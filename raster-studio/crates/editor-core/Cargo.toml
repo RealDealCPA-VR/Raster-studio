@@ -19,3 +19,8 @@ raster.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+# The encoder `project-format` saves with. `Document`'s hand-written `Serialize`
+# omits empty fields, so it needs a name-keyed encoding; the round-trip test
+# holds that contract against the real MessagePack implementation rather than
+# against `serde_json` alone.
+rmp-serde.workspace = true

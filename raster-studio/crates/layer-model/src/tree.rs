@@ -14,7 +14,11 @@
 //! so outside this crate it can only arrive from [`LayerTree::remove`] or from
 //! deserializing a journal — and that deserialization is routed through the
 //! same structural `check` that [`LayerTree::reinsert`] runs before touching
-//! the tree. `reinsert` also asserts `validate()` afterwards in debug builds.
+//! the tree. That check ends in a reachability walk from the subtree's own
+//! root, so an undo cannot put back an island or a cycle that the tree's own
+//! traversal would then fail to reach. `reinsert` also asserts `validate()`
+//! afterwards in debug builds, but that is a canary, not the guard: it is
+//! compiled out in release and fires only after the mutation.
 //!
 //! 1. Ids are unique — a layer appears in `layers` at most once.
 //! 2. **A layer id appears under at most one parent**: exactly one reference
@@ -100,11 +104,12 @@ pub enum TreeError {
 ///
 /// The fields are private and there is no public constructor, so outside this
 /// crate the only ways to obtain one are [`LayerTree::remove`] and
-/// deserializing a previously serialized value. That is what lets `reinsert` be
-/// an invariant-preserving operation — a caller-built value naming ids that are
-/// not in `layers` would push a dangling id into the tree, reintroducing on the
-/// undo path exactly the reachable-vs-stored divergence `remove` exists to
-/// prevent.
+/// deserializing a previously serialized value — and both routes run the same
+/// structural check. That is what lets `reinsert` be an invariant-preserving
+/// operation: a value naming ids it does not carry would push a dangling id
+/// into the tree, and one whose layers are not all reachable from its own root
+/// would push in an orphaned island, either of which reintroduces on the undo
+/// path exactly the reachable-vs-stored divergence `remove` exists to prevent.
 ///
 /// It is serializable because the command journal has to carry it: a delete's
 /// inverse *is* the detached subtree. Deserialization runs the same structural
@@ -193,8 +198,21 @@ impl DetachedSubtree {
     }
 
     /// Structural self-check run by [`LayerTree::reinsert`] before it mutates
-    /// anything: `layers[0]` really is `root`, ids are unique, and every child
-    /// named inside the subtree is part of the subtree.
+    /// anything: `layers[0]` really is `root`, ids are unique, every child
+    /// named inside the subtree is part of the subtree, each non-root layer is
+    /// claimed exactly once, and **every carried layer is reachable from
+    /// `root`**.
+    ///
+    /// The reachability walk is not redundant with the reference counts. A
+    /// subtree `{R, P -> [Q], Q -> [P]}` satisfies every counting rule — `P`
+    /// and `Q` are each named exactly once, `R` never — yet `P` and `Q` hang
+    /// off nothing. Reinserting it would put two layers into `layers` that no
+    /// traversal from the document root can reach, so `len()` over-counts,
+    /// `iter_depth_first` omits them, and they form a live cycle: precisely the
+    /// corruption `remove` returning the *whole* subtree exists to prevent,
+    /// arriving instead through undo. Reachability plus the single-reference
+    /// rule also rules out every cycle inside the subtree, since a cycle's
+    /// members are either double-referenced or unreachable.
     fn check(&self) -> Result<(), TreeError> {
         if self.layers.first().map(|l| l.id) != Some(self.root) {
             return Err(TreeError::Corrupt(format!(
@@ -231,6 +249,29 @@ impl DetachedSubtree {
                     l.id
                 )));
             }
+        }
+        // Reachability, walked iteratively so a deep subtree cannot overflow
+        // the stack on the undo path. Every named child is already known to be
+        // one of `self.layers`, so `seen` can only ever be a subset of them and
+        // the count comparison below is exact.
+        let by_id: HashMap<LayerId, &Layer> = self.layers.iter().map(|l| (l.id, l)).collect();
+        let mut seen = HashSet::with_capacity(self.layers.len());
+        let mut stack = vec![self.root];
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            if let Some(l) = by_id.get(&id) {
+                stack.extend_from_slice(l.children());
+            }
+        }
+        if seen.len() != self.layers.len() {
+            return Err(TreeError::Corrupt(format!(
+                "detached subtree carries {} layers but only {} are reachable from its root {}",
+                self.layers.len(),
+                seen.len(),
+                self.root
+            )));
         }
         Ok(())
     }
@@ -385,9 +426,12 @@ impl LayerTree {
     ///
     /// # Errors
     ///
-    /// [`TreeError::Corrupt`] when the subtree is not internally consistent
-    /// (its first layer is not its root, or it names a child it does not
-    /// carry), [`TreeError::DuplicateId`] when any id is already in the tree,
+    /// [`TreeError::Corrupt`] when the subtree is not internally consistent —
+    /// its first layer is not its root, it names a child it does not carry, a
+    /// layer is claimed by two parents, or some carried layer is not reachable
+    /// from the subtree's root, which is what stops an undo from smuggling an
+    /// orphaned island or a group cycle back into the tree —
+    /// [`TreeError::DuplicateId`] when any id is already in the tree,
     /// and [`TreeError::NotFound`] / [`TreeError::NotAGroup`] for a destination
     /// that no longer accepts it. All checks run before any mutation, so a
     /// rejected reinsert leaves the tree unchanged and still valid.
@@ -662,7 +706,7 @@ impl LayerTree {
             .is_some_and(|g| g.clipped.contains(&id))
     }
 
-    /// Depth-first iteration of ids in composite order (root order, recursing
+    /// Depth-first iteration of ids in composite order (root order, descending
     /// into groups). Useful for the render graph walk.
     ///
     /// Guaranteed to terminate and to visit each id at most once even if the
@@ -671,7 +715,7 @@ impl LayerTree {
         let mut out = Vec::with_capacity(self.layers.len());
         let mut seen = HashSet::with_capacity(self.layers.len());
         for &id in &self.root {
-            self.push_recursive(id, &mut out, &mut seen);
+            self.walk_subtree(id, &mut out, &mut seen);
         }
         out
     }
@@ -682,7 +726,7 @@ impl LayerTree {
         let mut out = Vec::new();
         if self.layers.contains_key(&id) {
             let mut seen = HashSet::new();
-            self.push_recursive(id, &mut out, &mut seen);
+            self.walk_subtree(id, &mut out, &mut seen);
         }
         out
     }
@@ -726,15 +770,13 @@ impl LayerTree {
                 reached.len()
             )));
         }
-        // Non-group layers must not claim children.
-        for l in self.layers.values() {
-            if !l.is_group() && !l.children().is_empty() {
-                return Err(TreeError::Corrupt(format!(
-                    "non-group layer {} has children",
-                    l.id
-                )));
-            }
-        }
+        // "Only a group holds children" needs no check here: the child list
+        // lives in [`crate::layer::GroupLayer`] and nowhere else, so
+        // `Layer::children()` returns an empty slice for every other kind and
+        // a non-group naming a child is a state this crate cannot represent.
+        // `layer::tests::only_a_group_can_ever_hold_children` pins that, which
+        // is a real test — the runtime check this replaces was a branch no
+        // input could reach.
         Ok(())
     }
 
@@ -790,24 +832,28 @@ impl LayerTree {
         }
     }
 
-    fn push_recursive(&self, id: LayerId, out: &mut Vec<LayerId>, seen: &mut HashSet<LayerId>) {
-        if !seen.insert(id) {
-            // Defensive: the invariants forbid this, but a truncated traversal
-            // beats a stack overflow if a future edit slips through.
-            return;
-        }
-        if !self.layers.contains_key(&id) {
-            return;
-        }
-        out.push(id);
-        if let Some(Layer {
-            kind: LayerKind::Group(g),
-            ..
-        }) = self.layers.get(&id)
-        {
-            for &c in &g.children {
-                self.push_recursive(c, out, seen);
+    /// Depth-first walk from `id`, appending each id visited to `out`.
+    ///
+    /// Iterative rather than recursive: nesting depth is bounded only by the
+    /// number of layers, and `validate` runs this walk on every deserialize.
+    /// Recursion would turn a deep — but perfectly legal — document into a
+    /// stack overflow, and a stack overflow aborts the process instead of
+    /// returning the [`TreeError`] the caller is waiting to reject the file
+    /// with.
+    fn walk_subtree(&self, id: LayerId, out: &mut Vec<LayerId>, seen: &mut HashSet<LayerId>) {
+        let mut stack = vec![id];
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                // Defensive: the invariants forbid this, but a truncated
+                // traversal beats an endless one if a future edit slips through.
+                continue;
             }
+            let Some(l) = self.layers.get(&id) else {
+                continue;
+            };
+            out.push(id);
+            // Reversed, so the children pop off in their stored z-order.
+            stack.extend(l.children().iter().rev().copied());
         }
     }
 }
@@ -874,8 +920,8 @@ mod tests {
                 parent: g
             }
         );
-        // And the tree is untouched: without the guard `push_recursive` would
-        // recurse forever here.
+        // And the tree is untouched: without the guard `walk_subtree` would
+        // loop forever here.
         assert_eq!(t.root(), &[g]);
         assert_eq!(t.iter_depth_first(), vec![g]);
         t.validate().unwrap();
@@ -1105,6 +1151,79 @@ mod tests {
             "expected Corrupt, got {err:?}"
         );
         t.validate().unwrap();
+    }
+
+    /// `{root, P -> [Q], Q -> [P]}`: a subtree whose root carries nothing and
+    /// whose other two layers point at each other. Every *counting* rule holds
+    /// — P and Q are each named exactly once and the root never — so only a
+    /// reachability walk from `root` can reject it.
+    fn subtree_with_a_disconnected_cycle() -> (DetachedSubtree, LayerId, LayerId, LayerId) {
+        let root = Layer::group("Root");
+        let mut p = Layer::group("P");
+        let mut q = Layer::group("Q");
+        let (rid, pid, qid) = (root.id, p.id, q.id);
+        if let LayerKind::Group(g) = &mut p.kind {
+            g.children.push(qid);
+        }
+        if let LayerKind::Group(g) = &mut q.kind {
+            g.children.push(pid);
+        }
+        let sub = DetachedSubtree {
+            root: rid,
+            layers: vec![root, p, q],
+            parent: None,
+            index: 0,
+        };
+        // Premise: the pre-existing rules really are satisfied, so this test
+        // fails for the reachability pass and nothing else.
+        let mut refs: HashMap<LayerId, usize> = HashMap::new();
+        for l in &sub.layers {
+            for &c in l.children() {
+                *refs.entry(c).or_insert(0) += 1;
+            }
+        }
+        assert_eq!(refs.get(&rid), None, "the root must be unreferenced");
+        assert_eq!(refs.get(&pid), Some(&1));
+        assert_eq!(refs.get(&qid), Some(&1));
+        (sub, rid, pid, qid)
+    }
+
+    #[test]
+    fn reinserting_a_subtree_hiding_a_disconnected_cycle_is_rejected() {
+        let (mut t, _g, _a, _b, _s) = nested();
+        let before = snapshot(&t);
+        let len_before = t.len();
+        let (sub, rid, pid, qid) = subtree_with_a_disconnected_cycle();
+
+        let err = sub.check().unwrap_err();
+        assert!(
+            matches!(&err, TreeError::Corrupt(m) if m.contains("reachable")),
+            "expected a reachability rejection, got {err:?}"
+        );
+        assert_eq!(t.reinsert(sub).unwrap_err(), err);
+
+        // Nothing may have landed: without the walk, `reinsert` returns Ok and
+        // leaves the tree holding a live P<->Q cycle that no traversal reaches.
+        for id in [rid, pid, qid] {
+            assert!(!t.contains(id), "a rejected reinsert inserted {id}");
+        }
+        assert_eq!(t.len(), len_before);
+        assert_eq!(snapshot(&t), before);
+        t.validate()
+            .expect("a rejected reinsert leaves a valid tree");
+    }
+
+    #[test]
+    fn a_hand_edited_journal_cannot_smuggle_in_a_disconnected_cycle() {
+        // Serialization is unchecked by design (the value was already valid),
+        // so this is exactly the payload a hand-edited journal could hold.
+        let (sub, ..) = subtree_with_a_disconnected_cycle();
+        let json = serde_json::to_string(&sub).unwrap();
+        let err = serde_json::from_str::<DetachedSubtree>(&json).unwrap_err();
+        assert!(
+            err.to_string().contains("reachable"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1647,6 +1766,37 @@ mod tests {
     }
 
     // ---- misc ---------------------------------------------------------------
+
+    #[test]
+    fn a_deeply_nested_document_walks_without_overflowing_the_stack() {
+        // Nothing bounds nesting depth but the layer count, and `validate`
+        // walks the whole tree on every deserialize — so a legal deep document
+        // must be *walkable*, not merely rejectable. A recursive walk aborts
+        // the process here (a stack overflow is not a catchable error), which
+        // means the file never gets as far as being accepted or refused.
+        const DEPTH: usize = 100_000;
+        let mut t = LayerTree::new();
+        let top = t.push_root(Layer::group("G0")).unwrap();
+        let mut parent = top;
+        for i in 1..DEPTH {
+            parent = t
+                .insert_at(Layer::group(format!("G{i}")), Some(parent), 0)
+                .unwrap();
+        }
+        assert_eq!(t.len(), DEPTH);
+        // (No `depth_of` here: `parent_of` is a linear scan, so walking one
+        // chain of this length with it is quadratic.)
+        let order = t.iter_depth_first();
+        assert_eq!(order.len(), DEPTH);
+        assert_eq!(order[0], top);
+        assert_eq!(
+            order[DEPTH - 1],
+            parent,
+            "the walk reaches the deepest leaf"
+        );
+        assert_eq!(t.subtree_ids(top).len(), DEPTH);
+        t.validate().unwrap();
+    }
 
     #[test]
     fn subtree_ids_and_descendant_queries() {

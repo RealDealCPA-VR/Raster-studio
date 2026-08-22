@@ -595,12 +595,54 @@ mod tests {
         );
     }
 
+    /// Check one full reference table: every separable mode's expected result
+    /// at a single `(base, src)` sample, through both entry points.
+    ///
+    /// The 21 separable modes + the 6 `is_separable` classifies as needing
+    /// `blend_rgb` = the 27 in `ALL`;
+    /// `every_mode_is_classified_and_the_two_classes_partition_all` pins that
+    /// split, and the set equality below pins each table against it, so a new
+    /// mode cannot quietly skip its reference value.
+    ///
+    /// One sample per table is not enough on its own: `Overlay`, `SoftLight`,
+    /// `HardLight`, `VividLight` and `PinLight` are piecewise, so a table that
+    /// only ever lands on one side of the split leaves the other side pinned by
+    /// nothing. That is why the callers below sample three points that between
+    /// them cover both arms of every piecewise mode.
+    fn assert_reference_table(b: f32, s: f32, cases: &[(BlendMode, f32)]) {
+        let listed: std::collections::HashSet<BlendMode> = cases.iter().map(|&(m, _)| m).collect();
+        let separable: std::collections::HashSet<BlendMode> = BlendMode::ALL
+            .iter()
+            .copied()
+            .filter(|m| m.is_separable())
+            .collect();
+        assert_eq!(listed.len(), cases.len(), "a mode is listed twice");
+        assert_eq!(
+            listed, separable,
+            "the table must cover exactly the separable modes"
+        );
+        assert_eq!(cases.len(), 21, "the doc comments name this count");
+
+        for &(mode, expected) in cases {
+            let got = mode.blend_channel(b, s);
+            assert!(
+                close(got, expected),
+                "{mode:?}({b}, {s}): got {got}, expected {expected}"
+            );
+            // blend_rgb must agree channel-for-channel for separable modes.
+            let rgb = mode.blend_rgb([b; 3], [s; 3]);
+            assert!(
+                close3(rgb, [expected; 3]),
+                "{mode:?} blend_rgb disagrees at ({b}, {s}): got {rgb:?}"
+            );
+        }
+    }
+
     /// Reference table for the 21 separable modes at base=0.25, src=0.75.
     ///
-    /// 21 + the 6 modes `is_separable` classifies as needing `blend_rgb` = the
-    /// 27 in `ALL`; `every_mode_is_classified_and_the_two_classes_partition_all`
-    /// pins that split, and the length assertion below pins this table against
-    /// it, so a new mode cannot quietly skip its reference value.
+    /// This sample takes the `s > 0.5` arm of SoftLight/HardLight/VividLight/
+    /// PinLight and the `b < 0.5` arm of Overlay; the darkening halves are
+    /// covered by `separable_reference_values_at_three_quarters_and_a_quarter`.
     ///
     /// Values are hand-derived from the W3C Compositing 1 formulas (and the
     /// Photoshop definitions for the four not in that spec).
@@ -647,30 +689,116 @@ mod tests {
             // min(1, 0.25/0.75) = 0.333..
             (BlendMode::Divide, 1.0 / 3.0),
         ];
-        let listed: std::collections::HashSet<BlendMode> = cases.iter().map(|&(m, _)| m).collect();
-        let separable: std::collections::HashSet<BlendMode> = BlendMode::ALL
-            .iter()
-            .copied()
-            .filter(|m| m.is_separable())
-            .collect();
-        assert_eq!(listed.len(), cases.len(), "a mode is listed twice above");
-        assert_eq!(
-            listed, separable,
-            "the table must cover exactly the separable modes"
-        );
-        assert_eq!(cases.len(), 21, "the doc comment above names this count");
+        assert_reference_table(b, s, cases);
+    }
 
-        for &(mode, expected) in cases {
-            let got = mode.blend_channel(b, s);
-            assert!(
-                close(got, expected),
-                "{:?}: got {got}, expected {expected}",
-                mode
-            );
-            // blend_rgb must agree channel-for-channel for separable modes.
-            let rgb = mode.blend_rgb([b; 3], [s; 3]);
-            assert!(close3(rgb, [expected; 3]), "{:?} blend_rgb disagrees", mode);
-        }
+    /// The mirror image of the table above: base=0.75, src=0.25.
+    ///
+    /// This is the sample that pins the *darkening* halves — the `s <= 0.5` arm
+    /// of SoftLight, HardLight, VividLight and PinLight, and the `b > 0.5` arm
+    /// of Overlay. Without it, inverting PinLight's `min` to a `max`, flipping
+    /// soft light's darkening sign, or swapping VividLight's burn for a dodge
+    /// all pass unnoticed.
+    #[test]
+    fn separable_reference_values_at_three_quarters_and_a_quarter() {
+        let b = 0.75f32;
+        let s = 0.25f32;
+        let cases: &[(BlendMode, f32)] = &[
+            (BlendMode::Normal, 0.25),
+            (BlendMode::Dissolve, 0.25),
+            (BlendMode::Darken, 0.25),
+            (BlendMode::Multiply, 0.1875),
+            // 1 - min(1, (1-0.75)/0.25) = 1 - min(1, 1) = 0
+            (BlendMode::ColorBurn, 0.0),
+            // 0.75 + 0.25 - 1 = 0
+            (BlendMode::LinearBurn, 0.0),
+            (BlendMode::Lighten, 0.75),
+            // 0.75 + 0.25 - 0.1875
+            (BlendMode::Screen, 0.8125),
+            // min(1, 0.75/(1-0.25)) = min(1, 1) = 1
+            (BlendMode::ColorDodge, 1.0),
+            // 0.75 + 0.25 = 1
+            (BlendMode::LinearDodge, 1.0),
+            // Overlay = HardLight(s, b), so here the *source* 0.25 is the base
+            // of a Screen(0.25, 2*0.75-1) = 0.25 + 0.5 - 0.125
+            (BlendMode::Overlay, 0.625),
+            // s <= 0.5 -> b - (1-2s)*b*(1-b) = 0.75 - 0.5*0.75*0.25
+            //           = 0.75 - 0.09375
+            (BlendMode::SoftLight, 0.65625),
+            // s <= 0.5 -> Multiply(0.75, 0.5)
+            (BlendMode::HardLight, 0.375),
+            // s <= 0.5 -> ColorBurn(0.75, 0.5) = 1 - min(1, 0.25/0.5)
+            (BlendMode::VividLight, 0.5),
+            // 0.75 + 0.5 - 1
+            (BlendMode::LinearLight, 0.25),
+            // s <= 0.5 -> min(0.75, 0.5)
+            (BlendMode::PinLight, 0.5),
+            // b + s = 1.0 >= 1 -> 1. Still exactly on the threshold; the sample
+            // below and `hard_mix_thresholds_at_unit_sum` cover it off-boundary.
+            (BlendMode::HardMix, 1.0),
+            (BlendMode::Difference, 0.5),
+            // 0.75 + 0.25 - 2*0.1875
+            (BlendMode::Exclusion, 0.625),
+            // 0.75 - 0.25, no clamping this time
+            (BlendMode::Subtract, 0.5),
+            // 0.75/0.25 = 3, clamped
+            (BlendMode::Divide, 1.0),
+        ];
+        assert_reference_table(b, s, cases);
+    }
+
+    /// A third table at base=0.4, src=0.55, off every threshold.
+    ///
+    /// The two tables above both sit exactly on `b + s == 1`, HardMix's
+    /// threshold, and both make ColorDodge and ColorBurn saturate. This sample
+    /// lands strictly below the HardMix threshold, keeps dodge and divide off
+    /// their clamps, and is the only one to reach soft light's `s > 0.5,
+    /// b > 0.25` arm — the `sqrt` branch.
+    #[test]
+    fn separable_reference_values_off_every_threshold() {
+        let b = 0.4f32;
+        let s = 0.55f32;
+        let cases: &[(BlendMode, f32)] = &[
+            (BlendMode::Normal, 0.55),
+            (BlendMode::Dissolve, 0.55),
+            (BlendMode::Darken, 0.4),
+            (BlendMode::Multiply, 0.22),
+            // (1-0.4)/0.55 = 1.0909.. -> min(1, ..) = 1 -> 0
+            (BlendMode::ColorBurn, 0.0),
+            // 0.4 + 0.55 - 1 = -0.05, clamped
+            (BlendMode::LinearBurn, 0.0),
+            (BlendMode::Lighten, 0.55),
+            // 0.4 + 0.55 - 0.22
+            (BlendMode::Screen, 0.73),
+            // min(1, 0.4/(1-0.55)) = 0.4/0.45 = 0.8888.. — unclamped, so the
+            // dodge quotient itself is pinned here and nowhere else.
+            (BlendMode::ColorDodge, 0.888_888_9),
+            (BlendMode::LinearDodge, 0.95),
+            // Overlay = HardLight(0.55, 0.4): source arg 0.4 <= 0.5 ->
+            // Multiply(0.55, 0.8) = 0.44
+            (BlendMode::Overlay, 0.44),
+            // s > 0.5 and b > 0.25 -> D(b) = sqrt(0.4) = 0.632455..
+            // b + (2s-1)*(D-b) = 0.4 + 0.1*0.232455.. = 0.4232455..
+            (BlendMode::SoftLight, 0.423_245_55),
+            // s > 0.5 -> Screen(0.4, 0.1) = 0.4 + 0.1 - 0.04
+            (BlendMode::HardLight, 0.46),
+            // s > 0.5 -> ColorDodge(0.4, 0.1) = min(1, 0.4/0.9) = 0.4444..
+            (BlendMode::VividLight, 0.444_444_45),
+            // 0.4 + 1.1 - 1
+            (BlendMode::LinearLight, 0.5),
+            // s > 0.5 -> max(0.4, 0.1)
+            (BlendMode::PinLight, 0.4),
+            // b + s = 0.95 < 1 -> 0, the arm neither table above reaches
+            (BlendMode::HardMix, 0.0),
+            (BlendMode::Difference, 0.15),
+            // 0.4 + 0.55 - 2*0.22
+            (BlendMode::Exclusion, 0.51),
+            // 0.4 - 0.55 clamped
+            (BlendMode::Subtract, 0.0),
+            // 0.4/0.55 = 0.7272..
+            (BlendMode::Divide, 0.727_272_75),
+        ];
+        assert_reference_table(b, s, cases);
     }
 
     #[test]

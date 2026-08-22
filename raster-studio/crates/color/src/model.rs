@@ -182,7 +182,12 @@ fn lab_f_inv(t: f32) -> f32 {
 /// in-range input.
 ///
 /// The reference white is [`D65_WHITE_XYZ`], the white point the crate's
-/// matrices actually realise, so neutral input gives exactly `a* = b* = 0`.
+/// matrices actually realise rather than the rounded literature value, so
+/// neutral input stays achromatic: white and black give exactly `a* = b* = 0`,
+/// and every other neutral in `[0, 1]` is within `1e-4` of it — four orders of
+/// magnitude below the ~`1.0` unit that is just perceptible. The residue is
+/// f32 rounding inside the XYZ matrix product, not a white-point mismatch;
+/// see `neutral_rgb_has_no_visible_chroma_cast_in_lab`.
 pub fn linear_srgb_to_lab(rgb: [f32; 3]) -> [f32; 3] {
     let xyz = linear_srgb_to_xyz(rgb);
     let fx = lab_f(xyz[0] / D65_WHITE_XYZ[0]);
@@ -461,6 +466,96 @@ mod tests {
             [53.389, 0.0, 0.0],
             1e-2,
             "grey",
+        );
+    }
+
+    /// The reason [`D65_WHITE_XYZ`] is the matrix's own row sums instead of the
+    /// rounded literature D65: a grey must not pick up a chroma cast in Lab.
+    ///
+    /// The docs used to claim neutrals give *exactly* `a* = b* = 0` and no test
+    /// checked it; white was checked only at `1e-3`, which hid a `b*` of
+    /// `1.19e-5` caused by the white-point literal sitting one ULP above the
+    /// row sum. Exactness is guaranteed only at the two endpoints: the matrix
+    /// product rounds, so `X/Xn` is not bit-exactly `Y/Yn` for a general
+    /// neutral and roughly 40% of the f32 neutrals in `[0, 1]` carry a residue.
+    /// The claim is therefore a bound now, and this is the test that makes the
+    /// bound mean something.
+    ///
+    /// The quoted maxima (`|a*| = 8.94e-5`, `|b*| = 4.77e-5`) are the true ones
+    /// over **every** f32 neutral in `[0, 1]`, found by an exhaustive
+    /// bit-pattern sweep; that sweep is far too slow to run in a unit test, so
+    /// its two argmax values are listed explicitly among the inputs below and
+    /// the observed worst case is asserted to still reach them.
+    ///
+    /// The last block pins the *choice* of constant rather than its value: with
+    /// the rounded literature white the cast on white alone is two orders of
+    /// magnitude past the bound.
+    #[test]
+    fn neutral_rgb_has_no_visible_chroma_cast_in_lab() {
+        // Exact at the endpoints. This is what the one-ULP white point broke.
+        assert_eq!(rgb_to_lab([1.0, 1.0, 1.0]), [100.0, 0.0, 0.0], "white");
+        assert_eq!(linear_srgb_to_lab([1.0, 1.0, 1.0]), [100.0, 0.0, 0.0]);
+        assert_eq!(rgb_to_lab([0.0, 0.0, 0.0]), [0.0, 0.0, 0.0], "black");
+
+        /// Documented bound on `|a*|` / `|b*|` for a neutral in `[0, 1]`.
+        const BOUND: f32 = 1e-4;
+
+        let mut worst = 0.0f32;
+        let mut worst_at = 0.0f32;
+        // Every 8-bit code value, a fine even sweep, and the two exhaustively
+        // determined argmax values (|a*| = 8.94e-5 and |b*| = 4.77e-5).
+        let values = (0..=255)
+            .map(|i| i as f32 / 255.0)
+            .chain((0..=2000).map(|i| i as f32 / 2000.0))
+            .chain([0.453_146_46, 0.721_399_8]);
+        for v in values {
+            for lab in [linear_srgb_to_lab([v, v, v]), rgb_to_lab([v, v, v])] {
+                let cast = lab[1].abs().max(lab[2].abs());
+                if cast > worst {
+                    worst = cast;
+                    worst_at = v;
+                }
+                assert!(
+                    cast <= BOUND,
+                    "neutral {v} picked up a chroma cast of {cast} (a*={}, b*={}), \
+                     above the documented bound of {BOUND}",
+                    lab[1],
+                    lab[2]
+                );
+            }
+        }
+        // The sweep must still reach the exhaustive maximum, or the bound above
+        // passes vacuously and could be tightened to a lie without anything
+        // noticing. 8.94e-5 against a bound of 1e-4 also shows the documented
+        // figure is tight rather than a comfortable over-estimate.
+        assert!(
+            worst >= 8.9e-5,
+            "sweep no longer reaches the known worst case of 8.94e-5 \
+             (got {worst} at {worst_at}); the {BOUND} bound would pass vacuously"
+        );
+
+        // And now the counterfactual the constant's doc rests on: the rounded
+        // literature D65. Reproducing the CIELAB step against an arbitrary
+        // white is three lines, so the comparison is measured here rather than
+        // asserted in prose.
+        fn lab_against(white: [f32; 3], rgb: [f32; 3]) -> [f32; 3] {
+            let xyz = linear_srgb_to_xyz(rgb);
+            let (fx, fy, fz) = (
+                lab_f(xyz[0] / white[0]),
+                lab_f(xyz[1] / white[1]),
+                lab_f(xyz[2] / white[2]),
+            );
+            [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
+        }
+        // The stand-in must be the real transform, or the comparison is idle.
+        for rgb in grid() {
+            assert_eq!(lab_against(D65_WHITE_XYZ, rgb), linear_srgb_to_lab(rgb));
+        }
+        let literature = lab_against([0.95047, 1.0, 1.08883], [1.0, 1.0, 1.0]);
+        assert!(
+            literature[2].abs() > 100.0 * BOUND,
+            "the literature white is supposed to be the clearly worse choice, \
+             but white came out at {literature:?}"
         );
     }
 

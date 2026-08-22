@@ -16,10 +16,14 @@
 //!   being clamped, so highlights are preserved.
 //! * `NaN` in yields `NaN` out; no finite input yields `NaN`; no input panics.
 //!   [`linear_to_srgb`] is finite for every finite input, including `f32::MAX`.
-//!   [`srgb_to_linear`] is finite up to a magnitude of roughly `1.2e16`, where
-//!   `((m + 0.055) / 1.055).powf(2.4)` genuinely exceeds `f32::MAX` and
-//!   saturates to infinity; that is ~16 orders of magnitude above any pixel
-//!   value, so callers need no guard.
+//!   [`srgb_to_linear`] is finite for magnitudes below about `1.19e16` and has
+//!   already saturated to infinity by `1.2e16`, where
+//!   `((m + 0.055) / 1.055).powf(2.4)` genuinely exceeds `f32::MAX`. The exact
+//!   crossing sits inside that bracket and depends on the platform's `powf`
+//!   rounding, so the bracket is what is promised and what
+//!   `overflow_threshold_is_where_the_docs_say_it_is` pins — note the bound is
+//!   exclusive: `1.2e16` itself is already infinite. Either way it is ~16
+//!   orders of magnitude above any pixel value, so callers need no guard.
 
 /// Encoded-domain breakpoint of the sRGB curve's linear segment (IEC 61966-2-1).
 pub const SRGB_ENCODED_KNEE: f32 = 0.040_45;
@@ -445,9 +449,14 @@ mod tests {
         }
     }
 
-    /// Pins the documented overflow bound. The module doc used to claim `1e12`
-    /// overflows; it does not, and quoting a bound 4 orders of magnitude too
-    /// low invites callers to add a guard they do not need.
+    /// Pins the documented overflow bound, **including the two numbers the doc
+    /// actually quotes**. The module doc used to claim `1e12` overflows; it
+    /// does not, and quoting a bound 4 orders of magnitude too low invites
+    /// callers to add a guard they do not need. It then claimed finiteness "up
+    /// to a magnitude of roughly `1.2e16`" while only bracketing `1e16` and
+    /// `1e17` here — and read inclusively that claim was false, because
+    /// `1.2e16` is already infinite. The bracket below is therefore the doc's
+    /// own pair of figures, so the two cannot drift apart.
     #[test]
     fn overflow_threshold_is_where_the_docs_say_it_is() {
         for &c in &[1e6f32, 1e12, 1e15, 1e16, -1e16] {
@@ -459,7 +468,24 @@ mod tests {
         }
         // 1e12 specifically: the value the old doc named.
         assert!((srgb_to_linear(1e12) - 5.548_752e28).abs() < 1e24);
-        // Above ~1.2e16 the powf really does leave f32 range.
+        // The documented bracket. Below `1.19e16` the curve is still finite...
+        for &c in &[1.19e16f32, -1.19e16] {
+            assert!(
+                srgb_to_linear(c).is_finite(),
+                "srgb_to_linear({c}) = {} but the docs promise finite below 1.19e16",
+                srgb_to_linear(c)
+            );
+        }
+        // ...and by `1.2e16` it has already gone, which is why the documented
+        // bound is exclusive. An inclusive reading of the old "roughly 1.2e16"
+        // was simply wrong here.
+        assert_eq!(
+            srgb_to_linear(1.2e16),
+            f32::INFINITY,
+            "the docs promise 1.2e16 is already infinite"
+        );
+        assert_eq!(srgb_to_linear(-1.2e16), f32::NEG_INFINITY);
+        // Well above the bracket, unchanged.
         assert!(srgb_to_linear(1e17).is_infinite());
         assert_eq!(srgb_to_linear(-1e17), f32::NEG_INFINITY);
         // The inverse direction never overflows: m^(1/2.4) shrinks.

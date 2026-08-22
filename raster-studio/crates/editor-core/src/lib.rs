@@ -9,7 +9,10 @@
 //!
 //! * **Commands are atomic.** A command that fails leaves the document
 //!   byte-identical to what it was, transactions included — they roll back the
-//!   members that already applied. [`History`] records an entry only on
+//!   members that already applied. The one exception is
+//!   [`CommandError::RollbackFailed`], which is that rollback *itself* failing:
+//!   it reports that the guarantee could not be kept and that the document must
+//!   be reloaded rather than edited on. [`History`] records an entry only on
 //!   success, so there is never a mutation with no way back.
 //! * **Pixels are references.** A raster edit is a *tile delta*: for each tile
 //!   the edit touches, the content hash it carries afterwards. The bytes live
@@ -41,4 +44,4 @@ pub use pixels::{
     edge_tiles, Coverage, FillColor, FillValue, MaskCoverage, PixelError, PixelKey, PixelStore,
     PixelTarget, TileDelta, TileEdit, TileMap, MASK_TILE_BYTES,
 };
-pub use selection::{Selection, SelectionError, SelectionMask};
+pub use selection::{Selection, SelectionError, SelectionMask, MAX_MASK_SAMPLES};

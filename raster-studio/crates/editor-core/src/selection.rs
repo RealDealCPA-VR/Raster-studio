@@ -24,6 +24,8 @@ pub enum SelectionError {
         expected: usize,
         got: usize,
     },
+    /// The extent is larger than [`MAX_MASK_SAMPLES`], or the buffer it needs
+    /// could not be allocated.
     #[error("selection mask dimensions {width}x{height} do not fit in memory")]
     DimensionOverflow { width: u32, height: u32 },
     #[error("selection mask at ({x}, {y}) sized {width}x{height} reaches past the i32 pixel grid")]
@@ -53,8 +55,9 @@ struct SelectionMaskRepr {
 /// selected.
 ///
 /// # Invariants
-/// `coverage.len() == width * height`, and `origin + (width, height)` fits in
-/// `i32` — both enforced by [`SelectionMask::new`] and re-checked on
+/// `coverage.len() == width * height`, that product is at most
+/// [`MAX_MASK_SAMPLES`], and `origin + (width, height)` fits in `i32` — all
+/// enforced by [`SelectionMask::new`] and re-checked on
 /// deserialize, so no coordinate arithmetic in this module can overflow on a
 /// corrupt or hand-edited document. The tight bounds of the non-zero samples
 /// are computed once at construction, so [`SelectionMask::bounds`] is O(1) and
@@ -95,10 +98,10 @@ impl SelectionMask {
     /// them.
     ///
     /// Refuses a sample count that does not match the rectangle, a rectangle
-    /// too large to index, and an origin whose far edge leaves the `i32` pixel
-    /// grid ([`SelectionError::OriginOutOfRange`]) — the last is what keeps
-    /// [`SelectionMask::bounds`] from overflowing on a document that was
-    /// hand-edited or corrupted.
+    /// larger than [`MAX_MASK_SAMPLES`], and an origin whose far edge leaves
+    /// the `i32` pixel grid ([`SelectionError::OriginOutOfRange`]) — the last is
+    /// what keeps [`SelectionMask::bounds`] from overflowing on a document that
+    /// was hand-edited or corrupted.
     pub fn new(
         origin: IVec2,
         width: u32,
@@ -126,11 +129,25 @@ impl SelectionMask {
 
     /// A fully-selected rectangle — the mask form of a marquee, useful as the
     /// starting point for feathering or a boolean combination.
+    ///
+    /// # Never aborts
+    /// Two guards, because an out-of-memory `vec![]` is a process abort
+    /// (`handle_alloc_error`), not an error a caller can handle. First the
+    /// extent is validated *before* the allocation, so a rejected one costs no
+    /// buffer at all ([`MAX_MASK_SAMPLES`] is what makes that bite: without a
+    /// cap, `u32 * u32` always fits a 64-bit `usize` and nothing was refused).
+    /// Then the buffer is reserved with [`Vec::try_reserve_exact`], so even an
+    /// accepted extent that this machine cannot hold comes back as
+    /// [`SelectionError::DimensionOverflow`]. Pinned by
+    /// `a_mask_too_large_to_hold_is_refused_instead_of_aborting_the_process`.
     pub fn filled(origin: IVec2, width: u32, height: u32) -> Result<Self, SelectionError> {
-        // Validated *before* the allocation: a rejected extent must not cost a
-        // multi-gigabyte buffer on the way to its error.
         let expected = sample_count(origin, width, height)?;
-        Self::new(origin, width, height, vec![255; expected])
+        let mut coverage = Vec::new();
+        coverage
+            .try_reserve_exact(expected)
+            .map_err(|_| SelectionError::DimensionOverflow { width, height })?;
+        coverage.resize(expected, 255);
+        Self::new(origin, width, height, coverage)
     }
 
     pub fn origin(&self) -> IVec2 {
@@ -180,14 +197,26 @@ impl SelectionMask {
     }
 }
 
+/// The largest coverage buffer a selection mask may describe: 2^32 samples, one
+/// byte each, so 4 GiB — a full-canvas selection on a 65,536 × 65,536 document,
+/// which is already larger than any image this editor opens.
+///
+/// The cap exists because *every* other limit here is vacuous on a 64-bit
+/// target: a `u32 * u32` product always fits in a `usize`, so a mask claiming
+/// to be 3,000,000,000 square would otherwise be accepted and try to allocate
+/// 9 × 10^18 bytes. It is a `u64` so the comparison is the same on a 32-bit
+/// target, where the conversion to `usize` is the one that fails.
+pub const MAX_MASK_SAMPLES: u64 = 1 << 32;
+
 /// Samples a `width * height` mask at `origin` must carry, or the reason the
 /// extent is not representable.
 ///
-/// Two separate limits: the sample count has to be indexable (`usize`), and the
-/// far edge `origin + (width, height)` has to stay inside `i32` so bounds
-/// arithmetic is exact. The second is the one a corrupt document reaches first
-/// — `width` alone is bounded by the coverage length, but `origin` is not
-/// bounded by anything.
+/// Three limits: the sample count must not exceed [`MAX_MASK_SAMPLES`], it has
+/// to be indexable (`usize`), and the far edge `origin + (width, height)` has to
+/// stay inside `i32` so bounds arithmetic is exact. The last is the one a
+/// corrupt document reaches first — `width` alone is bounded by the coverage
+/// length, but `origin` is not bounded by anything, and a negative one lets an
+/// enormous `width` past the `i32` check.
 fn sample_count(origin: IVec2, width: u32, height: u32) -> Result<usize, SelectionError> {
     if origin.x as i64 + width as i64 > i32::MAX as i64
         || origin.y as i64 + height as i64 > i32::MAX as i64
@@ -199,9 +228,13 @@ fn sample_count(origin: IVec2, width: u32, height: u32) -> Result<usize, Selecti
             height,
         });
     }
-    (width as usize)
-        .checked_mul(height as usize)
-        .ok_or(SelectionError::DimensionOverflow { width, height })
+    // `u32 * u32` cannot overflow a `u64`, so this product is exact before it is
+    // compared with anything.
+    let samples = width as u64 * height as u64;
+    if samples > MAX_MASK_SAMPLES {
+        return Err(SelectionError::DimensionOverflow { width, height });
+    }
+    usize::try_from(samples).map_err(|_| SelectionError::DimensionOverflow { width, height })
 }
 
 /// Half-open box of the non-zero samples.
@@ -543,6 +576,72 @@ mod tests {
         ));
         // The last representable extent is still accepted.
         assert!(SelectionMask::filled(IVec2::new(i32::MAX - 2, 0), 2, 1).is_ok());
+    }
+
+    #[test]
+    fn a_mask_too_large_to_hold_is_refused_instead_of_aborting_the_process() {
+        // `sample_count` used to cap nothing. On a 64-bit target every
+        // `u32 * u32` product fits in a `usize`, so `DimensionOverflow` was
+        // unreachable and this extent — legal for the `i32` check because the
+        // origin is negative — reached `vec![255; 9_000_000_000_000_000_000]`,
+        // i.e. `handle_alloc_error`, i.e. an abort no caller can catch.
+        let huge = (3_000_000_000u32, 3_000_000_000u32);
+        assert_eq!(
+            SelectionMask::filled(IVec2::new(-2_000_000_000, -2_000_000_000), huge.0, huge.1)
+                .unwrap_err(),
+            SelectionError::DimensionOverflow {
+                width: huge.0,
+                height: huge.1
+            },
+            "a huge-but-representable extent must come back as an error"
+        );
+        assert_eq!(
+            SelectionMask::new(
+                IVec2::new(-2_000_000_000, -2_000_000_000),
+                huge.0,
+                huge.1,
+                Vec::new()
+            )
+            .unwrap_err(),
+            SelectionError::DimensionOverflow {
+                width: huge.0,
+                height: huge.1
+            },
+            "and the check must run before the length comparison, not after"
+        );
+
+        // The same on the deserialization path, which is where a project file's
+        // untrusted numbers enter.
+        let json = r#"{"origin":[-2000000000,-2000000000],"width":3000000000,"height":3000000000,"coverage":[]}"#;
+        let err = serde_json::from_str::<SelectionMask>(json).unwrap_err();
+        assert!(
+            err.to_string().contains("do not fit in memory"),
+            "a corrupt document must fail to load, not abort the editor: {err}"
+        );
+
+        // The cap is a real boundary, and it is not tight enough to refuse a
+        // mask anybody would actually make. Neither of these allocates: the
+        // one at the cap fails the *length* check, which runs after it.
+        let at_cap = SelectionMask::new(IVec2::ZERO, 65_536, 65_536, Vec::new()).unwrap_err();
+        assert_eq!(
+            at_cap,
+            SelectionError::CoverageLengthMismatch {
+                width: 65_536,
+                height: 65_536,
+                expected: MAX_MASK_SAMPLES as usize,
+                got: 0
+            },
+            "exactly MAX_MASK_SAMPLES is still a describable mask"
+        );
+        assert_eq!(
+            SelectionMask::new(IVec2::ZERO, 65_536, 65_537, Vec::new()).unwrap_err(),
+            SelectionError::DimensionOverflow {
+                width: 65_536,
+                height: 65_537
+            },
+            "one sample past the cap is not"
+        );
+        assert!(SelectionMask::filled(IVec2::ZERO, 4096, 4096).is_ok());
     }
 
     #[test]

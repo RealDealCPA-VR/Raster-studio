@@ -752,6 +752,7 @@ dependencies = [
  "glam",
  "layer-model",
  "raster",
+ "rmp-serde",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

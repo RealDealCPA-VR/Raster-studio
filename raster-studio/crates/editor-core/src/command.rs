@@ -18,6 +18,21 @@
 //! members that already succeeded. [`crate::History`] depends on this — it
 //! records an entry only on success, so a command that half-applied would leave
 //! a mutation nothing can undo.
+//!
+//! There is exactly one exception, and it announces itself:
+//! [`CommandError::RollbackFailed`] is returned when a transaction member failed
+//! *and* undoing the members that had already applied failed too. Then the
+//! document is left wherever the rollback stopped — the error says so, and the
+//! caller must reload instead of continuing to edit. Every other `Err` from
+//! [`Command::apply`] leaves the document untouched.
+//!
+//! Keeping that exception unreachable in practice is why an *inverse* may never
+//! be refusable: a recorded entry whose undo cannot apply is the same
+//! "mutation with no way back" in slow motion. Two rules follow from it — no
+//! command may insert an already fully-locked layer (see
+//! [`CommandError::CannotInsertLocked`]), and an inverse captured from a
+//! corrupt document normalizes what it captures (see
+//! [`Command::SetLayerProperties`]).
 
 use glam::Affine2;
 use serde::{Deserialize, Serialize};
@@ -192,6 +207,14 @@ impl LayerPatch {
 /// a migration if older journals must still replay.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Command {
+    /// Add a layer at the document root.
+    ///
+    /// Refuses a payload that is already fully locked
+    /// ([`CommandError::CannotInsertLocked`]): this command's inverse is a
+    /// [`Command::DeleteLayer`], which the blanket lock refuses, so such a
+    /// create would be an edit with no way back. Paste, duplicate and import of
+    /// a locked layer therefore create it unlocked and lock it in the same
+    /// [`Command::Transaction`].
     CreateLayer {
         /// Boxed deliberately, as is [`LayerPatch::effects`]. A [`Layer`]
         /// carries its whole effect block and is several times larger than this
@@ -217,6 +240,12 @@ pub enum Command {
     /// the original parent and index, and [`layer_model::LayerTree::reinsert`]
     /// restores the position, which is why this variant needs no follow-up
     /// move.
+    ///
+    /// Like [`Command::CreateLayer`] it refuses to insert a fully locked layer
+    /// ([`CommandError::CannotInsertLocked`]), anywhere in the subtree. A
+    /// payload built by [`Command::DeleteLayer`] never contains one, since the
+    /// delete refused the lock in the first place; only an untrusted journal
+    /// can carry one here.
     RestoreLayers { subtree: DetachedSubtree },
     /// Re-parent or re-order a layer within the tree.
     ///
@@ -235,6 +264,31 @@ pub enum Command {
     /// an unguarded patch would move a position-locked layer. A fully locked
     /// layer ([`LockState::all`]) refuses every patch except one that touches
     /// nothing but `locked` itself, which is how a lock is released.
+    ///
+    /// # Undo of a corrupt prior value
+    /// `opacity`, `fill_opacity` and `transform` are range-checked on the way in
+    /// ([`LayerPatch::validate`]) but are public, unvalidated fields on
+    /// [`Layer`], so a hand-edited or corrupt document can hold `2.0`, or a NaN
+    /// matrix. The inverse this command captures is applied through that same
+    /// validation, so a raw capture would fail its own `validate()` and the edit
+    /// would be permanently un-undoable. The capture is therefore sanitized —
+    /// and what that costs differs between the two halves:
+    ///
+    /// * `opacity` and `fill_opacity` are captured through
+    ///   [`Layer::effective_opacity`] / [`Layer::effective_fill_opacity`].
+    ///   `layer_model` puts both fields in its clamp-at-read group and those
+    ///   methods *are* that read, so undo restores exactly the value the
+    ///   compositor was already using.
+    /// * `transform` is in no such group: `layer_model` defines no
+    ///   `effective_transform`, and `blend::unit` cannot clamp a matrix. A
+    ///   non-finite prior matrix is therefore **repaired, not restored** — it
+    ///   comes back as the identity (see `restorable_transform`). A layer whose
+    ///   matrix was NaN drew nothing before the edit and is visible, at the
+    ///   origin, after the undo. That is the deliberate price of keeping the
+    ///   edit undoable at all, since a non-finite matrix cannot go into an
+    ///   inverse patch that `validate` will accept.
+    ///
+    /// Pinned by `an_edit_to_a_corrupt_layer_is_still_undoable`.
     SetLayerProperties {
         layer_id: LayerId,
         patch: LayerPatch,
@@ -320,6 +374,26 @@ pub enum CommandError {
     NoMask(LayerId),
     #[error("layer {0} is locked against this edit")]
     LayerLocked(LayerId),
+    /// An insertion carried a layer that is already fully locked
+    /// ([`LockState::all`]).
+    ///
+    /// The inverse of an insertion is a deletion, and the blanket lock refuses
+    /// deletion — so the insertion would be recorded in [`crate::History`] with
+    /// an undo that can never apply, and inside a [`Command::Transaction`] it
+    /// would turn a rollback into [`CommandError::RollbackFailed`]. Refusing at
+    /// apply time keeps the failure loud and keeps the lock meaningful: nothing
+    /// is recorded, so there is nothing to undo.
+    ///
+    /// The supported shape is a [`Command::Transaction`] of "create it
+    /// unlocked, then lock it": that undoes as one step, because a transaction
+    /// applies its inverses newest-first and the unlock therefore runs before
+    /// the delete.
+    #[error(
+        "layer {0} cannot be inserted already fully locked: the lock refuses the deletion \
+         that is this command's own inverse, so the edit could never be undone; insert it \
+         unlocked and lock it in the same transaction instead"
+    )]
+    CannotInsertLocked(LayerId),
     /// A pixel edit named a layer whose kind owns no pixels of its own. See
     /// [`PixelTarget::Layer`] for which kinds are addressable and why.
     #[error("layer {layer} is a {kind} layer and owns no pixels of its own")]
@@ -439,6 +513,14 @@ impl Command {
     pub fn apply(&self, doc: &mut Document) -> Result<Command, CommandError> {
         match self {
             Command::CreateLayer { layer } => {
+                // A layer that arrives already fully locked cannot be created:
+                // this command's inverse is a `DeleteLayer`, and the blanket
+                // lock refuses deletion, so the entry `History` recorded could
+                // never be undone. Checked before the insert, so the refusal
+                // changes nothing.
+                if layer.locked.all {
+                    return Err(CommandError::CannotInsertLocked(layer.id));
+                }
                 // `push_root` refuses a duplicate id rather than pushing a
                 // second reference into `root`; that refusal has to reach the
                 // caller, or a replayed journal quietly grows a corrupt tree.
@@ -464,6 +546,17 @@ impl Command {
 
             Command::RestoreLayers { subtree } => {
                 let id = subtree.root();
+                // Same rule as `CreateLayer`, for the same reason, across the
+                // whole subtree — a locked *child* would block the delete that
+                // undoes this restore just as surely as a locked root. An
+                // inverse produced by `DeleteLayer` can never trip this (the
+                // delete already refused a locked subtree); a hand-written or
+                // corrupted journal can, and a journal is untrusted input.
+                for l in subtree.layers() {
+                    if l.locked.all {
+                        return Err(CommandError::CannotInsertLocked(l.id));
+                    }
+                }
                 doc.layers.reinsert(subtree.clone())?;
                 Ok(Command::DeleteLayer { layer_id: id })
             }
@@ -523,6 +616,18 @@ impl Command {
                     .get_mut(*layer_id)
                     .ok_or(CommandError::LayerNotFound(*layer_id))?;
                 // Build the inverse patch from current values before mutating.
+                //
+                // The three range-checked fields are captured through their
+                // *effective* value, not the raw one. `Layer::opacity`,
+                // `fill_opacity` and `transform` are public and unvalidated —
+                // `layer_model` defines their contract as clamp-at-read — so a
+                // hand-edited or corrupt document can hold `2.0` or a NaN. The
+                // inverse is applied through this same function, and
+                // `LayerPatch::validate` would refuse such a value: capturing
+                // the raw one would make the edit permanently un-undoable. So
+                // undo of an edit to a corrupt layer restores the value the
+                // compositor was already using. See the variant's "Undo
+                // normalizes" note.
                 let mut inverse = LayerPatch::default();
                 if let Some(v) = &patch.name {
                     inverse.name = Some(layer.name.clone());
@@ -533,11 +638,11 @@ impl Command {
                     layer.visible = v;
                 }
                 if let Some(v) = patch.opacity {
-                    inverse.opacity = Some(layer.opacity);
+                    inverse.opacity = Some(layer.effective_opacity());
                     layer.opacity = v;
                 }
                 if let Some(v) = patch.fill_opacity {
-                    inverse.fill_opacity = Some(layer.fill_opacity);
+                    inverse.fill_opacity = Some(layer.effective_fill_opacity());
                     layer.fill_opacity = v;
                 }
                 if let Some(v) = patch.blend_mode {
@@ -553,7 +658,7 @@ impl Command {
                     layer.clipping = v;
                 }
                 if let Some(v) = patch.transform {
-                    inverse.transform = Some(layer.transform.to_cols_array());
+                    inverse.transform = Some(restorable_transform(layer.transform));
                     layer.transform = Affine2::from_cols_array(&v);
                 }
                 match &patch.mask {
@@ -697,6 +802,24 @@ impl Command {
             Command::ClearRegion { .. } => "Clear".into(),
             Command::Transaction { label, .. } => label.clone(),
         }
+    }
+}
+
+/// The matrix an undo should restore for a layer that currently holds
+/// `current`.
+///
+/// Normally `current` itself. `Layer::transform` is public and unvalidated, so a
+/// corrupt document can hold a NaN or an infinity there; that matrix cannot go
+/// into an inverse patch, because [`LayerPatch::validate`] refuses it and the
+/// edit would become un-undoable. The identity is the substitution — the only
+/// matrix that is certainly usable, and no worse than the non-finite one it
+/// replaces, which maps every point to NaN and draws nothing.
+fn restorable_transform(current: Affine2) -> [f32; 6] {
+    let cols = current.to_cols_array();
+    if cols.iter().all(|v| v.is_finite()) {
+        cols
+    } else {
+        Affine2::IDENTITY.to_cols_array()
     }
 }
 
@@ -1478,6 +1601,243 @@ mod tests {
             matches!(err, CommandError::LayerLocked(l) if l == cid),
             "deleting the group would take the locked child with it: {err:?}"
         );
+        assert_eq!(doc, before);
+    }
+
+    #[test]
+    fn a_layer_cannot_be_created_already_fully_locked() {
+        // The trap this refusal closes: `CreateLayer` did no lock check, but
+        // its inverse is a `DeleteLayer`, which the blanket lock refuses. So
+        // creating an already-locked layer succeeded, `History` recorded the
+        // entry, and every later undo answered `Err(LayerLocked)` — a recorded
+        // mutation with no way back, which is exactly what this crate's central
+        // invariant says cannot exist. Reachable from paste, duplicate, import
+        // and journal replay of a locked layer.
+        let mut doc = Document::new(100, 100, "t");
+        let before = doc.clone();
+        let mut history = crate::History::new();
+
+        let mut locked = Layer::raster("locked on arrival");
+        locked.locked.all = true;
+        let lid = locked.id;
+
+        let err = history
+            .apply(&mut doc, Command::create_layer(locked.clone()))
+            .unwrap_err();
+        assert!(
+            matches!(err, CommandError::CannotInsertLocked(l) if l == lid),
+            "got {err:?}"
+        );
+        assert_eq!(doc, before, "a refused create must change nothing");
+        assert!(
+            !history.can_undo(),
+            "nothing was applied, so nothing may be recorded"
+        );
+
+        // Every other lock flag is still fine on a new layer: only the blanket
+        // lock blocks deletion, so only the blanket lock can strand an undo.
+        let mut pixel_locked = Layer::raster("pixels locked");
+        pixel_locked.locked.pixels = true;
+        pixel_locked.locked.position = true;
+        let pid = pixel_locked.id;
+        history
+            .apply(&mut doc, Command::create_layer(pixel_locked))
+            .unwrap();
+        assert!(history.undo(&mut doc).unwrap());
+        assert_eq!(doc, before);
+        assert!(doc.layers.get(pid).is_none());
+
+        // And the supported way to end up with a locked layer undoes as one
+        // step, because a transaction applies its inverses newest-first: the
+        // unlock runs before the delete.
+        let mut unlocked = locked.clone();
+        unlocked.locked = LockState::default();
+        history
+            .apply(
+                &mut doc,
+                Command::Transaction {
+                    label: "Paste locked layer".into(),
+                    commands: vec![
+                        Command::create_layer(unlocked),
+                        Command::SetLayerProperties {
+                            layer_id: lid,
+                            patch: LayerPatch {
+                                locked: Some(LockState {
+                                    all: true,
+                                    ..Default::default()
+                                }),
+                                ..Default::default()
+                            },
+                        },
+                    ],
+                },
+            )
+            .unwrap();
+        assert!(doc.layers.get(lid).unwrap().locked.all);
+
+        assert!(
+            history.undo(&mut doc).unwrap(),
+            "the undo of a locked-layer paste must apply, not be refused by the lock it set"
+        );
+        assert_eq!(doc, before, "and it must restore the document exactly");
+    }
+
+    #[test]
+    fn a_transaction_holding_a_locked_create_rolls_back_instead_of_stranding_the_document() {
+        // The same defect seen through `Transaction`: the failing member used
+        // to be the *undo* of the locked create during rollback, so a rollback
+        // that should have restored the document returned `RollbackFailed` —
+        // the one case where this crate cannot promise atomicity — and left the
+        // document half-edited.
+        let (mut doc, id) = doc_with_layer();
+        let before = doc.clone();
+
+        let mut locked = Layer::raster("locked on arrival");
+        locked.locked.all = true;
+        let ghost = LayerId::new();
+
+        let err = Command::Transaction {
+            label: "Import".into(),
+            commands: vec![
+                Command::SetLayerProperties {
+                    layer_id: id,
+                    patch: LayerPatch {
+                        name: Some("touched".into()),
+                        ..Default::default()
+                    },
+                },
+                Command::create_layer(locked),
+                // A member that fails after the create, forcing a rollback.
+                Command::DeleteLayer { layer_id: ghost },
+            ],
+        }
+        .apply(&mut doc)
+        .unwrap_err();
+
+        assert!(
+            !matches!(err, CommandError::RollbackFailed { .. }),
+            "the rollback itself must succeed: {err}"
+        );
+        assert!(
+            matches!(err, CommandError::CannotInsertLocked(_)),
+            "and the failure reported is the locked create, not the ghost delete: {err:?}"
+        );
+        assert_eq!(doc, before, "the transaction left the document untouched");
+    }
+
+    #[test]
+    fn a_restore_cannot_smuggle_a_locked_layer_back_in() {
+        // `RestoreLayers` is the other insertion, and it has the same inverse
+        // (`DeleteLayer`), so it needs the same guard. A subtree captured by
+        // `DeleteLayer` can never carry a lock — the delete refused one — but a
+        // journal is untrusted input, and this is how a hand-written one would
+        // reach an un-undoable restore.
+        let mut doc = Document::new(100, 100, "t");
+        let g = Layer::group("G");
+        let gid = g.id;
+        Command::create_layer(g).apply(&mut doc).unwrap();
+        let child = Layer::raster("C");
+        let cid = child.id;
+        Command::create_layer(child).apply(&mut doc).unwrap();
+        Command::MoveLayer {
+            layer_id: cid,
+            parent: Some(gid),
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+
+        // Lock the child through the field, as a corrupt document would, then
+        // detach the subtree behind the command system's back.
+        doc.layers.get_mut(cid).unwrap().locked.all = true;
+        let subtree = doc.layers.remove(gid).unwrap();
+        let before = doc.clone();
+
+        let err = Command::RestoreLayers { subtree }
+            .apply(&mut doc)
+            .unwrap_err();
+        assert!(
+            matches!(err, CommandError::CannotInsertLocked(l) if l == cid),
+            "the locked *child* is what would block the undo: {err:?}"
+        );
+        assert_eq!(doc, before);
+    }
+
+    #[test]
+    fn an_edit_to_a_corrupt_layer_is_still_undoable() {
+        // `opacity`, `fill_opacity` and `transform` are public, unvalidated
+        // fields (`layer_model` clamps at read), so a hand-edited document can
+        // hold values this command refuses to *write*. The inverse used to
+        // capture them raw, and the inverse is applied through the same
+        // `validate()`, so editing such a layer produced an undo entry that
+        // could never apply.
+        for corrupt in [2.0f32, -1.0, f32::NAN, f32::INFINITY] {
+            let (mut doc, id) = doc_with_layer();
+            {
+                let layer = doc.layers.get_mut(id).unwrap();
+                layer.opacity = corrupt;
+                layer.fill_opacity = corrupt;
+            }
+            let inverse = Command::SetLayerProperties {
+                layer_id: id,
+                patch: LayerPatch {
+                    opacity: Some(0.5),
+                    fill_opacity: Some(0.5),
+                    ..Default::default()
+                },
+            }
+            .apply(&mut doc)
+            .unwrap();
+
+            inverse.apply(&mut doc).unwrap_or_else(|e| {
+                panic!("undo of an edit to opacity {corrupt} was refused: {e}")
+            });
+            // Undo restores the *effective* value — the one the compositor was
+            // already using for that corrupt field — so the layer comes back
+            // looking exactly as it did, and the document is now valid.
+            let layer = doc.layers.get(id).unwrap();
+            assert_eq!(layer.opacity, layer_model::blend::unit(corrupt));
+            assert_eq!(layer.fill_opacity, layer_model::blend::unit(corrupt));
+        }
+
+        // Same for a non-finite transform, which `validate` also refuses.
+        let (mut doc, id) = doc_with_layer();
+        doc.layers.get_mut(id).unwrap().transform =
+            Affine2::from_cols_array(&[f32::NAN, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        let inverse = Command::SetLayerProperties {
+            layer_id: id,
+            patch: LayerPatch {
+                transform: Some([1.0, 0.0, 0.0, 1.0, 10.0, 0.0]),
+                ..Default::default()
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        inverse
+            .apply(&mut doc)
+            .expect("undo of an edit to a NaN transform was refused");
+        assert_eq!(
+            doc.layers.get(id).unwrap().transform,
+            Affine2::IDENTITY,
+            "a matrix that cannot be restored is normalized to the identity"
+        );
+
+        // And none of that disturbs the ordinary case: a valid prior value is
+        // restored bit-for-bit.
+        let (mut doc, id) = doc_with_layer();
+        doc.layers.get_mut(id).unwrap().opacity = 0.375;
+        let before = doc.clone();
+        let inverse = Command::SetLayerProperties {
+            layer_id: id,
+            patch: LayerPatch {
+                opacity: Some(0.5),
+                transform: Some([2.0, 0.0, 0.0, 2.0, 1.0, 1.0]),
+                ..Default::default()
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        inverse.apply(&mut doc).unwrap();
         assert_eq!(doc, before);
     }
 

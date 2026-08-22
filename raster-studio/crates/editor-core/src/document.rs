@@ -18,20 +18,26 @@ use crate::selection::Selection;
 /// # History
 ///
 /// * `1` — initial.
-/// * `2` — [`crate::Command::DeleteLayer`]'s inverse became
-///   `Command::RestoreLayers`, carrying the whole detached subtree instead of a
-///   single layer plus a follow-up move. A version-1 journal still replays
-///   unchanged (its inverse was a `Transaction` of variants that all still
-///   exist and still behave identically), so no migration step is needed; the
-///   bump exists because a version-2 journal is *not* readable by version-1
-///   code.
+/// * `2` — **never shipped.** No build ever wrote a version-2 document: the
+///   change it was allocated for ([`crate::Command::DeleteLayer`]'s inverse
+///   becoming `Command::RestoreLayers`, which carries the whole detached
+///   subtree instead of a single layer plus a follow-up move) went out in the
+///   same release as the version-3 changes below, so the number was consumed
+///   without a format ever bearing it. It is listed rather than reused because
+///   reusing a version number is how two different formats end up claiming to
+///   be the same one.
 /// * `3` — pixels became editable. The document gained a [`PixelStore`], the
 ///   selection gained per-pixel coverage and is now persisted, `Document`
 ///   gained the active layer, [`crate::Command`] gained `PaintTiles`,
 ///   `FillRegion` and `ClearRegion`, and [`crate::LayerPatch`] grew to cover
 ///   the rest of `Layer` (mask, transform, locks, clipping, layer styles).
+///   This version also carries the change listed above under `2`:
+///   `Command::RestoreLayers` is now the inverse of a delete.
 ///   Older documents and journals still load: every added field defaults, and
-///   no pre-existing variant changed shape.
+///   no pre-existing variant changed shape (a version-1 journal's delete
+///   inverse was a `Transaction` of variants that all still exist and still
+///   behave identically). The bump is one-way — a version-3 journal is not
+///   readable by version-1 code.
 pub const DOCUMENT_FORMAT_VERSION: u32 = 3;
 
 /// Oldest format this build can still read. Everything from here up to
@@ -184,6 +190,24 @@ pub struct Document {
 ///
 /// `selection` and `pixels` are omitted while they carry nothing, and `dirty`
 /// and `path` are session state and are never written.
+///
+/// # Requires a self-describing format
+/// Because those three fields are omitted conditionally, the field *count*
+/// varies with the document's content: a document with pixels and no selection
+/// emits `[meta, layers, pixels, ...]`. That is only readable again by a
+/// **name-keyed** encoding — `serde_json`, or the `rmp_serde::to_vec_named`
+/// that `project-format::save_project` is required to keep using. Handed to a
+/// positional encoder (`rmp_serde::to_vec`, `bincode`, `postcard`) the same
+/// bytes deserialize by position, and [`DocumentRepr`] reads that [`PixelStore`]
+/// into its `selection` field — silent corruption rather than an error.
+///
+/// So: **do not add a compact serializer for `Document` without first making
+/// this impl emit all five fields unconditionally.** The constraint is
+/// executable, not just written down here:
+/// `the_serialized_form_needs_a_name_keyed_encoding` round-trips a document
+/// through `rmp_serde::to_vec_named` and pins the omissions that make the field
+/// count content-dependent, so the day this impl becomes position-stable that
+/// test fails and points at this note.
 impl Serialize for Document {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let selection = (!self.selection.is_none()).then_some(&self.selection);
@@ -404,6 +428,46 @@ mod tests {
             );
             assert_eq!(back, d);
         }
+    }
+
+    #[test]
+    fn the_serialized_form_needs_a_name_keyed_encoding() {
+        // `Serialize for Document` omits `selection`, `pixels` and
+        // `active_layer` when they are empty, so the field count depends on the
+        // content. This test is the executable record of what that costs.
+        let mut d = Document::new(32, 32, "t");
+        let l = Layer::raster("L");
+        let id = l.id;
+        d.layers.push_root(l).unwrap();
+        d.pixels.apply(
+            PixelKey::Layer(id),
+            &crate::pixels::TileDelta::single(crate::pixels::TileEdit::set(
+                raster::TileCoord::new(0, 0, 0),
+                raster::TileHash([7; 32]),
+            )),
+        );
+        assert!(d.selection.is_none(), "the field that gets omitted");
+
+        // What `project-format::save_project` does, and the contract it has to
+        // keep: named MessagePack round-trips exactly.
+        let named = rmp_serde::to_vec_named(&d).unwrap();
+        let back: Document = rmp_serde::from_slice(&named).unwrap();
+        assert_eq!(back, d, "to_vec_named must be an identity");
+
+        // And here is why it has to be *named*: this document emits three
+        // fields, and the third one is `pixels`. A positional encoder writes
+        // `[meta, layers, pixels]`; a positional reader assigns that third
+        // element to `selection`, which is the next field in `DocumentRepr`.
+        // Nothing about that read is loud — it is the wrong document, not an
+        // error.
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(json.contains(r#""pixels""#), "got {json}");
+        assert!(
+            !json.contains(r#""selection""#) && !json.contains(r#""active_layer""#),
+            "the omissions are the whole point of this test: {json}"
+        );
+        // If these two assertions ever fail, the impl has become
+        // position-stable: drop this test and the warning in its doc comment.
     }
 
     #[test]

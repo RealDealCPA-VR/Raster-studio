@@ -18,13 +18,19 @@
 //!
 //! Two invariants the rest of the codebase depends on:
 //!
-//! * **The working space is unclamped `f32` linear sRGB.** Every function here
-//!   is total: nothing panics, negatives are mirrored rather than clipped, and
-//!   highlights above `1.0` pass through. `NaN` comes out only where `NaN` went
-//!   in, apart from a closed set of numeric-overflow exceptions listed below.
+//! * **The working space is unclamped `f32` linear sRGB.** Nothing here panics.
+//!   The transfer functions, the space dispatch, CIELAB, luminance and the
+//!   alpha helpers are scene-referred: they mirror negatives rather than
+//!   clipping them and pass highlights above `1.0` straight through. The
+//!   HSL/HSV entry points are the exception — they are display-referred
+//!   reparameterisations of encoded RGB, are defined only on `[0, 1]`, and
+//!   clamp their input into that range (see [`model`]), so they must not be fed
+//!   raw working-space pixels. `clamping_claim_matches_the_code` machine-checks
+//!   that split in both directions. `NaN` comes out only where `NaN` went in,
+//!   apart from a closed set of numeric-overflow exceptions listed below.
 //!
 //!   Two independent overflows create them, and both need a channel magnitude
-//!   far beyond any pixel value. An *encoded* channel above roughly `1.2e16`
+//!   far beyond any pixel value. An *encoded* channel above about `1.19e16`
 //!   overflows the sRGB curve to infinity (see [`transfer`]). A *linear*
 //!   channel large enough to overflow a coefficient — above about `1.05e38`
 //!   (`f32::MAX / 3.241`, the largest [`XYZ_D65_TO_LINEAR_SRGB`] coefficient),
@@ -308,7 +314,7 @@ mod tests {
     }
 
     /// Finite magnitudes spanning pixel scale to `f32::MAX`, straddling both
-    /// documented overflow points (the `~1.2e16` encoded-domain sRGB curve
+    /// documented overflow points (the `~1.19e16` encoded-domain sRGB curve
     /// overflow and the `~1e38` linear-domain coefficient overflow).
     fn sweep_values() -> [f32; 30] {
         [
@@ -403,7 +409,7 @@ mod tests {
     /// moved down into magnitudes an image could reach.
     #[test]
     fn documented_nan_boundaries_sit_where_the_docs_say() {
-        // Encoded-domain overflow (~1.2e16): the sRGB curve saturates to
+        // Encoded-domain overflow (~1.19e16): the sRGB curve saturates to
         // infinity, then a channel-combining step evaluates `inf - inf`.
         // P3 needs same-signed infinities because its matrix row mixes
         // coefficient signs (+1.2249, -0.2249); the all-positive XYZ and
@@ -459,6 +465,155 @@ mod tests {
         }
         // NaN in, NaN out is deliberate, not an accident of the above.
         assert!(to_linear(&ColorSpace::Srgb, [f32::NAN; 3])[0].is_nan());
+    }
+
+    /// A scene-referred entry point named as the crate doc names it, paired
+    /// with a "triple in, triple out" reduction of it.
+    type UnclampedEntryPoint = (&'static str, fn([f32; 3]) -> [f32; 3]);
+
+    /// Entry points the crate-level doc lists as scene-referred. Each must pass
+    /// its input through unclamped, so both a highlight above `1.0` and a
+    /// negative have to change the output rather than collapsing onto whatever
+    /// the clamped triple gives.
+    fn unclamped_triple_entry_points() -> Vec<UnclampedEntryPoint> {
+        vec![
+            ("to_linear(sRGB)", |v| to_linear(&ColorSpace::Srgb, v)),
+            ("to_linear(Linear sRGB)", |v| {
+                to_linear(&ColorSpace::LinearSrgb, v)
+            }),
+            ("to_linear(Display P3)", |v| {
+                to_linear(&ColorSpace::DisplayP3, v)
+            }),
+            ("to_linear(ICC identity)", |v| {
+                to_linear(
+                    &ColorSpace::IccProfile {
+                        asset_hash: "probe".to_string(),
+                    },
+                    v,
+                )
+            }),
+            ("from_linear(sRGB)", |v| from_linear(&ColorSpace::Srgb, v)),
+            ("from_linear(Linear sRGB)", |v| {
+                from_linear(&ColorSpace::LinearSrgb, v)
+            }),
+            ("from_linear(Display P3)", |v| {
+                from_linear(&ColorSpace::DisplayP3, v)
+            }),
+            ("srgb_to_linear3", srgb_to_linear3),
+            ("linear_to_srgb3", linear_to_srgb3),
+            ("linear_srgb_to_xyz", linear_srgb_to_xyz),
+            ("xyz_to_linear_srgb", xyz_to_linear_srgb),
+            ("rgb_to_lab", rgb_to_lab),
+            ("linear_srgb_to_lab", linear_srgb_to_lab),
+        ]
+    }
+
+    /// Machine-checks the crate-level range claim in **both** directions.
+    ///
+    /// The doc used to state as a blanket invariant that "negatives are
+    /// mirrored rather than clipped, and highlights above `1.0` pass through".
+    /// Four entry points have never satisfied it: `rgb_to_hsl`, `rgb_to_hsv`,
+    /// `hsl_to_rgb` and `hsv_to_rgb` push every non-hue channel through
+    /// `clamp01`, so `rgb_to_hsl([2.0, 0.5, 0.25])` returns exactly what
+    /// `rgb_to_hsl([1.0, 0.5, 0.25])` returns and the highlight is destroyed.
+    /// `model`'s own per-function docs said so correctly; only the crate root
+    /// was wrong, which is the worst place for it — a caller who reads just the
+    /// root concludes HSL is HDR-safe and feeds it working-space pixels.
+    ///
+    /// The root now names the exception. This test is what keeps the two lists
+    /// from rotting back into prose: adding a clamp to a scene-referred path
+    /// fails the second half, and removing one from an HSL/HSV path fails the
+    /// first.
+    #[test]
+    fn clamping_claim_matches_the_code() {
+        // --- Display-referred: the input IS clamped into [0, 1]. ---
+        // Analysis direction: all three channels are colour channels.
+        assert_eq!(
+            rgb_to_hsl([2.0, 0.5, 0.25]),
+            rgb_to_hsl([1.0, 0.5, 0.25]),
+            "rgb_to_hsl is documented as clamping its input"
+        );
+        assert_eq!(
+            rgb_to_hsl([-1.0, 0.5, 0.25]),
+            rgb_to_hsl([0.0, 0.5, 0.25]),
+            "rgb_to_hsl is documented as clamping its input"
+        );
+        assert_eq!(
+            rgb_to_hsv([2.0, 0.5, 0.25]),
+            rgb_to_hsv([1.0, 0.5, 0.25]),
+            "rgb_to_hsv is documented as clamping its input"
+        );
+        assert_eq!(
+            rgb_to_hsv([-1.0, 0.5, 0.25]),
+            rgb_to_hsv([0.0, 0.5, 0.25]),
+            "rgb_to_hsv is documented as clamping its input"
+        );
+        // Synthesis direction: component 0 is hue, which wraps rather than
+        // clamping, so only saturation and lightness/value are probed. The
+        // colour chosen is chromatic and mid-lightness, so an unclamped
+        // saturation really would change the answer.
+        assert_eq!(
+            hsl_to_rgb([30.0, 2.0, 0.5]),
+            hsl_to_rgb([30.0, 1.0, 0.5]),
+            "hsl_to_rgb is documented as clamping saturation"
+        );
+        assert_eq!(
+            hsl_to_rgb([30.0, 0.5, -1.0]),
+            hsl_to_rgb([30.0, 0.5, 0.0]),
+            "hsl_to_rgb is documented as clamping lightness"
+        );
+        assert_eq!(
+            hsv_to_rgb([30.0, 2.0, 0.5]),
+            hsv_to_rgb([30.0, 1.0, 0.5]),
+            "hsv_to_rgb is documented as clamping saturation"
+        );
+        assert_eq!(
+            hsv_to_rgb([30.0, 0.5, 2.0]),
+            hsv_to_rgb([30.0, 0.5, 1.0]),
+            "hsv_to_rgb is documented as clamping value"
+        );
+        // And the clamp is doing real work at those inputs, not comparing two
+        // degenerate blacks: the clamped answers are distinguishable colours.
+        assert_ne!(hsl_to_rgb([30.0, 1.0, 0.5]), hsl_to_rgb([30.0, 0.5, 0.5]));
+        assert_ne!(hsv_to_rgb([30.0, 1.0, 0.5]), hsv_to_rgb([30.0, 0.5, 0.5]));
+
+        // --- Scene-referred: the input is NOT clamped. ---
+        for (name, eval) in unclamped_triple_entry_points() {
+            assert_ne!(
+                eval([2.0, 0.25, 0.25]),
+                eval([1.0, 0.25, 0.25]),
+                "{name} clamped a highlight away; the crate doc promises it passes through"
+            );
+            assert_ne!(
+                eval([-0.5, 0.25, 0.25]),
+                eval([0.0, 0.25, 0.25]),
+                "{name} clipped a negative to zero; the crate doc promises it is mirrored"
+            );
+        }
+        // Alpha helpers, which take a quadruple rather than a triple.
+        assert_eq!(
+            premultiply([2.0, -0.5, 0.25, 0.5]),
+            [1.0, -0.25, 0.125, 0.5]
+        );
+        assert_eq!(
+            unpremultiply([1.0, -0.25, 0.125, 0.5]),
+            [2.0, -0.5, 0.25, 0.5]
+        );
+        // Luminance is a weighted sum with no clamp at either end.
+        assert!(srgb_luminance([2.0, 0.25, 0.25]) > srgb_luminance([1.0, 0.25, 0.25]));
+        assert!(linear_srgb_luminance([-1.0, 0.0, 0.0]) < 0.0);
+        // The `lab_to_*` direction is unclamped on its *output*: an
+        // out-of-gamut Lab colour leaves `[0, 1]` instead of being clipped.
+        let vivid = lab_to_rgb([50.0, 120.0, -80.0]);
+        assert!(
+            vivid.iter().any(|c| !(0.0..=1.0).contains(c)),
+            "lab_to_rgb clipped an out-of-gamut colour into gamut: {vivid:?}"
+        );
+        let vivid = lab_to_linear_srgb([50.0, 120.0, -80.0]);
+        assert!(
+            vivid.iter().any(|c| !(0.0..=1.0).contains(c)),
+            "lab_to_linear_srgb clipped an out-of-gamut colour into gamut: {vivid:?}"
+        );
     }
 
     #[test]

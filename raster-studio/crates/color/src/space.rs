@@ -90,11 +90,27 @@ pub const XYZ_D65_TO_LINEAR_SRGB: Mat3 = [
 /// The D65 white point as this crate's matrices actually realise it, i.e. the
 /// row sums of [`LINEAR_SRGB_TO_XYZ_D65`].
 ///
-/// Deliberately *not* the rounded literature value `(0.95047, 1.0, 1.08883)`:
-/// using the matrix's own white point is what makes a neutral RGB triple map to
-/// exactly `a = b = 0` in CIELAB, so greys never acquire a chroma cast when a
-/// user edits in Lab.
-pub const D65_WHITE_XYZ: [f32; 3] = [0.950_455_9, 1.0, 1.089_057_8];
+/// Summed from the matrix rather than written out as a literal, and summed in
+/// the same left-to-right order [`mat3_mul_vec3`] uses, so this is bit-exactly
+/// `linear_srgb_to_xyz([1.0, 1.0, 1.0])` and cannot drift from it. A
+/// hand-transcribed literal previously sat one ULP above the sum in `Z`, which
+/// was enough to give white a `b*` of `1.19e-5`;
+/// `d65_white_is_bit_exactly_what_the_matrix_computes` pins the equality.
+///
+/// Deliberately *not* the rounded literature value `(0.95047, 1.0, 1.08883)`.
+/// Using the matrix's own white point is what keeps greys from acquiring a
+/// chroma cast when a user edits in Lab: white and black map to exactly
+/// `a* = b* = 0`, and every other neutral in `[0, 1]` lands within `1e-4` of it
+/// (rounding inside the matrix product is what stops *every* neutral being
+/// exact). The literature value puts a cast on white alone that is two orders
+/// of magnitude past that bound. `neutral_rgb_has_no_visible_chroma_cast_in_lab`
+/// in `model` asserts all three of those statements, the last by measuring the
+/// literature white rather than describing it.
+pub const D65_WHITE_XYZ: [f32; 3] = [
+    LINEAR_SRGB_TO_XYZ_D65[0][0] + LINEAR_SRGB_TO_XYZ_D65[0][1] + LINEAR_SRGB_TO_XYZ_D65[0][2],
+    LINEAR_SRGB_TO_XYZ_D65[1][0] + LINEAR_SRGB_TO_XYZ_D65[1][1] + LINEAR_SRGB_TO_XYZ_D65[1][2],
+    LINEAR_SRGB_TO_XYZ_D65[2][0] + LINEAR_SRGB_TO_XYZ_D65[2][1] + LINEAR_SRGB_TO_XYZ_D65[2][2],
+];
 
 /// Linear Display P3 to linear sRGB, derived from both sets of primaries under
 /// a shared D65 white. Values outside `[0, 1]` are expected: P3 is the wider
@@ -352,6 +368,28 @@ mod tests {
             [0.95047, 1.0, 1.08883],
             2e-3,
             "D65 vs literature",
+        );
+    }
+
+    /// The white point has to be *bit-exactly* what the matrix computes, not
+    /// merely close, because CIELAB divides XYZ by it: any difference at all
+    /// leaves a residue in `a*`/`b*` on neutral input, which is the one thing
+    /// [`D65_WHITE_XYZ`] exists to prevent. A hand-written literal used to sit
+    /// one ULP high in `Z` and gave white `b* = 1.19e-5`; the `1e-6` tolerance
+    /// in the test above cannot see a one-ULP difference at `1.089`, whose f32
+    /// spacing is `1.2e-7`, so this assertion is exact on purpose.
+    #[test]
+    fn d65_white_is_bit_exactly_what_the_matrix_computes() {
+        assert_eq!(
+            linear_srgb_to_xyz([1.0, 1.0, 1.0]),
+            D65_WHITE_XYZ,
+            "white point drifted from the matrix it is supposed to be the row sums of"
+        );
+        // Bit patterns, so a failure report names the ULP rather than printing
+        // two decimal strings that may or may not look different.
+        assert_eq!(
+            linear_srgb_to_xyz([1.0, 1.0, 1.0]).map(f32::to_bits),
+            D65_WHITE_XYZ.map(f32::to_bits)
         );
     }
 

@@ -61,6 +61,16 @@ pub struct Layer {
     pub transform: Affine2,
     /// Attached mask, if any. Carries everything the compositor needs to turn
     /// the referenced coverage data into an alpha multiplier.
+    ///
+    /// **Wire format.** This field used to serialize as a bare [`MaskId`]
+    /// string; it is now the whole [`LayerMask`] object, because a mask id
+    /// alone cannot tell the compositor whether the mask is enabled, inverted,
+    /// feathered or at what density. A `null` mask is unaffected, but a
+    /// pre-0.1.0 document that actually *had* a mask no longer loads. That is
+    /// deliberate rather than papered over with a legacy string form: nothing
+    /// has shipped at this version, and a permanently accepted alternate shape
+    /// would cost more than the migration it saves. Documents from 0.1.0
+    /// onward round-trip.
     #[serde(default)]
     pub mask: Option<LayerMask>,
     pub clipping: ClippingMode,
@@ -508,9 +518,79 @@ mod tests {
     }
 
     #[test]
-    fn children_is_empty_for_non_groups() {
-        assert!(Layer::raster("R").children().is_empty());
-        assert!(Layer::group("G").children().is_empty());
+    fn the_mask_field_is_an_object_now_and_a_bare_id_is_refused() {
+        // Pins the wire-format note on `Layer::mask`: a mask is the whole
+        // `LayerMask` object, so the old bare-id shape is refused loudly rather
+        // than silently dropping the mask (which would lose the user's
+        // enabled/inverted/density/feather settings on load).
+        let legacy = r#"{
+            "id": "5f0d1e2c-0000-4000-8000-000000000002",
+            "name": "Masked",
+            "visible": true,
+            "locked": {},
+            "opacity": 1.0,
+            "blend_mode": "Normal",
+            "transform": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            "mask": "5f0d1e2c-0000-4000-8000-0000000000aa",
+            "clipping": "None",
+            "kind": {"Raster": {"source_asset": null}}
+        }"#;
+        assert!(
+            serde_json::from_str::<Layer>(legacy).is_err(),
+            "a bare mask id must not load as a mask"
+        );
+
+        // The current shape carries the whole mask across a round trip.
+        let mut l = Layer::raster("Masked");
+        let mut m = LayerMask::new(MaskId::new());
+        m.enabled = false;
+        m.inverted = true;
+        l.set_mask(m);
+        let back: Layer = serde_json::from_str(&serde_json::to_string(&l).unwrap()).unwrap();
+        assert_eq!(back, l);
+        assert_eq!(back.mask_id(), l.mask_id());
+    }
+
+    #[test]
+    fn only_a_group_can_ever_hold_children() {
+        // `LayerTree::validate` does not check "a non-group must not claim
+        // children" at runtime because it cannot happen: the child list lives
+        // in `GroupLayer` and nowhere else. That is a property of these types,
+        // so this is where it is pinned — every non-group kind, not just
+        // raster.
+        let kinds = [
+            LayerKind::Raster(RasterLayer::default()),
+            LayerKind::Adjustment(AdjustmentLayer {
+                kind: AdjustmentKind::Exposure { stops: 1.0 },
+            }),
+            LayerKind::Text(TextLayer::default()),
+            LayerKind::Shape(ShapeLayer::default()),
+            LayerKind::SmartObject(SmartObjectLayer {
+                asset: AssetId::new(),
+                linked: false,
+            }),
+            LayerKind::Generator(GeneratorLayer {
+                provenance_key: "prov".into(),
+            }),
+        ];
+        for kind in kinds {
+            let l = Layer::with_kind("L", kind);
+            assert!(!l.is_group());
+            assert!(
+                l.children().is_empty(),
+                "{:?} exposed children through a non-group kind",
+                l.kind
+            );
+        }
+
+        // The one kind that can hold them still starts empty.
+        let mut g = Layer::group("G");
+        assert!(g.is_group());
+        assert!(g.children().is_empty());
+        if let LayerKind::Group(gr) = &mut g.kind {
+            gr.children.push(LayerId::new());
+        }
+        assert_eq!(g.children().len(), 1, "a group must expose its children");
     }
 
     #[test]
