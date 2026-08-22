@@ -439,6 +439,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor"
+version = "0.1.0"
+dependencies = [
+ "color",
+ "editor-core",
+ "glam",
+ "layer-model",
+ "raster",
+ "rayon",
+ "serde",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -524,6 +538,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "crossbeam-deque"
+version = "0.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5181e0de7b61eb03a81e347d6dd8797bae9da5146707b51077e2d71a54ec0ceb"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
+dependencies = [
+ "crossbeam-utils",
 ]
 
 [[package]]
@@ -773,6 +806,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "either"
+version = "1.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
+
+[[package]]
 name = "emath"
 version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -852,6 +891,17 @@ name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
+
+[[package]]
+name = "filters"
+version = "0.1.0"
+dependencies = [
+ "color",
+ "raster",
+ "rayon",
+ "serde",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "find-msvc-tools"
@@ -2141,6 +2191,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "psd"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "layer-model",
+ "raster",
+ "serde",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2234,6 +2295,26 @@ name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
+
+[[package]]
+name = "rayon"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
+]
 
 [[package]]
 name = "redox_syscall"
@@ -2405,6 +2486,18 @@ dependencies = [
  "memmap2",
  "smithay-client-toolkit 0.19.2",
  "tiny-skia",
+]
+
+[[package]]
+name = "selection"
+version = "0.1.0"
+dependencies = [
+ "editor-core",
+ "glam",
+ "raster",
+ "rayon",
+ "serde",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -3046,6 +3139,15 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
+
+[[package]]
+name = "vector"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "serde",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "version_check"

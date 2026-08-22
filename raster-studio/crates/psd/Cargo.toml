@@ -1,0 +1,13 @@
+[package]
+name = "psd"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+flate2.workspace = true
+layer-model.workspace = true
+raster.workspace = true

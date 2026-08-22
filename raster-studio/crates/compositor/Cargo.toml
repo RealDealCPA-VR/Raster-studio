@@ -1,0 +1,16 @@
+[package]
+name = "compositor"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+rayon.workspace = true
+glam.workspace = true
+color.workspace = true
+raster.workspace = true
+layer-model.workspace = true
+editor-core.workspace = true

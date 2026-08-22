@@ -1,0 +1,13 @@
+[package]
+name = "filters"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+rayon.workspace = true
+color.workspace = true
+raster.workspace = true
