@@ -10,7 +10,6 @@ serde.workspace = true
 glam.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
-color.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

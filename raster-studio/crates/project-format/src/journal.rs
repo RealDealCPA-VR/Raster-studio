@@ -70,7 +70,7 @@ mod tests {
         let mut doc = Document::new(64, 64, "t");
         let layer = Layer::raster("L1");
         let id = layer.id;
-        let cmd = Command::CreateLayer { layer };
+        let cmd = Command::create_layer(layer);
         cmd.apply(&mut doc).unwrap();
         CommandJournal::append(&jpath, &cmd).unwrap();
 

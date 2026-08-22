@@ -603,6 +603,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "design"
+version = "0.1.0"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -708,14 +715,13 @@ dependencies = [
 name = "editor-core"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "color",
  "glam",
  "layer-model",
+ "raster",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
- "uuid",
 ]
 
 [[package]]
@@ -1386,7 +1392,6 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 name = "layer-model"
 version = "0.1.0"
 dependencies = [
- "color",
  "glam",
  "serde",
  "serde_json",
@@ -2217,10 +2222,8 @@ checksum = "ca45419789ae5a7899559e9512e58ca889e41f04f1f2445e9f4b290ceccd1d08"
 name = "raster"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "blake3",
- "bytemuck",
- "glam",
+ "color",
  "image",
  "serde",
  "thiserror 2.0.20",
@@ -2284,11 +2287,7 @@ dependencies = [
  "bytemuck",
  "glam",
  "pollster",
- "raster",
- "raw-window-handle",
  "render-shaders",
- "thiserror 2.0.20",
- "tracing",
  "wgpu",
 ]
 

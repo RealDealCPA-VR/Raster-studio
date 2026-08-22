@@ -24,7 +24,7 @@ fn build_save_load_replay_undo() {
 
     let bg = Layer::raster("Background");
     let bg_id = bg.id;
-    let create_bg = Command::CreateLayer { layer: bg };
+    let create_bg = Command::create_layer(bg);
     hist.apply(&mut doc, create_bg.clone()).unwrap();
     CommandJournal::append(&journal, &create_bg).unwrap();
 
@@ -74,9 +74,9 @@ fn transaction_import_is_atomic_and_undoable() {
     let tx = Command::Transaction {
         label: "Import Assets".into(),
         commands: vec![
-            Command::CreateLayer { layer: g },
-            Command::CreateLayer { layer: l1 },
-            Command::CreateLayer { layer: l2 },
+            Command::create_layer(g),
+            Command::create_layer(l1),
+            Command::create_layer(l2),
         ],
     };
     hist.apply(&mut doc, tx).unwrap();

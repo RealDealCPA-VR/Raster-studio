@@ -26,9 +26,7 @@ pub fn layers_panel(
         ui.horizontal(|ui| {
             ui.heading("Layers");
             if ui.button("+").on_hover_text("Add raster layer").clicked() {
-                out.push(Command::CreateLayer {
-                    layer: Layer::raster("New Layer"),
-                });
+                out.push(Command::create_layer(Layer::raster("New Layer")));
             }
             let can_delete = selected.is_some();
             if ui
@@ -45,7 +43,9 @@ pub fn layers_panel(
         ui.separator();
 
         for &id in doc.layers.root() {
-            let Some(layer) = doc.layers.get(id) else { continue };
+            let Some(layer) = doc.layers.get(id) else {
+                continue;
+            };
             let is_selected = *selected == Some(id);
             let label = format!(
                 "{}{} — {:.0}%",

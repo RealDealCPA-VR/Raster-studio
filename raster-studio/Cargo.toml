@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "apps/studio-desktop",
   "crates/app-shell",
+  "crates/design",
   "crates/ui",
   "crates/editor-core",
   "crates/layer-model",
@@ -86,6 +87,7 @@ rand = "0.8"
 
 # Internal crates
 app-shell        = { path = "crates/app-shell" }
+design           = { path = "crates/design" }
 ui               = { path = "crates/ui" }
 editor-core      = { path = "crates/editor-core" }
 layer-model      = { path = "crates/layer-model" }

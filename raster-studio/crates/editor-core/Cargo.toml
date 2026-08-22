@@ -6,11 +6,16 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-anyhow.workspace = true
 thiserror.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 glam.workspace = true
-uuid.workspace = true
 color.workspace = true
 layer-model.workspace = true
+# Tile vocabulary: `TileCoord`, `TileHash`, `PixelRect`, `TILE_SIZE`, and
+# `Tile`/`PixelFormat` (used to derive a solid tile's hash). Commands reference
+# pixels by content hash, and the hash has to be the same one the tile store
+# computes, so the types are imported rather than redeclared.
+raster.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

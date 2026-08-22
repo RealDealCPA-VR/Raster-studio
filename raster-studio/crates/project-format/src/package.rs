@@ -128,8 +128,8 @@ mod tests {
         let pkg = dir.path().join("MyProject.rstudio");
 
         let mut doc = Document::new(1920, 1080, "MyProject");
-        doc.layers.push_root(Layer::raster("Background"));
-        doc.layers.push_root(Layer::group("Group"));
+        doc.layers.push_root(Layer::raster("Background")).unwrap();
+        doc.layers.push_root(Layer::group("Group")).unwrap();
 
         save_project(&pkg, &doc).unwrap();
         assert!(pkg.join("manifest.json").exists());

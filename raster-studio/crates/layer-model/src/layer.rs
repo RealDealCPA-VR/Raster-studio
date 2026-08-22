@@ -4,10 +4,12 @@ use glam::Affine2;
 use serde::{Deserialize, Serialize};
 
 use crate::blend::BlendMode;
+use crate::effects::LayerEffects;
 use crate::ids::{AssetId, LayerId, MaskId};
+use crate::mask::LayerMask;
 
 /// The variant-specific payload of a layer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LayerKind {
     Raster(RasterLayer),
     Group(GroupLayer),
@@ -18,74 +20,192 @@ pub enum LayerKind {
     Generator(GeneratorLayer),
 }
 
+fn one() -> f32 {
+    1.0
+}
+
 /// Common properties shared by every layer regardless of kind.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `PartialEq` is derived so undo/redo tests can assert whole-document
+/// equality. It compares `f32` fields with IEEE semantics, so a layer holding a
+/// NaN (nothing in this crate produces one, but `opacity` and `transform` are
+/// public) does not compare equal even to itself.
+///
+/// The numeric ranges documented on `opacity` and `fill_opacity` are
+/// *expectations*, not enforced invariants — see the "Numeric ranges" section
+/// of the [crate docs](crate). Read them through
+/// [`Layer::effective_opacity`] / [`Layer::effective_fill_opacity`] to get a
+/// value that is guaranteed finite and in `0.0..=1.0`.
+///
+/// Layer ownership of children is *not* stored here — see [`crate::LayerTree`],
+/// which enforces that an id appears under at most one parent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Layer {
     pub id: LayerId,
     pub name: String,
     pub visible: bool,
     pub locked: LockState,
-    /// 0.0..=1.0
+    /// Overall opacity. Scales the layer *and* its effects. Expected in
+    /// `0.0..=1.0`; nothing enforces that, so read it through
+    /// [`Layer::effective_opacity`] before compositing.
     pub opacity: f32,
+    /// Opacity of the layer's own pixels only; layer effects are unaffected.
+    /// Photoshop's "Fill". Defaults to 1.0 for documents written before this
+    /// field existed. Expected in `0.0..=1.0`; nothing enforces that, so read
+    /// it through [`Layer::effective_fill_opacity`] before compositing.
+    #[serde(default = "one")]
+    pub fill_opacity: f32,
     pub blend_mode: BlendMode,
     /// Layer-to-document affine transform (non-destructive).
     #[serde(with = "affine2_serde")]
     pub transform: Affine2,
-    pub mask: Option<MaskId>,
+    /// Attached mask, if any. Carries everything the compositor needs to turn
+    /// the referenced coverage data into an alpha multiplier.
+    #[serde(default)]
+    pub mask: Option<LayerMask>,
     pub clipping: ClippingMode,
+    /// Layer styles. Empty by default, and the key is omitted entirely from
+    /// serialized output while the block is untouched — see
+    /// [`LayerEffects::is_default`].
+    #[serde(default, skip_serializing_if = "LayerEffects::is_default")]
+    pub effects: LayerEffects,
     pub kind: LayerKind,
 }
 
 impl Layer {
     /// Construct a raster layer with sensible defaults.
     pub fn raster(name: impl Into<String>) -> Self {
-        Self {
-            id: LayerId::new(),
-            name: name.into(),
-            visible: true,
-            locked: LockState::default(),
-            opacity: 1.0,
-            blend_mode: BlendMode::Normal,
-            transform: Affine2::IDENTITY,
-            mask: None,
-            clipping: ClippingMode::None,
-            kind: LayerKind::Raster(RasterLayer::default()),
-        }
+        Self::with_kind(name, LayerKind::Raster(RasterLayer::default()))
     }
 
     /// Construct an empty group.
     pub fn group(name: impl Into<String>) -> Self {
+        Self::with_kind(name, LayerKind::Group(GroupLayer::default()))
+    }
+
+    /// Construct a layer of any kind with default common properties.
+    ///
+    /// A [`LayerKind::Group`] must be handed to the tree **empty**. Every
+    /// insertion path ([`crate::LayerTree::push_root`],
+    /// [`crate::LayerTree::insert_at`]) rejects a group that already names
+    /// children: an id the tree does not know is [`crate::TreeError::NotFound`],
+    /// and an id it does know already has exactly one parent (invariant 2), so
+    /// it is [`crate::TreeError::AlreadyParented`]. There is no input for which
+    /// a pre-populated group is accepted.
+    ///
+    /// To create a group *around* existing layers in one step — Photoshop's
+    /// "Group Selected Layers" — use [`crate::LayerTree::group_layers`], which
+    /// inserts the empty group and re-parents the children atomically. To fill
+    /// a group afterwards, use [`crate::LayerTree::move_layer`] or
+    /// [`crate::LayerTree::insert_at`].
+    pub fn with_kind(name: impl Into<String>, kind: LayerKind) -> Self {
         Self {
             id: LayerId::new(),
             name: name.into(),
             visible: true,
             locked: LockState::default(),
             opacity: 1.0,
+            fill_opacity: 1.0,
             blend_mode: BlendMode::Normal,
             transform: Affine2::IDENTITY,
             mask: None,
             clipping: ClippingMode::None,
-            kind: LayerKind::Group(GroupLayer {
-                children: Vec::new(),
-            }),
+            effects: LayerEffects::default(),
+            kind,
         }
     }
 
     pub fn is_group(&self) -> bool {
         matches!(self.kind, LayerKind::Group(_))
     }
+
+    /// The ids of this layer's direct children, or an empty slice for a
+    /// non-group.
+    pub fn children(&self) -> &[LayerId] {
+        match &self.kind {
+            LayerKind::Group(g) => &g.children,
+            _ => &[],
+        }
+    }
+
+    /// The mask id, regardless of whether the mask is enabled.
+    pub fn mask_id(&self) -> Option<MaskId> {
+        self.mask.as_ref().map(|m| m.id)
+    }
+
+    /// The mask only when it can change the composite — a disabled or
+    /// zero-density mask resolves to `None` so the compositor can skip it.
+    pub fn effective_mask(&self) -> Option<&LayerMask> {
+        self.mask.as_ref().filter(|m| m.affects_composite())
+    }
+
+    /// Attach a mask, replacing any existing one. Returns the previous mask.
+    pub fn set_mask(&mut self, mask: LayerMask) -> Option<LayerMask> {
+        self.mask.replace(mask)
+    }
+
+    /// `true` when this layer is clipped to the layer beneath it.
+    pub fn is_clipping(&self) -> bool {
+        self.clipping == ClippingMode::ClipToBelow
+    }
+
+    /// [`Layer::opacity`] made safe to multiply with: always finite and within
+    /// `0.0..=1.0`.
+    ///
+    /// The field itself is public and unvalidated, so a hand-edited document can
+    /// hold `5.0` or (through a binary format) a NaN. This is the accessor the
+    /// compositor uses; a non-finite value resolves to `0.0` rather than
+    /// poisoning the accumulator (see [`crate::blend::unit`]).
+    pub fn effective_opacity(&self) -> f32 {
+        crate::blend::unit(self.opacity)
+    }
+
+    /// [`Layer::fill_opacity`] made safe to multiply with, on the same terms as
+    /// [`Layer::effective_opacity`].
+    pub fn effective_fill_opacity(&self) -> f32 {
+        crate::blend::unit(self.fill_opacity)
+    }
+
+    /// `true` when the layer contributes nothing to the composite and the
+    /// render graph may drop it entirely.
+    ///
+    /// Uses [`Layer::effective_opacity`], so a NaN opacity counts as a no-op
+    /// rather than slipping through the comparison (`NaN <= 0.0` is `false`).
+    pub fn is_noop(&self) -> bool {
+        !self.visible || self.effective_opacity() <= 0.0
+    }
 }
 
 /// Lock flags. Any subset can be engaged independently.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LockState {
     pub pixels: bool,
     pub position: bool,
     pub transparency: bool,
+    /// Locks everything, including renaming and deletion.
+    pub all: bool,
+}
+
+impl LockState {
+    /// `true` when any lock at all is engaged.
+    pub fn any(self) -> bool {
+        self.pixels || self.position || self.transparency || self.all
+    }
+
+    /// `true` when pixel edits must be refused.
+    pub fn blocks_pixel_edit(self) -> bool {
+        self.all || self.pixels
+    }
+
+    /// `true` when transform / move must be refused.
+    pub fn blocks_transform(self) -> bool {
+        self.all || self.position
+    }
 }
 
 /// Clipping-mask behavior relative to the layer directly below.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ClippingMode {
     #[default]
     None,
@@ -95,26 +215,44 @@ pub enum ClippingMode {
 
 /// Pixel content lives as tiles owned by the asset/tile store; a raster layer
 /// references them indirectly. Kept minimal in the scaffold.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RasterLayer {
     /// Optional origin asset this raster was imported from (for provenance).
     pub source_asset: Option<AssetId>,
 }
 
+/// How a group composites its children.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum GroupBlending {
+    /// Children are composited into their own buffer, then that buffer is
+    /// blended into the parent using the group's own blend mode and opacity.
+    /// Required whenever the group's blend mode is not `Normal`.
+    #[default]
+    Isolated,
+    /// Children blend directly against whatever is beneath the group, as if the
+    /// group did not exist (Photoshop's "Pass Through").
+    PassThrough,
+}
+
 /// A group owns an ordered list of child layer ids (top-most first).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct GroupLayer {
     pub children: Vec<LayerId>,
+    /// Collapsed state in the layers panel. Purely presentational.
+    pub collapsed: bool,
+    pub blending: GroupBlending,
 }
 
 /// A non-destructive adjustment applied to everything beneath it (or clipped).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdjustmentLayer {
     pub kind: AdjustmentKind,
 }
 
 /// The parametric adjustments available in Phase 1.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AdjustmentKind {
     Levels {
         black: f32,
@@ -141,7 +279,8 @@ pub enum AdjustmentKind {
 
 /// Editable text layer. Postponed (Phase 3); shape reserved so the enum and
 /// serialization are forward-compatible.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TextLayer {
     pub text: String,
     pub font_family: String,
@@ -149,14 +288,15 @@ pub struct TextLayer {
 }
 
 /// Vector shape layer (Phase 3).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ShapeLayer {
     /// Placeholder path representation; a real path model lands with the pen tool.
     pub path_svg: String,
 }
 
 /// Embedded or linked document rendered non-destructively (Phase 3).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SmartObjectLayer {
     pub asset: AssetId,
     pub linked: bool,
@@ -164,7 +304,7 @@ pub struct SmartObjectLayer {
 
 /// A generator layer whose pixels are produced by an AI operation. Carries a
 /// reference to recorded provenance so the result stays reproducible.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GeneratorLayer {
     /// Free-form key into the document's AI provenance records.
     pub provenance_key: String,
@@ -188,13 +328,20 @@ mod affine2_serde {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::effects::{ShadowEffect, StrokeEffect};
+    use crate::mask::LayerMask;
 
     #[test]
     fn raster_layer_defaults() {
         let l = Layer::raster("Background");
         assert_eq!(l.opacity, 1.0);
+        assert_eq!(l.fill_opacity, 1.0);
         assert!(l.visible);
         assert!(matches!(l.kind, LayerKind::Raster(_)));
+        assert!(l.effects.is_empty());
+        assert!(l.mask.is_none());
+        assert!(!l.is_clipping());
+        assert!(!l.is_noop());
     }
 
     #[test]
@@ -202,7 +349,240 @@ mod tests {
         let l = Layer::group("Group 1");
         let json = serde_json::to_string(&l).unwrap();
         let back: Layer = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.id, l.id);
+        assert_eq!(back, l);
         assert!(back.is_group());
+    }
+
+    #[test]
+    fn layer_partial_eq_sees_every_field() {
+        let base = Layer::raster("L");
+
+        let mut a = base.clone();
+        a.opacity = 0.5;
+        assert_ne!(a, base);
+
+        let mut b = base.clone();
+        b.fill_opacity = 0.5;
+        assert_ne!(b, base);
+
+        let mut c = base.clone();
+        c.locked.pixels = true;
+        assert_ne!(c, base, "LockState must participate in equality");
+
+        let mut d = base.clone();
+        d.effects.stroke = Some(StrokeEffect::default());
+        assert_ne!(d, base, "effects must participate in equality");
+
+        let mut e = base.clone();
+        e.mask = Some(LayerMask::new(MaskId::new()));
+        assert_ne!(e, base);
+
+        let mut f = base.clone();
+        f.transform = Affine2::from_translation(glam::Vec2::new(3.0, 4.0));
+        assert_ne!(f, base);
+
+        let mut g = base.clone();
+        g.kind = LayerKind::Adjustment(AdjustmentLayer {
+            kind: AdjustmentKind::Exposure { stops: 1.0 },
+        });
+        assert_ne!(g, base, "LayerKind must participate in equality");
+
+        assert_eq!(base.clone(), base);
+    }
+
+    #[test]
+    fn adjustment_kind_partial_eq() {
+        let a = AdjustmentKind::Levels {
+            black: 0.0,
+            white: 1.0,
+            gamma: 1.0,
+        };
+        let b = AdjustmentKind::Levels {
+            black: 0.0,
+            white: 1.0,
+            gamma: 2.2,
+        };
+        assert_eq!(a, a.clone());
+        assert_ne!(a, b);
+        assert_ne!(
+            AdjustmentKind::Curves { points: vec![] },
+            AdjustmentKind::Curves {
+                points: vec![[0.0, 0.0]]
+            }
+        );
+    }
+
+    #[test]
+    fn lock_state_queries() {
+        let mut l = LockState::default();
+        assert!(!l.any());
+        l.position = true;
+        assert!(l.any());
+        assert!(l.blocks_transform());
+        assert!(!l.blocks_pixel_edit());
+
+        let all = LockState {
+            all: true,
+            ..Default::default()
+        };
+        assert!(all.blocks_pixel_edit() && all.blocks_transform());
+        assert_ne!(all, LockState::default());
+    }
+
+    #[test]
+    fn mask_resolution() {
+        let mut l = Layer::raster("L");
+        assert!(l.effective_mask().is_none());
+        assert!(l.mask_id().is_none());
+
+        let id = MaskId::new();
+        assert!(l.set_mask(LayerMask::new(id)).is_none());
+        assert_eq!(l.mask_id(), Some(id));
+        assert!(l.effective_mask().is_some());
+
+        // Disabling resolves to "no mask" for the compositor but keeps the id.
+        l.mask.as_mut().unwrap().enabled = false;
+        assert!(l.effective_mask().is_none());
+        assert_eq!(l.mask_id(), Some(id));
+
+        // Replacing returns the old one so a command can restore it on undo.
+        l.mask.as_mut().unwrap().enabled = true;
+        let old = l.set_mask(LayerMask::new(MaskId::new())).unwrap();
+        assert_eq!(old.id, id);
+    }
+
+    #[test]
+    fn an_unstyled_layer_carries_no_effects_key() {
+        let l = Layer::raster("Plain");
+        let json = serde_json::to_string(&l).unwrap();
+        assert!(
+            !json.contains("\"effects\""),
+            "styleless layers must cost nothing on disk, got {json}"
+        );
+        assert_eq!(serde_json::from_str::<Layer>(&json).unwrap(), l);
+
+        // One style is enough to bring the key back.
+        let mut styled = l.clone();
+        styled.effects.stroke = Some(StrokeEffect::default());
+        let json = serde_json::to_string(&styled).unwrap();
+        assert!(json.contains("\"effects\""));
+        assert_eq!(serde_json::from_str::<Layer>(&json).unwrap(), styled);
+    }
+
+    #[test]
+    fn effects_survive_a_layer_roundtrip() {
+        let mut l = Layer::raster("Styled");
+        l.effects.drop_shadow = Some(ShadowEffect {
+            distance_px: 12.0,
+            ..Default::default()
+        });
+        l.effects.stroke = Some(StrokeEffect::default());
+        let json = serde_json::to_string(&l).unwrap();
+        let back: Layer = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, l);
+        assert_eq!(back.effects.count(), 2);
+    }
+
+    #[test]
+    fn layers_written_before_effects_and_fill_still_load() {
+        // A minimal historical payload: no `effects`, no `fill_opacity`, and a
+        // `mask` of null.
+        let json = r#"{
+            "id": "5f0d1e2c-0000-4000-8000-000000000001",
+            "name": "Old",
+            "visible": true,
+            "locked": {"pixels": false, "position": false, "transparency": false},
+            "opacity": 0.5,
+            "blend_mode": "Multiply",
+            "transform": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            "mask": null,
+            "clipping": "None",
+            "kind": {"Raster": {"source_asset": null}}
+        }"#;
+        let l: Layer = serde_json::from_str(json).unwrap();
+        assert_eq!(l.name, "Old");
+        assert_eq!(l.opacity, 0.5);
+        assert_eq!(l.fill_opacity, 1.0, "must default to fully filled");
+        assert!(l.effects.is_empty());
+        assert!(!l.locked.all, "the new lock flag defaults to false");
+    }
+
+    #[test]
+    fn children_is_empty_for_non_groups() {
+        assert!(Layer::raster("R").children().is_empty());
+        assert!(Layer::group("G").children().is_empty());
+    }
+
+    #[test]
+    fn noop_layers_are_detectable() {
+        let mut l = Layer::raster("L");
+        l.visible = false;
+        assert!(l.is_noop());
+        l.visible = true;
+        l.opacity = 0.0;
+        assert!(l.is_noop());
+    }
+
+    #[test]
+    fn effective_opacity_repairs_what_the_public_field_cannot_refuse() {
+        // The documented range is an expectation, not an invariant: the field
+        // accepts anything. The accessor is where the guarantee lives.
+        let mut l = Layer::raster("L");
+        for (raw, want) in [(5.0f32, 1.0f32), (-2.0, 0.0), (0.4, 0.4)] {
+            l.opacity = raw;
+            l.fill_opacity = raw;
+            assert_eq!(l.effective_opacity(), want, "opacity {raw}");
+            assert_eq!(l.effective_fill_opacity(), want, "fill_opacity {raw}");
+        }
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            l.opacity = bad;
+            l.fill_opacity = bad;
+            let (o, f) = (l.effective_opacity(), l.effective_fill_opacity());
+            assert!(
+                o.is_finite() && (0.0..=1.0).contains(&o),
+                "opacity {bad} -> {o}"
+            );
+            assert!(
+                f.is_finite() && (0.0..=1.0).contains(&f),
+                "fill {bad} -> {f}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_nan_opacity_counts_as_a_noop_rather_than_slipping_through() {
+        // `NaN <= 0.0` is false, so a bare field comparison would report this
+        // layer as drawable and hand NaN to the compositor.
+        let mut l = Layer::raster("L");
+        l.opacity = f32::NAN;
+        assert!(l.visible);
+        assert!(
+            l.opacity.partial_cmp(&0.0).is_none(),
+            "premise: NaN is incomparable, so a raw `opacity <= 0.0` test misses it"
+        );
+        assert!(l.is_noop());
+    }
+
+    #[test]
+    fn an_out_of_range_document_still_loads_and_is_clamped_on_read() {
+        // The load is deliberately lenient — refusing it would make one bad
+        // number cost the user the whole file. The clamp happens at read.
+        let json = r#"{
+            "id": "5f0d1e2c-0000-4000-8000-000000000009",
+            "name": "Hand edited",
+            "visible": true,
+            "locked": {},
+            "opacity": 5.0,
+            "fill_opacity": -1.0,
+            "blend_mode": "Normal",
+            "transform": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            "mask": null,
+            "clipping": "None",
+            "kind": {"Raster": {"source_asset": null}}
+        }"#;
+        let l: Layer = serde_json::from_str(json).unwrap();
+        assert_eq!(l.opacity, 5.0, "the stored value is preserved verbatim");
+        assert_eq!(l.effective_opacity(), 1.0);
+        assert_eq!(l.effective_fill_opacity(), 0.0);
     }
 }

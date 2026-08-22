@@ -5,6 +5,11 @@
 //
 // Operates in linear, premultiplied space; the caller is responsible for the
 // linearization and (un)premultiplication passes around this shader.
+//
+// ORIENTATION CONVENTION (shared with quad.wgsl, do not diverge):
+//   clip-space y = +1 is the TOP of the screen and maps to v = 0.0, the FIRST
+//   row of the bound textures. quad.wgsl gets the same flip through its camera
+//   affine; this shader applies it directly in `vs_main`.
 
 struct Params {
     blend_index: u32,
@@ -57,12 +62,21 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var src = textureSample(src_tex, samp, in.uv);
     src = src * params.opacity;
 
-    // Straight-alpha blend of the color, then standard over-compositing.
+    // Un-premultiply to straight alpha so the separable blend functions see
+    // real colors rather than alpha-attenuated ones.
     let base_rgb = select(dst.rgb / max(dst.a, 1e-5), vec3<f32>(0.0), dst.a < 1e-5);
     let src_rgb  = select(src.rgb / max(src.a, 1e-5), vec3<f32>(0.0), src.a < 1e-5);
-    let blended  = blend_rgb(base_rgb, src_rgb, params.blend_index);
 
+    // W3C Compositing 1, §9.2: the blend function only applies in proportion to
+    // how opaque the BACKDROP is:
+    //     cs = (1 - alpha_b) * Cs + alpha_b * B(Cb, Cs)
+    // Without this term a Multiply/Darken layer over an empty (fully
+    // transparent) destination would evaluate B(0, Cs) = 0 and vanish.
+    let blended = blend_rgb(base_rgb, src_rgb, params.blend_index);
+    let cs = (1.0 - dst.a) * src_rgb + dst.a * blended;
+
+    // Porter-Duff "over", emitting premultiplied color.
     let out_a = src.a + dst.a * (1.0 - src.a);
-    let out_rgb = blended * src.a + base_rgb * dst.a * (1.0 - src.a);
+    let out_rgb = cs * src.a + base_rgb * dst.a * (1.0 - src.a);
     return vec4<f32>(out_rgb, out_a);
 }

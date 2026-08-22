@@ -7,12 +7,8 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-thiserror.workspace = true
 glam.workspace = true
 wgpu.workspace = true
 bytemuck.workspace = true
 pollster.workspace = true
-raw-window-handle.workspace = true
-tracing.workspace = true
 render-shaders.workspace = true
-raster.workspace = true
