@@ -444,8 +444,11 @@ mod tests {
         let mut hist = History::new();
         hist.apply(
             &mut doc,
-            Command::paint_tiles(PixelTarget::Layer(id), [TileEdit::set(coord(0, 0), hash(1))])
-                .unwrap(),
+            Command::paint_tiles(
+                PixelTarget::Layer(id),
+                [TileEdit::set(coord(0, 0), hash(1))],
+            )
+            .unwrap(),
         )
         .unwrap();
 

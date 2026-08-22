@@ -201,12 +201,7 @@ pub fn ghost_button(ui: &mut Ui, label: &str) -> Response {
 /// glyph stays [`ColorRole::TextPrimary`] — see the
 /// `the_selected_toolbar_glyph_is_legible_over_its_accent_wash` gate in
 /// `tests/token_gates.rs`.
-pub fn toolbar_icon_button(
-    ui: &mut Ui,
-    glyph: &str,
-    tooltip: &str,
-    selected: bool,
-) -> Response {
+pub fn toolbar_icon_button(ui: &mut Ui, glyph: &str, tooltip: &str, selected: bool) -> Response {
     let t = current_tokens(ui);
     let p = &t.palette;
     let mut skin = skin_from(t, ButtonKind::Ghost);
@@ -301,13 +296,8 @@ pub fn segmented_control(
                         // shadow in the control and is what makes the choice
                         // legible.
                         let shadow_slot = ui.painter().add(egui::Shape::Noop);
-                        let response = skinned_button(
-                            ui,
-                            option,
-                            &skin,
-                            vec2(0.0, height - 2.0 * pad),
-                            inner,
-                        );
+                        let response =
+                            skinned_button(ui, option, &skin, vec2(0.0, height - 2.0 * pad), inner);
                         if is_selected && ui.is_rect_visible(response.rect) {
                             ui.painter().set(
                                 shadow_slot,
@@ -446,8 +436,7 @@ pub fn list_row(ui: &mut Ui, label: &str, selected: bool) -> Response {
         };
         let radius = Radius::Medium.resolve(&t.radii, height);
         if fill != Color32::TRANSPARENT {
-            ui.painter()
-                .rect_filled(rect, rounding(radius), fill);
+            ui.painter().rect_filled(rect, rounding(radius), fill);
         }
         let pairing = if selected {
             LIST_ROW_SELECTED
@@ -618,7 +607,11 @@ mod tests {
             let t = theme.tokens();
             let p = &t.palette;
             let skin = skin_from(t, ButtonKind::Secondary);
-            assert_eq!(skin.fill, color32(p.color(ColorRole::ControlFill)), "{theme:?}");
+            assert_eq!(
+                skin.fill,
+                color32(p.color(ColorRole::ControlFill)),
+                "{theme:?}"
+            );
             assert_eq!(
                 skin.fill_hovered,
                 color32(p.color(ColorRole::ControlFillHovered)),
@@ -632,7 +625,10 @@ mod tests {
             assert_eq!(skin.text, color32(p.text(TextRole::Primary)), "{theme:?}");
             assert_eq!(
                 skin.stroke,
-                Stroke::new(t.borders.hairline, color32(p.color(ColorRole::ControlStroke))),
+                Stroke::new(
+                    t.borders.hairline,
+                    color32(p.color(ColorRole::ControlStroke))
+                ),
                 "{theme:?}"
             );
         }

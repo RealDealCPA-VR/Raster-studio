@@ -41,20 +41,15 @@ use crate::pixels::{
 /// nullable field: `mask: None` would be indistinguishable from "leave the mask
 /// alone". A dedicated three-state enum is the fix, and it keeps the inverse
 /// exact — the inverse of `Set` on a layer that had no mask is `Clear`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum Patch<T> {
     /// Leave the field as it is.
+    #[default]
     Keep,
     /// Replace the field with this value.
     Set(T),
     /// Remove the field's value.
     Clear,
-}
-
-impl<T> Default for Patch<T> {
-    fn default() -> Self {
-        Patch::Keep
-    }
 }
 
 impl<T> Patch<T> {
@@ -140,11 +135,9 @@ impl LayerPatch {
     /// because a non-finite `transform` also has to be refused *before* it can
     /// reach the undo entry.
     fn validate(&self) -> Result<(), CommandError> {
-        for o in [self.opacity, self.fill_opacity] {
-            if let Some(v) = o {
-                if !v.is_finite() || !(0.0..=1.0).contains(&v) {
-                    return Err(CommandError::InvalidOpacity(v));
-                }
+        for v in [self.opacity, self.fill_opacity].into_iter().flatten() {
+            if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+                return Err(CommandError::InvalidOpacity(v));
             }
         }
         if let Some(m) = self.transform {
@@ -214,9 +207,7 @@ pub enum Command {
     /// Remove a layer and, if it is a group, its whole subtree. Refused when
     /// the layer or any descendant is fully locked ([`LockState::all`], which
     /// `layer_model` documents as covering deletion).
-    DeleteLayer {
-        layer_id: LayerId,
-    },
+    DeleteLayer { layer_id: LayerId },
     /// The inverse of [`Command::DeleteLayer`]: put a detached subtree back
     /// exactly where it came from.
     ///
@@ -226,9 +217,7 @@ pub enum Command {
     /// the original parent and index, and [`layer_model::LayerTree::reinsert`]
     /// restores the position, which is why this variant needs no follow-up
     /// move.
-    RestoreLayers {
-        subtree: DetachedSubtree,
-    },
+    RestoreLayers { subtree: DetachedSubtree },
     /// Re-parent or re-order a layer within the tree.
     ///
     /// Deliberately **not** gated on [`LockState`]: the locks guard a layer's
@@ -334,10 +323,7 @@ pub enum CommandError {
     /// A pixel edit named a layer whose kind owns no pixels of its own. See
     /// [`PixelTarget::Layer`] for which kinds are addressable and why.
     #[error("layer {layer} is a {kind} layer and owns no pixels of its own")]
-    NotPaintable {
-        layer: LayerId,
-        kind: &'static str,
-    },
+    NotPaintable { layer: LayerId, kind: &'static str },
     #[error(
         "layer {0}'s mask cannot be cleared: an absent mask tile reads as zero coverage \
          (the layer hidden), not as 'nothing'; fill an explicit coverage instead"
@@ -764,10 +750,7 @@ fn kind_owning_pixels(kind: &LayerKind) -> Result<(), &'static str> {
 fn resolve_target(doc: &Document, target: PixelTarget) -> Result<PixelKey, CommandError> {
     match target {
         PixelTarget::Layer(id) => {
-            let layer = doc
-                .layers
-                .get(id)
-                .ok_or(CommandError::LayerNotFound(id))?;
+            let layer = doc.layers.get(id).ok_or(CommandError::LayerNotFound(id))?;
             if let Err(kind) = kind_owning_pixels(&layer.kind) {
                 return Err(CommandError::NotPaintable { layer: id, kind });
             }
@@ -777,10 +760,7 @@ fn resolve_target(doc: &Document, target: PixelTarget) -> Result<PixelKey, Comma
             Ok(PixelKey::Layer(id))
         }
         PixelTarget::Mask(id) => {
-            let layer = doc
-                .layers
-                .get(id)
-                .ok_or(CommandError::LayerNotFound(id))?;
+            let layer = doc.layers.get(id).ok_or(CommandError::LayerNotFound(id))?;
             // No kind check: any layer may carry a mask, and a masked
             // adjustment layer is the commonest case of all.
             //
@@ -791,7 +771,10 @@ fn resolve_target(doc: &Document, target: PixelTarget) -> Result<PixelKey, Comma
             if layer.locked.all {
                 return Err(CommandError::LayerLocked(id));
             }
-            layer.mask_id().map(PixelKey::Mask).ok_or(CommandError::NoMask(id))
+            layer
+                .mask_id()
+                .map(PixelKey::Mask)
+                .ok_or(CommandError::NoMask(id))
         }
     }
 }
@@ -825,7 +808,8 @@ fn region_delta(
         map.insert(edit.coord, edit.hash);
     }
     Ok(TileDelta::new(
-        map.into_iter().map(|(coord, hash)| TileEdit { coord, hash }),
+        map.into_iter()
+            .map(|(coord, hash)| TileEdit { coord, hash }),
     )?)
 }
 
@@ -926,8 +910,10 @@ mod tests {
         let kind_before = doc.layers.get(id).unwrap().kind.clone();
         let before = doc.clone();
 
-        let mut styled = LayerEffects::default();
-        styled.stroke = Some(StrokeEffect::default());
+        let styled = LayerEffects {
+            stroke: Some(StrokeEffect::default()),
+            ..Default::default()
+        };
         let new_mask = LayerMask::new(MaskId::new());
         let patch = LayerPatch {
             name: Some("renamed".into()),
@@ -998,11 +984,13 @@ mod tests {
         assert!(doc.layers.get(id).unwrap().effects.is_empty());
         let before = doc.clone();
 
-        let mut shadowed = LayerEffects::default();
-        shadowed.drop_shadow = Some(ShadowEffect {
-            distance_px: 12.0,
+        let shadowed = LayerEffects {
+            drop_shadow: Some(ShadowEffect {
+                distance_px: 12.0,
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         let undo_add = Command::SetLayerProperties {
             layer_id: id,
             patch: LayerPatch {
@@ -1016,8 +1004,10 @@ mod tests {
         let with_shadow = doc.clone();
 
         // Replacing one style block with another inverts to the first.
-        let mut stroked = LayerEffects::default();
-        stroked.stroke = Some(StrokeEffect::default());
+        let stroked = LayerEffects {
+            stroke: Some(StrokeEffect::default()),
+            ..Default::default()
+        };
         let undo_replace = Command::SetLayerProperties {
             layer_id: id,
             patch: LayerPatch {
@@ -1184,7 +1174,10 @@ mod tests {
         assert_eq!(t.translation, Vec2::new(10.0, 0.0));
         // A point at layer-space (1,0) is at document (2,0) before the drag and
         // (12,0) after it: the geometry moved 10 document pixels.
-        assert_eq!(t.transform_point2(Vec2::new(1.0, 0.0)), Vec2::new(12.0, 0.0));
+        assert_eq!(
+            t.transform_point2(Vec2::new(1.0, 0.0)),
+            Vec2::new(12.0, 0.0)
+        );
     }
 
     #[test]
@@ -1548,7 +1541,10 @@ mod tests {
         assert!(matches!(err, CommandError::Tree(_)), "got {err:?}");
         assert_eq!(doc, before, "the partial transaction was not rolled back");
         assert_eq!(doc.layers.len(), 1);
-        assert_eq!(doc.pixels.tile(PixelKey::Layer(id), coord(0, 0)), Some(hash(1)));
+        assert_eq!(
+            doc.pixels.tile(PixelKey::Layer(id), coord(0, 0)),
+            Some(hash(1))
+        );
     }
 
     #[test]
@@ -1761,13 +1757,11 @@ mod tests {
             .set_mask(LayerMask::new(mask_id));
         let before = doc.clone();
 
-        let inverse = Command::paint_tiles(
-            PixelTarget::Mask(id),
-            [TileEdit::set(coord(0, 0), hash(5))],
-        )
-        .unwrap()
-        .apply(&mut doc)
-        .unwrap();
+        let inverse =
+            Command::paint_tiles(PixelTarget::Mask(id), [TileEdit::set(coord(0, 0), hash(5))])
+                .unwrap()
+                .apply(&mut doc)
+                .unwrap();
 
         assert_eq!(
             doc.pixels.tile(PixelKey::Mask(mask_id), coord(0, 0)),
@@ -1787,13 +1781,11 @@ mod tests {
     fn painting_a_mask_that_does_not_exist_is_refused() {
         let (mut doc, id) = doc_with_layer();
         let before = doc.clone();
-        let err = Command::paint_tiles(
-            PixelTarget::Mask(id),
-            [TileEdit::set(coord(0, 0), hash(5))],
-        )
-        .unwrap()
-        .apply(&mut doc)
-        .unwrap_err();
+        let err =
+            Command::paint_tiles(PixelTarget::Mask(id), [TileEdit::set(coord(0, 0), hash(5))])
+                .unwrap()
+                .apply(&mut doc)
+                .unwrap_err();
         assert!(matches!(err, CommandError::NoMask(l) if l == id));
         assert_eq!(doc, before);
     }
@@ -1849,7 +1841,10 @@ mod tests {
         let before = doc.clone();
         let inverse = fill.apply(&mut doc).unwrap();
         let key = PixelKey::Layer(id);
-        assert_eq!(doc.pixels.tile(key, coord(0, 0)), Some(red.solid_tile_hash()));
+        assert_eq!(
+            doc.pixels.tile(key, coord(0, 0)),
+            Some(red.solid_tile_hash())
+        );
         assert_eq!(doc.pixels.tile(key, coord(2, 0)), Some(hash(77)));
 
         // Undoing a fill is a restore, not another fill.
@@ -1949,10 +1944,7 @@ mod tests {
         // those, and passes them as `edges`.
         let owed = crate::pixels::edge_tiles(small).unwrap();
         assert_eq!(owed, vec![coord(0, 0)]);
-        let edges: Vec<TileEdit> = owed
-            .iter()
-            .map(|c| TileEdit::set(*c, hash(42)))
-            .collect();
+        let edges: Vec<TileEdit> = owed.iter().map(|c| TileEdit::set(*c, hash(42))).collect();
         let fill = Command::fill_region(PixelTarget::Layer(id), small, red, edges).unwrap();
         let Command::FillRegion { delta, .. } = &fill else {
             panic!("expected a FillRegion");
@@ -2153,12 +2145,14 @@ mod tests {
         // write. The claim that something neutralizes it is checked here too,
         // against the clamp that crate publishes.
         let (mut doc, id) = doc_with_layer();
-        let mut effects = LayerEffects::default();
-        effects.drop_shadow = Some(ShadowEffect {
-            spread: f32::NAN,
-            opacity: 5.0,
+        let effects = LayerEffects {
+            drop_shadow: Some(ShadowEffect {
+                spread: f32::NAN,
+                opacity: 5.0,
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
 
         Command::SetLayerProperties {
             layer_id: id,
@@ -2178,7 +2172,10 @@ mod tests {
             .drop_shadow
             .clone()
             .unwrap();
-        assert!(shadow.spread.is_nan(), "the value really did reach the layer");
+        assert!(
+            shadow.spread.is_nan(),
+            "the value really did reach the layer"
+        );
         assert_eq!(layer_model::blend::unit(shadow.spread), 0.0);
         assert_eq!(layer_model::blend::unit(shadow.opacity), 1.0);
 
@@ -2425,7 +2422,10 @@ mod tests {
         json_roundtrip(
             &Command::paint_tiles(
                 PixelTarget::Layer(id),
-                [TileEdit::set(coord(0, 0), hash(3)), TileEdit::clear(coord(4, 2))],
+                [
+                    TileEdit::set(coord(0, 0), hash(3)),
+                    TileEdit::clear(coord(4, 2)),
+                ],
             )
             .unwrap(),
         );
@@ -2471,7 +2471,10 @@ mod tests {
         let patch: LayerPatch = serde_json::from_str(json).unwrap();
         assert_eq!(patch.visible, Some(true));
         assert_eq!(patch.opacity, Some(0.5));
-        assert!(patch.mask.is_keep(), "an absent mask key must mean unchanged");
+        assert!(
+            patch.mask.is_keep(),
+            "an absent mask key must mean unchanged"
+        );
         assert!(patch.transform.is_none());
         assert!(patch.locked.is_none());
     }
@@ -2498,8 +2501,12 @@ mod tests {
                 matrix: Affine2::IDENTITY.to_cols_array(),
             }
             .label(),
-            Command::paint_tiles(PixelTarget::Layer(id), []).unwrap().label(),
-            Command::paint_tiles(PixelTarget::Mask(id), []).unwrap().label(),
+            Command::paint_tiles(PixelTarget::Layer(id), [])
+                .unwrap()
+                .label(),
+            Command::paint_tiles(PixelTarget::Mask(id), [])
+                .unwrap()
+                .label(),
             Command::fill_region(
                 PixelTarget::Layer(id),
                 PixelRect::new(0, 0, 1, 1),

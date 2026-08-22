@@ -39,7 +39,11 @@ fn text_meets_wcag_aa_on_every_surface_in_both_themes() {
             }
         }
     }
-    assert!(failures.is_empty(), "WCAG AA failures:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "WCAG AA failures:\n{}",
+        failures.join("\n")
+    );
 }
 
 #[test]
@@ -137,7 +141,11 @@ fn separators_are_visible_on_the_surfaces_they_divide() {
     // cannot be seen is not a divider.
     for theme in Theme::ALL {
         let p = theme.palette();
-        for surface in [SurfaceRole::Panel, SurfaceRole::Elevated, SurfaceRole::Overlay] {
+        for surface in [
+            SurfaceRole::Panel,
+            SurfaceRole::Elevated,
+            SurfaceRole::Overlay,
+        ] {
             let ratio =
                 contrast_ratio_over(p.color(ColorRole::SeparatorHairline), p.surface(surface));
             assert!(
@@ -235,8 +243,7 @@ fn the_type_scale_is_strictly_increasing() {
 fn the_contrast_gate_actually_catches_a_bad_palette() {
     // Guards the gate itself: a palette with grey-on-grey body text must fail
     // the same check the real palettes pass.
-    let mut pairs: Vec<(ColorRole, design::Srgba)> =
-        design::tokens::palette::LIGHT_ROLES.to_vec();
+    let mut pairs: Vec<(ColorRole, design::Srgba)> = design::tokens::palette::LIGHT_ROLES.to_vec();
     pairs.push((ColorRole::TextPrimary, design::Srgba::hex(0xC9C9CE)));
     let bad = Palette::from_pairs(false, &pairs);
 

@@ -324,7 +324,12 @@ mod tests {
     fn hue_wraps_and_out_of_range_inputs_are_clamped() {
         // 360 + 30 is the same colour as 30.
         assert_close(hsl_to_rgb([390.0, 1.0, 0.5]), [1.0, 0.5, 0.0], 1e-5, "wrap");
-        assert_close(hsl_to_rgb([-330.0, 1.0, 0.5]), [1.0, 0.5, 0.0], 1e-5, "wrap");
+        assert_close(
+            hsl_to_rgb([-330.0, 1.0, 0.5]),
+            [1.0, 0.5, 0.0],
+            1e-5,
+            "wrap",
+        );
         // HDR / negative input is clamped, not turned into garbage or NaN.
         assert_eq!(rgb_to_hsl([2.0, -1.0, 0.5]), rgb_to_hsl([1.0, 0.0, 0.5]));
         assert_eq!(rgb_to_hsv([2.0, -1.0, 0.5]), rgb_to_hsv([1.0, 0.0, 0.5]));
@@ -338,7 +343,10 @@ mod tests {
     fn hsl_output_ranges_are_respected() {
         for rgb in grid() {
             let [h, s, l] = rgb_to_hsl(rgb);
-            assert!((0.0..360.0).contains(&h), "hue {h} out of range for {rgb:?}");
+            assert!(
+                (0.0..360.0).contains(&h),
+                "hue {h} out of range for {rgb:?}"
+            );
             assert!((0.0..=1.0).contains(&s), "sat {s} out of range");
             assert!((0.0..=1.0).contains(&l), "lightness {l} out of range");
             let [h, s, v] = rgb_to_hsv(rgb);
@@ -421,7 +429,12 @@ mod tests {
         // NaN must still propagate, not be clamped into a real number.
         assert!(lab_to_linear_srgb([f32::NAN, 0.0, 0.0])[0].is_nan());
         // The saturation must not disturb values an image can actually reach.
-        assert_close(lab_to_rgb(rgb_to_lab([0.3, 0.6, 0.9])), [0.3, 0.6, 0.9], 1e-4, "unaffected");
+        assert_close(
+            lab_to_rgb(rgb_to_lab([0.3, 0.6, 0.9])),
+            [0.3, 0.6, 0.9],
+            1e-4,
+            "unaffected",
+        );
     }
 
     #[test]
@@ -436,9 +449,19 @@ mod tests {
             assert_close(rgb_to_lab(rgb), want, 0.02, "rgb_to_lab");
         }
         // Neutrals must be exactly achromatic, or greys pick up a cast.
-        assert_close(rgb_to_lab([1.0, 1.0, 1.0]), [100.0, 0.0, 0.0], 1e-3, "white");
+        assert_close(
+            rgb_to_lab([1.0, 1.0, 1.0]),
+            [100.0, 0.0, 0.0],
+            1e-3,
+            "white",
+        );
         assert_close(rgb_to_lab([0.0, 0.0, 0.0]), [0.0, 0.0, 0.0], 1e-6, "black");
-        assert_close(rgb_to_lab([0.5, 0.5, 0.5]), [53.389, 0.0, 0.0], 1e-2, "grey");
+        assert_close(
+            rgb_to_lab([0.5, 0.5, 0.5]),
+            [53.389, 0.0, 0.0],
+            1e-2,
+            "grey",
+        );
     }
 
     #[test]

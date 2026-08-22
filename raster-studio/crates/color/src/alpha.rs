@@ -92,7 +92,10 @@ mod tests {
         // The behavioural consequence: an alpha of exactly one storage step is
         // still reconstructed, not zeroed.
         let straight = unpremultiply([0.5 * unorm_step, 0.0, 0.0, unorm_step]);
-        assert_eq!(straight[3], unorm_step, "one UNORM step was treated as transparent");
+        assert_eq!(
+            straight[3], unorm_step,
+            "one UNORM step was treated as transparent"
+        );
         assert!((straight[0] - 0.5).abs() < 1e-3, "{straight:?}");
         // Reconstructing colour from a sub-step alpha would amplify the
         // stored quantization error by more than 65536x.
@@ -105,7 +108,10 @@ mod tests {
         // channel: a single sub-quantum pixel becomes a blazing speckle.
         let px = [1e-6, 2e-6, 3e-6, 1e-5];
         assert_eq!(unpremultiply(px), [0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(unpremultiply([0.0, 0.0, 0.0, UNPREMULTIPLY_ALPHA_EPSILON]), [0.0; 4]);
+        assert_eq!(
+            unpremultiply([0.0, 0.0, 0.0, UNPREMULTIPLY_ALPHA_EPSILON]),
+            [0.0; 4]
+        );
     }
 
     #[test]

@@ -118,7 +118,9 @@ impl App {
             }
             Action::ZoomOut => {
                 if let Some(state) = &mut self.state {
-                    state.camera.zoom_at(state.camera.viewport_size * 0.5, 1.0 / 1.2);
+                    state
+                        .camera
+                        .zoom_at(state.camera.viewport_size * 0.5, 1.0 / 1.2);
                 }
             }
             Action::ZoomFit => {
@@ -188,8 +190,9 @@ impl App {
             // than leaving the edit invisible until some later input event.
             state.egui_ctx.request_repaint();
         }
-        let paint_jobs =
-            state.egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+        let paint_jobs = state
+            .egui_ctx
+            .tessellate(full_output.shapes, full_output.pixels_per_point);
         let screen_descriptor = egui_wgpu::ScreenDescriptor {
             size_in_pixels: [state.surface_config.width, state.surface_config.height],
             pixels_per_point: state.egui_ctx.pixels_per_point(),
@@ -205,12 +208,9 @@ impl App {
         state.canvas.render(&mut encoder, &view);
 
         for (id, delta) in &full_output.textures_delta.set {
-            state.egui_renderer.update_texture(
-                &state.gpu.device,
-                &state.gpu.queue,
-                *id,
-                delta,
-            );
+            state
+                .egui_renderer
+                .update_texture(&state.gpu.device, &state.gpu.queue, *id, delta);
         }
         state.egui_renderer.update_buffers(
             &state.gpu.device,
@@ -446,7 +446,9 @@ impl ApplicationHandler for App {
             }
             WindowEvent::ModifiersChanged(mods) => self.modifiers = mods.state(),
             WindowEvent::RedrawRequested => self.redraw(),
-            WindowEvent::KeyboardInput { event: key_event, .. } if !consumed => {
+            WindowEvent::KeyboardInput {
+                event: key_event, ..
+            } if !consumed => {
                 self.on_keyboard(key_event);
                 self.repaint_at = Some(Instant::now());
             }

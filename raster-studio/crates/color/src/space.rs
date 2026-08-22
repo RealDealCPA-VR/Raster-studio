@@ -145,9 +145,7 @@ pub fn to_linear(space: &ColorSpace, rgb: [f32; 3]) -> [f32; 3] {
     match space {
         ColorSpace::Srgb => srgb_to_linear3(rgb),
         ColorSpace::LinearSrgb => rgb,
-        ColorSpace::DisplayP3 => {
-            mat3_mul_vec3(&DISPLAY_P3_TO_LINEAR_SRGB, srgb_to_linear3(rgb))
-        }
+        ColorSpace::DisplayP3 => mat3_mul_vec3(&DISPLAY_P3_TO_LINEAR_SRGB, srgb_to_linear3(rgb)),
         // Identity, not a guess. Documented above.
         ColorSpace::IccProfile { .. } => rgb,
     }
@@ -161,19 +159,14 @@ pub fn from_linear(space: &ColorSpace, rgb: [f32; 3]) -> [f32; 3] {
     match space {
         ColorSpace::Srgb => linear_to_srgb3(rgb),
         ColorSpace::LinearSrgb => rgb,
-        ColorSpace::DisplayP3 => {
-            linear_to_srgb3(mat3_mul_vec3(&LINEAR_SRGB_TO_DISPLAY_P3, rgb))
-        }
+        ColorSpace::DisplayP3 => linear_to_srgb3(mat3_mul_vec3(&LINEAR_SRGB_TO_DISPLAY_P3, rgb)),
         ColorSpace::IccProfile { .. } => rgb,
     }
 }
 
 /// [`to_linear`] that reports the unsupported path instead of silently
 /// falling back to identity.
-pub fn try_to_linear(
-    space: &ColorSpace,
-    rgb: [f32; 3],
-) -> Result<[f32; 3], UnsupportedColorSpace> {
+pub fn try_to_linear(space: &ColorSpace, rgb: [f32; 3]) -> Result<[f32; 3], UnsupportedColorSpace> {
     if space.is_transform_supported() {
         Ok(to_linear(space, rgb))
     } else {
@@ -378,7 +371,11 @@ mod tests {
 
     #[test]
     fn every_supported_space_round_trips() {
-        let spaces = [ColorSpace::Srgb, ColorSpace::LinearSrgb, ColorSpace::DisplayP3];
+        let spaces = [
+            ColorSpace::Srgb,
+            ColorSpace::LinearSrgb,
+            ColorSpace::DisplayP3,
+        ];
         let v = [0.13, 0.62, 0.87];
         for space in spaces {
             let round = from_linear(&space, to_linear(&space, v));
@@ -404,7 +401,11 @@ mod tests {
 
     #[test]
     fn supported_spaces_never_error() {
-        for space in [ColorSpace::Srgb, ColorSpace::LinearSrgb, ColorSpace::DisplayP3] {
+        for space in [
+            ColorSpace::Srgb,
+            ColorSpace::LinearSrgb,
+            ColorSpace::DisplayP3,
+        ] {
             assert!(space.is_transform_supported());
             assert!(try_to_linear(&space, [0.5; 3]).is_ok());
             assert!(try_from_linear(&space, [0.5; 3]).is_ok());
@@ -414,13 +415,25 @@ mod tests {
     #[test]
     fn dispatch_handles_out_of_range_working_values() {
         // The working space is unclamped f32; dispatch must not produce NaN.
-        for space in [ColorSpace::Srgb, ColorSpace::LinearSrgb, ColorSpace::DisplayP3] {
+        for space in [
+            ColorSpace::Srgb,
+            ColorSpace::LinearSrgb,
+            ColorSpace::DisplayP3,
+        ] {
             for v in [[-0.5f32, 1.8, 0.2], [4.0, -2.0, 0.0]] {
                 for c in to_linear(&space, v) {
-                    assert!(c.is_finite(), "{} to_linear({v:?}) not finite", space.name());
+                    assert!(
+                        c.is_finite(),
+                        "{} to_linear({v:?}) not finite",
+                        space.name()
+                    );
                 }
                 for c in from_linear(&space, v) {
-                    assert!(c.is_finite(), "{} from_linear({v:?}) not finite", space.name());
+                    assert!(
+                        c.is_finite(),
+                        "{} from_linear({v:?}) not finite",
+                        space.name()
+                    );
                 }
             }
         }

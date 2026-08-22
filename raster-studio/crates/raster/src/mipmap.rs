@@ -586,7 +586,10 @@ mod tests {
             b[0] > 180,
             "the right output must carry the 255 column, got {b:?}"
         );
-        assert!(a[0] < b[0], "the ramp must stay monotonic: {a:?} then {b:?}");
+        assert!(
+            a[0] < b[0],
+            "the ramp must stay monotonic: {a:?} then {b:?}"
+        );
     }
 
     #[test]

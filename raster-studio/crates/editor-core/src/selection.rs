@@ -26,9 +26,7 @@ pub enum SelectionError {
     },
     #[error("selection mask dimensions {width}x{height} do not fit in memory")]
     DimensionOverflow { width: u32, height: u32 },
-    #[error(
-        "selection mask at ({x}, {y}) sized {width}x{height} reaches past the i32 pixel grid"
-    )]
+    #[error("selection mask at ({x}, {y}) sized {width}x{height} reaches past the i32 pixel grid")]
     OriginOutOfRange {
         x: i32,
         y: i32,
@@ -211,12 +209,7 @@ fn sample_count(origin: IVec2, width: u32, height: u32) -> Result<usize, Selecti
 /// The `origin + ...` additions cannot overflow: [`sample_count`] has already
 /// rejected any extent whose far edge leaves the `i32` grid, and `max_x + 1`
 /// is at most `width`.
-fn tight_bounds(
-    origin: IVec2,
-    width: u32,
-    height: u32,
-    coverage: &[u8],
-) -> Option<(IVec2, IVec2)> {
+fn tight_bounds(origin: IVec2, width: u32, height: u32, coverage: &[u8]) -> Option<(IVec2, IVec2)> {
     let (mut min_x, mut min_y) = (u32::MAX, u32::MAX);
     let (mut max_x, mut max_y) = (0u32, 0u32);
     let mut any = false;
@@ -462,8 +455,9 @@ mod tests {
         // The old `Selection::Mask` was an inert asset hash whose `bounds()`
         // was always `None`, so every consumer had to fall back to the whole
         // canvas.
-        let mut coverage = vec![0u8; 4 * 3];
-        coverage[1 * 4 + 2] = 200; // local (2,1)
+        const W: usize = 4;
+        let mut coverage = vec![0u8; W * 3];
+        coverage[W + 2] = 200; // local (2,1)
         let mask = SelectionMask::new(IVec2::new(10, 20), 4, 3, coverage).unwrap();
         let s = Selection::Mask(mask);
 
@@ -475,7 +469,11 @@ mod tests {
         assert!(!s.is_empty());
         assert!((s.coverage_at(IVec2::new(12, 21)) - 200.0 / 255.0).abs() < 1e-6);
         assert_eq!(s.coverage_at(IVec2::new(11, 21)), 0.0);
-        assert_eq!(s.coverage_at(IVec2::new(0, 0)), 0.0, "outside the mask rect");
+        assert_eq!(
+            s.coverage_at(IVec2::new(0, 0)),
+            0.0,
+            "outside the mask rect"
+        );
     }
 
     #[test]
@@ -567,7 +565,8 @@ mod tests {
             min: IVec2::new(5, 5),
             max: IVec2::new(5, 5),
         };
-        let empty_mask = Selection::Mask(SelectionMask::new(IVec2::ZERO, 4, 4, vec![0; 16]).unwrap());
+        let empty_mask =
+            Selection::Mask(SelectionMask::new(IVec2::ZERO, 4, 4, vec![0; 16]).unwrap());
 
         for s in [&empty_rect, &empty_mask] {
             assert!(s.is_empty());
@@ -609,7 +608,10 @@ mod tests {
             let back: Selection = serde_json::from_str(&json).unwrap();
             assert_eq!(back, s);
             assert_eq!(back.bounds(), s.bounds());
-            assert_eq!(back.coverage_at(IVec2::new(5, 5)), s.coverage_at(IVec2::new(5, 5)));
+            assert_eq!(
+                back.coverage_at(IVec2::new(5, 5)),
+                s.coverage_at(IVec2::new(5, 5))
+            );
         }
     }
 }

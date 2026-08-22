@@ -625,13 +625,15 @@ pub fn tiles_covering(rect: PixelRect) -> Result<Vec<(TileCoord, Coverage)>, Pix
         for tx in x0..=x1 {
             let ox = tx * t;
             let oy = ty * t;
-            let full = ox >= rect.x
-                && ox + t <= rect.right()
-                && oy >= rect.y
-                && oy + t <= rect.bottom();
+            let full =
+                ox >= rect.x && ox + t <= rect.right() && oy >= rect.y && oy + t <= rect.bottom();
             out.push((
                 TileCoord::new(tx as i32, ty as i32, 0),
-                if full { Coverage::Full } else { Coverage::Partial },
+                if full {
+                    Coverage::Full
+                } else {
+                    Coverage::Partial
+                },
             ));
         }
     }
@@ -834,7 +836,10 @@ mod tests {
             px.copy_from_slice(&[255, 0, 0, 255]);
         }
         assert_eq!(red.solid_tile_hash(), manual.hash());
-        assert_ne!(red.solid_tile_hash(), FillColor::TRANSPARENT.solid_tile_hash());
+        assert_ne!(
+            red.solid_tile_hash(),
+            FillColor::TRANSPARENT.solid_tile_hash()
+        );
     }
 
     #[test]
@@ -851,7 +856,10 @@ mod tests {
             MaskCoverage::REVEALED.solid_tile_hash(),
             TileHash::of(&[255u8; TILE_SIZE as usize * TILE_SIZE as usize])
         );
-        assert_ne!(MaskCoverage::HIDDEN.solid_tile_hash(), MaskCoverage::REVEALED.solid_tile_hash());
+        assert_ne!(
+            MaskCoverage::HIDDEN.solid_tile_hash(),
+            MaskCoverage::REVEALED.solid_tile_hash()
+        );
         assert_ne!(
             MaskCoverage::HIDDEN.solid_tile_hash(),
             FillColor::TRANSPARENT.solid_tile_hash(),
@@ -873,8 +881,14 @@ mod tests {
 
         assert!(color.matches(layer) && !color.matches(mask));
         assert!(coverage.matches(mask) && !coverage.matches(layer));
-        assert_eq!(color.solid_tile_hash(), FillColor([1, 2, 3, 4]).solid_tile_hash());
-        assert_eq!(coverage.solid_tile_hash(), MaskCoverage::REVEALED.solid_tile_hash());
+        assert_eq!(
+            color.solid_tile_hash(),
+            FillColor([1, 2, 3, 4]).solid_tile_hash()
+        );
+        assert_eq!(
+            coverage.solid_tile_hash(),
+            MaskCoverage::REVEALED.solid_tile_hash()
+        );
     }
 
     #[test]

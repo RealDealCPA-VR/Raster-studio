@@ -78,7 +78,9 @@ pub fn style_for(theme: Theme) -> egui::Style {
     };
 
     for role in TypeRole::ALL {
-        style.text_styles.insert(text_style(*role), font_id(t, *role));
+        style
+            .text_styles
+            .insert(text_style(*role), font_id(t, *role));
     }
     // Buttons read at body size; egui's `Button` style must not drift larger.
     style
@@ -354,10 +356,16 @@ mod tests {
                 "channel {channel} was not scaled down from {straight}"
             );
         }
-        assert!(tinted.r() > tinted.g() && tinted.g() > tinted.b(), "hue drifted");
+        assert!(
+            tinted.r() > tinted.g() && tinted.g() > tinted.b(),
+            "hue drifted"
+        );
 
         // Opaque colors are copied verbatim — premultiplying by 1.0 is a no-op.
-        assert_eq!(color32(Srgba::hex(0x2A6FD4)).to_array(), [0x2A, 0x6F, 0xD4, 0xFF]);
+        assert_eq!(
+            color32(Srgba::hex(0x2A6FD4)).to_array(),
+            [0x2A, 0x6F, 0xD4, 0xFF]
+        );
         assert_eq!(color32(Srgba::TRANSPARENT), Color32::TRANSPARENT);
     }
 
@@ -369,9 +377,17 @@ mod tests {
             let v = visuals_for(*theme);
             let c = |role: ColorRole| color32(p.color(role));
 
-            assert_eq!(v.window_shadow, shadow(p, Elevation::Modal), "{theme:?} window_shadow");
+            assert_eq!(
+                v.window_shadow,
+                shadow(p, Elevation::Modal),
+                "{theme:?} window_shadow"
+            );
             assert_ne!(v.window_shadow, Shadow::NONE, "{theme:?} window_shadow");
-            assert_eq!(v.popup_shadow, shadow(p, Elevation::Overlay), "{theme:?} popup_shadow");
+            assert_eq!(
+                v.popup_shadow,
+                shadow(p, Elevation::Overlay),
+                "{theme:?} popup_shadow"
+            );
             assert_ne!(v.popup_shadow, Shadow::NONE, "{theme:?} popup_shadow");
 
             assert_eq!(
@@ -385,19 +401,47 @@ mod tests {
                 "{theme:?} selection.stroke"
             );
 
-            assert_eq!(v.window_rounding, rounding(t.radii.large), "{theme:?} window_rounding");
-            assert_eq!(v.menu_rounding, rounding(t.radii.medium), "{theme:?} menu_rounding");
-            assert_eq!(v.window_fill, c(ColorRole::SurfaceOverlay), "{theme:?} window_fill");
+            assert_eq!(
+                v.window_rounding,
+                rounding(t.radii.large),
+                "{theme:?} window_rounding"
+            );
+            assert_eq!(
+                v.menu_rounding,
+                rounding(t.radii.medium),
+                "{theme:?} menu_rounding"
+            );
+            assert_eq!(
+                v.window_fill,
+                c(ColorRole::SurfaceOverlay),
+                "{theme:?} window_fill"
+            );
             assert_eq!(
                 v.window_stroke,
                 Stroke::new(t.borders.hairline, c(ColorRole::SeparatorHairline)),
                 "{theme:?} window_stroke"
             );
 
-            assert_eq!(v.extreme_bg_color, c(ColorRole::SurfaceSunken), "{theme:?} extreme_bg");
-            assert_eq!(v.code_bg_color, c(ColorRole::SurfaceSunken), "{theme:?} code_bg");
-            assert_eq!(v.faint_bg_color, c(ColorRole::SurfaceElevated), "{theme:?} faint_bg");
-            assert_eq!(v.hyperlink_color, c(ColorRole::TextLink), "{theme:?} hyperlink");
+            assert_eq!(
+                v.extreme_bg_color,
+                c(ColorRole::SurfaceSunken),
+                "{theme:?} extreme_bg"
+            );
+            assert_eq!(
+                v.code_bg_color,
+                c(ColorRole::SurfaceSunken),
+                "{theme:?} code_bg"
+            );
+            assert_eq!(
+                v.faint_bg_color,
+                c(ColorRole::SurfaceElevated),
+                "{theme:?} faint_bg"
+            );
+            assert_eq!(
+                v.hyperlink_color,
+                c(ColorRole::TextLink),
+                "{theme:?} hyperlink"
+            );
             assert_eq!(v.warn_fg_color, c(ColorRole::Warning), "{theme:?} warn_fg");
             assert_eq!(v.error_fg_color, c(ColorRole::Danger), "{theme:?} error_fg");
             assert_eq!(
@@ -418,10 +462,19 @@ mod tests {
             apply_theme(&ctx, *theme);
             let installed = ctx.style();
             let expected = visuals_for(*theme);
-            assert_eq!(installed.visuals.window_shadow, expected.window_shadow, "{theme:?}");
-            assert_eq!(installed.visuals.popup_shadow, expected.popup_shadow, "{theme:?}");
+            assert_eq!(
+                installed.visuals.window_shadow, expected.window_shadow,
+                "{theme:?}"
+            );
+            assert_eq!(
+                installed.visuals.popup_shadow, expected.popup_shadow,
+                "{theme:?}"
+            );
             assert_eq!(installed.visuals.selection, expected.selection, "{theme:?}");
-            assert_eq!(installed.visuals.window_rounding, expected.window_rounding, "{theme:?}");
+            assert_eq!(
+                installed.visuals.window_rounding, expected.window_rounding,
+                "{theme:?}"
+            );
         }
     }
 

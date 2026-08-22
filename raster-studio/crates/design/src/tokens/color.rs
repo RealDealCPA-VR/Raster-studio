@@ -76,7 +76,9 @@ impl Srgba {
         }
         let a = self.alpha_f32();
         let mix = |fg: u8, bg: u8| -> u8 {
-            (f32::from(fg) * a + f32::from(bg) * (1.0 - a)).round().clamp(0.0, 255.0) as u8
+            (f32::from(fg) * a + f32::from(bg) * (1.0 - a))
+                .round()
+                .clamp(0.0, 255.0) as u8
         };
         Self::rgb(
             mix(self.r, background.r),

@@ -193,9 +193,7 @@ impl TextRole {
     /// role is exempt from the check.
     pub const fn checked_size(self) -> Option<TextSize> {
         match self {
-            Self::Primary | Self::Secondary | Self::Tertiary | Self::Link => {
-                Some(TextSize::Normal)
-            }
+            Self::Primary | Self::Secondary | Self::Tertiary | Self::Link => Some(TextSize::Normal),
             Self::Disabled => None,
         }
     }

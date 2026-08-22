@@ -50,8 +50,7 @@ pub enum Elevation {
 
 impl Elevation {
     /// Every level, ascending.
-    pub const ALL: &'static [Elevation] =
-        &[Self::Flat, Self::Raised, Self::Overlay, Self::Modal];
+    pub const ALL: &'static [Elevation] = &[Self::Flat, Self::Raised, Self::Overlay, Self::Modal];
 
     /// The shadow cast at this level.
     pub const fn shadow(self) -> ShadowSpec {
@@ -99,7 +98,11 @@ mod tests {
         for e in Elevation::ALL {
             let s = e.shadow();
             assert!(s.y_offset_pt >= 0.0, "{e:?} casts upward");
-            assert!((0.0..=1.0).contains(&s.opacity), "{e:?} opacity {}", s.opacity);
+            assert!(
+                (0.0..=1.0).contains(&s.opacity),
+                "{e:?} opacity {}",
+                s.opacity
+            );
             // Spread never exceeds the blur, or the shadow reads as a border.
             assert!(s.spread_pt.abs() <= s.blur_pt);
         }

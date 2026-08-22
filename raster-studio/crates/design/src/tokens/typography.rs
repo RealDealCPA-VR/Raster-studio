@@ -159,7 +159,9 @@ impl TypeScale {
 
     /// Rounded point size for a rung.
     pub fn size_pt(&self, role: TypeRole) -> f32 {
-        (self.base_pt * self.ratio.powi(role.step())).round().max(1.0)
+        (self.base_pt * self.ratio.powi(role.step()))
+            .round()
+            .max(1.0)
     }
 
     /// Full style for a rung.

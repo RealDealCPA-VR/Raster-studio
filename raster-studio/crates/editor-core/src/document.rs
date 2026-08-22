@@ -387,9 +387,7 @@ mod tests {
                 min: probe,
                 max: probe,
             },
-            Selection::Mask(
-                crate::selection::SelectionMask::new(probe, 2, 2, vec![0; 4]).unwrap(),
-            ),
+            Selection::Mask(crate::selection::SelectionMask::new(probe, 2, 2, vec![0; 4]).unwrap()),
         ] {
             let mut d = Document::new(64, 64, "t");
             d.selection = empty.clone();
