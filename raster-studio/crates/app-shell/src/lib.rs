@@ -16,7 +16,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::Key;
+use winit::keyboard::{Key, ModifiersState};
 use winit::window::{Window, WindowId};
 
 use crate::shortcuts::{Action, Chord, Shortcuts};
@@ -61,6 +61,9 @@ pub struct App {
     // Input tracking.
     cursor: Vec2,
     dragging: bool,
+    /// winit 0.30 delivers modifier state out-of-band via `ModifiersChanged`
+    /// rather than on each `KeyEvent`, so the shell mirrors it here.
+    modifiers: ModifiersState,
 }
 
 impl App {
@@ -71,6 +74,7 @@ impl App {
             shortcuts: Shortcuts::default(),
             cursor: Vec2::ZERO,
             dragging: false,
+            modifiers: ModifiersState::empty(),
         }
     }
 
@@ -83,11 +87,11 @@ impl App {
         let Key::Character(ch) = event.logical_key else {
             return; // modifier/function keys don't form shortcuts
         };
-        let mods = event.modifiers;
+        let mods = self.modifiers;
         let chord = Chord::new(
-            mods.ctrl() || mods.super_(),
-            mods.shift(),
-            mods.alt(),
+            mods.control_key() || mods.super_key(),
+            mods.shift_key(),
+            mods.alt_key(),
             ch.as_str(),
         );
         if let Some(action) = self.shortcuts.resolve(&chord) {
@@ -199,7 +203,7 @@ impl App {
             &screen_descriptor,
         );
         {
-            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("egui"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -217,16 +221,15 @@ impl App {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            if let Err(e) =
-                state.egui_renderer.render(&mut rpass, &paint_jobs, &screen_descriptor)
-            {
-                tracing::warn!("egui render error: {e:?}");
-            }
+            // egui-wgpu 0.29 needs a `'static` pass and returns `()`.
+            let mut rpass = rpass.forget_lifetime();
+            state
+                .egui_renderer
+                .render(&mut rpass, &paint_jobs, &screen_descriptor);
         }
-        state.egui_renderer.free_textures(
-            &state.gpu.device,
-            &full_output.textures_delta.free,
-        );
+        for id in &full_output.textures_delta.free {
+            state.egui_renderer.free_texture(id);
+        }
 
         state.gpu.queue.submit(std::iter::once(encoder.finish()));
         frame.present();
@@ -329,9 +332,9 @@ impl ApplicationHandler for App {
             egui_ctx.clone(),
             egui::ViewportId::ROOT,
             &*window,
-            window.scale_factor() as f32,
-            egui::Theme::Dark,
-            gpu.adapter.limits().max_texture_dimension_2d as usize,
+            Some(window.scale_factor() as f32),
+            Some(winit::window::Theme::Dark),
+            Some(gpu.adapter.limits().max_texture_dimension_2d as usize),
         );
         let egui_renderer = egui_wgpu::Renderer::new(
             &gpu.device,
@@ -367,30 +370,39 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        // Let egui observe every event (hover, focus, input on panels).
-        if let Some(state) = &mut self.state {
-            let _ = state.egui_state.on_window_event(&state.window, &event);
-        }
+        // Let egui observe every event (hover, focus, input on panels). When egui
+        // consumes an event the pointer is over a panel, so the canvas must not
+        // also pan/zoom on it.
+        let consumed = match &mut self.state {
+            Some(state) => state
+                .egui_state
+                .on_window_event(&state.window, &event)
+                .consumed,
+            None => false,
+        };
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => self.resize(size),
+            WindowEvent::ModifiersChanged(mods) => self.modifiers = mods.state(),
             WindowEvent::RedrawRequested => {
                 self.redraw();
                 if let Some(state) = &self.state {
                     state.window.request_redraw();
                 }
             }
-            WindowEvent::KeyboardInput { event: key_event, .. } => {
+            WindowEvent::KeyboardInput { event: key_event, .. } if !consumed => {
                 self.on_keyboard(key_event);
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 if button == MouseButton::Left {
-                    self.dragging = state == ElementState::Pressed;
+                    // Always honour release, so a drag that ends over a panel
+                    // cannot leave the canvas stuck in dragging state.
+                    self.dragging = state == ElementState::Pressed && !consumed;
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let new = Vec2::new(position.x as f32, position.y as f32);
-                if self.dragging {
+                if self.dragging && !consumed {
                     let delta = new - self.cursor;
                     if let Some(state) = &mut self.state {
                         state.camera.pan_screen(delta);
@@ -398,7 +410,7 @@ impl ApplicationHandler for App {
                 }
                 self.cursor = new;
             }
-            WindowEvent::MouseWheel { delta, .. } => {
+            WindowEvent::MouseWheel { delta, .. } if !consumed => {
                 let scroll = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.0,

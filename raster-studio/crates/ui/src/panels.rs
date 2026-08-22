@@ -32,7 +32,8 @@ pub fn layers_panel(
             }
             let can_delete = selected.is_some();
             if ui
-                .add_enabled(can_delete, egui::Button::new("−").on_hover_text("Delete selected"))
+                .add_enabled(can_delete, egui::Button::new("−"))
+                .on_hover_text("Delete selected")
                 .clicked()
             {
                 if let Some(id) = *selected {
