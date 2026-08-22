@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
   "apps/studio-desktop",
-  "apps/runtime-manager",
   "crates/app-shell",
   "crates/ui",
   "crates/editor-core",
@@ -16,8 +15,6 @@ members = [
   "crates/asset-store",
   "crates/color",
   "crates/text-engine",
-  "crates/ai-contracts",
-  "crates/ai-runtime",
   "crates/licensing",
   "crates/updater",
   "crates/telemetry",
@@ -101,8 +98,6 @@ project-format   = { path = "crates/project-format" }
 asset-store      = { path = "crates/asset-store" }
 color            = { path = "crates/color" }
 text-engine      = { path = "crates/text-engine" }
-ai-contracts     = { path = "crates/ai-contracts" }
-ai-runtime       = { path = "crates/ai-runtime" }
 licensing        = { path = "crates/licensing" }
 updater          = { path = "crates/updater" }
 telemetry        = { path = "crates/telemetry" }
