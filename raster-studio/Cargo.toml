@@ -1,0 +1,119 @@
+[workspace]
+resolver = "2"
+members = [
+  "apps/studio-desktop",
+  "apps/runtime-manager",
+  "crates/app-shell",
+  "crates/ui",
+  "crates/editor-core",
+  "crates/layer-model",
+  "crates/render",
+  "crates/render-shaders",
+  "crates/raster",
+  "crates/tools",
+  "crates/adjustments",
+  "crates/project-format",
+  "crates/asset-store",
+  "crates/color",
+  "crates/text-engine",
+  "crates/ai-contracts",
+  "crates/ai-runtime",
+  "crates/licensing",
+  "crates/updater",
+  "crates/telemetry",
+  "tests/integration",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.82"
+license = "Proprietary"
+authors = ["Raster Studio"]
+repository = ""
+
+# NOTE on edition/rust-version:
+# The design doc specifies edition 2024 / rust 1.85. We pin edition 2021 /
+# rust 1.82 here so the scaffold compiles on the broadest stable toolchain
+# available today. Bump both once your CI toolchain is >= 1.85 and you want
+# the 2024 idioms — nothing in this scaffold depends on 2024-only features.
+
+[workspace.dependencies]
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rmp-serde = "1"
+postcard = { version = "1", features = ["use-std"] }
+
+# Identity / hashing
+uuid = { version = "1", features = ["v4", "serde"] }
+blake3 = "1"
+
+# Async / concurrency
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "process", "io-util", "net", "time", "fs"] }
+rayon = "1"
+crossbeam-channel = "0.5"
+
+# Math
+glam = { version = "0.29", features = ["serde"] }
+
+# Graphics / windowing
+winit = "0.30"
+wgpu = "22"
+egui = "0.29"
+egui-wgpu = "0.29"
+egui-winit = "0.29"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+raw-window-handle = "0.6"
+
+# Image codecs
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "tiff"] }
+
+# Storage
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# File watching
+notify = "6"
+
+# Diagnostics
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Crypto (licensing / update signatures)
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+
+# Internal crates
+app-shell        = { path = "crates/app-shell" }
+ui               = { path = "crates/ui" }
+editor-core      = { path = "crates/editor-core" }
+layer-model      = { path = "crates/layer-model" }
+render           = { path = "crates/render" }
+render-shaders   = { path = "crates/render-shaders" }
+raster           = { path = "crates/raster" }
+tools            = { path = "crates/tools" }
+adjustments      = { path = "crates/adjustments" }
+project-format   = { path = "crates/project-format" }
+asset-store      = { path = "crates/asset-store" }
+color            = { path = "crates/color" }
+text-engine      = { path = "crates/text-engine" }
+ai-contracts     = { path = "crates/ai-contracts" }
+ai-runtime       = { path = "crates/ai-runtime" }
+licensing        = { path = "crates/licensing" }
+updater          = { path = "crates/updater" }
+telemetry        = { path = "crates/telemetry" }
+
+[profile.dev]
+opt-level = 1          # keep image/GPU work bearable in debug
+
+[profile.dev.package."*"]
+opt-level = 3          # optimize deps even in dev builds
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"

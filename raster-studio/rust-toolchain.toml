@@ -1,0 +1,8 @@
+[toolchain]
+# Pin the toolchain so every developer and CI runner builds identically.
+# The design doc targets 1.85+/edition 2024; we build on stable here and the
+# scaffold is edition-2021 clean. Bump `channel` to "1.85" (or later) and flip
+# the workspace edition to 2024 once your CI image ships it.
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

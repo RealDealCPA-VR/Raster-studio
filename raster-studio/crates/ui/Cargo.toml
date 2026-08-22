@@ -1,0 +1,12 @@
+[package]
+name = "ui"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+egui.workspace = true
+editor-core.workspace = true
+layer-model.workspace = true
+tools.workspace = true

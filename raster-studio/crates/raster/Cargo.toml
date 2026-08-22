@@ -1,0 +1,15 @@
+[package]
+name = "raster"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+glam.workspace = true
+blake3.workspace = true
+bytemuck.workspace = true
+image.workspace = true

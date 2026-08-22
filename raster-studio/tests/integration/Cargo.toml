@@ -1,0 +1,20 @@
+[package]
+name = "integration-tests"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# This crate exists purely to host cross-crate integration tests that exercise
+# the full Phase-0 vertical slice. It has no library/binary of its own.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]
+editor-core.workspace = true
+layer-model.workspace = true
+project-format.workspace = true
+tempfile = "3"

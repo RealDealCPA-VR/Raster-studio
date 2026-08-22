@@ -1,0 +1,14 @@
+# Pinned Python requirements for the ComfyUI sidecar.
+#
+# Generate with hashes from the isolated venv used to build the runtime:
+#   pip freeze > runtime/requirements-lock.txt
+# or, preferably, a hash-pinned lock:
+#   pip-compile --generate-hashes -o runtime/requirements-lock.txt
+#
+# This file MUST accompany every release for the GPL corresponding-source and
+# supply-chain inventory (see LICENSES/COMFYUI_SOURCE_AND_NOTICES.md).
+#
+# Example (fill in real pins + hashes before shipping):
+# torch==2.4.0 --hash=sha256:...
+# torchvision==0.19.0 --hash=sha256:...
+# numpy==1.26.4 --hash=sha256:...

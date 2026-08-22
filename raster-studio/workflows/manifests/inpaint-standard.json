@@ -1,0 +1,12 @@
+{
+  "id": "inpaint-standard",
+  "version": "1.0.0",
+  "required_runtime": ">=0.0.0",
+  "required_nodes": [
+    { "id": "core", "version": "pinned" }
+  ],
+  "inputs": ["image", "mask", "prompt", "negative_prompt", "seed", "strength"],
+  "outputs": ["image"],
+  "minimum_vram_gb": 12,
+  "supported_accelerators": ["cuda"]
+}
