@@ -10,12 +10,13 @@
 pub mod shortcuts;
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use glam::Vec2;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState};
 use winit::window::{Window, WindowId};
 
@@ -64,6 +65,10 @@ pub struct App {
     /// winit 0.30 delivers modifier state out-of-band via `ModifiersChanged`
     /// rather than on each `KeyEvent`, so the shell mirrors it here.
     modifiers: ModifiersState,
+    /// Absolute deadline for the next frame, derived from egui's requested
+    /// repaint delay. `None` means a redraw has already been requested and we
+    /// are waiting for it to be serviced.
+    repaint_at: Option<Instant>,
 }
 
 impl App {
@@ -75,6 +80,7 @@ impl App {
             cursor: Vec2::ZERO,
             dragging: false,
             modifiers: ModifiersState::empty(),
+            repaint_at: Some(Instant::now()),
         }
     }
 
@@ -146,6 +152,9 @@ impl App {
                 state
                     .surface
                     .configure(&state.gpu.device, &state.surface_config);
+                // Ask for another frame, or reconfiguring would leave the window
+                // frozen once the unconditional redraw loop is gone.
+                state.window.request_redraw();
                 return;
             }
             Err(e) => {
@@ -166,10 +175,18 @@ impl App {
         state
             .egui_state
             .handle_platform_output(&state.window, full_output.platform_output);
+        let mut edited = false;
         for cmd in state.workspace.drain_commands() {
+            edited = true;
             if let Err(e) = state.history.apply(&mut state.document, cmd) {
                 tracing::warn!("rejected panel command: {e}");
             }
+        }
+        if edited {
+            // The shapes below were tessellated from the pre-command document, so
+            // this frame is one edit stale. Schedule an immediate repaint rather
+            // than leaving the edit invisible until some later input event.
+            state.egui_ctx.request_repaint();
         }
         let paint_jobs =
             state.egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
@@ -208,7 +225,13 @@ impl App {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
-                    ops: wgpu::Operations::default(),
+                    ops: wgpu::Operations {
+                        // MUST be Load. `Operations::default()` is
+                        // `LoadOp::Clear(transparent black)`, which wipes the
+                        // canvas pass that just drew the image underneath.
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &state.egui_depth,
@@ -233,6 +256,17 @@ impl App {
 
         state.gpu.queue.submit(std::iter::once(encoder.finish()));
         frame.present();
+
+        // Honour egui's own repaint scheduling instead of spinning at vsync
+        // forever. ZERO means "another frame now"; anything else is a deadline.
+        let delay = full_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|v| v.repaint_delay)
+            .unwrap_or(Duration::ZERO);
+        // A very long delay means "nothing is animating"; park until an event
+        // wakes us rather than scheduling a wakeup years out.
+        self.repaint_at = Instant::now().checked_add(delay);
     }
 
     fn resize(&mut self, size: PhysicalSize<u32>) {
@@ -369,29 +403,52 @@ impl ApplicationHandler for App {
         });
     }
 
+    /// Idle policy. Without this the shell would redraw at full vsync forever,
+    /// burning a core and the battery on a completely static document.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(state) = &self.state else { return };
+        match self.repaint_at {
+            // No deadline: egui asked for an effectively infinite delay, so the
+            // document is static. Sleep until an input event arrives.
+            None => event_loop.set_control_flow(ControlFlow::Wait),
+            Some(at) if at <= Instant::now() => {
+                // Due now. Clear the deadline so we ask exactly once; `redraw`
+                // sets the next one.
+                self.repaint_at = None;
+                state.window.request_redraw();
+                event_loop.set_control_flow(ControlFlow::Wait);
+            }
+            Some(at) => event_loop.set_control_flow(ControlFlow::WaitUntil(at)),
+        }
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         // Let egui observe every event (hover, focus, input on panels). When egui
         // consumes an event the pointer is over a panel, so the canvas must not
         // also pan/zoom on it.
-        let consumed = match &mut self.state {
-            Some(state) => state
-                .egui_state
-                .on_window_event(&state.window, &event)
-                .consumed,
-            None => false,
+        let (consumed, egui_wants_repaint) = match &mut self.state {
+            Some(state) => {
+                let r = state.egui_state.on_window_event(&state.window, &event);
+                (r.consumed, r.repaint)
+            }
+            None => (false, false),
         };
+        // With the unconditional redraw loop gone, input has to schedule its own
+        // frame or the window would stay frozen until the next timer fires.
+        if egui_wants_repaint {
+            self.repaint_at = Some(Instant::now());
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => self.resize(size),
-            WindowEvent::ModifiersChanged(mods) => self.modifiers = mods.state(),
-            WindowEvent::RedrawRequested => {
-                self.redraw();
-                if let Some(state) = &self.state {
-                    state.window.request_redraw();
-                }
+            WindowEvent::Resized(size) => {
+                self.resize(size);
+                self.repaint_at = Some(Instant::now());
             }
+            WindowEvent::ModifiersChanged(mods) => self.modifiers = mods.state(),
+            WindowEvent::RedrawRequested => self.redraw(),
             WindowEvent::KeyboardInput { event: key_event, .. } if !consumed => {
                 self.on_keyboard(key_event);
+                self.repaint_at = Some(Instant::now());
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 if button == MouseButton::Left {
@@ -407,6 +464,7 @@ impl ApplicationHandler for App {
                     if let Some(state) = &mut self.state {
                         state.camera.pan_screen(delta);
                     }
+                    self.repaint_at = Some(Instant::now());
                 }
                 self.cursor = new;
             }
@@ -420,6 +478,7 @@ impl ApplicationHandler for App {
                 if let Some(state) = &mut self.state {
                     state.camera.zoom_at(anchor, factor);
                 }
+                self.repaint_at = Some(Instant::now());
             }
             _ => {}
         }
