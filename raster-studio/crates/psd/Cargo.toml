@@ -10,4 +10,9 @@ thiserror.workspace = true
 serde.workspace = true
 flate2.workspace = true
 layer-model.workspace = true
-raster.workspace = true
+
+# NOTE: `raster` was in the scaffold's dependency list and has been dropped.
+# This crate models a .psd as its own document tree of planar channels, which
+# is what the format stores; it never builds tiles. Converting a `PsdFile` into
+# `raster::TileGrid`s belongs to whichever crate imports a document, not here,
+# and an unused dependency would drag `raster` into every build of this one.

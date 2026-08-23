@@ -13,6 +13,21 @@ serde_json.workspace = true
 rmp-serde.workspace = true
 editor-core.workspace = true
 layer-model.workspace = true
+# Content hashing: the package integrity digest, the document digest that
+# anchors the journal to a snapshot, and the blob names under `tiles/`.
+blake3.workspace = true
+# `TileHash`/`Tile` (the identity and size of a tile blob) and `codec` (the
+# PNG encoder the composite preview is written with).
+raster.workspace = true
+# The content-addressed blob store pixels and assets are loaded back into.
+asset-store.workspace = true
+# The authoritative CPU compositor, used for exactly one thing here: rendering
+# the composite preview thumbnail written into `previews/`. A preview produced
+# any other way would be a second compositor and would drift.
+compositor.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+# Tests build selections and canvas coordinates; the library itself never names
+# a vector type.
+glam.workspace = true

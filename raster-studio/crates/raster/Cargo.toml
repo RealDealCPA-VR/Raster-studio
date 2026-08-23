@@ -9,5 +9,16 @@ license.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 blake3.workspace = true
-image.workspace = true
+# The workspace pins png/jpeg/webp/tiff. The import pipeline additionally reads
+# GIF, BMP, ICO and TGA, and exports GIF and BMP, so those codec features are
+# requested here.
+#
+# Requesting them *here* is not containment: Cargo unifies features across a
+# workspace build, so `image` is compiled once with the union of every member's
+# requests and these four decoders are linked into every crate in the workspace
+# that depends on `image`, whatever its own manifest asks for. Treat this list
+# as workspace-wide attack surface, not as this crate's private set.
+image = { workspace = true, features = ["gif", "bmp", "ico", "tga"] }
 color.workspace = true
+# Reinterpreting `&[u16]` as `&[u8]` for 16-bit encoders, without a copy.
+bytemuck.workspace = true
