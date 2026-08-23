@@ -8,6 +8,8 @@
 use editor_core::{Command, Document, History};
 use layer_model::LayerId;
 
+pub mod canvas;
+pub mod dialogs;
 pub mod panels;
 
 /// Aggregates the panels that make up the editor workspace and draws them for

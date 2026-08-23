@@ -7,6 +7,15 @@ license.workspace = true
 
 [dependencies]
 egui.workspace = true
+design.workspace = true
 editor-core.workspace = true
 layer-model.workspace = true
 tools.workspace = true
+compositor.workspace = true
+selection.workspace = true
+filters.workspace = true
+adjustments.workspace = true
+vector.workspace = true
+text-engine.workspace = true
+raster.workspace = true
+glam.workspace = true
