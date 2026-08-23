@@ -236,7 +236,7 @@ pub fn stroke(path: &Path, style: &StrokeStyle) -> Result<Path, VectorError> {
     Ok(out)
 }
 
-/// Split a path into its dash pattern's "on" runs, as open subpaths.
+/// Split a path into its dash pattern's "on" runs, one subpath each.
 ///
 /// Exposed on its own because the pattern's geometry is worth being able to
 /// inspect and test directly, and because a caller that wants dashed *guides*
@@ -251,6 +251,15 @@ pub fn stroke(path: &Path, style: &StrokeStyle) -> Result<Path, VectorError> {
 /// five-unit dashes; `[0, 8]` is a row of zero-length runs eight apart, which is
 /// how a dotted line is spelled — [`stroke`] gives each one the area of its cap.
 /// Neither is an excuse to drop the rest of the path.
+///
+/// On a **closed** subpath the dash that wraps across the start vertex is one
+/// run, not two. When the pattern is "on" both as the walk leaves the first
+/// vertex and as it arrives back at it, the trailing run and the leading run are
+/// spliced into a single open subpath that passes *through* that vertex — so
+/// [`stroke`] draws a join there, as it would at any other corner, instead of
+/// two butt caps meeting in a notch (or, under a round or square cap, two caps
+/// of doubled ink). A pattern that never toggles at all over the whole ring
+/// stays closed for the same reason: it comes back as the ring it went in as.
 pub fn dash(path: &Path, d: &Dash, tolerance: f64) -> Result<Path, VectorError> {
     let Some(pattern) = d.resolved() else {
         return Ok(path.clone());
@@ -292,7 +301,16 @@ pub fn dash(path: &Path, d: &Dash, tolerance: f64) -> Result<Path, VectorError> 
         let mut remaining = pattern[idx] - phase;
         let mut on = idx % 2 == 0;
 
+        // Whether the pattern was already "on" *at* `pts[0]`. Only then is the
+        // run that ends at the closing vertex continuous with the run that
+        // started there, and only then may the two be spliced.
+        let started_on = on;
+
         let mut cur: Vec<Point> = if on { vec![pts[0]] } else { Vec::new() };
+        // Runs are buffered per subpath rather than emitted as they close,
+        // because whether the last one is its own dash or the tail of the first
+        // is not known until the walk reaches the closing vertex.
+        let mut poly_runs: Vec<Vec<Point>> = Vec::new();
         let edges = super::path::Polyline {
             points: pts,
             closed: poly.closed,
@@ -330,8 +348,7 @@ pub fn dash(path: &Path, d: &Dash, tolerance: f64) -> Result<Path, VectorError> 
                             limit: MAX_DASH_RUNS,
                         });
                     }
-                    emit_run(&mut out, &cur);
-                    cur.clear();
+                    poly_runs.push(std::mem::take(&mut cur));
                 } else {
                     cur.clear();
                     cur.push(p);
@@ -346,25 +363,59 @@ pub fn dash(path: &Path, d: &Dash, tolerance: f64) -> Result<Path, VectorError> 
             }
         }
         if on {
-            emit_run(&mut out, &cur);
+            poly_runs.push(std::mem::take(&mut cur));
+        }
+
+        // A closed subpath whose pattern was on at the closing vertex from both
+        // sides has one dash, not two: the walk arrived back where it started
+        // still drawing. Emitting the two halves separately would cap each of
+        // them at the closing vertex, so a mitred rectangle would show a notch
+        // at its first corner and a round or square cap would double its ink
+        // there. `poly_runs.len() == 1` is the case where nothing ever toggled,
+        // so the single run *is* the whole ring and simply closes.
+        let wraps = poly.closed && started_on && on;
+        let mut closed_run = false;
+        if wraps {
+            if poly_runs.len() == 1 {
+                closed_run = true;
+            } else if let Some(tail) = poly_runs.pop() {
+                let head = std::mem::replace(&mut poly_runs[0], tail);
+                poly_runs[0].extend_from_slice(&head);
+            }
+        }
+        for run in &poly_runs {
+            emit_run(&mut out, run, closed_run);
         }
     }
     Ok(out)
 }
 
-/// Emit one "on" run as an open subpath.
+/// Emit one "on" run as a subpath — open, unless the run is a whole closed ring
+/// the pattern never interrupted, in which case it stays closed so [`stroke`]
+/// joins it rather than capping it.
 ///
 /// A run of a single point is kept, not dropped: a zero-length entry in the
 /// pattern is a *dot*, and [`stroke`] turns a one-point subpath into whatever
 /// the cap paints there. Dropping it is how `stroke-dasharray: 0 8` ends up
 /// drawing nothing at all.
-fn emit_run(out: &mut Path, pts: &[Point]) {
+fn emit_run(out: &mut Path, pts: &[Point], closed: bool) {
     let mut run = pts.to_vec();
     dedup_points(&mut run);
+    // A run that walked the whole way round arrives with `pts[0]` repeated at
+    // the end, and the closing edge of a closed subpath is implied, so keeping
+    // that duplicate would only add a zero-length segment for the stroker to
+    // trip over. `run.len() > 2` is the ring's own minimum counted *with* the
+    // duplicate: `[p0, p1, p0]` is the smallest ring there is, out along one
+    // leg and back along the implied closing edge.
+    let repeats_start = run.len() > 1 && run[0].distance_squared(run[run.len() - 1]) == 0.0;
+    let ring = closed && run.len() > 2;
+    if ring && repeats_start {
+        run.pop();
+    }
     if run.is_empty() {
         return;
     }
-    out.extend(&Path::from_polyline(&run, false));
+    out.extend(&Path::from_polyline(&run, ring));
 }
 
 /// Offset one side of a polyline by `r`, to the **right** of travel.
@@ -868,6 +919,180 @@ mod tests {
         assert_eq!(d.subpaths().len(), 9);
         // One run straddles the corner, so it has three points.
         assert!(d.subpaths().iter().any(|s| s.segments.len() == 2));
+    }
+
+    /// A dash that wraps across a closed subpath's start vertex is *one* dash,
+    /// not two. Before this, the run arriving at the rectangle's first corner
+    /// and the run leaving it were emitted separately, so the corner got two
+    /// butt caps facing each other — a notch under [`Join::Miter`], and doubled
+    /// overlapping ink under a round or square cap.
+    #[test]
+    fn a_dash_wrapping_a_closed_subpaths_start_is_one_run_with_a_join() {
+        let b = Bounds::from_xywh(0.0, 0.0, 25.0, 25.0);
+        let r = shapes::rect(b);
+        let pattern = Dash::new(vec![10.0, 5.0]);
+        // A perimeter of 100 against a 15-unit period: six whole periods and a
+        // ten-unit tail, so the tail runs straight on into the leading dash.
+        let d = dash(&r, &pattern, 0.01).unwrap();
+        assert_eq!(d.subpaths().len(), 6, "the wrapping dash must not be split");
+        assert!((d.length() - 70.0).abs() < 1e-9, "{}", d.length());
+
+        let corner = Point::ZERO;
+        let subs = d.subpaths();
+        let touching: Vec<_> = subs
+            .iter()
+            .filter(|s| {
+                s.start.distance(corner) < 1e-9
+                    || s.segments.iter().any(|g| g.end().distance(corner) < 1e-9)
+            })
+            .collect();
+        assert_eq!(touching.len(), 1, "one run only may touch the start vertex");
+        let w = touching[0];
+        // It passes *through* the corner instead of starting or ending there:
+        // twenty units of dash, ten either side, with a real vertex between.
+        assert!(!w.closed);
+        assert_eq!(w.segments.len(), 2, "one segment either side of the corner");
+        assert!(
+            (w.start - point(0.0, 10.0)).length() < 1e-9,
+            "{:?}",
+            w.start
+        );
+        assert!(
+            (w.end() - point(10.0, 0.0)).length() < 1e-9,
+            "{:?}",
+            w.end()
+        );
+        let run_len: f64 = w.segments.iter().map(|g| g.length(1e-6)).sum();
+        assert!((run_len - 20.0).abs() < 1e-9, "{run_len}");
+
+        // And the ink follows. Mitred at half-width one, the wrapped corner
+        // reaches its outer point at (-1, -1); two butt caps would leave that
+        // whole square empty.
+        let o = stroke(
+            &r,
+            &StrokeStyle {
+                dash: Some(pattern.clone()),
+                ..StrokeStyle::new(2.0)
+            },
+        )
+        .unwrap();
+        assert!(
+            contains(&o, point(-0.5, -0.5), FillRule::NonZero),
+            "the wrapped corner was not joined"
+        );
+        // A corner the pattern really does interrupt still gets its two caps:
+        // (25, 0) falls inside an "off" stretch and stays empty, so this is not
+        // just an outline that covers everything.
+        assert!(!contains(&o, point(25.5, -0.5), FillRule::NonZero));
+    }
+
+    /// The same rule with nothing to splice: a pattern whose first "on" entry
+    /// outlasts the whole ring never cuts it, so it must come back as a ring
+    /// rather than as an open run whose two ends meet at a pair of caps.
+    #[test]
+    fn a_closed_subpath_the_pattern_never_interrupts_stays_closed() {
+        let b = Bounds::from_xywh(0.0, 0.0, 25.0, 25.0);
+        let r = shapes::rect(b);
+        let pattern = Dash::new(vec![200.0, 5.0]);
+        let d = dash(&r, &pattern, 0.01).unwrap();
+        assert_eq!(d.subpaths().len(), 1);
+        assert!(d.subpaths()[0].closed, "an uncut ring must stay a ring");
+        assert!((d.length() - 100.0).abs() < 1e-9, "{}", d.length());
+        assert_eq!(d, r, "an uncut ring is the shape it started as");
+        // So stroking it is stroking the rectangle: four joins, no caps.
+        let dashed = stroke(
+            &r,
+            &StrokeStyle {
+                dash: Some(pattern),
+                ..StrokeStyle::new(2.0)
+            },
+        )
+        .unwrap();
+        assert_eq!(dashed, stroke(&r, &StrokeStyle::new(2.0)).unwrap());
+    }
+
+    /// The splice is conditional, not automatic. With the phase ten units in,
+    /// the walk leaves (0, 0) in an "off" stretch, so the run that arrives back
+    /// there is a dash in its own right and keeps both of its caps.
+    #[test]
+    fn a_closed_dash_that_starts_off_at_the_start_vertex_is_not_spliced() {
+        let r = shapes::rect(Bounds::from_xywh(0.0, 0.0, 25.0, 25.0));
+        let d = dash(
+            &r,
+            &Dash {
+                pattern: vec![10.0, 5.0],
+                offset: 10.0,
+            },
+            0.01,
+        )
+        .unwrap();
+        // Off 0-5, then six ten-unit dashes, then off 90-95 and on 95-100.
+        assert_eq!(d.subpaths().len(), 7);
+        assert!((d.length() - 65.0).abs() < 1e-9, "{}", d.length());
+        let subs = d.subpaths();
+        let corner = Point::ZERO;
+        assert_eq!(
+            subs.iter()
+                .filter(|s| s.end().distance(corner) < 1e-9)
+                .count(),
+            1,
+            "exactly one run ends at the start vertex"
+        );
+        assert_eq!(
+            subs.iter()
+                .filter(|s| s.start.distance(corner) < 1e-9)
+                .count(),
+            0,
+            "and none leaves it, so there is nothing to splice onto"
+        );
+        assert!(subs.iter().all(|s| !s.closed));
+    }
+
+    /// The smallest ring the rule has to survive. `M 0 0 L 10 0 Z` is a legal
+    /// closed subpath: its ring is twenty units long, out along the segment and
+    /// back along the implied closing edge. Walked all the way round it is the
+    /// shortest run that can be a ring at all — `[p0, p1, p0]`, exactly the
+    /// three points the `run.len() > 2` test admits — so it is where a rule that
+    /// demanded one vertex more would quietly hand back an open there-and-back
+    /// polyline instead: the same twenty units wound twice, with two butt caps
+    /// meeting at (0, 0) rather than a join.
+    #[test]
+    fn a_two_vertex_closed_subpath_keeps_both_of_its_legs() {
+        let p = crate::svg::parse("M 0 0 L 10 0 Z").unwrap();
+
+        // Uncut: the pattern's first "on" entry outlasts the whole ring.
+        let whole = dash(&p, &Dash::new(vec![100.0, 5.0]), 0.01).unwrap();
+        assert_eq!(whole.subpaths().len(), 1);
+        assert!(whole.subpaths()[0].closed, "an uncut ring must stay a ring");
+        assert_eq!(
+            whole.subpaths()[0].segments.len(),
+            2,
+            "both legs of the ring survive"
+        );
+        assert!((whole.length() - 20.0).abs() < 1e-9, "{}", whole.length());
+        assert_eq!(whole, p, "an uncut ring is the shape it started as");
+
+        // And the ink follows. Handed back open the run doubles back on itself,
+        // so the outline winds the same twenty units twice — 80 in
+        // `signed_area2` against the 40 the solid stroke paints.
+        assert_eq!(
+            stroke(
+                &p,
+                &StrokeStyle {
+                    dash: Some(Dash::new(vec![100.0, 5.0])),
+                    ..StrokeStyle::new(2.0)
+                }
+            )
+            .unwrap(),
+            stroke(&p, &StrokeStyle::new(2.0)).unwrap(),
+            "an uninterrupted pattern must not change the ink"
+        );
+
+        // Cut once: on 0-15, off 15-18, on 18-20, and the tail splices through
+        // the start vertex onto the head — seventeen units of ink either way.
+        let cut = dash(&p, &Dash::new(vec![15.0, 3.0]), 0.01).unwrap();
+        assert_eq!(cut.subpaths().len(), 1);
+        assert!((cut.length() - 17.0).abs() < 1e-9, "{}", cut.length());
     }
 
     #[test]

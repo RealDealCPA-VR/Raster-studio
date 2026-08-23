@@ -231,6 +231,27 @@ struct Segment {
 /// The returned [`ShapedText`] is self-contained: it owns the string and every
 /// position it reports, so editing helpers and the rasteriser need nothing
 /// else from the shaper.
+///
+/// A `library` with no faces at all has nothing to shape with: the result then
+/// carries no glyphs and **exactly one** zero-width line per paragraph, each
+/// owning that paragraph's whole byte range. Every caret, hit-test, selection
+/// and rasterisation path still works on it, but the lines have no width, so
+/// every caret on a line shares one x.
+///
+/// One line per paragraph is the line a font would have produced for point
+/// text, and for any other run that does not wrap: there `line_of_index` and
+/// `caret_rect` agree with the fonted layout index for index. A wrapping
+/// [`TextFrame::Box`] is where they part. Glyphless text has no widths to break
+/// on, so the several visual lines a font would have wrapped a paragraph into
+/// collapse into that paragraph's single line, and `line_of_index` /
+/// `caret_rect` answer with the paragraph's line rather than the wrapped one —
+/// for most indices in a wrapping box, a different line from the fonted answer.
+/// The synthesised line is also always reported left to right, so a
+/// right-to-left paragraph's [`ShapedLine::rtl`] is `false` there and its
+/// first-line indent is not mirrored the way the shaped path mirrors it.
+///
+/// Check [`FontLibrary::is_empty`] if the caller needs to distinguish "no
+/// fonts" from "nothing to draw".
 pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
     let base_size = run.style.size_px.max(MIN_FONT_SIZE_PX);
     let line_height = run
@@ -261,6 +282,16 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
     // (an empty paragraph), so the caret there has the right height.
     let default_attrs = attrs_for(&run.style, usize::MAX, line_height);
 
+    // A database with no faces at all must never reach the shaper: its font
+    // fallback chain ends in "any font in the database", and cosmic-text takes
+    // that with `expect("no default font found")`. `FontLibrary::empty()` is
+    // public and is what `Default` returns, and `with_system_fonts()` yields
+    // the same thing on a machine with nothing installed — so this is a state a
+    // caller reaches without doing anything wrong, and the workspace builds
+    // releases with `panic = "abort"`, which would make it an unrecoverable
+    // process abort rather than something a caller could catch.
+    let fontless = library.is_empty();
+
     let mut buffer = Buffer::new_empty(Metrics::new(base_size, line_height));
     let font_system = library.system_mut();
     buffer.set_wrap(font_system, wrap);
@@ -287,7 +318,9 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
         line.set_align(Some(align));
         buffer.lines.push(line);
     }
-    buffer.shape_until_scroll(font_system, false);
+    if !fontless {
+        buffer.shape_until_scroll(font_system, false);
+    }
 
     let mut out = ShapedText {
         text: run.text.clone(),
@@ -305,7 +338,14 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
     let empty_line_x = empty_line_x(run);
     let mut previous_paragraph: Option<usize> = None;
 
-    for layout_run in buffer.layout_runs() {
+    // Nothing was shaped when there are no faces, so there is nothing to walk;
+    // the lines are synthesised after the loop instead.
+    let layout_runs = if fontless {
+        None
+    } else {
+        Some(buffer.layout_runs())
+    };
+    for layout_run in layout_runs.into_iter().flatten() {
         let paragraph = layout_run.line_i;
         let offset = paragraph_offsets.get(paragraph).copied().unwrap_or(0);
         let extra_y = paragraph as f32 * paragraph_step;
@@ -409,12 +449,105 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
         });
     }
 
+    if fontless {
+        push_fontless_lines(
+            &mut out,
+            run,
+            &paragraph_offsets,
+            paragraph_step,
+            empty_line_x,
+        );
+    }
+
     extend_line_ends(&mut out, &paragraph_offsets, &run.text);
     align_point_text(&mut out, run);
     out.bounds = compute_bounds(&out.lines);
     let rules = decorations(library, &out);
     out.decorations = rules;
     out
+}
+
+/// Lines for a library that has no faces to shape with.
+///
+/// The geometry is the same layout the shaper itself produces for a paragraph
+/// that has no glyphs on it — cosmic-text builds one visual line per buffer line
+/// with an empty glyph list, and centres its baseline in the line box because
+/// the run's ascent and descent are both zero. Every paragraph therefore gets
+/// exactly one `line_height`-tall line, stacked with the paragraph spacing: a
+/// caret with a real height, no selection rectangles and no ink.
+///
+/// Unlike a glyphless line in a library that *has* fonts, the paragraph here can
+/// be non-empty, so the line claims the paragraph's **whole** byte range rather
+/// than the single point at its end. That is what keeps
+/// [`ShapedText::line_of_index`](crate::ShapedText::line_of_index) — and so
+/// `caret_rect` — answering with a line at all for an index in the paragraph's
+/// interior; without it those indices fall through the lookup and land on the
+/// last line of the block.
+///
+/// It is one line per paragraph whatever the frame, this being the only line
+/// there is to own the range. For point text — and for any boxed run whose
+/// paragraphs would not have wrapped — that is the same line a font would have
+/// produced, so `line_of_index` agrees with the fonted layout index for index.
+/// A wrapping [`TextFrame::Box`] is the exception: with no glyphs there are no
+/// widths to break on, so the visual lines a font would have wrapped a paragraph
+/// into collapse into their paragraph's single line here, and the caret answers
+/// with the paragraph's line rather than the wrapped one. That is not a choice
+/// this function could make differently — the break points are a property of
+/// glyph advances that do not exist — and the text is invisible either way.
+///
+/// The line is zero-width, so both of its byte-range endpoints offer a caret at
+/// the same x; `hit_test` breaks that tie towards the lower index and reports
+/// the paragraph's start. Both endpoints are defensible on a line with no width,
+/// and owning the range is what makes the caret land on the right line at all.
+///
+/// The lines are reported left to right: [`ShapedLine::rtl`] is `false` here
+/// whatever the paragraph's own direction, which a caller can read straight off
+/// the public field. One thing follows from that and is visible in the geometry:
+/// the shaped path mirrors the first-line indent for a right-to-left line
+/// (`let indent = if layout_run.rtl { -indent } else { indent };`) and this path
+/// does not, so an RTL paragraph's indent moves the line right here where a font
+/// would have moved it left. `rtl`, and the sign of the indent in
+/// `x_min`/`x_max` — and hence in [`ShapedText::bounds`] — are the two places a
+/// fontless line differs from the layout it degenerates from. Beyond those,
+/// direction has nothing here to act on: there are no glyphs to reorder, and
+/// with `x_min == x_max` there is no line edge for it to pick between.
+fn push_fontless_lines(
+    out: &mut ShapedText,
+    run: &TextRun,
+    offsets: &[usize],
+    paragraph_step: f32,
+    empty_line_x: f32,
+) {
+    // Every synthesised line is the first — and only — line of its paragraph,
+    // so the first-line indent applies to all of them, exactly as it does to a
+    // glyphless line in the shaped path.
+    let x = empty_line_x + run.paragraph.first_line_indent + run.origin[0];
+    // `line_top` is accumulated, and the baseline is centred inside the line
+    // box before the paragraph offset is added, because that is term for term
+    // how the shaped path arrives at the same numbers — associating them any
+    // other way agrees only to a rounding error.
+    let mut line_top = 0.0_f32;
+    for (paragraph, &offset) in offsets.iter().enumerate() {
+        let (slice, _) = paragraph_slice(&run.text, offsets, paragraph);
+        let extra_y = paragraph as f32 * paragraph_step;
+        let top = line_top + extra_y + run.origin[1];
+        out.lines.push(ShapedLine {
+            paragraph,
+            first_glyph: out.glyphs.len(),
+            glyph_count: 0,
+            // The paragraph's whole range, so that every index inside it is
+            // owned by this line. `extend_line_ends` leaves both ends alone.
+            byte_start: offset,
+            byte_end: offset + slice.len(),
+            baseline_y: (line_top + out.line_height / 2.0) + extra_y + run.origin[1],
+            top,
+            bottom: top + out.line_height,
+            x_min: x,
+            x_max: x,
+            rtl: false,
+        });
+        line_top += out.line_height;
+    }
 }
 
 /// Byte offset of each paragraph, mirroring how the shaper splits lines.
@@ -467,7 +600,14 @@ fn extend_line_ends(out: &mut ShapedText, offsets: &[usize], text: &str) {
         let end = offsets.get(paragraph).copied().unwrap_or(0) + slice.len();
         let line = &mut out.lines[index];
         line.byte_end = line.byte_end.max(end);
-        if line.glyph_count == 0 {
+        // A line with no glyphs took `byte_start` from the paragraph's offset
+        // rather than from a cluster. When the paragraph is genuinely empty
+        // that offset *is* the end, and pinning the two together says so; when
+        // it is not — the fontless path, where a whole paragraph lays out
+        // without a single glyph — the line still owns every index in it, and
+        // collapsing the start would strand the paragraph's interior on no
+        // line at all.
+        if line.glyph_count == 0 && line.byte_start >= end {
             line.byte_start = line.byte_end;
         }
     }

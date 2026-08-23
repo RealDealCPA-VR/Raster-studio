@@ -16,12 +16,27 @@
 //! Two plane shapes, because there are two tile shapes.
 //! [`ColorPatch`] holds `TILE_SIZE²` RGBA pixels per tile and is what a
 //! [`PixelKey::Layer`] stores; [`CoveragePatch`] holds `TILE_SIZE²` 8-bit
-//! samples per tile and is what a [`PixelKey::Mask`] stores. Mixing them up
-//! would store a hash of four-byte pixels where the compositor expects
-//! one-byte samples, which is exactly the mismatch
-//! [`editor_core::CommandError::FillValueMismatch`] exists to prevent.
+//! samples per tile and is what a [`PixelKey::Mask`] stores.
+//!
+//! # Choosing the wrong one corrupts the mask, and nothing downstream notices
+//!
+//! [`editor_core::Command::PaintTiles`] carries content *hashes*, not bytes, so
+//! no length check stands between a tool and a mask slot:
+//! [`editor_core::CommandError::FillValueMismatch`] guards
+//! [`editor_core::Command::FillRegion`], which is a different command entirely.
+//! A [`ColorPatch`] committed to a [`PixelKey::Mask`] therefore *succeeds*,
+//! storing a 262144-byte RGBA tile where [`MASK_TILE_BYTES`] says 65536.
+//!
+//! The gate is here in this crate, in every tool that writes pixels: each one
+//! branches on [`crate::PaintTarget`] before it loads a plane. The fills, the
+//! shapes, the strokes and the free transform go through [`CoveragePatch`] on a
+//! mask — a gradient dragged over a layer mask is a core workflow, not an edge
+//! case — and the ops with no coverage meaning (red-eye, patch, the magic
+//! eraser, and the stroke ops [`crate::StrokeOp::works_on_mask`] rejects) refuse
+//! with [`crate::ToolError::UnsupportedOnMask`] rather than write something
+//! plausible into the wrong plane.
 
-use color::{linear_to_srgb, premultiply, srgb8_to_linear, unpremultiply};
+use color::{linear_srgb_luminance, linear_to_srgb, premultiply, srgb8_to_linear, unpremultiply};
 use editor_core::{PixelKey, TileDelta, TileEdit, MASK_TILE_BYTES};
 use filters::FilterBuffer;
 use glam::IVec2;
@@ -148,6 +163,18 @@ impl TileBox {
         let ty = ly / TILE_SIZE as i32;
         Some((ty as usize) * (self.nx as usize) + tx as usize)
     }
+}
+
+/// The coverage a straight-alpha linear colour paints onto a mask.
+///
+/// White reveals and black conceals, so the value is the colour's luminance —
+/// the same rule [`crate::StrokeTool`] already uses when it paints a mask, so a
+/// grey gradient and a grey brush lay down the same coverage and the two paths
+/// cannot drift apart. The colour's *alpha* is deliberately not part of the
+/// value: it scales how much of the value is applied, exactly as it does on a
+/// layer, which is why it is the caller that multiplies it in.
+pub fn mask_coverage_of(color: [f32; 4]) -> f32 {
+    linear_srgb_luminance([color[0], color[1], color[2]]).clamp(0.0, 1.0)
 }
 
 /// Decode one straight-alpha sRGB8 pixel into linear premultiplied light.
@@ -424,6 +451,15 @@ impl CoveragePatch {
         self.tb
     }
 
+    /// The region this plane covers, in document pixels.
+    pub fn rect(&self) -> PixelRect {
+        self.tb.rect()
+    }
+
+    pub fn origin(&self) -> IVec2 {
+        self.tb.origin()
+    }
+
     pub fn width(&self) -> u32 {
         self.tb.width()
     }
@@ -452,6 +488,59 @@ impl CoveragePatch {
             self.data[i] = v.clamp(0.0, 1.0);
             self.dirty[slot] = true;
         }
+    }
+
+    /// Move the coverage at `p` a fraction `amount` of the way toward `value`.
+    ///
+    /// The single write every mask-painting tool goes through — the brush, the
+    /// bucket, the gradient, the shape rasteriser — so "a half-covered pixel
+    /// painted with white at 50%" means one thing in this crate rather than
+    /// four. A zero or negative `amount` leaves the plane, and the tile's dirty
+    /// flag, untouched.
+    pub fn blend(&mut self, p: IVec2, value: f32, amount: f32) {
+        let a = amount.clamp(0.0, 1.0);
+        if a <= 0.0 {
+            return;
+        }
+        let cur = self.get(p);
+        self.set(p, cur + (value.clamp(0.0, 1.0) - cur) * a);
+    }
+
+    /// The coverage plane as a premultiplied RGBA buffer, coverage in every
+    /// channel.
+    ///
+    /// Sample `c` becomes `[c, c, c, c]` — unpremultiplied, white at `c` alpha —
+    /// so anything that is correct on premultiplied colour is correct on this,
+    /// and [`CoveragePatch::replace_from_buffer`] reads the coverage straight
+    /// back out of the alpha channel. That is what lets the free transform move
+    /// a mask through the very same resampler the layer path uses instead of a
+    /// second, subtly different one.
+    pub fn to_buffer(&self) -> Result<FilterBuffer, ToolError> {
+        let mut buf = FilterBuffer::transparent(self.width(), self.height())?;
+        for (px, &c) in buf.pixels_mut().iter_mut().zip(self.data.iter()) {
+            let c = c.clamp(0.0, 1.0);
+            *px = [c, c, c, c];
+        }
+        Ok(buf)
+    }
+
+    /// Replace the plane with the alpha channel of `src` — the inverse of
+    /// [`CoveragePatch::to_buffer`]. Marks every tile dirty, because the caller
+    /// could have rewritten any of them.
+    pub fn replace_from_buffer(&mut self, src: &FilterBuffer) -> Result<(), ToolError> {
+        if src.width() != self.width() || src.height() != self.height() {
+            return Err(ToolError::Filter(filters::FilterError::BadLength {
+                width: self.width(),
+                height: self.height(),
+                expected: (self.width() as usize) * (self.height() as usize),
+                got: src.len(),
+            }));
+        }
+        for (dst, px) in self.data.iter_mut().zip(src.pixels()) {
+            *dst = px[3].clamp(0.0, 1.0);
+        }
+        self.dirty.iter_mut().for_each(|d| *d = true);
+        Ok(())
     }
 
     fn encode_tile(&self, slot: usize) -> Vec<u8> {
@@ -544,6 +633,70 @@ pub fn read_rgba8(
     Ok(out)
 }
 
+/// Read a rectangle of a mask's coverage as **opaque grey** sRGB8 pixels.
+///
+/// The magic wand behind the paint bucket judges tolerance over a
+/// [`selection::ImageView`], which is RGBA. [`read_rgba8`] cannot serve a mask:
+/// a 65536-byte coverage tile fails its length check and is skipped, so the
+/// whole mask would read back as one uniform transparent field and a single
+/// bucket click would flood the entire canvas. Expanding each sample to
+/// `[v, v, v, 255]` asks the question the user meant — "the part of the mask
+/// about as revealed as the pixel I clicked" — and keeps the bucket's tolerance
+/// behaving the way it does on a layer.
+///
+/// A tile of the wrong length is an error rather than a skipped read: a mask
+/// slot holding RGBA bytes is corruption, and quietly treating it as empty is
+/// how it would stay invisible.
+pub fn read_mask_rgba8(
+    access: &dyn TileAccess,
+    key: PixelKey,
+    rect: PixelRect,
+) -> Result<Vec<u8>, ToolError> {
+    if rect.is_empty() {
+        return Err(ToolError::Degenerate);
+    }
+    let area = (rect.width as u64) * (rect.height as u64);
+    if area > MAX_PATCH_TILES * (TILE_SIZE as u64) * (TILE_SIZE as u64) {
+        return Err(ToolError::RegionTooLarge {
+            tiles: area / ((TILE_SIZE as u64) * (TILE_SIZE as u64)),
+            max: MAX_PATCH_TILES,
+        });
+    }
+    // Absent coverage is zero, and zero coverage is opaque black here.
+    let mut out = vec![0u8; (area * 4) as usize];
+    for i in 0..area as usize {
+        out[i * 4 + 3] = 255;
+    }
+    let t = TILE_SIZE as i64;
+    let ts = TILE_SIZE as usize;
+    for row in 0..rect.height as i64 {
+        let y = rect.y + row;
+        let ty = y.div_euclid(t);
+        let ly = y.rem_euclid(t) as usize;
+        for col in 0..rect.width as i64 {
+            let x = rect.x + col;
+            let tx = x.div_euclid(t);
+            let coord = TileCoord::new(tx as i32, ty as i32, 0);
+            let Some(bytes) = access.tile_bytes(key, coord) else {
+                continue;
+            };
+            if bytes.len() != MASK_TILE_BYTES {
+                return Err(ToolError::Tile(raster::TileError::BadLength {
+                    expected: MASK_TILE_BYTES,
+                    got: bytes.len(),
+                }));
+            }
+            let lx = x.rem_euclid(t) as usize;
+            let v = bytes[ly * ts + lx];
+            let di = ((row * rect.width as i64 + col) * 4) as usize;
+            out[di] = v;
+            out[di + 1] = v;
+            out[di + 2] = v;
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,6 +783,85 @@ mod tests {
             delta.edits()[0].hash.is_some(),
             "a mask tile is stored, never removed"
         );
+    }
+
+    #[test]
+    fn a_coverage_plane_round_trips_through_an_rgba_buffer() {
+        // The free transform resamples a mask by borrowing the layer path's
+        // resampler, which speaks premultiplied RGBA. The conversion has to be
+        // lossless to 8-bit or every transform would drift the mask.
+        let mut tiles = MemoryTiles::new();
+        let k = PixelKey::Mask(layer_model::MaskId::new());
+        let mut bytes = vec![0u8; MASK_TILE_BYTES];
+        for (i, b) in bytes.iter_mut().enumerate() {
+            *b = (i % 256) as u8;
+        }
+        tiles.put(k, TileCoord::new(0, 0, 0), bytes);
+        let mut patch = CoveragePatch::load(&tiles, k, PixelRect::new(0, 0, 16, 16)).unwrap();
+        let buf = patch.to_buffer().unwrap();
+        // Premultiplied grey: every channel carries the coverage.
+        let c = patch.get(IVec2::new(7, 0));
+        assert_eq!(buf.get(7, 0), [c, c, c, c]);
+        patch.replace_from_buffer(&buf).unwrap();
+        assert_eq!(patch.get(IVec2::new(7, 0)), c);
+        // Nothing changed, so nothing is stored even though every tile is dirty.
+        assert!(patch.commit(&mut tiles, k).unwrap().is_empty());
+
+        // A mismatched buffer is refused rather than half-applied.
+        let wrong = FilterBuffer::transparent(8, 8).unwrap();
+        assert!(patch.replace_from_buffer(&wrong).is_err());
+    }
+
+    #[test]
+    fn blending_coverage_moves_partway_and_a_zero_amount_writes_nothing() {
+        let mut tiles = MemoryTiles::new();
+        let k = PixelKey::Mask(layer_model::MaskId::new());
+        let mut patch = CoveragePatch::load(&tiles, k, PixelRect::new(0, 0, 8, 8)).unwrap();
+        patch.blend(IVec2::new(1, 1), 1.0, 0.5);
+        assert!((patch.get(IVec2::new(1, 1)) - 0.5).abs() < 1e-6);
+        patch.blend(IVec2::new(1, 1), 1.0, 0.5);
+        assert!((patch.get(IVec2::new(1, 1)) - 0.75).abs() < 1e-6);
+        // A zero amount must not even dirty the tile, or a fill that lands
+        // entirely outside its selection would still rewrite tiles.
+        let mut clean = CoveragePatch::load(&tiles, k, PixelRect::new(0, 0, 8, 8)).unwrap();
+        clean.blend(IVec2::new(1, 1), 1.0, 0.0);
+        assert!(clean.commit(&mut tiles, k).unwrap().is_empty());
+    }
+
+    #[test]
+    fn mask_coverage_reads_white_as_revealed_and_black_as_hidden() {
+        assert!((mask_coverage_of([1.0, 1.0, 1.0, 1.0]) - 1.0).abs() < 1e-6);
+        assert_eq!(mask_coverage_of([0.0, 0.0, 0.0, 1.0]), 0.0);
+        // Alpha is not part of the value — the caller scales with it.
+        assert!((mask_coverage_of([1.0, 1.0, 1.0, 0.0]) - 1.0).abs() < 1e-6);
+        let mid = mask_coverage_of([0.5, 0.5, 0.5, 1.0]);
+        assert!((mid - 0.5).abs() < 1e-6, "grey came back as {mid}");
+    }
+
+    #[test]
+    fn reading_a_mask_as_rgba_gives_opaque_grey_and_refuses_a_colour_tile() {
+        let mut tiles = MemoryTiles::new();
+        let k = PixelKey::Mask(layer_model::MaskId::new());
+        let mut bytes = vec![0u8; MASK_TILE_BYTES];
+        bytes[TILE_SIZE as usize + 1] = 200; // (1, 1)
+        tiles.put(k, TileCoord::new(0, 0, 0), bytes);
+        let px = read_mask_rgba8(&tiles, k, PixelRect::new(0, 0, 2, 2)).unwrap();
+        // Absent coverage reads as opaque black, not as a transparent pixel:
+        // the wand has to be able to tell "hidden" from "no tile".
+        assert_eq!(&px[0..4], &[0, 0, 0, 255]);
+        assert_eq!(&px[12..16], &[200, 200, 200, 255]);
+
+        // An RGBA tile parked in a mask slot is corruption, and is reported.
+        let bad = PixelKey::Mask(layer_model::MaskId::new());
+        tiles.put(
+            bad,
+            TileCoord::new(0, 0, 0),
+            vec![0u8; Tile::byte_len(PixelFormat::Rgba8)],
+        );
+        assert!(matches!(
+            read_mask_rgba8(&tiles, bad, PixelRect::new(0, 0, 2, 2)),
+            Err(ToolError::Tile(raster::TileError::BadLength { .. }))
+        ));
     }
 
     #[test]

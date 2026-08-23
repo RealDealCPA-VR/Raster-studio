@@ -508,6 +508,68 @@ mod tests {
         assert!(!contains(&g, Point::ZERO, FillRule::EvenOdd));
     }
 
+    /// The `rotation` argument must actually rotate. Every other test of these
+    /// three primitives asserts something rotation-invariant — vertices on the
+    /// circle, the n-gon area formula, the winding sign, or the shape against a
+    /// rasterisation of itself — so deleting the term outright would leave them
+    /// all green.
+    #[test]
+    fn rotation_turns_the_vertices_off_the_top() {
+        let c = point(3.0, -7.0);
+        let r = 10.0;
+        // Documented rule: at rotation zero the first vertex points straight up,
+        // which with y down is the angle -pi/2 from the +x axis. At `rot` it is
+        // therefore at angle `rot - pi/2`, i.e. `(sin rot, -cos rot) * r`.
+        // Derived from the doc comment, not read off the expression under test.
+        let first_vertex_at = |rot: f64| c + point(rot.sin(), -rot.cos()) * r;
+
+        for rot in [0.0, FRAC_PI_2, 0.3, -1.4, TAU + 0.75] {
+            let want = first_vertex_at(rot);
+            for (name, p) in [
+                ("regular_polygon", regular_polygon(c, r, 4, rot)),
+                ("star", star(c, r, 4.0, 5, rot)),
+                ("pentagram", pentagram(c, r, rot)),
+            ] {
+                let got = p.flatten(0.001)[0].points[0];
+                assert!(
+                    (got - want).length() < 1e-9,
+                    "{name} at rotation {rot}: got {got:?}, wanted {want:?}"
+                );
+            }
+        }
+
+        // Concretely, and independent of the closure: a quarter turn takes the
+        // vertex at the top of a square to the right of it.
+        let quarter = regular_polygon(Point::ZERO, 10.0, 4, FRAC_PI_2);
+        let v0 = quarter.flatten(0.001)[0].points[0];
+        assert!((v0 - point(10.0, 0.0)).length() < 1e-9, "{v0:?}");
+
+        // And it turns *every* vertex, not only the first. 0.3 rad is not a
+        // symmetry of any of these shapes, so the whole vertex set has to move;
+        // a quarter turn maps a square onto itself and would prove nothing.
+        for (name, a, b) in [
+            (
+                "regular_polygon",
+                regular_polygon(c, r, 4, 0.0),
+                regular_polygon(c, r, 4, 0.3),
+            ),
+            ("star", star(c, r, 4.0, 5, 0.0), star(c, r, 4.0, 5, 0.3)),
+            ("pentagram", pentagram(c, r, 0.0), pentagram(c, r, 0.3)),
+        ] {
+            let unrotated = a.flatten(0.001)[0].points.clone();
+            let rotated = b.flatten(0.001)[0].points.clone();
+            assert_eq!(unrotated.len(), rotated.len(), "{name}");
+            for (i, (x, y)) in unrotated.iter().zip(rotated.iter()).enumerate() {
+                assert!(x.distance(*y) > 1e-6, "{name} vertex {i} did not move");
+                // Rotation about the centre keeps every radius exactly.
+                assert!(
+                    (x.distance(c) - y.distance(c)).abs() < 1e-9,
+                    "{name} vertex {i} changed radius"
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_line_is_open_and_as_long_as_it_looks() {
         let l = line(point(0.0, 0.0), point(3.0, 4.0));

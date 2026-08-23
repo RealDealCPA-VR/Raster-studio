@@ -615,6 +615,9 @@ impl Tool for RedEyeTool {
         let Some(a) = self.anchor.take() else {
             return Ok(());
         };
+        // A mask stores coverage, not colour: there is no red channel to find a
+        // pupil in.
+        ctx.require_layer_target()?;
         crate::error::finite_pt("red-eye corner", event.pos)?;
         let x0 = (a.x.min(event.pos.x).floor() as i64).max(ctx.canvas.x);
         let y0 = (a.y.min(event.pos.y).floor() as i64).max(ctx.canvas.y);
@@ -697,6 +700,9 @@ impl PatchTool {
     }
 
     fn heal(&mut self, ctx: &mut ToolContext<'_>, offset: IVec2) -> Result<(), ToolError> {
+        // The heal is a frequency split over colour and shading; a coverage
+        // plane has neither.
+        ctx.require_layer_target()?;
         let Some(mask) = self.mask.clone() else {
             return Ok(());
         };
@@ -909,6 +915,10 @@ impl Tool for MagicEraserTool {
         let Some(seed) = self.seed.take() else {
             return Ok(());
         };
+        // Erasing to transparency is an alpha operation on colour pixels. On a
+        // mask the equivalent gesture is a bucket fill with black, which the
+        // paint bucket does properly through the coverage plane.
+        ctx.require_layer_target()?;
         let canvas = ctx.canvas;
         if (seed.x as i64) < canvas.x
             || (seed.y as i64) < canvas.y

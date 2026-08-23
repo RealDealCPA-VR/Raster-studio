@@ -1425,3 +1425,77 @@ fn the_wand_and_quick_select_pick_the_region_under_the_pointer() {
         "quick select is colour-driven and should have taken the far dark band"
     );
 }
+
+/// `TransformState::dest_bounds` used to consult the warp mesh whenever one
+/// existed, while `commit` and `resample` gate it on `TransformMode::Warp`.
+/// Entering warp mode is the only way a mesh is created, and switching modes
+/// does not throw it away — it cannot, or switching back would lose the user's
+/// warp — so a scale performed after a visit to warp mode was bounded by the
+/// stale mesh box and the result was silently truncated to it. The patch is
+/// tile-aligned to 256 px, which hides the truncation for small drags; this one
+/// goes well past that.
+#[test]
+fn a_scale_after_a_visit_to_warp_mode_is_not_clipped_to_the_stale_mesh() {
+    let mut fx = fixture(512, 512);
+    fx.paint_rect(PixelRect::new(0, 0, 64, 64), [255, 0, 0, 255]);
+
+    let mut tool = TransformTool::with_mode(TransformMode::Warp);
+    tool.begin(PixelRect::new(0, 0, 64, 64)).unwrap();
+    // Touching a warp handle is what creates the mesh. A zero-length drag
+    // leaves it at the identity, so the picture is untouched and all the visit
+    // leaves behind is the mesh itself.
+    tool.state.as_mut().unwrap().drag(
+        TransformMode::Warp,
+        Handle::Mesh(1, 1),
+        Vec2::new(21.0, 21.0),
+        Vec2::new(21.0, 21.0),
+    );
+    assert!(
+        tool.state.as_ref().unwrap().mesh.is_some(),
+        "the warp visit did not create a mesh, so this test proves nothing"
+    );
+
+    // Back to scale, and blow the box out to 500x500 — far outside the mesh.
+    tool.mode = TransformMode::Scale;
+    tool.state.as_mut().unwrap().drag(
+        TransformMode::Scale,
+        Handle::Corner(2),
+        Vec2::new(64.0, 64.0),
+        Vec2::new(500.0, 500.0),
+    );
+
+    {
+        let state = tool.state.as_ref().unwrap();
+        let scaled = state
+            .dest_bounds(fx.canvas(), TransformMode::Scale)
+            .expect("a 500x500 destination has bounds");
+        assert!(
+            scaled.width > 400 && scaled.height > 400,
+            "dest_bounds took the destination from the stale mesh: {scaled:?}"
+        );
+        // ...and in warp mode the mesh is still exactly what bounds it.
+        let warped = state
+            .dest_bounds(fx.canvas(), TransformMode::Warp)
+            .expect("the mesh has bounds");
+        assert!(
+            warped.width <= 65 && warped.height <= 65,
+            "warp mode stopped using the mesh: {warped:?}"
+        );
+    }
+
+    let layer = fx.layer;
+    let canvas = fx.canvas();
+    let cmds = {
+        let mut ctx = ToolContext::new(&mut fx.tiles, canvas).with_layer(layer);
+        tool.commit(&mut ctx).unwrap();
+        ctx.drain()
+    };
+    assert_eq!(cmds.len(), 1, "a transform commit is one command");
+    fx.commit(cmds);
+
+    assert_eq!(
+        fx.pixel(400, 400),
+        [255, 0, 0, 255],
+        "the scaled result was truncated to the stale mesh box"
+    );
+}

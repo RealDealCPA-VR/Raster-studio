@@ -13,7 +13,8 @@
 //!   tool accumulates a gesture         (dabs, a rubber band, a path)
 //!          |
 //!          v  on pointer up, or on commit
-//!   load the tiles it will touch       crate::patch::ColorPatch
+//!   load the tiles it will touch       crate::patch::ColorPatch  (a layer)
+//!                                      crate::patch::CoveragePatch (a mask)
 //!   edit them in linear premultiplied light
 //!   encode the touched tiles once  ->  editor_core::TileDelta
 //!          |
@@ -41,6 +42,21 @@
 //! the way in and encoded back to straight-alpha sRGB8 once on the way out.
 //! Nothing in this crate averages, blurs, resamples or blends gamma-encoded
 //! values.
+//!
+//! # Layer or mask
+//!
+//! [`tool::PaintTarget`] decides which surface of the active layer a pixel tool
+//! writes to, and **every** pixel tool branches on it before it loads anything:
+//! a mask tile is one byte per pixel where a layer tile is four, and
+//! [`editor_core::Command::PaintTiles`] carries hashes, so nothing downstream
+//! would catch the mistake. The tools that mean something on coverage — the
+//! brush and eraser, the fills, the gradient, the rasterised shapes, the free
+//! transform — go through [`patch::CoveragePatch`], painting the colour's
+//! luminance ([`patch::mask_coverage_of`]: white reveals, black conceals). The
+//! ones that are definitionally about colour — red-eye, patch, the magic
+//! eraser, and the retouching [`StrokeOp`]s — refuse with
+//! [`ToolError::UnsupportedOnMask`] rather than edit the layer the user was not
+//! looking at.
 //!
 //! # What the crate contains
 //!

@@ -35,8 +35,8 @@ use glam::{IVec2, Vec2};
 use raster::PixelRect;
 
 use crate::error::ToolError;
-use crate::patch::ColorPatch;
-use crate::tool::{PointerEvent, Tool, ToolContext, ToolId};
+use crate::patch::{ColorPatch, CoveragePatch};
+use crate::tool::{PaintTarget, PointerEvent, Tool, ToolContext, ToolId};
 
 /// Which kind of edit a handle drag performs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -461,11 +461,21 @@ impl TransformState {
     }
 
     /// Bounding rect of the destination, clipped to `canvas`.
-    pub fn dest_bounds(&self, canvas: PixelRect) -> Option<PixelRect> {
+    ///
+    /// `mode` is not decoration: the mesh only describes the destination in
+    /// [`TransformMode::Warp`], and it is exactly the gate
+    /// [`TransformTool::commit`] and [`resample`] use. A session that visited
+    /// warp mode and then switched to scale still *carries* its mesh — nothing
+    /// throws it away, because switching back has to restore it — so consulting
+    /// the mesh unconditionally would bound the destination by a stale box and
+    /// the commit would silently clip the user's scale to it. The mesh's
+    /// control points bound the Bézier patch (a Bézier surface stays inside its
+    /// control hull), so in warp mode they are the right point set.
+    pub fn dest_bounds(&self, canvas: PixelRect, mode: TransformMode) -> Option<PixelRect> {
         let mut lo = Vec2::splat(f32::INFINITY);
         let mut hi = Vec2::splat(f32::NEG_INFINITY);
-        let pts: Vec<Vec2> = match (&self.mesh, true) {
-            (Some(m), _) => {
+        let pts: Vec<Vec2> = match self.mesh.filter(|_| mode == TransformMode::Warp) {
+            Some(m) => {
                 let mut v = Vec::new();
                 for r in 0..4 {
                     for c in 0..4 {
@@ -474,7 +484,7 @@ impl TransformState {
                 }
                 v
             }
-            _ => self.corners.to_vec(),
+            None => self.corners.to_vec(),
         };
         for p in pts {
             if !p.x.is_finite() || !p.y.is_finite() {
@@ -744,13 +754,31 @@ impl TransformTool {
 
         let target = ctx.pixel_target()?;
         let key = ctx.pixel_key()?;
-        let dest = state.dest_bounds(ctx.canvas).ok_or(ToolError::Degenerate)?;
+        let dest = state
+            .dest_bounds(ctx.canvas, self.mode)
+            .ok_or(ToolError::Degenerate)?;
         let rect = union_clipped(state.source, dest, ctx.canvas).ok_or(ToolError::Degenerate)?;
-        let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
-        let src = patch.buffer().clone();
-        let out = resample(&src, patch.rect(), &state, self.mode)?;
-        patch.replace(out)?;
-        let delta = patch.commit(ctx.tiles, key)?;
+        let delta = match ctx.paint_target {
+            PaintTarget::Layer => {
+                let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
+                let src = patch.buffer().clone();
+                let out = resample(&src, patch.rect(), &state, self.mode)?;
+                patch.replace(out)?;
+                patch.commit(ctx.tiles, key)?
+            }
+            PaintTarget::Mask => {
+                // Moving, scaling or warping a layer mask is the same geometry
+                // problem, so it runs the identical resampler over the coverage
+                // plane lifted into premultiplied grey — not a ColorPatch,
+                // which would store a four-byte-per-pixel tile in the mask's
+                // one-byte-per-pixel slot.
+                let mut patch = CoveragePatch::load(ctx.tiles, key, rect)?;
+                let src = patch.to_buffer()?;
+                let out = resample(&src, patch.rect(), &state, self.mode)?;
+                patch.replace_from_buffer(&out)?;
+                patch.commit(ctx.tiles, key)?
+            }
+        };
         self.state = None;
         self.grabbed = None;
         if !delta.is_empty() {

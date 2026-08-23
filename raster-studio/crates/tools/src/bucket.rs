@@ -9,7 +9,7 @@
 //! because in every editor they are the same control.
 
 use color::{premultiply, srgb8_to_linear};
-use editor_core::{Command, Selection, SelectionMask};
+use editor_core::{Command, SelectionMask};
 use glam::IVec2;
 use raster::PixelRect;
 use selection::{
@@ -20,8 +20,8 @@ use selection::{
 use serde::{Deserialize, Serialize};
 
 use crate::error::ToolError;
-use crate::patch::{read_rgba8, ColorPatch};
-use crate::tool::{Pattern, PointerEvent, Tool, ToolContext, ToolId};
+use crate::patch::{mask_coverage_of, read_mask_rgba8, read_rgba8, ColorPatch, CoveragePatch};
+use crate::tool::{PaintTarget, Pattern, PointerEvent, Tool, ToolContext, ToolId};
 
 /// What a fill lays down.
 #[derive(Debug, Clone, PartialEq)]
@@ -77,6 +77,34 @@ impl FillSettings {
     }
 }
 
+/// The straight-alpha linear colour a fill lays down at one document point.
+///
+/// `pattern` must be `Some` when `content` is [`FillContent::Pattern`]; both
+/// entry points below check that once, before the loop, rather than per pixel.
+fn content_at(
+    content: &FillContent,
+    foreground: [f32; 4],
+    pattern: Option<&Pattern>,
+    x: i32,
+    y: i32,
+) -> [f32; 4] {
+    match content {
+        FillContent::Foreground => foreground,
+        FillContent::Color(c) => *c,
+        FillContent::Pattern => {
+            let s = pattern
+                .expect("a pattern fill checks for its pattern before it starts")
+                .sample(x as i64, y as i64);
+            [
+                srgb8_to_linear(s[0]),
+                srgb8_to_linear(s[1]),
+                srgb8_to_linear(s[2]),
+                s[3] as f32 / 255.0,
+            ]
+        }
+    }
+}
+
 /// Composite `content` through a coverage mask onto a patch.
 ///
 /// Shared by the paint bucket, the pattern fill and Edit ▸ Fill, so a fill
@@ -103,19 +131,7 @@ pub fn fill_masked(
             if cov <= 0.0 || patch.index_of(p).is_none() {
                 continue;
             }
-            let straight = match content {
-                FillContent::Foreground => foreground,
-                FillContent::Color(c) => *c,
-                FillContent::Pattern => {
-                    let s = pattern.expect("checked above").sample(x as i64, y as i64);
-                    [
-                        srgb8_to_linear(s[0]),
-                        srgb8_to_linear(s[1]),
-                        srgb8_to_linear(s[2]),
-                        s[3] as f32 / 255.0,
-                    ]
-                }
-            };
+            let straight = content_at(content, foreground, pattern, x, y);
             let a = (straight[3] * cov * opacity).clamp(0.0, 1.0);
             if a <= 0.0 {
                 continue;
@@ -131,6 +147,44 @@ pub fn fill_masked(
                     a + dst[3] * (1.0 - a),
                 ],
             );
+        }
+    }
+    Ok(())
+}
+
+/// The same fill, onto a mask's coverage plane instead of a layer's pixels.
+///
+/// Filling a layer mask — a bucket to reveal a whole flat region, a pattern to
+/// stencil one — is routine, so it goes through [`CoveragePatch`] rather than
+/// being refused. What lands is the content's luminance
+/// ([`mask_coverage_of`]): white reveals, black conceals, a mid-grey pattern
+/// half-reveals. The content's alpha scales *how much* of that value is
+/// applied, exactly as it does on a layer, so filling with a transparent colour
+/// is still a no-op.
+pub fn fill_masked_coverage(
+    patch: &mut CoveragePatch,
+    mask: &SelectionMask,
+    content: &FillContent,
+    foreground: [f32; 4],
+    pattern: Option<&Pattern>,
+    opacity: f32,
+) -> Result<(), ToolError> {
+    let Some((min, max)) = mask.bounds() else {
+        return Ok(());
+    };
+    let opacity = opacity.clamp(0.0, 1.0);
+    if matches!(content, FillContent::Pattern) && pattern.is_none() {
+        return Err(ToolError::Degenerate);
+    }
+    for y in min.y..max.y {
+        for x in min.x..max.x {
+            let p = IVec2::new(x, y);
+            let cov = mask.coverage_at(p) as f32 / 255.0;
+            if cov <= 0.0 {
+                continue;
+            }
+            let straight = content_at(content, foreground, pattern, x, y);
+            patch.blend(p, mask_coverage_of(straight), straight[3] * cov * opacity);
         }
     }
     Ok(())
@@ -153,12 +207,21 @@ fn flood(
             y: seed.y,
         });
     }
-    let key = if settings.sample_merged {
-        ctx.sample_key()?
+    // What the tolerance is judged against. "Sample merged" always names a
+    // colour surface, so it reads RGBA whatever is being painted; otherwise the
+    // read has to match the plane the fill will write, or a bucket on a mask
+    // would measure tolerance against a surface of the wrong shape — which
+    // `read_rgba8` reports as "no tiles at all", i.e. a flood over the whole
+    // canvas.
+    let pixels = if settings.sample_merged {
+        read_rgba8(ctx.tiles, ctx.sample_key()?, canvas)?
     } else {
-        ctx.pixel_key()?
+        let key = ctx.pixel_key()?;
+        match ctx.paint_target {
+            PaintTarget::Layer => read_rgba8(ctx.tiles, key, canvas)?,
+            PaintTarget::Mask => read_mask_rgba8(ctx.tiles, key, canvas)?,
+        }
     };
-    let pixels = read_rgba8(ctx.tiles, key, canvas)?;
     let view = ImageView::new(
         IVec2::new(canvas.x as i32, canvas.y as i32),
         canvas.width,
@@ -246,18 +309,35 @@ impl Tool for PaintBucketTool {
             (max.x - min.x) as u32,
             (max.y - min.y) as u32,
         );
-        let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
         let fg = ctx.foreground;
         let pattern = ctx.pattern.clone();
-        fill_masked(
-            &mut patch,
-            &mask,
-            &self.content,
-            fg,
-            pattern.as_ref(),
-            self.settings.opacity,
-        )?;
-        let delta = patch.commit(ctx.tiles, key)?;
+        let opacity = self.settings.opacity;
+        let delta = match ctx.paint_target {
+            PaintTarget::Layer => {
+                let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
+                fill_masked(
+                    &mut patch,
+                    &mask,
+                    &self.content,
+                    fg,
+                    pattern.as_ref(),
+                    opacity,
+                )?;
+                patch.commit(ctx.tiles, key)?
+            }
+            PaintTarget::Mask => {
+                let mut patch = CoveragePatch::load(ctx.tiles, key, rect)?;
+                fill_masked_coverage(
+                    &mut patch,
+                    &mask,
+                    &self.content,
+                    fg,
+                    pattern.as_ref(),
+                    opacity,
+                )?;
+                patch.commit(ctx.tiles, key)?
+            }
+        };
         if !delta.is_empty() {
             ctx.emit(Command::PaintTiles { target, delta });
         }
@@ -321,10 +401,9 @@ impl Tool for PatternFillTool {
         }
         let target = ctx.pixel_target()?;
         let key = ctx.pixel_key()?;
-        let mask = match &ctx.selection {
-            Selection::None => to_mask(&Selection::None, ctx.canvas_rect())?,
-            other => to_mask(other, ctx.canvas_rect())?,
-        };
+        // No flood: the region is the selection, and `Selection::None` means
+        // the whole canvas.
+        let mask = to_mask(&ctx.selection, ctx.canvas_rect())?;
         let Some((min, max)) = mask.bounds() else {
             return Ok(());
         };
@@ -334,18 +413,35 @@ impl Tool for PatternFillTool {
             (max.x - min.x) as u32,
             (max.y - min.y) as u32,
         );
-        let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
         let fg = ctx.foreground;
         let pattern = ctx.pattern.clone();
-        fill_masked(
-            &mut patch,
-            &mask,
-            &FillContent::Pattern,
-            fg,
-            pattern.as_ref(),
-            self.opacity,
-        )?;
-        let delta = patch.commit(ctx.tiles, key)?;
+        let opacity = self.opacity;
+        let delta = match ctx.paint_target {
+            PaintTarget::Layer => {
+                let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
+                fill_masked(
+                    &mut patch,
+                    &mask,
+                    &FillContent::Pattern,
+                    fg,
+                    pattern.as_ref(),
+                    opacity,
+                )?;
+                patch.commit(ctx.tiles, key)?
+            }
+            PaintTarget::Mask => {
+                let mut patch = CoveragePatch::load(ctx.tiles, key, rect)?;
+                fill_masked_coverage(
+                    &mut patch,
+                    &mask,
+                    &FillContent::Pattern,
+                    fg,
+                    pattern.as_ref(),
+                    opacity,
+                )?;
+                patch.commit(ctx.tiles, key)?
+            }
+        };
         if !delta.is_empty() {
             ctx.emit(Command::PaintTiles { target, delta });
         }

@@ -774,8 +774,7 @@ pub fn apply_stroke_to_mask(
             if a <= 0.0 {
                 continue;
             }
-            let cur = patch.get(p);
-            patch.set(p, cur + (value - cur) * a);
+            patch.blend(p, value, a);
         }
     }
 }
@@ -911,9 +910,7 @@ impl StrokeTool {
                 // ever widens, the new op has to decide what it means here.
                 let value = match &self.op {
                     StrokeOp::Erase => 0.0,
-                    StrokeOp::Paint { color } => {
-                        linear_srgb_luminance([color[0], color[1], color[2]]).clamp(0.0, 1.0)
-                    }
+                    StrokeOp::Paint { color } => crate::patch::mask_coverage_of(*color),
                     _ => return Err(ToolError::UnsupportedOnMask),
                 };
                 apply_stroke_to_mask(

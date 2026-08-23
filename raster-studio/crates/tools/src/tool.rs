@@ -617,6 +617,23 @@ impl<'a> ToolContext<'a> {
         }
     }
 
+    /// Refuse a gesture that has no meaning on an 8-bit coverage mask.
+    ///
+    /// The tools that *do* mean something there — the brush, the fills, the
+    /// gradient, the shape rasteriser, the free transform — branch on
+    /// [`ToolContext::paint_target`] and load a
+    /// [`crate::patch::CoveragePatch`] instead. Everything whose whole job is
+    /// to read or write colour (red-eye, patch, the magic eraser) calls this
+    /// first, because [`editor_core::Command::PaintTiles`] would otherwise
+    /// happily store a four-byte-per-pixel tile in a one-byte-per-pixel mask
+    /// slot; nothing downstream checks.
+    pub fn require_layer_target(&self) -> Result<(), ToolError> {
+        match self.paint_target {
+            PaintTarget::Layer => Ok(()),
+            PaintTarget::Mask => Err(ToolError::UnsupportedOnMask),
+        }
+    }
+
     /// Where a colour-reading tool should sample from.
     pub fn sample_key(&self) -> Result<PixelKey, ToolError> {
         match self.sample_from {

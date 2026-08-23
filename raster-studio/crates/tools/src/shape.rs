@@ -25,8 +25,8 @@ use vector::{
 
 use crate::error::ToolError;
 use crate::gradient::constrain_45;
-use crate::patch::ColorPatch;
-use crate::tool::{PointerEvent, Tool, ToolContext, ToolId};
+use crate::patch::{mask_coverage_of, ColorPatch, CoveragePatch};
+use crate::tool::{PaintTarget, PointerEvent, Tool, ToolContext, ToolId};
 
 /// The shapes the tool can draw.
 #[derive(Debug, Clone, PartialEq)]
@@ -148,6 +148,17 @@ pub fn path_for(kind: &ShapeKind, a: Vec2, b: Vec2) -> Result<Path, ToolError> {
     Ok(path)
 }
 
+/// The anti-aliased coverage of a path, clipped to `clip`.
+fn path_coverage(path: &Path, clip: PixelRect) -> Result<vector::CoverageMask, ToolError> {
+    let opts = FillOptions::default().clipped_to(VecRect::from_xywh(
+        clip.x as i32,
+        clip.y as i32,
+        clip.width,
+        clip.height,
+    ));
+    Ok(fill(path, &opts)?)
+}
+
 /// Fill a path's coverage into a patch with one colour.
 pub fn rasterize_path(
     patch: &mut ColorPatch,
@@ -156,13 +167,7 @@ pub fn rasterize_path(
     clip: PixelRect,
     selection: &Selection,
 ) -> Result<(), ToolError> {
-    let opts = FillOptions::default().clipped_to(VecRect::from_xywh(
-        clip.x as i32,
-        clip.y as i32,
-        clip.width,
-        clip.height,
-    ));
-    let mask = fill(path, &opts)?;
+    let mask = path_coverage(path, clip)?;
     let origin = mask.origin();
     for y in 0..mask.height() as i32 {
         for x in 0..mask.width() as i32 {
@@ -186,6 +191,36 @@ pub fn rasterize_path(
                     a + dst[3] * (1.0 - a),
                 ],
             );
+        }
+    }
+    Ok(())
+}
+
+/// Fill a path's coverage into a mask's coverage plane.
+///
+/// Stencilling a shape into a layer mask — an ellipse to open a soft vignette,
+/// a rectangle to hide a band — is the ordinary reason to rasterise at all, so
+/// rasterise mode targets the mask through [`CoveragePatch`] rather than
+/// refusing. As everywhere else on a mask the colour contributes its luminance
+/// and its alpha decides how much of it lands.
+pub fn rasterize_path_coverage(
+    patch: &mut CoveragePatch,
+    path: &Path,
+    color: [f32; 4],
+    clip: PixelRect,
+    selection: &Selection,
+) -> Result<(), ToolError> {
+    let mask = path_coverage(path, clip)?;
+    let origin = mask.origin();
+    let value = mask_coverage_of(color);
+    for y in 0..mask.height() as i32 {
+        for x in 0..mask.width() as i32 {
+            let p = IVec2::new(origin.x + x, origin.y + y);
+            let cov = mask.coverage_f32(p);
+            if cov <= 0.0 {
+                continue;
+            }
+            patch.blend(p, value, color[3] * cov * selection.coverage_at(p));
         }
     }
     Ok(())
@@ -311,10 +346,19 @@ impl Tool for ShapeTool {
                 let key = ctx.pixel_key()?;
                 let bounds = path.bounds();
                 let rect = clip_bounds(&bounds, ctx.canvas).ok_or(ToolError::Degenerate)?;
-                let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
                 let color = ctx.foreground;
-                rasterize_path(&mut patch, &path, color, rect, &ctx.selection)?;
-                let delta = patch.commit(ctx.tiles, key)?;
+                let delta = match ctx.paint_target {
+                    PaintTarget::Layer => {
+                        let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
+                        rasterize_path(&mut patch, &path, color, rect, &ctx.selection)?;
+                        patch.commit(ctx.tiles, key)?
+                    }
+                    PaintTarget::Mask => {
+                        let mut patch = CoveragePatch::load(ctx.tiles, key, rect)?;
+                        rasterize_path_coverage(&mut patch, &path, color, rect, &ctx.selection)?;
+                        patch.commit(ctx.tiles, key)?
+                    }
+                };
                 if !delta.is_empty() {
                     ctx.emit(Command::PaintTiles { target, delta });
                 }

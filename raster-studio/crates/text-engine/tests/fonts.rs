@@ -1,6 +1,6 @@
 //! Font enumeration, loading and matching.
 
-use text_engine::{FontLibrary, FontSlant, FontWeight};
+use text_engine::{shape, FontLibrary, FontSlant, FontWeight, TextRun};
 
 fn regular_only() -> FontLibrary {
     let mut library = FontLibrary::empty();
@@ -157,11 +157,18 @@ fn face_metrics_come_from_the_font() {
 
 #[test]
 fn the_system_library_is_usable_when_the_machine_has_fonts() {
-    let library = FontLibrary::with_system_fonts();
+    let mut library = FontLibrary::with_system_fonts();
     if library.face_count() == 0 {
-        // A machine with no fonts installed at all is a legitimate state; the
-        // only claim then is that construction did not panic.
+        // A machine with no fonts installed at all is a legitimate state, and
+        // the claim is not merely that construction survived it: laying text
+        // out against that library must be safe too, because the shaper
+        // underneath aborts on an empty database. `tests/no_fonts.rs` pins the
+        // behaviour in full; here we only prove the *system* library reaches
+        // the same guard.
         assert!(library.family_names().is_empty());
+        let shaped = shape(&mut library, &TextRun::point("Hello", "", 24.0));
+        assert!(shaped.glyphs.is_empty());
+        assert!(!shaped.lines.is_empty(), "the caret still has a line");
         return;
     }
     assert!(!library.family_names().is_empty());

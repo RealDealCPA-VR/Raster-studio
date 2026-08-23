@@ -791,6 +791,50 @@ mod tests {
         assert!((moved.length() - p.length() * 2.0).abs() < 1e-6);
     }
 
+    /// `bounds()` is the box of the ink; `control_bounds()` is the box of the
+    /// handles. Most shapes cannot tell them apart, because their control
+    /// points already sit inside the curve's own box — so this uses the one
+    /// case that can: a cubic whose two handles overshoot the extremum the
+    /// curve actually reaches.
+    #[test]
+    fn path_bounds_are_tight_where_control_bounds_are_not() {
+        let mut p = Path::new();
+        p.move_to(point(0.0, 0.0)).curve_to(
+            point(0.0, 100.0),
+            point(100.0, 100.0),
+            point(100.0, 0.0),
+        );
+
+        // y(t) = 3(1-t)^2 t*100 + 3(1-t)t^2*100 = 300 t (1 - t), which peaks at
+        // t = 1/2 with y = 75 — three quarters of the way to the handles.
+        let tight = p.bounds();
+        let ctrl = p.control_bounds();
+        assert!((tight.max.y - 75.0).abs() < 1e-9, "{tight:?}");
+        assert!((ctrl.max.y - 100.0).abs() < 1e-9, "{ctrl:?}");
+        assert!(tight.height() < ctrl.height(), "{tight:?} vs {ctrl:?}");
+        // Everywhere else the two agree: the curve does reach x = 0 and x = 100
+        // and starts on y = 0, so only the overshoot separates them.
+        assert_eq!(tight.min, point(0.0, 0.0));
+        assert_eq!(ctrl.min, point(0.0, 0.0));
+        assert!((tight.max.x - 100.0).abs() < 1e-9);
+        assert!((ctrl.max.x - 100.0).abs() < 1e-9);
+        // The tight box is always inside the conservative one, never the other
+        // way round.
+        assert_eq!(tight.union(ctrl), ctrl);
+
+        // The same for a quadratic, whose single handle it reaches half way to,
+        // and across more than one subpath so the union really is over tight
+        // boxes rather than one lucky segment.
+        let mut q = Path::new();
+        q.move_to(point(0.0, 0.0))
+            .quad_to(point(50.0, 100.0), point(100.0, 0.0))
+            .move_to(point(200.0, 0.0))
+            .line_to(point(200.0, 10.0));
+        assert!((q.bounds().max.y - 50.0).abs() < 1e-9, "{:?}", q.bounds());
+        assert!((q.control_bounds().max.y - 100.0).abs() < 1e-9);
+        assert!((q.bounds().max.x - 200.0).abs() < 1e-9);
+    }
+
     #[test]
     fn reversing_twice_returns_the_original_geometry() {
         let mut p = Path::new();

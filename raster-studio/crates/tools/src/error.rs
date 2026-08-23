@@ -37,9 +37,15 @@ pub enum ToolError {
     /// The gesture would write colour into an 8-bit coverage mask.
     ///
     /// A mask stores how much of the layer shows through, not RGBA pixels, so
-    /// a clone stamp or a dodge has nothing to mean there. Refused rather than
-    /// quietly retargeted at the layer, which would edit something the user was
-    /// not looking at.
+    /// a clone stamp, a dodge, a red-eye fix or a frequency-split heal has
+    /// nothing to mean there. Refused rather than quietly retargeted at the
+    /// layer, which would edit something the user was not looking at — and
+    /// rather than committed anyway, which stores a four-byte-per-pixel tile in
+    /// a one-byte-per-pixel slot that nothing downstream validates.
+    ///
+    /// This is the *narrow* half of the rule. Painting, filling, gradients,
+    /// shapes and the free transform all mean something on coverage and go
+    /// through [`crate::CoveragePatch`] instead of landing here.
     #[error("this tool has no meaning on a coverage mask")]
     UnsupportedOnMask,
 

@@ -24,8 +24,8 @@ use raster::PixelRect;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{finite, ToolError};
-use crate::patch::ColorPatch;
-use crate::tool::{PointerEvent, Tool, ToolContext, ToolId};
+use crate::patch::{mask_coverage_of, ColorPatch, CoveragePatch};
+use crate::tool::{PaintTarget, PointerEvent, Tool, ToolContext, ToolId};
 
 /// A colour stop, positioned in `0..=1` along the ramp.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -308,6 +308,36 @@ impl Default for GradientSettings {
     }
 }
 
+/// The dithered straight-alpha linear colour the ramp puts at one pixel.
+///
+/// Both renderers below go through this, so the layer and the mask see exactly
+/// the same ramp, the same reversal and the same dither pattern.
+fn ramp_at(settings: &GradientSettings, p: IVec2, start: Vec2, end: Vec2) -> [f32; 4] {
+    let pt = Vec2::new(p.x as f32 + 0.5, p.y as f32 + 0.5);
+    let mut t = settings.shape.parameter(pt, start, end);
+    if settings.reverse {
+        t = 1.0 - t;
+    }
+    let mut c = settings.ramp.sample(t);
+    if settings.dither {
+        // Dither in the **output** domain, not in `t`.
+        //
+        // The banding a gradient shows is a quantisation artefact of the 8-bit
+        // encoding, so the noise has to be just under one encoded level — which
+        // is a different amount of `t` for every ramp, and none at all for a
+        // ramp that spans two colours a hair apart. Perturbing `t` instead
+        // would leave exactly the shallow gradients that band worst completely
+        // undithered.
+        let d = (bayer(p.x, p.y) - 0.5) / 255.0;
+        for ch in c.iter_mut().take(3) {
+            let enc = linear_to_srgb(ch.clamp(0.0, 1.0)) + d;
+            *ch = srgb_to_linear_scalar(enc.clamp(0.0, 1.0));
+        }
+        c[3] = (c[3] + d).clamp(0.0, 1.0);
+    }
+    c
+}
+
 /// Render a gradient into a patch over `rect`.
 ///
 /// Exposed separately from the tool so a fill layer, a mask ramp or a scripted
@@ -328,28 +358,7 @@ pub fn render_gradient(
             if clip <= 0.0 {
                 continue;
             }
-            let pt = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
-            let mut t = settings.shape.parameter(pt, start, end);
-            if settings.reverse {
-                t = 1.0 - t;
-            }
-            let mut c = settings.ramp.sample(t);
-            if settings.dither {
-                // Dither in the **output** domain, not in `t`.
-                //
-                // The banding a gradient shows is a quantisation artefact of
-                // the 8-bit encoding, so the noise has to be just under one
-                // encoded level — which is a different amount of `t` for every
-                // ramp, and none at all for a ramp that spans two colours a
-                // hair apart. Perturbing `t` instead would leave exactly the
-                // shallow gradients that band worst completely undithered.
-                let d = (bayer(p.x, p.y) - 0.5) / 255.0;
-                for ch in c.iter_mut().take(3) {
-                    let enc = linear_to_srgb(ch.clamp(0.0, 1.0)) + d;
-                    *ch = srgb_to_linear_scalar(enc.clamp(0.0, 1.0));
-                }
-                c[3] = (c[3] + d).clamp(0.0, 1.0);
-            }
+            let c = ramp_at(settings, p, start, end);
             let a = c[3] * opacity * clip;
             let src = premultiply([c[0], c[1], c[2], a]);
             let dst = patch.get(p);
@@ -362,6 +371,36 @@ pub fn render_gradient(
                     a + dst[3] * (1.0 - a),
                 ],
             );
+        }
+    }
+}
+
+/// The same gradient, onto a mask's coverage plane.
+///
+/// Dragging a black-to-white ramp across a layer mask is how every soft edge
+/// and every fade in a raster editor gets made, so this is a first-class path
+/// rather than a refusal: the ramp's luminance ([`crate::patch::mask_coverage_of`])
+/// becomes the coverage and the ramp's own alpha decides how much of it lands,
+/// which is what makes a transparent-to-white ramp fade *in* over whatever the
+/// mask already held instead of overwriting it with black.
+pub fn render_gradient_coverage(
+    patch: &mut CoveragePatch,
+    rect: PixelRect,
+    start: Vec2,
+    end: Vec2,
+    settings: &GradientSettings,
+    selection: &Selection,
+) {
+    let opacity = settings.opacity.clamp(0.0, 1.0);
+    for y in rect.y..rect.bottom() {
+        for x in rect.x..rect.right() {
+            let p = IVec2::new(x as i32, y as i32);
+            let clip = selection.coverage_at(p);
+            if clip <= 0.0 {
+                continue;
+            }
+            let c = ramp_at(settings, p, start, end);
+            patch.blend(p, mask_coverage_of(c), c[3] * opacity * clip);
         }
     }
 }
@@ -472,9 +511,25 @@ impl Tool for GradientTool {
         let Some(rect) = self.target_rect(ctx) else {
             return Ok(());
         };
-        let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
-        render_gradient(&mut patch, rect, start, end, &self.settings, &ctx.selection);
-        let delta = patch.commit(ctx.tiles, key)?;
+        let delta = match ctx.paint_target {
+            PaintTarget::Layer => {
+                let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
+                render_gradient(&mut patch, rect, start, end, &self.settings, &ctx.selection);
+                patch.commit(ctx.tiles, key)?
+            }
+            PaintTarget::Mask => {
+                let mut patch = CoveragePatch::load(ctx.tiles, key, rect)?;
+                render_gradient_coverage(
+                    &mut patch,
+                    rect,
+                    start,
+                    end,
+                    &self.settings,
+                    &ctx.selection,
+                );
+                patch.commit(ctx.tiles, key)?
+            }
+        };
         if !delta.is_empty() {
             ctx.emit(Command::PaintTiles { target, delta });
         }

@@ -56,6 +56,15 @@
 //!   pixels. Layout still reports the true positions; it is only the glyph
 //!   scaler, whose pixel component is an `i32`, that is protected. Text that
 //!   far off-canvas rasterises at the clamp instead of overflowing.
+//! * A [`FontLibrary`] with no faces at all cannot shape anything, so [`shape`]
+//!   reports no glyphs and one zero-width line per paragraph, each owning that
+//!   paragraph's whole byte range. The caret, hit test, selection and rasteriser
+//!   all still answer on that result, and [`ShapedText::caret_rect`] still puts
+//!   an index on the line its paragraph is on — but the lines have no width, so
+//!   every caret on a line shares one x and [`ShapedText::hit_test`] can only
+//!   answer with the paragraph's start. The text is invisible either way;
+//!   callers that care should check [`FontLibrary::is_empty`] and say so in the
+//!   UI.
 //! * Vertical writing modes are not implemented.
 //!
 //! ```

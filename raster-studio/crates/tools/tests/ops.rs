@@ -7,15 +7,18 @@
 //! and that a tool with no meaning on a coverage mask says so instead of
 //! quietly editing the layer behind it.
 
-use editor_core::{Command, Document, PixelKey, PixelTarget, Selection};
-use layer_model::{Layer, LayerMask, MaskId};
+use editor_core::{Command, Document, PixelKey, PixelTarget, Selection, MASK_TILE_BYTES};
+use layer_model::{Layer, LayerId, LayerMask, MaskId};
 use raster::{PixelRect, TileCoord, TILE_SIZE};
 use tools::brush::BrushSettings;
-use tools::edit::PatchTool;
+use tools::bucket::{FillContent, FillSettings, PaintBucketTool, PatternFillTool};
+use tools::edit::{MagicEraserTool, PatchTool, RedEyeTool};
+use tools::gradient::{GradientRamp, GradientSettings, GradientShape, GradientTool};
+use tools::shape::{ShapeKind, ShapeMode, ShapeTool};
 use tools::stroke::{SpongeMode, StrokeOp, StrokeTool, ToneRange};
 use tools::tiles::{MemoryTiles, TileAccess};
-use tools::tool::{PaintTarget, PointerEvent, Tool, ToolContext, ToolId};
-use tools::transform::{TransformMode, TransformTool, WarpMesh};
+use tools::tool::{PaintTarget, Pattern, PointerEvent, Tool, ToolContext, ToolId};
+use tools::transform::{Handle, TransformMode, TransformTool, WarpMesh};
 use tools::ToolError;
 
 mod common;
@@ -615,4 +618,342 @@ fn the_patch_tool_heals_the_region_it_lassoed_from_where_it_was_dragged() {
         );
     }
     assert_eq!(fx.pixel(100, 100), [200, 200, 200, 255]);
+}
+
+// ------------------------------------------------------ the mask target ----
+//
+// `Command::PaintTiles` carries content *hashes* and validates no byte format
+// (`CommandError::FillValueMismatch` guards `FillRegion`, a different command),
+// so a tool that loads a `ColorPatch` while the paint target is the mask
+// commits a 262144-byte RGBA tile into a slot the compositor reads as 65536
+// bytes of coverage — and everything downstream accepts it. The assertion that
+// catches that is the tile's *length*, so every test below makes it.
+
+/// A document with one masked layer, plus everything needed to drive a tool at
+/// the mask and read the coverage back.
+struct MaskFixture {
+    doc: Document,
+    tiles: MemoryTiles,
+    layer: LayerId,
+    mask: MaskId,
+}
+
+impl MaskFixture {
+    const CANVAS: PixelRect = PixelRect {
+        x: 0,
+        y: 0,
+        width: 64,
+        height: 64,
+    };
+
+    fn new() -> Self {
+        let (doc, tiles, layer, mask) = masked();
+        Self {
+            doc,
+            tiles,
+            layer,
+            mask,
+        }
+    }
+
+    /// A context that paints the *mask*, with a white foreground — which on a
+    /// mask means "fully revealed".
+    fn ctx(&mut self) -> ToolContext<'_> {
+        let (layer, mask) = (self.layer, self.mask);
+        let mut ctx = ToolContext::new(&mut self.tiles, Self::CANVAS).with_layer(layer);
+        ctx.active_mask = Some(mask);
+        ctx.paint_target = PaintTarget::Mask;
+        ctx.foreground = [1.0, 1.0, 1.0, 1.0];
+        ctx
+    }
+
+    /// Put coverage into the mask the way an application would: bytes in the
+    /// store, a hash in the document.
+    fn seed(&mut self, bytes: Vec<u8>) {
+        assert_eq!(bytes.len(), MASK_TILE_BYTES);
+        let coord = TileCoord::new(0, 0, 0);
+        let hash = self.tiles.put(PixelKey::Mask(self.mask), coord, bytes);
+        Command::paint_tiles(
+            PixelTarget::Mask(self.layer),
+            vec![editor_core::TileEdit::set(coord, hash)],
+        )
+        .unwrap()
+        .apply(&mut self.doc)
+        .unwrap();
+        self.tiles.sync_from(&self.doc.pixels);
+    }
+
+    /// Apply what a gesture queued, asserting it was one command aimed at the
+    /// mask, and refresh the store mirror.
+    fn apply(&mut self, cmds: Vec<Command>) {
+        assert_eq!(cmds.len(), 1, "a mask gesture is one command");
+        match &cmds[0] {
+            Command::PaintTiles { target, .. } => {
+                assert_eq!(*target, PixelTarget::Mask(self.layer))
+            }
+            other => panic!("expected PaintTiles on the mask, got {}", other.label()),
+        }
+        for c in cmds {
+            c.apply(&mut self.doc).unwrap();
+        }
+        self.tiles.sync_from(&self.doc.pixels);
+        assert!(
+            self.doc.pixels.tiles(PixelKey::Layer(self.layer)).is_none(),
+            "a mask edit wrote to the layer's own pixels"
+        );
+    }
+
+    /// The mask's only tile — and the length assertion this whole section is
+    /// about.
+    fn tile(&self) -> &[u8] {
+        let bytes = self
+            .tiles
+            .tile_bytes(PixelKey::Mask(self.mask), TileCoord::new(0, 0, 0))
+            .expect("no mask tile was stored");
+        assert_eq!(
+            bytes.len(),
+            MASK_TILE_BYTES,
+            "the mask holds {} bytes: a colour tile was committed into a coverage slot",
+            bytes.len()
+        );
+        bytes
+    }
+
+    fn coverage(&self, x: usize, y: usize) -> u8 {
+        self.tile()[y * TILE_SIZE as usize + x]
+    }
+}
+
+#[test]
+fn a_gradient_dragged_across_a_mask_writes_a_coverage_ramp() {
+    let mut fx = MaskFixture::new();
+    let mut tool = GradientTool::new(GradientSettings {
+        shape: GradientShape::Linear,
+        ramp: GradientRamp::two([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]),
+        dither: false,
+        reverse: false,
+        opacity: 1.0,
+    });
+    let cmds = {
+        let mut ctx = fx.ctx();
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(0.0, 0.0))
+            .unwrap();
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(63.0, 0.0))
+            .unwrap();
+        ctx.drain()
+    };
+    fx.apply(cmds);
+
+    // Black on the left conceals, white on the right reveals, and the middle is
+    // genuinely partial rather than either extreme.
+    assert!(fx.coverage(1, 10) < 16, "left end: {}", fx.coverage(1, 10));
+    assert!(
+        fx.coverage(62, 10) > 240,
+        "right end: {}",
+        fx.coverage(62, 10)
+    );
+    let mid = fx.coverage(32, 10);
+    assert!((100..160).contains(&mid), "midpoint coverage was {mid}");
+}
+
+#[test]
+fn a_paint_bucket_on_a_mask_fills_only_the_region_it_was_clicked_in() {
+    let mut fx = MaskFixture::new();
+    // Left half half-revealed, right half hidden. The flood's tolerance has to
+    // be judged against *coverage*: reading the mask as RGBA finds no tiles at
+    // all, which floods the entire canvas.
+    let mut seed = vec![0u8; MASK_TILE_BYTES];
+    for y in 0..64usize {
+        for x in 0..32usize {
+            seed[y * TILE_SIZE as usize + x] = 128;
+        }
+    }
+    fx.seed(seed);
+
+    let mut tool = PaintBucketTool::new(
+        FillSettings {
+            tolerance: 0.1,
+            contiguous: true,
+            antialias: false,
+            opacity: 1.0,
+            sample_merged: false,
+        },
+        FillContent::Foreground,
+    );
+    let cmds = {
+        let mut ctx = fx.ctx();
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(10.0, 10.0))
+            .unwrap();
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(10.0, 10.0))
+            .unwrap();
+        ctx.drain()
+    };
+    fx.apply(cmds);
+
+    assert_eq!(
+        fx.coverage(10, 10),
+        255,
+        "the clicked region was not revealed"
+    );
+    assert_eq!(
+        fx.coverage(31, 63),
+        255,
+        "the fill stopped short of its region"
+    );
+    assert_eq!(
+        fx.coverage(40, 10),
+        0,
+        "the fill leaked past the coverage edge into the hidden half"
+    );
+}
+
+#[test]
+fn a_pattern_fill_on_a_mask_stencils_the_pattern_luminance() {
+    let mut fx = MaskFixture::new();
+    let mut tool = PatternFillTool::default();
+    let cmds = {
+        let mut ctx = fx.ctx();
+        ctx.pattern = Some(Pattern::new(2, 1, vec![255, 255, 255, 255, 0, 0, 0, 255]).unwrap());
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(1.0, 1.0))
+            .unwrap();
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(1.0, 1.0))
+            .unwrap();
+        ctx.drain()
+    };
+    fx.apply(cmds);
+
+    assert_eq!(fx.coverage(0, 0), 255, "the white column did not reveal");
+    assert_eq!(fx.coverage(1, 0), 0, "the black column did not conceal");
+    assert_eq!(fx.coverage(2, 7), 255, "the pattern did not tile");
+}
+
+#[test]
+fn a_rasterised_shape_on_a_mask_stencils_coverage() {
+    let mut fx = MaskFixture::new();
+    let mut tool = ShapeTool::new(ShapeKind::Rectangle, ShapeMode::Rasterize);
+    let cmds = {
+        let mut ctx = fx.ctx();
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(8.0, 8.0))
+            .unwrap();
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(40.0, 40.0))
+            .unwrap();
+        ctx.drain()
+    };
+    fx.apply(cmds);
+
+    assert_eq!(
+        fx.coverage(20, 20),
+        255,
+        "the shape did not reveal its inside"
+    );
+    assert_eq!(fx.coverage(50, 50), 0, "the shape reached outside its box");
+}
+
+#[test]
+fn a_transform_on_a_mask_moves_coverage_and_leaves_a_coverage_tile() {
+    let mut fx = MaskFixture::new();
+    let mut seed = vec![0u8; MASK_TILE_BYTES];
+    for y in 8..24usize {
+        for x in 8..24usize {
+            seed[y * TILE_SIZE as usize + x] = 255;
+        }
+    }
+    fx.seed(seed);
+
+    let mut tool = TransformTool::with_mode(TransformMode::Scale);
+    tool.begin(PixelRect::new(8, 8, 16, 16)).unwrap();
+    tool.state.as_mut().unwrap().drag(
+        TransformMode::Scale,
+        Handle::Inside,
+        glam::Vec2::new(16.0, 16.0),
+        glam::Vec2::new(40.0, 40.0),
+    );
+    let cmds = {
+        let mut ctx = fx.ctx();
+        tool.commit(&mut ctx).unwrap();
+        ctx.drain()
+    };
+    fx.apply(cmds);
+
+    assert_eq!(fx.coverage(40, 40), 255, "the coverage did not arrive");
+    assert_eq!(fx.coverage(16, 16), 0, "the coverage did not leave");
+}
+
+#[test]
+fn the_colour_only_tools_refuse_a_mask_rather_than_committing_rgba_into_it() {
+    let mut fx = MaskFixture::new();
+
+    // Red-eye: a coverage plane has no red channel to find a pupil in.
+    let mut red_eye = RedEyeTool::default();
+    {
+        let mut ctx = fx.ctx();
+        red_eye
+            .on_pointer_down(&mut ctx, PointerEvent::at(10.0, 10.0))
+            .unwrap();
+        let err = red_eye
+            .on_pointer_up(&mut ctx, PointerEvent::at(30.0, 30.0))
+            .unwrap_err();
+        assert!(
+            matches!(err, ToolError::UnsupportedOnMask),
+            "red-eye on a mask gave {err:?}"
+        );
+        assert!(ctx.commands().is_empty());
+    }
+
+    // Magic eraser: erasing to transparency is an alpha operation on colour.
+    let mut eraser = MagicEraserTool::default();
+    {
+        let mut ctx = fx.ctx();
+        eraser
+            .on_pointer_down(&mut ctx, PointerEvent::at(10.0, 10.0))
+            .unwrap();
+        let err = eraser
+            .on_pointer_up(&mut ctx, PointerEvent::at(10.0, 10.0))
+            .unwrap_err();
+        assert!(
+            matches!(err, ToolError::UnsupportedOnMask),
+            "the magic eraser on a mask gave {err:?}"
+        );
+        assert!(ctx.commands().is_empty());
+    }
+
+    // Patch: a frequency split needs colour and shading, and a mask has neither.
+    let mut patch = PatchTool::default();
+    {
+        let mut ctx = fx.ctx();
+        let outline = [
+            (20.0, 20.0),
+            (36.0, 20.0),
+            (36.0, 36.0),
+            (20.0, 36.0),
+            (20.0, 20.0),
+        ];
+        patch
+            .on_pointer_down(&mut ctx, PointerEvent::at(outline[0].0, outline[0].1))
+            .unwrap();
+        for (x, y) in &outline[1..outline.len() - 1] {
+            patch
+                .on_pointer_move(&mut ctx, PointerEvent::at(*x, *y))
+                .unwrap();
+        }
+        patch
+            .on_pointer_up(&mut ctx, PointerEvent::at(outline[0].0, outline[0].1))
+            .unwrap();
+        assert!(patch.region().is_some(), "the lasso did not close");
+        patch
+            .on_pointer_down(&mut ctx, PointerEvent::at(28.0, 28.0))
+            .unwrap();
+        let err = patch
+            .on_pointer_up(&mut ctx, PointerEvent::at(12.0, 12.0))
+            .unwrap_err();
+        assert!(
+            matches!(err, ToolError::UnsupportedOnMask),
+            "the patch tool on a mask gave {err:?}"
+        );
+        assert!(ctx.commands().is_empty());
+    }
+
+    // Nothing reached either surface.
+    assert!(fx.doc.pixels.tiles(PixelKey::Mask(fx.mask)).is_none());
+    assert!(fx.doc.pixels.tiles(PixelKey::Layer(fx.layer)).is_none());
 }
