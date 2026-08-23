@@ -18,4 +18,10 @@ adjustments.workspace = true
 vector.workspace = true
 text-engine.workspace = true
 raster.workspace = true
+color.workspace = true
 glam.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

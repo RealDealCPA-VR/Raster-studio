@@ -35,7 +35,7 @@ pub mod offscreen;
 pub mod texture;
 
 pub use camera::Camera;
-pub use canvas::Canvas;
+pub use canvas::{backdrop_clear_color, srgb_to_linear, Canvas, DEFAULT_BACKDROP_SRGB};
 pub use composite::{CompositeParams, CompositePass};
 pub use context::GpuContext;
 pub use offscreen::{read_texture_rgba8, OffscreenTarget, Readback};

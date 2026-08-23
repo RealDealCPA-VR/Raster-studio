@@ -1,0 +1,1548 @@
+//! The native shell: the winit event loop, the wgpu surface, and the egui
+//! overlay.
+//!
+//! This is the thin layer. It turns platform events into [`Action`]s, hands
+//! them to the [`Editor`], and draws what the editor holds — the composite of
+//! the active document ([`CanvasPresenter`]) with the chrome on top
+//! ([`Chrome`]). Every decision worth testing lives one layer down, without a
+//! window.
+//!
+//! # Failure is a dialog, not an abort
+//!
+//! Nothing in start-up calls `.expect`. A machine that cannot give us an
+//! adapter, a surface, or a window gets a [`ShellError`] in a native message
+//! box and a clean exit — see [`crate::error`] for why that matters under
+//! `panic = "abort"`.
+//!
+//! # Who owns the keyboard
+//!
+//! Not `egui-winit`'s `consumed` flag — that is the seam this shell got wrong.
+//! egui-winit 0.29 computes `consumed = wants_keyboard_input() || key == Tab`,
+//! so **every** Tab press is consumed whatever the modifiers, and the Tab it
+//! swallows moves egui's widget focus, after which `wants_keyboard_input()`
+//! stays true and no shortcut works again until Escape.
+//!
+//! Two rules replace it, both pure functions with tests:
+//!
+//! * [`withhold_from_egui`] — Tab never reaches egui unless egui is recording a
+//!   chord, so egui's focus navigation has nothing to steal. Nothing in this
+//!   application needs Tab-to-focus; the panels are pointer-driven.
+//! * [`route_key`] — the shell performs a chord unless a text field genuinely
+//!   holds focus or the shortcut editor is listening for the next chord
+//!   ([`KeyboardOwner`]). The second case is what stops recording a shortcut
+//!   over Ctrl+Q from quitting the application while recording it.
+//!
+//! # Known gap: tools do not receive pointer events yet
+//!
+//! The `tools` crate's state machines take [`tools::PointerEvent`]s, and this
+//! shell does not yet feed them: a left-drag on the canvas pans the view
+//! whatever tool is selected. Painting therefore happens through commands
+//! emitted by panels and actions, not by dragging on the image. Selecting a
+//! brush is not a lie — the tool *is* selected, the palette and status bar show
+//! it, `[`/`]` size it and the colour wells hold the colour it would use — but
+//! the canvas gesture that would consume any of it is not wired. That is the
+//! next wave's work, and it is stated here rather than implied by a tool
+//! palette that looks finished.
+//!
+//! # The backdrop is a token
+//!
+//! [`backdrop_srgb`] is the one place the colour around the image comes from,
+//! and it is handed to both the empty-window clear and
+//! [`render::Canvas::set_backdrop`]. They used to disagree, which made Light
+//! mode jump to near-black the moment a document opened.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use glam::Vec2;
+use winit::application::ApplicationHandler;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{ModifiersState, NamedKey};
+use winit::window::{Window, WindowId};
+
+use render::{Camera, Canvas, GpuContext};
+
+use crate::action::Action;
+use crate::chrome::Chrome;
+use crate::dialogs::{FileDialogs, NativeDialogs};
+use crate::editor::{ActionError, Editor};
+use crate::error::ShellError;
+use crate::keymap::{Chord, Key};
+use crate::prefs::WindowGeometry;
+use crate::presenter::CanvasPresenter;
+use crate::session::SessionMarker;
+
+/// Translate a winit key event into a [`Chord`].
+///
+/// `None` for keys that cannot form a shortcut on their own (a bare modifier,
+/// dead keys, IME composition). Letter case is normalised by [`Key::character`],
+/// so `Shift+B` and `B` name the same key with the shift flag telling them
+/// apart.
+pub fn chord_from_key(logical: &winit::keyboard::Key, mods: ModifiersState) -> Option<Chord> {
+    let key = match logical {
+        winit::keyboard::Key::Character(s) => {
+            let mut chars = s.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => Key::character(c),
+                _ => return None,
+            }
+        }
+        winit::keyboard::Key::Named(named) => named_key(*named)?,
+        _ => return None,
+    };
+    Some(Chord {
+        ctrl_or_cmd: mods.control_key() || mods.super_key(),
+        alt: mods.alt_key(),
+        shift: mods.shift_key(),
+        key,
+    })
+}
+
+fn named_key(named: NamedKey) -> Option<Key> {
+    Some(match named {
+        NamedKey::Tab => Key::Tab,
+        NamedKey::Space => Key::Space,
+        NamedKey::Enter => Key::Enter,
+        NamedKey::Escape => Key::Escape,
+        NamedKey::Backspace => Key::Backspace,
+        NamedKey::Delete => Key::Delete,
+        NamedKey::ArrowLeft => Key::ArrowLeft,
+        NamedKey::ArrowRight => Key::ArrowRight,
+        NamedKey::ArrowUp => Key::ArrowUp,
+        NamedKey::ArrowDown => Key::ArrowDown,
+        NamedKey::F1 => Key::Function(1),
+        NamedKey::F2 => Key::Function(2),
+        NamedKey::F3 => Key::Function(3),
+        NamedKey::F4 => Key::Function(4),
+        NamedKey::F5 => Key::Function(5),
+        NamedKey::F6 => Key::Function(6),
+        NamedKey::F7 => Key::Function(7),
+        NamedKey::F8 => Key::Function(8),
+        NamedKey::F9 => Key::Function(9),
+        NamedKey::F10 => Key::Function(10),
+        NamedKey::F11 => Key::Function(11),
+        NamedKey::F12 => Key::Function(12),
+        _ => return None,
+    })
+}
+
+/// `true` when releasing this key should give back the temporary hand tool.
+pub fn is_temporary_hand_key(logical: &winit::keyboard::Key) -> bool {
+    matches!(logical, winit::keyboard::Key::Named(NamedKey::Space))
+}
+
+/// `true` for the key egui would use to move widget focus.
+///
+/// Tab, and only Tab. egui advances focus on any Tab press
+/// (`egui::memory::Focus::begin_pass`), and `egui-winit` 0.29 reports **every**
+/// Tab press as consumed whatever the modifiers are
+/// (`consumed = wants_keyboard_input() || key == Tab`). Between them, the three
+/// Tab chords this application ships — Tab, Ctrl+Tab, Ctrl+Shift+Tab — could
+/// never fire, *and* the swallowed Tab left an egui button focused, which makes
+/// `wants_keyboard_input()` true and killed every other shortcut until the user
+/// happened to press Escape.
+///
+/// So Tab is not offered to egui at all unless a chord is being recorded (where
+/// egui is the thing that reads it). Nothing in this application needs Tab
+/// focus navigation; the panels are pointer-driven and the shortcut editor
+/// records keys directly.
+pub fn is_focus_navigation_key(logical: &winit::keyboard::Key) -> bool {
+    matches!(logical, winit::keyboard::Key::Named(NamedKey::Tab))
+}
+
+/// `true` when this key press must not be handed to egui at all.
+///
+/// Only Tab, and only while nothing is recording a chord. egui's *own* use for
+/// Tab is focus navigation, which this application does not want and which is
+/// what poisons `wants_keyboard_input()` for every later key press; the one
+/// time egui legitimately needs to see a Tab is when the shortcut editor is
+/// listening for the next chord and Tab is the chord being pressed.
+pub fn withhold_from_egui(owner: KeyboardOwner, logical: &winit::keyboard::Key) -> bool {
+    !owner.recording_shortcut && is_focus_navigation_key(logical)
+}
+
+/// Who has a claim on the keyboard this frame.
+///
+/// The two things — and the *only* two things — that may take a key press away
+/// from the shell's shortcut table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct KeyboardOwner {
+    /// `egui::Context::wants_keyboard_input()`: a widget holds keyboard focus,
+    /// which in this application means a text field or a drag value being typed
+    /// into. Focus is never granted by a click in egui 0.29, and Tab never
+    /// reaches egui (see [`is_focus_navigation_key`]), so this really does mean
+    /// "the user is typing" rather than "some button caught focus".
+    pub egui_text_focus: bool,
+    /// The shortcut editor is listening for the next chord. The same key press
+    /// must not *also* be performed as whatever it currently means — recording
+    /// a new shortcut over Ctrl+Q used to quit the application.
+    pub recording_shortcut: bool,
+}
+
+/// What the shell does with one key event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyOutcome {
+    /// Resolve this chord in the keymap and perform what it names.
+    Dispatch(Chord),
+    /// Space came up: give back the tool the hand borrowed.
+    ReleaseTemporaryHand,
+    /// Nothing for the shell to do.
+    Ignore,
+}
+
+/// Decide what a key event means, with no window and no egui context.
+///
+/// This is the routing decision the shell used to take from `egui-winit`'s
+/// `consumed` flag, which is wrong twice over — see [`is_focus_navigation_key`]
+/// for the Tab half and [`KeyboardOwner::recording_shortcut`] for the other.
+/// Being a pure function, every one of those cases is a test.
+pub fn route_key(
+    owner: KeyboardOwner,
+    logical: &winit::keyboard::Key,
+    state: ElementState,
+    repeat: bool,
+    mods: ModifiersState,
+) -> KeyOutcome {
+    if state == ElementState::Released {
+        // Unconditional, deliberately: if focus moved while Space was held, a
+        // guarded release would leave the hand tool engaged for ever. Giving
+        // back a hand that was never borrowed is a no-op.
+        return if is_temporary_hand_key(logical) {
+            KeyOutcome::ReleaseTemporaryHand
+        } else {
+            KeyOutcome::Ignore
+        };
+    }
+    if owner.recording_shortcut || owner.egui_text_focus {
+        return KeyOutcome::Ignore;
+    }
+    // A held key repeats. Only the temporary hand wants the repeats — it is
+    // idempotent and they are what keep it engaged.
+    if repeat && !is_temporary_hand_key(logical) {
+        return KeyOutcome::Ignore;
+    }
+    match chord_from_key(logical, mods) {
+        Some(chord) => KeyOutcome::Dispatch(chord),
+        None => KeyOutcome::Ignore,
+    }
+}
+
+/// Pick the surface format the canvas will draw to, preferring sRGB.
+pub fn choose_surface_format(
+    formats: &[wgpu::TextureFormat],
+) -> Result<wgpu::TextureFormat, ShellError> {
+    formats
+        .iter()
+        .copied()
+        .find(|f| f.is_srgb() && Canvas::supports_target(*f))
+        .or_else(|| {
+            formats
+                .iter()
+                .copied()
+                .find(|f| Canvas::supports_target(*f))
+        })
+        .ok_or_else(|| ShellError::UnsupportedSurfaceFormat {
+            formats: formats
+                .iter()
+                .map(|f| format!("{f:?}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        })
+}
+
+struct WindowState {
+    window: Arc<Window>,
+    surface: wgpu::Surface<'static>,
+    surface_config: wgpu::SurfaceConfiguration,
+    gpu: GpuContext,
+    canvas: Canvas,
+    presenter: CanvasPresenter,
+    egui_ctx: egui::Context,
+    egui_state: egui_winit::State,
+    egui_renderer: egui_wgpu::Renderer,
+    egui_depth: wgpu::TextureView,
+    /// The title last pushed to the window, so it is only set when it changes.
+    title: String,
+    /// The theme last installed on the egui context.
+    theme: design::Theme,
+}
+
+/// The application: an [`Editor`] plus the window it is shown in.
+pub struct Shell {
+    editor: Editor,
+    chrome: Chrome,
+    state: Option<WindowState>,
+    marker: Option<SessionMarker>,
+    /// Files named on the command line, opened once the window exists.
+    startup_files: Vec<PathBuf>,
+    cursor: Vec2,
+    dragging: bool,
+    modifiers: ModifiersState,
+    repaint_at: Option<Instant>,
+}
+
+impl Shell {
+    /// The shell the desktop binary runs.
+    pub fn new(editor: Editor, startup_files: Vec<PathBuf>) -> Self {
+        Shell {
+            editor,
+            chrome: Chrome::new(),
+            state: None,
+            marker: None,
+            startup_files,
+            cursor: Vec2::ZERO,
+            dragging: false,
+            modifiers: ModifiersState::empty(),
+            repaint_at: Some(Instant::now()),
+        }
+    }
+
+    pub fn editor(&self) -> &Editor {
+        &self.editor
+    }
+
+    /// Run until the window closes.
+    pub fn run(mut self) -> Result<(), ShellError> {
+        let event_loop = EventLoop::new()?;
+        event_loop.run_app(&mut self)?;
+        Ok(())
+    }
+
+    /// Claim this run's crash marker and offer whatever previous runs left.
+    ///
+    /// A list, not one record: every crashed run has a marker of its own, and a
+    /// machine that lost two of them has two lots of work to offer. Markers
+    /// belonging to instances that are *running* are not in this list at all —
+    /// see [`crate::session`].
+    fn begin_session(&mut self) {
+        let (marker, previous) = SessionMarker::begin(self.editor.paths());
+        self.marker = Some(marker);
+        let mut restored = 0;
+        for record in &previous {
+            let report = self.editor.recover(record);
+            restored += report.restored.len();
+            for (project, reason) in &report.failed {
+                tracing::warn!("could not recover {}: {reason}", project.display());
+            }
+        }
+        if restored > 0 {
+            // Documents, not commands: a scratch autosave replays nothing (the
+            // package *is* the work), so counting commands would say
+            // "Restored 0" for exactly the case that lost the most.
+            self.editor
+                .set_status(format!("Restored {restored} document(s)"));
+        }
+    }
+
+    /// Keep the crash marker in step with what a crash would have to recover:
+    /// the packages that are open, *and* the scratch autosaves of the documents
+    /// that have no package at all.
+    fn sync_marker(&mut self) {
+        let projects = self.editor.open_project_paths();
+        let autosaves = self.editor.autosave_paths();
+        if let Some(marker) = &mut self.marker {
+            marker.set_open_projects(projects);
+            marker.set_autosaves(autosaves);
+        }
+    }
+
+    /// Perform an action, turning a refusal into a status message (or a dialog
+    /// when something actually failed).
+    fn perform(&mut self, action: Action) {
+        match self.editor.dispatch(action) {
+            Ok(_) => {}
+            Err(ActionError::Cancelled(_)) => {}
+            Err(ActionError::Unavailable { reason, .. }) => self.editor.set_status(reason),
+            Err(ActionError::Failed { action, reason }) => {
+                let title = format!("{} failed", action.label());
+                self.editor.report_error(&title, &reason);
+            }
+        }
+        self.repaint_at = Some(Instant::now());
+    }
+
+    fn build_window(&mut self, event_loop: &ActiveEventLoop) -> Result<WindowState, ShellError> {
+        let geometry = self
+            .editor
+            .preferences()
+            .window
+            .unwrap_or(WindowGeometry::DEFAULT)
+            .sanitized();
+        let attrs = Window::default_attributes()
+            .with_title(self.editor.window_title())
+            .with_inner_size(PhysicalSize::new(geometry.width, geometry.height))
+            .with_position(PhysicalPosition::new(geometry.x, geometry.y))
+            .with_maximized(geometry.maximized);
+        let window = Arc::new(event_loop.create_window(attrs)?);
+
+        let instance = wgpu::Instance::default();
+        let surface = instance.create_surface(window.clone())?;
+        let gpu = pollster::block_on(GpuContext::for_surface(instance, &surface))
+            .map_err(ShellError::Gpu)?;
+
+        let size = window.inner_size();
+        let caps = surface.get_capabilities(&gpu.adapter);
+        let format = choose_surface_format(&caps.formats)?;
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            present_mode: wgpu::PresentMode::AutoVsync,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&gpu.device, &surface_config);
+
+        let theme = self
+            .editor
+            .preferences()
+            .theme
+            .resolve(system_theme(&window));
+        let mut canvas = Canvas::new(&gpu, format);
+        canvas.set_backdrop(backdrop_srgb(theme));
+
+        let egui_ctx = egui::Context::default();
+        crate::chrome::install_theme(&egui_ctx, theme);
+        egui_ctx.set_zoom_factor(self.editor.preferences().ui_scale);
+        let egui_state = egui_winit::State::new(
+            egui_ctx.clone(),
+            egui::ViewportId::ROOT,
+            &*window,
+            Some(window.scale_factor() as f32),
+            window.theme(),
+            Some(gpu.adapter.limits().max_texture_dimension_2d as usize),
+        );
+        let egui_renderer = egui_wgpu::Renderer::new(
+            &gpu.device,
+            format,
+            Some(wgpu::TextureFormat::Depth32Float),
+            1,
+            true,
+        );
+        let egui_depth = create_depth_view(&gpu, size.width.max(1), size.height.max(1));
+
+        Ok(WindowState {
+            title: self.editor.window_title(),
+            window,
+            surface,
+            surface_config,
+            gpu,
+            canvas,
+            presenter: CanvasPresenter::new(),
+            egui_ctx,
+            egui_state,
+            egui_renderer,
+            egui_depth,
+            theme,
+        })
+    }
+
+    fn resize(&mut self, size: PhysicalSize<u32>) {
+        let Some(state) = &mut self.state else { return };
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
+        state.surface_config.width = size.width;
+        state.surface_config.height = size.height;
+        state
+            .surface
+            .configure(&state.gpu.device, &state.surface_config);
+        state.egui_depth = create_depth_view(&state.gpu, size.width, size.height);
+        let viewport = Vec2::new(size.width as f32, size.height as f32);
+        for doc in self.editor.documents_mut() {
+            doc.camera.viewport_size = viewport;
+        }
+    }
+
+    /// Store the window's geometry so the next session opens where this one was.
+    fn capture_geometry(&mut self) {
+        let Some(state) = &self.state else { return };
+        let size = state.window.inner_size();
+        let position = state
+            .window
+            .outer_position()
+            .unwrap_or(PhysicalPosition::new(
+                WindowGeometry::DEFAULT.x,
+                WindowGeometry::DEFAULT.y,
+            ));
+        let geometry = WindowGeometry {
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+            maximized: state.window.is_maximized(),
+        }
+        .sanitized();
+        let mut prefs = self.editor.preferences().clone();
+        prefs.window = Some(geometry);
+        self.editor.set_preferences(prefs);
+    }
+
+    /// Clean exit: geometry, preferences, recent files, then the crash marker.
+    fn shut_down(&mut self) {
+        self.capture_geometry();
+        if let Err(e) = self.editor.persist() {
+            tracing::warn!("could not save preferences: {e}");
+        }
+        if let Some(marker) = self.marker.take() {
+            marker.finish();
+        }
+    }
+
+    /// Re-install the theme and UI scale if the preferences moved.
+    ///
+    /// Applied every frame rather than only at start-up, so changing the theme
+    /// or the scale takes effect without a restart.
+    fn sync_appearance(&mut self) {
+        let choice = self.editor.preferences().theme;
+        let scale = self.editor.preferences().ui_scale;
+        let Some(state) = &mut self.state else { return };
+        let resolved = choice.resolve(system_theme(&state.window));
+        if state.theme != resolved {
+            crate::chrome::install_theme(&state.egui_ctx, resolved);
+            // The area around the image is a themed surface like any other.
+            state.canvas.set_backdrop(backdrop_srgb(resolved));
+            state.theme = resolved;
+        }
+        if (state.egui_ctx.zoom_factor() - scale).abs() > f32::EPSILON {
+            state.egui_ctx.set_zoom_factor(scale);
+        }
+    }
+
+    fn redraw(&mut self) {
+        self.sync_appearance();
+        let Some(state) = &mut self.state else { return };
+        let frame = match state.surface.get_current_texture() {
+            Ok(f) => f,
+            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                state
+                    .surface
+                    .configure(&state.gpu.device, &state.surface_config);
+                state.window.request_redraw();
+                return;
+            }
+            Err(e) => {
+                tracing::warn!("dropped frame: {e:?}");
+                return;
+            }
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // ---- document -> compositor -> GPU texture ----
+        let mut camera = Camera::new(Vec2::ONE, Vec2::ONE);
+        let mut have_document = false;
+        if let Some(doc) = self.editor.active_mut() {
+            doc.camera.viewport_size = Vec2::new(
+                state.surface_config.width as f32,
+                state.surface_config.height as f32,
+            );
+            camera = doc.camera.clone();
+            have_document = true;
+            match state.presenter.sync(&state.gpu, doc) {
+                Ok(report) => {
+                    if report.texture_replaced {
+                        if let Some(texture) = state.presenter.texture() {
+                            state.canvas.set_source(&state.gpu, texture);
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!("compositing failed: {e}"),
+            }
+        }
+        if have_document {
+            camera.image_size = Vec2::new(
+                state.presenter.size().0 as f32,
+                state.presenter.size().1 as f32,
+            );
+            state.canvas.update_camera(&state.gpu, &camera);
+        }
+
+        // ---- chrome ----
+        let raw_input = state.egui_state.take_egui_input(&state.window);
+        let (full_output, chrome_output) = {
+            let chrome = &mut self.chrome;
+            let editor = &self.editor;
+            let mut captured = crate::chrome::ChromeOutput::default();
+            let full = state.egui_ctx.run(raw_input, |ctx| {
+                captured = chrome.ui(ctx, editor);
+            });
+            (full, captured)
+        };
+        state
+            .egui_state
+            .handle_platform_output(&state.window, full_output.platform_output);
+
+        let paint_jobs = state
+            .egui_ctx
+            .tessellate(full_output.shapes, full_output.pixels_per_point);
+        let screen_descriptor = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [state.surface_config.width, state.surface_config.height],
+            pixels_per_point: state.egui_ctx.pixels_per_point(),
+        };
+
+        let mut encoder =
+            state
+                .gpu
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("frame"),
+                });
+        if have_document {
+            state.canvas.render(&mut encoder, &view);
+        } else {
+            clear(
+                &mut encoder,
+                &view,
+                state.theme,
+                state.surface_config.format,
+            );
+        }
+
+        for (id, delta) in &full_output.textures_delta.set {
+            state
+                .egui_renderer
+                .update_texture(&state.gpu.device, &state.gpu.queue, *id, delta);
+        }
+        state.egui_renderer.update_buffers(
+            &state.gpu.device,
+            &state.gpu.queue,
+            &mut encoder,
+            &paint_jobs,
+            &screen_descriptor,
+        );
+        {
+            let rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("egui"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        // MUST be Load: `Operations::default()` clears, which
+                        // would wipe the canvas pass that just drew the image.
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &state.egui_depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            let mut rpass = rpass.forget_lifetime();
+            state
+                .egui_renderer
+                .render(&mut rpass, &paint_jobs, &screen_descriptor);
+        }
+        for id in &full_output.textures_delta.free {
+            state.egui_renderer.free_texture(id);
+        }
+        state.gpu.queue.submit(std::iter::once(encoder.finish()));
+        frame.present();
+
+        let delay = full_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|v| v.repaint_delay)
+            .unwrap_or(Duration::ZERO);
+        self.repaint_at = Instant::now().checked_add(delay);
+
+        self.apply_chrome(chrome_output);
+        self.refresh_title();
+    }
+
+    /// Perform whatever the chrome asked for this frame.
+    ///
+    /// # Order matters
+    ///
+    /// The selection lands **before** the actions. A frame can carry both — the
+    /// user clicks a layer row and then picks Layer ▸ New Layer — and the click
+    /// happened first, so it must be applied first. Doing it the other way
+    /// round is what made a menu-invoked New Layer create the layer and then
+    /// immediately point the cursor back at the previously active one; see
+    /// `a_new_layer_stays_active_when_the_menu_creates_it`.
+    fn apply_chrome(&mut self, output: crate::chrome::ChromeOutput) {
+        if let Some(id) = output.select_layer {
+            self.editor.set_active_layer(id);
+        }
+        if let Some(depth) = output.history_jump {
+            let moved = self.editor.jump_history(depth);
+            if moved > 0 {
+                self.editor
+                    .set_status(format!("Stepped {moved} place(s) in history"));
+            }
+        }
+        for action in output.actions {
+            self.perform(action);
+        }
+        if let Some(index) = output.activate {
+            if let Err(e) = self.editor.activate(index) {
+                self.editor.set_status(e.to_string());
+            }
+        }
+        if let Some(tool) = output.select_tool {
+            self.editor.set_tool(tool);
+        }
+        for command in output.commands {
+            self.editor.apply_command(command);
+        }
+        if let Some(rgba) = output.set_foreground {
+            self.editor.set_foreground(rgba);
+        }
+        if let Some(rgba) = output.set_background {
+            self.editor.set_background(rgba);
+        }
+        if let Some(prefs) = output.preferences {
+            self.editor.set_preferences(prefs);
+        }
+        if output.reset_keymap {
+            self.editor.reset_keymap();
+        }
+        if let Some(chord) = output.unbind {
+            self.editor.unbind_chord(chord);
+        }
+        if let Some(rebind) = output.rebind {
+            if rebind.force {
+                self.editor.force_rebind(rebind.chord, rebind.action);
+            } else {
+                // A refusal parks the conflict on the editor; the shortcut
+                // editor renders it as the "…is already Save. Replace?" prompt.
+                let _ = self.editor.rebind(rebind.chord, rebind.action);
+            }
+        }
+        if output.dismiss_conflict {
+            self.editor.clear_conflict();
+        }
+        if let Some(path) = output.open_recent {
+            self.editor.open_paths(&[path]);
+        }
+        if let Some(index) = output.close {
+            if let Err(ActionError::Failed { action, reason }) = self.editor.close_document(index) {
+                let title = format!("{} failed", action.label());
+                self.editor.report_error(&title, &reason);
+            }
+        }
+        self.sync_marker();
+    }
+
+    /// Who has a claim on the keyboard right now.
+    fn keyboard_owner(&self) -> KeyboardOwner {
+        KeyboardOwner {
+            egui_text_focus: self
+                .state
+                .as_ref()
+                .is_some_and(|s| s.egui_ctx.wants_keyboard_input()),
+            // The guard `Chrome::capturing` was written for, and which nothing
+            // ever called: while a chord is being recorded the shell must not
+            // *also* perform it.
+            recording_shortcut: self.chrome.capturing().is_some(),
+        }
+    }
+
+    /// Route one key press. Separated from `window_event` so it can be driven
+    /// without an event loop, which is how [`route_key`]'s decisions are shown
+    /// to reach [`Editor::dispatch`].
+    fn on_key(
+        &mut self,
+        owner: KeyboardOwner,
+        logical: &winit::keyboard::Key,
+        state: ElementState,
+        repeat: bool,
+    ) {
+        match route_key(owner, logical, state, repeat, self.modifiers) {
+            KeyOutcome::Dispatch(chord) => {
+                if let Some(action) = self.editor.keymap().resolve(&chord) {
+                    self.perform(action);
+                }
+            }
+            KeyOutcome::ReleaseTemporaryHand => {
+                self.editor.release_temporary_hand();
+                self.repaint_at = Some(Instant::now());
+            }
+            KeyOutcome::Ignore => {}
+        }
+    }
+
+    fn refresh_title(&mut self) {
+        let title = self.editor.window_title();
+        if let Some(state) = &mut self.state {
+            if state.title != title {
+                state.window.set_title(&title);
+                state.title = title;
+            }
+        }
+    }
+}
+
+fn system_theme(window: &Window) -> design::Theme {
+    match window.theme() {
+        Some(winit::window::Theme::Light) => design::Theme::Light,
+        _ => design::Theme::Dark,
+    }
+}
+
+/// The canvas backdrop for `theme`, as an 8-bit sRGB display value.
+///
+/// One function, two consumers: the empty-window clear below and
+/// [`render::Canvas::set_backdrop`]. They used to disagree — the empty path
+/// read `BackgroundCanvas` while the canvas cleared to a hardcoded grey — so in
+/// Light mode the surround snapped from #E9E9EE to near-black the instant a
+/// file was opened.
+pub fn backdrop_srgb(theme: design::Theme) -> [u8; 3] {
+    let c = theme
+        .tokens()
+        .palette
+        .color(design::ColorRole::BackgroundCanvas);
+    [c.r, c.g, c.b]
+}
+
+/// The clear value the window is filled with when there is no document.
+///
+/// Goes through the same [`render::backdrop_clear_color`] the canvas uses, so
+/// the sRGB→linear conversion exists once rather than in two places that can
+/// drift.
+pub fn backdrop_clear(theme: design::Theme, format: wgpu::TextureFormat) -> wgpu::Color {
+    render::backdrop_clear_color(backdrop_srgb(theme), format)
+}
+
+/// Fill the window with the canvas backdrop when there is no document to draw.
+fn clear(
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    theme: design::Theme,
+    format: wgpu::TextureFormat,
+) {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("empty-canvas"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(backdrop_clear(theme, format)),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+    });
+}
+
+fn create_depth_view(gpu: &GpuContext, width: u32, height: u32) -> wgpu::TextureView {
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("egui-depth"),
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth32Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+impl ApplicationHandler for Shell {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.state.is_some() {
+            return;
+        }
+        match self.build_window(event_loop) {
+            Ok(state) => {
+                self.state = Some(state);
+                self.begin_session();
+                let files = std::mem::take(&mut self.startup_files);
+                if !files.is_empty() {
+                    self.editor.open_paths(&files);
+                }
+                self.sync_marker();
+                self.refresh_title();
+            }
+            Err(e) => {
+                // The whole point of `crate::error`: say what happened instead
+                // of aborting with nothing on screen.
+                tracing::error!("{e}");
+                NativeDialogs.report_error(e.title(), &e.user_message());
+                event_loop.exit();
+            }
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.state.is_none() {
+            return;
+        }
+        if let Some(report) = self.editor.autosave_tick(Instant::now()) {
+            tracing::info!("autosaved {} document(s)", report.written.len());
+            for (_, reason) in &report.failed {
+                tracing::warn!("autosave failed: {reason}");
+            }
+            // A scratch autosave is only recoverable once the marker names it.
+            self.sync_marker();
+        }
+        let Some(state) = &self.state else { return };
+        if self.editor.quit_requested() {
+            self.shut_down();
+            event_loop.exit();
+            return;
+        }
+        // An armed autosave has to wake the loop, or a document sitting idle
+        // would never be written.
+        let deadline = match (self.repaint_at, self.editor.next_autosave()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        match deadline {
+            None => event_loop.set_control_flow(ControlFlow::Wait),
+            Some(at) if at <= Instant::now() => {
+                self.repaint_at = None;
+                state.window.request_redraw();
+                event_loop.set_control_flow(ControlFlow::Wait);
+            }
+            Some(at) => event_loop.set_control_flow(ControlFlow::WaitUntil(at)),
+        }
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        // Who owns the keyboard is read *before* the event reaches egui, so a
+        // press cannot be judged against the focus it is about to create.
+        let owner = self.keyboard_owner();
+        // Tab is withheld from egui unless egui is the thing that wants it.
+        // egui would otherwise move widget focus with it and then claim every
+        // subsequent key press; see `is_focus_navigation_key`.
+        let hide_from_egui = matches!(
+            &event,
+            WindowEvent::KeyboardInput { event, .. }
+                if withhold_from_egui(owner, &event.logical_key)
+        );
+        let (consumed, wants_repaint) = match &mut self.state {
+            Some(state) if !hide_from_egui => {
+                let r = state.egui_state.on_window_event(&state.window, &event);
+                (r.consumed, r.repaint)
+            }
+            Some(_) => (false, true),
+            None => (false, false),
+        };
+        if wants_repaint {
+            self.repaint_at = Some(Instant::now());
+        }
+        match event {
+            WindowEvent::CloseRequested => {
+                // Ask about unsaved work first; `Quit` reports Cancelled when
+                // the user backs out, and the window stays.
+                match self.editor.dispatch(Action::Quit) {
+                    Ok(_) => {
+                        self.shut_down();
+                        event_loop.exit();
+                    }
+                    Err(e) => {
+                        self.editor.set_status(e.to_string());
+                        self.repaint_at = Some(Instant::now());
+                    }
+                }
+            }
+            WindowEvent::Resized(size) => {
+                self.resize(size);
+                self.repaint_at = Some(Instant::now());
+            }
+            WindowEvent::ThemeChanged(theme) => {
+                let system = match theme {
+                    winit::window::Theme::Light => design::Theme::Light,
+                    winit::window::Theme::Dark => design::Theme::Dark,
+                };
+                let resolved = self.editor.preferences().theme.resolve(system);
+                if let Some(state) = &mut self.state {
+                    if state.theme != resolved {
+                        crate::chrome::install_theme(&state.egui_ctx, resolved);
+                        state.canvas.set_backdrop(backdrop_srgb(resolved));
+                        state.theme = resolved;
+                    }
+                }
+                self.repaint_at = Some(Instant::now());
+            }
+            WindowEvent::ModifiersChanged(mods) => self.modifiers = mods.state(),
+            WindowEvent::RedrawRequested => self.redraw(),
+            WindowEvent::DroppedFile(path) => {
+                self.editor.open_paths(&[path]);
+                self.sync_marker();
+                self.repaint_at = Some(Instant::now());
+            }
+            WindowEvent::KeyboardInput {
+                event: key_event, ..
+            } => {
+                // Note what is *not* here: a guard on egui-winit's `consumed`.
+                // That flag is true for every Tab press whatever the modifiers,
+                // which made three shipped bindings unreachable. `route_key`
+                // asks the two questions that actually matter instead.
+                self.on_key(
+                    owner,
+                    &key_event.logical_key,
+                    key_event.state,
+                    key_event.repeat,
+                );
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                if matches!(button, MouseButton::Left | MouseButton::Middle) {
+                    // Always honour release, so a drag that ends over a panel
+                    // cannot leave the canvas stuck dragging.
+                    self.dragging = state == ElementState::Pressed && !consumed;
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                let now = Vec2::new(position.x as f32, position.y as f32);
+                if self.dragging && !consumed {
+                    let delta = now - self.cursor;
+                    if let Some(doc) = self.editor.active_mut() {
+                        doc.camera.pan_screen(delta);
+                    }
+                    self.repaint_at = Some(Instant::now());
+                }
+                self.cursor = now;
+            }
+            WindowEvent::MouseWheel { delta, .. } if !consumed => {
+                let scroll = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.0,
+                };
+                let factor = (1.0 + scroll * 0.1).clamp(0.2, 5.0);
+                let anchor = self.cursor;
+                if let Some(doc) = self.editor.active_mut() {
+                    doc.camera.zoom_at(anchor, factor);
+                }
+                self.repaint_at = Some(Instant::now());
+            }
+            _ => {}
+        }
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if self.marker.is_some() {
+            self.shut_down();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use winit::keyboard::Key as WKey;
+
+    use crate::chrome::ChromeOutput;
+    use crate::dialogs::ScriptedDialogs;
+    use crate::prefs::{AppPaths, Preferences};
+    use crate::recent::RecentFiles;
+
+    fn shell_with_one_image(dir: &std::path::Path) -> Shell {
+        let png = dir.join("a.png");
+        std::fs::write(
+            &png,
+            raster::encode(raster::ExportFormat::Png, 16, 16, &[7u8; 16 * 16 * 4]).unwrap(),
+        )
+        .unwrap();
+        let mut editor = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        editor.open_path(&png).unwrap();
+        Shell::new(editor, Vec::new())
+    }
+
+    fn shell_with_two_images(dir: &std::path::Path) -> Shell {
+        let mut shell = shell_with_one_image(dir);
+        let png = dir.join("b.png");
+        std::fs::write(
+            &png,
+            raster::encode(raster::ExportFormat::Png, 8, 8, &[3u8; 8 * 8 * 4]).unwrap(),
+        )
+        .unwrap();
+        shell.editor.open_path(&png).unwrap();
+        assert_eq!(shell.editor.documents().len(), 2);
+        shell
+    }
+
+    /// Press a key on a shell that has no window, exactly as `window_event`
+    /// would once `route_key` has spoken.
+    fn press(shell: &mut Shell, owner: KeyboardOwner, key: WKey, mods: ModifiersState) {
+        shell.modifiers = mods;
+        shell.on_key(owner, &key, ElementState::Pressed, false);
+    }
+
+    #[test]
+    fn the_tab_chords_reach_the_editor_although_egui_calls_every_tab_consumed() {
+        // The defect: the key handler only ran when `egui-winit` reported the
+        // event as *not* consumed, and egui-winit 0.29 computes
+        // `consumed = wants_keyboard_input() || key == Tab` — so Tab was always
+        // consumed, whatever the modifiers, and the three Tab chords this
+        // application ships could never fire in the running program even though
+        // the keymap resolved them.
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_two_images(dir.path());
+        let free = KeyboardOwner::default();
+
+        assert!(shell.editor().panels_visible());
+        press(
+            &mut shell,
+            free,
+            WKey::Named(NamedKey::Tab),
+            ModifiersState::empty(),
+        );
+        assert!(
+            !shell.editor().panels_visible(),
+            "Tab must toggle the panels"
+        );
+
+        shell.editor.activate(0).unwrap();
+        press(
+            &mut shell,
+            free,
+            WKey::Named(NamedKey::Tab),
+            ModifiersState::CONTROL,
+        );
+        assert_eq!(
+            shell.editor().active_index(),
+            Some(1),
+            "Ctrl+Tab must step to the next document"
+        );
+        press(
+            &mut shell,
+            free,
+            WKey::Named(NamedKey::Tab),
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
+        );
+        assert_eq!(
+            shell.editor().active_index(),
+            Some(0),
+            "Ctrl+Shift+Tab must step back"
+        );
+    }
+
+    #[test]
+    fn tab_is_never_handed_to_egui_unless_egui_is_recording_it() {
+        // The other half of the same defect: the Tab egui swallowed moved egui's
+        // widget focus, after which `wants_keyboard_input()` stayed true and
+        // *every* shortcut was dead until the user pressed Escape.
+        let tab = WKey::Named(NamedKey::Tab);
+        let z = WKey::Character("z".into());
+        assert!(withhold_from_egui(KeyboardOwner::default(), &tab));
+        assert!(
+            !withhold_from_egui(KeyboardOwner::default(), &z),
+            "only Tab moves egui's focus"
+        );
+        assert!(
+            !withhold_from_egui(
+                KeyboardOwner {
+                    recording_shortcut: true,
+                    ..Default::default()
+                },
+                &tab
+            ),
+            "the shortcut editor reads its chord out of egui's events"
+        );
+        // Even a focused text field does not get Tab: nothing here needs it,
+        // and letting it through is what gives focus somewhere to wander to.
+        assert!(withhold_from_egui(
+            KeyboardOwner {
+                egui_text_focus: true,
+                ..Default::default()
+            },
+            &tab
+        ));
+    }
+
+    #[test]
+    fn a_focused_text_field_wins_the_keyboard() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_two_images(dir.path());
+        let typing = KeyboardOwner {
+            egui_text_focus: true,
+            ..Default::default()
+        };
+        let before = shell.editor().active_index();
+
+        press(
+            &mut shell,
+            typing,
+            WKey::Named(NamedKey::Tab),
+            ModifiersState::CONTROL,
+        );
+        assert_eq!(
+            shell.editor().active_index(),
+            before,
+            "Ctrl+Tab did not switch tabs"
+        );
+        press(
+            &mut shell,
+            typing,
+            WKey::Character("b".into()),
+            ModifiersState::empty(),
+        );
+        press(
+            &mut shell,
+            typing,
+            WKey::Named(NamedKey::Tab),
+            ModifiersState::empty(),
+        );
+        assert!(
+            shell.editor().panels_visible(),
+            "and a bare Tab did not hide the panels"
+        );
+        assert_eq!(
+            shell.editor().tool(),
+            tools::ToolId::Move,
+            "nor did a letter select a tool"
+        );
+    }
+
+    #[test]
+    fn recording_a_shortcut_does_not_also_perform_it() {
+        // The defect: egui 0.29 does not focus a clicked button, so while the
+        // shortcut editor was listening the shell still saw the press as
+        // unconsumed and performed it. Assigning a shortcut over Ctrl+Q quit
+        // the application; over Ctrl+W it closed the document.
+        let recording = KeyboardOwner {
+            recording_shortcut: true,
+            ..Default::default()
+        };
+        for (key, mods) in [
+            (WKey::Character("q".into()), ModifiersState::CONTROL),
+            (WKey::Character("w".into()), ModifiersState::CONTROL),
+            (
+                WKey::Named(NamedKey::Delete),
+                ModifiersState::CONTROL | ModifiersState::SHIFT,
+            ),
+        ] {
+            assert_eq!(
+                route_key(recording, &key, ElementState::Pressed, false, mods),
+                KeyOutcome::Ignore,
+                "{key:?} was dispatched while it was being recorded"
+            );
+        }
+
+        // ...and it really does not reach the editor.
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_two_images(dir.path());
+        press(
+            &mut shell,
+            recording,
+            WKey::Character("q".into()),
+            ModifiersState::CONTROL,
+        );
+        assert!(!shell.editor().quit_requested(), "Ctrl+Q quit the app");
+        assert_eq!(shell.editor().documents().len(), 2);
+
+        // With nothing recording, the same press is the action it names.
+        press(
+            &mut shell,
+            KeyboardOwner::default(),
+            WKey::Character("q".into()),
+            ModifiersState::CONTROL,
+        );
+        assert!(
+            shell.editor().quit_requested(),
+            "and otherwise it still quits"
+        );
+    }
+
+    #[test]
+    fn a_release_gives_back_the_hand_whoever_owns_the_keyboard() {
+        // A focus change mid-hold must not strand the temporary hand tool, so
+        // the release is unconditional. It is idempotent, so giving back a hand
+        // that was never borrowed costs nothing.
+        for owner in [
+            KeyboardOwner::default(),
+            KeyboardOwner {
+                egui_text_focus: true,
+                recording_shortcut: true,
+            },
+        ] {
+            assert_eq!(
+                route_key(
+                    owner,
+                    &WKey::Named(NamedKey::Space),
+                    ElementState::Released,
+                    false,
+                    ModifiersState::empty()
+                ),
+                KeyOutcome::ReleaseTemporaryHand
+            );
+            assert_eq!(
+                route_key(
+                    owner,
+                    &WKey::Character("b".into()),
+                    ElementState::Released,
+                    false,
+                    ModifiersState::empty()
+                ),
+                KeyOutcome::Ignore
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_hand_wants_a_held_keys_repeats() {
+        let free = KeyboardOwner::default();
+        assert_eq!(
+            route_key(
+                free,
+                &WKey::Named(NamedKey::Space),
+                ElementState::Pressed,
+                true,
+                ModifiersState::empty()
+            ),
+            KeyOutcome::Dispatch(Chord::plain(Key::Space)),
+            "a held Space must keep the hand engaged"
+        );
+        assert_eq!(
+            route_key(
+                free,
+                &WKey::Character("z".into()),
+                ElementState::Pressed,
+                true,
+                ModifiersState::CONTROL
+            ),
+            KeyOutcome::Ignore,
+            "a held Ctrl+Z must not undo the whole session"
+        );
+        // A key that forms no chord at all is simply not ours.
+        assert_eq!(
+            route_key(
+                free,
+                &WKey::Named(NamedKey::Shift),
+                ElementState::Pressed,
+                false,
+                ModifiersState::SHIFT
+            ),
+            KeyOutcome::Ignore
+        );
+    }
+
+    #[test]
+    fn a_new_layer_stays_active_when_the_menu_creates_it() {
+        // The defect: `apply_chrome` performed the actions first and *then*
+        // applied `select_layer`, which the chrome had filled with the
+        // selection as it stood before the click. So Layer ▸ New Layer created
+        // the layer and immediately pointed the cursor back at the old one —
+        // silently, with no error and nothing in the log.
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        let original = shell
+            .editor()
+            .active()
+            .unwrap()
+            .document
+            .active_layer()
+            .unwrap();
+
+        shell.apply_chrome(ChromeOutput {
+            actions: vec![Action::NewLayer],
+            select_layer: Some(original),
+            ..Default::default()
+        });
+
+        let doc = &shell.editor().active().unwrap().document;
+        assert_eq!(doc.layers.len(), 2, "the layer was created");
+        let active = doc.active_layer().expect("something must be active");
+        assert_ne!(
+            active, original,
+            "the new layer is the one you want to paint on"
+        );
+    }
+
+    #[test]
+    fn a_click_and_an_action_in_one_frame_compose_in_the_order_they_happened() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        // Two layers, with the *lower* one selected.
+        shell.perform(Action::NewLayer);
+        let doc = &shell.editor().active().unwrap().document;
+        let lower = *doc.layers.root().last().unwrap();
+        let upper = doc.active_layer().unwrap();
+        assert_ne!(lower, upper);
+
+        // Click the lower row, then hide it from the menu, in one frame.
+        shell.apply_chrome(ChromeOutput {
+            actions: vec![Action::ToggleLayerVisibility],
+            select_layer: Some(lower),
+            ..Default::default()
+        });
+        let doc = &shell.editor().active().unwrap().document;
+        assert!(
+            !doc.layers.get(lower).unwrap().visible,
+            "the row that was clicked is the one that was hidden"
+        );
+        assert!(doc.layers.get(upper).unwrap().visible);
+    }
+
+    #[test]
+    fn the_canvas_backdrop_is_the_design_token_in_every_theme() {
+        // The defect: `Shell::clear` used `BackgroundCanvas` but ran only while
+        // the window was empty. With a document open the canvas cleared to a
+        // hardcoded 0.1 grey, so Light mode snapped from #E9E9EE to near-black
+        // the instant a file was opened.
+        for theme in design::Theme::ALL {
+            let token = theme
+                .tokens()
+                .palette
+                .color(design::ColorRole::BackgroundCanvas);
+            assert_eq!(
+                backdrop_srgb(*theme),
+                [token.r, token.g, token.b],
+                "{theme:?} does not hand the canvas its own token"
+            );
+            for format in [
+                wgpu::TextureFormat::Bgra8UnormSrgb,
+                wgpu::TextureFormat::Bgra8Unorm,
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+            ] {
+                // What the empty window clears to and what the canvas clears to
+                // are the same value, computed by the same function.
+                assert_eq!(
+                    backdrop_clear(*theme, format),
+                    render::backdrop_clear_color(backdrop_srgb(*theme), format),
+                    "{theme:?}/{format:?}"
+                );
+            }
+        }
+        // ...and the two themes really are different colours, so a test that
+        // passed by handing both the same constant would fail here.
+        assert_ne!(
+            backdrop_srgb(design::Theme::Light),
+            backdrop_srgb(design::Theme::Dark)
+        );
+        assert_ne!(
+            backdrop_srgb(design::Theme::Dark),
+            render::DEFAULT_BACKDROP_SRGB,
+            "the token must not be the constant the render crate invented"
+        );
+    }
+
+    #[test]
+    fn a_character_key_becomes_the_chord_the_keymap_expects() {
+        let chord = chord_from_key(&WKey::Character("z".into()), ModifiersState::CONTROL).unwrap();
+        assert_eq!(chord, Chord::ctrl(Key::character('z')));
+        assert_eq!(
+            crate::keymap::Keymap::default().resolve(&chord),
+            Some(Action::Undo)
+        );
+
+        // Shift reports the upper-case character; the key is the same one.
+        let chord = chord_from_key(
+            &WKey::Character("Z".into()),
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
+        )
+        .unwrap();
+        assert_eq!(chord, Chord::ctrl_shift(Key::character('z')));
+        assert_eq!(
+            crate::keymap::Keymap::default().resolve(&chord),
+            Some(Action::Redo)
+        );
+    }
+
+    #[test]
+    fn named_keys_map_to_the_keys_the_defaults_use() {
+        let cases = [
+            (NamedKey::Tab, Key::Tab, Some(Action::TogglePanels)),
+            (NamedKey::Space, Key::Space, Some(Action::TemporaryHand)),
+            (NamedKey::Escape, Key::Escape, None),
+            (NamedKey::F5, Key::Function(5), None),
+        ];
+        for (named, expected, action) in cases {
+            let chord = chord_from_key(&WKey::Named(named), ModifiersState::empty()).unwrap();
+            assert_eq!(chord.key, expected);
+            assert_eq!(crate::keymap::Keymap::default().resolve(&chord), action);
+        }
+    }
+
+    #[test]
+    fn the_delete_layer_chord_reaches_the_action_that_had_no_key_at_all() {
+        // Wave 0 shipped `NewLayer` and `DeleteLayer` with no binding.
+        let chord = chord_from_key(
+            &WKey::Named(NamedKey::Delete),
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
+        )
+        .unwrap();
+        assert_eq!(
+            crate::keymap::Keymap::default().resolve(&chord),
+            Some(Action::DeleteLayer)
+        );
+        let chord = chord_from_key(
+            &WKey::Character("n".into()),
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
+        )
+        .unwrap();
+        assert_eq!(
+            crate::keymap::Keymap::default().resolve(&chord),
+            Some(Action::NewLayer)
+        );
+    }
+
+    #[test]
+    fn a_bare_modifier_forms_no_chord() {
+        assert_eq!(
+            chord_from_key(&WKey::Named(NamedKey::Shift), ModifiersState::SHIFT),
+            None
+        );
+        // ...and neither does a multi-character IME commit.
+        assert_eq!(
+            chord_from_key(&WKey::Character("ab".into()), ModifiersState::empty()),
+            None
+        );
+    }
+
+    #[test]
+    fn the_super_key_counts_as_ctrl_so_one_table_serves_macos() {
+        let chord = chord_from_key(&WKey::Character("s".into()), ModifiersState::SUPER).unwrap();
+        assert!(chord.ctrl_or_cmd);
+        assert_eq!(
+            crate::keymap::Keymap::default().resolve(&chord),
+            Some(Action::Save)
+        );
+    }
+
+    #[test]
+    fn only_space_releases_the_temporary_hand() {
+        assert!(is_temporary_hand_key(&WKey::Named(NamedKey::Space)));
+        assert!(!is_temporary_hand_key(&WKey::Character("b".into())));
+        assert!(!is_temporary_hand_key(&WKey::Named(NamedKey::Tab)));
+    }
+
+    #[test]
+    fn the_surface_format_prefers_srgb_and_refuses_what_it_cannot_draw() {
+        use wgpu::TextureFormat as F;
+        assert_eq!(
+            choose_surface_format(&[F::Bgra8Unorm, F::Bgra8UnormSrgb]).unwrap(),
+            F::Bgra8UnormSrgb,
+            "sRGB wins when both are offered"
+        );
+        assert_eq!(
+            choose_surface_format(&[F::Bgra8Unorm]).unwrap(),
+            F::Bgra8Unorm,
+            "a plain 8-bit target is still drawable"
+        );
+
+        // An adapter offering only formats the canvas cannot draw to is a
+        // dialog, not a panic — and the message names what was offered.
+        let err = choose_surface_format(&[F::Rgba16Float]).unwrap_err();
+        assert!(err.to_string().contains("Rgba16Float"), "{err}");
+        let err = choose_surface_format(&[]).unwrap_err();
+        assert!(matches!(err, ShellError::UnsupportedSurfaceFormat { .. }));
+    }
+}

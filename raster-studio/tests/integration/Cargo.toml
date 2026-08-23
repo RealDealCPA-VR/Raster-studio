@@ -6,15 +6,31 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
-# This crate exists purely to host cross-crate integration tests that exercise
-# the full Phase-0 vertical slice. It has no library/binary of its own.
+# This crate exists to host cross-crate end-to-end tests. `src/lib.rs` is the
+# harness those tests share — fixture images and a thin set of helpers that
+# build commands for `app_shell::doc::OpenDocument`, which is the engine the
+# application itself runs. The tests themselves live in `tests/`.
 [lib]
 path = "src/lib.rs"
 
+# Regular dependencies rather than dev-dependencies: the harness in `src/lib.rs`
+# needs them, and a dev-dependency is not visible to the library target.
 [dependencies]
-
-[dev-dependencies]
+# The application's own engine. `OpenDocument` and `session` carry no window and
+# no GPU handle, so the end-to-end tests drive the real thing rather than a
+# look-alike. This dependency is the whole point of the suite: a test that
+# builds its own document/history/tile-store triple proves that triple works,
+# not that the product does.
+app-shell.workspace = true
 editor-core.workspace = true
 layer-model.workspace = true
+compositor.workspace = true
+raster.workspace = true
 project-format.workspace = true
+psd.workspace = true
+tools.workspace = true
+selection.workspace = true
+filters.workspace = true
+color.workspace = true
+glam.workspace = true
 tempfile = "3"

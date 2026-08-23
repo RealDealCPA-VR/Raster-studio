@@ -16,16 +16,52 @@ struct CameraUniform {
     m1: [f32; 4],
 }
 
-/// The backdrop behind the quad, as the sRGB value it should APPEAR as.
-const CLEAR_SRGB: f64 = 0.1;
+/// The backdrop a canvas starts with, as an 8-bit sRGB display value.
+///
+/// This crate has no design system, so it cannot know the application's canvas
+/// token — it only guarantees the first frames are not uninitialized memory.
+/// A host with a theme is expected to call [`Canvas::set_backdrop`] and keep
+/// calling it when the theme changes; `app-shell` hands it
+/// `design::ColorRole::BackgroundCanvas`, which is why the surround around an
+/// open image follows light and dark like every other surface.
+pub const DEFAULT_BACKDROP_SRGB: [u8; 3] = [26, 26, 26];
 
-/// [`CLEAR_SRGB`] pre-linearized, i.e. `srgb_to_linear(0.1)`.
+/// One 8-bit sRGB channel as a linear-light value in `0.0..=1.0`.
+///
+/// The single implementation of the sRGB EOTF in this workspace's rendering
+/// path: [`backdrop_clear_color`] uses it, and `app-shell`'s empty-canvas clear
+/// goes through that same function rather than repeating the arithmetic.
+pub fn srgb_to_linear(channel: u8) -> f64 {
+    let c = channel as f64 / 255.0;
+    if c <= 0.040_45 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// The `LoadOp::Clear` value that makes `srgb` *appear* on a `format` target.
 ///
 /// An `*-Srgb` target applies the sRGB transfer function to everything written
-/// to it — including the clear value — so it must be handed this. Writing 0.1
-/// there would show up as sRGB 0.35, more than three times as bright as
-/// intended. A plain unorm target encodes nothing and takes [`CLEAR_SRGB`].
-const CLEAR_LINEAR: f64 = 0.010_022_8;
+/// to it — the clear value included — so it must be handed the linearized form.
+/// Writing the display value there would show up roughly three times too
+/// bright. A plain unorm target encodes nothing and takes the display value as
+/// it is.
+pub fn backdrop_clear_color(srgb: [u8; 3], format: wgpu::TextureFormat) -> wgpu::Color {
+    let channel = |c: u8| {
+        if format.is_srgb() {
+            srgb_to_linear(c)
+        } else {
+            c as f64 / 255.0
+        }
+    };
+    wgpu::Color {
+        r: channel(srgb[0]),
+        g: channel(srgb[1]),
+        b: channel(srgb[2]),
+        a: 1.0,
+    }
+}
 
 /// Renders a single source texture with a camera transform.
 pub struct Canvas {
@@ -35,6 +71,7 @@ pub struct Canvas {
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: Option<wgpu::BindGroup>,
     format: wgpu::TextureFormat,
+    backdrop: [u8; 3],
 }
 
 impl Canvas {
@@ -183,7 +220,22 @@ impl Canvas {
             bind_group_layout,
             bind_group: None,
             format: output_format,
+            backdrop: DEFAULT_BACKDROP_SRGB,
         })
+    }
+
+    /// Set the colour the canvas clears to, as an 8-bit sRGB display value.
+    ///
+    /// This is the area around and behind the image. It is a parameter rather
+    /// than a constant so the backdrop can come from the host's design tokens
+    /// and follow its theme; see [`DEFAULT_BACKDROP_SRGB`].
+    pub fn set_backdrop(&mut self, srgb: [u8; 3]) {
+        self.backdrop = srgb;
+    }
+
+    /// The backdrop currently in force, as an 8-bit sRGB display value.
+    pub fn backdrop(&self) -> [u8; 3] {
+        self.backdrop
     }
 
     /// Point the canvas at a source texture. Call when the open image changes.
@@ -234,25 +286,17 @@ impl Canvas {
     ///
     /// `target` must have the format this canvas was built for; the clear value
     /// is pre-linearized for an `*-Srgb` target and left as a display value for
-    /// a plain unorm one, so the backdrop reads back as sRGB 0.1 either way.
+    /// a plain unorm one, so [`Canvas::backdrop`] reads back the same either
+    /// way.
     pub fn render(&self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
-        let clear = if self.format.is_srgb() {
-            CLEAR_LINEAR
-        } else {
-            CLEAR_SRGB
-        };
+        let clear = backdrop_clear_color(self.backdrop, self.format);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("canvas-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: clear,
-                        g: clear,
-                        b: clear,
-                        a: 1.0,
-                    }),
+                    load: wgpu::LoadOp::Clear(clear),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -275,11 +319,12 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
-    use super::{Canvas, CLEAR_LINEAR, CLEAR_SRGB};
+    use super::{backdrop_clear_color, srgb_to_linear, Canvas, DEFAULT_BACKDROP_SRGB};
 
-    /// sRGB EOTF, to check `CLEAR_LINEAR` really is `CLEAR_SRGB` linearized
-    /// rather than a number someone typed.
-    fn srgb_to_linear(c: f64) -> f64 {
+    /// The sRGB EOTF written out independently, so the helper is checked
+    /// against the formula rather than against itself.
+    fn reference(c: u8) -> f64 {
+        let c = c as f64 / 255.0;
         if c <= 0.040_45 {
             c / 12.92
         } else {
@@ -288,12 +333,31 @@ mod tests {
     }
 
     #[test]
-    fn clear_linear_is_the_display_value_linearized() {
-        let expected = srgb_to_linear(CLEAR_SRGB);
-        assert!(
-            (CLEAR_LINEAR - expected).abs() < 1e-6,
-            "CLEAR_LINEAR = {CLEAR_LINEAR}, srgb_to_linear({CLEAR_SRGB}) = {expected}"
-        );
+    fn an_srgb_target_is_cleared_with_the_linearized_backdrop() {
+        // The bug this pins: writing the display value to an `*-Srgb` target
+        // encodes it a second time and the backdrop comes out far too bright.
+        for srgb in [
+            DEFAULT_BACKDROP_SRGB,
+            [0xE9, 0xE9, 0xEE],
+            [0x1A, 0x1A, 0x1D],
+        ] {
+            let linear = backdrop_clear_color(srgb, wgpu::TextureFormat::Bgra8UnormSrgb);
+            assert!((linear.r - reference(srgb[0])).abs() < 1e-9, "{linear:?}");
+            assert!((linear.g - reference(srgb[1])).abs() < 1e-9, "{linear:?}");
+            assert!((linear.b - reference(srgb[2])).abs() < 1e-9, "{linear:?}");
+            assert_eq!(linear.a, 1.0);
+
+            // A plain unorm target encodes nothing, so it takes the display
+            // value unchanged.
+            let plain = backdrop_clear_color(srgb, wgpu::TextureFormat::Bgra8Unorm);
+            assert!((plain.r - srgb[0] as f64 / 255.0).abs() < 1e-9, "{plain:?}");
+            assert!(
+                plain.r > linear.r || srgb[0] == 0,
+                "the encoded form must be the brighter number"
+            );
+        }
+        assert_eq!(srgb_to_linear(0), 0.0);
+        assert!((srgb_to_linear(255) - 1.0).abs() < 1e-9);
     }
 
     /// Both encodings of the 8-bit display formats are drawable; the shader
