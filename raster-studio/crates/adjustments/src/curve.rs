@@ -105,6 +105,23 @@ impl Curve {
             return Err(AdjustmentError::TooFewCurvePoints { got: xs.len() });
         }
 
+        // Every coordinate is finite, but a *span* between two of them need not
+        // be: knots at -3e38 and 3e38 subtract to +inf. The tangent for that
+        // interval is then `finite / inf` = 0, and `eval` multiplies the
+        // interval width by it as `inf * 0.0` = NaN — which would travel into
+        // the compositor and poison every blend it touched. Reject the span
+        // rather than the magnitude, so ordinary out-of-display-range knots
+        // still work.
+        for k in 0..xs.len() - 1 {
+            let span = xs[k + 1] - xs[k];
+            if !span.is_finite() {
+                return Err(AdjustmentError::NotFinite {
+                    name: "curve point spacing",
+                    value: span,
+                });
+            }
+        }
+
         let tangents = fritsch_carlson_tangents(&xs, &ys);
         // An identity curve must be recognisable so it can be skipped exactly:
         // every knot on `y = x`, and the domain covering the whole display
@@ -474,5 +491,29 @@ mod tests {
     #[test]
     fn nan_in_nan_out() {
         assert!(s_curve().eval(f32::NAN).is_nan());
+    }
+
+    #[test]
+    fn extreme_knot_spacing_is_rejected_rather_than_evaluating_to_nan() {
+        // Both coordinates are finite, but their difference is not, which used
+        // to produce `inf * 0.0` = NaN inside `eval` and send a NaN pixel into
+        // the compositor.
+        let err = Curve::new(&[[-3.0e38, 0.0], [3.0e38, 1.0]])
+            .expect_err("an infinite knot span must be refused");
+        assert!(
+            matches!(err, AdjustmentError::NotFinite { .. }),
+            "expected NotFinite, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_curve_that_is_accepted_never_evaluates_to_nan() {
+        // The guard is only worth having if everything that survives it is
+        // total, so sweep the accepted curve across and beyond its domain.
+        let c = Curve::new(&[[-1.0e30, 0.0], [0.5, 0.25], [1.0e30, 1.0]]).unwrap();
+        for i in -20..=20 {
+            let x = i as f32 * 1.0e29;
+            assert!(c.eval(x).is_finite(), "eval({x}) was not finite");
+        }
     }
 }

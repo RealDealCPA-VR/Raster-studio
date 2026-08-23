@@ -502,9 +502,14 @@ impl From<&AdjustmentKind> for Adjustment {
                 .monochrome(*monochrome),
             ),
             AdjustmentKind::Invert => Adjustment::Invert,
-            AdjustmentKind::Posterize { levels } => Adjustment::Posterize(
-                Posterize::new((*levels).clamp(2, 256)).unwrap_or(Posterize::FINEST),
-            ),
+            // No pre-clamp: clamping first made `unwrap_or` unreachable and
+            // turned a corrupt `levels: 0` into a two-level posterise — the
+            // most destructive output the control has — where both this
+            // conversion and `Posterize::FINEST` promise a corrupt value
+            // degrades to the near-identity instead.
+            AdjustmentKind::Posterize { levels } => {
+                Adjustment::Posterize(Posterize::new(*levels).unwrap_or(Posterize::FINEST))
+            }
             AdjustmentKind::Threshold { level } => Adjustment::Threshold(
                 Threshold::new(lenient(*level, 0.0, 1.0, 0.5)).unwrap_or(Threshold::MIDDLE),
             ),
@@ -951,6 +956,13 @@ impl PreparedAdjustment {
         }
         for (px, m) in pixels.iter_mut().zip(mask) {
             if px[3] <= color::UNPREMULTIPLY_ALPHA_EPSILON {
+                continue;
+            }
+            // `f32::clamp` PROPAGATES NaN rather than replacing it, so a NaN
+            // coverage entry would fall past both fast paths below and write
+            // NaN into the tile. Treat a non-finite mask sample as no
+            // coverage, which leaves the pixel bit-identical.
+            if !m.is_finite() {
                 continue;
             }
             let m = m.clamp(0.0, 1.0);
@@ -1801,5 +1813,44 @@ mod tests {
             .get();
         assert!(dark[0] < 0.02, "{dark:?}");
         assert!(light[0] > 0.98, "{light:?}");
+    }
+
+    #[test]
+    fn a_nan_mask_sample_leaves_the_pixel_untouched() {
+        // `f32::clamp` propagates NaN instead of replacing it, so a NaN
+        // coverage entry used to skip both fast paths and write NaN into the
+        // tile — and one NaN pixel poisons every blend the compositor
+        // subsequently performs on it.
+        let prepared = PreparedAdjustment::new(&Adjustment::Invert);
+        let before = [0.2f32, 0.5, 0.8, 1.0];
+        let mut pixels = [before];
+        prepared
+            .apply_premultiplied_rgba_masked(&mut pixels, &[f32::NAN], &SRGB)
+            .unwrap();
+        assert_eq!(
+            pixels[0], before,
+            "a non-finite mask sample must mean no coverage, not NaN output"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_posterize_level_degrades_to_the_near_identity() {
+        // Both this conversion and `Posterize::FINEST` promise a corrupt stored
+        // value degrades to something indistinguishable from the identity.
+        // Clamping first turned `levels: 0` into a two-level posterise, the
+        // most destructive output the control can produce.
+        for bad in [0u32, 1, 100_000] {
+            let a = Adjustment::from(&AdjustmentKind::Posterize { levels: bad });
+            assert_eq!(
+                a,
+                Adjustment::Posterize(Posterize::FINEST),
+                "levels: {bad} must degrade to FINEST"
+            );
+        }
+        // A valid count is still honoured exactly.
+        assert_eq!(
+            Adjustment::from(&AdjustmentKind::Posterize { levels: 4 }),
+            Adjustment::Posterize(Posterize::new(4).unwrap())
+        );
     }
 }
