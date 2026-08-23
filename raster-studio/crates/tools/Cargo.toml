@@ -8,5 +8,24 @@ license.workspace = true
 [dependencies]
 glam.workspace = true
 serde.workspace = true
+thiserror.workspace = true
 editor-core.workspace = true
 layer-model.workspace = true
+# Tile identity and geometry: a tool's output is a tile delta, so it speaks the
+# same `TileCoord`/`TileHash`/`PixelRect` vocabulary the store does.
+raster.workspace = true
+# sRGB <-> linear transfer and premultiply/unpremultiply. Every pixel a tool
+# touches is worked on in linear premultiplied space and encoded back once.
+color.workspace = true
+# `FilterBuffer` is *the* linear-premultiplied working plane in this workspace,
+# and the blur/sharpen tools are the per-dab form of the crate's filters.
+filters.workspace = true
+# Selection tools are thin gesture wrappers around these algorithms.
+selection.workspace = true
+# Shape tools are thin gesture wrappers around these paths.
+vector.workspace = true
+
+[dev-dependencies]
+# Gradient ramps are persisted as presets, so the tests decode one the way a
+# preset file would — including a corrupt one.
+serde_json.workspace = true

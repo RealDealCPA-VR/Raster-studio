@@ -7,3 +7,17 @@ license.workspace = true
 
 [dependencies]
 serde.workspace = true
+layer-model.workspace = true
+
+# Shaping / font handling. `std` gives us memory-mapped system font loading and
+# `swash` gives us the glyph rasteriser. `fontconfig` is deliberately off: it is
+# a Linux-only discovery path we do not need (fontdb's own scanner covers all
+# three desktop platforms) and it drags in extra native lookups.
+cosmic-text = { version = "0.17", default-features = false, features = ["std", "swash"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+# Deterministic test corpus: an embedded, permissively licensed font family so
+# the shaping/layout/raster assertions do not depend on whatever the host
+# machine happens to have installed.
+dejavu = "2.37"
