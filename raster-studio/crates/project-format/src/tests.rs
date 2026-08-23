@@ -986,6 +986,90 @@ fn a_journal_that_grows_while_the_save_reads_it_still_carries_a_whole_prefix() {
     );
 }
 
+#[test]
+fn a_command_journalled_while_a_save_is_running_stays_out_of_the_new_package() {
+    // The window: `build_package` reads `dest/commands.journal`, copies its
+    // valid prefix into the package it is building, and `swap_into_place` then
+    // deletes the old directory — so a record appended in between goes with it.
+    // This drives exactly that through the seam and pins what survives.
+    //
+    // Dropping the record is the *correct* outcome under this crate's ordering
+    // rule (see the `journal` module header): a record is appended after its
+    // command has been accepted, and `save_project_with` holds `&Document` for
+    // the whole save, so nothing can be applied while one runs. The record
+    // therefore names a command the snapshot being written already contains, and
+    // carrying it across *after* the save marker would replay it onto a document
+    // that already has it — a second layer, from one CreateLayer. What the crate
+    // cannot promise is an application that journals a command *before* applying
+    // it; that is the limit named in the crate docs, not something this test
+    // claims away.
+    let dir = tempfile::tempdir().unwrap();
+    let pkg = dir.path().join("S.rstudio");
+    let mut doc = Document::new(64, 64, "S");
+    save_project_with(&pkg, &doc, &NoTiles, &opts()).unwrap();
+    let journal = pkg.join(JOURNAL_FILE);
+
+    // Accept the command into the document, exactly as the application does...
+    let cmd = editor_core::Command::create_layer(Layer::raster("A"));
+    cmd.apply(&mut doc).unwrap();
+
+    // ...and take the bytes of its journal record from a scratch journal, so
+    // what the seam appends is byte-for-byte what `append` would have written.
+    let scratch = dir.path().join("scratch.journal");
+    CommandJournal::append(&scratch, &cmd).unwrap();
+    let record = std::fs::read(&scratch).unwrap();
+
+    // The seam appends it to the package's journal after the save has read that
+    // file and before the swap: the window, reproduced.
+    crate::package::GROW_JOURNAL_AFTER_READ.with(|c| {
+        *c.borrow_mut() = Some(record.clone());
+    });
+    let report = save_project_with(&pkg, &doc, &NoTiles, &opts()).unwrap();
+    assert!(
+        crate::package::GROW_JOURNAL_AFTER_READ.with(|c| c.borrow().is_none()),
+        "the seam never fired, so this test proved nothing about the window"
+    );
+
+    let carried = std::fs::read(&journal).unwrap();
+    assert!(
+        !carried
+            .windows(record.len())
+            .any(|w| w == record.as_slice()),
+        "the record appended inside the window is not carried across"
+    );
+
+    let rec = CommandJournal::read(&journal).unwrap();
+    assert!(!rec.truncated(), "and what is carried ends on a boundary");
+    assert!(rec.commands().is_empty());
+    assert_eq!(
+        rec.last_save().map(|m| m.document),
+        Some(report.document),
+        "the marker anchors recovery to the snapshot just written"
+    );
+    assert!(rec.since_last_save().is_empty());
+
+    // Nothing was lost: the command is in the snapshot on disk, which is why
+    // dropping its record is right rather than merely convenient.
+    let loaded = open_project(&pkg).unwrap();
+    assert_eq!(
+        loaded.document.layers.len(),
+        1,
+        "the command is in the document the save wrote"
+    );
+    let digest = loaded.document_digest;
+    let mut recovered = loaded.document;
+    assert_eq!(
+        rec.replay_onto(&mut recovered, digest).unwrap(),
+        0,
+        "there is nothing to replay"
+    );
+    assert_eq!(
+        recovered.layers.len(),
+        1,
+        "carrying the record past the marker would have made a second layer here"
+    );
+}
+
 // ------------------------------------------------------------------ manifest
 
 #[test]
@@ -1040,6 +1124,15 @@ fn collecting_assets_makes_a_portable_package() {
         &b"texture bytes"[..],
         "the bytes are in the package, not on the machine that saved it"
     );
+    // The store this load actually filled is capped at the number the save
+    // enforced. `AssetStore::new()`'s default is a different, smaller number,
+    // and a load built on it accepted less than the save wrote: the package
+    // saved and could never be reopened.
+    assert_eq!(
+        loaded.tiles.config().max_blob_bytes,
+        crate::assets::MAX_ASSET_BYTES,
+        "the store a load fills is the one the saver capped against"
+    );
 }
 
 #[test]
@@ -1048,6 +1141,226 @@ fn a_package_with_no_assets_is_portable() {
     let pkg = dir.path().join("P.rstudio");
     save_project_with(&pkg, &Document::new(8, 8, "P"), &NoTiles, &opts()).unwrap();
     assert!(open_project(&pkg).unwrap().manifest.assets_collected);
+}
+
+#[test]
+fn what_the_real_save_accepts_the_real_load_opens() {
+    // The data-loss defect, end to end, through `save_project_with` and
+    // `open_project` themselves — not through the capped test helpers. The bug
+    // was never that the helpers disagreed; it was that the production save had
+    // no per-asset cap and the production load built its store from
+    // `AssetStore::new()`. Both caps are moved together by one seam, so this
+    // runs at 64 bytes instead of at 512 MiB.
+    const CAP: u64 = 64;
+    const TOTAL: u64 = 128;
+    let caps = crate::assets::AssetCaps {
+        asset: CAP,
+        total: TOTAL,
+        ..Default::default()
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let doc = Document::new(8, 8, "P");
+
+    // Exactly at the cap: saves, and comes back out.
+    let at_cap = dir.path().join("AtCap.rstudio");
+    let loaded = crate::assets::with_caps(caps, || {
+        let o = opts().with_assets(vec![AssetInput::embedded(
+            "application/octet-stream",
+            vec![7u8; CAP as usize],
+        )]);
+        save_project_with(&at_cap, &doc, &NoTiles, &o).unwrap();
+        open_project(&at_cap).unwrap()
+    });
+    assert_eq!(
+        loaded.assets[0].byte_len, CAP,
+        "an asset at exactly the cap has to survive the round trip"
+    );
+    assert_eq!(
+        &*loaded.tiles.get(loaded.assets[0].hash).unwrap(),
+        &vec![7u8; CAP as usize][..]
+    );
+    assert_eq!(
+        loaded.tiles.config().max_blob_bytes,
+        CAP,
+        "the load's store is built from the same cap the save enforced"
+    );
+
+    // One byte over: refused BY THE SAVE, by name, with no package left behind
+    // — not accepted and then unopenable forever.
+    let over = dir.path().join("Over.rstudio");
+    let err = crate::assets::with_caps(caps, || {
+        let o = opts().with_assets(vec![AssetInput::embedded(
+            "application/octet-stream",
+            vec![7u8; CAP as usize + 1],
+        )]);
+        save_project_with(&over, &doc, &NoTiles, &o).unwrap_err()
+    });
+    assert!(
+        matches!(err, ProjectError::AssetTooLarge { size, max, .. }
+                 if size == CAP + 1 && max == CAP),
+        "{err}"
+    );
+    assert!(!over.exists(), "a refused save leaves no package behind");
+
+    // And the aggregate is enforced by the save too: three assets under the
+    // per-asset cap, over the total the load would make resident.
+    let bulk = dir.path().join("Bulk.rstudio");
+    let err = crate::assets::with_caps(caps, || {
+        let o = opts().with_assets(
+            (0u8..3)
+                .map(|n| AssetInput::embedded("application/octet-stream", vec![n; CAP as usize]))
+                .collect(),
+        );
+        save_project_with(&bulk, &doc, &NoTiles, &o).unwrap_err()
+    });
+    assert!(
+        matches!(err, ProjectError::AssetDataTooLarge { max } if max == TOTAL),
+        "{err}"
+    );
+    assert!(!bulk.exists(), "a refused save leaves no package behind");
+}
+
+#[test]
+fn an_index_the_real_load_would_refuse_is_refused_by_the_real_save() {
+    // The second half of the same data-loss shape, and the one that needs no
+    // giant asset at all: `assets/index.json` was bounded on load and unbounded
+    // on save. An entry costs ~160 bytes plus its link path, so 20 000 linked
+    // assets with ordinary long paths wrote a 21 MiB index, returned `Ok`, and
+    // then failed every open with "assets/index.json is 21208892 bytes, more
+    // than the 16777216 this reader will load". Both sides now read
+    // `assets::caps().index`, so this runs at the size of a two-entry index
+    // instead of at 16 MiB.
+    let dir = tempfile::tempdir().unwrap();
+    let doc = Document::new(8, 8, "P");
+    let assets = || {
+        vec![
+            AssetInput::linked("image/png", "some/reasonably/long/path/one.png"),
+            AssetInput::linked("image/png", "some/reasonably/long/path/two.png"),
+        ]
+    };
+    let index_caps = |index: u64| crate::assets::AssetCaps {
+        index,
+        ..Default::default()
+    };
+
+    // What the index for these assets actually weighs.
+    let measure = dir.path().join("Measure.rstudio");
+    save_project_with(&measure, &doc, &NoTiles, &opts().with_assets(assets())).unwrap();
+    let len = std::fs::metadata(measure.join(crate::assets::ASSETS_INDEX))
+        .unwrap()
+        .len();
+
+    // Exactly at the cap: saves, and opens again under the same number.
+    let at_cap = dir.path().join("AtCap.rstudio");
+    let loaded = crate::assets::with_caps(index_caps(len), || {
+        save_project_with(&at_cap, &doc, &NoTiles, &opts().with_assets(assets())).unwrap();
+        open_project(&at_cap).unwrap()
+    });
+    assert_eq!(
+        loaded.assets.len(),
+        2,
+        "an index at exactly the cap has to survive the round trip"
+    );
+
+    // One byte less of headroom: refused BY THE SAVE, by name, with no package
+    // left behind — not written and then unopenable forever.
+    let over = dir.path().join("Over.rstudio");
+    let err = crate::assets::with_caps(index_caps(len - 1), || {
+        save_project_with(&over, &doc, &NoTiles, &opts().with_assets(assets())).unwrap_err()
+    });
+    assert!(
+        matches!(&err, ProjectError::PackageFileTooLarge { path, size, max }
+                 if path == crate::assets::ASSETS_INDEX && *size == len && *max == len - 1),
+        "{err}"
+    );
+    assert!(!over.exists(), "a refused save leaves no package behind");
+
+    // ...and it is refused because the *load* would refuse it, at the very same
+    // number: the package the save would not write is the package this reader
+    // will not open.
+    let err = crate::assets::with_caps(index_caps(len - 1), || open_project(&measure).unwrap_err());
+    assert!(
+        matches!(&err, ProjectError::FileTooLarge { path, size, max }
+                 if path == crate::assets::ASSETS_INDEX && *size == len && *max == len - 1),
+        "the two sides have to be one number: {err}"
+    );
+}
+
+#[test]
+fn the_save_refuses_every_file_the_load_caps_and_at_the_same_number() {
+    // `assets/index.json` was not the only load-side bound with no write-side
+    // counterpart: `document.msgpack`, `manifest.json` and
+    // `previews/preview.png` each had one too. None is as reachable as the asset
+    // bounds were — but `app_version` and `preview_max_edge` come from the
+    // caller and are unbounded, so that is a fact about today's callers, not
+    // about this format. Each pair of checks below lowers one bound and shows
+    // both sides moving with it: the save refuses to write the file, and the
+    // load refuses to read the very same file at the very same number.
+    use crate::package::{with_file_caps, FileCaps};
+
+    let dir = tempfile::tempdir().unwrap();
+    let (painted_doc, source, _) = painted();
+
+    for (n, (name, caps, doc, tiles)) in [
+        (
+            DOCUMENT_FILE,
+            FileCaps {
+                document: 8,
+                ..Default::default()
+            },
+            Document::new(8, 8, "P"),
+            None,
+        ),
+        (
+            MANIFEST_FILE,
+            FileCaps {
+                manifest: 8,
+                ..Default::default()
+            },
+            Document::new(8, 8, "P"),
+            None,
+        ),
+        (
+            PREVIEW_FILE,
+            FileCaps {
+                preview: 8,
+                ..Default::default()
+            },
+            painted_doc.clone(),
+            Some(&source),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let tiles: &dyn crate::tiles::TileBytes = match tiles {
+            Some(s) => s,
+            None => &NoTiles,
+        };
+
+        // A package saved at the real caps, to read back at the lowered one.
+        let good = dir.path().join(format!("Good{n}.rstudio"));
+        save_project_with(&good, &doc, tiles, &opts()).unwrap();
+        let size = std::fs::metadata(good.join(name)).unwrap().len();
+        let err = with_file_caps(caps, || open_project(&good).unwrap_err());
+        assert!(
+            matches!(&err, ProjectError::FileTooLarge { path, max, .. }
+                     if path == name && *max == 8),
+            "the load has to apply this cap to {name}: {err}"
+        );
+
+        // ...and the save refuses to produce that file in the first place.
+        let refused = dir.path().join(format!("Refused{n}.rstudio"));
+        let err = with_file_caps(caps, || {
+            save_project_with(&refused, &doc, tiles, &opts()).unwrap_err()
+        });
+        assert!(
+            matches!(&err, ProjectError::PackageFileTooLarge { path, size: s, max }
+                     if path == name && *s == size && *max == 8),
+            "the save has to refuse {name} rather than write it unreadable: {err}"
+        );
+        assert!(!refused.exists(), "a refused save leaves no package behind");
+    }
 }
 
 // ------------------------------------------------------------------- preview

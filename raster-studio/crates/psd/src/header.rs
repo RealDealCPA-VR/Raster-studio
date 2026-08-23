@@ -179,6 +179,16 @@ impl PsdHeader {
             u64::from(width),
             u64::from(opts.max_dimension),
         )?;
+        // Bounded from below as well as from above. `check_limit` only refuses
+        // an absurdly *large* canvas; a 0 x N one parsed cleanly all the way
+        // through and then made `write` refuse the document with an
+        // `InvalidDocument` — an error whose `is_file_fault` is false, blaming
+        // the caller for a file they did not write. Photoshop cannot produce a
+        // zero-area canvas, so the reader is the lenient side and this is where
+        // the two are brought back into agreement.
+        if width == 0 || height == 0 {
+            return Err(PsdError::EmptyCanvas { width, height });
+        }
         let depth = Depth::from_bits(cur.u16()?)?;
         let color_mode = ColorMode::from_code(cur.u16()?)?;
         let min = color_mode.color_channels();
@@ -301,6 +311,40 @@ mod tests {
         let buf = s.into_inner();
         let err = PsdHeader::read(&mut Cursor::new(&buf), &ReadOptions::default()).unwrap_err();
         assert!(matches!(err, PsdError::LimitExceeded { .. }), "{err}");
+    }
+
+    /// A header with a zero edge is refused on the way *in*.
+    ///
+    /// Without this the file read cleanly and then `write` refused the document
+    /// it produced, which is the one asymmetry the crate promises not to have:
+    /// the refusal has to blame the file, so `is_file_fault` must be true.
+    #[test]
+    fn a_zero_edge_canvas_is_refused_by_the_reader_and_blamed_on_the_file() {
+        for (width, height) in [(0u32, 0u32), (0, 5), (5, 0)] {
+            let mut s = Sink::new();
+            s.tag(&SIGNATURE);
+            s.u16(VERSION_PSD);
+            s.zeros(6);
+            s.u16(4);
+            s.u32(height);
+            s.u32(width);
+            s.u16(8);
+            s.u16(3);
+            let buf = s.into_inner();
+            let err = PsdHeader::read(&mut Cursor::new(&buf), &ReadOptions::default())
+                .expect_err("a zero-area canvas must be refused");
+            assert!(err.is_file_fault(), "{width}x{height}: {err}");
+            match err {
+                PsdError::EmptyCanvas {
+                    width: w,
+                    height: h,
+                } => assert_eq!((w, h), (width, height)),
+                other => panic!("wrong error for {width}x{height}: {other}"),
+            }
+        }
+        // One pixel each way is still the smallest legal canvas, not a refusal.
+        let h = PsdHeader::rgba8(1, 1);
+        assert_eq!(round_trip(h), h);
     }
 
     #[test]

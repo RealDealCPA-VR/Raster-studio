@@ -18,6 +18,9 @@
 //! So every path is also checked with `symlink_metadata` — which does not
 //! follow links — before it is opened, written through or swept:
 //!
+//! * [`Disk::open`] refuses a store *root* that is not a real directory before
+//!   it creates anything inside it, so a linked root never has `blobs/` or
+//!   `tmp/` materialised at the far end of the link;
 //! * [`Disk::open`] refuses a `blobs/` or `tmp/` that is not a real directory,
 //!   so no write can be staged or renamed through a link;
 //! * [`Disk::read_blob`] and [`Disk::load_index`] refuse anything that is not a
@@ -124,9 +127,15 @@ impl Disk {
     /// a directory, because it tests `is_dir()`, which follows links. Adopting
     /// such a directory would send every staged temp file, every shard
     /// `create_dir_all` and every `rename` through the link and out of the
-    /// store root. Both directories are therefore re-checked with
+    /// store root. The root and both directories are therefore re-checked with
     /// `symlink_metadata` afterwards and a linked one is refused here, before
     /// anything is written.
+    ///
+    /// The root is checked *first*, and on its own, because `blobs/` and `tmp/`
+    /// are created *through* it: creating them before the root has been proven
+    /// real would materialise two directories at the far end of a linked root
+    /// even though the store is about to be refused. Every later refusal in this
+    /// module then rests on a root that is known not to be a link.
     pub(crate) fn open(root: &Path) -> Result<Self, StoreError> {
         let disk = Self {
             root: root.to_path_buf(),
@@ -134,6 +143,13 @@ impl Disk {
             tmp: root.join("tmp"),
             index_path: root.join("index"),
         };
+        // A missing root is this crate's to create; an existing one must be a
+        // real directory. `create_dir_all` is a no-op on a symlink to a
+        // directory, so the check below is what distinguishes the two.
+        fs::create_dir_all(&disk.root).map_err(|e| io_err(&disk.root, e))?;
+        if !is_real_dir(&disk.root) {
+            return Err(StoreError::NotADirectory(disk.root.clone()));
+        }
         fs::create_dir_all(&disk.blobs).map_err(|e| io_err(&disk.blobs, e))?;
         fs::create_dir_all(&disk.tmp).map_err(|e| io_err(&disk.tmp, e))?;
         for dir in [&disk.blobs, &disk.tmp] {

@@ -39,10 +39,13 @@
 //!
 //! A store root can arrive inside someone else's project package, so its
 //! contents are untrusted input. Every path the disk layer touches is built
-//! from a hash this crate computed itself, and is then checked with
-//! `symlink_metadata` before it is opened, written through or unlinked — the
-//! `disk` module docs list what each check defends against. Every read is
-//! size-bounded before a buffer is allocated ([`StoreConfig`]).
+//! either from a fixed name this crate chose (`blobs`, `tmp`, `index`) or from
+//! a hash this crate computed itself, so no component of an untrusted string is
+//! ever joined onto the root. Each of them — the root included, before anything
+//! is created inside it — is then checked with `symlink_metadata` before it is
+//! opened, written through or unlinked; the `disk` module docs list what each
+//! check defends against. Every read is size-bounded before a buffer is
+//! allocated ([`StoreConfig`]).
 //!
 //! # Threading
 //!

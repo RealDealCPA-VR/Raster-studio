@@ -134,6 +134,11 @@ fn predict_row_16(row: &mut [u8]) {
 /// the four planes back into samples.
 fn unpredict_row_32(row: &mut [u8], width: usize) {
     unpredict_row_8(row);
+    // `width` arrives from the caller, and every index below is built from it.
+    // `row_bytes` has already proved `row.len() == width * 4` for a 32-bit row,
+    // so the clamp never bites — it is here because that proof lives in another
+    // function, and this one is not entitled to a panic if it stops holding.
+    let width = width.min(row.len() / 4);
     if width == 0 {
         return;
     }
@@ -147,6 +152,8 @@ fn unpredict_row_32(row: &mut [u8], width: usize) {
 
 /// Encode: split the row into four byte-planes, then delta over the result.
 fn predict_row_32(row: &mut [u8], width: usize) {
+    // Clamped for the same reason [`unpredict_row_32`] clamps.
+    let width = width.min(row.len() / 4);
     if width != 0 {
         let interleaved = row.to_vec();
         for p in 0..4 {
@@ -165,6 +172,23 @@ mod tests {
     fn sample_rows(width: usize, height: usize, depth: Depth) -> Vec<u8> {
         let n = width * height * depth.bytes_per_sample();
         (0..n).map(|i| ((i * 37 + i / 5) % 251) as u8).collect()
+    }
+
+    /// Every index in the 32-bit predictor is built from `width`, which arrives
+    /// from the caller rather than from the row being transformed. `row_bytes`
+    /// proves `row.len() == width * 4` first — but it does so in a *different*
+    /// function, and the crate docs say no index in this crate rests on that
+    /// kind of promise. Unclamped, both calls below are an index out of bounds.
+    #[test]
+    fn a_thirty_two_bit_row_shorter_than_its_width_is_transformed_short_not_panicked_on() {
+        for width in [3usize, 100] {
+            let mut row = vec![1u8, 2, 3, 4, 5, 6];
+            unpredict_row_32(&mut row, width);
+            assert_eq!(row.len(), 6, "nothing grew to meet the index");
+            let mut row = vec![1u8, 2, 3, 4, 5, 6];
+            predict_row_32(&mut row, width);
+            assert_eq!(row.len(), 6);
+        }
     }
 
     #[test]

@@ -856,6 +856,47 @@ fn a_section_divider_of_type_zero_is_an_ordinary_layer_not_a_group() {
     assert_eq!(back2.layers[0].rgba8().unwrap(), pixels);
 }
 
+/// An `lsct` block shorter than the fields it is read for.
+///
+/// A divider's type is a `u32`, and the blend key that may restate the group's
+/// mode is two more tags after it: twelve bytes in all, of which a hostile file
+/// is free to supply none.
+///
+/// This is a regression guard over short `lsct` bodies, **not** a test that
+/// fails without the change it accompanies, and it should not be read as one.
+/// The spelling it replaced took the tail as `&block.data[4..]`, but only
+/// inside an `if block.data.len() >= 12` several lines above, so the slice was
+/// never taken for a short block and no input could panic there. The two forms
+/// are behaviourally identical for every input — old and new alike need twelve
+/// bytes to reach the signature at `4..8` and the key at `8..12`. Reading the
+/// tail through the cursor that already consumed the type is therefore a
+/// structural change: it deletes the pairing between a guard and an offset that
+/// happened to be in step, which a later edit to either one could have put out
+/// of step. What this test pins is the behaviour on both sides of that change —
+/// a truncated divider is a non-fatal, still-writable record rather than a
+/// fatal parse — so that the structural change stays free.
+#[test]
+fn a_section_divider_block_shorter_than_its_own_fields_is_not_fatal() {
+    for len in [0usize, 1, 2, 3, 4, 6, 8, 11] {
+        let mut file = PsdFile::new(PsdHeader::rgba8(3, 2));
+        let mut layer = raster("Plain", Rect::sized(3, 2), 11);
+        layer.extra.push(TaggedBlock::new(*b"lnsr", vec![0; len]));
+        file.layers.push(layer);
+        let mut bytes = write(&file).unwrap();
+        let at = find_subsequence(&bytes, b"8BIMlnsr").expect("the block is in the record");
+        bytes[at + 4..at + 8].copy_from_slice(b"lsct");
+
+        let back =
+            read(&bytes).unwrap_or_else(|e| panic!("a {len}-byte `lsct` must not be fatal: {e}"));
+        assert_eq!(back.all_layers().len(), 1, "len {len}");
+        // A body of zeros names divider type 0 — "any other type of layer" —
+        // and a body too short to name anything leaves the record ordinary too.
+        assert!(!back.layers[0].is_group(), "len {len}");
+        assert_eq!(back.layers[0].name, "Plain", "len {len}");
+        write(&back).unwrap_or_else(|e| panic!("len {len} left an unwritable document: {e}"));
+    }
+}
+
 /// A file may declare a layer mask rectangle and then never supply the `-2`
 /// channel that fills it. Reading that cleanly and *then* refusing to write the
 /// document blames the caller for a defect in the file, so the reader drops the
@@ -1236,6 +1277,198 @@ fn header_only_psd(width: u32, height: u32) -> Vec<u8> {
     s.u32(0); // image resources
     s.u32(0); // layer and mask information
     s.into_inner()
+}
+
+/// A `.psd` whose single layer record declares `rect` and then lists
+/// `channels` channels, each of `channel_len` bytes of payload.
+///
+/// With `channels: 0` this is the "declares a rectangle, supplies no pixels"
+/// record: structurally perfect, every length in it correct, and nothing in it
+/// to fill the rectangle with. With `channels: 4` and `channel_len: 0` it is
+/// the same hole reached the other way — a channel table whose entries are too
+/// short to hold even a compression code.
+fn one_record_psd(rect: Rect, channels: u16, channel_len: u32) -> Vec<u8> {
+    let mut extra = crate::bytes::Sink::new();
+    extra.u32(0); // no layer mask
+    extra.u32(0); // no blending ranges
+    extra.pascal_string("nochan", 4);
+    let extra = extra.into_inner();
+
+    let mut layer_info = crate::bytes::Sink::new();
+    layer_info.i16(-1); // one record; negative because the composite has alpha
+    layer_info.i32(rect.top);
+    layer_info.i32(rect.left);
+    layer_info.i32(rect.bottom);
+    layer_info.i32(rect.right);
+    layer_info.u16(channels);
+    for id in [CHANNEL_ALPHA, 0, 1, 2].iter().take(channels as usize) {
+        layer_info.i16(*id);
+        layer_info.u32(channel_len);
+    }
+    layer_info.tag(b"8BIM");
+    layer_info.tag(b"norm");
+    layer_info.u8(255); // opacity
+    layer_info.u8(0); // not clipping
+    layer_info.u8(0b1000); // "bit 4 is meaningful"
+    layer_info.u8(0); // filler
+    layer_info.u32(extra.len() as u32);
+    layer_info.bytes(&extra);
+    for _ in 0..channels {
+        layer_info.zeros(channel_len as usize);
+    }
+    let layer_info = layer_info.into_inner();
+
+    let mut s = crate::bytes::Sink::new();
+    PsdHeader::rgba8(8, 8).write(&mut s);
+    s.u32(0); // colour mode data
+    s.u32(0); // image resources
+    let lmi = s.begin_len();
+    s.u32(layer_info.len() as u32);
+    s.bytes(&layer_info);
+    s.u32(0); // global layer mask info
+    s.end_len_even(lmi);
+    s.into_inner()
+}
+
+/// A record may declare a rectangle and then supply nothing to put in it. Left
+/// alone that reads cleanly and *then* makes `write` refuse the whole document
+/// with an `InvalidDocument`, whose `is_file_fault` is false — the crate
+/// blaming its caller for a defect in somebody else's file. The reader empties
+/// the rectangle instead, exactly as it drops a mask whose channel never
+/// arrived.
+#[test]
+fn a_record_that_declares_a_rectangle_but_no_pixels_stays_writable() {
+    // Both routes to the same hole: no channel table at all, and a channel
+    // table whose entries are too short to hold a compression code.
+    for (channels, channel_len) in [(0u16, 0u32), (4, 0), (4, 1)] {
+        let bytes = one_record_psd(Rect::sized(4, 4), channels, channel_len);
+        let back = read(&bytes).unwrap_or_else(|e| {
+            panic!("({channels}, {channel_len}) should read: {e}");
+        });
+        assert_eq!(back.layers.len(), 1);
+        let layer = &back.layers[0];
+        assert_eq!(layer.name, "nochan");
+        assert!(layer.channels.is_empty(), "({channels}, {channel_len})");
+        assert!(
+            layer.bounds.is_empty(),
+            "({channels}, {channel_len}) kept a {}x{} rectangle it cannot fill",
+            layer.bounds.width(),
+            layer.bounds.height()
+        );
+        assert!(
+            back.warnings
+                .iter()
+                .any(|w| w.contains("no channel data to fill it")),
+            "({channels}, {channel_len}) emptied the rectangle silently: {:?}",
+            back.warnings
+        );
+
+        // The whole point: the document the reader handed back can be saved.
+        let again = write(&back)
+            .unwrap_or_else(|e| panic!("({channels}, {channel_len}) is unwritable: {e}"));
+        let back2 = read(&again).unwrap();
+        assert_eq!(back2.layers.len(), 1);
+        assert_eq!(back2.layers[0].name, "nochan");
+        assert!(back2.layers[0].bounds.is_empty());
+    }
+}
+
+/// The same rule, stated once for every damaged file the fuzzers can build:
+/// **a document the reader accepts is one the writer accepts.** If `write` does
+/// refuse it, the refusal must blame the file, never the caller — an
+/// `InvalidDocument` here means the reader let through something it should have
+/// repaired or refused itself.
+///
+/// Damaging one whole file is not enough to state that rule over the crate, and
+/// the two repairs this test covers show why. The zero-edge canvas of
+/// [`crate::header::PsdHeader::read`] is reachable by flipping bits in a file
+/// this crate wrote, and mutation over `rich_document()` alone does make this
+/// test red when that guard is removed. A record that declares a rectangle
+/// above an **empty channel table** is not: the channel count is what says how
+/// long the channel table is, so a flip that empties the count leaves the table
+/// bytes behind and the record desynchronises rather than arriving empty, and
+/// the read fails before `write_with` sees the layer. Measured rather than
+/// assumed — with only the `rich_document()` seed the counter below reaches
+/// that repair **zero** times — so the class had to be thought of and
+/// hand-built (see
+/// [`a_record_that_declares_a_rectangle_but_no_pixels_stays_writable`]). Those
+/// records are seeded into the corpus here and mutated in turn, and the
+/// coverage assertion at the end fails if a later change stops them arriving,
+/// so the property covers both halves of the rule rather than looking as though
+/// it does.
+#[test]
+fn every_corruption_the_reader_accepts_produces_a_document_the_writer_accepts() {
+    // Seed one: everything the writer emits, which is where header- and
+    // section-level corruption comes from. Then hand-built layer records —
+    // a well-formed one (four raw 4x4 channels, two bytes of code and sixteen
+    // of samples each) and the three shapes of missing channel table that
+    // `empty_the_rectangle_without_pixels` repairs.
+    let mut seeds = vec![write(&rich_document()).unwrap()];
+    for (channels, channel_len) in [(4u16, 18u32), (0, 0), (4, 0), (4, 1)] {
+        seeds.push(one_record_psd(Rect::sized(4, 4), channels, channel_len));
+    }
+
+    let opts = ReadOptions {
+        // A small budget so a corrupted size field cannot make the test slow.
+        max_decoded_bytes: 8 << 20,
+        ..Default::default()
+    };
+    let mut accepted = 0usize;
+    let mut written = 0usize;
+    let mut repaired = 0usize;
+    // Each seed undamaged, then byte flips, then single-bit flips over the
+    // header and section lengths, then every truncation: four shapes of damage.
+    let mut corpus: Vec<Vec<u8>> = Vec::new();
+    for original in &seeds {
+        corpus.push(original.clone());
+        for i in 0..original.len() {
+            let mut bytes = original.clone();
+            bytes[i] ^= 0xFF;
+            corpus.push(bytes);
+        }
+        for i in 0..original.len().min(96) {
+            for bit in 0..8 {
+                let mut bytes = original.clone();
+                bytes[i] ^= 1 << bit;
+                corpus.push(bytes);
+            }
+        }
+        for cut in 0..original.len() {
+            corpus.push(original[..cut].to_vec());
+        }
+    }
+
+    for bytes in &corpus {
+        let Ok(file) = read_with(bytes, &opts) else {
+            continue;
+        };
+        accepted += 1;
+        if file
+            .warnings
+            .iter()
+            .any(|w| w.contains("no channel data to fill it"))
+        {
+            repaired += 1;
+        }
+        match write_with(&file, &WriteOptions::default()) {
+            Ok(_) => written += 1,
+            Err(e) => {
+                assert!(
+                    e.is_file_fault(),
+                    "the reader accepted a document the writer blames the caller for: {e}"
+                );
+            }
+        }
+    }
+    assert!(
+        accepted > 50 && written > 50,
+        "the corpus is not exercising the property: {accepted} read, {written} written"
+    );
+    assert!(
+        repaired >= 3,
+        "the corpus stopped reaching the empty-channel-table repair, so this \
+         test no longer covers the record half of the rule ({repaired} reached it)"
+    );
 }
 
 #[test]

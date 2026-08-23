@@ -26,13 +26,19 @@
 //! The two-digit shard keeps directories to a few thousand entries on
 //! filesystems that get slow with a hundred thousand.
 //!
-//! # Bounds on the way in
+//! # Bounds, in both directions
 //!
 //! Both the tile count and the total byte volume are capped
 //! ([`MAX_PACKAGE_TILES`], [`MAX_TILE_DATA_BYTES`]), and a single blob may not
-//! exceed the largest legal tile ([`MAX_TILE_BYTES`]). The document naming
-//! those tiles came out of the package too, so the counts it implies are as
-//! untrusted as the files themselves.
+//! exceed the largest tile this format stores ([`MAX_TILE_BYTES`]). The document
+//! naming those tiles came out of the package too, so the counts it implies are
+//! as untrusted as the files themselves.
+//!
+//! All three apply on the way **out** as well, from one [`TileCaps`]: a package
+//! with more in it than this reader will load is a package this writer must not
+//! produce. The count always did; the two byte bounds did not, and the shape
+//! that leaves — a save that returns `Ok` and a package that never opens again —
+//! is the one [`crate::assets`] had to be fixed for twice.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -50,15 +56,49 @@ pub const TILES_DIR: &str = "tiles";
 
 /// Largest a single tile blob may be: one `TILE_SIZE²` RGBA8 tile.
 ///
-/// A mask tile is a quarter of this, and nothing in the format is larger, so a
-/// blob that claims more is refused before it is read.
+/// A mask tile is a quarter of this, and nothing this format writes today is
+/// larger, so a blob that claims more is refused before it is read — and refused
+/// before it is *written*, which matters the day one is: a
+/// [`raster::PixelFormat::Rgba16`] tile is twice this and an
+/// [`raster::PixelFormat::RgbaF32`] tile four times, so whoever brings those
+/// through [`TileBytes`] raises this one number and both sides move with it,
+/// rather than shipping saves that never reopen.
 pub const MAX_TILE_BYTES: u64 = (raster::TILE_SIZE as u64) * (raster::TILE_SIZE as u64) * 4;
 
 /// Most distinct tiles one package may reference.
 pub const MAX_PACKAGE_TILES: u64 = 1 << 20;
 
 /// Most tile bytes one package may load into memory.
+///
+/// Not implied by the other two: their product is 256 GiB.
 pub const MAX_TILE_DATA_BYTES: u64 = 8 << 30;
+
+/// Every bound the tile path applies — **in both directions**.
+///
+/// [`write_tiles`] and [`read_tiles`] each build this from the constants above,
+/// so each bound is one number rather than a writer's number and a reader's
+/// number that can drift apart. See [`crate::assets::AssetCaps`], which exists
+/// for the same reason and was written after the drift had already cost a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TileCaps {
+    /// Largest single blob: [`MAX_TILE_BYTES`].
+    pub tile: u64,
+    /// Most distinct tiles: [`MAX_PACKAGE_TILES`].
+    pub count: u64,
+    /// Largest total: [`MAX_TILE_DATA_BYTES`].
+    pub data: u64,
+}
+
+impl Default for TileCaps {
+    /// The constants — what every non-test call runs at.
+    fn default() -> Self {
+        Self {
+            tile: MAX_TILE_BYTES,
+            count: MAX_PACKAGE_TILES,
+            data: MAX_TILE_DATA_BYTES,
+        }
+    }
+}
 
 /// Resolves a tile content hash to its bytes.
 ///
@@ -180,19 +220,35 @@ fn referenced(doc: &Document, max: u64) -> Result<(Vec<TileHash>, usize), Projec
 }
 
 /// Write every tile the document references into `root/tiles`.
+///
+/// Capped on the way out as well as the way in: a package with more in it than
+/// this reader will load is a package this writer must not produce. See
+/// [`TileCaps`].
 pub(crate) fn write_tiles(
     root: &Path,
     doc: &Document,
     tiles: &dyn TileBytes,
 ) -> Result<TileReport, ProjectError> {
-    // Capped on the way out as well as the way in: a package with more tiles
-    // than this reader will load is a package this writer must not produce.
-    let (hashes, references) = referenced(doc, MAX_PACKAGE_TILES)?;
+    write_tiles_capped(root, doc, tiles, TileCaps::default())
+}
+
+/// [`write_tiles`] with the caps as a parameter, so a test can reach them
+/// without building a million-tile document or eight gigabytes of pixels.
+///
+/// `caps` must be the caps the *load* will run at.
+pub(crate) fn write_tiles_capped(
+    root: &Path,
+    doc: &Document,
+    tiles: &dyn TileBytes,
+    caps: TileCaps,
+) -> Result<TileReport, ProjectError> {
+    let (hashes, references) = referenced(doc, caps.count)?;
     let mut report = TileReport {
         references_deduplicated: references.saturating_sub(hashes.len()),
         ..TileReport::default()
     };
     let mut shards: HashSet<String> = HashSet::new();
+    let mut total = 0u64;
     for hash in hashes {
         let bytes = tiles
             .tile_bytes(hash)
@@ -207,7 +263,22 @@ pub(crate) fn write_tiles(
                 path: format!("{TILES_DIR}/{}.tile", hexid::to_hex(&hash.0)),
             });
         }
-        let (shard, _) = blob_rel(hash);
+        let (shard, hex) = blob_rel(hash);
+        // The two byte bounds, before the write rather than after: the loader
+        // refuses a blob over `caps.tile` and a package over `caps.data`, so
+        // writing either would hand the user a project that saves and never
+        // opens.
+        if bytes.len() as u64 > caps.tile {
+            return Err(ProjectError::PackageFileTooLarge {
+                path: format!("{TILES_DIR}/{shard}/{hex}.tile"),
+                size: bytes.len() as u64,
+                max: caps.tile,
+            });
+        }
+        total = total.saturating_add(bytes.len() as u64);
+        if total > caps.data {
+            return Err(ProjectError::TileDataTooLarge { max: caps.data });
+        }
         if shards.insert(shard.clone()) {
             std::fs::create_dir_all(root.join(TILES_DIR).join(&shard))?;
         }
@@ -228,19 +299,18 @@ pub(crate) fn read_tiles(
     doc: &Document,
     store: &mut AssetStore,
 ) -> Result<usize, ProjectError> {
-    read_tiles_capped(root, doc, store, MAX_PACKAGE_TILES, MAX_TILE_DATA_BYTES)
+    read_tiles_capped(root, doc, store, TileCaps::default())
 }
 
-/// [`read_tiles`] with the caps as parameters, so a test can reach them without
+/// [`read_tiles`] with the caps as a parameter, so a test can reach them without
 /// building a million-tile document.
 pub(crate) fn read_tiles_capped(
     root: &Path,
     doc: &Document,
     store: &mut AssetStore,
-    max_tiles: u64,
-    max_bytes: u64,
+    caps: TileCaps,
 ) -> Result<usize, ProjectError> {
-    let (hashes, _) = referenced(doc, max_tiles)?;
+    let (hashes, _) = referenced(doc, caps.count)?;
     let mut total = 0u64;
     for hash in &hashes {
         let (shard, hex) = blob_rel(*hash);
@@ -249,10 +319,10 @@ pub(crate) fn read_tiles_capped(
         // through the same check as anything else so there is exactly one way
         // a package-relative path becomes a real one.
         let path = safepath::safe_join(root, &rel, "tile")?;
-        let bytes = safepath::read_capped(&path, &rel, MAX_TILE_BYTES)?;
+        let bytes = safepath::read_capped(&path, &rel, caps.tile)?;
         total = total.saturating_add(bytes.len() as u64);
-        if total > max_bytes {
-            return Err(ProjectError::TileDataTooLarge { max: max_bytes });
+        if total > caps.data {
+            return Err(ProjectError::TileDataTooLarge { max: caps.data });
         }
         if TileHash::of(&bytes) != *hash {
             return Err(ProjectError::CorruptBlob { path: rel });
@@ -439,8 +509,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let doc = doc_with_n_tiles(10);
         let mut store = AssetStore::new();
-        let err =
-            read_tiles_capped(dir.path(), &doc, &mut store, 3, MAX_TILE_DATA_BYTES).unwrap_err();
+        let err = read_tiles_capped(dir.path(), &doc, &mut store, count_cap(3)).unwrap_err();
         assert!(
             matches!(err, ProjectError::TooManyTiles { max: 3, .. }),
             "{err}"
@@ -463,13 +532,103 @@ mod tests {
             dir.path(),
             &doc,
             &mut store,
-            MAX_PACKAGE_TILES,
-            bytes.len() as u64 - 1,
+            data_cap(bytes.len() as u64 - 1),
         )
         .unwrap_err();
         assert!(
             matches!(err, ProjectError::TileDataTooLarge { .. }),
             "{err}"
+        );
+    }
+
+    /// The real caps with only the tile-count bound lowered.
+    fn count_cap(count: u64) -> TileCaps {
+        TileCaps {
+            count,
+            ..TileCaps::default()
+        }
+    }
+
+    /// The real caps with only the aggregate lowered.
+    fn data_cap(data: u64) -> TileCaps {
+        TileCaps {
+            data,
+            ..TileCaps::default()
+        }
+    }
+
+    #[test]
+    fn a_blob_the_reader_would_refuse_to_open_is_refused_by_the_save() {
+        // `read_tiles` refuses a blob over `MAX_TILE_BYTES` before it opens it
+        // and `write_tiles` used to write one anyway, which is a package that
+        // saves and then fails every open — the assets defect, in the module
+        // that stated the rule. Reachable the day a `Rgba16` tile (twice this
+        // size) reaches `TileBytes`.
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = vec![9u8; MAX_TILE_BYTES as usize + 1];
+        let hash = TileHash::of(&bytes);
+        let doc = doc_with_tile(hash);
+        let mut source = compositor::MemoryTileSource::new();
+        source.insert_bytes(bytes.clone());
+
+        let err = write_tiles(dir.path(), &doc, &source).unwrap_err();
+        assert!(
+            matches!(&err, ProjectError::PackageFileTooLarge { size, max, .. }
+                     if *size == bytes.len() as u64 && *max == MAX_TILE_BYTES),
+            "{err}"
+        );
+        assert!(
+            !blob_path(dir.path(), hash).exists(),
+            "a blob the loader will not open must never be written"
+        );
+
+        // And exactly at the cap it still round-trips.
+        let ok = solid_tile([1, 2, 3, 255]);
+        assert_eq!(ok.len() as u64, MAX_TILE_BYTES);
+        let doc = doc_with_tile(TileHash::of(&ok));
+        let mut source = compositor::MemoryTileSource::new();
+        source.insert_bytes(ok);
+        write_tiles(dir.path(), &doc, &source).unwrap();
+        let mut store = AssetStore::new();
+        assert_eq!(read_tiles(dir.path(), &doc, &mut store).unwrap(), 1);
+    }
+
+    #[test]
+    fn tile_data_over_the_byte_budget_is_refused_by_the_save_too() {
+        // The mirror of `tile_data_over_the_byte_budget_is_refused`: the
+        // aggregate is a load-side bound, so the save has to stop at the same
+        // total or the package is refused only once it is the user's only copy.
+        // Not implied by the other two bounds — a million tiles at
+        // `MAX_TILE_BYTES` is 256 GiB against an 8 GiB budget.
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = solid_tile([4, 4, 4, 255]);
+        let hash = TileHash::of(&bytes);
+        let doc = doc_with_tile(hash);
+        let mut source = compositor::MemoryTileSource::new();
+        source.insert_bytes(bytes.clone());
+
+        let over = dir.path().join("over");
+        std::fs::create_dir(&over).unwrap();
+        let err =
+            write_tiles_capped(&over, &doc, &source, data_cap(bytes.len() as u64 - 1)).unwrap_err();
+        assert!(
+            matches!(err, ProjectError::TileDataTooLarge { max } if max == bytes.len() as u64 - 1),
+            "{err}"
+        );
+        assert!(
+            !blob_path(&over, hash).exists(),
+            "a package over the budget must not be half-written"
+        );
+
+        // At the budget it writes, and what the save accepted the load opens.
+        let under = dir.path().join("under");
+        std::fs::create_dir(&under).unwrap();
+        let caps = data_cap(bytes.len() as u64);
+        write_tiles_capped(&under, &doc, &source, caps).unwrap();
+        let mut store = AssetStore::new();
+        assert_eq!(
+            read_tiles_capped(&under, &doc, &mut store, caps).unwrap(),
+            1
         );
     }
 

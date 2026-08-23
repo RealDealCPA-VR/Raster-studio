@@ -29,6 +29,20 @@
 //!   are the ceilings on what a package can make resident, and the tile
 //!   reference set stops being collected the moment it passes
 //!   [`tiles::MAX_PACKAGE_TILES`].
+//! * **Every one of those bounds is applied on the way out as well.** A package
+//!   this crate writes is a package this crate reads: the save refuses an asset,
+//!   an asset total, a tile, a tile total, an asset index, a document, a
+//!   manifest or a preview that would exceed what the load will accept, from the
+//!   same accessor the load reads — `assets::caps`, `package::file_caps`, and
+//!   the constants in [`tiles`] — rather than from a second number that can
+//!   drift. A save can fail loudly; it cannot succeed into a file that will not
+//!   reopen. It could once: an embedded asset over the store's blob limit, and
+//!   an asset index over 16 MiB, each saved `Ok` and then failed every
+//!   subsequent open with the user's only copy inside. The one file with no
+//!   write-side bound is `commands.journal`, deliberately: the application grows
+//!   it between saves rather than a save writing it whole, and nothing in
+//!   [`open_project`] reads it, so no size it reaches can cost the project — a
+//!   save that meets an over-size journal starts a fresh one. See [`journal`].
 //! * **Every blob is verified** against the content hash that names it. Three
 //!   files are not content-addressed — `document.msgpack`, `assets/index.json`
 //!   and `previews/preview.png` — and each of those, whenever the package
@@ -97,6 +111,19 @@
 //!   full-size copy of the interrupted save next to the project until someone
 //!   deletes it by hand. Disk usage, not data loss; an age-gated sweep would
 //!   have to guess how long a legitimate save may take.
+//! * **A command journalled while a save is running does not reach the new
+//!   package.** The save copies the valid prefix of the journal it read into the
+//!   package it is building, and the swap then deletes the directory the old
+//!   journal is in, so a record appended between that read and the swap is
+//!   dropped. Under this crate's ordering rule — a record is appended *after*
+//!   its command is accepted, and [`save_project_with`] holds `&Document` for
+//!   the whole save, so nothing can be applied during one — that record names a
+//!   command the snapshot already contains, and dropping it is correct: carrying
+//!   it past the save marker would replay it onto a document that already has
+//!   it. An application that journals a command *before* applying it, or that
+//!   saves one document while another thread mutates a copy, loses that record
+//!   instead. That ordering is a contract this crate states and cannot enforce.
+//!   See [`journal`].
 //! * **A symlink check is not a no-follow open.** The journal writers check
 //!   `symlink_metadata` immediately before opening, which stops a link that is
 //!   already in the package, but `std` offers no portable `O_NOFOLLOW`, so a

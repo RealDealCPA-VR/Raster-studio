@@ -21,6 +21,19 @@
 //! channels is the classic way to read a correct file as garbage, so
 //! [`decode_merged`] and [`encode_merged`] are separate entry points rather
 //! than a loop over [`decode_channel`].
+//!
+//! Splitting that one table back into per-channel slices is one of the three
+//! places in the crate that were tempted to index on the strength of a count
+//! produced by a different function; the other two are the ZIP 32-bit row
+//! predictor in [`crate::zip`], which clamps the width it was passed to the row
+//! it was handed, and the two canvas planes in [`mod@crate::flatten`], which are
+//! handed out together from one iterator. None of the three takes the bait.
+//! Here the split goes through `chunks_exact` and refuses a table that does not
+//! divide evenly, so no future change to the table reader can turn this into a
+//! panic in a parser whose entire premise is that a malformed file never
+//! panics. Of the three this is the only one the rule cost anything: the other
+//! two are a `min` and an iterator, while refusing a table that does not divide
+//! evenly needed a named error and a path to return it on.
 
 use crate::bytes::{Cursor, Sink};
 use crate::error::{PsdError, PsdResult};
@@ -118,6 +131,56 @@ fn read_rle_counts(cur: &mut Cursor<'_>, rows: usize) -> PsdResult<Vec<u32>> {
         counts.push(u32::from(cur.u16()?));
     }
     Ok(counts)
+}
+
+/// Split the composite's single row-count table into one slice per channel.
+///
+/// The obvious spelling is `&counts[c * height..(c + 1) * height]`, and it
+/// cannot panic *today* because [`read_rle_counts`] pushes exactly
+/// `height * channels` entries or errors. That is an invariant maintained in a
+/// different function, though, and this crate's whole premise is that a
+/// malformed file never panics — with `panic = "abort"` in the release profile,
+/// a panic here takes the host application down. So the split is expressed as
+/// `chunks_exact`, which cannot index out of bounds whatever the table's length
+/// turns out to be, and a table that does not divide into `channels` whole rows
+/// is a named refusal.
+///
+/// The refusal is [`PsdError::RowCountTableMismatch`] rather than
+/// [`PsdError::ChannelSizeMismatch`]: the two numbers are table *entries*, not
+/// bytes, and nothing has been decoded at the point this fires, so borrowing
+/// the "expected N bytes of pixel data, decoded M" wording would misreport both
+/// the unit and the stage. Both are file faults either way.
+fn channel_row_counts<'a>(
+    counts: &'a [u32],
+    height: usize,
+    channels: usize,
+) -> PsdResult<std::slice::ChunksExact<'a, u32>> {
+    if height == 0 {
+        // `chunks_exact(0)` panics. Unreachable from `decode_merged`, which
+        // returns early on an empty shape, but this function does not get to
+        // assume that either.
+        return Err(PsdError::RowCountTableWithoutRows {
+            actual: counts.len(),
+            channels,
+        });
+    }
+    let expected = channels.checked_mul(height).ok_or(PsdError::Overflow {
+        what: "merged image row-count table length",
+    })?;
+    let chunks = counts.chunks_exact(height);
+    if chunks.len() != channels || !chunks.remainder().is_empty() {
+        return Err(PsdError::RowCountTableMismatch {
+            expected,
+            // Entries, not chunks: a table of eleven counts split four at a
+            // time yields two whole chunks, and reporting "2" would name the
+            // wrong quantity in the same way the old wording named the wrong
+            // unit.
+            actual: counts.len(),
+            channels,
+            height,
+        });
+    }
+    Ok(chunks)
 }
 
 /// Decode `rows` PackBits rows of `row_bytes` each, using an already-read table.
@@ -266,8 +329,7 @@ pub fn decode_merged(
                 })?;
             let counts = read_rle_counts(cur, rows)?;
             let mut out = Vec::with_capacity(channels);
-            for c in 0..channels {
-                let slice = &counts[c * shape.height..(c + 1) * shape.height];
+            for slice in channel_row_counts(&counts, shape.height, channels)? {
                 let mut chan = Vec::with_capacity(expected);
                 decode_rle_rows(cur, slice, row_bytes, &mut chan)?;
                 out.push(chan);
@@ -469,6 +531,84 @@ mod tests {
             decode_channel(&mut cur, Compression::Rle, shape, &mut budget).unwrap_err(),
             PsdError::Truncated { .. }
         ));
+    }
+
+    /// The composite's row-count table is produced by [`read_rle_counts`] and
+    /// consumed by [`channel_row_counts`], and the consumer must not assume the
+    /// producer got it right. Written as `&counts[c * height..(c + 1) * height]`
+    /// every line below is an index out of bounds — a panic, and with
+    /// `panic = "abort"` in the release profile, a dead host application rather
+    /// than a rejected file.
+    #[test]
+    fn splitting_a_row_count_table_refuses_rather_than_indexing_out_of_bounds() {
+        // Exactly right: three channels of four rows each.
+        let table = vec![0u32; 12];
+        let chunks: Vec<&[u32]> = channel_row_counts(&table, 4, 3).unwrap().collect();
+        assert_eq!(chunks.len(), 3);
+        assert!(chunks.iter().all(|c| c.len() == 4));
+
+        // One row short of three channels, and one row long. The rendered
+        // message is pinned as well as the variant: these numbers are table
+        // entries, and reporting them through `ChannelSizeMismatch` said
+        // "expected 3 bytes of pixel data, decoded 2" — wrong unit, wrong
+        // quantity (2 is the chunk count, not the entry count), and wrong stage,
+        // since nothing has been decoded when this fires.
+        for (table, entries) in [(vec![0u32; 11], 11), (vec![0u32; 13], 13)] {
+            let err = channel_row_counts(&table, 4, 3)
+                .expect_err("a table that does not divide into whole channels");
+            assert!(
+                matches!(
+                    err,
+                    PsdError::RowCountTableMismatch {
+                        expected: 12,
+                        actual,
+                        channels: 3,
+                        height: 4,
+                    } if actual == entries
+                ),
+                "{err:?}"
+            );
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "the merged image's row-count table holds {entries} entries, not the 12 \
+                     that 3 channels of 4 rows need"
+                )
+            );
+            assert!(err.is_file_fault(), "a short table is the file's fault");
+        }
+
+        // Empty table, three channels wanted: the plain index reads nothing at
+        // all before it panics.
+        let err = channel_row_counts(&[], 4, 3).expect_err("an empty table splits into nothing");
+        assert_eq!(
+            err.to_string(),
+            "the merged image's row-count table holds 0 entries, not the 12 that 3 channels \
+             of 4 rows need"
+        );
+        assert!(err.is_file_fault());
+
+        // A zero-height channel would make `chunks_exact` itself panic. There is
+        // no entry count that would have been right, so it says so rather than
+        // inventing an expectation — the old wording hardcoded "decoded 0"
+        // whatever table it was handed.
+        let err = channel_row_counts(&table, 0, 3).expect_err("chunks_exact(0) panics");
+        assert!(
+            matches!(
+                err,
+                PsdError::RowCountTableWithoutRows {
+                    actual: 12,
+                    channels: 3
+                }
+            ),
+            "{err:?}"
+        );
+        assert_eq!(
+            err.to_string(),
+            "the merged image declares no rows, so its 12-entry row-count table cannot be \
+             split into 3 channels"
+        );
+        assert!(err.is_file_fault());
     }
 
     #[test]

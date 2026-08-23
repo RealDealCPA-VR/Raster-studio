@@ -34,6 +34,33 @@
 //! describes so a journal paired with the wrong document is refused rather than
 //! replayed ([`JournalRecovery::replay_onto`]).
 //!
+//! # When a record may be appended, and what a save does with that window
+//!
+//! A record is appended **after its command has been accepted** into the
+//! document: this is a log of what happened, not of what is about to.
+//! [`crate::save_project_with`] holds `&Document` for the whole save, so no
+//! command can be applied while one is running, and a record that reaches the
+//! journal *during* a save therefore belongs to a command the snapshot being
+//! written already contains.
+//!
+//! That is what makes the save's handling of the window correct rather than
+//! lossy, and the window is real: the save copies the valid prefix of the
+//! journal it read into the new package, and the directory swap then deletes the
+//! old package — so a record appended between the read and the swap is deleted
+//! with it. Dropping it is the right answer, because the command is in the
+//! snapshot; carrying it across *after* the save marker would replay it onto a
+//! document that already has it, which is exactly the duplicate-apply this
+//! marker model exists to prevent. There is no third option: a record that
+//! arrives after the read carries nothing that says which side of the snapshot
+//! it belongs on, so the ordering rule above is what decides it.
+//!
+//! The limit that follows is stated rather than implied. An application that
+//! journals a command **before** applying it (write-ahead), or that saves one
+//! document while another thread mutates a copy of it, breaks that ordering, and
+//! a record appended inside the window is then lost rather than redundant. This
+//! crate states that contract; it cannot enforce it. See the crate-level "Known
+//! limits".
+//!
 //! # Why the writers check for a symlink too
 //!
 //! `commands.journal` is the one file in a package that is neither

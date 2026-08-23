@@ -318,12 +318,20 @@ fn read_layer_record(
                 }
                 // A divider may restate the group's blend mode; `pass` there
                 // marks a pass-through group just as it does in the record.
-                if block.data.len() >= 12 {
-                    let mut c = Cursor::new(&block.data[4..]);
-                    if let (Ok(sig), Ok(key)) = (c.tag(), c.tag()) {
-                        if sig == SIG_8BIM && key == crate::blend::PASS_THROUGH {
-                            group_pass_through = true;
-                        }
+                //
+                // Read through the same cursor, which is already positioned
+                // past the type, rather than re-slicing `block.data[4..]`
+                // behind an `if block.data.len() >= 12` several lines above.
+                // That older form could not panic either — the guard and the
+                // offset were in step, and both spellings need twelve bytes to
+                // reach the signature and the key — so this is a structural
+                // change and not a bug fix: it removes the guard/offset pairing
+                // rather than an out-of-bounds index. The cursor refuses to
+                // read past the end of the block by construction, so a short
+                // block yields `Err` however this code is edited later.
+                if let (Ok(sig), Ok(key)) = (c.tag(), c.tag()) {
+                    if sig == SIG_8BIM && key == crate::blend::PASS_THROUGH {
+                        group_pass_through = true;
                     }
                 }
             }
@@ -505,7 +513,44 @@ fn read_layer_channels(
         }
     }
     drop_masks_without_pixels(pending, header, warnings)?;
+    empty_the_rectangle_without_pixels(pending, warnings);
     Ok(())
+}
+
+/// Collapse the rectangle of a layer whose colour channels never arrived.
+///
+/// This is [`drop_masks_without_pixels`] again, one field over. A record may
+/// declare a non-empty rectangle and then list **no channels at all** — or list
+/// only channels whose declared length is too short to hold even a compression
+/// code, which [`read_layer_channels`] skips. Either way the layer arrives with
+/// an attacker-chosen rectangle and nothing to put in it, and the writer refuses
+/// the whole document with a [`PsdError::InvalidDocument`] whose `is_file_fault`
+/// is `false` — blaming the caller for a defect in someone else's file. Read and
+/// write have to agree, so the rectangle is emptied here, with a warning, and
+/// the document stays writable.
+///
+/// Emptying rather than synthesising a transparent fill is deliberate, for the
+/// same reason the mask case records: the rectangle is attacker-controlled and
+/// bounded only by [`ReadOptions::max_dimension`], so filling it would let a
+/// file carrying no pixel data at all charge hundreds of megabytes to the
+/// [`Budget`] — the one ceiling that is supposed to make that impossible.
+///
+/// A record that already has an empty rectangle is left alone: that is what
+/// Photoshop writes for every group record and every adjustment layer, and the
+/// writer regenerates the placeholder channels for it.
+fn empty_the_rectangle_without_pixels(pending: &mut Pending, warnings: &mut Vec<String>) {
+    let layer = &mut pending.layer;
+    if !layer.channels.is_empty() || layer.bounds.is_empty() {
+        return;
+    }
+    warnings.push(format!(
+        "layer {:?} declares a {}x{} rectangle but the file carries no channel \
+         data to fill it; reading it as an empty layer",
+        layer.name,
+        layer.bounds.width(),
+        layer.bounds.height()
+    ));
+    layer.bounds = Rect::default();
 }
 
 /// Discard a mask whose pixel channel never arrived.

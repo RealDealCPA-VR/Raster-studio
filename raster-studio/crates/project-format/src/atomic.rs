@@ -34,7 +34,10 @@
 //!   because a file fsync says nothing about the durability of the directory
 //!   entry that points at it — but an fsync that fails *after* the rename that
 //!   completed the save is reported to nobody, because the save did happen and
-//!   telling the user it failed would be a lie about where their work is.
+//!   telling the user it failed would be a lie about where their work is. The
+//!   fsync *inside* the window, between the two renames, is the opposite case:
+//!   `dest` is empty when it fails, so it rolls the swap back like any other
+//!   failure there rather than returning with the project missing from the path.
 //!
 //! # What a crash leaks
 //!
@@ -129,6 +132,17 @@ pub(crate) fn write_and_sync(path: &Path, bytes: &[u8]) -> Result<(), ProjectErr
 ///
 /// See the module's platform note: a no-op off Unix.
 pub(crate) fn sync_dir(dir: &Path) -> Result<(), ProjectError> {
+    sync_dir_io(dir).map_err(Into::into)
+}
+
+/// [`sync_dir`] as an [`std::io::Error`], which is what
+/// [`ProjectError::RollbackFailed`] carries: inside the swap this failure is
+/// handled exactly like a failed rename, so it has to be the same kind of thing.
+fn sync_dir_io(dir: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_DIR_SYNC.with(|c| c.replace(false)) {
+        return Err(std::io::Error::other("simulated directory fsync failure"));
+    }
     #[cfg(unix)]
     {
         std::fs::File::open(dir)?.sync_all()?;
@@ -183,6 +197,13 @@ thread_local! {
     /// surviving copies are.
     pub(crate) static FAIL_ROLLBACK_RENAME: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
+    /// Make the next [`sync_dir`] fail. Reachable for real on Unix (`EIO`,
+    /// `ENOSPC`) and, inside the swap, at the worst possible moment: the
+    /// previous package has been renamed away and `dest` does not exist yet.
+    /// Off Unix `sync_dir` is a no-op and cannot fail, so this seam is the only
+    /// way that branch is ever exercised there.
+    pub(crate) static FAIL_DIR_SYNC: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 fn rename_dest_to_backup(dest: &Path, backup: &Path) -> std::io::Result<()> {
@@ -219,6 +240,12 @@ fn rename_backup_to_dest(backup: &Path, dest: &Path) -> std::io::Result<()> {
 /// [`ProjectError::RollbackFailed`] names both directories that survive,
 /// because either one may be the only copy of the user's work.
 ///
+/// That covers **every** failure this function can return, including a failing
+/// directory fsync in the middle of the swap: `dest` is empty at that moment
+/// exactly as it is after a failed forward rename, so it takes the same exit
+/// ([`roll_back`]). The only fsync whose failure is swallowed is the one *after*
+/// the rename that completed the save, where the work is already on disk.
+///
 /// A crash inside this function is a third case and is not a return at all: see
 /// the module header's "What a crash leaks".
 pub(crate) fn swap_into_place(dest: &Path, tmp: &Path) -> Result<(), ProjectError> {
@@ -251,7 +278,17 @@ pub(crate) fn swap_into_place(dest: &Path, tmp: &Path) -> Result<(), ProjectErro
     }
     // The directory entry for the backup has to be durable before the window
     // opens, or a crash could leave neither name pointing anywhere.
-    sync_dir(parent)?;
+    //
+    // A bare `?` here used to be a third failure mode both doc blocks said could
+    // not exist: `dest` empty, the previous package parked under the backup
+    // name, the temp not removed, no rollback attempted, and the caller told the
+    // save had failed while their project was missing from the path. `recover`
+    // healed it at the next open, but "the file is back after you restart" is
+    // not the contract this module states. It is the same window a failed
+    // forward rename opens, so it takes the same exit.
+    if let Err(e) = sync_dir_io(parent) {
+        return Err(roll_back(dest, backup, tmp, e));
+    }
 
     #[cfg(test)]
     if CRASH_BETWEEN_RENAMES.with(|c| c.replace(false)) {
@@ -274,23 +311,34 @@ pub(crate) fn swap_into_place(dest: &Path, tmp: &Path) -> Result<(), ProjectErro
             let _ = std::fs::remove_dir_all(&backup);
             Ok(())
         }
-        Err(source) => match rename_backup_to_dest(&backup, dest) {
-            Ok(()) => {
-                let _ = sync_dir(parent);
-                let _ = std::fs::remove_dir_all(tmp);
-                Err(source.into())
-            }
-            // Never `let _ =`. The user's project is at `backup`, the save
-            // they just asked for is at `tmp`, and this error is the only
-            // thing that knows either. The temp is *not* removed here: with
-            // `dest` empty and the rollback broken it may be the only copy of
-            // the work, so it is named rather than deleted.
-            Err(rollback) => Err(ProjectError::RollbackFailed {
-                source,
-                rollback,
-                backup,
-                temp: tmp.to_path_buf(),
-            }),
+        Err(source) => Err(roll_back(dest, backup, tmp, source)),
+    }
+}
+
+/// Undo a half-finished swap: `dest` is empty, the previous package is at
+/// `backup`, and `source` is the failure that opened the window.
+///
+/// Every exit from the window goes through here, so there is one answer to "what
+/// state is on disk after a mid-swap failure" rather than one per failure kind.
+fn roll_back(dest: &Path, backup: PathBuf, tmp: &Path, source: std::io::Error) -> ProjectError {
+    match rename_backup_to_dest(&backup, dest) {
+        Ok(()) => {
+            let _ = sync_dir(parent_dir(dest));
+            let _ = std::fs::remove_dir_all(tmp);
+            // The *original* failure, not the rollback: the rollback worked, so
+            // it is not what the caller needs to hear about.
+            source.into()
+        }
+        // Never `let _ =`. The user's project is at `backup`, the save they just
+        // asked for is at `tmp`, and this error is the only thing that knows
+        // either. The temp is *not* removed here: with `dest` empty and the
+        // rollback broken it may be the only copy of the work, so it is named
+        // rather than deleted.
+        Err(rollback) => ProjectError::RollbackFailed {
+            source,
+            rollback,
+            backup,
+            temp: tmp.to_path_buf(),
         },
     }
 }
@@ -303,7 +351,8 @@ pub(crate) fn swap_into_place(dest: &Path, tmp: &Path) -> Result<(), ProjectErro
 /// no manifest — is left exactly as it is.
 ///
 /// Deliberately conservative: it never touches a `.new-` temp, because a temp
-/// that is not ours belongs to a save that is still running.
+/// that is not ours belongs to a save that is still running, and it never
+/// promotes a candidate that is a symlink — see the check in the loop.
 pub(crate) fn recover(dest: &Path) -> Result<bool, ProjectError> {
     if dest.exists() {
         return Ok(false);
@@ -325,6 +374,25 @@ pub(crate) fn recover(dest: &Path) -> Result<bool, ProjectError> {
             continue;
         }
         let path = entry.path();
+        // This is the one place the crate elevates an unvetted directory to the
+        // *package root*, so the crate's own symlink rule has to reach it. Every
+        // other guard checks components strictly below the root
+        // ([`crate::safepath::safe_join`], [`crate::safepath::reject_symlink`]),
+        // and `symlink_metadata(dest/manifest.json)` resolves `dest` itself as
+        // an intermediate component — so a symlinked backup renamed into place
+        // would make `dest` a link and every later "this path is inside the
+        // package" guarantee would be measured against a directory somebody else
+        // chose. `symlink_metadata` does not follow: for a link `is_dir()` is
+        // false however it resolves, which also rules out a plain file wearing
+        // the backup name.
+        match std::fs::symlink_metadata(&path) {
+            Ok(m) if m.is_dir() => {}
+            _ => continue,
+        }
+        // This one follows links, but it no longer decides anything a link can
+        // subvert: the entry is already known to be a real directory, and
+        // `open_project` re-checks the manifest with `reject_symlink` after the
+        // rename.
         if !path.join(crate::MANIFEST_FILE).is_file() {
             continue;
         }
@@ -595,6 +663,132 @@ mod tests {
                 && msg.contains("simulated rollback rename failure"),
             "both failures have to be visible: {msg}"
         );
+    }
+
+    #[test]
+    fn a_failed_directory_fsync_mid_swap_puts_the_previous_package_back() {
+        // The third failure mode both doc blocks said could not exist. The
+        // fsync between the two renames used to be a bare `?`: it returned with
+        // `dest` empty, the project parked under the backup name, and the
+        // full-size temp still on disk — the caller told the save failed while
+        // their project was missing from the path they saved to.
+        let dir = tempfile::tempdir().unwrap();
+        let (dest, tmp) = staged(dir.path());
+
+        FAIL_DIR_SYNC.with(|c| c.set(true));
+        let err = swap_into_place(&dest, &tmp).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("simulated directory fsync failure"),
+            "the caller must see the original failure: {err}"
+        );
+        assert!(
+            !matches!(err, ProjectError::RollbackFailed { .. }),
+            "the rollback succeeded, so this is not that error: {err}"
+        );
+        assert_eq!(
+            manifest_text(&dest),
+            "previous",
+            "a failed save must leave the project where the user left it"
+        );
+        assert!(!tmp.exists(), "stranded {}", tmp.display());
+        let strays: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|n| n != "P.rstudio")
+            .collect();
+        assert!(strays.is_empty(), "left {strays:?} behind");
+    }
+
+    #[test]
+    fn a_failed_fsync_whose_rollback_also_fails_names_both_copies() {
+        // Same window, both exits broken: the fsync path has to reach
+        // `RollbackFailed` like the rename path does, rather than inventing a
+        // fourth on-disk state nothing describes.
+        let dir = tempfile::tempdir().unwrap();
+        let (dest, tmp) = staged(dir.path());
+
+        FAIL_DIR_SYNC.with(|c| c.set(true));
+        FAIL_ROLLBACK_RENAME.with(|c| c.set(true));
+        let err = swap_into_place(&dest, &tmp).unwrap_err();
+
+        let ProjectError::RollbackFailed {
+            ref backup,
+            temp: ref reported_temp,
+            ..
+        } = err
+        else {
+            panic!("expected RollbackFailed, got {err}");
+        };
+        assert_eq!(reported_temp, &tmp);
+        assert!(!dest.exists(), "this is the state the error is describing");
+        assert_eq!(
+            manifest_text(&tmp),
+            "new",
+            "the in-flight save is named, not deleted"
+        );
+        assert_eq!(manifest_text(backup), "previous");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("simulated directory fsync failure")
+                && msg.contains("simulated rollback rename failure"),
+            "both failures have to be visible: {msg}"
+        );
+    }
+
+    #[test]
+    fn recover_refuses_a_backup_that_is_a_symlink() {
+        // `recover` is the one place this crate promotes an unvetted directory
+        // to the package root. Adopt a symlinked sibling and `dest` *is* a link:
+        // the loader's later guards check components below the root, and
+        // `symlink_metadata(dest/manifest.json)` resolves `dest` on the way, so
+        // nothing downstream notices that every "inside the package" path now
+        // points at a directory somebody else chose.
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("attacker-owned");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join(crate::MANIFEST_FILE), b"{}").unwrap();
+
+        let dest = dir.path().join("P.rstudio");
+        let backup = unique_sibling(&dest, BACKUP_PREFIX);
+        if let Err(e) = crate::safepath::try_symlink_dir(&outside, &backup) {
+            if cfg!(unix) {
+                panic!("could not stage the symlink: {e}");
+            }
+            eprintln!("skipped: this machine cannot create a directory symlink ({e})");
+            return;
+        }
+        // The link really does resolve — this is the live case, not a broken
+        // path that would be skipped for some unrelated reason.
+        assert!(backup.join(crate::MANIFEST_FILE).is_file());
+
+        assert!(
+            !recover(&dest).unwrap(),
+            "a link is not a package this crate parked here"
+        );
+        assert!(
+            !dest.exists(),
+            "the package path must not become a symlink out of the directory"
+        );
+        assert!(
+            std::fs::symlink_metadata(&backup).is_ok(),
+            "and the sibling is left exactly as it was found"
+        );
+    }
+
+    #[test]
+    fn recover_ignores_a_plain_file_wearing_the_backup_name() {
+        // A companion, not a regression test: the manifest probe already
+        // excluded this case, and the new `symlink_metadata` check now excludes
+        // it a step earlier. It is here so a later reordering of those two
+        // checks cannot quietly let a file be renamed onto the package path.
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("P.rstudio");
+        let backup = unique_sibling(&dest, BACKUP_PREFIX);
+        std::fs::write(&backup, b"not a package").unwrap();
+        assert!(!recover(&dest).unwrap());
+        assert!(!dest.exists());
     }
 
     #[test]

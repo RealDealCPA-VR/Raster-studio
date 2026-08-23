@@ -1210,6 +1210,44 @@ mod tests {
         v
     }
 
+    /// TGA's 18-byte header. Every field in it is attacker-controlled with
+    /// nothing to cross-check it against — the format has no magic number and
+    /// no length prefix — which is why the hostile cases below poke at it
+    /// directly.
+    ///
+    /// `image_type` 2 is uncompressed true-colour, 10 is RLE true-colour, 1 is
+    /// colour-mapped.
+    fn tga_header(image_type: u8, w: u16, h: u16, bpp: u8) -> Vec<u8> {
+        let mut header = vec![0u8; 18];
+        header[2] = image_type;
+        header[12..14].copy_from_slice(&w.to_le_bytes());
+        header[14..16].copy_from_slice(&h.to_le_bytes());
+        header[16] = bpp;
+        header[17] = 0x28; // 8 alpha bits, origin at top-left
+        header
+    }
+
+    /// An ICO directory with `entries` declared and one 16-byte entry whose
+    /// declared `size` and `offset` are the caller's to choose. Those two
+    /// fields are ICO's whole attack surface: the payload they address is
+    /// wherever they say it is, however far past the end of the file that is.
+    ///
+    /// `dim` is the entry's declared square size, in the single byte ICO gives
+    /// it; the payload's own header has to agree with it.
+    fn ico_with(entries: u16, dim: u8, size: u32, offset: u32, payload: &[u8]) -> Vec<u8> {
+        let mut ico = Vec::new();
+        ico.extend_from_slice(&0u16.to_le_bytes()); // reserved
+        ico.extend_from_slice(&1u16.to_le_bytes()); // type: icon
+        ico.extend_from_slice(&entries.to_le_bytes());
+        ico.extend_from_slice(&[dim, dim, 0, 0]); // width, height, palette, reserved
+        ico.extend_from_slice(&1u16.to_le_bytes()); // colour planes
+        ico.extend_from_slice(&32u16.to_le_bytes()); // bits per pixel
+        ico.extend_from_slice(&size.to_le_bytes());
+        ico.extend_from_slice(&offset.to_le_bytes());
+        ico.extend_from_slice(payload);
+        ico
+    }
+
     #[test]
     fn png_roundtrip() {
         let (w, h) = (2, 2);
@@ -1289,12 +1327,7 @@ mod tests {
     fn read_only_formats_decode() {
         // --- TGA: 18-byte header, uncompressed 32-bit BGRA, top-left origin.
         let (w, h) = (2u32, 2u32);
-        let mut tga = vec![0u8; 18];
-        tga[2] = 2; // uncompressed true-colour
-        tga[12..14].copy_from_slice(&(w as u16).to_le_bytes());
-        tga[14..16].copy_from_slice(&(h as u16).to_le_bytes());
-        tga[16] = 32; // bits per pixel
-        tga[17] = 0x28; // 8 alpha bits, origin at top-left
+        let mut tga = tga_header(2, w as u16, h as u16, 32);
         let want = [
             [10u8, 20, 30, 255],
             [200, 100, 50, 255],
@@ -1342,19 +1375,9 @@ mod tests {
 
         // --- ICO wrapping a PNG.
         let inner = encode(ExportFormat::Png, 4, 4, &checker_rgba8(4, 4)).unwrap();
-        let mut ico = Vec::new();
-        ico.extend_from_slice(&0u16.to_le_bytes()); // reserved
-        ico.extend_from_slice(&1u16.to_le_bytes()); // type: icon
-        ico.extend_from_slice(&1u16.to_le_bytes()); // one image
-        ico.push(4); // width
-        ico.push(4); // height
-        ico.push(0); // palette size
-        ico.push(0); // reserved
-        ico.extend_from_slice(&1u16.to_le_bytes()); // colour planes
-        ico.extend_from_slice(&32u16.to_le_bytes()); // bits per pixel
-        ico.extend_from_slice(&(inner.len() as u32).to_le_bytes());
-        ico.extend_from_slice(&22u32.to_le_bytes()); // offset of the PNG
-        ico.extend_from_slice(&inner);
+        // One entry, honestly sized, at offset 22 — immediately after the
+        // 6-byte directory header and the single 16-byte entry.
+        let ico = ico_with(1, 4, inner.len() as u32, 22, &inner);
         let decoded = decode_bytes(&ico).expect("ICO must decode");
         assert_eq!((decoded.width, decoded.height), (4, 4));
         assert_eq!(decoded.rgba8, checker_rgba8(4, 4));
@@ -1712,6 +1735,184 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// ...including the two formats that are import-only, and therefore cannot
+    /// be reached by truncating something this crate encoded.
+    ///
+    /// ICO and TGA are precisely the two parsers where "never trust a length or
+    /// an offset from the file" has the most to do: an ICO entry carries a
+    /// declared size and a declared offset with nothing to check them against,
+    /// and a TGA header carries an id-field length, a colour-map length and
+    /// (for image type 10) RLE run lengths, in a container with no magic number
+    /// and no length prefix at all. `a_truncated_file_errors_instead_of_
+    /// panicking` iterates `ExportFormat`, which has six writable containers
+    /// and neither of these, so before this test nothing in the suite fed
+    /// either parser a malformed byte.
+    ///
+    /// The contract is the same one: an error, or a decode whose buffer really
+    /// is the size it claims. Never a panic, and never an over-large buffer.
+    #[test]
+    fn hostile_ico_and_tga_headers_error_instead_of_panicking() {
+        let inner = encode(ExportFormat::Png, 4, 4, &checker_rgba8(4, 4)).unwrap();
+        let check = |label: &str, bytes: &[u8], format: ImportFormat| {
+            if let Ok(surface) = decode_surface_bytes_as(bytes, ImportLimits::default(), format) {
+                assert_eq!(
+                    surface.pixels.pixel_count() as u64,
+                    u64::from(surface.width) * u64::from(surface.height),
+                    "{label} returned a mis-sized buffer"
+                );
+                assert!(surface.width > 0 && surface.height > 0, "{label}");
+            }
+        };
+
+        // --- ICO: the declared size/offset pair, in every hostile shape.
+        let size = inner.len() as u32;
+        check(
+            "ico: entry offset past EOF",
+            &ico_with(1, 4, size, 0xffff_0000, &inner),
+            ImportFormat::Ico,
+        );
+        check(
+            "ico: entry declares 4 GiB",
+            &ico_with(1, 4, u32::MAX, 22, &inner),
+            ImportFormat::Ico,
+        );
+        check(
+            "ico: 65535 entries, one present",
+            &ico_with(0xffff, 4, size, 22, &inner),
+            ImportFormat::Ico,
+        );
+        check(
+            "ico: offset overlaps the directory header",
+            &ico_with(1, 4, size, 0, &inner),
+            ImportFormat::Ico,
+        );
+        check(
+            "ico: empty payload",
+            &ico_with(1, 4, 0, 22, &[]),
+            ImportFormat::Ico,
+        );
+        check(
+            "ico: directory header only",
+            &ico_with(1, 4, size, 22, &inner)[..6],
+            ImportFormat::Ico,
+        );
+
+        // --- TGA: the declared lengths, in every hostile shape.
+        // An RLE run packet claiming 128 pixels in a 2x2 image, with one
+        // pixel's worth of payload behind it.
+        let mut rle = tga_header(10, 2, 2, 32);
+        rle.push(0x80 | 127);
+        rle.extend_from_slice(&[1, 2, 3, 4]);
+        check("tga: RLE run overruns the image", &rle, ImportFormat::Tga);
+
+        // The id field declares 255 bytes that are not there.
+        let mut id_overrun = tga_header(2, 2, 2, 32);
+        id_overrun[0] = 255;
+        id_overrun.extend_from_slice(&[0u8; 16]);
+        check("tga: id field overruns", &id_overrun, ImportFormat::Tga);
+
+        // A colour map of 65535 32-bit entries — 256 KiB — declared by a
+        // 20-byte file.
+        let mut colour_map = tga_header(1, 2, 2, 8);
+        colour_map[1] = 1; // a colour map is present
+        colour_map[5..7].copy_from_slice(&u16::MAX.to_le_bytes());
+        colour_map[7] = 32; // bits per colour-map entry
+        check(
+            "tga: 65535-entry colour map",
+            &colour_map,
+            ImportFormat::Tga,
+        );
+
+        // Truncated part way through the pixel data.
+        let mut full = tga_header(2, 8, 8, 32);
+        full.extend_from_slice(&checker_rgba8(8, 8));
+        check("tga: truncated mid-pixels", &full[..30], ImportFormat::Tga);
+        check("tga: header only", &full[..18], ImportFormat::Tga);
+        check("tga: half a header", &full[..9], ImportFormat::Tga);
+
+        // A zero dimension, which would make every later product zero.
+        check("tga: 0x0", &tga_header(2, 0, 0, 32), ImportFormat::Tga);
+        // ...and a bit depth no true-colour TGA has.
+        check(
+            "tga: 7 bits per pixel",
+            &tga_header(2, 2, 2, 7),
+            ImportFormat::Tga,
+        );
+    }
+
+    /// The dimension and allocation ceilings apply to the import-only formats
+    /// too, and they bite *before* the buffer exists rather than after.
+    ///
+    /// An 18-byte TGA header can declare 65535x65535, which is 4.29 billion
+    /// pixels and 17 GB of RGBA8. A 22-byte ICO directory can declare a 4 GiB
+    /// entry. Neither number is checked by the container against anything, so
+    /// the only thing standing between them and the allocator is
+    /// [`ImportLimits`] — and "is checked" is only worth asserting if the
+    /// measurement shows nothing large was allocated on the way to the refusal.
+    #[test]
+    fn an_import_only_header_cannot_ask_for_a_giant_allocation() {
+        // 65535 * 65535 = 4_294_836_225 pixels against a 1<<28 ceiling.
+        let tga = tga_header(2, 65_535, 65_535, 32);
+        assert_eq!(tga.len(), 18, "the whole hostile file is 18 bytes");
+        let (result, peak) = crate::alloc_probe::measure_peak(|| {
+            decode_surface_bytes_as(&tga, ImportLimits::default(), ImportFormat::Tga)
+        });
+        // Which ceiling fired is asserted, not just that one did: the declared
+        // *dimensions* are what must be caught, because they are checked before
+        // the decoder is asked for a single pixel.
+        let err = result.unwrap_err();
+        assert!(
+            matches!(&err, CodecError::LimitExceeded(m) if m.contains("4294836225 pixels")),
+            "an 18-byte TGA declaring 17 GB of pixels was not refused on its dimensions: {err}"
+        );
+        assert!(
+            peak < (1 << 20),
+            "refusing the 17 GB TGA header still peaked at {peak} bytes"
+        );
+
+        // The same header under limits that *do* allow that many pixels is
+        // still refused, by the allocation ceiling — a second, independent
+        // bound, reached with nothing allocated either.
+        let generous = ImportLimits {
+            max_pixels: u64::MAX,
+            ..ImportLimits::default()
+        };
+        let (result, peak) = crate::alloc_probe::measure_peak(|| {
+            decode_surface_bytes_as(&tga, generous, ImportFormat::Tga)
+        });
+        let err = result.unwrap_err();
+        assert!(
+            matches!(&err, CodecError::LimitExceeded(m) if m.contains("decoding needs")),
+            "the allocation ceiling did not catch a 17 GB TGA: {err}"
+        );
+        assert!(peak < (1 << 20), "peaked at {peak} bytes");
+
+        // ICO: an entry declaring u32::MAX bytes at an offset past the end.
+        let ico = ico_with(1, 4, u32::MAX, 0xffff_0000, &[]);
+        assert!(ico.len() < 64);
+        let (result, peak) = crate::alloc_probe::measure_peak(|| {
+            decode_surface_bytes_as(&ico, ImportLimits::default(), ImportFormat::Ico)
+        });
+        assert!(result.is_err(), "{result:?}");
+        assert!(
+            peak < (1 << 20),
+            "refusing a 4 GiB ICO entry peaked at {peak} bytes"
+        );
+
+        // ...and the probe is measuring this call rather than always reading
+        // zero: the same decode of a legitimate 64x64 ICO does allocate.
+        let inner = encode(ExportFormat::Png, 64, 64, &checker_rgba8(64, 64)).unwrap();
+        let good = ico_with(1, 64, inner.len() as u32, 22, &inner);
+        let (result, peak) = crate::alloc_probe::measure_peak(|| {
+            decode_surface_bytes_as(&good, ImportLimits::default(), ImportFormat::Ico)
+        });
+        assert!(result.is_ok(), "{result:?}");
+        assert!(
+            peak >= 64 * 64 * 4,
+            "a 64x64 ICO decode peaked at only {peak} bytes; the probe is not measuring"
+        );
     }
 
     #[test]

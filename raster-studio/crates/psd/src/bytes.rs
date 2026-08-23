@@ -377,16 +377,37 @@ impl Sink {
         LenSlot { at }
     }
 
+    /// Bytes written since `slot` was opened, or `None` if the slot did not
+    /// come from this sink.
+    ///
+    /// `LenSlot` is `Copy` and both it and this type are public, so a slot from
+    /// a *different*, longer sink can reach us. Establishing the bound here
+    /// rather than trusting [`Sink::begin_len`] keeps every public entry point
+    /// on this type total — which matters because the release profile sets
+    /// `panic = "abort"`, so a panic here would take the process down rather
+    /// than surface as an error a caller could handle.
+    fn span_of(&self, slot: LenSlot) -> Option<u32> {
+        let body = self.buf.len().checked_sub(slot.at)?.checked_sub(4)?;
+        u32::try_from(body).ok()
+    }
+
     /// Fill in a slot with the number of bytes written since it was opened.
+    ///
+    /// A slot that did not come from this sink writes nothing.
     pub fn end_len(&mut self, slot: LenSlot) {
-        let len = (self.buf.len() - slot.at - 4) as u32;
-        self.buf[slot.at..slot.at + 4].copy_from_slice(&len.to_be_bytes());
+        let Some(len) = self.span_of(slot) else {
+            return;
+        };
+        let Some(dst) = self.buf.get_mut(slot.at..slot.at + 4) else {
+            return;
+        };
+        dst.copy_from_slice(&len.to_be_bytes());
     }
 
     /// Fill in a slot after padding the section to an even length, which is
     /// what the format asks for in most places that carry a length.
     pub fn end_len_even(&mut self, slot: LenSlot) {
-        if (self.buf.len() - slot.at - 4) % 2 != 0 {
+        if self.span_of(slot).is_some_and(|len| len % 2 != 0) {
             self.u8(0);
         }
         self.end_len(slot);
@@ -544,5 +565,33 @@ mod tests {
         let buf = s.into_inner();
         assert_eq!(&buf[..4], &[0, 0, 0, 4]);
         assert_eq!(buf.len(), 8);
+    }
+
+    #[test]
+    fn a_length_slot_from_another_sink_is_ignored_rather_than_fatal() {
+        // `LenSlot` is `Copy` and every type here is public, so a slot can
+        // reach a sink it did not come from. The release profile aborts on
+        // panic, so this has to be an ignored write, not a crash.
+        let mut long = Sink::new();
+        long.zeros(100);
+        let foreign = long.begin_len();
+
+        let mut short = Sink::new();
+        short.u16(0xABCD);
+        short.end_len(foreign);
+        short.end_len_even(foreign);
+
+        // Nothing was written, and the sink is otherwise untouched.
+        assert_eq!(short.into_inner(), vec![0xAB, 0xCD]);
+    }
+
+    #[test]
+    fn a_slot_from_this_sink_still_measures_its_own_span() {
+        let mut s = Sink::new();
+        let slot = s.begin_len();
+        s.zeros(7);
+        s.end_len(slot);
+        let buf = s.into_inner();
+        assert_eq!(&buf[..4], &[0, 0, 0, 7]);
     }
 }

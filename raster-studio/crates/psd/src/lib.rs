@@ -96,7 +96,27 @@
 //! * [`flatten`] takes its canvas size from a [`header::PsdHeader`], which a
 //!   caller can hand over without any file behind it, so it draws every canvas
 //!   from a byte budget and refuses before it reserves. See [`flatten_with`].
-//! * Nothing in the parser indexes a slice directly.
+//! * **No index depends on an invariant held somewhere else.** Every field the
+//!   parser reads comes through [`bytes::Cursor`], which returns
+//!   [`PsdError::Truncated`] rather than panicking when a read would run past
+//!   the end of its section. Where a byte-for-byte inner loop does index
+//!   directly — PackBits, the ZIP row predictor, the channel interleavers, the
+//!   fixed-size resource payloads — the bound is established in that same
+//!   function, from a length it is holding: the 32-bit row predictor, for one,
+//!   clamps the width it was passed to the row it was handed rather than trust
+//!   that its caller checked. Nothing is indexed on the strength
+//!   of a count some *other* function promised to produce, because the release
+//!   profile sets `panic = "abort"`: a panic in this crate is not an error the
+//!   host application can catch. See [`codec`] for the one place that rule cost
+//!   something, and what it bought.
+//! * The rule is a crate rule, not a parser rule, because [`flatten`] runs on
+//!   the same untrusted sizes. Its canvas is two planes — colour and alpha —
+//!   allocated to one length in one place, and the compositor never indexes
+//!   either on the strength of the other's length or of the canvas's declared
+//!   width and height: it takes both planes together from one iterator, or
+//!   fetches a pixel and gets `None` past the end. A canvas that somehow came
+//!   back the wrong length would compose fewer pixels; it would not abort the
+//!   process.
 //!
 //! The one recursion left is the *derived* `Clone`, `PartialEq` and `Debug` on
 //! [`model::PsdLayer`]. A tree that came from a file is depth-limited, so those

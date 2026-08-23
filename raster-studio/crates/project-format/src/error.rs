@@ -69,8 +69,38 @@ pub enum ProjectError {
     TileDataTooLarge { max: u64 },
     #[error("package lists {count} assets, more than the {max} this reader will load")]
     TooManyAssets { count: u64, max: u64 },
+    /// An asset handed to the **saver** that is larger than the store the
+    /// loader fills will accept.
+    ///
+    /// Raised on the way *out*, like [`ProjectError::PackageFileTooLarge`] and
+    /// for the same reason. Both sides read one
+    /// [`crate::assets::AssetCaps`](crate::assets) accessor, so an asset this
+    /// crate agrees to write is an asset it will read back; before that, a save
+    /// of an embedded asset over the store's limit returned `Ok` and the project
+    /// could never be opened again.
+    #[error("asset {asset} is {size} bytes, more than the {max} this format stores")]
+    AssetTooLarge { asset: String, size: u64, max: u64 },
     #[error("package asset data totals more than the {max} bytes this reader will load")]
     AssetDataTooLarge { max: u64 },
+
+    /// A file the **saver** was about to write at a size this crate's own loader
+    /// refuses to read.
+    ///
+    /// The general form of [`ProjectError::AssetTooLarge`], covering the four
+    /// files a package carries that are not content-addressed:
+    /// `assets/index.json`, `document.msgpack`, `manifest.json` and
+    /// `previews/preview.png`. Each has a load-side byte cap, each cap is read
+    /// through one accessor by the writer and the reader alike
+    /// ([`crate::assets::caps`](crate::assets) and
+    /// [`crate::package`]'s `file_caps`), and this is what the save returns
+    /// instead of producing a package that cannot be opened. A refused save
+    /// leaves no package behind: the temp directory it was building is removed
+    /// and whatever was already at the path is untouched.
+    #[error(
+        "this save would write {path} at {size} bytes, more than the {max} this format \
+         reads back; the package would not reopen"
+    )]
+    PackageFileTooLarge { path: String, size: u64, max: u64 },
 
     #[error("could not render the composite preview: {0}")]
     Preview(String),

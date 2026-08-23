@@ -110,7 +110,35 @@ impl Canvas {
     fn release(self, budget: &mut Budget) {
         budget.give(self.cost);
     }
+
+    /// Colour and alpha together, in canvas order.
+    ///
+    /// The two planes are allocated to the same length in [`Canvas::new`] and
+    /// nothing resizes them afterwards — but that is an invariant held in a
+    /// *different* function, and this crate's rule (see the crate docs) is that
+    /// no index rests on one. Handing both planes out from a single iterator
+    /// means a caller cannot index one on the strength of the other's length,
+    /// whatever a future change to `Canvas` does.
+    fn pixels(&self) -> impl Iterator<Item = ([f32; 3], f32)> + '_ {
+        self.color.iter().copied().zip(self.alpha.iter().copied())
+    }
+
+    /// The colour and alpha slots at one canvas index, or `None` when either
+    /// plane is shorter than the index — see [`Canvas::pixels`] for why this is
+    /// a `get` and not a `[]`.
+    fn pixel_mut(&mut self, i: usize) -> Option<(&mut [f32; 3], &mut f32)> {
+        let color = self.color.get_mut(i)?;
+        let alpha = self.alpha.get_mut(i)?;
+        Some((color, alpha))
+    }
 }
+
+/// What a pixel past the end of a canvas plane reads as: fully transparent.
+///
+/// Unreachable while `color` and `alpha` are the length `Canvas::new` gave
+/// them, which is why no test can drive a loop into it — it exists so the loops
+/// below have an answer that is not a panic if that ever stops being true.
+const CLEAR_PIXEL: ([f32; 3], f32) = ([0.0; 3], 0.0);
 
 /// Read one sample as `0.0..=1.0`.
 ///
@@ -206,23 +234,33 @@ fn composite_layer(canvas: &mut Canvas, layer: &PsdLayer, header: PsdHeader, gro
             if a_s <= 0.0 {
                 continue;
             }
+            // `nc` is 1 or 3 today, but it comes from `ColorMode` in another
+            // module: taking `nc` slots of a three-slot array rather than
+            // indexing `0..nc` into it means a fourth colour channel added
+            // there would drop a plane here, not panic.
             let mut src = [0.0f32; 3];
-            for c in 0..nc {
-                src[c] = planes[c].map_or(0.0, |p| sample(p, li, header.depth));
+            for (slot, plane) in src.iter_mut().zip(planes.iter().take(nc)) {
+                *slot = plane.map_or(0.0, |p| sample(p, li, header.depth));
             }
             if nc == 1 {
                 src[1] = src[0];
                 src[2] = src[0];
             }
-            let base = canvas.color[ci];
-            let a_b = canvas.alpha[ci];
+            // `ci` is in range for a canvas of `canvas.width * canvas.height`
+            // pixels, which is what `Canvas::new` builds — but that is another
+            // function's promise, so the slot is fetched, not indexed.
+            let Some((slot_color, slot_alpha)) = canvas.pixel_mut(ci) else {
+                continue;
+            };
+            let base = *slot_color;
+            let a_b = *slot_alpha;
             let blended = layer.blend_mode.blend_rgb(base, src);
 
             // W3C source-over with a blend function, in straight alpha.
             let a_o = a_s + a_b * (1.0 - a_s);
             if a_o <= 0.0 {
-                canvas.color[ci] = [0.0; 3];
-                canvas.alpha[ci] = 0.0;
+                *slot_color = [0.0; 3];
+                *slot_alpha = 0.0;
                 continue;
             }
             let mut out = [0.0f32; 3];
@@ -232,35 +270,41 @@ fn composite_layer(canvas: &mut Canvas, layer: &PsdLayer, header: PsdHeader, gro
                     + (1.0 - a_s) * a_b * base[c];
                 out[c] = unit(premul / a_o);
             }
-            canvas.color[ci] = out;
-            canvas.alpha[ci] = unit(a_o);
+            *slot_color = out;
+            *slot_alpha = unit(a_o);
         }
     }
 }
 
 /// Composite a canvas over another, as if it were a layer.
+///
+/// Both canvases are walked by zipped iterator rather than by index: the loop
+/// stops at the shortest of the four planes involved, so no plane's length is
+/// ever assumed from another's. For canvases [`Canvas::new`] built — every one
+/// this module makes — all four are equal and the walk covers the whole canvas.
 fn composite_canvas(dst: &mut Canvas, src: &Canvas, layer: &PsdLayer, alpha_scale: f32) {
-    for i in 0..dst.color.len().min(src.color.len()) {
-        let a_s = src.alpha[i] * alpha_scale;
+    let dst_pixels = dst.color.iter_mut().zip(dst.alpha.iter_mut());
+    for ((slot_color, slot_alpha), (src_color, src_alpha)) in dst_pixels.zip(src.pixels()) {
+        let a_s = src_alpha * alpha_scale;
         if a_s <= 0.0 {
             continue;
         }
-        let base = dst.color[i];
-        let a_b = dst.alpha[i];
-        let blended = layer.blend_mode.blend_rgb(base, src.color[i]);
+        let base = *slot_color;
+        let a_b = *slot_alpha;
+        let blended = layer.blend_mode.blend_rgb(base, src_color);
         let a_o = a_s + a_b * (1.0 - a_s);
         if a_o <= 0.0 {
             continue;
         }
         let mut out = [0.0f32; 3];
         for c in 0..3 {
-            let premul = a_s * (1.0 - a_b) * src.color[i][c]
+            let premul = a_s * (1.0 - a_b) * src_color[c]
                 + a_s * a_b * blended[c]
                 + (1.0 - a_s) * a_b * base[c];
             out[c] = unit(premul / a_o);
         }
-        dst.color[i] = out;
-        dst.alpha[i] = unit(a_o);
+        *slot_color = out;
+        *slot_alpha = unit(a_o);
     }
 }
 
@@ -417,7 +461,11 @@ pub fn flatten_with(file: &PsdFile, max_bytes: u64) -> PsdResult<MergedImage> {
 
     let nc = header.color_mode.color_channels() as usize;
     let has_alpha = header.has_alpha();
-    let n = w * h; // `Canvas::new` already proved this does not overflow.
+    // `Canvas::new` has already proved this product fits, but proving it again
+    // here costs one comparison and keeps the arithmetic honest on its own.
+    let n = w.checked_mul(h).ok_or(PsdError::Overflow {
+        what: "merged plane pixel count",
+    })?;
     let bytes = header.depth.bytes_per_sample();
     let plane_bytes = checked_bytes(w, h, bytes, "merged plane size")?;
     let mut channels: Vec<Vec<u8>> = Vec::with_capacity(header.channels as usize);
@@ -427,21 +475,33 @@ pub fn flatten_with(file: &PsdFile, max_bytes: u64) -> PsdResult<MergedImage> {
         Ok(Vec::with_capacity(plane_bytes))
     };
 
+    // Each plane is exactly `n` samples because the *header* says so, and it is
+    // written by pulling `n` pixels from the canvas rather than by indexing it
+    // `n` times: the canvas being `n` pixels long is `composite_tree`'s
+    // business, and a plane of the wrong length is not a failure this loop is
+    // allowed to express as a panic.
     for c in 0..nc.min(header.channels as usize) {
         let mut plane = reserve(&mut budget)?;
-        for i in 0..n {
+        let mut pixels = canvas.pixels();
+        for _ in 0..n {
             // Composite against white where nothing covers the canvas, which is
             // what Photoshop shows for a document with no background layer.
-            let a = canvas.alpha[i];
-            let v = canvas.color[i][if nc == 1 { 0 } else { c }] * a + (1.0 - a);
+            let (color, a) = pixels.next().unwrap_or(CLEAR_PIXEL);
+            // Greyscale reads the one plane the canvas carries; anything past
+            // the canvas's three colour slots reads black, for the same reason
+            // `sample` reads a missing plane as zero rather than refusing.
+            let from = if nc == 1 { 0 } else { c };
+            let v = color.get(from).copied().unwrap_or(0.0) * a + (1.0 - a);
             store(&mut plane, v, header.depth);
         }
         channels.push(plane);
     }
     if has_alpha && channels.len() < header.channels as usize {
         let mut plane = reserve(&mut budget)?;
-        for i in 0..n {
-            store(&mut plane, canvas.alpha[i], header.depth);
+        let mut pixels = canvas.pixels();
+        for _ in 0..n {
+            let (_, a) = pixels.next().unwrap_or(CLEAR_PIXEL);
+            store(&mut plane, a, header.depth);
         }
         channels.push(plane);
     }
@@ -514,6 +574,59 @@ mod tests {
             .unwrap()
             .to_rgba8(file.header.width, file.header.height)
             .unwrap()
+    }
+
+    /// The crate docs claim that no index in this crate rests on an invariant
+    /// held in another function. The compositor's canvas is where that claim is
+    /// easiest to break: `color` and `alpha` are two vectors allocated to one
+    /// length in [`Canvas::new`], and every loop below used to be bounded by one
+    /// of them, or by `width * height`, while indexing the other.
+    ///
+    /// No parse can produce a canvas like the two here — which is exactly the
+    /// status the claim depends on, and exactly what stops being true the day
+    /// someone gives `Canvas` a resize. Written with `[]`, every line of this
+    /// test is an index out of bounds, and with `panic = "abort"` in the release
+    /// profile that is a dead host application rather than a wrong pixel.
+    #[test]
+    fn a_canvas_whose_planes_disagree_composites_short_rather_than_panicking() {
+        let over = solid("over", 2, 2, [255, 255, 255, 255]);
+
+        // Merging a group's canvas back: `alpha` one pixel long, `color` four.
+        let src = Canvas {
+            width: 2,
+            height: 2,
+            color: vec![[1.0, 0.0, 0.0]; 4],
+            alpha: vec![1.0; 1],
+            cost: 0,
+        };
+        let mut dst = Canvas {
+            width: 2,
+            height: 2,
+            color: vec![[0.0; 3]; 4],
+            alpha: vec![0.0; 4],
+            cost: 0,
+        };
+        composite_canvas(&mut dst, &src, &over, 1.0);
+        assert_eq!(dst.alpha, vec![1.0, 0.0, 0.0, 0.0], "only the shared pixel");
+        assert_eq!(dst.color[0], [1.0, 0.0, 0.0]);
+
+        // Drawing a layer: a canvas that declares 4x4 but holds one pixel. The
+        // loop bound comes from `width` and `height`, the write from the planes.
+        let mut short = Canvas {
+            width: 4,
+            height: 4,
+            color: vec![[0.0; 3]; 1],
+            alpha: vec![0.0; 1],
+            cost: 0,
+        };
+        composite_layer(
+            &mut short,
+            &solid("cover", 4, 4, [255, 255, 255, 255]),
+            PsdHeader::rgba8(4, 4),
+            1.0,
+        );
+        assert_eq!(short.alpha, vec![1.0], "the one real pixel is still drawn");
+        assert_eq!(short.color.len(), 1, "and nothing grew to meet the index");
     }
 
     #[test]

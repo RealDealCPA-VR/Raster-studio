@@ -25,7 +25,7 @@ use std::path::Path;
 use asset_store::{AssetRecord, AssetStore};
 use editor_core::Document;
 
-use crate::assets::{self, AssetInput, AssetReport, ASSETS_INDEX, MAX_INDEX_BYTES};
+use crate::assets::{self, AssetInput, AssetReport, ASSETS_INDEX};
 use crate::atomic;
 use crate::journal::{CommandJournal, DocumentDigest, MAX_JOURNAL_BYTES};
 use crate::manifest::{FileDigest, Manifest, MANIFEST_VERSION, MIN_SUPPORTED_MANIFEST_VERSION};
@@ -52,12 +52,110 @@ pub const AI_DIR: &str = "ai";
 /// Recorded as [`Manifest::app_version`] when the caller does not supply one.
 pub const UNKNOWN_APP_VERSION: &str = "unknown";
 
-/// Largest manifest this reader will parse.
+/// Largest manifest this format writes or parses.
 pub const MAX_MANIFEST_BYTES: u64 = 64 << 20;
-/// Largest serialized document this reader will load.
+/// Largest serialized document this format writes or loads.
 pub const MAX_DOCUMENT_BYTES: u64 = 1 << 30;
-/// Largest preview image this reader will load.
+/// Largest preview image this format writes or loads.
 pub const MAX_PREVIEW_BYTES: u64 = 64 << 20;
+
+/// The size bounds on the package files that are **not** content-addressed —
+/// applied in both directions.
+///
+/// `document.msgpack`, `manifest.json` and `previews/preview.png` each have a
+/// cap the loader refuses to read past, and [`build_package`] refuses to write
+/// past exactly the same number, out of this one struct. That is the rule
+/// [`crate::tiles::write_tiles`] has always stated and the rule the asset path
+/// was fixed to keep: *a package with more in it than this reader will load is a
+/// package this writer must not produce.* None of these three is as reachable as
+/// the asset bounds were — but `app_version` and `preview_max_edge` are
+/// caller-supplied and unbounded, so "unreachable" is a property of today's
+/// callers rather than of this format, and a bound that only one side applies is
+/// a bound that eventually writes a project nobody can open.
+///
+/// `assets/index.json` obeys the same rule from [`crate::assets::caps`], where
+/// the rest of the asset bounds live.
+///
+/// `commands.journal` is deliberately absent, and it is the only absence. It is
+/// the one file the *application* grows on its own, between saves, so no save
+/// could bound it anyway — and it does not need one: [`open_project`] never
+/// reads it, so no size it reaches can cost the user the project. A save that
+/// meets an over-size journal starts a fresh one rather than failing
+/// ([`carry_journal_forward`]); what that costs is the crash-recovery suffix,
+/// which [`CommandJournal::read`] reports as
+/// [`ProjectError::FileTooLarge`] rather than replaying half of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileCaps {
+    /// [`MAX_DOCUMENT_BYTES`].
+    pub document: u64,
+    /// [`MAX_MANIFEST_BYTES`].
+    pub manifest: u64,
+    /// [`MAX_PREVIEW_BYTES`].
+    pub preview: u64,
+}
+
+impl Default for FileCaps {
+    /// The constants — what every non-test call runs at.
+    fn default() -> Self {
+        Self {
+            document: MAX_DOCUMENT_BYTES,
+            manifest: MAX_MANIFEST_BYTES,
+            preview: MAX_PREVIEW_BYTES,
+        }
+    }
+}
+
+// Test seam, in the shape of `assets::CAP_OVERRIDE`: one knob per bound, moving
+// the writing side and the reading side of that bound together, so no test can
+// pass while the two sides disagree.
+#[cfg(test)]
+thread_local! {
+    static FILE_CAP_OVERRIDE: std::cell::Cell<Option<FileCaps>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The file-size caps in force.
+///
+/// [`FileCaps::default`], except under the test seam above.
+pub(crate) fn file_caps() -> FileCaps {
+    #[cfg(test)]
+    {
+        if let Some(overridden) = FILE_CAP_OVERRIDE.with(|c| c.get()) {
+            return overridden;
+        }
+    }
+    FileCaps::default()
+}
+
+/// Run `f` with the file caps replaced, restoring them afterwards even on a
+/// panic, so a test can reach a bound without writing a gigabyte.
+#[cfg(test)]
+pub(crate) fn with_file_caps<T>(caps: FileCaps, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<FileCaps>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FILE_CAP_OVERRIDE.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(FILE_CAP_OVERRIDE.with(|c| c.replace(Some(caps))));
+    f()
+}
+
+/// [`atomic::write_and_sync`], refusing a size this crate's own loader will not
+/// read back.
+///
+/// The check is before the write, not after: the point is that these bytes never
+/// reach a package. See [`FileCaps`].
+fn write_reopenable(path: &Path, name: &str, bytes: &[u8], max: u64) -> Result<(), ProjectError> {
+    if bytes.len() as u64 > max {
+        return Err(ProjectError::PackageFileTooLarge {
+            path: name.to_string(),
+            size: bytes.len() as u64,
+            max,
+        });
+    }
+    atomic::write_and_sync(path, bytes)
+}
 
 /// Knobs for a save.
 #[derive(Debug, Clone)]
@@ -221,6 +319,9 @@ fn build_package(
         std::fs::create_dir_all(tmp.join(sub))?;
     }
 
+    // The bounds `open_project` will apply to this package, applied on the way
+    // out so it cannot be written unopenable. See [`FileCaps`].
+    let caps = file_caps();
     let mut contents: BTreeMap<String, FileDigest> = BTreeMap::new();
 
     // Document. MessagePack, and `to_vec_named` specifically: `Document`'s
@@ -228,7 +329,12 @@ fn build_package(
     // content and a positional encoder would read the wrong field back. See
     // `editor_core::document`.
     let doc_bytes = rmp_serde::to_vec_named(doc)?;
-    atomic::write_and_sync(&tmp.join(DOCUMENT_FILE), &doc_bytes)?;
+    write_reopenable(
+        &tmp.join(DOCUMENT_FILE),
+        DOCUMENT_FILE,
+        &doc_bytes,
+        caps.document,
+    )?;
     contents.insert(DOCUMENT_FILE.to_string(), FileDigest::of(&doc_bytes));
 
     // Pixels. Content-addressed, so not listed in `contents`.
@@ -246,7 +352,7 @@ fn build_package(
         if let Some(Preview { width, height, png }) =
             preview::render(doc, tiles, opts.preview_max_edge)?
         {
-            atomic::write_and_sync(&tmp.join(PREVIEW_FILE), &png)?;
+            write_reopenable(&tmp.join(PREVIEW_FILE), PREVIEW_FILE, &png, caps.preview)?;
             contents.insert(PREVIEW_FILE.to_string(), FileDigest::of(&png));
             preview_size = Some((width, height));
         }
@@ -273,9 +379,11 @@ fn build_package(
         integrity: String::new(),
     };
     manifest.seal();
-    atomic::write_and_sync(
+    write_reopenable(
         &tmp.join(MANIFEST_FILE),
+        MANIFEST_FILE,
         &serde_json::to_vec_pretty(&manifest)?,
+        caps.manifest,
     )?;
 
     // Files were fsynced as they were written; the directories holding them
@@ -305,6 +413,16 @@ fn build_package(
 /// while the package is open, so the file can grow between two reads; a length
 /// measured over the longer buffer and applied to the shorter one cuts the copy
 /// mid-record, which is precisely the state this function exists to avoid.
+///
+/// **What that one read does not carry.** Whatever is appended to `from` after
+/// it is not in the copy, and [`atomic::swap_into_place`] then deletes the
+/// directory `from` lives in — so a command journalled between this read and the
+/// swap does not reach the new package. That is the intended outcome rather than
+/// an oversight: under the ordering rule in the [`crate::journal`] module header
+/// such a record belongs to a command the snapshot already holds, and carrying
+/// it past the save marker written next would replay it twice. The one
+/// application shape it does not hold for is named there and in the crate-level
+/// "Known limits".
 fn carry_journal_forward(from: &Path, to: &Path) -> Result<(), ProjectError> {
     if !from.exists() {
         atomic::write_and_sync(to, b"")?;
@@ -394,7 +512,10 @@ pub fn open_project(path: &Path) -> Result<LoadedProject, ProjectError> {
     for dir in [TILES_DIR, assets::ASSETS_DIR, PREVIEWS_DIR, AI_DIR] {
         safepath::reject_symlink(&path.join(dir), dir)?;
     }
-    let manifest_bytes = safepath::read_capped(&manifest_path, MANIFEST_FILE, MAX_MANIFEST_BYTES)?;
+    // The same bounds the save applied on the way out — one accessor, so the two
+    // sides of each cannot drift apart. See [`FileCaps`].
+    let caps = file_caps();
+    let manifest_bytes = safepath::read_capped(&manifest_path, MANIFEST_FILE, caps.manifest)?;
     let manifest: Manifest = serde_json::from_slice(&manifest_bytes)?;
 
     if !(MIN_SUPPORTED_MANIFEST_VERSION..=MANIFEST_VERSION).contains(&manifest.manifest_version) {
@@ -429,7 +550,7 @@ pub fn open_project(path: &Path) -> Result<LoadedProject, ProjectError> {
 
     // Document.
     let doc_path = safepath::safe_join(path, DOCUMENT_FILE, "document_path")?;
-    let doc_bytes = safepath::read_capped(&doc_path, DOCUMENT_FILE, MAX_DOCUMENT_BYTES)?;
+    let doc_bytes = safepath::read_capped(&doc_path, DOCUMENT_FILE, caps.document)?;
     verify_listed(&manifest, DOCUMENT_FILE, &doc_bytes)?;
 
     // Version first, document second: a file from a newer build must produce a
@@ -440,13 +561,16 @@ pub fn open_project(path: &Path) -> Result<LoadedProject, ProjectError> {
     let mut document = migrate::migrate(document, found)?;
     document.set_path(Some(path.to_path_buf()));
 
-    // Pixels and assets.
-    let mut store = AssetStore::new();
+    // Pixels and assets. The store is built from this crate's own asset cap
+    // rather than from `AssetStore::new()`'s default, so the limit the saver
+    // enforced and the limit this store applies are one number — see
+    // [`assets::MAX_ASSET_BYTES`].
+    let mut store = assets::new_store();
     tiles::read_tiles(path, &document, &mut store)?;
 
     let index_path = safepath::safe_join(path, ASSETS_INDEX, "assets")?;
     let index_bytes = if manifest.contents.contains_key(ASSETS_INDEX) || index_path.is_file() {
-        let bytes = safepath::read_capped(&index_path, ASSETS_INDEX, MAX_INDEX_BYTES)?;
+        let bytes = safepath::read_capped(&index_path, ASSETS_INDEX, assets::caps().index)?;
         verify_listed(&manifest, ASSETS_INDEX, &bytes)?;
         Some(bytes)
     } else {
@@ -457,7 +581,7 @@ pub fn open_project(path: &Path) -> Result<LoadedProject, ProjectError> {
     // Preview.
     let preview_path = safepath::safe_join(path, PREVIEW_FILE, "preview")?;
     let preview = if manifest.contents.contains_key(PREVIEW_FILE) || preview_path.is_file() {
-        let bytes = safepath::read_capped(&preview_path, PREVIEW_FILE, MAX_PREVIEW_BYTES)?;
+        let bytes = safepath::read_capped(&preview_path, PREVIEW_FILE, caps.preview)?;
         verify_listed(&manifest, PREVIEW_FILE, &bytes)?;
         Some(bytes)
     } else {

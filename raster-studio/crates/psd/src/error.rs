@@ -87,6 +87,46 @@ pub enum PsdError {
     #[error("header declares {declared} channels but the file's colour mode needs at least {min}")]
     ChannelCountTooSmall { declared: u16, min: u16 },
 
+    /// The header declares a canvas with no area.
+    ///
+    /// Photoshop cannot produce one, and the writer refuses to emit one, so a
+    /// file that contains one is damaged. It is refused on the way *in* rather
+    /// than tolerated and then rejected on the way out: a document the reader
+    /// hands back has to be one the writer accepts, and an
+    /// [`PsdError::InvalidDocument`] from `write` would blame the caller for a
+    /// defect in someone else's file.
+    #[error("the canvas is {width}x{height}; a .psd must be at least 1x1")]
+    EmptyCanvas { width: u32, height: u32 },
+
+    /// The merged image's single RLE byte-count table does not hold one whole
+    /// row-count per row of every channel.
+    ///
+    /// Kept apart from [`PsdError::ChannelSizeMismatch`] because the numbers are
+    /// table entries, not bytes, and nothing has been decoded yet: reporting
+    /// "expected 3 bytes of pixel data, decoded 2" for a three-channel table two
+    /// entries long would name neither the quantity nor the stage correctly.
+    #[error(
+        "the merged image's row-count table holds {actual} entries, not the {expected} that \
+         {channels} channels of {height} rows need"
+    )]
+    RowCountTableMismatch {
+        expected: usize,
+        actual: usize,
+        channels: usize,
+        height: usize,
+    },
+
+    /// A row-count table was handed to the splitter for a shape with no rows.
+    ///
+    /// Separate from [`PsdError::RowCountTableMismatch`] because there is no
+    /// entry count that *would* have been right: with zero rows per channel the
+    /// only honest report is that the request itself has no answer.
+    #[error(
+        "the merged image declares no rows, so its {actual}-entry row-count table cannot be \
+         split into {channels} channels"
+    )]
+    RowCountTableWithoutRows { actual: usize, channels: usize },
+
     #[error("{what}: expected {expected} bytes of pixel data, decoded {actual}")]
     ChannelSizeMismatch {
         what: &'static str,

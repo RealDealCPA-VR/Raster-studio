@@ -978,6 +978,53 @@ fn gc_does_not_sweep_a_symlinked_tmp_directory() {
 
 #[test]
 #[cfg_attr(windows, ignore = "needs SeCreateSymbolicLinkPrivilege")]
+fn open_refuses_a_symlinked_store_root() {
+    // The root itself is untrusted: a project package can ship a link where the
+    // store directory should be. `create_dir_all` is satisfied by a symlink to a
+    // directory, so without an explicit check on the root, `blobs/` and `tmp/`
+    // are created at the far end of the link — outside the intended root —
+    // before anything else has a chance to refuse. Both halves are asserted: the
+    // refusal, and that nothing was created through the link.
+    let parent = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    let root = parent.path().join("store");
+    link_dir(outside.path(), &root);
+
+    let err = AssetStore::open(&root).unwrap_err();
+    match err {
+        StoreError::NotADirectory(ref p) => assert_eq!(*p, root),
+        other => panic!("expected NotADirectory, got {other:?}"),
+    }
+    assert_eq!(
+        fs::read_dir(outside.path()).unwrap().count(),
+        0,
+        "nothing was created through the linked root"
+    );
+    assert!(
+        fs::symlink_metadata(&root)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the link itself is left alone"
+    );
+}
+
+#[test]
+fn open_creates_a_root_that_does_not_exist_yet() {
+    // The other half of the root check: refusing a link must not turn into
+    // refusing a root this crate is supposed to create.
+    let parent = TempDir::new().unwrap();
+    let root = parent.path().join("nested").join("store");
+    let s = AssetStore::open(&root).unwrap();
+    let h = s.put(b"payload").unwrap();
+    assert!(root.join("blobs").is_dir() && root.join("tmp").is_dir());
+    drop(s);
+    let s = AssetStore::open(&root).unwrap();
+    assert_eq!(&*s.get(h).unwrap(), b"payload");
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "needs SeCreateSymbolicLinkPrivilege")]
 fn open_refuses_a_symlinked_blobs_directory() {
     // `fs::create_dir_all` is satisfied by a symlink pointing at a directory,
     // because it tests `is_dir()`, which follows links. Adopting one would send

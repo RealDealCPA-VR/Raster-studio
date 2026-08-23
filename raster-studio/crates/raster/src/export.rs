@@ -55,7 +55,25 @@
 //! An embedded profile is likewise tied to the space actually written: one
 //! [`ExportMetadata`] is offered to every preset in a batch, and a profile that
 //! does not describe a given preset's [`ExportPreset::color_space`] is refused
-//! rather than attached to a file it mislabels.
+//! rather than attached to a file it mislabels. Which space a profile describes
+//! is not guessed — no ICC engine is linked to read it with — so the caller
+//! states it in [`ExportMetadata::icc_profile_space`] and the exporter matches
+//! that against each preset.
+//!
+//! # Untagged is not "unspecified"
+//!
+//! None of the containers written here can record a built-in space *except* by
+//! carrying an ICC profile: `image` 0.25's encoders expose `set_icc_profile` and
+//! nothing else, so no `cICP`, `gAMA` or `cHRM` is written. An untagged file is
+//! therefore read back as sRGB — by every viewer, and by this crate's own
+//! [`crate::codec::decode_surface_bytes`], which reports
+//! [`ColorSpace::Srgb`] for a file with no profile.
+//!
+//! So a preset that converts into [`ColorSpace::DisplayP3`] or
+//! [`ColorSpace::LinearSrgb`] and then writes no profile produces a file whose
+//! pixels are in one space and whose only available label says another. That is
+//! refused — see [`check_taggable`] — rather than written: either export in
+//! sRGB, or offer a profile that describes the space.
 //!
 //! # Untrusted input
 //!
@@ -482,10 +500,21 @@ pub fn linear_from_rgba16_pass_through(
 pub enum FlattenMode {
     /// Every pixel becomes opaque. For containers with no alpha at all (JPEG).
     All,
-    /// Partially transparent pixels are composited and become opaque; fully
-    /// transparent pixels are left transparent. For containers that have a
-    /// single transparent palette entry and no alpha channel (GIF).
-    PartialOnly,
+    /// Partially transparent pixels are composited and become opaque; pixels
+    /// the file would have stored as fully transparent are left transparent.
+    /// For containers that have a single transparent palette entry and no
+    /// alpha channel (GIF).
+    ///
+    /// "Fully transparent" is decided by `depth` rather than by a comparison
+    /// against zero, because the rest of the pipeline does not use zero either:
+    /// [`color::unpremultiply`] zeroes anything at or below
+    /// [`color::UNPREMULTIPLY_ALPHA_EPSILON`], and the quantizer zeroes
+    /// anything under half a code. A flatten that only kept `alpha == 0`
+    /// transparent would turn the whole sub-quantum band — the tail of every
+    /// feathered edge — into opaque background in the GIF while the same buffer
+    /// exported to PNG left it transparent. See
+    /// [`BitDepth::writes_transparent`].
+    PartialOnly { depth: BitDepth },
 }
 
 fn flatten_with(
@@ -501,9 +530,10 @@ fn flatten_with(
     ]);
     let mut pixels = Vec::with_capacity(image.pixels.len());
     for px in image.pixels.chunks_exact(4) {
-        if mode == FlattenMode::PartialOnly && px[3] <= 0.0 {
-            // A fully transparent pixel keeps the container's transparent
-            // index rather than becoming an opaque patch of background.
+        if matches!(mode, FlattenMode::PartialOnly { depth } if depth.writes_transparent(px[3])) {
+            // A pixel the encoder would have written as fully transparent keeps
+            // the container's transparent index rather than becoming an opaque
+            // patch of background.
             pixels.extend_from_slice(&[0.0, 0.0, 0.0, 0.0]);
             continue;
         }
@@ -864,6 +894,36 @@ pub enum BitDepth {
     Sixteen,
 }
 
+impl BitDepth {
+    /// Whether a pixel carrying this *premultiplied* alpha is written to a file
+    /// at this depth as fully transparent.
+    ///
+    /// Not a threshold constant but the two real stages, asked in order, so the
+    /// answer cannot drift from what the encoder actually does:
+    ///
+    /// 1. [`color::unpremultiply`] collapses anything at or below
+    ///    [`color::UNPREMULTIPLY_ALPHA_EPSILON`] to transparent black. That
+    ///    constant's own documentation requires every stage to agree with it
+    ///    exactly — a pixel one stage treats as opaque enough to divide and the
+    ///    next zeroes is an edge that changes colour.
+    /// 2. The quantizer for this depth rounds the surviving alpha, and half a
+    ///    code down is still zero. At eight bits that band reaches to
+    ///    `0.5/255`, two orders of magnitude above the epsilon.
+    ///
+    /// [`FlattenMode::PartialOnly`] uses this so a GIF keeps the transparent
+    /// index for exactly the pixels a PNG of the same buffer would write with
+    /// zero alpha.
+    fn writes_transparent(self, alpha: f32) -> bool {
+        if alpha <= color::UNPREMULTIPLY_ALPHA_EPSILON {
+            return true;
+        }
+        match self {
+            BitDepth::Eight => quantize8(alpha) == 0,
+            BitDepth::Sixteen => quantize16(alpha) == 0,
+        }
+    }
+}
+
 /// One named export configuration.
 ///
 /// A preset is the whole recipe: what container, how compressed, how big, how
@@ -965,10 +1025,7 @@ impl ExportPreset {
 
     /// Reject a preset whose parameters cannot produce a file.
     pub fn validate(&self) -> Result<(), ExportError> {
-        let reject = |reason: String| ExportError::Preset {
-            name: self.name.clone(),
-            reason,
-        };
+        let reject = |reason: String| reject(self, reason);
         self.format.validate().map_err(|e| reject(e.to_string()))?;
         if !self.scale.is_finite() || self.scale <= 0.0 {
             return Err(reject(format!(
@@ -1044,6 +1101,36 @@ impl ExportPreset {
 pub struct ExportMetadata {
     /// ICC profile to embed where the container and the preset both allow it.
     pub icc_profile: Option<Vec<u8>>,
+    /// The colour space [`ExportMetadata::icc_profile`] describes.
+    ///
+    /// One `ExportMetadata` is offered to every preset in a batch, and one
+    /// profile cannot describe two spaces, so the exporter has to know which
+    /// preset it belongs to. It cannot work that out for itself: no ICC engine
+    /// is linked, so the profile's bytes are opaque here. The caller states it,
+    /// and [`resolve_icc`] embeds the profile only in the presets whose
+    /// [`ExportPreset::color_space`] matches.
+    ///
+    /// `None` means "unstated". A profile is then embedded only where the
+    /// preset's space is the [`ColorSpace::IccProfile`] the profile hashes to,
+    /// because that is the one case the exporter can verify without being told.
+    /// Offering an unstated profile to a preset in a built-in space is an error
+    /// rather than a silent embed: an unlabelled profile could describe any
+    /// space, and attaching it is exactly the mislabelling this module refuses
+    /// to do.
+    pub icc_profile_space: Option<ColorSpace>,
+}
+
+impl ExportMetadata {
+    /// A profile together with the space it describes.
+    ///
+    /// This is the "Embed Color Profile" checkbox: pair it with a preset in the
+    /// same space and the file carries the profile.
+    pub fn describing(space: ColorSpace, profile: Vec<u8>) -> Self {
+        ExportMetadata {
+            icc_profile: Some(profile),
+            icc_profile_space: Some(space),
+        }
+    }
 }
 
 /// One finished export.
@@ -1114,6 +1201,13 @@ fn check_handling(image: &LinearImage, preset: &ExportPreset) -> Result<(), Expo
     })
 }
 
+fn reject(preset: &ExportPreset, reason: String) -> ExportError {
+    ExportError::Preset {
+        name: preset.name.clone(),
+        reason,
+    }
+}
+
 /// The profile to embed, which must describe the space the file is written in.
 ///
 /// [`ExportMetadata`] is offered to *every* preset in a batch, and one profile
@@ -1123,11 +1217,28 @@ fn check_handling(image: &LinearImage, preset: &ExportPreset) -> Result<(), Expo
 /// module exists to prevent, so it is refused here rather than written.
 ///
 /// The profile is embedded only where the file's space *is* the profile's
-/// space: a [`ColorHandling::PassThrough`] preset, whose
-/// [`ExportPreset::color_space`] is by construction the
-/// [`ColorSpace::IccProfile`] the buffer came from, and whose `asset_hash` is
-/// verified against the profile's actual content hash.
+/// space, which is decided two ways:
+///
+/// * [`ExportMetadata::icc_profile_space`] names it, and it equals
+///   [`ExportPreset::color_space`]. This is the ordinary "embed the sRGB
+///   profile in the sRGB PNG" case, and the only way a converting preset can
+///   carry a profile at all.
+/// * It is unstated, and the preset's space is the [`ColorSpace::IccProfile`]
+///   whose `asset_hash` is the profile's own content hash — the pass-through
+///   case, which the exporter can verify without being told.
+///
+/// Then [`check_taggable`] has the last word: a converting preset that ends up
+/// with no profile must be writing a space an untagged file already means.
 fn resolve_icc(
+    preset: &ExportPreset,
+    metadata: &ExportMetadata,
+) -> Result<Option<Vec<u8>>, ExportError> {
+    let profile = embedded_profile(preset, metadata)?;
+    check_taggable(preset, profile.as_ref())?;
+    Ok(profile)
+}
+
+fn embedded_profile(
     preset: &ExportPreset,
     metadata: &ExportMetadata,
 ) -> Result<Option<Vec<u8>>, ExportError> {
@@ -1137,29 +1248,93 @@ fn resolve_icc(
     let Some(profile) = metadata.icc_profile.as_ref() else {
         return Ok(None);
     };
-    let reject = |reason: String| {
-        Err(ExportError::Preset {
-            name: preset.name.clone(),
-            reason,
-        })
-    };
+    // A stated space is checked first, and against the preset's space rather
+    // than against the profile's bytes, because the bytes are opaque here.
+    if let Some(declared) = metadata.icc_profile_space.as_ref() {
+        if declared != &preset.color_space {
+            return Err(reject(
+                preset,
+                format!(
+                    "the offered ICC profile describes {}, but the file is written in {}; \
+                     embedding it would mislabel the file",
+                    declared.name(),
+                    preset.color_space.name()
+                ),
+            ));
+        }
+    }
     match &preset.color_space {
         ColorSpace::IccProfile { asset_hash } => {
+            // Verifiable independently of what the caller declared, so it is
+            // checked either way: `asset_hash` addresses the profile the file
+            // is written in, and these are supposed to be the same bytes.
             let actual = blake3::hash(profile).to_hex().to_string();
             if &actual != asset_hash {
-                return reject(format!(
-                    "the offered ICC profile hashes to {actual}, but the file is written in \
-                     the profile addressed by {asset_hash}; embedding it would mislabel the file"
+                return Err(reject(
+                    preset,
+                    format!(
+                        "the offered ICC profile hashes to {actual}, but the file is written \
+                         in the profile addressed by {asset_hash}; embedding it would \
+                         mislabel the file"
+                    ),
                 ));
             }
             Ok(Some(profile.clone()))
         }
-        built_in => reject(format!(
-            "the file is written in {}, so the offered ICC profile does not describe it; \
-             clear ExportMetadata::icc_profile or set include_metadata = false",
-            built_in.name()
+        // A built-in space the caller vouched for: checked against the preset
+        // above, so this is the profile that describes what is being written.
+        _ if metadata.icc_profile_space.is_some() => Ok(Some(profile.clone())),
+        built_in => Err(reject(
+            preset,
+            format!(
+                "the file is written in {}, and the offered ICC profile does not say which \
+                 space it describes; set ExportMetadata::icc_profile_space to {} to embed it, \
+                 or clear ExportMetadata::icc_profile",
+                built_in.name(),
+                built_in.name()
+            ),
         )),
     }
+}
+
+/// Refuse a file whose colour cannot be read back off the file.
+///
+/// No container written here records a built-in space except by carrying an ICC
+/// profile — see the module header — so an untagged file *means* sRGB. A preset
+/// that converts the pixels into Display P3 or linear sRGB and then writes no
+/// profile therefore ships numbers in one space under a label that says
+/// another, and this crate's own decoder reads such a file back as
+/// [`ColorSpace::Srgb`]. That is the mislabelling the rest of this module
+/// exists to prevent, so it is an error rather than a file.
+///
+/// Only the [`ColorHandling::Convert`] path is checked. A
+/// [`ColorHandling::PassThrough`] export writes the source file's own samples,
+/// and dropping the tag there — by turning metadata off, or by choosing a
+/// container that cannot carry one — is the caller deliberately re-writing an
+/// untagged copy of bytes they already had, not the exporter converting into a
+/// space it then declines to record.
+fn check_taggable(preset: &ExportPreset, profile: Option<&Vec<u8>>) -> Result<(), ExportError> {
+    if profile.is_some() || preset.color_handling != ColorHandling::Convert {
+        return Ok(());
+    }
+    // Every caller validates first, and `validate` rejects `Convert` into a
+    // space with no transform, so the remaining variants here are the
+    // built-ins — of which sRGB is the one an untagged file already means.
+    if preset.color_space == ColorSpace::Srgb {
+        return Ok(());
+    }
+    Err(reject(
+        preset,
+        format!(
+            "the pixels would be converted into {} and then written to a .{} carrying no \
+             colour tag, which every decoder — including this crate's — reads as sRGB; \
+             export in sRGB instead, or offer a profile for {} via \
+             ExportMetadata::describing",
+            preset.color_space.name(),
+            preset.format.extension(),
+            preset.color_space.name()
+        ),
+    ))
 }
 
 /// Run one preset's colour pipeline over an already-scaled image.
@@ -1179,7 +1354,11 @@ fn prepare(
                 scaled,
                 preset.background,
                 transform,
-                FlattenMode::PartialOnly,
+                // The preset's own depth, so the flatten's idea of "fully
+                // transparent" is the one the quantizer below will use.
+                FlattenMode::PartialOnly {
+                    depth: preset.bit_depth,
+                },
             );
             &flattened
         }
@@ -1260,7 +1439,13 @@ pub fn export(
     // Before the resample, so a mismatched pair costs nothing. `prepare`
     // checks again, because it is reachable from the batch paths too.
     check_handling(image, preset)?;
+    // `target_size` validates, which is what lets `resolve_icc` below assume a
+    // `Convert` preset names a space that has a transform.
     let (w, h) = preset.target_size(image.width, image.height)?;
+    // Likewise before the resample: a preset that cannot record its own colour
+    // space, or that was offered a profile describing a different one, fails
+    // before a full resample runs rather than after it.
+    resolve_icc(preset, metadata)?;
     if (w, h) == (image.width, image.height) {
         return encode_scaled(image, preset, metadata);
     }
@@ -1710,8 +1895,11 @@ mod tests {
         let file = export(
             &working,
             &preset,
+            // Unstated space: the pass-through preset's own `asset_hash`
+            // addresses this profile, which the exporter verifies for itself.
             &ExportMetadata {
                 icc_profile: surface.icc_profile.clone(),
+                icc_profile_space: None,
             },
         )
         .unwrap();
@@ -1934,6 +2122,117 @@ mod tests {
             decoded.pixels,
             SurfacePixels::Rgba8(vec![255, 0, 0, 128, 0, 0, 0, 0])
         );
+    }
+
+    /// The flatten and the quantizer must agree on what "fully transparent"
+    /// means, or the same buffer exports differently per container.
+    ///
+    /// Measured before the fix: `flatten_with` kept the transparent index only
+    /// for `px[3] <= 0.0`, while `unpremultiply` zeroes anything at or below
+    /// `color::UNPREMULTIPLY_ALPHA_EPSILON` and `quantize8` zeroes anything
+    /// under half a code. A premultiplied `[1e-7, 0, 0, 1e-7]` therefore came
+    /// out of a GIF over a green background as `Rgba8([0, 255, 0, 255])` — a
+    /// fully *opaque* patch of background — while the identical pixel exported
+    /// to PNG was `[0, 0, 0, 0]`. Every feathered edge whose alpha decays
+    /// through the sub-quantum band became a ring of solid background colour,
+    /// visible the moment that GIF was placed over anything else.
+    #[test]
+    fn sub_quantum_alpha_stays_transparent_in_a_binary_alpha_container() {
+        const EPS: f32 = color::UNPREMULTIPLY_ALPHA_EPSILON;
+        // The band the two stages disagree over is real and two orders of
+        // magnitude wide, not a rounding curiosity.
+        const { assert!(EPS < 0.5 / 255.0) };
+
+        // Straight red at four alphas, premultiplied: below the un-premultiply
+        // epsilon, inside the sub-quantum band, just above it, and opaque.
+        let alphas = [1e-7f32, 0.001, 0.01, 1.0];
+        let px: Vec<f32> = alphas.iter().flat_map(|&a| [a, 0.0, 0.0, a]).collect();
+        let image = LinearImage::from_premultiplied(4, 1, px).unwrap();
+        let background = [0u8, 255, 0];
+
+        let decode = |file: &ExportedFile| -> Vec<u8> {
+            let SurfacePixels::Rgba8(px) =
+                decode_surface_bytes(&file.bytes, ImportLimits::default())
+                    .unwrap()
+                    .pixels
+            else {
+                unreachable!()
+            };
+            px
+        };
+        let gif = decode(
+            &export(
+                &image,
+                &ExportPreset::new("g", ExportFormat::Gif).with_background(background),
+                &ExportMetadata::default(),
+            )
+            .unwrap(),
+        );
+        let png = decode(
+            &export(
+                &image,
+                &ExportPreset::new("p", ExportFormat::Png).with_background(background),
+                &ExportMetadata::default(),
+            )
+            .unwrap(),
+        );
+
+        // The claim: the two containers make the same transparency decision for
+        // the same buffer.
+        for (i, &a) in alphas.iter().enumerate() {
+            assert_eq!(
+                gif[i * 4 + 3] == 0,
+                png[i * 4 + 3] == 0,
+                "alpha {a}: GIF wrote alpha {} where PNG wrote {}",
+                gif[i * 4 + 3],
+                png[i * 4 + 3]
+            );
+        }
+
+        // ...and specifically, the two sub-quantum pixels are transparent in
+        // both rather than opaque background in the GIF.
+        for i in 0..2 {
+            assert_eq!(
+                gif[i * 4 + 3],
+                0,
+                "alpha {} became an opaque {:?} patch of background",
+                alphas[i],
+                &gif[i * 4..i * 4 + 3]
+            );
+            assert_eq!(png[i * 4 + 3], 0);
+        }
+        // The pixel just above the band is still composited, so this is a
+        // threshold and not a blanket "leave partial alpha alone".
+        assert_eq!(gif[11], 255, "alpha 0.01 should have been composited");
+        assert!(
+            gif[9] > 64,
+            "alpha 0.01 lost the background: {:?}",
+            &gif[8..12]
+        );
+        assert_eq!(png[11], 3, "alpha 0.01 quantizes to code 3, not 0");
+        // ...as is the opaque one, which keeps its own colour.
+        assert_eq!(gif[15], 255);
+        assert!(gif[12] > 200 && gif[13] < 64, "{:?}", &gif[12..16]);
+
+        // The predicate itself, at the two boundaries it is made of.
+        assert!(BitDepth::Eight.writes_transparent(EPS));
+        assert!(BitDepth::Eight.writes_transparent(0.4 / 255.0));
+        assert!(!BitDepth::Eight.writes_transparent(0.6 / 255.0));
+        // Sixteen bits resolve the whole of that band — its own half-code,
+        // 0.5/65535, is *below* the epsilon — so the two depths disagree over
+        // it and the flatten really does have to ask the preset which one it
+        // is. At 16 bits the epsilon is what bites, and nothing else.
+        const { assert!(0.5 / 65_535.0 < EPS) };
+        assert!(!BitDepth::Sixteen.writes_transparent(0.4 / 255.0));
+        assert!(BitDepth::Sixteen.writes_transparent(EPS));
+        assert!(!BitDepth::Sixteen.writes_transparent(EPS * 1.5));
+
+        // And `FlattenMode::All` is unaffected: a container with no alpha at
+        // all still composites every pixel, however transparent.
+        let flat = flatten_onto(&image, background, &ColorSpace::Srgb, FlattenMode::All).unwrap();
+        for p in flat.pixels().chunks_exact(4) {
+            assert_eq!(p[3], 1.0);
+        }
     }
 
     /// The alpha classification is a property of each container, not a guess.
@@ -2322,9 +2621,7 @@ mod tests {
     #[test]
     fn metadata_inclusion_is_a_preset_decision() {
         let (working, space, profile, px) = icc_document();
-        let metadata = ExportMetadata {
-            icc_profile: Some(profile.clone()),
-        };
+        let metadata = ExportMetadata::describing(space.clone(), profile.clone());
 
         let with = export(
             &working,
@@ -2371,9 +2668,7 @@ mod tests {
     #[test]
     fn a_profile_is_only_embedded_in_a_file_written_in_its_own_space() {
         let (working, space, profile, _) = icc_document();
-        let metadata = ExportMetadata {
-            icc_profile: Some(profile.clone()),
-        };
+        let metadata = ExportMetadata::describing(space.clone(), profile.clone());
 
         // A converting preset writes a built-in space, which this profile does
         // not describe. Refused, rather than attached to a file it mislabels.
@@ -2390,10 +2685,26 @@ mod tests {
                 matches!(err, ExportError::Preset { .. }),
                 "{target:?} accepted a profile that does not describe it: {err}"
             );
-            // ...with nothing offered, or nothing asked for, it exports fine.
-            assert!(export(&linear, &preset, &ExportMetadata::default()).is_ok());
-            assert!(export(&linear, &preset.clone().with_metadata(false), &metadata).is_ok());
+            // ...and leaving the space *unstated* is not a licence to attach it
+            // either: an unlabelled profile could describe anything.
+            let unstated = ExportMetadata {
+                icc_profile: Some(profile.clone()),
+                icc_profile_space: None,
+            };
+            let err = export(&linear, &preset, &unstated).unwrap_err();
+            assert!(
+                matches!(err, ExportError::Preset { .. }),
+                "{target:?} accepted an unlabelled profile: {err}"
+            );
         }
+
+        // With nothing offered, or nothing asked for, the sRGB preset writes an
+        // untagged file — which is the one built-in space an untagged file
+        // already means. (The other two are
+        // `a_built_in_space_no_container_can_tag_is_refused_not_mislabelled`.)
+        let srgb = ExportPreset::new("plain", ExportFormat::Png);
+        assert!(export(&linear, &srgb, &ExportMetadata::default()).is_ok());
+        assert!(export(&linear, &srgb.with_metadata(false), &metadata).is_ok());
 
         // A batch spanning two different spaces cannot embed one profile in
         // both: the preset whose space the profile describes takes it, and the
@@ -2430,6 +2741,196 @@ mod tests {
                 .as_deref(),
             Some(profile.as_slice())
         );
+    }
+
+    /// The "Embed Color Profile" checkbox: an ordinary sRGB export with the
+    /// sRGB profile attached.
+    ///
+    /// Measured before the fix: `resolve_icc` matched the offered profile only
+    /// against `ColorSpace::IccProfile`, so *every* preset in a built-in space
+    /// refused it — `export(&img, &ExportPreset::new("web", Png),
+    /// &ExportMetadata{ icc_profile: Some(profile) })` returned
+    /// `Err(Preset{ reason: "the file is written in sRGB, so the offered ICC
+    /// profile does not describe it" })`, which is false for an sRGB profile.
+    /// A document in the working space is by construction in a built-in space,
+    /// so the only way to embed anything at all was the ICC pass-through path.
+    #[test]
+    fn a_converting_preset_can_embed_a_profile_for_the_space_it_writes() {
+        let profile = tiny_icc();
+        let image = one_pixel([0.18, 0.18, 0.18, 1.0]);
+        let metadata = ExportMetadata::describing(ColorSpace::Srgb, profile.clone());
+
+        let preset = ExportPreset::new("web", ExportFormat::Png);
+        assert!(preset.include_metadata, "metadata is on by default");
+        assert_eq!(preset.color_space, ColorSpace::Srgb);
+        assert_eq!(preset.color_handling, ColorHandling::Convert);
+
+        let file = export(&image, &preset, &metadata).unwrap();
+        let decoded = decode_surface_bytes(&file.bytes, ImportLimits::default()).unwrap();
+        assert_eq!(
+            decoded.icc_profile.as_deref(),
+            Some(profile.as_slice()),
+            "the sRGB profile was not embedded in the sRGB file"
+        );
+        // ...and the pixels are still the colour-managed ones, so embedding is
+        // not being paid for with a skipped conversion.
+        assert_eq!(
+            decoded.pixels,
+            SurfacePixels::Rgba8(vec![118, 118, 118, 255])
+        );
+
+        // The preset's switch still wins.
+        let off = export(&image, &preset.clone().with_metadata(false), &metadata).unwrap();
+        assert_eq!(
+            decode_surface_bytes(&off.bytes, ImportLimits::default())
+                .unwrap()
+                .icc_profile,
+            None
+        );
+
+        // Every container that claims it can carry a profile really does, on
+        // this path and not only on the pass-through one. 64x64 because a
+        // 1x1 TIFF drops its profile for an unrelated reason — see
+        // `codec::tests::a_tiny_tiff_loses_its_icc_profile_but_a_normal_one_does_not`.
+        let big = LinearImage::from_premultiplied(64, 64, [0.18, 0.18, 0.18, 1.0].repeat(64 * 64))
+            .unwrap();
+        for format in ExportFormat::ALL {
+            let preset = ExportPreset::new("c", format);
+            let file = export(&big, &preset, &metadata).unwrap();
+            let decoded = decode_surface_bytes(&file.bytes, ImportLimits::default()).unwrap();
+            if format.supports_icc() {
+                assert_eq!(
+                    decoded.icc_profile.as_deref(),
+                    Some(profile.as_slice()),
+                    "{format:?} supports ICC but wrote none"
+                );
+            } else {
+                assert_eq!(decoded.icc_profile, None, "{format:?}");
+            }
+        }
+
+        // A batch does the same, and matches the single-export bytes exactly.
+        let presets = [
+            ExportPreset::new("a", ExportFormat::Png),
+            ExportPreset::new("b", ExportFormat::Jpeg(90)),
+        ];
+        let files = export_batch(&image, &presets, &metadata).unwrap();
+        for (preset, file) in presets.iter().zip(&files) {
+            assert_eq!(&export(&image, preset, &metadata).unwrap(), file);
+            assert_eq!(
+                decode_surface_bytes(&file.bytes, ImportLimits::default())
+                    .unwrap()
+                    .icc_profile
+                    .as_deref(),
+                Some(profile.as_slice())
+            );
+        }
+    }
+
+    /// A built-in space no container written here can tag is refused, not
+    /// written untagged.
+    ///
+    /// Measured before the fix: `export(&one_pixel([0.5, 0.5, 0.5, 1.0]),
+    /// &ExportPreset::default().with_color_space(LinearSrgb), &default())`
+    /// returned `Ok`, and `decode_surface_bytes` of those bytes reported
+    /// `ColorSpace::Srgb` with `Rgba8([128, 128, 128, 255])` — linear-encoded
+    /// samples wearing an sRGB label, which every viewer renders too bright.
+    /// `resolve_icc` then refused to attach the profile that would have fixed
+    /// it, because the space was not `ColorSpace::IccProfile`.
+    #[test]
+    fn a_built_in_space_no_container_can_tag_is_refused_not_mislabelled() {
+        // Saturated on purpose: a neutral grey encodes identically in sRGB and
+        // Display P3 (same transfer curve, same white point), so a grey would
+        // make the "the label lies" assertion below vacuous.
+        let image = one_pixel([0.5, 0.2, 0.1, 1.0]);
+        let profile = tiny_icc();
+
+        for space in [ColorSpace::LinearSrgb, ColorSpace::DisplayP3] {
+            // Untagged: refused in every container, whether or not it could
+            // have carried a profile, and whether or not metadata is asked for.
+            for format in ExportFormat::ALL {
+                for include in [true, false] {
+                    let preset = ExportPreset::new("p", format)
+                        .with_color_space(space.clone())
+                        .with_metadata(include);
+                    let err = export(&image, &preset, &ExportMetadata::default()).unwrap_err();
+                    assert!(
+                        matches!(err, ExportError::Preset { .. }),
+                        "{space:?} in {format:?} (metadata={include}) wrote an untagged \
+                         file: {err}"
+                    );
+                }
+            }
+
+            // The exact file the hole produced, pinned as a number: the
+            // converter really does encode into `space`, and the decoder really
+            // does read the result back as sRGB.
+            let bytes = rgba8_from_linear(&image, &space).unwrap();
+            let untagged = encode_with(
+                ExportFormat::Png,
+                1,
+                1,
+                EncodedPixels::Rgba8(&bytes),
+                &EncodeOptions::default(),
+            )
+            .unwrap();
+            let decoded = decode_surface_bytes(&untagged, ImportLimits::default()).unwrap();
+            assert_eq!(
+                decoded.color_space,
+                ColorSpace::Srgb,
+                "{space:?}: an untagged PNG is read as sRGB, so writing one mislabels it"
+            );
+            assert_ne!(
+                bytes,
+                rgba8_from_linear(&image, &ColorSpace::Srgb).unwrap(),
+                "{space:?} encodes the same pixel differently from sRGB, so the label lies"
+            );
+
+            // ...and with a profile that describes the space, the same preset
+            // exports and the tag round-trips.
+            let metadata = ExportMetadata::describing(space.clone(), profile.clone());
+            let preset = ExportPreset::new("tagged", ExportFormat::Png)
+                .with_color_space(space.clone())
+                .with_metadata(true);
+            let file = export(&image, &preset, &metadata).unwrap();
+            let decoded = decode_surface_bytes(&file.bytes, ImportLimits::default()).unwrap();
+            assert_eq!(decoded.icc_profile.as_deref(), Some(profile.as_slice()));
+            assert_eq!(decoded.pixels, SurfacePixels::Rgba8(bytes));
+            assert!(
+                matches!(decoded.color_space, ColorSpace::IccProfile { .. }),
+                "the re-imported file must carry the profile, not fall back to sRGB"
+            );
+
+            // A container that cannot carry the tag is still refused, profile
+            // or no profile.
+            let gif = ExportPreset::new("g", ExportFormat::Gif).with_color_space(space.clone());
+            assert!(!ExportFormat::Gif.supports_icc());
+            assert!(matches!(
+                export(&image, &gif, &metadata),
+                Err(ExportError::Preset { .. })
+            ));
+        }
+
+        // sRGB is the exception and stays the exception: an untagged file
+        // already means sRGB, so it needs no profile.
+        assert!(export(
+            &image,
+            &ExportPreset::new("s", ExportFormat::Gif),
+            &ExportMetadata::default()
+        )
+        .is_ok());
+
+        // A batch containing one untaggable preset writes nothing at all.
+        let dir = temp_dir("untaggable");
+        let presets = [
+            ExportPreset::new("fine", ExportFormat::Png),
+            ExportPreset::new("mislabelled", ExportFormat::Png)
+                .with_color_space(ColorSpace::DisplayP3),
+        ];
+        assert!(export_batch(&image, &presets, &ExportMetadata::default()).is_err());
+        assert!(export_batch_to_dir(&dir, &image, &presets, &ExportMetadata::default()).is_err());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
