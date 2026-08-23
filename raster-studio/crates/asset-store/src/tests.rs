@@ -880,6 +880,9 @@ fn a_file_where_a_shard_directory_belongs_is_refused_before_the_write() {
 // in the summary, which is honest, and CI runs them for real on Linux, where
 // symlink creation always succeeds. On Windows with the privilege they can be
 // opted into: `cargo test -p asset-store -- --ignored`.
+// Only the `#[cfg(windows)]` arms below quote this, so on unix it is dead code
+// and CI builds with `-D warnings`.
+#[cfg(windows)]
 const WINDOWS_SYMLINK_NOTE: &str = "needs SeCreateSymbolicLinkPrivilege on Windows \
      (Developer Mode or an elevated shell); runs unignored on unix. \
      Opt in here with: cargo test -p asset-store -- --ignored";

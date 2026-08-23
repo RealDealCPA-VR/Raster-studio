@@ -73,6 +73,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      # Run the binary rather than rustsec/audit-check: that action is a
+      # JavaScript action, so it ignores `defaults.run.working-directory` and
+      # looks for ./Cargo.lock at the repository root — which is one level above
+      # this workspace.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - run: cargo audit
