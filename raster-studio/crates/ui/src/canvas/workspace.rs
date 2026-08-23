@@ -83,6 +83,12 @@ pub struct CanvasSessions {
     /// Bounds of the layers a gesture may snap against — everything except the
     /// one being dragged.
     pub snap_layers: Vec<DocRect>,
+    /// Bounds of the layers View ▸ Layer Edges outlines — *all* of them, the
+    /// one being dragged included. A layer's true bounds are the extent of its
+    /// non-transparent pixels, which the compositor knows and
+    /// `editor_core::Document` does not, so like [`CanvasSessions::snap_layers`]
+    /// this is written by the shell rather than derived here.
+    pub layer_edges: Vec<DocRect>,
     /// Smart guides the *application* computed, drawn under the canvas's own.
     pub smart_guides: Vec<SnapHit>,
 }
@@ -209,6 +215,25 @@ impl CanvasHost {
         self.view.zoom_to_fill(self.doc_size);
     }
 
+    /// Frame the selection the last frame drew.
+    ///
+    /// The selection comes from the cache [`CanvasHost::selection_outline`]
+    /// keeps, for the same reason `doc_size` is kept: Zoom to Selection is a
+    /// [`crate::MenuAction`], and [`crate::Workspace::absorb`] is handed an
+    /// intent and no document.
+    ///
+    /// Returns `false` when nothing is selected, so a caller can say so rather
+    /// than appear to ignore the command. The menu disables the item in that
+    /// case; this is the second line of defence, for a chord pressed on a
+    /// document whose selection has since gone.
+    pub fn zoom_to_selection(&mut self) -> bool {
+        let Self { view, outlined, .. } = self;
+        match outlined.as_ref() {
+            Some((selection, _, _)) => view.zoom_to_selection(selection),
+            None => false,
+        }
+    }
+
     /// Show the document at the size it will print: one document inch occupies
     /// one inch of screen, as far as [`POINTS_PER_INCH`] can tell.
     ///
@@ -291,6 +316,7 @@ impl CanvasHost {
             text: sessions.text.as_ref().map(|(g, origin)| (g, *origin)),
             brush: Some(brush),
             snap_layers: &sessions.snap_layers,
+            layer_edges: &sessions.layer_edges,
             smart_guides: &sessions.smart_guides,
             time_secs: time,
         };
@@ -424,6 +450,7 @@ mod tests {
         let text = TextOverlayGeometry {
             caret: Some(DocRect::new(Vec2::new(10.0, 10.0), Vec2::new(11.0, 30.0))),
             highlight: vec![DocRect::new(Vec2::new(10.0, 10.0), Vec2::new(90.0, 30.0))],
+            run_bounds: Some(DocRect::new(Vec2::new(10.0, 10.0), Vec2::new(90.0, 30.0))),
         };
 
         let cases: Vec<(&str, CanvasSessions)> = vec![
@@ -615,5 +642,64 @@ mod tests {
             host.last.tool_events[0].route,
             crate::canvas::Route::Tool(ToolId::Brush)
         );
+    }
+
+    /// Layer Edges is a View toggle, so the boxes it draws have to reach the
+    /// canvas through the same seam every other overlay uses.
+    #[test]
+    fn layer_edges_reach_the_screen_through_the_central_panel() {
+        let ctx = ctx();
+        let doc = Document::new(200, 200, "T");
+        let mut host = CanvasHost::for_document(&doc);
+        frame(&mut host, &ctx, &doc, ToolId::Move);
+        let bare = frame(&mut host, &ctx, &doc, ToolId::Move).len();
+
+        host.sessions.layer_edges = vec![
+            DocRect::new(Vec2::new(10.0, 10.0), Vec2::new(90.0, 70.0)),
+            DocRect::new(Vec2::new(100.0, 80.0), Vec2::new(190.0, 190.0)),
+        ];
+        let drawn = frame(&mut host, &ctx, &doc, ToolId::Move).len();
+        assert_eq!(
+            drawn,
+            bare + 2,
+            "the layer edges never reached the painter ({drawn} vs {bare})"
+        );
+
+        host.view.layer_edges_visible = false;
+        assert_eq!(frame(&mut host, &ctx, &doc, ToolId::Move).len(), bare);
+    }
+
+    /// Zoom to Selection has to work from a menu action, which arrives without
+    /// a document — so the host frames the selection the last frame drew.
+    #[test]
+    fn the_host_frames_the_selection_it_last_drew() {
+        let ctx = ctx();
+        let mut doc = Document::new(2000, 2000, "T");
+        let mut host = CanvasHost::for_document(&doc);
+        frame(&mut host, &ctx, &doc, ToolId::Move);
+
+        // Nothing selected: refused, and the camera does not move.
+        let before = host.view.camera;
+        assert!(!host.zoom_to_selection());
+        assert_eq!(host.view.camera, before);
+
+        doc.selection = Selection::Rect {
+            min: IVec2::new(1000, 1200),
+            max: IVec2::new(1100, 1260),
+        };
+        frame(&mut host, &ctx, &doc, ToolId::Move);
+        assert!(host.zoom_to_selection());
+        assert!(
+            (host.view.camera.center - Vec2::new(1050.0, 1230.0)).length() < 1e-3,
+            "{:?}",
+            host.view.camera.center
+        );
+
+        // …and a selection cleared since the last frame is refused again.
+        doc.selection = Selection::None;
+        frame(&mut host, &ctx, &doc, ToolId::Move);
+        let before = host.view.camera;
+        assert!(!host.zoom_to_selection());
+        assert_eq!(host.view.camera, before);
     }
 }

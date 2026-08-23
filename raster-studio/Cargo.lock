@@ -101,6 +101,7 @@ name = "app-shell"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "color",
  "compositor",
  "design",
  "dirs",

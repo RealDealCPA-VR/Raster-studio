@@ -71,6 +71,13 @@
 //!   physical pixels, insets included. `ui` does not depend on `render`, so the
 //!   native shell is what feeds that camera to the canvas pass — until it does,
 //!   the inset is computed correctly and read by nobody.
+//! * **Layer edges are supplied, not derived.** View ▸ Layer Edges gates
+//!   [`CanvasContent::layer_edges`], which the shell fills from
+//!   [`workspace::CanvasSessions::layer_edges`] — the same seam as
+//!   [`CanvasContent::snap_layers`], and for the same reason: a layer's true
+//!   bounding box is the extent of its *non-transparent pixels*, which lives in
+//!   the compositor and not in `editor_core::Document`. Deriving it here from
+//!   the tile map would be tile-aligned and therefore wrong by up to a tile.
 //! * **Snapping snaps the pointer, not the dragged object.** [`snapping`] pulls
 //!   the sample on its way to a tool that places things (see
 //!   [`snapping::tool_snaps`]); snapping a *layer's own edges* needs that
@@ -155,6 +162,11 @@ pub struct CanvasContent<'a> {
     /// Bounds of the layers a gesture may snap against — everything except the
     /// one being dragged, which would otherwise snap to itself and freeze.
     pub snap_layers: &'a [DocRect],
+    /// Bounds of the layers View ▸ Layer Edges outlines. Every layer worth
+    /// showing, including the one being dragged — which is exactly why this is
+    /// not [`CanvasContent::snap_layers`], where that layer is deliberately
+    /// missing.
+    pub layer_edges: &'a [DocRect],
     /// Smart guides to draw, from a snap the *caller* performed. The canvas
     /// draws its own on top of these; see [`CanvasView::smart_guides`].
     pub smart_guides: &'a [snapping::SnapHit],
@@ -175,6 +187,7 @@ impl Default for CanvasContent<'_> {
             text: None,
             brush: None,
             snap_layers: &[],
+            layer_edges: &[],
             smart_guides: &[],
             time_secs: 0.0,
         }
@@ -219,6 +232,12 @@ pub struct CanvasView {
     pub ants: AntsStyle,
     pub handle_layout: HandleLayout,
     pub crop_guide: CropGuide,
+    /// Draw the marching ants around the selection. View ▸ Selection Edges;
+    /// on by default, because a selection you cannot see is a trap.
+    pub selection_edges_visible: bool,
+    /// Draw an outline around each of [`CanvasContent::layer_edges`].
+    /// View ▸ Layer Edges.
+    pub layer_edges_visible: bool,
     /// Swap the pictorial cursors for a crosshair.
     pub precise_cursor: bool,
     /// The router; public so the shell can tell it about the space bar.
@@ -236,6 +255,9 @@ pub struct CanvasView {
     /// What the last snapped sample caught, for the smart guides this frame.
     smart_guides: Vec<SnapHit>,
     pen_pressure: f32,
+    /// Whether alt was held on the frame just drawn. The Zoom tool zooms *out*
+    /// with alt, so the cursor has to know; see [`CanvasView::resolve_cursor`].
+    alt_held: bool,
     cursor: CanvasCursor,
     pointer_doc: Option<Vec2>,
 }
@@ -252,6 +274,8 @@ impl Default for CanvasView {
             ants: AntsStyle::default(),
             handle_layout: HandleLayout::default(),
             crop_guide: CropGuide::default(),
+            selection_edges_visible: true,
+            layer_edges_visible: true,
             precise_cursor: false,
             router: InputRouter::new(),
             viewport: Viewport::default(),
@@ -261,6 +285,7 @@ impl Default for CanvasView {
             guide_drag: None,
             smart_guides: Vec::new(),
             pen_pressure: 1.0,
+            alt_held: false,
             cursor: CanvasCursor::Arrow,
             pointer_doc: None,
         }
@@ -315,6 +340,10 @@ pub enum Region {
     Guide { index: usize, locked: bool },
     /// A path anchor or one of its control handles.
     Path(PathHit),
+    /// The run of a text layer that is being edited. Below the path anchors,
+    /// because an anchor drawn over a caption is still the thing that will be
+    /// dragged; above bare image, because a click here goes into the text.
+    Text,
     /// Bare image: the active tool's.
     Image,
 }
@@ -632,6 +661,9 @@ impl CanvasView {
         self.router.set_space_held(
             !ctx.wants_keyboard_input() && ctx.input(|i| i.key_down(egui::Key::Space)),
         );
+        // Alt is the Zoom tool's "the other way": read once here so the cursor
+        // and the click agree about which direction the next click goes.
+        self.alt_held = ctx.input(|i| i.modifiers.alt);
 
         let frame = ctx.input(|i| self.pointer.frame(i, self.pen_pressure));
         let mut out = CanvasOutput::default();
@@ -728,24 +760,32 @@ impl CanvasView {
             }
         }
 
-        // Everything below reads one answer to "is the pointer the canvas's?",
-        // so the coordinate readout, the cursor and the tool dispatch cannot
-        // disagree about whether the pointer is on the image. A gesture already
+        // Everything below reads *one* answer to "is the pointer the
+        // canvas's?", so the coordinate readout, the cursor and the icon
+        // installed on the window cannot disagree about it. A gesture already
         // in flight keeps the pointer whatever is drawn over it.
         //
         // The position comes from the context, not from `response.hover_pos()`:
         // the response reports nothing while another widget holds the pointer,
         // and "nothing" is exactly the case this has to tell apart from "over
         // the image".
-        let egui_has_the_pointer = !self.router.is_gesture_active()
-            && ctx
-                .input(|i| i.pointer.hover_pos())
-                .is_some_and(|p| egui_owns_point(&ctx, geom::from_pos2(p)));
-        let pointer_pt = if egui_has_the_pointer {
-            None
-        } else {
-            response.hover_pos().map(geom::from_pos2)
-        };
+        //
+        // Two things have to be true. Nothing of egui's own may be floating
+        // over the point — a dialog, a menu, a combo popup — *and* the point
+        // has to be inside the rectangle this frame was given. The rectangle
+        // test is the half that used to be missing, and it is the whole defect:
+        // egui's side, top and bottom panels live in `Order::Background`, so
+        // [`egui_owns_point`] is false over the layers dock and the options bar
+        // and the canvas cheerfully installed the *brush ring* over them —
+        // which is `CursorIcon::None`, so the system pointer vanished for the
+        // whole application. `outer_rect` and not the viewport, so the ruler
+        // gutters still count as the canvas's own.
+        let hover_pt = ctx.input(|i| i.pointer.hover_pos()).map(geom::from_pos2);
+        let pointer_is_ours = self.router.is_gesture_active()
+            || hover_pt.is_some_and(|p| {
+                !egui_owns_point(&ctx, p) && self.outer_rect.contains(geom::to_pos2(p))
+            });
+        let pointer_pt = if pointer_is_ours { hover_pt } else { None };
 
         self.pointer_doc = pointer_pt
             .filter(|p| self.viewport.contains_pt(*p))
@@ -787,11 +827,21 @@ impl CanvasView {
             &style,
         );
 
+        if self.layer_edges_visible {
+            paint::layer_edges(
+                &painter,
+                &self.camera,
+                &self.viewport,
+                content.layer_edges,
+                &style,
+            );
+        }
+
         if let Some(crop_doc) = content.crop {
             paint::crop(&painter, &self.crop_overlay(crop_doc), &style);
         }
 
-        if !content.selection_outline.is_empty() {
+        if self.selection_edges_visible && !content.selection_outline.is_empty() {
             let phase = ants::ants_phase(content.time_secs, &self.ants);
             let geometry = ants::build(
                 content.selection_outline,
@@ -895,13 +945,18 @@ impl CanvasView {
                 )
             })
         });
-        self.cursor = if egui_has_the_pointer {
-            // Something of egui's own is under the pointer. It has already
-            // chosen a cursor for itself; installing the brush ring here would
-            // hide the system pointer over a dialog's own buttons.
-            CanvasCursor::Arrow
-        } else {
+        self.cursor = if pointer_is_ours {
             self.resolve_cursor(content, pointer_pt)
+        } else {
+            // The pointer is over a dock, a dialog or the space outside the
+            // window. `CursorOverride::OverPanel` is the documented top of the
+            // priority order, and this is the one place it fires from a real
+            // frame: `resolve_cursor` can only reach `Region::Panel` from a
+            // position, and there is no position of ours to give it.
+            cursor::resolve(
+                cursor::cursor_for_tool_id(content.active_tool, self.precise_cursor),
+                CursorOverride::OverPanel,
+            )
         };
         if self.cursor == CanvasCursor::BrushOutline {
             if let (Some(brush), Some(doc)) = (content.brush, self.pointer_doc) {
@@ -915,7 +970,12 @@ impl CanvasView {
                 paint::brush(&painter, &cursor, &style);
             }
         }
-        if !egui_has_the_pointer {
+        // Installed only when the pointer is the canvas's. When it is not,
+        // nothing is installed at all: the central panel is drawn last, so a
+        // `set_cursor_icon` from here overwrites the resize arrow a splitter
+        // asked for, the I-beam a text field asked for and the plain pointer a
+        // button asked for. Saying nothing is the only way to let them win.
+        if pointer_is_ours {
             ctx.set_cursor_icon(self.cursor.to_egui());
         }
         out.cursor = self.cursor;
@@ -926,9 +986,9 @@ impl CanvasView {
     ///
     /// The order is: the panels and the gutters (which are not the image at
     /// all), then the hand, then the transform box, then the crop, then a
-    /// guide, then a path anchor, then bare image. Every branch **falls
-    /// through** on a miss — a live transform whose handles the pointer is
-    /// nowhere near must not swallow the guide underneath it.
+    /// guide, then a path anchor, then a live text run, then bare image. Every
+    /// branch **falls through** on a miss — a live transform whose handles the
+    /// pointer is nowhere near must not swallow the guide underneath it.
     ///
     /// Both [`CanvasView::show`]'s dispatch and [`CanvasView::resolve_cursor`]
     /// read this, which is what makes the cursor a promise about what the next
@@ -992,6 +1052,16 @@ impl CanvasView {
         }) {
             return Region::Path(hit);
         }
+        // Hit-tested in *layer* space rather than against a projected box, so a
+        // rotated or flipped view needs no special case.
+        if let Some((geometry, origin)) = content.text {
+            if let Some(bounds) = geometry.bounds() {
+                let local = self.camera.doc_of_screen_pt(&self.viewport, pos) - origin;
+                if local.is_finite() && bounds.contains(local) {
+                    return Region::Text;
+                }
+            }
+        }
         Region::Image
     }
 
@@ -1006,7 +1076,14 @@ impl CanvasView {
         content: &CanvasContent<'_>,
         pointer_pt: Option<Vec2>,
     ) -> CanvasCursor {
-        let base = cursor::cursor_for_tool_id(content.active_tool, self.precise_cursor);
+        let mut base = cursor::cursor_for_tool_id(content.active_tool, self.precise_cursor);
+        // The Zoom tool zooms *out* on an alt-click — see `InputRouter::on_up`
+        // — so while alt is held the magnifier has to lose its plus. A cursor
+        // that promises the opposite of what the click does is worse than no
+        // cursor at all.
+        if content.active_tool == ToolId::Zoom && self.alt_held && base == CanvasCursor::ZoomIn {
+            base = CanvasCursor::ZoomOut;
+        }
         let Some(pos) = pointer_pt else {
             return base;
         };
@@ -1061,6 +1138,9 @@ impl CanvasView {
             // An anchor is dragged bodily; a control is aimed.
             Region::Path(PathHit::Anchor(_)) => CursorOverride::Handle(CanvasCursor::Move),
             Region::Path(PathHit::Control(_, _)) => CursorOverride::Handle(CanvasCursor::Crosshair),
+            // Over live text the pointer aims *between* characters, which is
+            // what an I-beam is for.
+            Region::Text => CursorOverride::Handle(CanvasCursor::Text),
             Region::Image => CursorOverride::None,
         };
         cursor::resolve(base, over)
@@ -1134,6 +1214,77 @@ mod tests {
     ) -> CanvasOutput {
         frame_shapes(view, ctx, content, events).0
     }
+
+    /// One frame with a modifier held down for the whole of it.
+    fn frame_holding(
+        view: &mut CanvasView,
+        ctx: &egui::Context,
+        content: &CanvasContent<'_>,
+        modifiers: egui::Modifiers,
+        events: Vec<egui::Event>,
+    ) -> CanvasOutput {
+        let mut out = CanvasOutput::default();
+        let full = ctx.run(
+            egui::RawInput {
+                events,
+                modifiers,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::SidePanel::left("dock")
+                    .exact_width(DOCK_PT)
+                    .show(ctx, |ui| {
+                        ui.label("panel");
+                    });
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::none())
+                    .show(ctx, |ui| {
+                        out = view.show(ui, content);
+                    });
+            },
+        );
+        let _ = ctx.tessellate(full.shapes, full.pixels_per_point);
+        out
+    }
+
+    /// One frame with a dock whose whole area asks for a cursor of its own,
+    /// returning what the canvas produced *and* the icon the window was left
+    /// with — which is the thing defect 1 was about.
+    fn frame_with_a_grabby_dock(
+        view: &mut CanvasView,
+        ctx: &egui::Context,
+        content: &CanvasContent<'_>,
+        events: Vec<egui::Event>,
+    ) -> (CanvasOutput, egui::CursorIcon) {
+        let mut out = CanvasOutput::default();
+        let full = ctx.run(
+            egui::RawInput {
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::SidePanel::left("dock")
+                    .exact_width(DOCK_PT)
+                    .show(ctx, |ui| {
+                        let filled = ui
+                            .allocate_response(ui.available_size(), egui::Sense::click_and_drag());
+                        let _ = filled.on_hover_cursor(DOCK_CURSOR);
+                    });
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::none())
+                    .show(ctx, |ui| {
+                        out = view.show(ui, content);
+                    });
+            },
+        );
+        let icon = full.platform_output.cursor_icon;
+        let _ = ctx.tessellate(full.shapes, full.pixels_per_point);
+        (out, icon)
+    }
+
+    /// The cursor the dock in [`frame_with_a_grabby_dock`] asks for — a
+    /// splitter's resize arrow stands in for every cursor a panel widget owns.
+    const DOCK_CURSOR: egui::CursorIcon = egui::CursorIcon::ResizeHorizontal;
 
     /// One quiet frame with every overlay live, with docks reserved.
     fn run_frame(
@@ -2410,5 +2561,239 @@ mod tests {
                 "{theme:?}: the gutter came off the wrong theme"
             );
         }
+    }
+
+    /// The headline defect, through the real `show` path rather than through a
+    /// hand-written position `show` never produces.
+    ///
+    /// egui's side, top and bottom panels live in `Order::Background`, so
+    /// [`egui_owns_point`] is false over the layers dock. The canvas therefore
+    /// resolved the *tool's* cursor there — for a brush that is
+    /// `CursorIcon::None`, because the ring is drawn instead — and installed
+    /// it. The system pointer disappeared over every dock, no ring was drawn to
+    /// replace it (the ring needs a document position, and there is none over a
+    /// panel), and because the central panel is drawn last it also clobbered
+    /// the cursor the dock's own widgets had asked for.
+    #[test]
+    fn a_brush_over_a_dock_leaves_the_pointer_and_the_docks_own_cursor_alone() {
+        let ctx = ctx_with_size(1000.0, 700.0);
+        let mut view = CanvasView::for_document(Vec2::splat(200.0));
+        let brush = BrushSettings::default();
+        let content = CanvasContent {
+            doc_size: Vec2::splat(200.0),
+            active_tool: ToolId::Brush,
+            brush: Some(&brush),
+            ..CanvasContent::default()
+        };
+        // Two settling frames: egui hit-tests against the widget rectangles the
+        // previous frame registered, so the dock has to have existed once.
+        frame_with_a_grabby_dock(&mut view, &ctx, &content, Vec::new());
+        frame_with_a_grabby_dock(&mut view, &ctx, &content, Vec::new());
+
+        // Well inside the 160pt dock.
+        let (out, icon) = frame_with_a_grabby_dock(
+            &mut view,
+            &ctx,
+            &content,
+            vec![move_to(Vec2::new(40.0, 300.0))],
+        );
+        assert_eq!(
+            out.cursor,
+            CanvasCursor::Arrow,
+            "the brush ring was installed over the layers dock"
+        );
+        assert_ne!(
+            icon,
+            egui::CursorIcon::None,
+            "the system pointer was hidden while it was over a panel"
+        );
+        assert_eq!(
+            icon, DOCK_CURSOR,
+            "the canvas overwrote the cursor the dock's own widget asked for"
+        );
+        assert!(out.pointer_doc.is_none());
+
+        // …and over the image itself the brush still gets its ring, so this is
+        // not a fix that simply switched the feature off.
+        let at = view.viewport().center_pt();
+        let (out, icon) = frame_with_a_grabby_dock(&mut view, &ctx, &content, vec![move_to(at)]);
+        assert_eq!(out.cursor, CanvasCursor::BrushOutline);
+        assert_eq!(icon, egui::CursorIcon::None, "the ring hides the pointer");
+        assert!(out.pointer_doc.is_some());
+    }
+
+    /// View ▸ Selection Edges was a checkmark read by nothing: the ants were
+    /// painted whenever there was an outline, gated on neither a canvas field
+    /// nor a flag.
+    #[test]
+    fn selection_edges_gates_the_marching_ants() {
+        let ctx = ctx_with_size(1000.0, 700.0);
+        let mut view = CanvasView::for_document(Vec2::splat(200.0));
+        let outline = vec![Polyline {
+            points: vec![
+                IVec2::new(20, 20),
+                IVec2::new(160, 20),
+                IVec2::new(160, 140),
+                IVec2::new(20, 140),
+            ],
+            closed: true,
+        }];
+        let content = CanvasContent {
+            doc_size: Vec2::splat(200.0),
+            selection_outline: &outline,
+            time_secs: 1.0,
+            ..CanvasContent::default()
+        };
+        frame_shapes(&mut view, &ctx, &content, Vec::new());
+
+        assert!(view.selection_edges_visible, "on by default");
+        let with = frame_shapes(&mut view, &ctx, &content, Vec::new()).1.len();
+        view.selection_edges_visible = false;
+        let without = frame_shapes(&mut view, &ctx, &content, Vec::new()).1.len();
+        assert!(
+            without < with,
+            "switching Selection Edges off left the ants crawling \
+             ({without} shapes vs {with} with it on)"
+        );
+        // …and what it removed is exactly the ants: with no selection at all
+        // the flag makes no difference.
+        let bare = CanvasContent {
+            doc_size: Vec2::splat(200.0),
+            ..CanvasContent::default()
+        };
+        assert_eq!(
+            frame_shapes(&mut view, &ctx, &bare, Vec::new()).1.len(),
+            without
+        );
+    }
+
+    /// …and the other half of the same defect: Layer Edges had nothing to
+    /// switch, because the canvas drew no layer outline at all.
+    #[test]
+    fn layer_edges_are_drawn_and_the_flag_switches_them_off() {
+        let ctx = ctx_with_size(1000.0, 700.0);
+        let mut view = CanvasView::for_document(Vec2::splat(200.0));
+        let edges = [
+            DocRect::new(Vec2::new(10.0, 10.0), Vec2::new(90.0, 70.0)),
+            DocRect::new(Vec2::new(100.0, 80.0), Vec2::new(190.0, 190.0)),
+        ];
+        let content = CanvasContent {
+            doc_size: Vec2::splat(200.0),
+            layer_edges: &edges,
+            ..CanvasContent::default()
+        };
+        frame_shapes(&mut view, &ctx, &content, Vec::new());
+
+        assert!(view.layer_edges_visible, "on by default");
+        let with = frame_shapes(&mut view, &ctx, &content, Vec::new()).1.len();
+        view.layer_edges_visible = false;
+        let without = frame_shapes(&mut view, &ctx, &content, Vec::new()).1.len();
+        assert_eq!(
+            with,
+            without + edges.len(),
+            "one outline per layer, and the flag turns all of them off"
+        );
+    }
+
+    /// The canvas draws a text caret and a selection highlight, and left the
+    /// pointer over the run reading as bare image — so `CanvasCursor::Text`
+    /// could never be produced.
+    #[test]
+    fn the_pointer_over_a_live_text_run_gets_an_i_beam() {
+        let ctx = ctx_with_size(1000.0, 700.0);
+        let mut view = CanvasView::for_document(Vec2::splat(200.0));
+        run_frame(&mut view, &ctx, &CanvasContent::default());
+
+        let geometry = TextOverlayGeometry {
+            caret: Some(DocRect::new(Vec2::new(20.0, 20.0), Vec2::new(21.0, 40.0))),
+            highlight: Vec::new(),
+            run_bounds: Some(DocRect::new(Vec2::new(20.0, 20.0), Vec2::new(120.0, 40.0))),
+        };
+        let content = CanvasContent {
+            doc_size: Vec2::splat(200.0),
+            // Deliberately not a text tool: the I-beam is a fact about what is
+            // under the pointer, not about which tool is selected.
+            active_tool: ToolId::Move,
+            text: Some((&geometry, Vec2::ZERO)),
+            ..CanvasContent::default()
+        };
+
+        let over = view
+            .camera
+            .screen_pt_of(view.viewport(), Vec2::new(70.0, 30.0));
+        assert_eq!(view.what_is_under(&content, over), Region::Text);
+        assert_eq!(
+            view.resolve_cursor(&content, Some(over)),
+            CanvasCursor::Text
+        );
+
+        // Just past the end of the run it is the tool's own cursor again.
+        let past = view
+            .camera
+            .screen_pt_of(view.viewport(), Vec2::new(160.0, 30.0));
+        assert_eq!(view.what_is_under(&content, past), Region::Image);
+        assert_eq!(
+            view.resolve_cursor(&content, Some(past)),
+            CanvasCursor::Move
+        );
+
+        // The run moves with its layer, so the region does too.
+        let moved = CanvasContent {
+            text: Some((&geometry, Vec2::new(50.0, 0.0))),
+            ..content
+        };
+        assert_eq!(view.what_is_under(&moved, past), Region::Text);
+    }
+
+    /// The Zoom tool zooms *out* on an alt-click, and the cursor used to say
+    /// `ZoomIn` regardless — a magnifier with a plus in it over a click that
+    /// takes zoom away.
+    #[test]
+    fn the_zoom_cursor_turns_round_while_alt_is_held() {
+        let ctx = ctx_with_size(1000.0, 700.0);
+        let mut view = CanvasView::for_document(Vec2::splat(200.0));
+        let content = CanvasContent {
+            doc_size: Vec2::splat(200.0),
+            active_tool: ToolId::Zoom,
+            ..CanvasContent::default()
+        };
+        run_frame(&mut view, &ctx, &content);
+        let at = view.viewport().center_pt();
+
+        let plain = frame_holding(
+            &mut view,
+            &ctx,
+            &content,
+            egui::Modifiers::default(),
+            vec![move_to(at)],
+        );
+        assert_eq!(plain.cursor, CanvasCursor::ZoomIn);
+
+        let alt = frame_holding(
+            &mut view,
+            &ctx,
+            &content,
+            egui::Modifiers::ALT,
+            vec![move_to(at)],
+        );
+        assert_eq!(
+            alt.cursor,
+            CanvasCursor::ZoomOut,
+            "alt+click zooms out and the cursor promised the opposite"
+        );
+
+        // Only the Zoom tool: alt means something else to every other tool.
+        let brush = CanvasContent {
+            active_tool: ToolId::Brush,
+            ..content
+        };
+        let alt = frame_holding(
+            &mut view,
+            &ctx,
+            &brush,
+            egui::Modifiers::ALT,
+            vec![move_to(at)],
+        );
+        assert_eq!(alt.cursor, CanvasCursor::BrushOutline);
     }
 }

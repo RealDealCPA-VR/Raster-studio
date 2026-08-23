@@ -24,10 +24,11 @@ pub fn menu_bar(w: &mut Workspace, ctx: &egui::Context, context: &MenuContext) {
                 ui.spacing_mut().item_spacing.x = Space::Hair.pt();
                 for menu in &menus {
                     let title = text(ui, menu.title, TextRole::Primary, TypeRole::Body);
-                    ui.menu_button(title, |ui| {
+                    let opener = ui.menu_button(title, |ui| {
                         ui.set_min_width(menu_min_width(ui));
                         entries(w, ui, &menu.entries, context);
                     });
+                    super::mark(ui, opener.response.rect, super::ids::menu_title(menu.title));
                 }
             });
         });
@@ -80,15 +81,17 @@ fn entries(w: &mut Workspace, ui: &mut Ui, entries: &[Entry], context: &MenuCont
                 // A submenu whose every child is unavailable is itself
                 // unavailable, and says so on hover rather than opening onto a
                 // list of dead rows.
-                if enabled {
+                let opener = if enabled {
                     ui.menu_button(title, |ui| {
                         ui.set_min_width(menu_min_width(ui));
                         self::entries(w, ui, children, context);
-                    });
+                    })
+                    .response
                 } else {
                     ui.add_enabled(false, egui::Button::new(title))
-                        .on_disabled_hover_text("Nothing in this submenu is available right now");
-                }
+                        .on_disabled_hover_text("Nothing in this submenu is available right now")
+                };
+                super::mark(ui, opener.rect, super::ids::menu_submenu(label));
             }
         }
     }
@@ -130,6 +133,12 @@ fn item(w: &mut Workspace, ui: &mut Ui, action: MenuAction, context: &MenuContex
     }
 
     let response = ui.add_enabled(enabled, button);
+    // A menu row's own id comes from call order, which no test can name. This
+    // one is keyed by the action, so `tests/wired_controls.rs` can click the
+    // exact row and assert what it posts — the gate this file's opening claim
+    // ("there is no path through this file that draws a row which does
+    // nothing") needs in order to mean anything.
+    super::mark(ui, response.rect, super::ids::menu_item(action));
     match resolution {
         Resolution::Enabled(intent) => {
             if response.clicked() {

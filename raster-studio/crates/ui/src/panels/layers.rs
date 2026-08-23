@@ -180,8 +180,12 @@ impl LayersState {
         }
     }
 
-    pub fn set_expanded(&mut self, id: LayerId, expanded: bool) {
-        self.expanded.insert(id, expanded);
+    /// Override a group's disclosure. Returns `true` when the stored override
+    /// actually moved, so `Workspace::absorb` can report honestly rather than
+    /// claiming a change on every re-application — see the idempotency rule on
+    /// [`crate::Intent`].
+    pub fn set_expanded(&mut self, id: LayerId, expanded: bool) -> bool {
+        self.expanded.insert(id, expanded) != Some(expanded)
     }
 
     pub fn dragging(&self) -> Option<LayerId> {

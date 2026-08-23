@@ -117,6 +117,12 @@ pub struct OpenDocument {
     source_path: Option<PathBuf>,
     compositor: TileCompositor,
     dirty: DirtyTiles,
+    /// The camera still owes the user a fit — see [`OpenDocument::set_viewport`].
+    ///
+    /// Set at construction and cleared by the first real viewport, because at
+    /// construction the only size known is the document's own and fitting an
+    /// image to itself is exactly `zoom = 1.0`.
+    fit_pending: bool,
     /// Labels of the steps that have been undone, mirroring `History`'s redo
     /// stack: last is the one a redo would re-apply.
     ///
@@ -139,26 +145,30 @@ impl std::fmt::Debug for OpenDocument {
 }
 
 impl OpenDocument {
-    /// Wrap an imported document, sizing the camera to the canvas.
+    /// Wrap an imported document, with a camera waiting to be fitted.
+    ///
+    /// The camera is *not* fitted here. See [`OpenDocument::set_viewport`]: the
+    /// only size known at this point is the document's own, and fitting an
+    /// image to a viewport the same size as itself is `zoom = 1.0` — which is
+    /// how a 6000×4000 photograph used to open as a 100% centre crop.
     pub fn from_import(id: DocumentId, imported: ImportedDocument) -> Self {
         let size = glam::Vec2::new(
             imported.document.width() as f32,
             imported.document.height() as f32,
         );
-        let mut camera = Camera::new(size, size);
-        camera.fit();
         OpenDocument {
             id,
             document: imported.document,
             history: imported.history,
             tiles: imported.tiles,
-            camera,
+            camera: Camera::new(size, size),
             project_path: None,
             source_path: None,
             compositor: TileCompositor::new(),
             // Nothing has been presented yet, so everything is outstanding.
             dirty: DirtyTiles::all(),
             undone_labels: Vec::new(),
+            fit_pending: true,
         }
     }
 
@@ -187,19 +197,18 @@ impl OpenDocument {
         let mut document = loaded.document;
         document.set_path(Some(path.to_path_buf()));
         let size = glam::Vec2::new(document.width() as f32, document.height() as f32);
-        let mut camera = Camera::new(size, size);
-        camera.fit();
         Ok(OpenDocument {
             id,
             document,
             history: History::with_limit(history_depth),
             tiles,
-            camera,
+            camera: Camera::new(size, size),
             project_path: Some(path.to_path_buf()),
             source_path: None,
             compositor: TileCompositor::new(),
             dirty: DirtyTiles::all(),
             undone_labels: Vec::new(),
+            fit_pending: true,
         })
     }
 
@@ -215,6 +224,53 @@ impl OpenDocument {
             id,
             crate::import::blank_document(width, height, title, history_depth)?,
         ))
+    }
+
+    /// Tell the document how big the area it is drawn in actually is.
+    ///
+    /// # Why this is not just `camera.viewport_size = …`
+    ///
+    /// Opening a file has to *fit* it to the window, and the constructor
+    /// cannot: the only size it knows is the document's own, so the camera it
+    /// builds has `viewport_size == image_size` and [`Camera::fit`] there is
+    /// arithmetically `zoom = min(w/w, h/h) = 1.0` — a call that looks like a
+    /// fit and is exactly a no-op. That is how a 6000×4000 photograph opened at
+    /// 100% showing the middle 1280×720 of it.
+    ///
+    /// So the fit is deferred to the first frame that knows the window's size,
+    /// and happens **once**: every later frame and every resize only moves
+    /// `viewport_size`, because re-fitting would throw away the zoom and the
+    /// pan the user chose every time the window changed shape.
+    ///
+    /// A degenerate viewport (a minimised window reports 0×0) is not a real
+    /// size: it moves nothing and does not consume the pending fit, or the
+    /// document would come back from the taskbar at `zoom = 0`.
+    ///
+    /// # Opening never enlarges
+    ///
+    /// The fit is clamped to 100%. Fitting *on open* means "show all of it",
+    /// and an image already smaller than the window is already all there —
+    /// blowing a 32×32 icon up to 3000% because the window is big is not what
+    /// any editor does. View ▸ Fit on Screen ([`crate::Action::ZoomFit`]) is
+    /// the explicit request, and that one does scale up.
+    pub fn set_viewport(&mut self, viewport: glam::Vec2) {
+        if !(viewport.x >= 1.0 && viewport.y >= 1.0) {
+            return;
+        }
+        self.camera.viewport_size = viewport;
+        if self.fit_pending {
+            self.camera.fit();
+            self.camera.zoom = self.camera.zoom.min(1.0);
+            self.fit_pending = false;
+        }
+    }
+
+    /// `true` until the camera has been fitted to a real viewport.
+    ///
+    /// Exposed so a caller that draws before it knows its own size can tell
+    /// "the user chose 100%" from "nobody has fitted this yet".
+    pub fn awaiting_fit(&self) -> bool {
+        self.fit_pending
     }
 
     pub fn id(&self) -> DocumentId {
@@ -516,6 +572,71 @@ mod tests {
     }
 
     #[test]
+    fn an_image_larger_than_the_window_is_fitted_once_the_window_size_is_known() {
+        // The defect: `from_import` called `camera.fit()` while the camera's
+        // viewport was still the image's *own* size, and
+        // `min(w/w, h/h) == 1.0` — a call that reads like a fit and is
+        // arithmetically a no-op. So a photograph opened at 100%, showing the
+        // middle of it, under a constructor whose doc said "sizing the camera
+        // to the canvas". 1200x800 into 256x144 has the same shape as
+        // 6000x4000 into a 1280x720 window and costs a thousandth of the RAM.
+        let mut d = doc_of(1200, 800);
+        assert_eq!(d.camera.zoom, 1.0, "nothing can be fitted yet");
+        assert!(d.awaiting_fit());
+
+        // A minimised window reports 0x0. That is not a size, and it must not
+        // consume the pending fit or the document comes back at zoom 0.
+        d.set_viewport(glam::Vec2::ZERO);
+        assert!(d.awaiting_fit(), "0x0 counted as a viewport");
+        assert_eq!(d.camera.zoom, 1.0);
+
+        d.set_viewport(glam::Vec2::new(256.0, 144.0));
+        assert!(!d.awaiting_fit(), "the fit is owed only once");
+        assert!(
+            (d.camera.zoom - 144.0 / 800.0).abs() < 1e-6,
+            "the whole image does not fit: zoom {}",
+            d.camera.zoom
+        );
+        // Which is to say: every corner of the image is inside the viewport.
+        let half = glam::Vec2::new(1200.0, 800.0) * 0.5 * d.camera.zoom;
+        assert!(half.x <= 128.0 + 1e-3 && half.y <= 72.0 + 1e-3, "{half:?}");
+        assert_eq!(d.camera.center, glam::Vec2::new(600.0, 400.0));
+    }
+
+    #[test]
+    fn an_image_smaller_than_the_window_opens_at_its_own_size() {
+        // The other direction of the same fix, and the reason the open-time fit
+        // is clamped: "fit" here means "all of it is on screen", which a small
+        // image already is. Scaling a thumbnail up to fill a 4K window because
+        // it happens to be small is not fitting, it is magnifying.
+        let mut d = doc_of(64, 48);
+        d.set_viewport(glam::Vec2::new(1600.0, 900.0));
+        assert!(!d.awaiting_fit());
+        assert_eq!(d.camera.zoom, 1.0, "opening enlarged the image");
+
+        // View ▸ Fit on Screen is the explicit ask, and it still scales up.
+        d.camera.fit();
+        assert!(d.camera.zoom > 1.0, "Fit on Screen must still fill");
+    }
+
+    #[test]
+    fn a_resize_moves_the_viewport_without_undoing_the_users_zoom() {
+        // The other half of the same fix: the fit is deferred, not repeated.
+        // Re-fitting on every viewport change would snap the view back every
+        // time the window was resized or a panel opened.
+        let mut d = doc_of(1200, 800);
+        d.set_viewport(glam::Vec2::new(256.0, 144.0));
+
+        d.camera.zoom = 4.0;
+        d.camera.center = glam::Vec2::new(100.0, 200.0);
+        d.set_viewport(glam::Vec2::new(320.0, 200.0));
+
+        assert_eq!(d.camera.viewport_size, glam::Vec2::new(320.0, 200.0));
+        assert_eq!(d.camera.zoom, 4.0, "the resize re-fitted");
+        assert_eq!(d.camera.center, glam::Vec2::new(100.0, 200.0));
+    }
+
+    #[test]
     fn dirty_state_tracks_edits_and_clears_on_save() {
         let dir = tempfile::tempdir().unwrap();
         let mut d = doc_of(300, 200);
@@ -553,6 +674,11 @@ mod tests {
         d.save_to(&project, "test").unwrap();
 
         let mut back = OpenDocument::open_project(DocumentId(2), &project, 100).unwrap();
+        assert!(
+            back.awaiting_fit(),
+            "a reopened package is fitted when the window's size is known, not \
+             against its own canvas size, where a fit is a no-op"
+        );
         assert_eq!(back.document.layers.len(), 1);
         assert_eq!(back.project_path(), Some(project.as_path()));
         assert!(!back.is_dirty());

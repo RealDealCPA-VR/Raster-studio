@@ -12,8 +12,9 @@
 //! only thing that would notice is the user.
 //!
 //! Painting order matters and is fixed: backdrop, grid, pixel grid, guides,
-//! smart guides, then the content overlays (crop scrim first, because it dims
-//! the image), then the selection ants, the transform box, the path furniture,
+//! smart guides, layer edges, then the content overlays (crop scrim first,
+//! because it dims the image), then the selection ants, the transform box,
+//! the path furniture,
 //! the text caret, and last of all the brush ring — which must sit on top of
 //! everything, because it is the cursor.
 
@@ -316,6 +317,35 @@ pub fn smart_guides(
             ],
             style.hairline(style.smart_guide),
         );
+    }
+}
+
+/// One outline per layer bounding box — View ▸ Layer Edges.
+///
+/// Projected corner by corner rather than drawn as a screen-space rectangle, so
+/// a rotated or flipped view tilts the box with the image instead of leaving an
+/// axis-aligned rectangle floating over it.
+pub fn layer_edges(
+    painter: &egui::Painter,
+    camera: &CanvasCamera,
+    viewport: &Viewport,
+    edges: &[DocRect],
+    style: &CanvasStyle,
+) {
+    let stroke = style.hairline(style.layer_edge);
+    for rect in edges {
+        if rect.is_empty() {
+            continue;
+        }
+        let quad: Vec<egui::Pos2> = rect
+            .corners()
+            .iter()
+            .map(|c| to_pos2(camera.screen_pt_of(viewport, *c)))
+            .collect();
+        if quad.iter().any(|p| p.any_nan()) {
+            continue;
+        }
+        painter.add(egui::Shape::closed_line(quad, stroke));
     }
 }
 

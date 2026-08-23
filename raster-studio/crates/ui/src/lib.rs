@@ -251,6 +251,15 @@ impl Workspace {
     /// Document edits are not this function's business and are ignored: the
     /// application runs those through [`History`] and the next frame reads the
     /// result. Returns `true` when something in the workspace changed.
+    ///
+    /// # Absorbing twice is a no-op
+    ///
+    /// The controls in `view::` apply their own effect as they draw and *then*
+    /// emit, so an application that absorbs what it drained is re-applying
+    /// something that already landed. Every intent handled here is therefore an
+    /// absolute set — see the idempotency rule on [`Intent`], and
+    /// `every_workspace_intent_is_idempotent_under_absorb`, which enforces it
+    /// by applying each one twice and comparing the workspace.
     pub fn absorb(&mut self, intent: &Intent) -> bool {
         match intent {
             Intent::SetPanelOpen { panel, open } => {
@@ -259,7 +268,7 @@ impl Workspace {
                 before != self.dock.is_open(*panel)
             }
             Intent::DockPanel { panel, side } => self.dock.dock(*panel, *side),
-            Intent::ReorderPanel { panel, up } => self.dock.reorder(*panel, *up),
+            Intent::ReorderPanel { panel, to } => self.dock.reorder_to(*panel, *to),
             Intent::ApplyLayout(layout) => {
                 let before = self.dock.clone();
                 self.dock.apply_layout(*layout);
@@ -349,8 +358,7 @@ impl Workspace {
                 .color
                 .set_well(panels::color::ColorWell::Background, *rgba),
             Intent::SetGroupExpanded { layer, expanded } => {
-                self.layers.set_expanded(*layer, *expanded);
-                true
+                self.layers.set_expanded(*layer, *expanded)
             }
             Intent::SetToolOption { tool, key, value } => self.options.set(*tool, key, *value),
             _ => false,
@@ -371,7 +379,14 @@ impl Workspace {
             MenuAction::Zoom(ZoomCommand::In) => self.canvas.view.zoom_in(),
             MenuAction::Zoom(ZoomCommand::Out) => self.canvas.view.zoom_out(),
             MenuAction::Zoom(ZoomCommand::FitOnScreen) => self.canvas.zoom_to_fit(),
+            MenuAction::Zoom(ZoomCommand::FillScreen) => self.canvas.zoom_to_fill(),
             MenuAction::Zoom(ZoomCommand::ActualPixels) => self.canvas.view.zoom_to_actual_pixels(),
+            // The return value is deliberately dropped: the camera comparison
+            // below is the answer to "did anything change?", and a refusal here
+            // means it did not.
+            MenuAction::Zoom(ZoomCommand::ToSelection) => {
+                let _ = self.canvas.zoom_to_selection();
+            }
             MenuAction::Zoom(ZoomCommand::PrintSize) => self.canvas.zoom_to_print_size(),
             MenuAction::ResetViewRotation => self.canvas.view.camera.reset_rotation(),
             _ => return false,
@@ -409,8 +424,8 @@ impl Workspace {
     /// Put the View menu's toggles onto the canvas.
     ///
     /// [`ViewFlags`] is what the menu draws its checkmarks from; this is what
-    /// makes ticking one *do* something. Without it the six canvas toggles were
-    /// a checkmark and nothing else.
+    /// makes ticking one *do* something. Without it the canvas toggles were a
+    /// checkmark and nothing else.
     ///
     /// Called immediately before the canvas draws, so a flag flipped by a menu
     /// click or a chord this frame is on screen in the same frame.
@@ -435,6 +450,8 @@ impl Workspace {
         // Smart guides *are* the layer-alignment snap: the lines only appear
         // because a layer edge or centre caught, so the two are one setting.
         view.snap.to_layers = self.view_flags.get(ViewFlag::SmartGuides);
+        view.selection_edges_visible = self.view_flags.get(ViewFlag::SelectionEdges);
+        view.layer_edges_visible = self.view_flags.get(ViewFlag::LayerEdges);
         view.precise_cursor = self.view_flags.get(ViewFlag::PreciseCursor);
         view.camera.flip_x = self.view_flags.get(ViewFlag::FlipHorizontal);
         view.camera.flip_y = self.view_flags.get(ViewFlag::FlipVertical);
@@ -651,17 +668,118 @@ mod tests {
         let mut w = Workspace::new();
         let before = w.dock.panels_on(DockSide::Right);
         let last = *before.last().expect("Essentials fills the right rail");
-        assert!(w.absorb(&Intent::ReorderPanel {
-            panel: last,
-            up: true
-        }));
+        let to = u8::try_from(before.len() - 2).unwrap();
+        assert!(w.absorb(&Intent::ReorderPanel { panel: last, to }));
         assert_ne!(w.dock.panels_on(DockSide::Right), before);
-        // The first panel cannot go up, and the workspace says nothing changed.
+        assert_eq!(w.dock.panels_on(DockSide::Right)[usize::from(to)], last);
+        // Absorbing the very same intent again leaves it exactly there: the
+        // destination is absolute, so a second application is a no-op.
+        assert!(!w.absorb(&Intent::ReorderPanel { panel: last, to }));
+        assert_eq!(w.dock.panels_on(DockSide::Right)[usize::from(to)], last);
+        // Index 0 is where the first panel already is.
         let first = w.dock.panels_on(DockSide::Right)[0];
         assert!(!w.absorb(&Intent::ReorderPanel {
             panel: first,
-            up: true
+            to: 0
         }));
+    }
+
+    /// Everything an application routes back into the workspace, applied twice.
+    ///
+    /// The invariant is on [`Intent`]: the drawing side has already applied
+    /// what it emits, so absorbing a drained intent is the *second*
+    /// application. A relative intent — `ReorderPanel { up }`, as it was
+    /// written — moves the panel one more place, and every other variant in
+    /// this set happened to be an absolute set, which is why nothing else
+    /// caught it.
+    #[test]
+    fn every_workspace_intent_is_idempotent_under_absorb() {
+        use dialogs::units::Unit;
+        use panels::channels::ChannelKind;
+
+        // The whole of the state `absorb` can touch for this set, as a value a
+        // test can compare. `ToolOptions` has no `PartialEq`, so this is the
+        // Debug rendering rather than the struct.
+        fn probe(w: &Workspace) -> String {
+            format!(
+                "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+                w.dock, w.view_flags, w.channels, w.canvas.unit, w.options, w.layers
+            )
+        }
+
+        let doc = Document::new(32, 32, "Probe");
+        let group = doc.layers.iter_depth_first().first().copied();
+        let intents = vec![
+            Intent::SetPanelOpen {
+                panel: PanelId::Navigator,
+                open: true,
+            },
+            Intent::DockPanel {
+                panel: PanelId::Layers,
+                side: DockSide::Left,
+            },
+            Intent::ReorderPanel {
+                panel: PanelId::Layers,
+                to: 0,
+            },
+            Intent::ApplyLayout(dock::LayoutId::Painting),
+            Intent::SetViewFlag {
+                flag: ViewFlag::Grid,
+                on: true,
+            },
+            Intent::SetRulerUnit(Unit::Centimeters),
+            Intent::SetChannelVisible {
+                channel: ChannelKind::Component(0),
+                visible: false,
+            },
+            Intent::SelectChannel(ChannelKind::Component(1)),
+            Intent::SetToolOption {
+                tool: tools::ToolId::Brush,
+                key: "size",
+                value: OptionValue::Float(48.0),
+            },
+            Intent::SetToolGradient {
+                tool: tools::ToolId::Gradient,
+                gradient: Box::new(layer_model::Gradient {
+                    smoothness: 0.25,
+                    ..Default::default()
+                }),
+            },
+            Intent::ResetToolOptions(tools::ToolId::Brush),
+        ]
+        .into_iter()
+        .chain(group.map(|layer| Intent::SetGroupExpanded {
+            layer,
+            expanded: false,
+        }))
+        .collect::<Vec<_>>();
+
+        for intent in intents {
+            let mut w = Workspace::new();
+            // An override for `ResetToolOptions` to have something to clear —
+            // without it that intent would pass the check by doing nothing.
+            w.options
+                .set(tools::ToolId::Brush, "size", OptionValue::Float(11.0));
+            let fresh = probe(&w);
+            assert!(
+                w.absorb(&intent),
+                "{intent:?} changed nothing at all, so applying it twice proves \
+                 nothing"
+            );
+            let once = probe(&w);
+            assert_ne!(once, fresh, "{intent:?} reported a change it did not make");
+            let again = w.absorb(&intent);
+            assert_eq!(
+                probe(&w),
+                once,
+                "absorbing {intent:?} twice moved the workspace twice"
+            );
+            assert!(
+                !again,
+                "{intent:?} reported a change on its second absorb, so an \
+                 application would repaint (and keep repainting) for nothing"
+            );
+        }
     }
 
     #[test]
@@ -945,13 +1063,17 @@ mod tests {
         /// How to read the canvas field one flag drives.
         type Read = fn(&Workspace) -> bool;
         // Each flag, beside the canvas field it has to move.
-        let read: [(ViewFlag, Read); 8] = [
+        let read: [(ViewFlag, Read); 10] = [
             (ViewFlag::Rulers, |w| w.canvas.view.rulers_visible),
             (ViewFlag::Guides, |w| w.canvas.view.guides.visible),
             (ViewFlag::Grid, |w| w.canvas.view.grid.visible),
             (ViewFlag::PixelGrid, |w| w.canvas.view.grid.pixel_grid),
             (ViewFlag::Snap, |w| w.canvas.view.snap.enabled),
             (ViewFlag::SmartGuides, |w| w.canvas.view.snap.to_layers),
+            (ViewFlag::SelectionEdges, |w| {
+                w.canvas.view.selection_edges_visible
+            }),
+            (ViewFlag::LayerEdges, |w| w.canvas.view.layer_edges_visible),
             (ViewFlag::FlipHorizontal, |w| w.canvas.view.camera.flip_x),
             (ViewFlag::FlipVertical, |w| w.canvas.view.camera.flip_y),
         ];
@@ -1189,6 +1311,81 @@ mod tests {
             "{}",
             w.canvas.view.camera.zoom
         );
+    }
+
+    /// Fill Screen and Zoom to Selection were implemented on the canvas,
+    /// tested, and reachable from no control in the running application: the
+    /// View menu listed five zoom commands and `absorb_action` handled exactly
+    /// those five.
+    #[test]
+    fn fill_screen_and_zoom_to_selection_are_reachable_and_do_something() {
+        use editor_core::Selection;
+        use glam::IVec2;
+        use menu::ZoomCommand;
+
+        let ctx = workspace_ctx(1.0);
+        let mut doc = Document::new(4000, 3000, "Big");
+        let history = History::new();
+        let mut w = Workspace::new();
+        workspace_frame(&mut w, &ctx, &doc, &history, 1.0, Vec::new());
+
+        // Both are in the View menu at all, which is where this started.
+        let in_the_menu: Vec<MenuAction> = menu::menu_bar(0)
+            .iter()
+            .flat_map(menu::Menu::actions)
+            .collect();
+        assert!(in_the_menu.contains(&MenuAction::Zoom(ZoomCommand::FillScreen)));
+        assert!(in_the_menu.contains(&MenuAction::Zoom(ZoomCommand::ToSelection)));
+
+        // Fill Screen goes past Fit on Screen, which is the whole difference
+        // between them on a document that is not the viewport's shape.
+        invoke(
+            &mut w,
+            &doc,
+            &history,
+            MenuAction::Zoom(ZoomCommand::FitOnScreen),
+        );
+        let fit = w.canvas.view.camera.zoom;
+        invoke(
+            &mut w,
+            &doc,
+            &history,
+            MenuAction::Zoom(ZoomCommand::FillScreen),
+        );
+        assert!(
+            w.canvas.view.camera.zoom > fit,
+            "Fill Screen left the view fitted ({} vs {fit})",
+            w.canvas.view.camera.zoom
+        );
+        assert_eq!(w.status.zoom, w.canvas.view.camera.zoom);
+
+        // With nothing selected, Zoom to Selection is disabled *and says why* —
+        // never an item that looks live and quietly does nothing.
+        let context = w.menu_context(&doc, &history);
+        let resolved = MenuAction::Zoom(ZoomCommand::ToSelection).resolve(&context);
+        assert!(!resolved.is_enabled());
+        assert_eq!(resolved.reason(), Some("Nothing is selected"));
+
+        // …and with one, it frames it.
+        doc.selection = Selection::Rect {
+            min: IVec2::new(1000, 1200),
+            max: IVec2::new(1100, 1260),
+        };
+        workspace_frame(&mut w, &ctx, &doc, &history, 1.0, Vec::new());
+        let before = w.canvas.view.camera.center;
+        invoke(
+            &mut w,
+            &doc,
+            &history,
+            MenuAction::Zoom(ZoomCommand::ToSelection),
+        );
+        assert_ne!(w.canvas.view.camera.center, before);
+        assert!(
+            (w.canvas.view.camera.center - glam::Vec2::new(1050.0, 1230.0)).length() < 1e-3,
+            "{:?}",
+            w.canvas.view.camera.center
+        );
+        assert_eq!(w.status.zoom, w.canvas.view.camera.zoom);
     }
 
     /// A zoom typed into the status bar reaches the camera, and a zoom the

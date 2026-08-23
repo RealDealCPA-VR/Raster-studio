@@ -22,13 +22,24 @@
 //! greyed out and says why is not.
 //!
 //! `every_ui_menu_item_is_either_performable_or_disabled_with_a_reason` walks
-//! all nine menus in several states and asserts exactly that.
+//! all nine menus in two document states, counts the three outcomes and pins
+//! the number of unwired items this build has, by name.
+//!
+//! # The bridge is the whole workspace's, not only the menu's
+//!
+//! [`pick`] answers *any* [`ui::Intent`], not only the ones a menu item
+//! produces, because the same vocabulary comes back out of
+//! [`ui::Workspace::drain_intents`] when the docked panels, the tool palette and
+//! the options bar are drawn. One translation table, so a control in a panel and
+//! the menu item that does the same thing cannot disagree.
 
 use std::path::PathBuf;
 
 use editor_core::Command;
+use layer_model::LayerId;
+use tools::ToolId;
 use ui::menu::{Entry, Menu, MenuAction};
-use ui::{Intent, MenuContext, Resolution};
+use ui::{Intent, MenuContext, Resolution, Workspace};
 
 use crate::action::Action;
 use crate::chrome::ChromeOutput;
@@ -49,6 +60,33 @@ pub enum Pick {
     OpenRecent(PathBuf),
     /// A settings change — the Window ▸ Appearance items.
     Preferences(Box<Preferences>),
+    /// An intent whose whole effect is on the workspace itself: which panels
+    /// are open, where they are docked, the view overlays, channel isolation,
+    /// tool options. [`ui::Workspace::absorb`] performs these, and
+    /// [`crate::chrome::Chrome`] owns the workspace, so it applies them itself.
+    ///
+    /// **Every intent routed here must be idempotent under
+    /// [`ui::Workspace::absorb`].** A control in a drawn panel applies its own
+    /// effect and then emits, so absorbing what was drained applies it again;
+    /// only an absolute set (`open`, `side`, `to`, `on`, `visible`, a value)
+    /// survives that. The `ui` crate states the rule on [`ui::Intent`] and
+    /// enforces it in `every_workspace_intent_is_idempotent_under_absorb`; this
+    /// list is the other half of the contract, so adding a *relative* intent
+    /// here is the mistake to refuse.
+    Workspace(Box<Intent>),
+    /// Make a tool active.
+    Tool(ToolId),
+    /// Move the selection in the layers panel.
+    SelectLayer(LayerId),
+    /// Stand on this many applied commands — [`Editor::jump_history`]'s
+    /// absolute depth, converted here from the panel's relative step count.
+    History(usize),
+    /// The active document's zoom, as a scale factor.
+    Zoom(f32),
+    /// The active document's camera centre, in image pixels.
+    ViewCenter((f32, f32)),
+    Foreground([f32; 4]),
+    Background([f32; 4]),
 }
 
 /// The nine menus, exactly as the `ui` crate publishes them.
@@ -61,7 +99,12 @@ pub fn menus(editor: &Editor) -> Vec<Menu> {
 }
 
 /// The state every item is resolved against this frame.
-pub fn context(editor: &Editor) -> MenuContext {
+///
+/// The dock, the view overlays and the ruler unit come from the live
+/// [`Workspace`] rather than from a default, which is what makes Window ▸
+/// Workspace and the View menu's checkmarks describe the window the user is
+/// looking at.
+pub fn context(editor: &Editor, workspace: &Workspace) -> MenuContext {
     let recent_files = editor
         .recent()
         .entries()
@@ -74,8 +117,13 @@ pub fn context(editor: &Editor) -> MenuContext {
         .collect();
 
     let mut context = match editor.active() {
-        Some(open) => MenuContext::from_document(&open.document, &open.history),
-        None => MenuContext::default(),
+        Some(open) => workspace.menu_context(&open.document, &open.history),
+        None => MenuContext {
+            dock: workspace.dock.clone(),
+            view: workspace.view_flags,
+            clipboard: workspace.clipboard,
+            ..MenuContext::default()
+        },
     };
     context.recent_files = recent_files;
     context.open_documents = editor.documents().len();
@@ -86,9 +134,10 @@ pub fn context(editor: &Editor) -> MenuContext {
 /// What the shell should do about `intent`, or `None` when this build has no
 /// answer for it.
 ///
-/// Every arm is an explicit decision. The wildcard at the end covers the
-/// intents that belong to `ui`'s own workspace — its dock, its tool options,
-/// its view overlays — which this shell does not host yet.
+/// Every arm is an explicit decision, and the two that return `None` say why:
+/// [`Intent::EditLayerKind`] has no `editor_core::Command` behind it (see the
+/// variant's own documentation), and a [`MenuAction`] with no [`Action`] is a
+/// menu item this build does not implement.
 pub fn pick(intent: &Intent, editor: &Editor) -> Option<Pick> {
     match intent {
         Intent::Document(command) => Some(Pick::Command(command.clone())),
@@ -101,7 +150,39 @@ pub fn pick(intent: &Intent, editor: &Editor) -> Option<Pick> {
             };
             Some(Pick::Preferences(Box::new(prefs)))
         }
-        _ => None,
+        Intent::SelectTool(tool) => Some(Pick::Tool(*tool)),
+        Intent::SelectLayers { active, .. } => active.map(Pick::SelectLayer),
+        Intent::HistoryJump(jump) => {
+            // The panel counts *steps* from where the document stands; the
+            // editor walks to an absolute depth. Converting here keeps the one
+            // place that knows both.
+            let here = editor.active()?.history_depth();
+            Some(Pick::History(
+                here.saturating_sub(jump.undo).saturating_add(jump.redo),
+            ))
+        }
+        Intent::SetZoom(zoom) => Some(Pick::Zoom(*zoom)),
+        Intent::SetViewCenter(center) => Some(Pick::ViewCenter(*center)),
+        Intent::SetForeground(rgba) => Some(Pick::Foreground(*rgba)),
+        Intent::SetBackground(rgba) => Some(Pick::Background(*rgba)),
+        // Everything whose whole effect is on the workspace's own state. Listed
+        // rather than caught by a wildcard: a new intent variant must be an
+        // explicit decision here, which is what the wildcard used to hide.
+        Intent::SetPanelOpen { .. }
+        | Intent::DockPanel { .. }
+        | Intent::ReorderPanel { .. }
+        | Intent::ApplyLayout(_)
+        | Intent::SetViewFlag { .. }
+        | Intent::SetRulerUnit(_)
+        | Intent::SetChannelVisible { .. }
+        | Intent::SelectChannel(_)
+        | Intent::SetToolOption { .. }
+        | Intent::SetToolGradient { .. }
+        | Intent::ResetToolOptions(_)
+        | Intent::SetGroupExpanded { .. } => Some(Pick::Workspace(Box::new(intent.clone()))),
+        // No `editor_core::Command` replaces a layer's kind payload, so there
+        // is nothing to route this through history as.
+        Intent::EditLayerKind { .. } => None,
     }
 }
 
@@ -147,6 +228,14 @@ pub fn record(pick: Pick, out: &mut ChromeOutput) {
         Pick::Command(command) => out.commands.push(command),
         Pick::OpenRecent(path) => out.open_recent = Some(path),
         Pick::Preferences(prefs) => out.preferences = Some(*prefs),
+        Pick::Workspace(intent) => out.workspace.push(*intent),
+        Pick::Tool(tool) => out.select_tool = Some(tool),
+        Pick::SelectLayer(layer) => out.select_layer = Some(layer),
+        Pick::History(depth) => out.history_jump = Some(depth),
+        Pick::Zoom(zoom) => out.set_zoom = Some(zoom),
+        Pick::ViewCenter(center) => out.set_view_center = Some(center),
+        Pick::Foreground(rgba) => out.set_foreground = Some(rgba),
+        Pick::Background(rgba) => out.set_background = Some(rgba),
     }
 }
 
@@ -167,9 +256,9 @@ pub fn resolve(action: MenuAction, context: &MenuContext, editor: &Editor) -> Re
 // ---------------------------------------------------------------------------
 
 /// Draw the menu bar and record whatever the user picked.
-pub fn draw(ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
+pub fn draw(ctx: &egui::Context, editor: &Editor, workspace: &Workspace, out: &mut ChromeOutput) {
     let menus = menus(editor);
-    let context = context(editor);
+    let context = context(editor, workspace);
     egui::TopBottomPanel::top("raster-menu-bar")
         .frame(crate::chrome::panel_frame(
             ctx,
@@ -352,30 +441,198 @@ mod tests {
         );
     }
 
-    #[test]
-    fn every_ui_menu_item_is_either_performable_or_disabled_with_a_reason() {
-        let dir = tempfile::tempdir().unwrap();
-        let ed = editor(dir.path());
-        let context = context(&ed);
-        let mut wired = 0usize;
-        for menu in menus(&ed) {
+    /// How every item in every menu resolved, in one document state.
+    #[derive(Default)]
+    struct Tally {
+        /// Items the shell can perform right now.
+        performable: Vec<MenuAction>,
+        /// Items the *shared model* turned off, with the reason it gave.
+        disabled: Vec<(MenuAction, String)>,
+        /// Items the model allows and this build has no answer for.
+        unwired: Vec<MenuAction>,
+    }
+
+    impl Tally {
+        fn total(&self) -> usize {
+            self.performable.len() + self.disabled.len() + self.unwired.len()
+        }
+
+        /// The unwired items, one per line, for a failure message that names
+        /// what is dead rather than only counting it.
+        fn unwired_list(&self) -> String {
+            self.unwired
+                .iter()
+                .map(|a| format!("  {a:?}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    }
+
+    /// Walk all nine menus and sort every item into the three outcomes.
+    fn tally(ed: &Editor, ws: &Workspace) -> Tally {
+        let context = context(ed, ws);
+        let mut tally = Tally::default();
+        for menu in menus(ed) {
             for action in menu.actions() {
-                match resolve(action, &context, &ed) {
-                    Ok(_) => wired += 1,
-                    Err(reason) => assert!(!reason.is_empty(), "{action:?} greys out silently"),
+                match resolve(action, &context, ed) {
+                    Ok(_) => tally.performable.push(action),
+                    Err(reason) if reason == NOT_WIRED => tally.unwired.push(action),
+                    Err(reason) => tally.disabled.push((action, reason)),
                 }
             }
         }
-        // With nothing open the shell can still do these, so a bridge that
-        // mapped nothing at all would fail here rather than passing vacuously.
-        assert!(wired >= 3, "only {wired} items were performable");
+        tally
+    }
+
+    /// A document open, one layer, nothing else special: the state a user is in
+    /// for almost the whole session, and therefore the state the menu contract
+    /// has to be measured in.
+    fn editor_with_a_document(dir: &std::path::Path) -> Editor {
+        let mut ed = editor(dir);
+        ed.dispatch(Action::NewDocument).expect("a new document");
+        ed
+    }
+
+    // The ratchet, and the honest measurement of where this build stands.
+    //
+    // All nine menus carry 256 items. With one document open, 77 of them are
+    // performable, 51 are legitimately disabled by the shared model, and 128
+    // still answer `NOT_WIRED` — every Filter, every Adjustment, Image Size,
+    // Canvas Size, every Transform and Select All, none of which has an
+    // `editor_core` command behind it yet. Before the shell hosted
+    // `ui::Workspace` the split was 41 / 51 / 164: the thirty-six items that
+    // moved are all four workspace presets, all thirteen panels, all thirteen
+    // view overlays and the ruler units, which had nowhere to act.
+    //
+    // The floors may only rise and the caps may only fall. A new menu item
+    // nobody wired pushes the cap over and the failure lists it by name.
+    const MAX_UNWIRED_WITH_A_DOCUMENT: usize = 128;
+    const MIN_PERFORMABLE_WITH_A_DOCUMENT: usize = 77;
+    const MAX_UNWIRED_WITH_NOTHING_OPEN: usize = 4;
+    const MIN_PERFORMABLE_WITH_NOTHING_OPEN: usize = 30;
+
+    #[test]
+    fn every_ui_menu_item_is_either_performable_or_disabled_with_a_reason() {
+        // The contract this module's doc names, measured rather than asserted:
+        // every item in every menu lands in exactly one of three buckets, a
+        // disabled item always says why, and the size of the dead bucket is
+        // pinned so it can only shrink.
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new();
+
+        for (label, ed, min_performable, max_unwired) in [
+            (
+                "with a document open",
+                editor_with_a_document(dir.path()),
+                MIN_PERFORMABLE_WITH_A_DOCUMENT,
+                MAX_UNWIRED_WITH_A_DOCUMENT,
+            ),
+            (
+                "with nothing open",
+                editor(dir.path()),
+                MIN_PERFORMABLE_WITH_NOTHING_OPEN,
+                MAX_UNWIRED_WITH_NOTHING_OPEN,
+            ),
+        ] {
+            let t = tally(&ed, &ws);
+            assert!(t.total() > 200, "{label}: only {} items walked", t.total());
+            for (action, reason) in &t.disabled {
+                assert!(!reason.is_empty(), "{label}: {action:?} greys out silently");
+            }
+            assert!(
+                t.performable.len() >= min_performable,
+                "{label}: only {} of {} items are performable, down from {min_performable}. \
+                 Something the bridge used to route stopped resolving.",
+                t.performable.len(),
+                t.total()
+            );
+            assert!(
+                t.unwired.len() <= max_unwired,
+                "{label}: {} of {} items answer “{NOT_WIRED}”, up from {max_unwired}. \
+                 The dead ones are:\n{}",
+                t.unwired.len(),
+                t.total(),
+                t.unwired_list()
+            );
+        }
+    }
+
+    #[test]
+    fn the_window_and_view_menus_are_wired_through_the_workspace() {
+        // The named half of the count above. Every one of these used to answer
+        // `NOT_WIRED`, because the bridge's `pick` ended in `_ => None` and the
+        // shell had no `ui::Workspace` for them to act on. They are the items a
+        // reviewer measured as dead: all four workspace presets, all thirteen
+        // panels, and every view overlay.
+        let dir = tempfile::tempdir().unwrap();
+        let ed = editor_with_a_document(dir.path());
+        let ws = Workspace::new();
+        let context = context(&ed, &ws);
+
+        for layout in ui::LayoutId::ALL {
+            match resolve(MenuAction::ApplyLayout(*layout), &context, &ed) {
+                Ok(Pick::Workspace(intent)) => {
+                    assert_eq!(*intent, Intent::ApplyLayout(*layout))
+                }
+                other => panic!("{layout:?} resolved to {other:?}"),
+            }
+        }
+        for panel in ui::PanelId::ALL {
+            match resolve(MenuAction::TogglePanel(*panel), &context, &ed) {
+                Ok(Pick::Workspace(intent)) => assert_eq!(
+                    *intent,
+                    Intent::SetPanelOpen {
+                        panel: *panel,
+                        open: !context.dock.is_open(*panel),
+                    }
+                ),
+                other => panic!("{panel:?} resolved to {other:?}"),
+            }
+        }
+        for flag in ui::ViewFlag::ALL {
+            let outcome = resolve(MenuAction::ToggleView(*flag), &context, &ed);
+            assert!(
+                matches!(outcome, Ok(Pick::Workspace(_))),
+                "{flag:?} resolved to {outcome:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn absorbing_what_the_window_menu_picks_really_moves_the_dock() {
+        // A pick that nothing performs is the defect this whole file exists to
+        // stop, so the round trip is the assertion: resolve the menu item,
+        // absorb what it produced, and read the dock back.
+        let dir = tempfile::tempdir().unwrap();
+        let ed = editor_with_a_document(dir.path());
+        let mut ws = Workspace::new();
+        assert!(!ws.dock.is_open(ui::PanelId::Channels), "not open yet");
+
+        let context = context(&ed, &ws);
+        let Ok(Pick::Workspace(intent)) = resolve(
+            MenuAction::TogglePanel(ui::PanelId::Channels),
+            &context,
+            &ed,
+        ) else {
+            panic!("Window ▸ Channels is not wired");
+        };
+        assert!(ws.absorb(&intent), "absorbing it changed nothing");
+        assert!(ws.dock.is_open(ui::PanelId::Channels));
+
+        // ...and the menu now shows the checkmark, because the context is read
+        // off the same workspace rather than off a fresh default.
+        let after = self::context(&ed, &ws);
+        assert_eq!(
+            MenuAction::TogglePanel(ui::PanelId::Channels).checked(&after),
+            Some(true)
+        );
     }
 
     #[test]
     fn the_file_menu_routes_the_actions_this_build_has() {
         let dir = tempfile::tempdir().unwrap();
         let ed = editor(dir.path());
-        let context = context(&ed);
+        let context = context(&ed, &Workspace::new());
         assert_eq!(
             resolve(MenuAction::NewDocument, &context, &ed),
             Ok(Pick::Action(Action::NewDocument))
@@ -401,7 +658,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ed = editor(dir.path());
         ed.dispatch(Action::NewDocument).expect("a new document");
-        let context = context(&ed);
+        let context = context(&ed, &Workspace::new());
         // The menu model allows it; this shell has no gallery for it.
         assert_eq!(
             resolve(MenuAction::FileInfo, &context, &ed),
@@ -421,7 +678,7 @@ mod tests {
         let mut recent = RecentFiles::new();
         recent.record(path.clone());
         let ed = with_recent(dir.path(), recent);
-        let context = context(&ed);
+        let context = context(&ed, &Workspace::new());
         assert_eq!(MenuAction::OpenRecent(0).label_in(&context), "seaside.png");
         assert_eq!(
             resolve(MenuAction::OpenRecent(0), &context, &ed),
@@ -437,7 +694,7 @@ mod tests {
     fn switching_appearance_writes_the_preference_rather_than_a_dead_action() {
         let dir = tempfile::tempdir().unwrap();
         let ed = editor(dir.path());
-        let context = context(&ed);
+        let context = context(&ed, &Workspace::new());
         let other = match context.theme {
             design::Theme::Dark => design::Theme::Light,
             design::Theme::Light => design::Theme::Dark,

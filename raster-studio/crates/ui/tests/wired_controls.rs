@@ -1,12 +1,25 @@
 //! Every control that changes something must *say* it changed something.
 //!
-//! `clicking_the_real_thing.rs` proves the layers panel and the tool palette
-//! are wired. This file covers the controls a review found drawn but silent:
-//! the tool-options Reset, the gradient stop editor, the Channels toggles, the
-//! Navigator's pan, the panel-move controls, and the Properties panel's
-//! adjustment editor. Each one is found on screen by its stable id, clicked,
-//! and the resulting intent asserted — so "drawn but wired to nothing" fails
-//! here rather than being discovered.
+//! `clicking_the_real_thing.rs` proves the layer rows and the tool palette are
+//! wired. This file covers the rest of the chrome: the menu bar, the tool
+//! options bar, the status bar's zoom, the Layers panel's blend / opacity /
+//! fill / locks and its footer, the History panel's stack and snapshots, the
+//! Adjustments grid, the tool-options Reset, the gradient stop editor, the
+//! Channels toggles, the Navigator's pan, the panel-move controls and the
+//! Properties panel's adjustment editor. Each one is found on screen by its
+//! stable id, driven, and the resulting intent asserted — so "drawn but wired
+//! to nothing" fails here rather than being discovered.
+//!
+//! That claim was once broader than the file: a review deleted the command
+//! emission from every menu row, every tool option, the Layers panel's opacity
+//! and blend, the History rows and the Adjustments tiles, and the suite stayed
+//! green. Each of those deletions now turns something in here red.
+//!
+//! The options bar is covered arm by arm, not just through the shared `emit`
+//! closure: Float, Int, Bool and Choice each have their own driven control, so
+//! a wiring bug in one arm cannot hide behind the others. `Color` is the one
+//! arm with no click test, and `no_tool_declares_a_colour_option_so_that_arm_is_undrawn`
+//! is why — it goes red the day a tool ships one.
 //!
 //! It also pins the two facts a drawn frame used to destroy: the dock's
 //! saved-layout identity, and the viewport the Navigator measures the document
@@ -94,6 +107,13 @@ impl Harness {
         self.ctx.read_response(id).is_some()
     }
 
+    /// The whole response, for the tests that ask what a control *senses*
+    /// rather than where it is.
+    fn response_of(&mut self, id: egui::Id) -> Option<egui::Response> {
+        self.settle();
+        self.ctx.read_response(id)
+    }
+
     fn click_at(&mut self, at: egui::Pos2) -> Vec<Intent> {
         self.frame(vec![
             egui::Event::PointerMoved(at),
@@ -116,6 +136,45 @@ impl Harness {
     fn click(&mut self, id: egui::Id) -> Vec<Intent> {
         let at = self.rect(id).center();
         self.click_at(at)
+    }
+
+    /// Press at `from`, walk the pointer to `to` over several frames, release.
+    ///
+    /// A slider or a `DragValue` only follows a pointer that *moves*: egui
+    /// calls a press a drag once it has travelled further than
+    /// `max_click_dist`, so a press and release in one frame changes nothing.
+    /// Every frame's intents are collected, so a value emitted mid-drag counts.
+    fn drag(&mut self, from: egui::Pos2, to: egui::Pos2) -> Vec<Intent> {
+        let mut out = self.frame(vec![
+            egui::Event::PointerMoved(from),
+            egui::Event::PointerButton {
+                pos: from,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+        ]);
+        const STEPS: usize = 4;
+        for step in 1..=STEPS {
+            let at = from + (to - from) * (step as f32 / STEPS as f32);
+            out.extend(self.frame(vec![egui::Event::PointerMoved(at)]));
+        }
+        out.extend(self.frame(vec![
+            egui::Event::PointerMoved(to),
+            egui::Event::PointerButton {
+                pos: to,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            },
+        ]));
+        out
+    }
+
+    /// Drag the control with `id`, starting in its middle and moving `by`.
+    fn drag_control(&mut self, id: egui::Id, by: egui::Vec2) -> Vec<Intent> {
+        let from = self.rect(id).center();
+        self.drag(from, from + by)
     }
 
     fn key(&mut self, key: egui::Key, modifiers: egui::Modifiers) -> Vec<Intent> {
@@ -159,6 +218,85 @@ impl Harness {
         }
         out
     }
+
+    /// Type `text` the way a keyboard does: the key press, the character it
+    /// produced, then the release — one character per frame.
+    ///
+    /// [`Harness::type_into`] sends only the `Text` event, which no shortcut
+    /// table ever looks at. A real keystroke carries a `Key` too, and that is
+    /// the one the workspace routes to `keys::tool_for_key` when no field has
+    /// focus — so a field that failed to take focus turns typing into tool
+    /// switching. Only this spelling can catch that.
+    fn type_keys(&mut self, text: &str) -> Vec<Intent> {
+        let mut out = Vec::new();
+        for ch in text.chars() {
+            let key = egui::Key::from_name(&ch.to_string())
+                .unwrap_or_else(|| panic!("egui has no key for {ch:?}"));
+            out.extend(self.frame(vec![
+                egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::default(),
+                },
+                egui::Event::Text(ch.to_string()),
+                egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: false,
+                    repeat: false,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ]));
+        }
+        out
+    }
+
+    /// Make `tool` the active tool, so its options bar is the one on screen.
+    fn use_tool(&mut self, tool: tools::ToolId) {
+        let model = ui::PaletteModel::build();
+        self.workspace.palette.activate(&model, tool);
+        self.settle();
+    }
+
+    /// Open a top-level menu by its title. Its rows are only drawn — and so
+    /// only findable — while it is open.
+    fn open_menu(&mut self, title: &'static str) {
+        self.click(ids::menu_title(title));
+    }
+}
+
+fn command() -> egui::Modifiers {
+    egui::Modifiers {
+        command: true,
+        ..Default::default()
+    }
+}
+
+/// Every `Intent::SetToolOption` a run of frames produced, in order.
+fn option_writes(intents: &[Intent]) -> Vec<(tools::ToolId, &'static str, ui::OptionValue)> {
+    intents
+        .iter()
+        .filter_map(|i| match i {
+            Intent::SetToolOption { tool, key, value } => Some((*tool, *key, *value)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every layer patch a run of frames produced, in order.
+fn patches(intents: &[Intent]) -> Vec<(layer_model::LayerId, editor_core::LayerPatch)> {
+    intents
+        .iter()
+        .filter_map(Intent::as_command)
+        .filter_map(|c| match c {
+            editor_core::Command::SetLayerProperties { layer_id, patch } => {
+                Some((*layer_id, patch.clone()))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn adjustment_document() -> Document {
@@ -293,11 +431,9 @@ fn reordering_a_panel_within_its_side_through_the_header_control() {
 
     h.click(ids::panel_menu(last));
     let intents = h.click(ids::panel_reorder(last, true));
+    let to = u8::try_from(before.len() - 2).unwrap();
     assert!(
-        intents.contains(&Intent::ReorderPanel {
-            panel: last,
-            up: true
-        }),
+        intents.contains(&Intent::ReorderPanel { panel: last, to }),
         "reordering emitted {intents:?}"
     );
     let after = h.workspace.dock.panels_on(DockSide::Right);
@@ -793,6 +929,673 @@ fn picking_a_variant_from_the_flyout_selects_it_and_closes() {
     );
     assert_eq!(h.workspace.palette.active(), variant);
     assert_eq!(h.workspace.palette.open_flyout, None);
+}
+
+// ---------------------------------------------------------------------------
+// The status bar's zoom
+//
+// It was worse than a dead control. The readout swapped itself for a
+// `TextEdit` only on the frame *after* the click, so the field appeared
+// without focus; `ctx.wants_keyboard_input()` stayed false, and
+// `Workspace::handle_keys` went on handing the keystrokes that followed to
+// `keys::tool_for_key`. Clicking the zoom and typing switched tools.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn one_click_on_the_zoom_field_is_enough_to_type_a_zoom_into_it() {
+    let mut h = Harness::new();
+    assert_eq!(h.workspace.status.zoom, 1.0);
+
+    // One click. The second one is what used to be needed.
+    h.click(ids::status_zoom());
+    assert!(
+        h.ctx.wants_keyboard_input(),
+        "the zoom field did not take focus, so the next keystroke goes to the tool shortcuts"
+    );
+
+    let mut typed = h.key(egui::Key::A, command());
+    typed.extend(h.type_keys("200"));
+    assert!(
+        !typed.iter().any(|i| matches!(i, Intent::SelectTool(_))),
+        "typing into the zoom field reached the tool shortcuts: {typed:?}"
+    );
+    assert!(
+        !typed.iter().any(|i| matches!(i, Intent::SetZoom(_))),
+        "a half-typed zoom was committed: {typed:?}"
+    );
+
+    let intents = h.key(egui::Key::Enter, egui::Modifiers::default());
+    let zooms: Vec<f32> = intents
+        .iter()
+        .filter_map(|i| match i {
+            Intent::SetZoom(z) => Some(*z),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(zooms.len(), 1, "committing the zoom emitted {intents:?}");
+    assert!(
+        (zooms[0] - 2.0).abs() < 1e-6,
+        "typing 200 asked for {zooms:?}"
+    );
+}
+
+#[test]
+fn a_letter_typed_into_the_zoom_field_does_not_switch_tools() {
+    let mut h = Harness::new();
+    let before = h.workspace.palette.active();
+    assert_ne!(before, tools::ToolId::Eraser);
+
+    h.click(ids::status_zoom());
+    // `e` is the Eraser's key. Before the field took focus on its first click
+    // this quietly changed tools under the user.
+    let typed = h.type_keys("e");
+    assert!(
+        !typed.iter().any(|i| matches!(i, Intent::SelectTool(_))),
+        "typing `e` into the zoom field emitted {typed:?}"
+    );
+    assert_eq!(h.workspace.palette.active(), before);
+}
+
+#[test]
+fn an_unreadable_zoom_is_dropped_rather_than_guessed_at() {
+    let mut h = Harness::new();
+    h.click(ids::status_zoom());
+    h.key(egui::Key::A, command());
+    h.type_keys("abc");
+    let intents = h.key(egui::Key::Enter, egui::Modifiers::default());
+    assert!(
+        !intents.iter().any(|i| matches!(i, Intent::SetZoom(_))),
+        "committing nonsense emitted {intents:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The menu bar
+//
+// Everything menu-shaped was tested at the `MenuAction::resolve` level or
+// through the keyboard. Nothing proved the drawn row posts its intent — the
+// emit could be deleted from `view::menu_bar::item` and the suite stayed green.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn clicking_a_menu_row_posts_the_intent_that_row_resolves_to() {
+    let mut h = Harness::new();
+    h.frame(Vec::new());
+    let context = h.workspace.menu_context(&h.doc, &h.history);
+    let expected = MenuAction::NewDocument
+        .resolve(&context)
+        .intent()
+        .cloned()
+        .expect("File ▸ New is available with a document open");
+
+    h.open_menu("File");
+    let intents = h.click(ids::menu_item(MenuAction::NewDocument));
+    assert!(
+        intents.contains(&expected),
+        "clicking File ▸ New emitted {intents:?}"
+    );
+}
+
+#[test]
+fn a_menu_row_disabled_in_this_context_posts_nothing_when_clicked() {
+    let mut h = Harness::new();
+    h.frame(Vec::new());
+    let context = h.workspace.menu_context(&h.doc, &h.history);
+    assert!(
+        matches!(MenuAction::Undo.resolve(&context), Resolution::Disabled(_)),
+        "nothing has been done yet, so Undo must be unavailable"
+    );
+
+    h.open_menu("Edit");
+    let intents = h.click(ids::menu_item(MenuAction::Undo));
+    assert!(
+        intents.is_empty(),
+        "clicking a disabled Edit ▸ Undo emitted {intents:?}"
+    );
+}
+
+#[test]
+fn clicking_a_checked_menu_toggle_asks_for_the_opposite_state() {
+    use ui::ViewFlag;
+
+    let mut h = Harness::new();
+    h.frame(Vec::new());
+    let context = h.workspace.menu_context(&h.doc, &h.history);
+    let was = MenuAction::ToggleView(ViewFlag::Rulers)
+        .checked(&context)
+        .expect("Rulers is a toggle and reports its state");
+
+    h.open_menu("View");
+    let intents = h.click(ids::menu_item(MenuAction::ToggleView(ViewFlag::Rulers)));
+    assert!(
+        intents.contains(&Intent::SetViewFlag {
+            flag: ViewFlag::Rulers,
+            on: !was,
+        }),
+        "View ▸ Rulers was {was} and emitted {intents:?}"
+    );
+
+    // …and with the flag flipped the same row asks for the opposite again, so
+    // it reports the live state rather than a constant. (Nothing here absorbs
+    // the intent: applying it is the application's job, and the workspace only
+    // says what was asked for.)
+    h.workspace.view_flags.set(ViewFlag::Rulers, !was);
+    h.open_menu("View");
+    let intents = h.click(ids::menu_item(MenuAction::ToggleView(ViewFlag::Rulers)));
+    assert!(
+        intents.contains(&Intent::SetViewFlag {
+            flag: ViewFlag::Rulers,
+            on: was,
+        }),
+        "with Rulers {} the row emitted {intents:?}",
+        !was
+    );
+}
+
+/// Every `Edit ▸ Transform` row the bar lists.
+fn transform_rows() -> Vec<MenuAction> {
+    ui::menu::menu_bar(0)
+        .iter()
+        .flat_map(ui::menu::Menu::actions)
+        .filter(|a| matches!(a, MenuAction::Transform(_)))
+        .collect()
+}
+
+#[test]
+fn a_submenu_with_nothing_available_in_it_does_not_open() {
+    // Every Transform op needs a layer. With none selected the Edit ▸ Transform
+    // submenu must refuse to open rather than showing a list of dead rows.
+    let mut h = Harness::with_document(Document::new(320, 240, "Test"));
+    h.frame(Vec::new());
+    let context = h.workspace.menu_context(&h.doc, &h.history);
+    let live = transform_rows()
+        .into_iter()
+        .filter(|a| a.resolve(&context).is_enabled())
+        .count();
+    assert_eq!(live, 0, "a Transform op is available without a layer");
+
+    h.open_menu("Edit");
+    h.click(ids::menu_submenu("Transform"));
+    for action in transform_rows() {
+        assert!(
+            !h.is_drawn(ids::menu_item(action)),
+            "{action:?} opened out of a submenu that has nothing available"
+        );
+    }
+}
+
+#[test]
+fn the_same_submenu_opens_once_something_in_it_is_available() {
+    // The control for the test above: without this, "nothing was drawn" would
+    // also be satisfied by a submenu that never opens at all.
+    let mut doc = Document::new(320, 240, "Test");
+    let id = doc.layers.push_root(Layer::raster("Pixels")).unwrap();
+    doc.set_active_layer(Some(id)).unwrap();
+    let mut h = Harness::with_document(doc);
+    h.frame(Vec::new());
+    let context = h.workspace.menu_context(&h.doc, &h.history);
+    assert!(
+        transform_rows()
+            .into_iter()
+            .any(|a| a.resolve(&context).is_enabled()),
+        "a pixel layer makes at least one Transform op available"
+    );
+
+    h.open_menu("Edit");
+    h.click(ids::menu_submenu("Transform"));
+    assert!(
+        transform_rows()
+            .into_iter()
+            .any(|a| h.is_drawn(ids::menu_item(a))),
+        "the Transform submenu did not open"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The tool options bar
+//
+// One control of every `OptionKind`, driven on screen. The `emit` closure in
+// `view::toolbar::option_control` could be gutted — deleting
+// `Intent::SetToolOption` for brush size, hardness, opacity, flow, the
+// selection mode, the gradient shape, every checkbox and every colour — and
+// all 953 tests still passed.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dragging_a_float_option_writes_it_and_says_so() {
+    let mut h = Harness::new();
+    let tool = tools::ToolId::Brush;
+    h.use_tool(tool);
+    assert_eq!(
+        h.workspace.options.get(tool, "size"),
+        Some(ui::OptionValue::Float(24.0))
+    );
+
+    let intents = h.drag_control(ids::tool_option(tool, "size"), egui::vec2(24.0, 0.0));
+    let writes = option_writes(&intents);
+    let last = writes
+        .last()
+        .copied()
+        .unwrap_or_else(|| panic!("dragging Size emitted {intents:?}"));
+    assert_eq!(last.0, tool);
+    assert_eq!(last.1, "size");
+    match last.2 {
+        ui::OptionValue::Float(v) => assert!(v > 24.0, "Size went the wrong way: {v}"),
+        other => panic!("Size emitted {other:?}"),
+    }
+    // The intent and the workspace agree, so an application that follows the
+    // stream paints with the size on screen.
+    assert_eq!(h.workspace.options.get(tool, "size"), Some(last.2));
+}
+
+/// The `Int` arm of `option_control` has its own `response.changed()` test and
+/// its own `emit` call, so gutting the shared closure is not enough to prove it
+/// wired: a per-arm break in the arm nobody drives would pass unseen. Four
+/// controls ship on this arm — Polygon `sides`, Star `points`, Patch `Width`
+/// and Eyedropper `Sample Size` — so drive one of them for real.
+#[test]
+fn dragging_an_int_option_writes_it_and_says_so() {
+    let mut h = Harness::new();
+    let tool = tools::ToolId::Polygon;
+    h.use_tool(tool);
+    assert_eq!(
+        h.workspace.options.get(tool, "sides"),
+        Some(ui::OptionValue::Int(6))
+    );
+
+    let intents = h.drag_control(ids::tool_option(tool, "sides"), egui::vec2(24.0, 0.0));
+    let writes = option_writes(&intents);
+    let last = writes
+        .last()
+        .copied()
+        .unwrap_or_else(|| panic!("dragging Sides emitted {intents:?}"));
+    assert_eq!(last.0, tool);
+    assert_eq!(last.1, "sides");
+    match last.2 {
+        ui::OptionValue::Int(v) => assert!(v > 6, "Sides went the wrong way: {v}"),
+        other => panic!("Sides emitted {other:?}"),
+    }
+    // The intent and the workspace agree, so an application that follows the
+    // stream draws the polygon the bar is showing.
+    assert_eq!(h.workspace.options.get(tool, "sides"), Some(last.2));
+}
+
+/// Float, Int, Bool and Choice each have a click-level test above; `Color` has
+/// none, because no tool in the registry declares one, so the bar never draws
+/// that arm and there is nothing on screen to drive. That is a fact about the
+/// schema, not a decision, so pin it: the day a tool ships a colour option this
+/// goes red and asks for the fifth test rather than letting an undriven arm in
+/// unnoticed.
+#[test]
+fn no_tool_declares_a_colour_option_so_that_arm_is_undrawn() {
+    let with_colour: Vec<&str> = tools::registry::all()
+        .iter()
+        .flat_map(|info| info.options)
+        .filter(|o| matches!(o.kind, tools::OptionKind::Color { .. }))
+        .map(|o| o.key)
+        .collect();
+    assert!(
+        with_colour.is_empty(),
+        "a colour option now ships ({with_colour:?}) — drive it from the options \
+         bar the way the Float and Int tests do"
+    );
+}
+
+#[test]
+fn clicking_a_bool_option_writes_it_and_says_so() {
+    let mut h = Harness::new();
+    let tool = tools::ToolId::Gradient;
+    h.use_tool(tool);
+    assert_eq!(
+        h.workspace.options.get(tool, "dither"),
+        Some(ui::OptionValue::Bool(true))
+    );
+
+    let intents = h.click(ids::tool_option(tool, "dither"));
+    assert_eq!(
+        option_writes(&intents),
+        vec![(tool, "dither", ui::OptionValue::Bool(false))],
+        "clicking Dither emitted {intents:?}"
+    );
+    assert_eq!(
+        h.workspace.options.get(tool, "dither"),
+        Some(ui::OptionValue::Bool(false))
+    );
+}
+
+#[test]
+fn picking_a_choice_option_writes_it_and_the_reader_follows() {
+    use selection::BooleanOp;
+
+    let mut h = Harness::new();
+    let tool = tools::ToolId::RectMarquee;
+    h.use_tool(tool);
+    assert_eq!(
+        h.workspace
+            .options
+            .selection_options(tool)
+            .expect("the marquee declares a mode")
+            .mode,
+        BooleanOp::Replace
+    );
+
+    // The entries only exist while the drop-down is open.
+    assert!(!h.is_drawn(ids::tool_option_choice(tool, "mode", 1)));
+    h.click(ids::tool_option(tool, "mode"));
+    let intents = h.click(ids::tool_option_choice(tool, "mode", 1));
+    assert_eq!(
+        option_writes(&intents),
+        vec![(tool, "mode", ui::OptionValue::Choice(1))],
+        "picking Add emitted {intents:?}"
+    );
+    assert_eq!(
+        h.workspace.options.selection_options(tool).unwrap().mode,
+        BooleanOp::Add,
+        "the drop-down wrote an index the selection reader disagrees with"
+    );
+}
+
+#[test]
+fn picking_a_paint_blend_mode_writes_it_and_the_reader_follows() {
+    use layer_model::BlendMode;
+
+    let mut h = Harness::new();
+    let tool = tools::ToolId::Brush;
+    h.use_tool(tool);
+    assert_eq!(
+        h.workspace.options.blend_mode(tool),
+        Some(BlendMode::Normal)
+    );
+
+    let multiply = BlendMode::ALL
+        .iter()
+        .position(|m| *m == BlendMode::Multiply)
+        .expect("Multiply is a blend mode");
+    let key = ui::tool_options::BLEND_MODE_KEY;
+    h.click(ids::tool_option(tool, key));
+    let intents = h.click(ids::tool_option_choice(tool, key, multiply));
+    assert_eq!(
+        option_writes(&intents),
+        vec![(tool, key, ui::OptionValue::Choice(multiply))],
+        "picking Multiply emitted {intents:?}"
+    );
+    assert_eq!(
+        h.workspace.options.blend_mode(tool),
+        Some(BlendMode::Multiply)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The Layers panel's blend, opacity, fill and locks
+//
+// The task names these verbatim. Only the pure builders were tested, which
+// says nothing about whether the drawn control calls them.
+// ---------------------------------------------------------------------------
+
+/// Two raster layers with the top one active.
+fn two_layer_document() -> (Document, layer_model::LayerId, layer_model::LayerId) {
+    let mut doc = Document::new(320, 240, "Test");
+    let top = doc.layers.insert_at(Layer::raster("Top"), None, 0).unwrap();
+    let bottom = doc
+        .layers
+        .insert_at(Layer::raster("Bottom"), None, 1)
+        .unwrap();
+    doc.set_active_layer(Some(top)).unwrap();
+    (doc, top, bottom)
+}
+
+#[test]
+fn dragging_the_layers_opacity_slider_patches_the_active_layer() {
+    let (doc, top, bottom) = two_layer_document();
+    let mut h = Harness::with_document(doc);
+    h.only(PanelId::Layers);
+
+    let rect = h.rect(ids::layer_opacity());
+    // A quarter of the way in from the left: firmly on the slider rather than
+    // on the numeric field at its right-hand end.
+    let from = egui::pos2(rect.left() + rect.width() * 0.25, rect.center().y);
+    let intents = h.drag(from, egui::pos2(rect.left(), rect.center().y));
+    let (layer, patch) = patches(&intents)
+        .pop()
+        .unwrap_or_else(|| panic!("dragging Opacity emitted {intents:?}"));
+    assert_eq!(layer, top, "the slider patched the wrong layer");
+    assert_ne!(layer, bottom);
+    let opacity = patch.opacity.expect("the patch carries an opacity");
+    assert!(opacity < 0.5, "dragging Opacity to the left gave {opacity}");
+    assert_eq!(patch.fill_opacity, None, "Opacity also wrote Fill");
+    assert_eq!(patch.blend_mode, None);
+}
+
+#[test]
+fn dragging_the_layers_fill_slider_patches_fill_and_not_opacity() {
+    let (doc, top, _bottom) = two_layer_document();
+    let mut h = Harness::with_document(doc);
+    h.only(PanelId::Layers);
+
+    let rect = h.rect(ids::layer_fill());
+    let from = egui::pos2(rect.left() + rect.width() * 0.25, rect.center().y);
+    let intents = h.drag(from, egui::pos2(rect.left(), rect.center().y));
+    let (layer, patch) = patches(&intents)
+        .pop()
+        .unwrap_or_else(|| panic!("dragging Fill emitted {intents:?}"));
+    assert_eq!(layer, top);
+    let fill = patch.fill_opacity.expect("the patch carries a fill");
+    assert!(fill < 0.5, "dragging Fill to the left gave {fill}");
+    assert_eq!(patch.opacity, None, "Fill also wrote Opacity");
+}
+
+#[test]
+fn picking_a_blend_mode_in_the_layers_panel_patches_the_active_layer() {
+    use layer_model::BlendMode;
+
+    let (doc, top, _bottom) = two_layer_document();
+    let mut h = Harness::with_document(doc);
+    h.only(PanelId::Layers);
+
+    assert!(!h.is_drawn(ids::layer_blend_option(BlendMode::Multiply)));
+    h.click(ids::layer_blend());
+    let intents = h.click(ids::layer_blend_option(BlendMode::Multiply));
+    let (layer, patch) = patches(&intents)
+        .pop()
+        .unwrap_or_else(|| panic!("picking Multiply emitted {intents:?}"));
+    assert_eq!(layer, top);
+    assert_eq!(patch.blend_mode, Some(BlendMode::Multiply));
+    assert_eq!(patch.opacity, None);
+}
+
+#[test]
+fn each_lock_glyph_engages_its_own_lock_and_no_other() {
+    use ui::view::LockToggle;
+
+    for toggle in LockToggle::ALL {
+        let (doc, top, _bottom) = two_layer_document();
+        let mut h = Harness::with_document(doc);
+        h.only(PanelId::Layers);
+
+        let intents = h.click(ids::layer_lock(toggle));
+        let (layer, patch) = patches(&intents)
+            .pop()
+            .unwrap_or_else(|| panic!("clicking {toggle:?} emitted {intents:?}"));
+        assert_eq!(layer, top);
+        let locks = patch.locked.expect("the patch carries a lock state");
+        let mut expected = layer_model::LockState::default();
+        match toggle {
+            LockToggle::Transparency => expected.transparency = true,
+            LockToggle::Pixels => expected.pixels = true,
+            LockToggle::Position => expected.position = true,
+            LockToggle::All => expected.all = true,
+        }
+        assert_eq!(locks, expected, "{toggle:?} set the wrong flag");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The History panel and the Adjustments panel
+// ---------------------------------------------------------------------------
+
+/// A document with `edits` applied, so the History panel has rows to click.
+fn edited_document(edits: usize) -> (Document, History) {
+    let mut doc = Document::new(320, 240, "Test");
+    let mut history = History::new();
+    for i in 0..edits {
+        history
+            .apply(
+                &mut doc,
+                editor_core::Command::create_layer(Layer::raster(format!("L{i}"))),
+            )
+            .expect("apply");
+    }
+    (doc, history)
+}
+
+#[test]
+fn clicking_a_history_row_jumps_by_the_distance_to_that_row() {
+    let (doc, history) = edited_document(3);
+    let mut h = Harness::with_document(doc);
+    h.history = history;
+    h.only(PanelId::History);
+
+    // The stack is Open + three edits, and the document sits on the last one.
+    let intents = h.click(ids::history_row(1));
+    assert!(
+        intents.contains(&Intent::HistoryJump(
+            ui::panels::history::HistoryJump::undo(2)
+        )),
+        "clicking row 1 of a 3-edit stack emitted {intents:?}"
+    );
+}
+
+#[test]
+fn clicking_the_history_row_the_document_is_already_on_emits_nothing() {
+    let (doc, history) = edited_document(3);
+    let mut h = Harness::with_document(doc);
+    h.history = history;
+    h.only(PanelId::History);
+
+    let intents = h.click(ids::history_row(3));
+    assert!(
+        !intents.iter().any(|i| matches!(i, Intent::HistoryJump(_))),
+        "clicking the current row emitted {intents:?}"
+    );
+}
+
+#[test]
+fn a_snapshot_whose_steps_were_discarded_is_drawn_inert() {
+    let (doc, history) = edited_document(2);
+    let mut h = Harness::with_document(doc);
+    h.history = history;
+    h.only(PanelId::History);
+    h.workspace.snapshots.push(ui::panels::history::Snapshot {
+        name: "Live".into(),
+        index: 1,
+    });
+    h.workspace.snapshots.push(ui::panels::history::Snapshot {
+        name: "Stale".into(),
+        index: 99,
+    });
+
+    let live = h
+        .response_of(ids::history_snapshot(0))
+        .expect("the live snapshot is drawn");
+    assert!(live.sense.click, "a reachable snapshot is not clickable");
+    let stale = h
+        .response_of(ids::history_snapshot(1))
+        .expect("the stale snapshot is still drawn");
+    assert!(
+        !stale.sense.click,
+        "a snapshot naming discarded steps is still clickable"
+    );
+
+    let intents = h.click(ids::history_snapshot(1));
+    assert!(
+        !intents.iter().any(|i| matches!(i, Intent::HistoryJump(_))),
+        "clicking a stale snapshot emitted {intents:?}"
+    );
+
+    let intents = h.click(ids::history_snapshot(0));
+    assert!(
+        intents.contains(&Intent::HistoryJump(
+            ui::panels::history::HistoryJump::undo(1)
+        )),
+        "clicking a live snapshot emitted {intents:?}"
+    );
+}
+
+#[test]
+fn clicking_an_adjustments_tile_creates_a_layer_of_that_kind() {
+    use ui::menu::AdjustmentId;
+
+    let mut h = Harness::new();
+    h.only(PanelId::Adjustments);
+    let intents = h.click(ids::adjustment_tile(AdjustmentId::Threshold));
+    let command = intents
+        .iter()
+        .find_map(Intent::as_command)
+        .unwrap_or_else(|| panic!("clicking the Threshold tile emitted {intents:?}"));
+    // Not compared whole: every `Layer` is built with a fresh id, so the two
+    // commands can never be equal. The kind is what the tile chose.
+    match command {
+        editor_core::Command::CreateLayer { layer } => match &layer.kind {
+            layer_model::LayerKind::Adjustment(a) => assert_eq!(
+                a.kind,
+                layer_model::AdjustmentKind::Threshold { level: 0.5 },
+                "the tile created the wrong adjustment"
+            ),
+            other => panic!("the Threshold tile created a {other:?}"),
+        },
+        other => panic!("the Threshold tile emitted {other:?}"),
+    }
+
+    // …and a different tile is a different adjustment, so the grid is not one
+    // button repeated.
+    let intents = h.click(ids::adjustment_tile(AdjustmentId::Invert));
+    let command = intents
+        .iter()
+        .find_map(Intent::as_command)
+        .unwrap_or_else(|| panic!("clicking the Invert tile emitted {intents:?}"));
+    match command {
+        editor_core::Command::CreateLayer { layer } => match &layer.kind {
+            layer_model::LayerKind::Adjustment(a) => {
+                assert_eq!(a.kind, layer_model::AdjustmentKind::Invert)
+            }
+            other => panic!("the Invert tile created a {other:?}"),
+        },
+        other => panic!("the Invert tile emitted {other:?}"),
+    }
+}
+
+#[test]
+fn the_layers_footer_buttons_create_a_raster_layer_and_a_group() {
+    let mut h = Harness::new();
+    h.only(PanelId::Layers);
+
+    let intents = h.click(ids::new_layer());
+    let command = intents
+        .iter()
+        .find_map(Intent::as_command)
+        .unwrap_or_else(|| panic!("the + button emitted {intents:?}"));
+    match command {
+        editor_core::Command::CreateLayer { layer, .. } => assert!(
+            matches!(layer.kind, layer_model::LayerKind::Raster(_)),
+            "+ created a {:?}",
+            layer.kind
+        ),
+        other => panic!("+ emitted {other:?}"),
+    }
+
+    let intents = h.click(ids::new_group());
+    let command = intents
+        .iter()
+        .find_map(Intent::as_command)
+        .unwrap_or_else(|| panic!("the group button emitted {intents:?}"));
+    match command {
+        editor_core::Command::CreateLayer { layer, .. } => assert!(
+            matches!(layer.kind, layer_model::LayerKind::Group(_)),
+            "the group button created a {:?}",
+            layer.kind
+        ),
+        other => panic!("the group button emitted {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------

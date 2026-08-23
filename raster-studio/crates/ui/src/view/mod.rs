@@ -132,6 +132,153 @@ pub mod ids {
     pub fn color_hex() -> egui::Id {
         egui::Id::new("raster-color-hex")
     }
+
+    /// The status bar's editable zoom field.
+    pub fn status_zoom() -> egui::Id {
+        egui::Id::new("raster-status-zoom")
+    }
+
+    /// One top-level title in the menu bar, by the title it prints.
+    pub fn menu_title(title: &'static str) -> egui::Id {
+        egui::Id::new(("raster-menu-title", title))
+    }
+
+    /// One row of a menu, by the action it would perform.
+    ///
+    /// The action alone names the row because one menu is open at a time and
+    /// no menu lists an action twice — held by
+    /// `crate::menu::tests::no_action_is_listed_twice_within_one_menu`. (A few
+    /// actions, `Keyboard Shortcuts…` among them, are reachable from two
+    /// different menus; those two rows are never drawn together.)
+    pub fn menu_item(action: crate::menu::MenuAction) -> egui::Id {
+        egui::Id::new(("raster-menu-item", action))
+    }
+
+    /// One submenu opener, by the label it prints.
+    pub fn menu_submenu(label: &str) -> egui::Id {
+        egui::Id::new(("raster-menu-submenu", label))
+    }
+
+    /// One control of the tool-options bar.
+    pub fn tool_option(tool: tools::ToolId, key: &'static str) -> egui::Id {
+        egui::Id::new(("raster-tool-option", tool, key))
+    }
+
+    /// One entry inside a tool option's drop-down.
+    pub fn tool_option_choice(tool: tools::ToolId, key: &'static str, index: usize) -> egui::Id {
+        egui::Id::new(("raster-tool-option-choice", tool, key, index))
+    }
+
+    /// The Layers panel's blend-mode combo.
+    pub fn layer_blend() -> egui::Id {
+        egui::Id::new("raster-layer-blend-combo")
+    }
+
+    /// One entry inside the Layers panel's blend-mode combo.
+    pub fn layer_blend_option(mode: layer_model::BlendMode) -> egui::Id {
+        egui::Id::new(("raster-layer-blend-option", mode))
+    }
+
+    /// The Layers panel's Opacity slider row.
+    pub fn layer_opacity() -> egui::Id {
+        egui::Id::new("raster-layer-opacity")
+    }
+
+    /// The Layers panel's Fill slider row.
+    pub fn layer_fill() -> egui::Id {
+        egui::Id::new("raster-layer-fill")
+    }
+
+    /// One of the Layers panel's four lock toggles.
+    pub fn layer_lock(lock: super::LockToggle) -> egui::Id {
+        egui::Id::new(("raster-layer-lock", lock))
+    }
+
+    /// The Layers panel footer's "new layer" button.
+    pub fn new_layer() -> egui::Id {
+        egui::Id::new("raster-new-layer")
+    }
+
+    /// The Layers panel footer's "new group" button.
+    pub fn new_group() -> egui::Id {
+        egui::Id::new("raster-new-group")
+    }
+
+    /// One tile of the Adjustments panel.
+    pub fn adjustment_tile(adjustment: crate::menu::AdjustmentId) -> egui::Id {
+        egui::Id::new(("raster-adjustment-tile", adjustment))
+    }
+
+    /// One saved snapshot in the History panel, by its position in the list.
+    pub fn history_snapshot(index: usize) -> egui::Id {
+        egui::Id::new(("raster-history-snapshot", index))
+    }
+}
+
+/// Which of the Layers panel's four lock toggles a glyph is.
+///
+/// Named rather than indexed: the row used to decide what a click meant from
+/// the toggle's position in an array, so re-ordering the glyphs would have
+/// silently re-wired them.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum LockToggle {
+    Transparency,
+    Pixels,
+    Position,
+    All,
+}
+
+impl LockToggle {
+    /// Every toggle, in the order the row draws them.
+    pub const ALL: [LockToggle; 4] = [
+        LockToggle::Transparency,
+        LockToggle::Pixels,
+        LockToggle::Position,
+        LockToggle::All,
+    ];
+
+    /// The glyph and the tooltip this toggle prints.
+    pub(crate) const fn glyph_and_tooltip(self) -> (&'static str, &'static str) {
+        match self {
+            LockToggle::Transparency => ("▨", "Lock transparent pixels"),
+            LockToggle::Pixels => ("✎", "Lock pixels"),
+            LockToggle::Position => ("✥", "Lock position"),
+            LockToggle::All => ("🔒", "Lock all"),
+        }
+    }
+
+    /// Read this toggle out of a layer's lock state.
+    pub(crate) const fn get(self, locks: layer_model::LockState) -> bool {
+        match self {
+            LockToggle::Transparency => locks.transparency,
+            LockToggle::Pixels => locks.pixels,
+            LockToggle::Position => locks.position,
+            LockToggle::All => locks.all,
+        }
+    }
+
+    /// Write this toggle into a layer's lock state.
+    pub(crate) fn set(self, locks: &mut layer_model::LockState, on: bool) {
+        match self {
+            LockToggle::Transparency => locks.transparency = on,
+            LockToggle::Pixels => locks.pixels = on,
+            LockToggle::Position => locks.position = on,
+            LockToggle::All => locks.all = on,
+        }
+    }
+}
+
+/// Register `id` over `rect` so a headless test can find a control egui named
+/// by call order.
+///
+/// Some widgets — a `Slider`, a `ComboBox`, a menu row — build their own id
+/// from the call sequence and offer no way to set one. Marking them keeps
+/// [`ids`]'s promise ("a stable id lets a headless test click exactly it")
+/// without reimplementing the widget. The marker senses *hover only*, so it
+/// never takes the click away from the control it marks: egui's hit test picks
+/// the top-most widget that senses click or drag, and this one senses neither.
+pub(crate) fn mark(ui: &mut Ui, rect: egui::Rect, id: egui::Id) {
+    ui.interact(rect, id, Sense::hover());
 }
 
 /// What one frame of a [`text_field`] produced.
@@ -142,6 +289,8 @@ pub(crate) struct FieldEdit {
     pub text: String,
     /// `true` while the user is part-way through an edit.
     pub editing: bool,
+    /// The field itself, so a caller can hang a tooltip on it.
+    pub response: Response,
 }
 
 /// A text field whose in-progress edit survives between frames.
@@ -160,9 +309,26 @@ pub(crate) struct FieldEdit {
 /// on a frame that consumed no keystroke. The edit is stashed in `ui.memory`
 /// instead — keyed off `id`, seeded from `value` only when no edit is in
 /// progress — and handed back once, on Enter or on losing focus. Escape throws
-/// the edit away. This is the same pattern [`super::status`]'s zoom field
-/// already used.
+/// the edit away.
+///
+/// Every text field in the chrome — the panels, the inspector and the status
+/// bar's zoom — is built on it. The dialogs deliberately are not: each either
+/// binds a `String` its dialog struct owns across frames, or writes the edit
+/// back on `changed()`, which fires on the frame the keystroke lands. Either
+/// way the re-seeding above cannot drop a keystroke, so they need no memory
+/// buffer. The status bar's zoom used to hand-roll the same memory buffer and
+/// got it wrong in a way this shape cannot be wrong in: it only *created* the
+/// `TextEdit` on the frame after the click, so the field appeared with no
+/// focus and the keystrokes that followed fell through to the tool shortcuts.
+/// A widget that is always drawn takes focus from the click that lands on it.
 pub(crate) fn text_field(ui: &mut Ui, id: egui::Id, value: &str) -> FieldEdit {
+    let width = current_tokens(ui).metrics.inspector_label_width;
+    text_field_sized(ui, id, value, width)
+}
+
+/// [`text_field`] at a width of the caller's choosing, for the places an
+/// inspector column would be too wide — the status bar's zoom, for one.
+pub(crate) fn text_field_sized(ui: &mut Ui, id: egui::Id, value: &str, width: f32) -> FieldEdit {
     let key = id.with("in-progress");
     let stored = ui.memory(|m| m.data.get_temp::<String>(key));
     let was_editing = stored.is_some();
@@ -170,7 +336,7 @@ pub(crate) fn text_field(ui: &mut Ui, id: egui::Id, value: &str) -> FieldEdit {
 
     let t = current_tokens(ui);
     let response = ui.add_sized(
-        Vec2::new(t.metrics.inspector_label_width, t.metrics.control_height),
+        Vec2::new(width, t.metrics.control_height),
         egui::TextEdit::singleline(&mut buffer).id(id),
     );
 
@@ -188,6 +354,7 @@ pub(crate) fn text_field(ui: &mut Ui, id: egui::Id, value: &str) -> FieldEdit {
         committed: (finished && !cancelled).then(|| buffer.clone()),
         text: buffer,
         editing,
+        response,
     }
 }
 
@@ -319,10 +486,20 @@ pub(crate) fn swatch(ui: &mut Ui, rgba: [f32; 4], side: f32, sense: Sense) -> Re
     response
 }
 
+/// The checker size a request of `cell` is actually painted at.
+///
+/// A floor is needed at all because a cell of zero asks for an unbounded
+/// number of squares, and it is a *design* number rather than a magic one: a
+/// checker finer than the hairline the rest of the chrome is drawn with cannot
+/// be read as a checker, so the hairline is the smallest one worth painting.
+pub(crate) fn checker_cell(ctx: &egui::Context, cell: f32) -> f32 {
+    cell.max(design::current_theme(ctx).tokens().borders.hairline)
+}
+
 /// The transparency checkerboard, in the palette's own two neutrals so it
 /// belongs to the theme rather than being a pair of hard-coded greys.
 pub(crate) fn checkerboard(painter: &egui::Painter, rect: egui::Rect, cell: f32) {
-    let cell = cell.max(2.0);
+    let cell = checker_cell(painter.ctx(), cell);
     let light = painter
         .ctx()
         .style()
@@ -459,4 +636,146 @@ pub(crate) fn empty_state(ui: &mut Ui, message: &str) {
         ui.label(hint(ui, message));
     });
     ui.add_space(Space::Medium.pt());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every shipping `TextEdit::singleline` in the crate, as
+    /// `(relative path, line number)`. Doc comments are skipped — this file's
+    /// own comment quotes the broken shape — and so is everything from the
+    /// first `#[cfg(test)]` on, because a test may stand up a scratch field.
+    fn shipping_singleline_sites() -> Vec<(String, usize)> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let entries =
+                std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        assert!(
+            files.len() >= 10,
+            "the crate lost its source files: found {}",
+            files.len()
+        );
+        files.sort();
+
+        let mut found = Vec::new();
+        for path in &files {
+            let text = std::fs::read_to_string(path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let shipping = match text.find("#[cfg(test)]") {
+                Some(at) => &text[..at],
+                None => &text[..],
+            };
+            let rel = path
+                .strip_prefix(&root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            for (n, line) in shipping.lines().enumerate() {
+                let code = line.trim_start();
+                if code.starts_with("//") {
+                    continue;
+                }
+                if code.contains("TextEdit::singleline") || code.contains("text_edit_singleline") {
+                    found.push((rel.clone(), n + 1));
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn the_chrome_builds_every_text_field_on_the_shared_helper() {
+        // `text_field`'s doc comment claims the chrome routes through it and
+        // that only the dialogs hand-roll a field. A claim about the code that
+        // nothing checks is how that comment went stale before.
+        let stray: Vec<_> = shipping_singleline_sites()
+            .into_iter()
+            .filter(|(file, _)| !file.starts_with("dialogs/") && file != "view/mod.rs")
+            .collect();
+        assert!(
+            stray.is_empty(),
+            "chrome must use view::text_field, not a raw TextEdit::singleline: {stray:?}"
+        );
+    }
+
+    #[test]
+    fn the_helper_is_the_only_raw_singleline_outside_the_dialogs() {
+        // The other half of the same claim: `view/mod.rs` is exempt above only
+        // because it *is* the helper, so it must hold exactly one such call.
+        // Were a second field hand-rolled here, the exemption would hide it.
+        let here: Vec<_> = shipping_singleline_sites()
+            .into_iter()
+            .filter(|(file, _)| file == "view/mod.rs")
+            .collect();
+        assert_eq!(
+            here.len(),
+            1,
+            "view/mod.rs should hold only text_field_sized's own TextEdit: {here:?}"
+        );
+    }
+
+    #[test]
+    fn the_dialog_exemption_is_not_vacuous() {
+        // The gate above exempts `dialogs/` by string prefix, on a path this
+        // helper normalises from the platform separator. If that normalisation
+        // broke — or the walk stopped reaching the directory — the prefix would
+        // match nothing, every dialog field would read as chrome, and the gate
+        // would fail loudly rather than silently. Pin the other direction too:
+        // the comment's claim that the dialogs hand-roll their fields is only
+        // true while the scan can actually see them.
+        let dialogs: Vec<_> = shipping_singleline_sites()
+            .into_iter()
+            .filter(|(file, _)| file.starts_with("dialogs/"))
+            .collect();
+        assert!(
+            !dialogs.is_empty(),
+            "the scan found no dialog text fields, so the exemption proves nothing"
+        );
+    }
+
+    #[test]
+    fn the_checkerboards_floor_is_a_design_token_and_not_a_magic_number() {
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let hairline = design::current_theme(&ctx).tokens().borders.hairline;
+
+        // A degenerate request is lifted to the token…
+        assert_eq!(checker_cell(&ctx, 0.0), hairline);
+        assert_eq!(checker_cell(&ctx, -1.0), hairline);
+        // …to the token, and not to the pixel count this used to hard-code.
+        assert_ne!(
+            hairline, 2.0,
+            "pick a floor the gate can tell apart from the old literal"
+        );
+        assert_ne!(checker_cell(&ctx, 0.0), 2.0);
+        // …and it is a floor, so a legible cell is left alone.
+        assert_eq!(checker_cell(&ctx, Space::XSmall.pt()), Space::XSmall.pt());
+    }
+
+    #[test]
+    fn a_lock_toggle_reads_and_writes_only_its_own_flag() {
+        let mut locks = layer_model::LockState::default();
+        for toggle in LockToggle::ALL {
+            assert!(!toggle.get(locks));
+            toggle.set(&mut locks, true);
+            assert!(toggle.get(locks));
+            for other in LockToggle::ALL.iter().filter(|o| **o != toggle) {
+                assert!(!other.get(locks), "{toggle:?} also set {other:?}");
+            }
+            toggle.set(&mut locks, false);
+        }
+        assert_eq!(locks, layer_model::LockState::default());
+    }
 }

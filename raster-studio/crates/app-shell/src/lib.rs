@@ -27,6 +27,13 @@
 //!   the *compositor's* output of that document ([`presenter`]) and nothing
 //!   else. There is no second picture beside the document — which is what made
 //!   the layers panel say "No layers yet" under a visible photograph.
+//! * **There is one chrome.** [`chrome::Chrome`] owns a [`ui::Workspace`] and
+//!   draws it: the nine menus, the tool palette and its fly-outs, the options
+//!   bar and all thirteen docked panels are the `ui` crate's, reached from the
+//!   binary. What this crate still draws itself is what that crate has no model
+//!   for — the document tab strip, preferences, and the transient status
+//!   message. [`menu_bridge::pick`] is the single translation from
+//!   [`ui::Intent`] to something the shell performs.
 //! * **The UI emits commands.** [`chrome`] takes `&Editor` and returns a
 //!   [`chrome::ChromeOutput`]; every document change goes through
 //!   [`editor_core::History`], so undo and redo are uniform. A field of that
@@ -78,13 +85,12 @@ pub mod session;
 pub mod shell;
 
 pub use action::{Action, Category, ToolKey};
-pub use chrome::{Chrome, ChromeOutput, HistoryRow, LayerRow, Rebind, ShortcutRow};
+pub use chrome::{Chrome, ChromeOutput, Rebind, ShortcutRow};
 pub use dialogs::{CloseChoice, FileDialogs, NativeDialogs, ScriptedDialogs};
 pub use dirty::DirtyTiles;
 pub use doc::{DocumentError, DocumentId, OpenDocument};
 pub use editor::{
-    color_hex, ActionError, AutosaveReport, Editor, Effect, Menu, MenuItem, NoSuchTab,
-    RecoveryReport,
+    color_hex, ActionError, AutosaveReport, Editor, Effect, NoSuchTab, RecoveryReport,
 };
 pub use error::ShellError;
 pub use import::{DecodedImage, ImportError, ImportedDocument};

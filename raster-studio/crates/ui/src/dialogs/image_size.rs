@@ -14,6 +14,14 @@
 //! that is a multiple of 16 produces a height that satisfies
 //! `new_w * old_h == new_h * old_w` exactly. A float ratio drifts, and after a
 //! few edits a "locked" 16:9 document is 1.0002:1 out.
+//!
+//! Between the multiples the ratio cannot be hit exactly — no integer height
+//! is 16:9 with a width of 1921 — so the guarantee there is that the answer is
+//! the **nearest** one, computed in integers and rounded half up. That is what
+//! `constrain_rounds_the_other_side_instead_of_truncating_it` and
+//! `the_locked_side_is_always_the_nearest_integer` assert, and they exist
+//! because the multiples-only tests that came first could not tell this
+//! arithmetic apart from the truncating float the paragraph above rejects.
 
 use design::tokens::Space;
 use egui::Context;
@@ -637,6 +645,84 @@ mod tests {
                 "height {height} gave {w}x{h}, which is not 16:9"
             );
         }
+    }
+
+    /// The test the two above cannot be: a *non-multiple*.
+    ///
+    /// The defect this pins is a hole in the coverage rather than in the code.
+    /// Every constrain test fed widths that were exact multiples of 16 and
+    /// heights that were exact multiples of 9, and at an exact multiple every
+    /// implementation agrees — truncating float, rounding float and reduced
+    /// integer alike. Replacing `other_side` with the truncating float ratio
+    /// the module docs call out as wrong left all twenty tests green. The
+    /// arithmetic the module exists to defend only shows itself between the
+    /// multiples, so that is where it now gets asserted.
+    #[test]
+    fn constrain_rounds_the_other_side_instead_of_truncating_it() {
+        // 1920x1080 reduces to 16:9. Exact answers, with what a truncating
+        // implementation would say instead:
+        //   1921 -> 1080.5625  (trunc 1080)
+        //   1912 -> 1075.5     (trunc 1075; the half-way case)
+        //   1927 -> 1083.9375  (trunc 1083)
+        for (width, height) in [(1921u32, 1081u32), (1912, 1076), (1913, 1076), (1927, 1084)] {
+            let mut dialog = ImageSizeDialog::new(1920, 1080, 72.0);
+            assert!(dialog.set_width(width));
+            assert_eq!(
+                dialog.height(),
+                height,
+                "width {width} should give height {height}"
+            );
+        }
+        //   1081 -> 1921.7778  (trunc 1921)
+        //   1076 -> 1912.8889  (trunc 1912)
+        //   1085 -> 1928.8889  (trunc 1928)
+        for (height, width) in [(1081u32, 1922u32), (1076, 1913), (1085, 1929)] {
+            let mut dialog = ImageSizeDialog::new(1920, 1080, 72.0);
+            assert!(dialog.set_height(height));
+            assert_eq!(
+                dialog.width(),
+                width,
+                "height {height} should give width {width}"
+            );
+        }
+    }
+
+    /// The property behind those numbers, over every width in a range that is
+    /// mostly non-multiples: the answer is the *nearest* integer, so the ratio
+    /// error never exceeds half a ratio unit. Truncation's error reaches a
+    /// whole one.
+    #[test]
+    fn the_locked_side_is_always_the_nearest_integer() {
+        let (ratio_w, ratio_h) = (16i64, 9i64);
+        for width in 1000..1200u32 {
+            let mut dialog = ImageSizeDialog::new(1920, 1080, 72.0);
+            assert!(dialog.set_width(width));
+            let error = i64::from(dialog.height()) * ratio_w - i64::from(width) * ratio_h;
+            assert!(
+                2 * error.abs() <= ratio_w,
+                "width {width} gave height {}, off the exact ratio by {}/{ratio_w}",
+                dialog.height(),
+                error
+            );
+        }
+    }
+
+    /// And the drift the module doc names: the ratio itself is stored, so a
+    /// detour through a non-multiple leaves it untouched and the original size
+    /// is reachable again exactly.
+    #[test]
+    fn a_non_multiple_detour_does_not_move_the_stored_ratio() {
+        let mut dialog = ImageSizeDialog::new(1920, 1080, 72.0);
+        for width in [1921, 907, 1913, 33, 1912] {
+            assert!(dialog.set_width(width));
+            assert_eq!(
+                dialog.aspect_ratio(),
+                (16, 9),
+                "editing to {width} re-derived the lock from the size on screen"
+            );
+        }
+        assert!(dialog.set_width(1920));
+        assert_eq!((dialog.width(), dialog.height()), (1920, 1080));
     }
 
     #[test]

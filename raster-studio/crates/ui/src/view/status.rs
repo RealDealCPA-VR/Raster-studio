@@ -58,37 +58,36 @@ pub fn status_bar(w: &mut Workspace, ctx: &egui::Context, doc: &Document) {
 }
 
 /// The zoom readout, editable in place.
+///
+/// It is a text field at all times rather than a label that swaps itself for
+/// one on click, and that is the whole fix for the control this used to be.
+/// The old shape inserted an editing buffer into memory on the click frame and
+/// only built the `TextEdit` on the *next* frame — where it appeared without
+/// focus. The first click therefore did nothing visible, and, because
+/// [`egui::Context::wants_keyboard_input`] stayed false, `Workspace::handle_keys`
+/// went on routing the keystrokes that
+/// followed to [`crate::keys::tool_for_key`]: clicking the zoom readout and
+/// typing silently switched tools. A field that is always present takes focus
+/// from the click that lands on it, which is what makes the very next
+/// keystroke arrive here instead.
+///
+/// The edit itself is [`super::text_field`]'s, so the seed / commit / cancel
+/// rules are the ones every other field in the chrome follows rather than a
+/// second hand-rolled memory buffer.
 fn zoom_field(w: &mut Workspace, ui: &mut Ui) {
-    let t = current_tokens(ui);
-    let id = egui::Id::new("raster-status-zoom-buffer");
-    let editing = ui.memory(|m| m.data.get_temp::<String>(id));
-    match editing {
-        Some(mut buffer) => {
-            let response = ui.add_sized(
-                Vec2::new(t.metrics.numeric_field_width, t.metrics.control_height),
-                egui::TextEdit::singleline(&mut buffer),
-            );
-            let commit = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
-            if commit {
-                if let Some(zoom) = StatusBar::parse_zoom(&buffer) {
-                    w.emit(Intent::SetZoom(zoom));
-                }
-            }
-            if commit || cancel || response.clicked_elsewhere() {
-                ui.memory_mut(|m| m.data.remove::<String>(id));
-            } else {
-                ui.memory_mut(|m| m.data.insert_temp(id, buffer));
-            }
-        }
-        None => {
-            let label = format_zoom(w.status.zoom);
-            let response = ui
-                .add(egui::Button::new(body(ui, label.clone())).frame(false))
-                .on_hover_text("Click to type a zoom level");
-            if response.clicked() {
-                ui.memory_mut(|m| m.data.insert_temp(id, label));
-            }
+    let width = current_tokens(ui).metrics.numeric_field_width;
+    let shown = format_zoom(w.status.zoom);
+    let edit = super::text_field_sized(ui, super::ids::status_zoom(), &shown, width);
+    edit.response.on_hover_text("Type a zoom level");
+    let Some(text) = edit.committed else {
+        return;
+    };
+    // Unreadable text is dropped rather than guessed at: the field re-seeds
+    // itself from the live zoom on the next frame, so the readout goes back to
+    // the truth instead of keeping whatever was typed.
+    if let Some(zoom) = StatusBar::parse_zoom(&text) {
+        if zoom != w.status.zoom {
+            w.emit(Intent::SetZoom(zoom));
         }
     }
 }

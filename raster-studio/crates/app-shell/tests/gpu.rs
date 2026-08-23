@@ -12,11 +12,12 @@
 
 use app_shell::doc::{DocumentId, OpenDocument};
 use app_shell::import::{document_from_image, DecodedImage};
-use app_shell::presenter::CanvasPresenter;
+use app_shell::presenter::{CanvasPresenter, ChannelMask};
 use editor_core::pixels::{PixelTarget, TileDelta, TileEdit};
 use editor_core::Command;
 use raster::{PixelFormat, Tile, TileCoord, TILE_SIZE};
 use render::GpuContext;
+use ui::panels::channels::ChannelKind;
 
 fn gpu() -> Option<GpuContext> {
     match pollster::block_on(GpuContext::headless()) {
@@ -241,4 +242,67 @@ fn undo_puts_the_original_pixels_back_on_the_gpu() {
     let back = presenter.texture().unwrap().read_level(&gpu, 0).unwrap();
     let diff = worst_diff(back.as_rgba8(), &image.rgba8);
     assert!(diff <= 1, "undo left the canvas {diff} off the original");
+}
+
+#[test]
+fn hiding_a_channel_changes_the_texture_the_canvas_samples() {
+    // The Channels panel used to move a flag nothing read. This is the whole
+    // path it now travels: the panel's state becomes a `ChannelMask`, the
+    // presenter re-uploads through it, and the texture the canvas draws has
+    // the isolated channel in it — read back from the GPU, not asserted about
+    // an intent.
+    let gpu = gpu_or_skip!();
+    let image = probe(300, 200);
+    let mut doc = open(&image);
+
+    let mut presenter = CanvasPresenter::new();
+    presenter.sync(&gpu, &mut doc).unwrap();
+    let full = presenter
+        .texture()
+        .unwrap()
+        .read_level(&gpu, 0)
+        .unwrap()
+        .into_rgba8();
+
+    // Isolate red exactly as `Ctrl+3` and the eye toggles do.
+    let mut workspace = ui::Workspace::new();
+    workspace
+        .channels
+        .isolate(&doc.document.meta.color_space, ChannelKind::Component(0));
+    assert!(presenter.set_channel_mask(ChannelMask::from_channels(&workspace.channels)));
+
+    let report = presenter.sync(&gpu, &mut doc).unwrap();
+    assert!(
+        report.full_uploads == 1,
+        "a channel toggle dirties no tile, so the canvas must be sent whole: {report:?}"
+    );
+    let isolated = presenter
+        .texture()
+        .unwrap()
+        .read_level(&gpu, 0)
+        .unwrap()
+        .into_rgba8();
+    assert!(
+        worst_diff(&isolated, &full) > 1,
+        "hiding two channels did not change a single pixel on the GPU"
+    );
+    for (px, was) in isolated.chunks_exact(4).zip(full.chunks_exact(4)) {
+        assert_eq!(px[0], was[0], "red is the channel that was kept");
+        assert_eq!(px[1], 0, "green survived isolation");
+        assert_eq!(px[2], 0, "blue survived isolation");
+        assert_eq!(px[3], was[3], "alpha is not a colour component");
+    }
+
+    // Ctrl+2 brings the composite back, and the GPU gets the original again.
+    workspace
+        .channels
+        .isolate(&doc.document.meta.color_space, ChannelKind::Composite);
+    assert!(presenter.set_channel_mask(ChannelMask::from_channels(&workspace.channels)));
+    presenter.sync(&gpu, &mut doc).unwrap();
+    let back = presenter.texture().unwrap().read_level(&gpu, 0).unwrap();
+    assert_eq!(
+        worst_diff(back.as_rgba8(), &full),
+        0,
+        "showing every channel again did not restore the composite"
+    );
 }

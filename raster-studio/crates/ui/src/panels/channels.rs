@@ -8,9 +8,20 @@
 //!
 //! The composite plus one row per component of the document's colour mode,
 //! derived from [`color::ColorSpace`] rather than hard-coded, plus one row per
-//! layer mask in the document (Photoshop's alpha channels). Toggling a
-//! component's visibility is a *view* setting, not a document edit, so it emits
-//! no command.
+//! layer mask in the document (Photoshop's alpha channels).
+//!
+//! Toggling a component's visibility is a *view* setting, not a document edit:
+//! it emits [`crate::Intent::SetChannelVisible`] rather than a
+//! [`editor_core::Command`], and the application applies it to the composite on
+//! its way to the screen — in this workspace, `app_shell::presenter::
+//! ChannelMask`, which the canvas texture is uploaded through. So hiding the
+//! red channel changes pixels and changes no file. A **mask** row is the
+//! exception and says so below: a mask's visibility is the mask's own
+//! `enabled` flag, which is document state, so that row emits a command.
+//!
+//! What this build still does not have is per-channel *editing* — painting into
+//! the red channel alone. The panel's selection is therefore an isolation
+//! target, not a paint target; `docs/parity-matrix.md` carries that gap.
 //!
 //! # Paths
 //!

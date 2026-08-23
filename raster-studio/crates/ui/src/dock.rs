@@ -429,10 +429,43 @@ impl DockState {
 
     /// Move a panel one place earlier (`up`) or later within its own side.
     ///
-    /// Returns `true` when the arrangement actually changed, so a caller can
-    /// avoid emitting an intent for a no-op — moving the first panel up is a
-    /// refusal, not a wrap-around.
-    pub fn reorder(&mut self, panel: PanelId, up: bool) -> bool {
+    /// Returns the index it landed on, or `None` when nothing moved — moving
+    /// the first panel up is a refusal, not a wrap-around. The *index* rather
+    /// than a bare `true` because the intent this raises has to carry a
+    /// destination: see [`DockState::reorder_to`].
+    pub fn reorder(&mut self, panel: PanelId, up: bool) -> Option<u8> {
+        let placement = self.placement(panel);
+        if !placement.open {
+            return None;
+        }
+        let order = self.panels_on(placement.side);
+        let at = order.iter().position(|p| *p == panel)?;
+        let to = if up {
+            at.checked_sub(1)?
+        } else {
+            let next = at + 1;
+            if next >= order.len() {
+                return None;
+            }
+            next
+        };
+        let to = u8::try_from(to).ok()?;
+        self.reorder_to(panel, to).then_some(to)
+    }
+
+    /// Move a panel to a **given** index within its own side.
+    ///
+    /// # Why this is the one the intent carries
+    ///
+    /// Absolute, and therefore idempotent: applying it twice leaves the panel
+    /// where the first application put it. `crate::Intent::ReorderPanel` used
+    /// to carry a *direction*, and the drawing side applies an intent before it
+    /// emits it, so an application that also absorbed what it drained moved the
+    /// panel two places for one click. Every workspace intent must survive
+    /// being absorbed twice — see the invariant on [`crate::Intent`].
+    ///
+    /// Returns `true` when the arrangement actually changed.
+    pub fn reorder_to(&mut self, panel: PanelId, to: u8) -> bool {
         let placement = self.placement(panel);
         if !placement.open {
             return false;
@@ -441,22 +474,16 @@ impl DockState {
         let Some(at) = order.iter().position(|p| *p == panel) else {
             return false;
         };
-        let swap_with = if up {
-            if at == 0 {
-                return false;
-            }
-            at - 1
-        } else {
-            if at + 1 >= order.len() {
-                return false;
-            }
-            at + 1
-        };
-        // Rewrite the whole side's order densely rather than swapping two
+        let to = usize::from(to);
+        if to >= order.len() || to == at {
+            return false;
+        }
+        // Rewrite the whole side's order densely rather than editing two
         // `order` values: ties on `order` are broken by declaration order, so a
         // swap of equal values would be invisible.
         let mut next = order.clone();
-        next.swap(at, swap_with);
+        let moved = next.remove(at);
+        next.insert(to, moved);
         for (i, id) in next.iter().enumerate() {
             let index = Self::index_of(*id);
             self.placements[index].order = u8::try_from(i).unwrap_or(u8::MAX - 1);
@@ -654,7 +681,7 @@ mod tests {
             d.panels_on(DockSide::Right),
             vec![PanelId::Properties, PanelId::Adjustments, PanelId::Layers]
         );
-        assert!(d.reorder(PanelId::Layers, true));
+        assert_eq!(d.reorder(PanelId::Layers, true), Some(1));
         assert_eq!(
             d.panels_on(DockSide::Right),
             vec![PanelId::Properties, PanelId::Layers, PanelId::Adjustments]
@@ -662,10 +689,10 @@ mod tests {
         assert_eq!(d.layout(), None);
 
         // The first panel cannot go up and the last cannot go down.
-        assert!(!d.reorder(PanelId::Properties, true));
-        assert!(!d.reorder(PanelId::Adjustments, false));
+        assert_eq!(d.reorder(PanelId::Properties, true), None);
+        assert_eq!(d.reorder(PanelId::Adjustments, false), None);
         // A closed panel has no place in the order at all.
-        assert!(!d.reorder(PanelId::Paths, true));
+        assert_eq!(d.reorder(PanelId::Paths, true), None);
         // ...and the refusals left the arrangement alone.
         assert_eq!(
             d.panels_on(DockSide::Right),
@@ -677,9 +704,40 @@ mod tests {
     fn reordering_down_is_the_inverse_of_reordering_up() {
         let mut d = DockState::default();
         let before = d.panels_on(DockSide::Right);
-        assert!(d.reorder(PanelId::Layers, true));
-        assert!(d.reorder(PanelId::Layers, false));
+        assert!(d.reorder(PanelId::Layers, true).is_some());
+        assert!(d.reorder(PanelId::Layers, false).is_some());
         assert_eq!(d.panels_on(DockSide::Right), before);
+    }
+
+    #[test]
+    fn moving_a_panel_to_the_index_it_already_holds_changes_nothing() {
+        // The whole reason the intent carries a destination rather than a
+        // direction: absorbing it twice must not move the panel twice.
+        let mut d = DockState::default();
+        let at = 2;
+        assert_eq!(d.panels_on(DockSide::Right)[at], PanelId::Layers);
+        assert!(d.reorder_to(PanelId::Layers, 0));
+        let once = d.panels_on(DockSide::Right);
+        assert_eq!(once[0], PanelId::Layers);
+        assert!(!d.reorder_to(PanelId::Layers, 0));
+        assert_eq!(d.panels_on(DockSide::Right), once);
+        // An index off the end of the side is a refusal, not a clamp.
+        assert!(!d.reorder_to(PanelId::Layers, 9));
+        assert_eq!(d.panels_on(DockSide::Right), once);
+    }
+
+    #[test]
+    fn moving_a_panel_across_the_side_carries_the_rest_along() {
+        // `remove` + `insert`, not `swap`: moving the last panel to the front
+        // must push the others down one, not trade places with the first.
+        let mut d = DockState::default();
+        let before = d.panels_on(DockSide::Right);
+        let last = *before.last().unwrap();
+        assert!(d.reorder_to(last, 0));
+        let mut expected = before.clone();
+        expected.remove(before.len() - 1);
+        expected.insert(0, last);
+        assert_eq!(d.panels_on(DockSide::Right), expected);
     }
 
     #[test]

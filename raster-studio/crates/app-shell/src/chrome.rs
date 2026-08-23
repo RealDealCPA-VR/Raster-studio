@@ -1,12 +1,37 @@
-//! The application chrome: menu bar, document tabs, tool palette, the layers
-//! and history docks, the preferences window, and the status bar.
+//! The application chrome: the document tabs, the preferences window, the
+//! status strip — and the seam that hands everything else to `ui::Workspace`.
 //!
-//! # It is a view
+//! # One chrome, not two
 //!
-//! [`Chrome::ui`] takes `&Editor`, never `&mut Editor`. Everything the user
-//! asks for comes back as a [`ChromeOutput`] the shell then performs, so the UI
+//! This file used to draw a second menu bar, tool palette, layers dock, history
+//! dock and colour-well pair beside the ones the `ui` crate publishes. Nothing
+//! in the binary reached `ui::Workspace`, so the thirteen docked panels, the
+//! tool fly-outs, the options bar, the Navigator, the Channels panel and the
+//! workspace layouts existed only in that crate's own tests.
+//!
+//! [`Chrome`] now **owns** a [`ui::Workspace`] and draws it:
+//!
+//! * the menu bar through [`crate::menu_bridge`], which paints
+//!   `ui::menu::menu_bar` and gates each item on what this build can perform;
+//! * the tool palette through [`ui::view::tool_palette`];
+//! * the options bar through [`ui::view::tool_options`];
+//! * every docked panel through [`ui::view::docks`].
+//!
+//! What is left here is what the `ui` crate has no model for: the document tab
+//! strip (that crate knows one document, not a set of them), the preferences and
+//! shortcut editor, and the status strip — which carries the shell's transient
+//! message ("Opened C:\…\photo.png"), a string [`ui::StatusBar`] has no field
+//! for. Its *readouts* are `ui::StatusBar`'s, so the zoom, size, colour mode and
+//! tool name are formatted once for the whole application.
+//!
+//! # It is still a view
+//!
+//! [`Chrome::ui`] takes `&Editor`, never `&mut Editor`. Everything the user asks
+//! for comes back as a [`ChromeOutput`] the shell then performs, so the UI
 //! cannot mutate a document behind history's back — and so the whole of "what
-//! did that click mean" is a value a test can inspect.
+//! did that click mean" is a value a test can inspect. The workspace's own
+//! intents go through the same door: [`ui::Workspace::drain_intents`] is
+//! translated by [`crate::menu_bridge::pick`], exactly as a menu click is.
 //!
 //! A field of [`ChromeOutput`] is set **only when the user did something this
 //! frame**. Mirroring current state into it (which `select_layer` used to do)
@@ -15,66 +40,30 @@
 //! that was captured before it. See `a_new_layer_stays_active_when_the_menu_
 //! creates_it`.
 //!
+//! # The editor is the source of truth, once per frame
+//!
+//! The workspace keeps its own copy of the things a panel has to draw — the
+//! active tool, the two colour wells, the zoom, the recent files. Those belong
+//! to the [`Editor`], so [`Chrome::sync_workspace`] pushes them in before the
+//! frame is drawn and the intents the frame produced are what push back. One
+//! direction each way; nothing is authoritative in two places.
+//!
 //! # It names no colours
 //!
 //! Every colour, radius, gap and text size *this module chooses* comes from
-//! `design`: the palette through [`design::current_tokens`], the widgets
-//! through [`design::toolbar_icon_button`] and friends. There is no literal
-//! `Color32` and no bare pixel gap anywhere below. The one class of colour that
-//! is not the design system's to choose is the user's own foreground and
-//! background, which the colour wells display and the picker edits.
-//!
-//! # One menu, not two
-//!
-//! The menu bar is **not** built here. [`crate::menu_bridge`] draws
-//! `ui::menu::menu_bar` — the nine-menu Photopea-shaped model with its own
-//! enablement rules and shortcut hints — and maps what it resolves to onto
-//! this crate's [`Action`] catalogue. A second menu in this file would be a
-//! second vocabulary to keep in step, which is exactly how the two drifted
-//! apart before.
-//!
-//! The remaining surfaces below — tabs, tool palette, the layers and history
-//! docks, the colour wells, preferences and the status bar — are still drawn
-//! here rather than by `ui::Workspace`. That duplication is real and is
-//! recorded as an open item; it is not hidden behind a claim that it does not
-//! exist.
+//! `design`. There is no literal `Color32` and no bare pixel gap anywhere below.
 
 use std::path::PathBuf;
 
 use design::{ColorRole, Space, SurfaceRole, TextRole, TypeRole};
-use editor_core::{Command, Document, LayerPatch};
+use editor_core::Command;
 use layer_model::LayerId;
-use tools::{registry, ToolId};
+use tools::ToolId;
 
-use crate::action::{Action, ToolKey};
-use crate::doc::OpenDocument;
+use crate::action::Action;
 use crate::editor::Editor;
 use crate::keymap::{Chord, Key};
 use crate::prefs::{Preferences, ThemeChoice};
-
-/// Widget ids the chrome pins down.
-///
-/// A themed affordance is painted by hand rather than by an `egui::Button`, so
-/// it needs an id of its own — and a stable one lets a headless test find the
-/// control and click it, which is how "this button emits that command" is
-/// proved rather than asserted.
-pub mod ids {
-    pub const ADD_LAYER: &str = "raster-add-layer";
-    pub const DELETE_LAYER: &str = "raster-delete-layer";
-    pub const DUPLICATE_LAYER: &str = "raster-duplicate-layer";
-    pub const SWAP_COLORS: &str = "raster-swap-colors";
-    pub const RESET_COLORS: &str = "raster-reset-colors";
-
-    /// The visibility toggle of one layer row.
-    pub fn layer_eye(layer: layer_model::LayerId) -> egui::Id {
-        egui::Id::new(("raster-layer-eye", layer))
-    }
-
-    /// One row of the history dock, by its index in [`super::history_rows`].
-    pub fn history_row(index: usize) -> egui::Id {
-        egui::Id::new(("raster-history-row", index))
-    }
-}
 
 /// Install `theme` on an egui context so it survives the platform changing its
 /// mind about light and dark.
@@ -140,6 +129,18 @@ pub struct ChromeOutput {
     pub set_foreground: Option<[f32; 4]>,
     /// The background colour was edited in the colour well.
     pub set_background: Option<[f32; 4]>,
+    /// A control asked for a zoom level — the status bar's field, the
+    /// Navigator's slider — as a scale factor.
+    pub set_zoom: Option<f32>,
+    /// The Navigator was panned: the camera's new centre, in image pixels.
+    pub set_view_center: Option<(f32, f32)>,
+    /// Intents whose whole effect is on the workspace — panel visibility, the
+    /// dock layout, view overlays, channel isolation, tool options.
+    ///
+    /// [`Chrome::ui`] has already absorbed these into the workspace it owns by
+    /// the time the shell sees them; they are reported so a test can read what
+    /// a click meant, and so the shell can repaint knowing something moved.
+    pub workspace: Vec<ui::Intent>,
     /// The preferences window changed a setting.
     pub preferences: Option<Preferences>,
     /// A shortcut was recorded in the shortcut editor.
@@ -150,6 +151,59 @@ pub struct ChromeOutput {
     pub reset_keymap: bool,
     /// The conflict prompt was dismissed without replacing anything.
     pub dismiss_conflict: bool,
+    /// The options bar edited a brush parameter. [`crate::Editor`] owns the
+    /// brush, so the edit travels back out to it rather than living on in the
+    /// workspace as a second, disagreeing copy.
+    pub set_brush: Option<tools::BrushSettings>,
+}
+
+/// The option keys that make up a [`tools::BrushSettings`].
+///
+/// Kept beside [`push_brush`] so the two cannot drift: a key written out but
+/// never read back — or the reverse — is how the two copies disagreed before.
+const BRUSH_KEYS: &[&str] = &[
+    "size",
+    "hardness",
+    "spacing",
+    "angle",
+    "roundness",
+    "opacity",
+    "flow",
+    "smoothing",
+    "size_pressure",
+    "flow_pressure",
+];
+
+/// Whether an intent could have changed the active tool's brush.
+fn touches_brush(intent: &ui::Intent) -> bool {
+    match intent {
+        ui::Intent::SetToolOption { key, .. } => BRUSH_KEYS.contains(key),
+        ui::Intent::ResetToolOptions { .. } => true,
+        _ => false,
+    }
+}
+
+/// Write `brush` into `w`'s options for `tool`.
+///
+/// Only keys the tool's schema actually declares are set, so a tool exposing
+/// just `size` is not given a hardness slider it never had.
+fn push_brush(w: &mut ui::Workspace, tool: tools::ToolId, brush: &tools::BrushSettings) {
+    use ui::OptionValue;
+    let pairs: [(&str, OptionValue); 10] = [
+        ("size", OptionValue::Float(brush.size)),
+        ("hardness", OptionValue::Float(brush.hardness)),
+        ("spacing", OptionValue::Float(brush.spacing)),
+        ("angle", OptionValue::Float(brush.angle)),
+        ("roundness", OptionValue::Float(brush.roundness)),
+        ("opacity", OptionValue::Float(brush.opacity)),
+        ("flow", OptionValue::Float(brush.flow)),
+        ("smoothing", OptionValue::Float(brush.smoothing)),
+        ("size_pressure", OptionValue::Bool(brush.size_pressure)),
+        ("flow_pressure", OptionValue::Bool(brush.flow_pressure)),
+    ];
+    for (key, value) in pairs {
+        w.options.set(tool, key, value);
+    }
 }
 
 impl ChromeOutput {
@@ -158,155 +212,9 @@ impl ChromeOutput {
     }
 }
 
-/// One button of the tool palette.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PaletteEntry {
-    pub key: ToolKey,
-    /// The tool the button selects and draws — the active member of the group
-    /// when one is active, otherwise the group's first tool.
-    pub tool: ToolId,
-    pub selected: bool,
-}
-
-/// The tool palette: one button per cycle group, in registry order.
-///
-/// A button per [`ToolId`] would be forty-five squares down the side of the
-/// window; the registry already groups them behind one letter, and the button
-/// shows whichever member of its group is active.
-pub fn palette_entries(active: ToolId) -> Vec<PaletteEntry> {
-    ToolKey::all()
-        .into_iter()
-        .filter_map(|key| {
-            let group = registry::by_shortcut(key.char());
-            let first = *group.first()?;
-            let selected = group.contains(&active);
-            Some(PaletteEntry {
-                key,
-                tool: if selected { active } else { first },
-                selected,
-            })
-        })
-        .collect()
-}
-
 /// The label for one document tab, with a bullet while it has unsaved changes.
 pub fn tab_labels(editor: &Editor) -> Vec<String> {
     editor.documents().iter().map(|d| d.tab_label()).collect()
-}
-
-/// The two colours the wells in the tool strip paint.
-///
-/// A pure function so "the swatch shows what the editor holds" is a test rather
-/// than a claim: `Action::SwapColors` and `Action::ResetColors` used to change
-/// state that nothing on screen displayed.
-pub fn color_wells(editor: &Editor) -> (egui::Color32, egui::Color32) {
-    (
-        rgba_to_color32(editor.foreground()),
-        rgba_to_color32(editor.background()),
-    )
-}
-
-fn rgba_to_color32(rgba: [f32; 4]) -> egui::Color32 {
-    let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    egui::Color32::from_rgba_unmultiplied(c(rgba[0]), c(rgba[1]), c(rgba[2]), c(rgba[3]))
-}
-
-fn color32_to_rgba(c: egui::Color32) -> [f32; 4] {
-    let [r, g, b, a] = c.to_srgba_unmultiplied();
-    [
-        r as f32 / 255.0,
-        g as f32 / 255.0,
-        b as f32 / 255.0,
-        a as f32 / 255.0,
-    ]
-}
-
-/// One row of the layers dock.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LayerRow {
-    pub id: LayerId,
-    /// Nesting depth; group children are indented by it. The Wave-0 panel
-    /// walked only `layers.root()`, so everything inside a group was invisible.
-    pub depth: usize,
-    pub name: String,
-    pub visible: bool,
-    pub is_group: bool,
-    pub selected: bool,
-    /// Opacity as a whole percentage, for the trailing hint.
-    pub opacity_percent: u32,
-}
-
-/// Every layer in composite order, top-most first, groups descended into.
-pub fn layer_rows(doc: &Document, active: Option<LayerId>) -> Vec<LayerRow> {
-    doc.layers
-        .iter_depth_first()
-        .into_iter()
-        .filter_map(|id| {
-            let layer = doc.layers.get(id)?;
-            Some(LayerRow {
-                id,
-                depth: doc.layers.depth_of(id).unwrap_or(0),
-                name: layer.name.clone(),
-                visible: layer.visible,
-                is_group: layer.is_group(),
-                selected: active == Some(id),
-                opacity_percent: (layer.opacity.clamp(0.0, 1.0) * 100.0).round() as u32,
-            })
-        })
-        .collect()
-}
-
-/// The command a layer row's eye emits.
-pub fn toggle_visibility_command(row: &LayerRow) -> Command {
-    Command::SetLayerProperties {
-        layer_id: row.id,
-        patch: LayerPatch {
-            visible: Some(!row.visible),
-            ..Default::default()
-        },
-    }
-}
-
-/// One row of the history dock.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HistoryRow {
-    pub label: String,
-    /// The state the document is standing on right now.
-    pub current: bool,
-    /// How many commands are applied while standing on this row — what
-    /// [`Editor::jump_history`] is asked for when the row is clicked.
-    pub depth: usize,
-    /// This step has been undone: it is ahead of where the document stands, and
-    /// clicking it redoes forward to it.
-    pub undone: bool,
-}
-
-/// The whole timeline of the active document, oldest first.
-///
-/// Row 0 is the state *before* any command, so the panel can walk all the way
-/// back; each later row is the state after one more step. Undone steps stay in
-/// the list rather than vanishing, because a history panel a user cannot click
-/// forward in is only half of one.
-pub fn history_rows(doc: &OpenDocument) -> Vec<HistoryRow> {
-    let here = doc.history_depth();
-    let mut rows = vec![HistoryRow {
-        label: "Original".to_string(),
-        current: here == 0,
-        depth: 0,
-        undone: false,
-    }];
-    rows.extend(
-        doc.history_timeline()
-            .into_iter()
-            .enumerate()
-            .map(|(i, label)| HistoryRow {
-                label,
-                current: i + 1 == here,
-                depth: i + 1,
-                undone: i + 1 > here,
-            }),
-    );
-    rows
 }
 
 /// One row of the shortcut editor.
@@ -384,12 +292,20 @@ pub fn chord_from_egui(key: egui::Key, mods: egui::Modifiers) -> Option<Chord> {
     })
 }
 
-/// The chrome's own view state. Nothing here is document or editor state — it
-/// is only "which row of the shortcut editor is listening for a key press".
-#[derive(Debug, Default)]
+/// The chrome's view state: the whole `ui` workspace, plus "which row of the
+/// shortcut editor is listening for a key press".
+///
+/// The workspace is *owned* here rather than by the shell because it is view
+/// state — which panels are open, where they are docked, which channel is
+/// isolated, what the gradient ramp looks like — and none of it belongs in a
+/// document or in the editor.
+#[derive(Default)]
 pub struct Chrome {
     /// The action whose shortcut is being recorded, if any.
     capturing: Option<Action>,
+    /// The `ui` crate's workspace: the dock, the panels, the tool palette's
+    /// fly-outs, the tool options, the view overlays.
+    workspace: ui::Workspace,
 }
 
 impl Chrome {
@@ -402,25 +318,212 @@ impl Chrome {
         self.capturing
     }
 
+    /// The workspace this chrome draws, for tests and for the shell's own
+    /// read-back of view state.
+    pub fn workspace(&self) -> &ui::Workspace {
+        &self.workspace
+    }
+
+    /// Which colour components the canvas should show, as the Channels panel
+    /// currently says.
+    ///
+    /// Channel isolation is a *view* setting, so it is not in the document and
+    /// not in the [`Editor`]: the panel owns it, this chrome owns the panel,
+    /// and [`crate::presenter::CanvasPresenter`] applies it on the composite's
+    /// way to the GPU. `hiding_a_channel_in_the_panel_changes_what_the_canvas_
+    /// is_asked_to_show` drives the real panel and reads this back.
+    pub fn channel_mask(&self) -> crate::presenter::ChannelMask {
+        crate::presenter::ChannelMask::from_channels(&self.workspace.channels)
+    }
+
     /// Draw one frame of chrome.
     pub fn ui(&mut self, ctx: &egui::Context, editor: &Editor) -> ChromeOutput {
         let mut out = ChromeOutput::default();
+        self.sync_workspace(editor);
 
+        // Order matters, and it is `ui::Workspace::ui`'s: egui gives each panel
+        // what the previously added ones left, so the full-width strips — menu,
+        // tabs, options, status — are claimed before the vertical tool rail and
+        // the docks, and the canvas gets the rectangle in the middle.
         self.menu_bar(ctx, editor, &mut out);
         if editor.documents().len() > 1 || editor.panels_visible() {
             self.tab_strip(ctx, editor, &mut out);
         }
+        // The `ui` crate's own surfaces, driven from the workspace this chrome
+        // owns. Every control in them posts an intent, which `harvest`
+        // translates below.
         if editor.panels_visible() {
-            self.tool_palette(ctx, editor, &mut out);
-            self.side_panels(ctx, editor, &mut out);
+            ui::view::tool_options(&mut self.workspace, ctx);
         }
         self.status_bar(ctx, editor);
+        if editor.panels_visible() {
+            ui::view::tool_palette(&mut self.workspace, ctx);
+            if let Some(open) = editor.active() {
+                ui::view::docks(&mut self.workspace, ctx, &open.document, &open.history);
+            }
+        }
         if editor.preferences_open() {
             self.preferences_window(ctx, editor, &mut out);
         } else {
             self.capturing = None;
         }
+        // Read *after* the chrome is drawn: this is the room the image actually
+        // has once every panel has taken its share, and it is what the
+        // Navigator's rectangle and Fit on Screen are computed against.
+        self.record_viewport(ctx);
+        self.channel_chords(ctx, editor);
+        self.harvest(editor, &mut out);
         out
+    }
+
+    /// Push the editor's state into the workspace, once, before the frame.
+    ///
+    /// These are the values a panel draws that the [`Editor`] owns. Without
+    /// this the Layers panel would show the workspace's idea of the active
+    /// tool, the Colour panel its own wells, and the Navigator a zoom that no
+    /// camera ever had.
+    fn sync_workspace(&mut self, editor: &Editor) {
+        let w = &mut self.workspace;
+        w.theme = editor.preferences().theme.resolve(design::Theme::Dark);
+        w.recent = editor
+            .recent()
+            .entries()
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.display().to_string())
+            })
+            .collect();
+        let tool = editor.effective_tool();
+        w.palette.activate(&ui::PaletteModel::build(), tool);
+        w.status.tool = Some(tool);
+        // The brush is [`Editor`]'s. Push it into the options bar every frame
+        // so `[` and `]` move the slider the user is looking at — without this
+        // the options bar and the status bar show different sizes in the same
+        // window. The reverse direction is `ChromeOutput::set_brush`.
+        push_brush(w, tool, editor.brush());
+        w.color.set_well(
+            ui::panels::color::ColorWell::Foreground,
+            editor.foreground(),
+        );
+        w.color.set_well(
+            ui::panels::color::ColorWell::Background,
+            editor.background(),
+        );
+        if let Some(open) = editor.active() {
+            w.status.zoom = open.camera.zoom;
+            w.view_center = (open.camera.center.x, open.camera.center.y);
+            w.prune(&open.document);
+        }
+    }
+
+    /// Remember how much room the canvas has once the docks have taken theirs.
+    fn record_viewport(&mut self, ctx: &egui::Context) {
+        let rect = ctx.available_rect();
+        let (w, h) = (rect.width(), rect.height());
+        if w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 {
+            self.workspace.viewport = (w, h);
+        }
+    }
+
+    /// `Ctrl+2`…`Ctrl+9`: isolate the channel the Channels panel prints that
+    /// chord beside.
+    ///
+    /// # Why this is not `ui::Workspace::handle_keys`
+    ///
+    /// That function runs the *whole* `ui` shortcut table, and this application
+    /// already has one: [`crate::keymap::Keymap`], routed from winit through
+    /// [`crate::shell::Shell::on_key`]. Running both would perform Ctrl+Z
+    /// twice. So only the chords the panel paints — and only those the
+    /// application's own keymap does not claim — are read here, from the same
+    /// [`ui::keys::channel_for_key`] table the hint is derived from. A chord
+    /// hint painted beside a control is a promise, and until this existed it
+    /// was a promise only the `ui` crate's own tests saw kept.
+    fn channel_chords(&mut self, ctx: &egui::Context, editor: &Editor) {
+        // Typing "3" into a layer name must not isolate the red channel.
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+        let Some(open) = editor.active() else { return };
+        let presses: Vec<(egui::Key, egui::Modifiers)> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        repeat: false,
+                        ..
+                    } => Some((*key, *modifiers)),
+                    _ => None,
+                })
+                .collect()
+        });
+        for (key, modifiers) in presses {
+            // The application's keymap wins: `Ctrl+0` and `Ctrl+1` are its zoom
+            // commands, and a user who rebinds `Ctrl+3` gets what they bound.
+            if chord_from_egui(key, modifiers)
+                .and_then(|chord| editor.keymap().resolve(&chord))
+                .is_some()
+            {
+                continue;
+            }
+            if let Some(channel) =
+                ui::keys::channel_for_key(key, modifiers, &open.document, &self.workspace.channels)
+            {
+                self.workspace
+                    .channels
+                    .isolate(&open.document.meta.color_space, channel);
+                self.workspace.emit(ui::Intent::SelectChannel(channel));
+            }
+        }
+    }
+
+    /// Translate what the workspace's controls asked for into the frame's
+    /// output, and absorb the part of it that is the workspace's own.
+    ///
+    /// The same [`crate::menu_bridge::pick`] the menu bar goes through, so a
+    /// panel button and the menu item beside it cannot mean two different
+    /// things. An intent this build has no answer for is dropped here rather
+    /// than silently half-applied — the menu bar's equivalent is the item that
+    /// greys out carrying [`crate::menu_bridge::NOT_WIRED`].
+    /// [`Chrome::harvest`], reachable from this crate's tests.
+    #[cfg(test)]
+    fn harvest_workspace_for_test(&mut self, out: &mut ChromeOutput, editor: &Editor) {
+        self.harvest(editor, out);
+    }
+
+    fn harvest(&mut self, editor: &Editor, out: &mut ChromeOutput) {
+        for intent in self.workspace.drain_intents() {
+            if let Some(pick) = crate::menu_bridge::pick(&intent, editor) {
+                crate::menu_bridge::record(pick, out);
+            }
+        }
+        // Workspace-local intents are performed by the thing that owns the
+        // state — this chrome — rather than travelling out to the shell and
+        // back. They stay in the output so a test can read what a click meant.
+        //
+        // This is the *second* application for anything a drawn control raised:
+        // `ui::view::docks` moves the panel as the header control is clicked
+        // and then emits. That is safe only because every intent
+        // `menu_bridge::pick` routes to `Pick::Workspace` is an absolute set,
+        // which `ui::Intent` states as an invariant and
+        // `every_workspace_intent_is_idempotent_under_absorb` enforces. It was
+        // not always true: `ReorderPanel` carried a direction, so one click on
+        // the ▲ moved the panel two places — see
+        // `the_header_reorder_control_moves_a_panel_exactly_one_place`.
+        for intent in &out.workspace {
+            self.workspace.absorb(intent);
+        }
+        // The other half of the brush's single source of truth: an options-bar
+        // edit is absorbed above, so read the result back and hand it to the
+        // shell for `Editor::set_brush`.
+        if out.workspace.iter().any(touches_brush) {
+            let tool = editor.effective_tool();
+            out.set_brush = Some(self.workspace.options.brush_settings(tool));
+        }
     }
 
     /// The menu bar, drawn by [`crate::menu_bridge`] from `ui::menu::menu_bar`.
@@ -430,7 +533,7 @@ impl Chrome {
     /// from the shared model in the `ui` crate; the bridge is the one place
     /// that says which of them this build can actually perform.
     fn menu_bar(&self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
-        crate::menu_bridge::draw(ctx, editor, out);
+        crate::menu_bridge::draw(ctx, editor, &self.workspace, out);
     }
 
     fn tab_strip(&self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
@@ -468,224 +571,16 @@ impl Chrome {
             });
     }
 
-    fn tool_palette(&self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
-        egui::SidePanel::left("raster-tools")
-            .resizable(false)
-            .exact_width(tool_strip_width(ctx))
-            .frame(panel_frame(ctx, SurfaceRole::Panel, Space::XSmall))
-            .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing.y = Space::Hair.pt();
-                for entry in palette_entries(editor.effective_tool()) {
-                    let info = registry::info(entry.tool);
-                    // The registry's `icon` is a KEY, not a glyph. Passing it
-                    // to a text button paints the words "marquee-rect" wrapped
-                    // across the strip; `ui::icons` resolves it to a drawing.
-                    let icon_key = info.map(|i| i.icon).unwrap_or("");
-                    let name = info.map(|i| i.name).unwrap_or("Tool");
-                    let tooltip = format!("{name}  ({})", entry.key);
-                    if ui::icons::icon_button(ui, icon_key, &tooltip, entry.selected).clicked() {
-                        out.select_tool = Some(entry.tool);
-                    }
-                }
-                ui.add_space(Space::Medium.pt());
-                self.color_wells_ui(ui, editor, out);
-            });
-    }
-
-    /// The foreground / background wells, and the two affordances that act on
-    /// them. This is the surface `Action::SwapColors` and `Action::ResetColors`
-    /// change: before it existed, both were menu items with no visible effect.
-    fn color_wells_ui(&self, ui: &mut egui::Ui, editor: &Editor, out: &mut ChromeOutput) {
-        let tokens = design::current_tokens(ui);
-        let side = tokens.metrics.toolbar_button;
-        let (mut foreground, mut background) = color_wells(editor);
-
-        ui.scope(|ui| {
-            ui.spacing_mut().interact_size = egui::vec2(side, side);
-            ui.spacing_mut().item_spacing.y = Space::Hair.pt();
-            if egui::color_picker::color_edit_button_srgba(
-                ui,
-                &mut foreground,
-                egui::color_picker::Alpha::Opaque,
-            )
-            .on_hover_text("Foreground colour")
-            .changed()
-            {
-                out.set_foreground = Some(color32_to_rgba(foreground));
-            }
-            if egui::color_picker::color_edit_button_srgba(
-                ui,
-                &mut background,
-                egui::color_picker::Alpha::Opaque,
-            )
-            .on_hover_text("Background colour")
-            .changed()
-            {
-                out.set_background = Some(color32_to_rgba(background));
-            }
-        });
-
-        if icon_affordance(ui, ids::SWAP_COLORS, "⇄", "Swap colours  (X)", None).clicked() {
-            out.actions.push(Action::SwapColors);
-        }
-        if icon_affordance(ui, ids::RESET_COLORS, "◨", "Default colours  (D)", None).clicked() {
-            out.actions.push(Action::ResetColors);
-        }
-    }
-
-    fn side_panels(&self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
-        let Some(doc) = editor.active() else {
-            return;
-        };
-        self.layers_dock(ctx, editor, out);
-        self.history_dock(ctx, doc, out);
-    }
-
-    /// The layers dock — themed, nested, and the only place a layer row can put
-    /// a selection into [`ChromeOutput::select_layer`].
-    fn layers_dock(&self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
-        let Some(open) = editor.active() else {
-            return;
-        };
-        let doc = &open.document;
-        let rows = layer_rows(doc, doc.active_layer());
-        let can_delete = editor.can(Action::DeleteLayer).is_ok();
-        let can_duplicate = editor.can(Action::DuplicateLayer);
-
-        egui::SidePanel::left("raster-layers")
-            .resizable(true)
-            .default_width(dock_width(ctx))
-            .frame(panel_frame(ctx, SurfaceRole::Panel, Space::XSmall))
-            .show(ctx, |ui| {
-                let tokens = design::current_tokens(ui);
-                let dim = design::color32(tokens.palette.text(TextRole::Tertiary));
-                design::section_header(ui, "LAYERS");
-
-                // Leave room for the button row below, but never ask for a
-                // negative height: a very short window would otherwise hand
-                // the scroll area a nonsense budget.
-                let list_height =
-                    (ui.available_height() - tokens.metrics.toolbar_button - Space::Small.pt())
-                        .max(tokens.metrics.list_row_height);
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, true])
-                    .max_height(list_height)
-                    .show(ui, |ui| {
-                        if rows.is_empty() {
-                            ui.colored_label(dim, "No layers yet — add one with +");
-                        }
-                        for row in &rows {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = Space::Hair.pt();
-                                if row.depth > 0 {
-                                    ui.add_space(row.depth as f32 * Space::Small.pt());
-                                }
-                                let eye = if row.visible { "◉" } else { "○" };
-                                let tip = if row.visible { "Hide" } else { "Show" };
-                                if eye_affordance(ui, ids::layer_eye(row.id), eye, tip).clicked() {
-                                    out.commands.push(toggle_visibility_command(row));
-                                }
-                                let label = if row.is_group {
-                                    format!("▸ {}", row.name)
-                                } else if row.opacity_percent == 100 {
-                                    row.name.clone()
-                                } else {
-                                    format!("{}  {}%", row.name, row.opacity_percent)
-                                };
-                                if design::list_row(ui, &label, row.selected).clicked() {
-                                    out.select_layer = Some(row.id);
-                                }
-                            });
-                        }
-                    });
-
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = Space::Hair.pt();
-                        // The *action*, not a bare `Command::CreateLayer`.
-                        // `Command` never touches the active layer, so the
-                        // button used to leave the selection on the old layer
-                        // while the menu's New Layer moved it to the new one —
-                        // and the “−” beside it then deleted a different layer
-                        // than the one just created.
-                        if icon_affordance(ui, ids::ADD_LAYER, "+", "New layer", None).clicked() {
-                            out.actions.push(Action::NewLayer);
-                        }
-                        // A greyed-out control that will not say why is only
-                        // half an answer — the same rule the menu bar keeps.
-                        if icon_affordance(
-                            ui,
-                            ids::DUPLICATE_LAYER,
-                            "⧉",
-                            "Duplicate layer",
-                            can_duplicate
-                                .as_ref()
-                                .err()
-                                .map(|e| e.to_string())
-                                .as_deref(),
-                        )
-                        .clicked()
-                        {
-                            out.actions.push(Action::DuplicateLayer);
-                        }
-                        if icon_affordance(
-                            ui,
-                            ids::DELETE_LAYER,
-                            "−",
-                            "Delete layer",
-                            (!can_delete).then_some("select a layer first"),
-                        )
-                        .clicked()
-                        {
-                            // Also the action: it deletes whatever is active
-                            // when the frame is *applied*, which after a click
-                            // on “+” in the same frame is the new layer.
-                            out.actions.push(Action::DeleteLayer);
-                        }
-                    });
-                });
-            });
-    }
-
-    /// The history dock: the whole timeline, and every row is a place to stand.
+    /// The status strip.
     ///
-    /// Each row is a real control. It used to be drawn with
-    /// [`design::list_row`], whose response was discarded — so every entry
-    /// highlighted under the pointer, advertised itself as clickable, and did
-    /// nothing at all. Now a click walks [`editor_core::History`] to that step
-    /// (through [`crate::Editor::jump_history`], so it is exactly the steps
-    /// Ctrl+Z and Ctrl+Shift+Z would have taken), and the one row that has
-    /// nowhere to go — the state the document is already on — is rendered as a
-    /// selected, non-clickable row that says so on hover.
-    fn history_dock(&self, ctx: &egui::Context, doc: &OpenDocument, out: &mut ChromeOutput) {
-        let rows = history_rows(doc);
-        egui::SidePanel::right("raster-history")
-            .resizable(true)
-            .default_width(dock_width(ctx))
-            .frame(panel_frame(ctx, SurfaceRole::Panel, Space::XSmall))
-            .show(ctx, |ui| {
-                design::section_header(ui, "HISTORY");
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        for (index, row) in rows.iter().enumerate() {
-                            let tooltip = if row.current {
-                                "The step the document is on".to_string()
-                            } else if row.undone {
-                                format!("Redo forward to “{}”", row.label)
-                            } else {
-                                format!("Undo back to “{}”", row.label)
-                            };
-                            if history_row_affordance(ui, ids::history_row(index), row, &tooltip)
-                                .clicked()
-                            {
-                                out.history_jump = Some(row.depth);
-                            }
-                        }
-                    });
-            });
-    }
-
+    /// Its readouts are `ui::StatusBar`'s — the zoom, the size, the colour mode
+    /// and the memory figure are formatted by the shared model, so the strip
+    /// and the panels showing the same number cannot disagree about how it is
+    /// written. What is drawn here rather than by `ui::view::status_bar` is the
+    /// **transient message**: "Opened C:\…\photo.png", "Restored 2
+    /// document(s)", the reason an action refused. `ui::StatusBar` has no field
+    /// for that string, and dropping it would take the only report a user gets
+    /// of half the shell's work off the screen.
     fn status_bar(&self, ctx: &egui::Context, editor: &Editor) {
         egui::TopBottomPanel::bottom("raster-status")
             .frame(panel_frame(ctx, SurfaceRole::Panel, Space::Hair))
@@ -700,26 +595,51 @@ impl Chrome {
                                 egui::RichText::new(doc.title())
                                     .text_style(design::egui_theme::text_style(TypeRole::Footnote)),
                             );
-                            ui.colored_label(
-                                dim,
-                                format!("{} × {}", doc.document.width(), doc.document.height()),
-                            );
-                            ui.colored_label(dim, format!("{:.0}%", doc.camera.zoom * 100.0));
-                            ui.colored_label(dim, format!("{} layers", doc.document.layers.len()));
+                            for field in self.workspace.status.fields(&doc.document) {
+                                ui.colored_label(dim, field.value);
+                            }
                         }
                         None => {
                             ui.colored_label(dim, "No document");
                         }
                     }
-                    let tool = registry::info(editor.effective_tool())
-                        .map(|i| i.name)
-                        .unwrap_or("Tool");
-                    ui.colored_label(dim, tool);
+                    ui.colored_label(dim, self.workspace.status.tool_hint());
                     ui.colored_label(dim, format!("{} px", editor.brush().size as i32));
                     if let Some(status) = editor.status() {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.colored_label(dim, status);
-                        });
+                        // Laid out and placed by hand, because this is the one
+                        // label whose length the application does not control:
+                        // it is routinely a whole file path ("Opened
+                        // C:\…\photo.png"). egui does not clip a label to
+                        // the space it was given, so the message was painted
+                        // straight across the tool name, the brush size and the
+                        // layer count — the right-hand end of the bar was two
+                        // sentences on top of each other.
+                        //
+                        // Elided to the room that is left and right-aligned
+                        // inside exactly that room, so "it cannot cover its
+                        // neighbours" is true by construction rather than by
+                        // hoping a layout does the right thing.
+                        let room = ui.available_width();
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(room, ui.spacing().interact_size.y),
+                            egui::Sense::hover(),
+                        );
+                        let mut job = egui::text::LayoutJob::single_section(
+                            status.to_string(),
+                            egui::TextFormat {
+                                font_id: egui::TextStyle::Body.resolve(ui.style()),
+                                color: dim,
+                                ..Default::default()
+                            },
+                        );
+                        job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+                        let galley = ui.painter().layout_job(job);
+                        let size = galley.size();
+                        ui.painter().galley(
+                            egui::pos2(rect.right() - size.x, rect.center().y - size.y * 0.5),
+                            galley,
+                            dim,
+                        );
                     }
                 });
             });
@@ -904,12 +824,6 @@ fn recorded_chord(ctx: &egui::Context) -> Option<Chord> {
     })
 }
 
-/// Width of the tool strip: one square button plus the panel's own padding.
-fn tool_strip_width(ctx: &egui::Context) -> f32 {
-    let tokens = design::current_theme(ctx).tokens();
-    tokens.metrics.toolbar_button + 2.0 * Space::XSmall.pt() + Space::Small.pt()
-}
-
 /// Default width of the layers and history docks, on the 4pt grid.
 fn dock_width(ctx: &egui::Context) -> f32 {
     let m = &design::current_theme(ctx).tokens().metrics;
@@ -945,183 +859,12 @@ fn overlay_frame(ctx: &egui::Context) -> egui::Frame {
         ))
 }
 
-/// A quiet square affordance with an explicit id.
-///
-/// Painted from tokens rather than by an `egui::Button` for two reasons: the
-/// hover / pressed / disabled states are the design system's, and the stable id
-/// lets a headless test find the control and click it.
-///
-/// `disabled_reason` is both the switch and the tooltip: `Some` greys the
-/// control out *and* is what the hover says, so a control can never be off
-/// without saying why. (`Response::on_disabled_hover_text` would be silent
-/// here — it keys off `Ui::is_enabled`, which a hand-painted widget does not
-/// change.)
-fn icon_affordance(
-    ui: &mut egui::Ui,
-    id: &str,
-    glyph: &str,
-    tooltip: &str,
-    disabled_reason: Option<&str>,
-) -> egui::Response {
-    affordance(ui, egui::Id::new(id), glyph, tooltip, disabled_reason)
-}
-
-fn eye_affordance(ui: &mut egui::Ui, id: egui::Id, glyph: &str, tooltip: &str) -> egui::Response {
-    affordance(ui, id, glyph, tooltip, None)
-}
-
-/// One history row: a full-width list row with an id of its own.
-///
-/// Same shape and the same tokens as [`design::list_row`] — the row height, the
-/// selection fill, the hover fill, the radius and the two text pairings all
-/// come from the design system, nothing here is a literal. What it adds is a
-/// *stable id*, so a headless test can find row N and click it, and a
-/// non-interactive mode for the row that is already where the document stands:
-/// that one senses hover only, so it neither highlights as a control nor
-/// pretends a click would do something.
-fn history_row_affordance(
-    ui: &mut egui::Ui,
-    id: egui::Id,
-    row: &HistoryRow,
-    tooltip: &str,
-) -> egui::Response {
-    let tokens = design::current_tokens(ui);
-    let palette = &tokens.palette;
-    let height = tokens.metrics.list_row_height;
-    let width = ui.available_width().max(tokens.metrics.min_hit_target);
-    let (_auto, rect) = ui.allocate_space(egui::vec2(width, height));
-    // `interact` rather than the allocation's own response, so the row is
-    // registered under the id the caller chose.
-    let sense = if row.current {
-        egui::Sense::hover()
-    } else {
-        egui::Sense::click()
-    };
-    let response = ui.interact(rect, id, sense);
-
-    if ui.is_rect_visible(rect) {
-        let fill = if row.current {
-            design::color32(palette.color(ColorRole::SelectionFill))
-        } else if response.is_pointer_button_down_on() {
-            design::color32(palette.color(ColorRole::ControlFillActive))
-        } else if response.hovered() {
-            design::color32(palette.color(ColorRole::ControlFillHovered))
-        } else {
-            egui::Color32::TRANSPARENT
-        };
-        let radius = design::Radius::Medium.resolve(&tokens.radii, height);
-        if fill != egui::Color32::TRANSPARENT {
-            ui.painter()
-                .rect_filled(rect, design::egui_theme::rounding(radius), fill);
-        }
-        if response.has_focus() {
-            ui.painter().rect_stroke(
-                rect,
-                design::egui_theme::rounding(radius),
-                egui::Stroke::new(
-                    tokens.borders.focus_ring,
-                    design::color32(palette.color(ColorRole::FocusRing)),
-                ),
-            );
-        }
-        // An undone step is ahead of where we stand: quieter, like any other
-        // inactive thing in this palette.
-        let text = if row.current {
-            palette.text(TextRole::Primary)
-        } else if row.undone {
-            palette.text(TextRole::Tertiary)
-        } else {
-            palette.text(TextRole::Secondary)
-        };
-        ui.painter().text(
-            egui::pos2(rect.left() + Space::Small.pt(), rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            &row.label,
-            design::egui_theme::font_id(tokens, TypeRole::Body),
-            design::color32(text),
-        );
-    }
-    response.on_hover_text(tooltip)
-}
-
-fn affordance(
-    ui: &mut egui::Ui,
-    id: egui::Id,
-    glyph: &str,
-    tooltip: &str,
-    disabled_reason: Option<&str>,
-) -> egui::Response {
-    let enabled = disabled_reason.is_none();
-    let tokens = design::current_tokens(ui);
-    let palette = &tokens.palette;
-    let side = tokens.metrics.min_hit_target;
-    let (_auto, rect) = ui.allocate_space(egui::vec2(side, side));
-    // `interact` rather than `allocate_exact_size` so the widget is registered
-    // under the id the caller chose: that is what a headless test looks up.
-    let response = ui.interact(
-        rect,
-        id,
-        if enabled {
-            egui::Sense::click()
-        } else {
-            egui::Sense::hover()
-        },
-    );
-    if ui.is_rect_visible(rect) {
-        let fill = if !enabled {
-            egui::Color32::TRANSPARENT
-        } else if response.is_pointer_button_down_on() {
-            design::color32(palette.color(ColorRole::ControlFillActive))
-        } else if response.hovered() {
-            design::color32(palette.color(ColorRole::ControlFillHovered))
-        } else {
-            egui::Color32::TRANSPARENT
-        };
-        let radius = design::Radius::Medium.resolve(&tokens.radii, side);
-        if fill != egui::Color32::TRANSPARENT {
-            ui.painter()
-                .rect_filled(rect, design::egui_theme::rounding(radius), fill);
-        }
-        if response.has_focus() {
-            ui.painter().rect_stroke(
-                rect,
-                design::egui_theme::rounding(radius),
-                egui::Stroke::new(
-                    tokens.borders.focus_ring,
-                    design::color32(palette.color(ColorRole::FocusRing)),
-                ),
-            );
-        }
-        let text = if !enabled {
-            palette.text(TextRole::Disabled)
-        } else if response.hovered() {
-            palette.text(TextRole::Primary)
-        } else {
-            palette.text(TextRole::Secondary)
-        };
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            glyph,
-            design::egui_theme::font_id(tokens, TypeRole::Body),
-            design::color32(text),
-        );
-    }
-    let hover = disabled_reason.unwrap_or(tooltip);
-    if hover.is_empty() {
-        response
-    } else {
-        response.on_hover_text(hover)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::dialogs::ScriptedDialogs;
     use crate::prefs::{AppPaths, Preferences};
     use crate::recent::RecentFiles;
-    use layer_model::Layer;
 
     fn editor(dir: &std::path::Path) -> Editor {
         Editor::with_state(
@@ -1151,6 +894,37 @@ mod tests {
             events,
             ..Default::default()
         }
+    }
+
+    /// Every string one drawn frame painted, with the rectangle it occupies.
+    ///
+    /// `FullOutput::shapes` is pre-tessellation, so a text shape still carries
+    /// its galley — which knows both its text and its size. That is what lets a
+    /// headless test assert on *where* the window put something, not only that
+    /// it was drawn.
+    fn painted_text(editor: &Editor) -> Vec<(String, egui::Rect)> {
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        let mut painted = Vec::new();
+        // Two passes: the first frame is where egui learns the sizes.
+        for _ in 0..2 {
+            let output = ctx.run(raw_input(Vec::new()), |ctx| {
+                chrome.ui(ctx, editor);
+            });
+            painted = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_string(),
+                        egui::Rect::from_min_size(text.pos, text.galley.size()),
+                    )),
+                    _ => None,
+                })
+                .collect();
+        }
+        painted
     }
 
     /// Run the chrome headlessly, optionally clicking one widget by id.
@@ -1194,48 +968,57 @@ mod tests {
     }
 
     #[test]
-    fn the_palette_has_one_button_per_tool_letter() {
-        let entries = palette_entries(ToolId::Move);
-        assert_eq!(entries.len(), ToolKey::all().len());
-        assert!(!entries.is_empty());
-        // Every button names a real tool with an icon and a name.
-        for entry in &entries {
-            let info = registry::info(entry.tool).expect("a registry tool");
-            assert!(!info.icon.is_empty());
-            assert!(!info.name.is_empty());
-        }
-        // Exactly one is selected, and it is the group holding the active tool.
-        let selected: Vec<_> = entries.iter().filter(|e| e.selected).collect();
-        assert_eq!(selected.len(), 1, "{selected:?}");
-        assert_eq!(selected[0].tool, ToolId::Move);
-    }
+    fn a_long_status_message_does_not_paint_over_the_rest_of_the_status_bar() {
+        // Found by running the application: opening a file put "Opened
+        // C:\…\big.png" in the status bar, and because that label is drawn
+        // right-to-left from the panel's right edge and egui does not clip a
+        // label to the space it was given, it grew leftwards straight across
+        // the zoom, the layer count, the tool name and the brush size. The
+        // whole right half of the bar was two sentences on top of each other.
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+        // Longer than the window is wide, which is the whole point: the
+        // message is a file path and paths are as long as the user's folders.
+        ed.set_status(format!(
+            "Opened C:{}\\photograph-of-the-whole-family-at-the-beach.png",
+            "\\a directory with a long name".repeat(12)
+        ));
 
-    #[test]
-    fn a_group_button_shows_whichever_member_is_active() {
-        let (key, group) = ToolKey::all()
-            .into_iter()
-            .map(|k| (k, registry::by_shortcut(k.char())))
-            .find(|(_, g)| g.len() > 1)
-            .expect("the registry has a cycle group");
-        let second = group[1];
-        let entry = palette_entries(second)
-            .into_iter()
-            .find(|e| e.key == key)
-            .unwrap();
-        assert!(entry.selected);
-        assert_eq!(entry.tool, second, "the button follows the active member");
-
-        // ...and falls back to the group's first tool when none is active.
-        let outside = *ToolId::ALL
+        let painted = painted_text(&ed);
+        // The status bar is the bottom-most panel of the window.
+        let row: Vec<&(String, egui::Rect)> = painted
             .iter()
-            .find(|t| !group.contains(t))
-            .expect("some tool is outside this group");
-        let entry = palette_entries(outside)
-            .into_iter()
-            .find(|e| e.key == key)
-            .unwrap();
-        assert!(!entry.selected);
-        assert_eq!(entry.tool, group[0]);
+            .filter(|(_, r)| r.center().y > 900.0 - 40.0)
+            .collect();
+        assert!(
+            row.len() >= 4,
+            "the status bar drew {row:?}, so this test is not looking at it"
+        );
+        assert!(
+            row.iter().any(|(t, _)| t.starts_with("Opened ")),
+            "the status message is not in the row being checked: {row:?}"
+        );
+
+        for (i, (a, ra)) in row.iter().enumerate() {
+            // Nothing may be painted outside the window either: a label egui
+            // was never asked to elide runs off the edge instead, and whatever
+            // is still on screen sits on top of its neighbours.
+            assert!(
+                ra.left() >= 0.0 && ra.right() <= 1400.0,
+                "“{a}” is painted outside the window: {ra:?}"
+            );
+            for (b, rb) in row.iter().skip(i + 1) {
+                // Half a pixel of slack: adjacent labels are separated by real
+                // spacing, so anything that overlaps does so by a lot.
+                let a_box = ra.shrink2(egui::vec2(0.5, 0.0));
+                assert!(
+                    !a_box.intersects(rb.shrink2(egui::vec2(0.5, 0.0))),
+                    "“{a}” and “{b}” are painted on top of each other: {ra:?} vs {rb:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1277,66 +1060,65 @@ mod tests {
 
     #[test]
     fn clicking_a_layer_row_is_the_only_thing_that_selects_a_layer() {
+        // The row and the eye are the `ui` crate's, found by the id
+        // `ui::view::ids` publishes for them: this is the shipped panel being
+        // clicked, not a model being asked a question.
         let dir = tempfile::tempdir().unwrap();
         let p = png(dir.path(), "a.png");
         let mut ed = editor(&dir.path().join("config"));
         ed.open_path(&p).unwrap();
         ed.dispatch(Action::NewLayer).unwrap();
-        let rows = layer_rows(
-            &ed.active().unwrap().document,
-            ed.active().unwrap().document.active_layer(),
-        );
-        assert_eq!(rows.len(), 2);
-        // The eye of the *unselected* row is a stable target that sits on the
-        // same line as its list row.
-        let other = rows.iter().find(|r| !r.selected).unwrap();
-        let out = run_chrome(&ed, Some(ids::layer_eye(other.id)));
-        assert_eq!(
-            out.commands,
-            vec![toggle_visibility_command(other)],
-            "the eye emits a visibility command and nothing else"
+        let doc = &ed.active().unwrap().document;
+        let active = doc.active_layer().unwrap();
+        let other = doc
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .find(|id| *id != active)
+            .expect("two layers");
+
+        let out = run_chrome(&ed, Some(ui::view::ids::layer_eye(other)));
+        assert_eq!(out.commands.len(), 1, "the eye emits one command: {out:?}");
+        assert!(
+            matches!(
+                &out.commands[0],
+                Command::SetLayerProperties { layer_id, patch }
+                    if *layer_id == other && patch.visible == Some(false)
+            ),
+            "the eye emits a visibility command: {out:?}"
         );
         assert_eq!(out.select_layer, None, "and does not move the selection");
+
+        // ...and clicking the row itself is what selects.
+        let out = run_chrome(&ed, Some(ui::view::ids::layer_row(other)));
+        assert_eq!(out.select_layer, Some(other), "{out:?}");
     }
 
     #[test]
-    fn the_add_button_takes_the_same_route_as_the_menu_and_activates_what_it_made() {
-        // The defect: the "+" emitted a bare `Command::CreateLayer`, and
-        // `Command` never touches the active layer — while `Action::NewLayer`
-        // explicitly does. So after a click on "+" the selection stayed on the
-        // old layer, and the "−" beside it then deleted a *different* layer
-        // than the one just created.
+    fn the_layers_panel_footer_adds_a_layer_through_history() {
+        // `ui::view::ids::new_layer()` is the "+" the shipped Layers panel
+        // draws. Before this wave that panel was never instantiated by the
+        // binary, so this click had nowhere to land.
         let dir = tempfile::tempdir().unwrap();
         let p = png(dir.path(), "a.png");
         let mut ed = editor(&dir.path().join("config"));
         ed.open_path(&p).unwrap();
-        let original = ed.active().unwrap().document.active_layer().unwrap();
+        assert_eq!(ed.active().unwrap().document.layers.len(), 1);
 
-        let out = run_chrome(&ed, Some(egui::Id::new(ids::ADD_LAYER)));
-        assert_eq!(out.actions, vec![Action::NewLayer], "{out:?}");
-        assert!(out.commands.is_empty(), "{out:?}");
+        let out = run_chrome(&ed, Some(ui::view::ids::new_layer()));
+        assert_eq!(out.commands.len(), 1, "{out:?}");
+        assert!(out.actions.is_empty(), "{out:?}");
 
-        for action in out.actions {
-            ed.dispatch(action).unwrap();
+        for command in out.commands {
+            ed.apply_command(command);
         }
-        let doc = &ed.active().unwrap().document;
-        assert_eq!(doc.layers.len(), 2);
-        let created = doc.active_layer().expect("something is active");
-        assert_ne!(created, original, "the new layer is the one to paint on");
-
-        // ...and the very next "−" click therefore targets the new layer.
-        let out = run_chrome(&ed, Some(egui::Id::new(ids::DELETE_LAYER)));
-        assert_eq!(out.actions, vec![Action::DeleteLayer], "{out:?}");
-        for action in out.actions {
-            ed.dispatch(action).unwrap();
-        }
-        let doc = &ed.active().unwrap().document;
-        assert_eq!(doc.layers.len(), 1);
-        assert!(
-            doc.layers.get(created).is_none(),
-            "the layer “+” created is the one “−” removed"
+        assert_eq!(
+            ed.active().unwrap().document.layers.len(),
+            2,
+            "the panel's + really added a layer"
         );
-        assert!(doc.layers.get(original).is_some(), "and only that one");
+        // ...and it went through history, so Ctrl+Z takes it back.
+        assert_eq!(ed.active().unwrap().history_depth(), 1);
     }
 
     #[test]
@@ -1364,106 +1146,11 @@ mod tests {
     }
 
     #[test]
-    fn the_delete_button_greys_out_without_a_layer_to_delete() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = png(dir.path(), "a.png");
-        let mut ed = editor(&dir.path().join("config"));
-        ed.open_path(&p).unwrap();
-
-        // With the last layer gone the button is disabled, so a click on it
-        // emits nothing at all.
-        ed.dispatch(Action::DeleteLayer).unwrap();
-        assert_eq!(ed.active().unwrap().document.layers.len(), 0);
-        let out = run_chrome(&ed, Some(egui::Id::new(ids::DELETE_LAYER)));
-        assert!(out.is_empty(), "{out:?}");
-    }
-
-    #[test]
-    fn the_layers_dock_shows_layers_nested_inside_groups() {
-        // The Wave-0 panel walked `layers.root()` only, so a grouped layer
-        // simply vanished from the dock.
-        let mut doc = Document::new(32, 32, "d");
-        let group = Layer::group("Group");
-        let group_id = group.id;
-        let child = Layer::raster("Inside");
-        let child_id = child.id;
-        doc.layers.push_root(group).unwrap();
-        doc.layers.insert_at(child, Some(group_id), 0).unwrap();
-
-        let rows = layer_rows(&doc, Some(child_id));
-        let ids: Vec<LayerId> = rows.iter().map(|r| r.id).collect();
-        assert_eq!(ids, vec![group_id, child_id]);
-        assert_eq!(rows[0].depth, 0);
-        assert_eq!(rows[1].depth, 1, "a group child is indented, not hidden");
-        assert!(rows[0].is_group);
-        assert!(rows[1].selected);
-    }
-
-    /// A document with `steps` layers added, as one open tab.
-    fn doc_with_history(steps: usize) -> OpenDocument {
-        let imported = crate::import::document_from_image(
-            &crate::import::DecodedImage {
-                width: 8,
-                height: 8,
-                rgba8: vec![4u8; 8 * 8 * 4],
-            },
-            "d.png",
-            100,
-        )
-        .unwrap();
-        let mut doc = OpenDocument::from_import(crate::doc::DocumentId(1), imported);
-        for i in 0..steps {
-            doc.apply(Command::create_layer(Layer::raster(format!("step {i}"))))
-                .unwrap();
-        }
-        doc
-    }
-
-    #[test]
-    fn history_rows_are_the_whole_timeline_with_a_place_to_stand_on_each() {
-        let fresh = doc_with_history(0);
-        let rows = history_rows(&fresh);
-        assert_eq!(rows.len(), 1, "the state before anything happened");
-        assert_eq!(rows[0].depth, 0);
-        assert!(rows[0].current);
-
-        let mut doc = doc_with_history(2);
-        let rows = history_rows(&doc);
-        assert_eq!(rows.len(), 3, "Original + two steps");
-        assert_eq!(
-            rows.iter().map(|r| r.depth).collect::<Vec<_>>(),
-            vec![0, 1, 2]
-        );
-        assert!(rows[2].current, "the newest step is where we stand");
-        assert!(rows.iter().all(|r| !r.label.is_empty()));
-        assert!(rows.iter().all(|r| !r.undone));
-
-        // An undone step stays in the list rather than vanishing, so it can be
-        // clicked back — `History` has no label for its redo stack, which is
-        // why `OpenDocument` keeps one.
-        doc.undo().unwrap();
-        let rows = history_rows(&doc);
-        assert_eq!(rows.len(), 3, "{rows:?}");
-        assert!(rows[1].current);
-        assert!(rows[2].undone, "and is marked as ahead of us");
-        assert_eq!(
-            rows[2].label,
-            Command::create_layer(Layer::raster("step 1")).label(),
-            "an undone step keeps the label its command had"
-        );
-
-        // Redoing puts it back where it was.
-        doc.redo().unwrap();
-        let rows = history_rows(&doc);
-        assert!(rows[2].current);
-        assert!(!rows[2].undone);
-    }
-
-    #[test]
     fn clicking_a_history_row_asks_to_walk_to_that_step() {
-        // The defect: every row was drawn with `design::list_row`, whose
-        // response was thrown away. The rows highlighted under the pointer,
-        // advertised themselves as clickable, and did nothing whatsoever.
+        // The History panel is the `ui` crate's, and it counts *steps* from
+        // where the document stands. `menu_bridge::pick` turns that into the
+        // absolute depth `Editor::jump_history` walks to — the conversion is
+        // the seam this pins.
         let dir = tempfile::tempdir().unwrap();
         let p = png(dir.path(), "a.png");
         let mut ed = editor(&dir.path().join("config"));
@@ -1471,11 +1158,9 @@ mod tests {
         for _ in 0..3 {
             ed.dispatch(Action::NewLayer).unwrap();
         }
-        let rows = history_rows(ed.active().unwrap());
-        assert_eq!(rows.len(), 4, "Original + three layers: {rows:?}");
+        assert_eq!(ed.active().unwrap().history_depth(), 3);
 
-        // Row 1 = "the state after the first command".
-        let out = run_chrome(&ed, Some(ids::history_row(1)));
+        let out = run_chrome(&ed, Some(ui::view::ids::history_row(1)));
         assert_eq!(out.history_jump, Some(1), "{out:?}");
 
         // ...and performing it really moves the document there.
@@ -1484,14 +1169,8 @@ mod tests {
         assert_eq!(ed.active().unwrap().history_depth(), 1);
         assert_eq!(ed.active().unwrap().document.layers.len(), 2);
 
-        // The row we are standing on is not a control: it senses hover only,
-        // so clicking it asks for nothing.
-        let out = run_chrome(&ed, Some(ids::history_row(1)));
-        assert_eq!(out.history_jump, None, "{out:?}");
-        assert!(out.is_empty(), "{out:?}");
-
         // A row ahead of us walks forward again, through History's redo.
-        let out = run_chrome(&ed, Some(ids::history_row(3)));
+        let out = run_chrome(&ed, Some(ui::view::ids::history_row(3)));
         assert_eq!(out.history_jump, Some(3), "{out:?}");
         assert_eq!(ed.jump_history(3), 2);
         assert_eq!(ed.active().unwrap().document.layers.len(), 4);
@@ -1513,23 +1192,33 @@ mod tests {
     }
 
     #[test]
-    fn the_colour_wells_show_what_the_editor_holds_and_swap_emits_the_action() {
+    fn the_colour_wells_show_what_the_editor_holds() {
+        // The wells are the Colour panel's now, and the panel reads them out of
+        // the workspace — so the editor's colours have to reach the workspace
+        // every frame or the swatches show whatever the `ui` crate happened to
+        // default to. `sync_workspace` is that push, and this is what proves it
+        // happens.
         let dir = tempfile::tempdir().unwrap();
         let mut ed = editor(&dir.path().join("config"));
         ed.set_foreground([1.0, 0.0, 0.0, 1.0]);
         ed.set_background([0.0, 0.0, 1.0, 1.0]);
-        let (fg, bg) = color_wells(&ed);
-        assert_eq!(fg, egui::Color32::from_rgb(255, 0, 0));
-        assert_eq!(bg, egui::Color32::from_rgb(0, 0, 255));
 
-        let out = run_chrome(&ed, Some(egui::Id::new(ids::SWAP_COLORS)));
-        assert_eq!(out.actions, vec![Action::SwapColors], "{out:?}");
-        let out = run_chrome(&ed, Some(egui::Id::new(ids::RESET_COLORS)));
-        assert_eq!(out.actions, vec![Action::ResetColors], "{out:?}");
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            chrome.ui(ctx, &ed);
+        });
+        assert_eq!(chrome.workspace().color.foreground(), [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(chrome.workspace().color.background(), [0.0, 0.0, 1.0, 1.0]);
 
-        // ...and performing the action moves what the wells will show.
+        // ...and a colour the panel emits comes back out as a request the shell
+        // performs, rather than being written straight into the workspace.
         ed.dispatch(Action::SwapColors).unwrap();
-        assert_eq!(color_wells(&ed).0, egui::Color32::from_rgb(0, 0, 255));
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            chrome.ui(ctx, &ed);
+        });
+        assert_eq!(chrome.workspace().color.foreground(), [0.0, 0.0, 1.0, 1.0]);
     }
 
     #[test]
@@ -1622,17 +1311,6 @@ mod tests {
     }
 
     #[test]
-    fn the_tool_strip_is_wide_enough_for_its_buttons() {
-        let ctx = egui::Context::default();
-        install_theme(&ctx, design::Theme::Dark);
-        let tokens = design::Theme::Dark.tokens();
-        assert!(tool_strip_width(&ctx) >= tokens.metrics.toolbar_button);
-        // ...and it is still on the 4pt grid.
-        let extra = tool_strip_width(&ctx) - tokens.metrics.toolbar_button;
-        assert_eq!(extra % design::UNIT_PT, 0.0, "off-grid by {extra}");
-    }
-
-    #[test]
     fn the_docks_are_on_the_grid_in_both_themes() {
         for theme in design::Theme::ALL {
             let ctx = egui::Context::default();
@@ -1665,5 +1343,488 @@ mod tests {
                 });
             }
         }
+    }
+    #[test]
+    fn the_docked_panels_the_window_draws_are_the_ui_crates() {
+        // Defect 1, pinned. `ui::Workspace`'s panels used to be unreachable
+        // from the binary: this file drew its own layers and history docks and
+        // nothing ever constructed `ui::view::docks`. What is asserted is not
+        // "the bridge would return them" but "the window says them" — the panel
+        // headers read back off one real frame's paint list, and the layer row
+        // found by the id only the `ui` crate's panel registers.
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+
+        let painted: Vec<String> = painted_text(&ed).into_iter().map(|(t, _)| t).collect();
+        let dock = ui::DockState::default();
+        let open: Vec<ui::PanelId> = ui::DockSide::ALL
+            .iter()
+            .flat_map(|side| dock.panels_on(*side))
+            .collect();
+        assert!(open.len() >= 5, "the default layout opens {open:?}");
+        for panel in open {
+            assert!(
+                painted.iter().any(|t| t == panel.title()),
+                "the window never drew the {} panel; it drew {painted:?}",
+                panel.title()
+            );
+        }
+
+        // The row a user clicks is the `ui` crate's row.
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        for _ in 0..2 {
+            let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+                chrome.ui(ctx, &ed);
+            });
+        }
+        assert!(
+            ctx.read_response(ui::view::ids::layer_row(layer)).is_some(),
+            "the Layers panel drawn is not ui::view::docks's"
+        );
+        assert!(
+            ctx.read_response(ui::view::ids::tool_slot(0)).is_some(),
+            "the tool palette drawn is not ui::view::toolbar's"
+        );
+    }
+
+    #[test]
+    fn a_panel_the_window_menu_opens_is_absorbed_by_the_chrome_that_owns_the_dock() {
+        // The other half of Defect 1: an intent the workspace raises has to be
+        // performed by something. It is performed here, because this is where
+        // the dock lives — and it is still reported, so the shell knows the
+        // frame changed something and a test can read what the click meant.
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            chrome.ui(ctx, &ed);
+        });
+        assert!(!chrome.workspace().dock.is_open(ui::PanelId::Navigator));
+
+        chrome.workspace.emit(ui::Intent::SetPanelOpen {
+            panel: ui::PanelId::Navigator,
+            open: true,
+        });
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            out = chrome.ui(ctx, &ed);
+        });
+        assert_eq!(
+            out.workspace,
+            vec![ui::Intent::SetPanelOpen {
+                panel: ui::PanelId::Navigator,
+                open: true
+            }],
+            "{out:?}"
+        );
+        assert!(
+            chrome.workspace().dock.is_open(ui::PanelId::Navigator),
+            "the panel was reported but never opened"
+        );
+
+        // ...and the next frame really draws it.
+        let painted: Vec<String> = painted_text_with(&ctx, &mut chrome, &ed);
+        assert!(
+            painted.iter().any(|t| t == ui::PanelId::Navigator.title()),
+            "the Navigator never appeared: {painted:?}"
+        );
+    }
+
+    /// Draw two more frames on an existing chrome and read back what they said.
+    fn painted_text_with(ctx: &egui::Context, chrome: &mut Chrome, editor: &Editor) -> Vec<String> {
+        let mut painted = Vec::new();
+        for _ in 0..2 {
+            let output = ctx.run(raw_input(Vec::new()), |ctx| {
+                chrome.ui(ctx, editor);
+            });
+            painted = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                    _ => None,
+                })
+                .collect();
+        }
+        painted
+    }
+
+    #[test]
+    fn the_navigators_pan_and_the_zoom_field_come_out_as_camera_moves() {
+        // Both used to be workspace-local writes the reviewer measured as dead:
+        // `view_center` was read by nobody outside the Navigator's own panel.
+        // They are now requests the shell performs on the document's camera.
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            chrome.ui(ctx, &ed);
+        });
+        chrome
+            .workspace
+            .emit(ui::Intent::SetViewCenter((12.0, 34.0)));
+        chrome.workspace.emit(ui::Intent::SetZoom(2.5));
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            out = chrome.ui(ctx, &ed);
+        });
+        assert_eq!(out.set_view_center, Some((12.0, 34.0)), "{out:?}");
+        assert_eq!(out.set_zoom, Some(2.5), "{out:?}");
+    }
+
+    /// One window, many clicks: the real [`Chrome`] driven across frames.
+    ///
+    /// `run_chrome` builds a fresh chrome per call and can click once, which is
+    /// enough for a control that is always on screen. A docking gesture is two
+    /// clicks — open the panel's "⋯" disclosure, then hit the control inside
+    /// it — and the second one only exists because the first one landed.
+    struct Window {
+        ctx: egui::Context,
+        chrome: Chrome,
+    }
+
+    impl Window {
+        fn new(editor: &Editor) -> Self {
+            let ctx = egui::Context::default();
+            install_theme(&ctx, design::Theme::Dark);
+            let mut window = Self {
+                ctx,
+                chrome: Chrome::new(),
+            };
+            window.settle(editor);
+            window
+        }
+
+        /// Draw until the layout stops moving.
+        ///
+        /// A rail whose panels overflow grows a scroll bar on the frame *after*
+        /// the overflow, and that narrows every widget in it — so a rectangle
+        /// read from an early frame is not where the click will land. The left
+        /// rail of the default layout needs this; the right one happens not to.
+        fn settle(&mut self, editor: &Editor) {
+            for _ in 0..4 {
+                self.frame(editor);
+            }
+        }
+
+        fn frame(&mut self, editor: &Editor) -> ChromeOutput {
+            let mut out = ChromeOutput::default();
+            let chrome = &mut self.chrome;
+            let _ = self.ctx.run(raw_input(Vec::new()), |ctx| {
+                out = chrome.ui(ctx, editor);
+            });
+            out
+        }
+
+        /// Click a widget by id and return what that frame meant.
+        fn click(&mut self, editor: &Editor, id: egui::Id) -> ChromeOutput {
+            let pos = self
+                .ctx
+                .read_response(id)
+                .unwrap_or_else(|| panic!("{id:?} was never drawn"))
+                .rect
+                .center();
+            let events = vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                },
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ];
+            let mut out = ChromeOutput::default();
+            let chrome = &mut self.chrome;
+            let _ = self.ctx.run(raw_input(events), |ctx| {
+                out = chrome.ui(ctx, editor);
+            });
+            out
+        }
+
+        fn panels_on(&self, side: ui::DockSide) -> Vec<ui::PanelId> {
+            self.chrome.workspace().dock.panels_on(side)
+        }
+    }
+
+    #[test]
+    fn the_header_reorder_control_moves_a_panel_exactly_one_place() {
+        // The seam defect: `ui::view::docks` reorders the panel as the ▲ is
+        // clicked and *then* emits the intent, and `Chrome::harvest` absorbs
+        // everything it drained. While the intent said "up" rather than "to
+        // index 1", one click moved the panel twice — with the default
+        // Essentials layout, Layers went from the bottom of the right rail
+        // straight to the top. Nothing else caught it because every other
+        // workspace intent is an absolute set.
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+
+        let mut window = Window::new(&ed);
+        let before = window.panels_on(ui::DockSide::Right);
+        assert!(before.len() >= 3, "the right rail holds {before:?}");
+        let panel = *before.last().unwrap();
+        let from = before.len() - 1;
+
+        window.click(&ed, ui::view::ids::panel_menu(panel));
+        let out = window.click(&ed, ui::view::ids::panel_reorder(panel, true));
+
+        let after = window.panels_on(ui::DockSide::Right);
+        assert_eq!(
+            after.iter().position(|q| *q == panel),
+            Some(from - 1),
+            "one click on ▲ moved {panel:?} from {from} to {after:?}"
+        );
+        // The order is otherwise untouched: exactly two panels traded places.
+        let mut expected = before.clone();
+        expected.swap(from - 1, from);
+        assert_eq!(after, expected);
+        assert_eq!(
+            out.workspace,
+            vec![ui::Intent::ReorderPanel {
+                panel,
+                to: u8::try_from(from - 1).unwrap()
+            }],
+            "the click meant {out:?}"
+        );
+    }
+
+    #[test]
+    fn the_header_move_control_docks_a_panel_on_the_other_side_once() {
+        // The companion gesture, and the same double-apply risk: `DockPanel`
+        // survives being absorbed twice only because it names a side rather
+        // than "the next one round".
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+
+        let mut window = Window::new(&ed);
+        let panel = ui::PanelId::History;
+        assert!(!window.panels_on(ui::DockSide::Bottom).contains(&panel));
+        let from = window.chrome.workspace().dock.placement(panel).side;
+        assert_ne!(from, ui::DockSide::Bottom);
+
+        window.click(&ed, ui::view::ids::panel_menu(panel));
+        let out = window.click(&ed, ui::view::ids::panel_dock(panel, ui::DockSide::Bottom));
+
+        assert_eq!(
+            out.workspace,
+            vec![ui::Intent::DockPanel {
+                panel,
+                side: ui::DockSide::Bottom
+            }],
+            "the click meant {out:?}"
+        );
+        assert_eq!(window.panels_on(ui::DockSide::Bottom), vec![panel]);
+        assert!(!window.panels_on(from).contains(&panel));
+        // ...and the window really draws it down there on the next frame.
+        let painted = painted_text_with(&window.ctx, &mut window.chrome, &ed);
+        assert!(
+            painted.iter().any(|t| t == panel.title()),
+            "the bottom rail never drew {panel:?}: {painted:?}"
+        );
+    }
+
+    #[test]
+    fn hiding_a_channel_in_the_panel_changes_what_the_canvas_is_asked_to_show() {
+        // Defect 6: the Channels panel's component toggles used to move a flag
+        // nothing outside the panel read. The eye is clicked on the real
+        // window here, and what comes back is the mask the presenter applies
+        // to the composite before it reaches the GPU — see
+        // `hiding_a_channel_changes_the_texture_the_canvas_samples`.
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+
+        let mut window = Window::new(&ed);
+        assert_eq!(
+            window.chrome.channel_mask(),
+            crate::presenter::ChannelMask::ALL
+        );
+        // One panel, so no rail overflows and every row is reachable.
+        window
+            .chrome
+            .workspace
+            .dock
+            .apply_layout(ui::dock::LayoutId::Minimal);
+        window
+            .chrome
+            .workspace
+            .dock
+            .set_open(ui::PanelId::Channels, true);
+        window.settle(&ed);
+
+        // Row 0 is the composite; row 1 is the first component.
+        let out = window.click(&ed, ui::view::ids::channel_eye(1));
+        assert_eq!(
+            out.workspace,
+            vec![ui::Intent::SetChannelVisible {
+                channel: ui::panels::channels::ChannelKind::Component(0),
+                visible: false,
+            }],
+            "the click meant {out:?}"
+        );
+        assert_eq!(
+            window.chrome.channel_mask(),
+            crate::presenter::ChannelMask {
+                components: [false, true, true]
+            },
+            "the canvas was never told the red channel is off"
+        );
+    }
+
+    #[test]
+    fn the_channel_chord_the_panel_prints_isolates_that_channel_in_this_window() {
+        // The hint beside the red row says "Ctrl+3". `ui::Workspace::ui` reads
+        // that chord, but this application does not call `Workspace::ui` — it
+        // draws the surfaces itself and routes keys through its own keymap — so
+        // until `Chrome::channel_chords` existed the hint was a promise the
+        // shipped window did not keep.
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            chrome.ui(ctx, &ed);
+        });
+
+        let command = egui::Modifiers {
+            command: true,
+            ..Default::default()
+        };
+        let press = |key| {
+            vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: command,
+            }]
+        };
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(raw_input(press(egui::Key::Num3)), |ctx| {
+            out = chrome.ui(ctx, &ed);
+        });
+        assert_eq!(
+            chrome.channel_mask(),
+            crate::presenter::ChannelMask {
+                components: [true, false, false]
+            },
+            "Ctrl+3 did not isolate the red channel: {out:?}"
+        );
+        assert_eq!(
+            out.workspace,
+            vec![ui::Intent::SelectChannel(
+                ui::panels::channels::ChannelKind::Component(0)
+            )],
+            "{out:?}"
+        );
+
+        // Ctrl+2 is the composite, and puts every channel back.
+        let _ = ctx.run(raw_input(press(egui::Key::Num2)), |ctx| {
+            out = chrome.ui(ctx, &ed);
+        });
+        assert_eq!(chrome.channel_mask(), crate::presenter::ChannelMask::ALL);
+
+        // Ctrl+1 belongs to the application's keymap (100%), so the panel must
+        // not steal it — there is no row wearing digit 1 either.
+        let _ = ctx.run(raw_input(press(egui::Key::Num1)), |ctx| {
+            out = chrome.ui(ctx, &ed);
+        });
+        assert_eq!(chrome.channel_mask(), crate::presenter::ChannelMask::ALL);
+    }
+
+    #[test]
+    fn clicking_a_tool_slot_selects_that_tool() {
+        // `ui::view::toolbar`'s palette, driven from this chrome's workspace.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        ed.set_tool(ToolId::Move);
+        let model = ui::PaletteModel::build();
+        let slot = model.slot_of(ToolId::Brush).expect("the brush has a slot");
+
+        let out = run_chrome(&ed, Some(ui::view::ids::tool_slot(slot)));
+        assert_eq!(out.select_tool, Some(ToolId::Brush), "{out:?}");
+    }
+
+    /// One frame of the chrome, returning what it emitted.
+    fn one_frame(chrome: &mut Chrome, editor: &Editor) -> ChromeOutput {
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            out = chrome.ui(ctx, editor);
+        });
+        out
+    }
+
+    #[test]
+    fn the_brush_size_is_one_number_in_both_directions() {
+        // Two surfaces show the brush: the options bar reads the workspace's
+        // tool options, the status bar reads Editor::brush(). Before this they
+        // were separate copies, so `[` moved one and the slider moved the
+        // other, and the window showed two different sizes at once.
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(tools::ToolId::Brush);
+        let mut chrome = Chrome::new();
+
+        // Editor -> options bar. A keymap change must reach the slider.
+        let mut brush = *editor.brush();
+        brush.size += 12.0;
+        let expected = brush.size;
+        editor.set_brush(brush);
+        one_frame(&mut chrome, &editor);
+        assert_eq!(
+            chrome
+                .workspace()
+                .options
+                .brush_settings(tools::ToolId::Brush)
+                .size,
+            expected,
+            "the options bar did not follow Editor::brush()"
+        );
+
+        // Options bar -> editor. An intent from a drawn control must come back
+        // out as `set_brush` so the shell can apply it.
+        let mut out = ChromeOutput::default();
+        out.workspace.push(ui::Intent::SetToolOption {
+            tool: tools::ToolId::Brush,
+            key: "size",
+            value: ui::OptionValue::Float(77.0),
+        });
+        chrome.harvest_workspace_for_test(&mut out, &editor);
+        assert_eq!(
+            out.set_brush.map(|b| b.size),
+            Some(77.0),
+            "an options-bar edit did not travel back to the editor"
+        );
     }
 }

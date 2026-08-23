@@ -27,6 +27,24 @@ use crate::tool_options::OptionValue;
 /// it carries a whole [`Command`] rather than a description of one — the UI has
 /// already decided exactly what the edit is, so the application has nothing
 /// left to interpret.
+///
+/// # Every workspace intent is idempotent
+///
+/// The variants [`crate::Workspace::absorb`] performs — the panel, dock,
+/// layout, view-flag, ruler, channel and tool-option ones, i.e. exactly the set
+/// an application routes back into the workspace — **must be safe to apply
+/// twice**. The drawing side applies them as it draws: `view::docks` moves a
+/// panel the moment its header control is clicked and *then* emits the intent,
+/// because a control that rearranges itself under the pointer lands the next
+/// click on the wrong thing. An application that drains the outbox and absorbs
+/// what it finds is therefore applying an intent that has already landed.
+///
+/// So every one of them is an **absolute set**, never a relative step: `open`,
+/// `side`, `to`, `on`, `visible`, the option's `value`. This is why
+/// [`Intent::ReorderPanel`] carries a destination index rather than a
+/// direction — as `up: bool` it moved the panel one place for the click and one
+/// more for the absorb. `every_workspace_intent_is_idempotent_under_absorb`
+/// pins the rule for the whole set.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Intent {
     /// A document edit, ready to run through history.
@@ -117,10 +135,13 @@ pub enum Intent {
         panel: PanelId,
         side: DockSide,
     },
-    /// Move a panel one place earlier (`up`) or later within its own side.
+    /// Put a panel at index `to` among the panels open on its own side.
+    ///
+    /// A destination, not a direction, so absorbing it twice leaves the panel
+    /// in one place — see the idempotency rule on [`Intent`].
     ReorderPanel {
         panel: PanelId,
-        up: bool,
+        to: u8,
     },
     /// Switch the whole dock to a saved layout.
     ApplyLayout(LayoutId),

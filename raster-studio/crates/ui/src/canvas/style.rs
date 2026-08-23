@@ -39,6 +39,10 @@ pub struct CanvasStyle {
     pub guide: Color32,
     pub guide_locked: Color32,
     pub smart_guide: Color32,
+    /// The outline View ▸ Layer Edges draws round each layer's bounds. Muted:
+    /// it is a box round *every* layer, so at full accent strength it would
+    /// compete with the transform box the user is actually working in.
+    pub layer_edge: Color32,
 
     /// The unbroken run of the selection outline.
     pub ants_base: Color32,
@@ -125,6 +129,7 @@ impl CanvasStyle {
             guide: c(ColorRole::Accent),
             guide_locked: c(ColorRole::AccentMuted),
             smart_guide: c(ColorRole::Danger),
+            layer_edge: faded(ColorRole::AccentMuted, theme, 170),
 
             ants_base,
             ants_dash,
@@ -226,6 +231,7 @@ mod tests {
                 ("guide", s.guide),
                 ("guide_locked", s.guide_locked),
                 ("smart_guide", s.smart_guide),
+                ("layer_edge", s.layer_edge),
                 ("ants_base", s.ants_base),
                 ("ants_dash", s.ants_dash),
                 ("handle_fill", s.handle_fill),
@@ -245,7 +251,7 @@ mod tests {
                 ("brush_ring_base", s.brush_ring_base),
                 ("brush_ring_over", s.brush_ring_over),
             ];
-            assert_eq!(all.len(), 31, "a colour was added without a check");
+            assert_eq!(all.len(), 32, "a colour was added without a check");
             for (name, colour) in all {
                 assert!(colour.a() > 0, "{theme:?}: {name} is fully transparent");
             }

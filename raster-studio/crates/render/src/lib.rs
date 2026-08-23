@@ -34,7 +34,7 @@ pub mod context;
 pub mod offscreen;
 pub mod texture;
 
-pub use camera::Camera;
+pub use camera::{Camera, MAX_ZOOM, MIN_ZOOM};
 pub use canvas::{backdrop_clear_color, srgb_to_linear, Canvas, DEFAULT_BACKDROP_SRGB};
 pub use composite::{CompositeParams, CompositePass};
 pub use context::GpuContext;

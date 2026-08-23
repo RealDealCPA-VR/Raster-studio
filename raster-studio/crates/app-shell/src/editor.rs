@@ -34,7 +34,7 @@ use editor_core::{Command, LayerPatch};
 use layer_model::{Layer, LayerId, LayerKind, MaskId};
 use tools::{registry, BrushSettings, ToolId};
 
-use crate::action::{Action, Category};
+use crate::action::Action;
 use crate::dialogs::{CloseChoice, FileDialogs, NativeDialogs, PROJECT_EXTENSION};
 use crate::doc::{DocumentError, DocumentId, OpenDocument};
 use crate::keymap::{Chord, Conflict, Keymap};
@@ -127,25 +127,6 @@ impl ActionError {
 pub struct NoSuchTab {
     pub index: usize,
     pub open: usize,
-}
-
-/// One row of the menu bar.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MenuItem {
-    pub action: Action,
-    pub label: String,
-    /// The chord to print on the right, if the action has one.
-    pub shortcut: Option<String>,
-    pub enabled: bool,
-    /// Why it is greyed out. `Some` exactly when `enabled` is false.
-    pub disabled_reason: Option<String>,
-}
-
-/// One menu.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Menu {
-    pub category: Category,
-    pub items: Vec<MenuItem>,
 }
 
 /// What one autosave pass did.
@@ -1132,34 +1113,6 @@ impl Editor {
                 }
             }
         }
-    }
-
-    /// The menu bar, built from the action catalogue and [`Editor::can`].
-    pub fn menus(&self) -> Vec<Menu> {
-        Category::ALL
-            .iter()
-            .map(|&category| {
-                let items = Action::all()
-                    .into_iter()
-                    .filter(|a| a.category() == category)
-                    // A tool letter belongs in the tool palette, not in a menu
-                    // of forty-five entries; the palette renders those.
-                    .filter(|a| !matches!(a, Action::SelectTool(_) | Action::TemporaryHand))
-                    .map(|action| {
-                        let refusal = self.can(action).err();
-                        MenuItem {
-                            action,
-                            label: action.label(),
-                            shortcut: self.keymap.shortcut_for(action).map(|c| c.to_string()),
-                            enabled: refusal.is_none(),
-                            disabled_reason: refusal.map(|e| e.to_string()),
-                        }
-                    })
-                    .collect();
-                Menu { category, items }
-            })
-            .filter(|m| !m.items.is_empty())
-            .collect()
     }
 
     // -------------------------------------------------------------- action

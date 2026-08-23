@@ -10,8 +10,15 @@
 //! launched from a desktop icon.
 //!
 //! Every one of those failures is now a [`ShellError`] with a title, an
-//! explanation, and something to try. The shell shows it in a native dialog and
-//! exits cleanly.
+//! explanation, and something to try. The shell shows it in a native dialog —
+//! and *returns* it, so the process exits non-zero. "Cleanly" used to mean
+//! "with status 0", which told a script or a CI job that a run which never
+//! opened a window had succeeded; see [`crate::shell::Shell::run`].
+//!
+//! That applies to [`ShellError::EventLoop`] too, and it is the variant most
+//! likely to be met: its advice is written for a machine with no desktop
+//! session at all, which is precisely the case that reaches nobody unless it
+//! is both shown and returned.
 
 /// A failure that stops the window from coming up.
 #[derive(Debug, thiserror::Error)]
@@ -79,6 +86,11 @@ mod tests {
 
     fn samples() -> Vec<ShellError> {
         vec![
+            // The headless case. `winit::error::OsError` cannot be built
+            // outside winit, so `Window` is the one variant with no sample;
+            // `EventLoop` is the one a machine with no display actually
+            // produces, and it was untested here.
+            ShellError::EventLoop(winit::error::EventLoopError::RecreationAttempt),
             ShellError::Gpu(anyhow::anyhow!("no suitable GPU adapter found")),
             ShellError::UnsupportedSurfaceFormat {
                 formats: "Rgba16Float".into(),
@@ -116,6 +128,21 @@ mod tests {
         assert_eq!(
             err.title(),
             "Raster Studio cannot start the graphics system"
+        );
+    }
+
+    #[test]
+    fn a_machine_with_no_desktop_is_told_where_to_run_it_instead() {
+        // This variant's advice is the reason the whole module exists — it is
+        // written for an SSH session or a container — and it is the one that
+        // used to be returned from `Shell::run` without ever being shown.
+        let err = ShellError::EventLoop(winit::error::EventLoopError::RecreationAttempt);
+        assert_eq!(err.title(), "Raster Studio cannot open a window");
+        let message = err.user_message();
+        assert!(message.contains("desktop session"), "{message}");
+        assert!(
+            message.contains("SSH") || message.contains("container"),
+            "the advice does not name the situation it is about: {message}"
         );
     }
 

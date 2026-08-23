@@ -42,6 +42,26 @@ pub fn photo_rgba8_with_alpha(width: u32, height: u32) -> Vec<u8> {
     out
 }
 
+/// [`photo_rgba8`] with its colour planes cycled: `(r, g, b) -> (b, r, g)`.
+///
+/// A *different picture of the same size and the same statistics*, which is
+/// what a negative control has to be. The three planes of [`photo_rgba8`] are
+/// three unrelated functions — a ramp in `x`, a ramp in `y`, and an `x ^ y`
+/// pattern with a checker on top — so cycling them moves every channel of
+/// almost every pixel while leaving the histogram, the size and the full
+/// opacity alone. A control that differed only in alpha would prove nothing
+/// about a container that has no alpha channel.
+pub fn photo_rgba8_channels_cycled(width: u32, height: u32) -> Vec<u8> {
+    let mut out = photo_rgba8(width, height);
+    for px in out.chunks_exact_mut(4) {
+        let (r, g, b) = (px[0], px[1], px[2]);
+        px[0] = b;
+        px[1] = r;
+        px[2] = g;
+    }
+    out
+}
+
 /// Encode an image and write it where a user would have one.
 pub fn write_image(
     path: &Path,

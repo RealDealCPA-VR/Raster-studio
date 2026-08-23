@@ -811,7 +811,14 @@ pub enum ZoomCommand {
     In,
     Out,
     FitOnScreen,
+    /// Fill the viewport with the document — the other half of Fit on Screen,
+    /// which leaves letterbox bars whenever the document and the viewport are
+    /// not the same shape.
+    FillScreen,
     ActualPixels,
+    /// Frame the current selection. Disabled, with a reason, when there is
+    /// nothing selected.
+    ToSelection,
     PrintSize,
 }
 
@@ -820,7 +827,9 @@ impl ZoomCommand {
         ZoomCommand::In,
         ZoomCommand::Out,
         ZoomCommand::FitOnScreen,
+        ZoomCommand::FillScreen,
         ZoomCommand::ActualPixels,
+        ZoomCommand::ToSelection,
         ZoomCommand::PrintSize,
     ];
 
@@ -829,7 +838,9 @@ impl ZoomCommand {
             ZoomCommand::In => "Zoom In",
             ZoomCommand::Out => "Zoom Out",
             ZoomCommand::FitOnScreen => "Fit on Screen",
+            ZoomCommand::FillScreen => "Fill Screen",
             ZoomCommand::ActualPixels => "100%",
+            ZoomCommand::ToSelection => "Zoom to Selection",
             ZoomCommand::PrintSize => "Print Size",
         }
     }
@@ -839,7 +850,10 @@ impl ZoomCommand {
             ZoomCommand::In => Shortcut::ctrl_key(Key::Plus),
             ZoomCommand::Out => Shortcut::ctrl_key(Key::Minus),
             ZoomCommand::FitOnScreen => Shortcut::ctrl('0'),
+            // The two framing commands share a key: fit, and fit-the-other-way.
+            ZoomCommand::FillScreen => Shortcut::ctrl_shift('0'),
             ZoomCommand::ActualPixels => Shortcut::ctrl('1'),
+            ZoomCommand::ToSelection => Shortcut::ctrl_alt('0'),
             ZoomCommand::PrintSize => return None,
         })
     }
@@ -1936,6 +1950,13 @@ impl MenuAction {
             },
 
             // ---- View ------------------------------------------------------
+            // Zoom to Selection with nothing selected is disabled and says so,
+            // rather than being an item that looks live and then no-ops.
+            MenuAction::Zoom(ZoomCommand::ToSelection) => gate(
+                ctx.need_document()
+                    .or((!ctx.has_selection).then_some("Nothing is selected")),
+                act(self),
+            ),
             MenuAction::Zoom(_) => gate(ctx.need_document(), act(self)),
             MenuAction::SetRulerUnit(unit) => gate(
                 (ctx.ruler_unit == unit).then_some("The rulers already read in this unit"),
@@ -2426,6 +2447,28 @@ mod tests {
                 assert!(
                     full.contains(&action),
                     "{action:?} is in a menu but not in MenuAction::all, so no gate sees it"
+                );
+            }
+        }
+    }
+
+    /// `view::ids::menu_item` keys a drawn row by its action alone, and two
+    /// rows sharing an egui id is a real fault — egui paints an "id clash"
+    /// warning over them. One menu is open at a time, so the rule that has to
+    /// hold is *per menu*, not across the bar: `Keyboard Shortcuts…` is
+    /// deliberately reachable from both Edit and Help, and those two rows are
+    /// never on screen together.
+    #[test]
+    fn no_action_is_listed_twice_within_one_menu() {
+        for recent in 0..=MAX_RECENT_FILES {
+            for menu in menu_bar(recent) {
+                let listed = menu.actions();
+                let unique: HashSet<MenuAction> = listed.iter().copied().collect();
+                assert_eq!(
+                    unique.len(),
+                    listed.len(),
+                    "the {} menu draws a row twice with {recent} recent files",
+                    menu.title
                 );
             }
         }

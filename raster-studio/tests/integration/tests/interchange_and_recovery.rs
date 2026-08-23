@@ -12,7 +12,8 @@ use app_shell::session;
 use editor_core::{Command, History, LayerPatch};
 use integration_tests::app::{self, DocExt, APP_VERSION};
 use integration_tests::fixture::{
-    max_channel_diff, mean_channel_diff, photo_rgba8, photo_rgba8_with_alpha,
+    max_channel_diff, mean_channel_diff, photo_rgba8, photo_rgba8_channels_cycled,
+    photo_rgba8_with_alpha,
 };
 use layer_model::{BlendMode, Layer};
 use project_format::{CommandJournal, JOURNAL_FILE};
@@ -33,15 +34,7 @@ fn photo_document(width: u32, height: u32) -> OpenDocument {
         .active_layer()
         .expect("File ▸ New makes a layer");
     let source = photo_rgba8(width, height);
-    let coords = doc.canvas_tiles();
-    doc.paint_layer(layer, &coords, &move |coord, tx, ty| {
-        let (ox, oy) = coord.pixel_origin();
-        let (x, y) = (ox + tx as i64, oy + ty as i64);
-        if x < 0 || y < 0 || x >= width as i64 || y >= height as i64 {
-            // Edge-tile padding. The compositor clips it to the canvas, so its
-            // value can never reach the output.
-            return [0, 0, 0, 0];
-        }
+    doc.paint_canvas(layer, &move |x, y| {
         let i = (y as usize * width as usize + x as usize) * 4;
         [source[i], source[i + 1], source[i + 2], source[i + 3]]
     });
@@ -85,21 +78,71 @@ fn a_jpeg_export_decodes_back_to_the_composite_within_the_formats_tolerance() {
         "JPEG has no alpha channel; every pixel must come back opaque"
     );
 
+    // Both sides of the comparison below are opaque: the decode because JPEG
+    // carries no alpha (asserted above), the composite by construction. That is
+    // the premise that lets a whole-pixel bound speak for the planes JPEG
+    // actually stores — with the alpha term identically zero, the four-channel
+    // mean is exactly three quarters of the colour-plane mean. Assert the
+    // premise rather than trusting the fixture's doc comment for it.
+    assert!(
+        composite.iter().skip(3).step_by(4).all(|a| *a == 255),
+        "the fixture's composite must be opaque, or `mean_channel_diff` below \
+         would be measuring a channel this format does not carry"
+    );
+
     // JPEG is lossy and chroma-subsampled, so the bound is on how far it may
     // stray, not on equality. The fixture is a hard case for it — a per-pixel
-    // checkerboard on top of two ramps — which is why the ceiling is where it
-    // is while the *mean* stays low.
+    // checkerboard on top of two ramps — which is why the ceiling sits well
+    // above the mean.
+    //
+    // The two numbers are the measured error plus a small margin for encoder
+    // version drift, not round numbers picked to be safe: this encoder produces
+    // worst = 37 and mean = 1.149 today (equivalently, a colour-plane mean of
+    // 1.532 — the same measurement scaled by 4/3, which is why there is no
+    // third bound here). Slack is not free — every code between the measurement
+    // and the bound is a regression the test would accept.
     let worst = max_channel_diff(&decoded.rgba8, &composite);
     let mean = mean_channel_diff(&decoded.rgba8, &composite);
-    assert!(worst <= 64, "worst channel error was {worst}");
-    assert!(mean <= 5.0, "mean channel error was {mean:.3}");
+    assert!(worst <= 45, "worst channel error was {worst}");
+    assert!(mean <= 1.6, "mean channel error was {mean:.3}");
 
-    // ...and it is genuinely the same picture, not a coincidence of tolerances:
-    // a *different* picture must fail the same bound.
-    let other = photo_rgba8_with_alpha(w, h);
+    // ...and it is genuinely the same picture, not a coincidence of tolerances.
+    //
+    // The control is the same generator with its colour planes cycled: same
+    // size, same histogram, same full opacity, different picture. That last
+    // part is the whole point — the composite here is opaque and JPEG forces
+    // every decoded alpha to 255, so a control that differed only in *alpha*
+    // would have bit-identical RGB and would clear the bound on the strength of
+    // a channel this format does not even carry.
+    let other = photo_rgba8_channels_cycled(w, h);
+    let control = mean_channel_diff(&other, &composite);
     assert!(
-        mean_channel_diff(&other, &composite) > 5.0,
-        "the tolerance is loose enough to accept an unrelated image"
+        control > 1.6,
+        "the tolerance is loose enough to accept a different picture \
+         (control mean was {control:.3})"
+    );
+    // The control is the one place a colour-plane-only comparison still has to
+    // be made by hand. The decoded file's opacity is asserted above; the
+    // control's is not, so its whole-pixel mean could in principle be carried
+    // by alpha alone — precisely the mistake this control replaced. Measure the
+    // planes JPEG actually stores and require the control to clear the same
+    // bound there. Today this reads 79.4, against 1.532 for the decoded file.
+    let rgb_only = |a: &[u8], b: &[u8]| -> f64 {
+        let (mut total, mut n) = (0u64, 0u64);
+        for (pa, pb) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+            for c in 0..3 {
+                total += u64::from(pa[c].abs_diff(pb[c]));
+                n += 1;
+            }
+        }
+        total as f64 / n as f64
+    };
+    let control_rgb = rgb_only(&other, &composite);
+    assert!(
+        control_rgb > 1.6,
+        "the control differs from the composite only in alpha, which JPEG \
+         discards — it is not a control at all (colour-plane mean was \
+         {control_rgb:.3})"
     );
 }
 

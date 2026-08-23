@@ -3,6 +3,18 @@
 
 use glam::Vec2;
 
+/// Smallest zoom a camera may be driven to: one image pixel per hundred screen
+/// pixels of the whole picture. Below it a document is a dot.
+///
+/// Published rather than kept as a literal inside [`Camera::zoom_at`] because a
+/// host that sets [`Camera::zoom`] directly — a typed zoom level, a Navigator
+/// slider — must clamp to the same range a wheel gesture does, or the two
+/// routes to the same number disagree.
+pub const MIN_ZOOM: f32 = 0.01;
+/// Largest zoom a camera may be driven to: sixty-four screen pixels per image
+/// pixel, which is where a single pixel fills a small window.
+pub const MAX_ZOOM: f32 = 64.0;
+
 /// A pannable, zoomable 2D view of an image of known pixel size.
 #[derive(Debug, Clone)]
 pub struct Camera {
@@ -34,7 +46,7 @@ impl Camera {
     /// Zoom toward a screen-space anchor (e.g. the cursor) by a multiplier.
     pub fn zoom_at(&mut self, anchor_screen: Vec2, factor: f32) {
         let before = self.screen_to_image(anchor_screen);
-        self.zoom = (self.zoom * factor).clamp(0.01, 64.0);
+        self.zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
         let after = self.screen_to_image(anchor_screen);
         // Keep the anchor point stationary in image space.
         self.center += before - after;

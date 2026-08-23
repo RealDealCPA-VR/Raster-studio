@@ -180,32 +180,26 @@ fn every_action_is_reachable_from_the_keyboard() {
 fn with_nothing_open_the_menu_says_why_each_item_is_greyed_out() {
     let dir = tempfile::tempdir().unwrap();
     let ed = bare(dir.path(), ScriptedDialogs::new());
-    let menus = ed.menus();
-    assert!(!menus.is_empty());
 
+    // Walked straight through `Editor::can`, which is the enablement rule
+    // itself. This used to walk `Editor::menus()` — a third menu model beside
+    // `ui::menu` and `menu_bridge`, drawn by nothing — and asserting on a menu
+    // no window renders proves only that the builder ran.
     let mut saw_disabled = false;
-    for menu in &menus {
-        for item in &menu.items {
-            assert!(!item.label.is_empty());
-            assert_eq!(
-                item.enabled,
-                item.disabled_reason.is_none(),
-                "{} must carry a reason exactly when it is disabled",
-                item.action.id()
+    for action in Action::all() {
+        assert!(!action.label().is_empty(), "{} has no label", action.id());
+        if let Err(refusal) = ed.can(action) {
+            assert!(
+                !refusal.to_string().is_empty(),
+                "{} greys out silently",
+                action.id()
             );
-            if let Some(reason) = &item.disabled_reason {
-                assert!(
-                    !reason.is_empty(),
-                    "{} greys out silently",
-                    item.action.id()
-                );
-                saw_disabled = true;
-            }
+            saw_disabled = true;
         }
     }
     assert!(
         saw_disabled,
-        "with no document open, some items must be off"
+        "with no document open, some actions must be off"
     );
 
     for action in [Action::Save, Action::Export, Action::Undo, Action::NewLayer] {

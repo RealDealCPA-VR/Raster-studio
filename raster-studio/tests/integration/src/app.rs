@@ -66,10 +66,45 @@ pub fn blank(width: u32, height: u32, title: &str) -> OpenDocument {
 /// re-encodes to exactly `v`, so a compositing reference can be computed on
 /// paper and compared as bytes without a transfer curve in the way.
 ///
-/// The working space is written straight onto the document because there is no
-/// command for it: `editor-core` has no `SetColorSpace`, and the application
-/// picks the space when the document is created rather than editing it later.
-/// It is set before any edit, so nothing undoable depends on it.
+/// # This is a working space the product cannot reach
+///
+/// Stated plainly, because it bounds what a test written on top of it proves:
+/// **no application path produces a linear document.**
+/// [`editor_core::DocumentMeta`] defaults to [`ColorSpace::Srgb`], `editor-core`
+/// has no `SetColorSpace` command, and nothing in the workspace assigns
+/// `meta.color_space` anywhere else — which is why the field is written straight
+/// onto the document here. (It is written before any edit, so nothing undoable
+/// depends on it.)
+///
+/// The compositing math is space-independent, but the last step every byte
+/// comparison goes through — `Canvas::to_rgba8` — is not: in linear it collapses
+/// to `round(v * 255)`, so the sRGB transfer curve the shipping product always
+/// applies is *not* exercised by a test built on this helper.
+///
+/// Two tests are therefore deliberately in linear, and only two, because both
+/// exist to check arithmetic against numbers computed on paper:
+/// `a_layered_document_composites_to_the_values_the_model_says_it_should` and
+/// `each_part_of_the_stack_is_load_bearing`. Everything else in the suite —
+/// including the save/reload byte-identity round trip and the transform/undo
+/// round trip, which were in linear and did not need to be — runs on [`blank`],
+/// in the configuration the product actually opens documents in.
+///
+/// # ...and moving them there is not the same as covering the curve
+///
+/// Said plainly too, because it would be easy to claim otherwise: a test that
+/// compares one composite with another composite cannot catch a defect in
+/// `Canvas::to_rgba8`'s encode, in *any* working space, because both sides go
+/// through it. Verified by mutation — deleting the `from_linear` call leaves
+/// the save/reload and transform round trips green.
+///
+/// The transfer curve is pinned by the tests that state an absolute sRGB code:
+/// `opening_an_image_makes_a_raster_layer_whose_tiles_are_the_source_pixels`
+/// (the composite must equal the file's bytes),
+/// `a_fill_through_a_feathered_selection_blends_by_coverage_in_production_code`
+/// and `a_filter_runs_only_inside_the_selection_and_fades_across_its_feather`
+/// (each expected byte is `store_code` of a hand-computed linear value). Those
+/// three go red on that mutation; they are where the curve is covered, and it
+/// is why they are not written on this helper.
 pub fn linear(width: u32, height: u32, title: &str) -> OpenDocument {
     let mut doc = blank(width, height, title);
     doc.document.meta.color_space = ColorSpace::LinearSrgb;
@@ -112,6 +147,14 @@ pub trait DocExt {
     );
     /// Fill every tile the canvas covers with one straight-alpha colour.
     fn fill_layer(&mut self, layer: LayerId, rgba: [u8; 4]);
+    /// Paint every tile the canvas covers from a function of **document**
+    /// coordinates, as one command.
+    ///
+    /// The off-canvas padding of an edge tile is written fully transparent: the
+    /// compositor clips a tile to the canvas, so that padding can never reach
+    /// the output, and writing a recognisable value there means a test that
+    /// *does* see it says so instead of quietly comparing padding to padding.
+    fn paint_canvas(&mut self, layer: LayerId, f: &dyn Fn(u32, u32) -> [u8; 4]);
     /// Paint whole tiles of a layer's mask. A mask tile is one byte per pixel.
     fn paint_mask(
         &mut self,
@@ -119,6 +162,9 @@ pub trait DocExt {
         coords: &[TileCoord],
         f: &dyn Fn(TileCoord, u32, u32) -> u8,
     );
+    /// The mask equivalent of [`DocExt::paint_canvas`]: coverage from a function
+    /// of document coordinates, zero over the off-canvas padding.
+    fn paint_canvas_mask(&mut self, layer: LayerId, f: &dyn Fn(u32, u32) -> u8);
     /// The whole canvas, composited through the cache the application paints
     /// with, encoded the way the screen and every export see it.
     fn composite_all(&mut self) -> Vec<u8>;
@@ -213,6 +259,19 @@ impl DocExt for OpenDocument {
         self.paint_layer(layer, &coords, &move |_, _, _| rgba);
     }
 
+    fn paint_canvas(&mut self, layer: LayerId, f: &dyn Fn(u32, u32) -> [u8; 4]) {
+        let coords = self.canvas_tiles();
+        let (w, h) = (self.document.width(), self.document.height());
+        self.paint_layer(
+            layer,
+            &coords,
+            &|coord, tx, ty| match canvas_pixel(coord, tx, ty, w, h) {
+                Some((x, y)) => f(x, y),
+                None => [0, 0, 0, 0],
+            },
+        );
+    }
+
     fn paint_mask(
         &mut self,
         layer: LayerId,
@@ -233,6 +292,19 @@ impl DocExt for OpenDocument {
         // whichever mask is attached.
         let cmd = Command::paint_tiles(PixelTarget::Mask(layer), edits).expect("distinct coords");
         self.apply(cmd).expect("paint mask");
+    }
+
+    fn paint_canvas_mask(&mut self, layer: LayerId, f: &dyn Fn(u32, u32) -> u8) {
+        let coords = self.canvas_tiles();
+        let (w, h) = (self.document.width(), self.document.height());
+        self.paint_mask(
+            layer,
+            &coords,
+            &|coord, tx, ty| match canvas_pixel(coord, tx, ty, w, h) {
+                Some((x, y)) => f(x, y),
+                None => 0,
+            },
+        );
     }
 
     fn composite_all(&mut self) -> Vec<u8> {
@@ -262,6 +334,17 @@ impl DocExt for OpenDocument {
             bytes: &mut self.tiles,
         }
     }
+}
+
+/// The document-space coordinate a tile-local one names, or `None` when it
+/// falls in an edge tile's off-canvas padding.
+fn canvas_pixel(coord: TileCoord, tx: u32, ty: u32, width: u32, height: u32) -> Option<(u32, u32)> {
+    let (ox, oy) = coord.pixel_origin();
+    let (x, y) = (ox + i64::from(tx), oy + i64::from(ty));
+    if x < 0 || y < 0 || x >= i64::from(width) || y >= i64::from(height) {
+        return None;
+    }
+    Some((x as u32, y as u32))
 }
 
 /// A snapshot of a document's tile references, keyed the way a tool asks.

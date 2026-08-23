@@ -157,6 +157,31 @@ pub struct TextOverlayGeometry {
     pub caret: Option<DocRect>,
     /// One rectangle per visual line of the selection.
     pub highlight: Vec<DocRect>,
+    /// The box the whole run occupies — every line box unioned, in layer
+    /// space. Not painted: it is what the canvas hit-tests to decide the
+    /// pointer is over live text and owes it an I-beam. `None` for a layout
+    /// with no lines.
+    pub run_bounds: Option<DocRect>,
+}
+
+impl TextOverlayGeometry {
+    /// The run's box, falling back to what the caret and the highlight cover
+    /// when a caller built this by hand and left
+    /// [`TextOverlayGeometry::run_bounds`] unset. `None` only when the overlay
+    /// is empty.
+    pub fn bounds(&self) -> Option<DocRect> {
+        if let Some(b) = self.run_bounds {
+            return Some(b);
+        }
+        let mut out = self.caret;
+        for r in &self.highlight {
+            out = Some(match out {
+                Some(acc) => acc.union(r),
+                None => *r,
+            });
+        }
+        out
+    }
 }
 
 /// How wide the caret is in layer units.
@@ -201,6 +226,13 @@ pub fn geometry(layout: &TextLayout, cursor: TextCursor) -> TextOverlayGeometry 
     if layout.lines.is_empty() {
         return out;
     }
+    // The run's own box, so the pointer can be told it is over text even where
+    // nothing is selected and the caret is elsewhere.
+    out.run_bounds = layout
+        .lines
+        .iter()
+        .map(|l| DocRect::new(Vec2::new(l.x_min, l.top), Vec2::new(l.x_max, l.bottom)))
+        .reduce(|a, b| a.union(&b));
     if let Some((line_index, x)) = caret_position(layout, cursor.head) {
         let line = &layout.lines[line_index];
         out.caret = Some(DocRect::new(

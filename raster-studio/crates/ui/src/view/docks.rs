@@ -235,8 +235,12 @@ fn move_controls(w: &mut Workspace, ui: &mut Ui, panel: PanelId) {
         w.panel_menu = None;
     }
     if let Some(up) = reorder {
-        if w.dock.reorder(panel, up) {
-            w.emit(Intent::ReorderPanel { panel, up });
+        // The intent carries where the panel *landed*, not which way it went.
+        // An application that absorbs what it drains is applying this a second
+        // time, and "one place up" applied twice is two places up — which is
+        // the bug this shape exists to make impossible.
+        if let Some(to) = w.dock.reorder(panel, up) {
+            w.emit(Intent::ReorderPanel { panel, to });
         }
     }
 }
@@ -327,32 +331,37 @@ fn blend_and_opacity(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Opt
     ui.add_enabled_ui(enabled, |ui| {
         design::inspector_field(ui, "Blend", |ui| {
             let mut picked = mode;
-            egui::ComboBox::from_id_salt("raster-layer-blend")
+            let combo = egui::ComboBox::from_id_salt("raster-layer-blend")
                 .selected_text(body(ui, mode.label()))
                 .show_ui(ui, |ui| {
                     for candidate in BlendMode::ALL {
-                        if ui
-                            .selectable_label(candidate == mode, body(ui, candidate.label()))
-                            .clicked()
-                        {
+                        let row =
+                            ui.selectable_label(candidate == mode, body(ui, candidate.label()));
+                        super::mark(ui, row.rect, super::ids::layer_blend_option(candidate));
+                        if row.clicked() {
                             picked = candidate;
                         }
                     }
                 });
+            super::mark(ui, combo.response.rect, super::ids::layer_blend());
             if picked != mode {
                 if let Some(id) = active {
                     w.emit(Intent::Document(LayersModel::set_blend_mode(id, picked)));
                 }
             }
         });
-        if design::slider_row(ui, "Opacity", &mut opacity, 0.0..=100.0).changed() {
+        let opacity_row = design::slider_row(ui, "Opacity", &mut opacity, 0.0..=100.0);
+        super::mark(ui, opacity_row.rect, super::ids::layer_opacity());
+        if opacity_row.changed() {
             if let Some(id) = active {
                 if let Some(c) = LayersModel::set_opacity(id, opacity / 100.0) {
                     w.emit(Intent::Document(c));
                 }
             }
         }
-        if design::slider_row(ui, "Fill", &mut fill, 0.0..=100.0).changed() {
+        let fill_row = design::slider_row(ui, "Fill", &mut fill, 0.0..=100.0);
+        super::mark(ui, fill_row.rect, super::ids::layer_fill());
+        if fill_row.changed() {
             if let Some(id) = active {
                 if let Some(c) = LayersModel::set_fill_opacity(id, fill / 100.0) {
                     w.emit(Intent::Document(c));
@@ -370,21 +379,12 @@ fn lock_row(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<Layer
     let locks = layer.locked;
     ui.horizontal(|ui| {
         ui.label(hint(ui, "Lock"));
-        let toggles: [(&str, &str, bool); 4] = [
-            ("▨", "Lock transparent pixels", locks.transparency),
-            ("✎", "Lock pixels", locks.pixels),
-            ("✥", "Lock position", locks.position),
-            ("🔒", "Lock all", locks.all),
-        ];
         let mut next = locks;
-        for (i, (glyph, tip, on)) in toggles.into_iter().enumerate() {
-            if glyph_toggle(ui, glyph, on, tip).clicked() {
-                match i {
-                    0 => next.transparency = !on,
-                    1 => next.pixels = !on,
-                    2 => next.position = !on,
-                    _ => next.all = !on,
-                }
+        for toggle in super::LockToggle::ALL {
+            let (glyph, tip) = toggle.glyph_and_tooltip();
+            let on = toggle.get(locks);
+            if glyph_toggle_id(ui, glyph, on, tip, Some(super::ids::layer_lock(toggle))).clicked() {
+                toggle.set(&mut next, !on);
             }
         }
         if next != locks {
@@ -623,10 +623,10 @@ fn row_drag_position(
 fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<LayerId>) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = Space::Hair.pt();
-        if glyph_toggle(ui, "+", true, "New layer").clicked() {
+        if glyph_toggle_id(ui, "+", true, "New layer", Some(super::ids::new_layer())).clicked() {
             w.emit(Intent::Document(LayersModel::new_layer(doc)));
         }
-        if glyph_toggle(ui, "▤", true, "New group").clicked() {
+        if glyph_toggle_id(ui, "▤", true, "New group", Some(super::ids::new_group())).clicked() {
             w.emit(Intent::Document(LayersModel::new_group()));
         }
 
@@ -719,8 +719,14 @@ fn history_body(w: &mut Workspace, ui: &mut Ui, history: &History) {
                 TypeRole::Body,
             ));
         })
-        .response
-        .interact(Sense::click());
+        .response;
+        // The row carries the id `view::ids` publishes for it, so a headless
+        // test clicks the row a user would click rather than a number.
+        let response = ui.interact(
+            response.rect,
+            super::ids::history_row(step.index),
+            Sense::click(),
+        );
 
         if ui.is_rect_visible(response.rect) && (selected || response.hovered()) {
             let t = current_tokens(ui);
@@ -759,14 +765,15 @@ fn history_body(w: &mut Workspace, ui: &mut Ui, history: &History) {
     if !w.snapshots.is_empty() {
         design::section_header(ui, "SNAPSHOTS");
         let snapshots = w.snapshots.clone();
-        for snapshot in &snapshots {
+        for (i, snapshot) in snapshots.iter().enumerate() {
             let stale = model.snapshot_is_stale(snapshot);
-            let response = ui.add_enabled(
-                !stale,
-                egui::Button::new(body(ui, snapshot.name.clone())).frame(false),
-            );
+            // `labelled_button` paints the disabled state and senses nothing
+            // when it is off, so a stale row is inert on screen and a test can
+            // read that off the response rather than trusting the colour.
+            let response =
+                super::labelled_button(ui, &snapshot.name, !stale, super::ids::history_snapshot(i));
             let response = if stale {
-                response.on_disabled_hover_text("The steps this snapshot named have been discarded")
+                response.on_hover_text("The steps this snapshot named have been discarded")
             } else {
                 response
             };
@@ -796,7 +803,15 @@ fn adjustments_body(w: &mut Workspace, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = Space::Hair.pt();
             for id in chunk {
-                if glyph_toggle(ui, AdjustmentsPanel::glyph(*id), true, id.label()).clicked() {
+                if glyph_toggle_id(
+                    ui,
+                    AdjustmentsPanel::glyph(*id),
+                    true,
+                    id.label(),
+                    Some(super::ids::adjustment_tile(*id)),
+                )
+                .clicked()
+                {
                     created = Some(*id);
                 }
             }

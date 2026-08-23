@@ -182,10 +182,18 @@ pub fn wants_blend_mode(info: &ToolInfo) -> bool {
 /// Decided from the *schema*, not from the tool's identity: a tool that offers
 /// a `shape` choice is choosing between ramp geometries, and every such tool
 /// needs stops. A second gradient tool would inherit the editor for free.
+///
+/// The key and its kind are the whole contract. This used to also require the
+/// option's *label* to read "Style", which is a display string — a second ramp
+/// tool calling the same choice "Type", or shipping a translated label, would
+/// have been refused the editor by a predicate whose comment promised it was
+/// looking at the schema.
+/// `a_second_ramp_tool_inherits_the_stop_editor_whatever_its_label_reads` pins
+/// that the label no longer decides.
 pub fn wants_gradient_stops(info: &ToolInfo) -> bool {
-    info.options.iter().any(|o| {
-        o.key == "shape" && matches!(o.kind, OptionKind::Choice { .. }) && o.label == "Style"
-    })
+    info.options
+        .iter()
+        .any(|o| o.key == "shape" && matches!(o.kind, OptionKind::Choice { .. }))
 }
 
 /// The full option list for a tool: its registry schema plus any capability
@@ -612,6 +620,58 @@ mod tests {
                 "{tool:?} claimed a gradient stop editor"
             );
         }
+    }
+
+    /// The claim in `wants_gradient_stops`'s own doc comment, tested.
+    ///
+    /// There is only one ramp tool in the registry, so the predicate's promise
+    /// — "a second gradient tool would inherit the editor for free" — cannot be
+    /// checked against it. Declare that second tool here instead. It differs
+    /// from `Gradient` in exactly one way: the choice is labelled "Ramp" rather
+    /// than "Style". While the predicate also compared the label, this tool got
+    /// no stop editor, which is the identity coupling the comment says it
+    /// avoids, hidden behind a display string.
+    #[test]
+    fn a_second_ramp_tool_inherits_the_stop_editor_whatever_its_label_reads() {
+        const RAMP: &[OptionSpec] = &[OptionSpec {
+            key: "shape",
+            label: "Ramp",
+            kind: OptionKind::Choice {
+                choices: &["Linear", "Radial"],
+                default: 0,
+            },
+        }];
+        let second = ToolInfo {
+            options: RAMP,
+            ..*info(ToolId::Gradient)
+        };
+        assert!(wants_gradient_stops(&second));
+
+        // …and the key is still doing the work: a choice under another key,
+        // however it is labelled, is not a ramp.
+        const NOT_A_RAMP: &[OptionSpec] = &[OptionSpec {
+            key: "mode",
+            label: "Style",
+            kind: OptionKind::Choice {
+                choices: &["Linear", "Radial"],
+                default: 0,
+            },
+        }];
+        let impostor = ToolInfo {
+            options: NOT_A_RAMP,
+            ..*info(ToolId::Gradient)
+        };
+        assert!(!wants_gradient_stops(&impostor));
+    }
+
+    /// `wants_gradient_stops`'s doc comment cites the test above by name.
+    /// Naming it as a function pointer turns a rename into a compile error, so
+    /// the citation cannot rot into a backticked identifier that resolves to
+    /// nothing — which is exactly how it was wrong before.
+    #[test]
+    fn the_doc_comment_cites_a_test_that_really_exists() {
+        let cited: fn() = a_second_ramp_tool_inherits_the_stop_editor_whatever_its_label_reads;
+        cited();
     }
 
     #[test]

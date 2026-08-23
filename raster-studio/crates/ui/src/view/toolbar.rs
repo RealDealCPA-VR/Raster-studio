@@ -376,36 +376,42 @@ fn option_control(w: &mut Workspace, ui: &mut Ui, tool: ToolId, spec: &OptionSpe
         }
     };
 
+    // Every control below is marked with `ids::tool_option(tool, key)` — one
+    // stable id per option, whatever kind it is — so a headless test can drive
+    // it and assert the `Intent::SetToolOption` that comes out. Without that
+    // the whole bar could be unwired and the suite would not notice.
+    let id = super::ids::tool_option(tool, spec.key);
+
     match (spec.kind, current) {
         (OptionKind::Float { min, max, .. }, OptionValue::Float(mut v)) => {
             ui.label(hint(ui, spec.label));
-            let changed = ui
-                .add_sized(
-                    Vec2::new(field, t.metrics.control_height),
-                    egui::DragValue::new(&mut v)
-                        .range(min..=max)
-                        .speed((max - min) / 400.0)
-                        .max_decimals(2),
-                )
-                .changed();
-            if changed {
+            let response = ui.add_sized(
+                Vec2::new(field, t.metrics.control_height),
+                egui::DragValue::new(&mut v)
+                    .range(min..=max)
+                    .speed((max - min) / 400.0)
+                    .max_decimals(2),
+            );
+            super::mark(ui, response.rect, id);
+            if response.changed() {
                 emit(w, OptionValue::Float(v));
             }
         }
         (OptionKind::Int { min, max, .. }, OptionValue::Int(mut v)) => {
             ui.label(hint(ui, spec.label));
-            let changed = ui
-                .add_sized(
-                    Vec2::new(field, t.metrics.control_height),
-                    egui::DragValue::new(&mut v).range(min..=max),
-                )
-                .changed();
-            if changed {
+            let response = ui.add_sized(
+                Vec2::new(field, t.metrics.control_height),
+                egui::DragValue::new(&mut v).range(min..=max),
+            );
+            super::mark(ui, response.rect, id);
+            if response.changed() {
                 emit(w, OptionValue::Int(v));
             }
         }
         (OptionKind::Bool { .. }, OptionValue::Bool(mut v)) => {
-            if ui.checkbox(&mut v, hint(ui, spec.label)).changed() {
+            let response = ui.checkbox(&mut v, hint(ui, spec.label));
+            super::mark(ui, response.rect, id);
+            if response.changed() {
                 emit(w, OptionValue::Bool(v));
             }
         }
@@ -413,15 +419,22 @@ fn option_control(w: &mut Workspace, ui: &mut Ui, tool: ToolId, spec: &OptionSpe
             ui.label(hint(ui, spec.label));
             let shown = choices.get(index).copied().unwrap_or("—");
             let mut picked = index;
-            egui::ComboBox::from_id_salt(("raster-option", tool, spec.key))
+            let combo = egui::ComboBox::from_id_salt(("raster-option", tool, spec.key))
                 .selected_text(body(ui, shown))
                 .show_ui(ui, |ui| {
                     for (i, choice) in choices.iter().enumerate() {
-                        if ui.selectable_label(i == index, body(ui, *choice)).clicked() {
+                        let row = ui.selectable_label(i == index, body(ui, *choice));
+                        super::mark(
+                            ui,
+                            row.rect,
+                            super::ids::tool_option_choice(tool, spec.key, i),
+                        );
+                        if row.clicked() {
                             picked = i;
                         }
                     }
                 });
+            super::mark(ui, combo.response.rect, id);
             if picked != index {
                 emit(w, OptionValue::Choice(picked));
             }
@@ -429,7 +442,9 @@ fn option_control(w: &mut Workspace, ui: &mut Ui, tool: ToolId, spec: &OptionSpe
         (OptionKind::Color { .. }, OptionValue::Color(rgba)) => {
             ui.label(hint(ui, spec.label));
             let mut color = rgba_to_color32(rgba);
-            if ui.color_edit_button_srgba(&mut color).changed() {
+            let response = ui.color_edit_button_srgba(&mut color);
+            super::mark(ui, response.rect, id);
+            if response.changed() {
                 let c = color.to_srgba_unmultiplied();
                 emit(
                     w,

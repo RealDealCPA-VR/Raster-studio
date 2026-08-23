@@ -7,12 +7,26 @@
 //! ([`Chrome`]). Every decision worth testing lives one layer down, without a
 //! window.
 //!
-//! # Failure is a dialog, not an abort
+//! # Failure is a dialog *and* an exit code
 //!
-//! Nothing in start-up calls `.expect`. A machine that cannot give us an
-//! adapter, a surface, or a window gets a [`ShellError`] in a native message
-//! box and a clean exit — see [`crate::error`] for why that matters under
-//! `panic = "abort"`.
+//! Nothing in start-up calls `.expect`. A machine that cannot give us an event
+//! loop, an adapter, a surface, or a window gets a [`ShellError`] in a native
+//! message box — see [`crate::error`] for why that matters under
+//! `panic = "abort"` — **and** the same error comes back out of [`Shell::run`].
+//!
+//! Both halves were missing, in mirror-image ways:
+//!
+//! * The failure inside [`Shell::resumed`] showed its dialog and was then
+//!   dropped, because `ApplicationHandler` has nowhere to return one. `run_app`
+//!   reported the loop's own clean exit, `run` returned `Ok`, and a run that
+//!   never opened a window exited 0 — while `studio-desktop`'s module doc
+//!   promised a script or a CI job a non-zero status. The error is parked on
+//!   [`Shell::startup_error`] and re-raised by [`Shell::finish`].
+//! * `EventLoop::new` failing — no `DISPLAY`, an SSH session, a container — was
+//!   returned but never shown, although [`ShellError::EventLoop`]'s advice text
+//!   ("Raster Studio needs a desktop session…") is written for exactly that
+//!   user. It now goes through [`Shell::report_startup_failure`] like every
+//!   other start-up failure.
 //!
 //! # Who owns the keyboard
 //!
@@ -63,11 +77,10 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
-use render::{Camera, Canvas, GpuContext};
+use render::{Camera, Canvas, GpuContext, MAX_ZOOM, MIN_ZOOM};
 
 use crate::action::Action;
 use crate::chrome::Chrome;
-use crate::dialogs::{FileDialogs, NativeDialogs};
 use crate::editor::{ActionError, Editor};
 use crate::error::ShellError;
 use crate::keymap::{Chord, Key};
@@ -282,6 +295,12 @@ pub struct Shell {
     dragging: bool,
     modifiers: ModifiersState,
     repaint_at: Option<Instant>,
+    /// A start-up failure that happened inside the event loop.
+    ///
+    /// `ApplicationHandler::resumed` returns `()`, so an error raised there has
+    /// nowhere to go: it waits here until [`Shell::finish`] hands it back as
+    /// the process's exit status.
+    startup_error: Option<ShellError>,
 }
 
 impl Shell {
@@ -297,6 +316,7 @@ impl Shell {
             dragging: false,
             modifiers: ModifiersState::empty(),
             repaint_at: Some(Instant::now()),
+            startup_error: None,
         }
     }
 
@@ -305,10 +325,63 @@ impl Shell {
     }
 
     /// Run until the window closes.
+    ///
+    /// Returns the start-up failure that stopped the window from appearing, if
+    /// there was one — the user has already seen it in a dialog by then, and
+    /// this is what makes the process exit non-zero for whoever launched it
+    /// from a terminal or a script.
     pub fn run(mut self) -> Result<(), ShellError> {
-        let event_loop = EventLoop::new()?;
-        event_loop.run_app(&mut self)?;
-        Ok(())
+        let event_loop = match EventLoop::new() {
+            Ok(event_loop) => event_loop,
+            // The headless case: no display, an SSH session, a container.
+            // Returned *and* shown — `ShellError::EventLoop`'s advice is
+            // written for this user, and before this it reached nobody.
+            Err(e) => return Err(self.report_startup_failure(ShellError::EventLoop(e))),
+        };
+        let ran = event_loop.run_app(&mut self);
+        self.finish(ran)
+    }
+
+    /// Tell the user about a start-up failure, and hand it back to the caller.
+    ///
+    /// One function for both halves of the promise in this module's doc: the
+    /// dialog (the only report a user who double-clicked an icon will ever
+    /// see) and the value (the exit code). It reports through the editor's own
+    /// [`crate::dialogs::FileDialogs`], so the native build shows a real
+    /// message box and a test can read back what was shown.
+    fn report_startup_failure(&mut self, error: ShellError) -> ShellError {
+        tracing::error!("{error}");
+        self.editor
+            .report_error(error.title(), &error.user_message());
+        error
+    }
+
+    /// Start-up failed inside the event loop: tell the user, and keep the
+    /// error for [`Shell::finish`].
+    ///
+    /// Split out of [`Shell::resumed`] because `resumed` needs an
+    /// `ActiveEventLoop` no test can build, and "the failure is reported *and*
+    /// survives to become the exit code" is the whole of what went wrong here.
+    fn start_up_failed(&mut self, error: ShellError) {
+        let error = self.report_startup_failure(error);
+        self.startup_error = Some(error);
+    }
+
+    /// Turn the event loop's result into the shell's.
+    ///
+    /// A failure inside [`Shell::resumed`] wins over `run_app`'s own `Ok`:
+    /// the loop exited cleanly *because* start-up failed, so reporting the
+    /// clean exit would report the consequence and hide the cause. That is
+    /// exactly what used to happen — the dialog was shown and the process still
+    /// exited 0.
+    fn finish(&mut self, ran: Result<(), winit::error::EventLoopError>) -> Result<(), ShellError> {
+        if let Some(error) = self.startup_error.take() {
+            return Err(error);
+        }
+        match ran {
+            Ok(()) => Ok(()),
+            Err(e) => Err(self.report_startup_failure(ShellError::EventLoop(e))),
+        }
     }
 
     /// Claim this run's crash marker and offer whatever previous runs left.
@@ -453,9 +526,19 @@ impl Shell {
             .surface
             .configure(&state.gpu.device, &state.surface_config);
         state.egui_depth = create_depth_view(&state.gpu, size.width, size.height);
-        let viewport = Vec2::new(size.width as f32, size.height as f32);
+        self.spread_viewport(Vec2::new(size.width as f32, size.height as f32));
+    }
+
+    /// Hand every open document the size of the area it is drawn in.
+    ///
+    /// Through [`OpenDocument::set_viewport`] rather than by assigning
+    /// `camera.viewport_size`, because a document that has never been drawn
+    /// still owes the user a fit and this is the moment its size is known. A
+    /// background tab opened while another was active gets fitted here too,
+    /// rather than the first time it happens to be redrawn.
+    fn spread_viewport(&mut self, viewport: Vec2) {
         for doc in self.editor.documents_mut() {
-            doc.camera.viewport_size = viewport;
+            doc.set_viewport(viewport);
         }
     }
 
@@ -539,12 +622,19 @@ impl Shell {
         let mut camera = Camera::new(Vec2::ONE, Vec2::ONE);
         let mut have_document = false;
         if let Some(doc) = self.editor.active_mut() {
-            doc.camera.viewport_size = Vec2::new(
+            // The first frame is where a freshly opened document learns how big
+            // the window is, and therefore where it is fitted to it.
+            doc.set_viewport(Vec2::new(
                 state.surface_config.width as f32,
                 state.surface_config.height as f32,
-            );
+            ));
             camera = doc.camera.clone();
             have_document = true;
+            // The Channels panel's component toggles are a view setting, so
+            // they are applied on the way to the texture rather than to the
+            // document. Read every frame: the panel is the authority, and the
+            // presenter re-uploads only when the answer actually changes.
+            state.presenter.set_channel_mask(self.chrome.channel_mask());
             match state.presenter.sync(&state.gpu, doc) {
                 Ok(report) => {
                     if report.texture_replaced {
@@ -703,6 +793,31 @@ impl Shell {
         }
         if let Some(rgba) = output.set_background {
             self.editor.set_background(rgba);
+        }
+        // The brush belongs to the editor, so an options-bar edit lands here.
+        // Without this the slider moved and nothing else did, while `[` and `]`
+        // moved the editor's brush and the slider stayed put — two numbers for
+        // one setting, disagreeing in the same window.
+        if let Some(brush) = output.set_brush {
+            self.editor.set_brush(brush);
+        }
+        // The camera is the document's, so the Navigator's pan and the status
+        // bar's zoom field land here rather than in the workspace. Before this
+        // they were workspace-local writes nothing read: dragging the Navigator
+        // moved the box inside the Navigator and the image stayed still.
+        if let Some((x, y)) = output.set_view_center {
+            if let Some(doc) = self.editor.active_mut() {
+                if x.is_finite() && y.is_finite() {
+                    doc.camera.center = Vec2::new(x, y);
+                }
+            }
+        }
+        if let Some(zoom) = output.set_zoom {
+            if let Some(doc) = self.editor.active_mut() {
+                if zoom.is_finite() && zoom > 0.0 {
+                    doc.camera.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+                }
+            }
         }
         if let Some(prefs) = output.preferences {
             self.editor.set_preferences(prefs);
@@ -876,9 +991,11 @@ impl ApplicationHandler for Shell {
             }
             Err(e) => {
                 // The whole point of `crate::error`: say what happened instead
-                // of aborting with nothing on screen.
-                tracing::error!("{e}");
-                NativeDialogs.report_error(e.title(), &e.user_message());
+                // of aborting with nothing on screen — and then *keep* it.
+                // Nothing can be returned from here, so it is parked for
+                // `finish`; dropping it is what made a run that never opened a
+                // window exit 0.
+                self.start_up_failed(e);
                 event_loop.exit();
             }
         }
@@ -1331,6 +1448,165 @@ mod tests {
                 ModifiersState::SHIFT
             ),
             KeyOutcome::Ignore
+        );
+    }
+
+    #[test]
+    fn a_start_up_failure_is_shown_and_still_ends_the_run_non_zero() {
+        // The defect: `resumed` showed its dialog and then dropped the error,
+        // because `ApplicationHandler` has nowhere to return one. `run_app`
+        // reported the loop's own clean exit, `run` returned `Ok(())`, and a
+        // run that never opened a window exited 0 — while
+        // `studio-desktop`'s module doc promises a terminal or a CI script
+        // exactly the opposite.
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        assert!(
+            shell.finish(Ok(())).is_ok(),
+            "a run that started is still a clean run"
+        );
+
+        let mut shell = shell_with_one_image(dir.path());
+        shell.start_up_failed(ShellError::Gpu(anyhow::anyhow!(
+            "no suitable GPU adapter found"
+        )));
+
+        // The user was told. `Editor::report_error` is the call that puts the
+        // native message box on screen, and the status line it writes at the
+        // same time is how a windowless test reads back that it happened.
+        let told = shell.editor().status().unwrap_or_default().to_string();
+        assert!(
+            told.contains("Raster Studio cannot start the graphics system"),
+            "no dialog title: {told}"
+        );
+        assert!(
+            told.contains("no suitable GPU adapter found"),
+            "the dialog did not name what failed: {told}"
+        );
+        assert!(
+            told.contains("graphics driver"),
+            "the advice never reached the user: {told}"
+        );
+
+        // ...and the process still fails, which is the half that was missing.
+        match shell.finish(Ok(())) {
+            Err(ShellError::Gpu(e)) => {
+                assert!(e.to_string().contains("no suitable GPU adapter found"))
+            }
+            other => panic!("a start-up failure exited cleanly: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_windowing_system_that_never_answers_is_explained_rather_than_only_returned() {
+        // The mirror case. `EventLoop::new` failing — no display, an SSH
+        // session, a container — was returned but never shown, although
+        // `ShellError::EventLoop`'s advice ("Raster Studio needs a desktop
+        // session…") is written for precisely that user. `run` now hands it to
+        // `report_startup_failure`, the same path every other start-up failure
+        // takes. (`EventLoop::new` itself cannot be made to fail in a test; the
+        // variant a headless box produces is not constructible outside winit,
+        // so this drives the same `ShellError` through the same function.)
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        let returned = shell.report_startup_failure(ShellError::EventLoop(
+            winit::error::EventLoopError::RecreationAttempt,
+        ));
+        assert!(
+            matches!(returned, ShellError::EventLoop(_)),
+            "the error must come back for the exit code"
+        );
+
+        let told = shell.editor().status().unwrap_or_default().to_string();
+        assert!(
+            told.contains("Raster Studio cannot open a window"),
+            "no dialog title: {told}"
+        );
+        assert!(
+            told.contains("desktop session"),
+            "the advice written for this case never reached the user: {told}"
+        );
+    }
+
+    #[test]
+    fn the_navigators_pan_and_a_typed_zoom_move_the_documents_camera() {
+        // The reviewer measured both of these as dead: the Navigator's drag
+        // wrote `Workspace::view_center`, which `grep` found no reader for
+        // outside the Navigator's own panel, and the status bar's zoom field
+        // moved a number in the workspace while the image stayed where it was.
+        // The camera belongs to the document, so this is where they land.
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        let before = shell.editor().active().unwrap().camera.center;
+
+        shell.apply_chrome(ChromeOutput {
+            set_view_center: Some((3.0, 4.0)),
+            set_zoom: Some(8.0),
+            ..Default::default()
+        });
+        let camera = &shell.editor().active().unwrap().camera;
+        assert_eq!(camera.center, Vec2::new(3.0, 4.0));
+        assert_ne!(camera.center, before, "the pan really moved the view");
+        assert_eq!(camera.zoom, 8.0);
+
+        // A value that cannot be drawn is refused rather than making the
+        // camera unusable: `screen_to_image` divides by the zoom, and a NaN
+        // centre poisons every later pan.
+        shell.apply_chrome(ChromeOutput {
+            set_view_center: Some((f32::NAN, 0.0)),
+            set_zoom: Some(0.0),
+            ..Default::default()
+        });
+        let camera = &shell.editor().active().unwrap().camera;
+        assert_eq!(camera.center, Vec2::new(3.0, 4.0));
+        assert_eq!(camera.zoom, 8.0);
+
+        // ...and a typed zoom is held to the same range a wheel gesture is,
+        // so the two routes to a zoom level cannot reach different extremes.
+        shell.apply_chrome(ChromeOutput {
+            set_zoom: Some(10_000.0),
+            ..Default::default()
+        });
+        assert_eq!(shell.editor().active().unwrap().camera.zoom, MAX_ZOOM);
+        shell.apply_chrome(ChromeOutput {
+            set_zoom: Some(1e-9),
+            ..Default::default()
+        });
+        assert_eq!(shell.editor().active().unwrap().camera.zoom, MIN_ZOOM);
+    }
+
+    #[test]
+    fn the_windows_size_reaches_every_open_document_and_fits_it_once() {
+        // The defect: the only `fit()` on the open path ran against a viewport
+        // that was still the canvas's own size, so it was a no-op and a large
+        // image opened as a 100% centre crop. The shell is where the real size
+        // is known, so the shell is where the fit happens.
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        shell.perform(Action::NewDocument);
+        let (w, h) = crate::editor::NEW_DOCUMENT_SIZE;
+        assert!(
+            shell.editor().documents().iter().all(|d| d.awaiting_fit()),
+            "nothing has been drawn yet, so nothing can have been fitted"
+        );
+
+        shell.spread_viewport(Vec2::new(800.0, 600.0));
+
+        let new_doc = shell.editor().documents().last().unwrap();
+        let expected = (800.0 / w as f32).min(600.0 / h as f32);
+        assert!(
+            (new_doc.camera.zoom - expected).abs() < 1e-4,
+            "{w}x{h} did not fit an 800x600 window: zoom {}",
+            new_doc.camera.zoom
+        );
+        assert_eq!(
+            new_doc.camera.viewport_size,
+            Vec2::new(800.0, 600.0),
+            "the camera is still working from a fabricated viewport"
+        );
+        assert!(
+            !shell.editor().documents()[0].awaiting_fit(),
+            "the background tab waits for a redraw that may never come"
         );
     }
 

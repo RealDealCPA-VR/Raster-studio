@@ -13,8 +13,11 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
-# Regular dependencies rather than dev-dependencies: the harness in `src/lib.rs`
-# needs them, and a dev-dependency is not visible to the library target.
+# Regular dependencies rather than dev-dependencies, because these seven are the
+# ones the harness in `src/lib.rs` itself names — in the signatures of
+# `app::DocExt` and `fixture` — and a dev-dependency is not visible to the
+# library target. Everything only the `tests/` targets reach for is a
+# dev-dependency below.
 [dependencies]
 # The application's own engine. `OpenDocument` and `session` carry no window and
 # no GPU handle, so the end-to-end tests drive the real thing rather than a
@@ -26,11 +29,14 @@ editor-core.workspace = true
 layer-model.workspace = true
 compositor.workspace = true
 raster.workspace = true
+tools.workspace = true
+color.workspace = true
+
+# Used only by the test targets in `tests/`, which see dev-dependencies.
+[dev-dependencies]
 project-format.workspace = true
 psd.workspace = true
-tools.workspace = true
 selection.workspace = true
 filters.workspace = true
-color.workspace = true
 glam.workspace = true
 tempfile = "3"

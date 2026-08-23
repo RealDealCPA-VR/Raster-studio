@@ -273,6 +273,62 @@ fn clear_color_is_srgb_on_both_target_encodings() {
     }
 }
 
+/// Clear a canvas whose backdrop has been set, with no source texture.
+fn render_backdrop(
+    gpu: &GpuContext,
+    backdrop: [u8; 3],
+    size: u32,
+    format: wgpu::TextureFormat,
+) -> anyhow::Result<Readback> {
+    let target = OffscreenTarget::new(gpu, size, size, format)?;
+    let mut canvas = Canvas::new(gpu, format);
+    canvas.set_backdrop(backdrop);
+    assert_eq!(canvas.backdrop(), backdrop, "the setter did not take");
+
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    canvas.render(&mut encoder, target.view());
+    gpu.queue.submit(Some(encoder.finish()));
+    target.read_rgba8(gpu)
+}
+
+/// The backdrop is a *parameter*, and a parameter nobody has shown reaching the
+/// framebuffer is only a field.
+///
+/// This is the pixel proof behind [`Canvas::set_backdrop`], the API this crate
+/// grew so the area around an image could stop being a hardcoded grey:
+/// `app-shell` hands it `design::ColorRole::BackgroundCanvas` at start-up and on
+/// every theme change, and in Light mode that is #E9E9EE. Both target encodings
+/// are checked, because the value has to be linearized for one and left alone
+/// for the other — getting that backwards is what renders a light theme's
+/// surround near-black.
+#[test]
+fn a_backdrop_the_host_sets_is_the_colour_the_canvas_clears_to() {
+    let gpu = gpu_or_skip!();
+    let light = [0xE9, 0xE9, 0xEE];
+    for format in [SRGB, wgpu::TextureFormat::Rgba8Unorm] {
+        let img = render_backdrop(&gpu, light, 8, format).expect("render");
+        assert_near(
+            &format!("{format:?} light backdrop"),
+            img.pixel(4, 4),
+            light,
+            2,
+        );
+        // ...and it really is the value that was set, not the default the
+        // canvas starts with.
+        assert_ne!(light, render::DEFAULT_BACKDROP_SRGB);
+        let dark = [0x1A, 0x1A, 0x1D];
+        let img = render_backdrop(&gpu, dark, 8, format).expect("render");
+        assert_near(
+            &format!("{format:?} dark backdrop"),
+            img.pixel(4, 4),
+            dark,
+            2,
+        );
+    }
+}
+
 /// A plain unorm target performs no sRGB encode, so `quad.wgsl` has to. The
 /// bytes it produces must match what the hardware writes for an `*-Srgb`
 /// target — otherwise an adapter that exposes no sRGB surface format (the

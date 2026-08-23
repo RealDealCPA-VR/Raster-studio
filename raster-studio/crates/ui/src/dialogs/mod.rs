@@ -48,10 +48,12 @@
 //!
 //! There is exactly one filter dialog, generated from a parameter schema — see
 //! [`filter_dialog`]. Adding a [`FilterSpec`] to [`filter_dialog::FILTERS`] is
-//! the entire cost of a new filter's UI, for **all five** parameter kinds: the
-//! colour arm is covered by a test-only `FilterSpec`, because no shipping
-//! filter takes a colour yet and an untested generated arm is how that arm
-//! became a dead control in the first place.
+//! the entire cost of a new filter's UI, for **all five** parameter kinds.
+//!
+//! A [`FilterSpec`] is keyed by [`crate::menu::FilterId`], so the catalogue
+//! and the Filter menu are one list checked in both directions: every menu
+//! entry has a dialog, and no dialog exists for something the menu cannot
+//! reach.
 
 pub mod action;
 pub mod brush_editor;
@@ -237,12 +239,124 @@ mod tests {
         }
     }
 
+    /// The type a line implements [`Dialog`] for, if it is such a line.
+    ///
+    /// Path-tolerant: `impl chrome::Dialog for X` counts, because a dialog
+    /// written that way is still a dialog the registry has to carry. Matching
+    /// only the bare `impl Dialog for ` let exactly that spelling walk past
+    /// this gate, which the mutation check found.
+    fn implemented_dialog(line: &str) -> Option<String> {
+        let line = line.trim_start();
+        if !line.starts_with("impl ") {
+            return None;
+        }
+        let at = line.find("Dialog for ")?;
+        // `impl Debug for FilterDialog` must not match: the trait name has to
+        // end at `Dialog`, not merely end with it.
+        let boundary = line[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+        if !boundary {
+            return None;
+        }
+        let name = line[at + "Dialog for ".len()..]
+            .trim_end_matches('{')
+            .trim()
+            .to_string();
+        (!name.is_empty()).then_some(name)
+    }
+
+    /// Every `impl Dialog for` in the module's shipping source.
+    ///
+    /// Read from the files rather than from a list, because a list is the
+    /// thing that gets forgotten. `tests/dialogs_style_gate.rs` walks the same
+    /// directory the same way, and for the same reason.
+    fn dialog_impls_in_source() -> Vec<String> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let entries =
+                std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("dialogs");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        assert!(
+            files.len() >= 10,
+            "the dialogs module lost its source files: found {}",
+            files.len()
+        );
+        let mut found = Vec::new();
+        for path in &files {
+            let text = std::fs::read_to_string(path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            // Only what ships: a test may well define a `Dialog` of its own,
+            // and one that is not in the registry is not a gap.
+            let shipping = match text.find("#[cfg(test)]") {
+                Some(at) => &text[..at],
+                None => &text[..],
+            };
+            for line in shipping.lines() {
+                if let Some(name) = implemented_dialog(line) {
+                    found.push(name);
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn the_registry_scan_reads_a_dialog_impl_however_it_is_spelled() {
+        // A gate whose rule is never exercised is a gate that can quietly stop
+        // matching. These four lines are the ones that decide whether an
+        // unregistered dialog is found.
+        assert_eq!(
+            implemented_dialog("impl Dialog for NewDocumentDialog {"),
+            Some("NewDocumentDialog".to_string())
+        );
+        assert_eq!(
+            implemented_dialog("    impl super::chrome::Dialog for Scratch {"),
+            Some("Scratch".to_string())
+        );
+        assert_eq!(
+            implemented_dialog("impl std::fmt::Debug for FilterDialog {"),
+            None,
+            "a Debug impl on a type whose name ends in Dialog is not a Dialog impl"
+        );
+        assert_eq!(implemented_dialog("/// impl Dialog for Doc"), None);
+    }
+
     #[test]
     fn the_registry_covers_every_dialog_in_the_module() {
-        // Nine hand-written dialogs plus one generated dialog per filter. If a
-        // dialog is added without being registered, the contract tests above
-        // would silently stop covering it — so the count is pinned.
-        assert_eq!(all_dialogs().len(), 9 + filter_dialog::FILTERS.len());
+        // The contract tests above only cover what `all_dialogs()` hands them,
+        // so a dialog that is written but never registered is a dialog whose
+        // confirm/cancel guarantee nothing checks. The expected count is
+        // therefore read out of the source: every `impl Dialog for` in
+        // `src/dialogs`, with `FilterDialog`'s single impl standing in for the
+        // whole generated set. A literal here — this assertion used to say
+        // `9 + FILTERS.len()` — could only catch an entry being *deleted* from
+        // the registry, which is the direction that already fails to compile.
+        let impls = dialog_impls_in_source();
+        let expected = impls.len() - 1 + filter_dialog::FILTERS.len();
+        assert_eq!(
+            all_dialogs().len(),
+            expected,
+            "`impl Dialog for` exists for {impls:?}, but all_dialogs() has {} entries \
+             (expected {expected}: one per impl, with FilterDialog standing in for all \
+             {} generated filter dialogs)",
+            all_dialogs().len(),
+            filter_dialog::FILTERS.len()
+        );
     }
 
     #[test]

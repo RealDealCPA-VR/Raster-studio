@@ -97,7 +97,7 @@ impl DialogAction {
             Self::SetBrush { name, .. } => format!("Brush \"{name}\""),
             Self::SetGradient(_) => "Gradient".to_string(),
             Self::SetPreferences(_) => "Preferences".to_string(),
-            Self::RunFilter(invocation) => invocation.filter.name.to_string(),
+            Self::RunFilter(invocation) => invocation.filter.name().to_string(),
         }
     }
 

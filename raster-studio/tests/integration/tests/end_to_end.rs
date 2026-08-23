@@ -12,9 +12,10 @@
 //! bug the user sees, so it is a bug these tests have to see too.
 
 use app_shell::doc::OpenDocument;
-use color::{linear_to_srgb, srgb8_to_linear, unpremultiply};
-use editor_core::{Command, LayerPatch, Patch, PixelKey, PixelTarget, Selection, SelectionMask};
-use filters::FilterBuffer;
+use color::{linear_to_srgb, srgb8_to_linear, srgb_to_linear, ColorSpace};
+use editor_core::{
+    Command, LayerPatch, Patch, PixelKey, PixelTarget, Selection, SelectionMask, MASK_TILE_BYTES,
+};
 use glam::IVec2;
 use integration_tests::app::{self, DocExt, APP_VERSION};
 use integration_tests::fixture::{
@@ -24,7 +25,7 @@ use layer_model::{
     AdjustmentKind, AdjustmentLayer, BlendMode, ClippingMode, Layer, LayerEffects, LayerId,
     LayerKind, MaskId, ShadowEffect,
 };
-use raster::{ExportFormat, TileCoord, TileGrid, TILE_SIZE};
+use raster::{ExportFormat, PixelFormat, Tile, TileCoord, TileGrid, TILE_SIZE};
 use tools::bucket::{fill_masked, FillContent};
 use tools::{
     BrushSettings, ColorPatch, PointerEvent, StrokeOp, StrokeTool, Tool, ToolContext, ToolId,
@@ -378,6 +379,199 @@ fn layered_document() -> Layered {
     }
 }
 
+// The same stack, at the size and in the working space the product actually
+// runs in. `layered_document` above is 4x4 and linear because its whole job is
+// to be checkable on paper; that makes it the wrong fixture for anything about
+// *geometry* or *encoding*:
+//
+//   * 4x4 lives inside a single tile, and 99.98% of the one tile blob it stores
+//     is off-canvas padding — so a package writer that dropped an edge tile,
+//     transposed a row stride or lost a shard would round-trip it perfectly;
+//   * every layer in it is a flat fill, and `fixture.rs` argues at length that
+//     "a flat colour survives almost any mistake ... so a fixture that is flat
+//     proves nothing about geometry";
+//   * and linear sRGB is a working space no application path can produce (see
+//     `app::linear`), so `Canvas::to_rgba8` collapses to `round(v * 255)` and
+//     the transfer curve the product always applies is never run.
+//
+// This one is 600x400: three tiles across and two down, a multiple of TILE_SIZE
+// in neither axis, so both edge tiles are partial. Every layer, the mask and the
+// clipping base's shape are two-axis functions or real fixture pixels. The
+// working space is whatever `File ▸ New` gives, which is sRGB.
+const PHOTO_W: u32 = 600;
+const PHOTO_H: u32 = 400;
+
+/// One pixel of a full-canvas RGBA8 fixture buffer.
+fn canvas_sample(buf: &[u8], x: u32, y: u32) -> [u8; 4] {
+    let i = ((y as usize * PHOTO_W as usize) + x as usize) * 4;
+    [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+}
+
+/// The same stack as [`layered_document`] — group, blend modes, layer mask,
+/// clipping pair, adjustment — built out of real picture content on a canvas
+/// that spans several tiles, in the product's own sRGB working space.
+fn photo_layered_document() -> Layered {
+    let mut doc = app::blank(PHOTO_W, PHOTO_H, "Photo stack");
+
+    // Bottom of the stack: the picture, opaque, varying on both axes and in all
+    // three channels.
+    let backdrop = doc
+        .document
+        .active_layer()
+        .expect("File ▸ New makes a layer");
+    let photo = photo_rgba8(PHOTO_W, PHOTO_H);
+    doc.paint_canvas(backdrop, &|x, y| canvas_sample(&photo, x, y));
+
+    // An isolated group of two differently blended layers. The lower one
+    // carries partial alpha, so the group's own buffer is not opaque.
+    let group = doc.add_layer(Layer::group("Group"));
+    let lower = doc.add_child(group, Layer::raster("Lower"));
+    let translucent = fixture::photo_rgba8_with_alpha(PHOTO_W, PHOTO_H);
+    doc.paint_canvas(lower, &|x, y| canvas_sample(&translucent, x, y));
+    // Every generated channel here is taken modulo a value that is *not* 256.
+    // A function of `x % 256` repeats exactly once per tile, so a layer built
+    // from one would store the same blob in every full tile — which is the flat
+    // fixture problem wearing a pattern. `the_persistence_fixture_is_multi_tile_
+    // srgb_and_is_not_flat` checks that it did not happen.
+    let upper = doc.add_child(group, Layer::raster("Upper"));
+    doc.paint_canvas(upper, &|x, y| {
+        [
+            ((x * 7 + y * 3) % 251) as u8,
+            ((y * 5 + x / 3) % 241) as u8,
+            ((x * y / 11) % 239) as u8,
+            255,
+        ]
+    });
+    doc.set_props(
+        upper,
+        LayerPatch {
+            blend_mode: Some(BlendMode::Multiply),
+            ..Default::default()
+        },
+    );
+
+    // ...under a layer mask whose coverage varies on both axes, so a mask tile
+    // that came back transposed or off by a shard is a visible difference.
+    let group_mask = doc.attach_mask(group);
+    doc.paint_canvas_mask(group, &|x, y| (((x * 3) ^ (y * 5)) % 251) as u8);
+
+    // A clipping pair: a base whose alpha is its shape — here a diagonal ramp
+    // rather than four flat rows — and a layer clipped to it.
+    let clip_base = doc.add_layer(Layer::raster("Clip base"));
+    doc.paint_canvas(clip_base, &|x, y| {
+        let [r, g, b, _] = canvas_sample(&photo, x, y);
+        [r, g, b, ((x + y * 2) % 251) as u8]
+    });
+    let clip_top = doc.add_layer(Layer::raster("Clipped"));
+    doc.paint_canvas(clip_top, &|x, y| {
+        [
+            (251 - (x % 251)) as u8,
+            ((x * 3 + y) % 253) as u8,
+            ((y * 11 + x) % 247) as u8,
+            255,
+        ]
+    });
+    doc.set_props(
+        clip_top,
+        LayerPatch {
+            blend_mode: Some(BlendMode::Screen),
+            clipping: Some(ClippingMode::ClipToBelow),
+            ..Default::default()
+        },
+    );
+
+    // ...and an adjustment layer over everything.
+    doc.add_layer(Layer::with_kind(
+        "Exposure",
+        LayerKind::Adjustment(AdjustmentLayer {
+            kind: AdjustmentKind::Exposure {
+                stops: EXPOSURE_STOPS,
+            },
+        }),
+    ));
+
+    Layered {
+        doc,
+        group,
+        group_mask,
+        clip_base,
+    }
+}
+
+/// The fixture's own premises, so a test built on it cannot be quietly weakened
+/// by the fixture shrinking back to one flat tile.
+#[test]
+fn the_persistence_fixture_is_multi_tile_srgb_and_is_not_flat() {
+    let mut l = photo_layered_document();
+
+    assert_eq!(
+        l.doc.document.meta.color_space,
+        ColorSpace::Srgb,
+        "the persistence fixture must be in the space the product ships in, \
+         or the sRGB transfer curve goes untested"
+    );
+
+    let tiles = l.doc.canvas_tiles();
+    assert_eq!(tiles.len(), 6, "600x400 is three tiles across and two down");
+    assert_ne!(
+        PHOTO_W % TILE_SIZE,
+        0,
+        "the right-hand tiles must be partial"
+    );
+    assert_ne!(PHOTO_H % TILE_SIZE, 0, "the bottom tiles must be partial");
+
+    // Every layer that carries pixels stores a distinct blob per tile: a fixture
+    // whose layers were flat would store *one* blob and reference it six times,
+    // and a package writer that lost five of six tiles would still round-trip.
+    for name in ["Layer 1", "Lower", "Upper", "Clip base", "Clipped"] {
+        let id = l
+            .doc
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .find(|id| l.doc.document.layers.get(*id).unwrap().name == name)
+            .unwrap_or_else(|| panic!("no layer named `{name}`"));
+        let map = l
+            .doc
+            .document
+            .layer_tiles(id)
+            .unwrap_or_else(|| panic!("`{name}` has no pixels"));
+        let hashes: std::collections::HashSet<_> = tiles.iter().map(|c| map.get(*c)).collect();
+        assert_eq!(
+            hashes.len(),
+            tiles.len(),
+            "`{name}` stores the same blob in more than one tile, so it is flat"
+        );
+    }
+
+    // The mask is on the same hook: a mask that stored one blob six times would
+    // survive a package writer that dropped five of them.
+    let group = l.group;
+    let mask_map = l
+        .doc
+        .document
+        .mask_tiles(group)
+        .expect("the group's mask has coverage tiles");
+    let mask_hashes: std::collections::HashSet<_> =
+        tiles.iter().map(|c| mask_map.get(*c)).collect();
+    assert_eq!(
+        mask_hashes.len(),
+        tiles.len(),
+        "the group mask stores the same blob in more than one tile, so it is flat"
+    );
+
+    // ...and the composite that comes out of it is a picture, not a wash.
+    let frame = l.doc.composite_all();
+    assert_eq!(frame.len(), (PHOTO_W * PHOTO_H * 4) as usize);
+    let distinct: std::collections::BTreeSet<&[u8]> = frame.chunks_exact(4).collect();
+    assert!(
+        distinct.len() > 10_000,
+        "the composite collapsed to {} distinct colours",
+        distinct.len()
+    );
+}
+
 /// What the pixel at `(x, y)` must be, derived from the documented compositing
 /// rules rather than from the compositor.
 ///
@@ -508,12 +702,23 @@ fn each_part_of_the_stack_is_load_bearing() {
 // 4. Save, close, reopen — the single most important test here
 // ---------------------------------------------------------------------------
 
+/// Where the round-tripped selection sits: astride the boundary between the
+/// first and second tile column, so the mask is not trivially inside one tile.
+const SELECTION_ORIGIN: IVec2 = IVec2::new(250, 180);
+const SELECTION_SIZE: (u32, u32) = (12, 8);
+
 #[test]
 fn a_saved_document_reopens_and_composites_to_byte_identical_output() {
     let tmp = tempfile::tempdir().unwrap();
     let package = tmp.path().join("Layered.rstudio");
 
-    let mut l = layered_document();
+    // The multi-tile, content-rich, sRGB fixture — not the 4x4 linear one. A
+    // package writer only has multi-tile paths (several blobs per layer, shard
+    // directories, partial edge tiles, row strides over content that varies in
+    // both axes) if the document handed to it has more than one tile of more
+    // than one colour. `the_persistence_fixture_is_multi_tile_srgb_and_is_not_
+    // flat` pins those premises.
+    let mut l = photo_layered_document();
 
     // Give the document the rest of what has to survive: a layer style and a
     // selection. (A selection is a field on the document rather than a command
@@ -536,8 +741,10 @@ fn a_saved_document_reopens_and_composites_to_byte_identical_output() {
             ..Default::default()
         },
     );
+    let (sw, sh) = SELECTION_SIZE;
+    let coverage: Vec<u8> = (0..sw * sh).map(|i| (255 - (i % 256)) as u8).collect();
     l.doc.document.selection =
-        Selection::Mask(SelectionMask::new(IVec2::new(1, 1), 2, 2, vec![255, 200, 64, 0]).unwrap());
+        Selection::Mask(SelectionMask::new(SELECTION_ORIGIN, sw, sh, coverage.clone()).unwrap());
 
     let before = l.doc.composite_all();
     let group_mask_before = l.group_mask;
@@ -581,10 +788,46 @@ fn a_saved_document_reopens_and_composites_to_byte_identical_output() {
         Some(group_mask_before),
         "the layer mask survived, under the same identity"
     );
-    assert!(
-        back.document.mask_tiles(group).is_some(),
-        "and so did the mask's coverage tiles"
+
+    // Every tile of every layer and of the mask came back, and the package
+    // actually holds the bytes each one names. "The map is `Some`" would pass on
+    // a package that wrote one blob and referenced it six times; this does not.
+    let canvas_tiles = back.canvas_tiles();
+    assert_eq!(
+        canvas_tiles.len(),
+        6,
+        "the reopened canvas is still six tiles"
     );
+    let mask_map = back
+        .document
+        .mask_tiles(group)
+        .expect("and so did the mask's coverage tiles");
+    for coord in &canvas_tiles {
+        let hash = mask_map
+            .get(*coord)
+            .unwrap_or_else(|| panic!("the mask lost its tile at {coord:?}"));
+        assert_eq!(
+            back.tile_bytes(hash).map(<[u8]>::len),
+            Some(MASK_TILE_BYTES),
+            "the package holds no coverage bytes for the mask tile at {coord:?}"
+        );
+    }
+    for name in ["Layer 1", "Lower", "Upper", "Clip base", "Clipped"] {
+        let map = back
+            .document
+            .layer_tiles(named(name))
+            .unwrap_or_else(|| panic!("`{name}` came back with no pixels"));
+        for coord in &canvas_tiles {
+            let hash = map
+                .get(*coord)
+                .unwrap_or_else(|| panic!("`{name}` lost its tile at {coord:?}"));
+            assert_eq!(
+                back.tile_bytes(hash).map(<[u8]>::len),
+                Some(Tile::byte_len(PixelFormat::Rgba8)),
+                "the package holds no pixels for `{name}` at {coord:?}"
+            );
+        }
+    }
     let clip_base = named("Clip base");
     assert_eq!(
         back.document
@@ -600,10 +843,23 @@ fn a_saved_document_reopens_and_composites_to_byte_identical_output() {
         matches!(back.document.selection, Selection::Mask(_)),
         "the selection survived"
     );
+    for (i, want) in coverage.iter().enumerate() {
+        let p = IVec2::new(
+            SELECTION_ORIGIN.x + (i as u32 % sw) as i32,
+            SELECTION_ORIGIN.y + (i as u32 / sw) as i32,
+        );
+        assert_eq!(
+            back.document.selection.coverage_at(p),
+            *want as f32 / 255.0,
+            "...with its coverage intact, at {p:?}"
+        );
+    }
     assert_eq!(
-        back.document.selection.coverage_at(IVec2::new(1, 1)),
-        1.0,
-        "...with its coverage intact"
+        back.document
+            .selection
+            .coverage_at(SELECTION_ORIGIN - IVec2::ONE),
+        0.0,
+        "...and nothing outside it selected"
     );
 
     // And it is still editable: the point of the whole format is "save, close,
@@ -806,6 +1062,51 @@ fn a_fill_through_a_feathered_selection_blends_by_coverage_in_production_code() 
     assert_eq!(doc.composite_all(), before);
 }
 
+/// `filters::stylize::solarize`, computed from its documented contract rather
+/// than read back out of the buffer the write path used.
+///
+/// The filter's own doc comment states the rule, and states that it is defined
+/// on the **gamma-encoded** value rather than on linear light: encode the
+/// channel to sRGB, reflect everything from mid-tone up (`e -> 1 - e`), decode
+/// back. A channel stored as the 8-bit code `v` decodes and re-encodes to
+/// exactly `v / 255`, so for the opaque sRGB8 layer below the whole fold is
+/// arithmetic on the stored byte — no `FilterBuffer` anywhere in it.
+///
+/// This is what makes the expectations below an oracle instead of an echo. If
+/// `solarize` stops folding the way it says it does, this function does not
+/// follow it, and the comparison goes red.
+fn solarized_linear(code: u8) -> f32 {
+    let e = code as f32 / 255.0;
+    let folded = if e < 0.5 { e } else { 1.0 - e };
+    srgb_to_linear(folded)
+}
+
+/// Pixels on the feathered edge, with the coverage byte `selection::modify::
+/// feather` stores for each.
+///
+/// Constants, for the same reason [`EDGE_COVERAGE`] is one: the filter test's
+/// write loop reads coverage out of the very mask its expectation would
+/// otherwise read, so a defect in `feather` would move both sides of the
+/// comparison by the same amount and cancel. Pinning the bytes here breaks that
+/// symmetry — a `feather` that changes its falloff fails this list first, and
+/// the per-pixel expectations built on it second.
+///
+/// The rectangle is `(64, 64, 128, 128)` feathered by 8, so these walk the left
+/// edge and the top edge from nearly clear to nearly solid, plus the corner
+/// where the two falloffs multiply.
+const EDGE_SAMPLES: &[(IVec2, u8)] = &[
+    (IVec2::new(60, 128), 24),
+    (IVec2::new(62, 128), 73),
+    (IVec2::new(64, 128), 147),
+    (IVec2::new(66, 128), 211),
+    (IVec2::new(68, 128), 244),
+    (IVec2::new(128, 60), 24),
+    (IVec2::new(128, 64), 147),
+    (IVec2::new(128, 68), 244),
+    (IVec2::new(64, 64), 84),
+    (IVec2::new(66, 66), 175),
+];
+
 /// A **filter** applied through the same feathered selection.
 ///
 /// # The gap this test is honest about
@@ -817,41 +1118,69 @@ fn a_fill_through_a_feathered_selection_blends_by_coverage_in_production_code() 
 /// per-pixel blend below is written *here*, and this test cannot claim to
 /// exercise a product path that does not exist. It is filed as a product gap.
 ///
-/// What it does prove is the rest of the chain, and the assertions are
-/// deliberately not the write expression read back:
+/// # Why the expectation is not the write expression read back
 ///
-/// * the original comes from the composited frame taken **before** the edit,
-/// * the filtered value comes from `filters::stylize::solarize`,
-/// * the coverage comes from the selection mask's **stored byte**, not from
-///   the `Selection::coverage_at` the write loop used,
+/// An earlier version of this test computed each expected pixel from
+/// `filtered.get(x, y)` — the buffer the write loop had just blended in — and
+/// from `mask.coverage_at(p)` — the mask the write loop had just read. Both
+/// sides then moved together: breaking `solarize`'s fold or `feather`'s falloff
+/// changed the written pixel and the expectation by the same amount and the
+/// test stayed green. Both oracles are now independent of the write:
+///
+/// * the original is the source code this test painted, `source_code(x, y)` —
+///   a number the test chose rather than one it measured. The pre-edit
+///   composite `before` is not the source of it; it is checked *against* it,
+///   pixel by pixel, by the premise loop below, and is otherwise used only to
+///   prove the filter did something and that undo restores the frame,
+/// * the filtered value comes from [`solarized_linear`], which is the filter's
+///   documented fold applied to that original byte,
+/// * the coverage at the pinned pixels comes from [`EDGE_SAMPLES`], which are
+///   constants,
 /// * and the result is read out of the composited frame **after** the edit,
 ///   through `ColorPatch`'s encode and the compositor's decode.
 ///
-/// So a defect in `selection::modify::feather`, in `filters::stylize`, in
-/// `tools::patch`'s encode/decode, in `Command::PaintTiles` or in the tile
+/// So a defect in `selection::modify::feather`, in `filters::stylize::solarize`,
+/// in `tools::patch`'s encode/decode, in `Command::PaintTiles` or in the tile
 /// cache fails this test; only the blending law itself is the test's own.
 #[test]
 fn a_filter_runs_only_inside_the_selection_and_fades_across_its_feather() {
+    // The source codes are stated here rather than measured, so every
+    // expectation below is arithmetic on numbers this test chose. The canvas is
+    // exactly one tile, so a tile-local coordinate is a document coordinate.
+    fn source_code(x: u32, y: u32) -> [u8; 4] {
+        [x as u8, y as u8, ((x + y) / 2) as u8, 255]
+    }
+
     let mut doc = app::blank(TILE_SIZE, TILE_SIZE, "Filtered");
     let layer = doc.document.active_layer().unwrap();
-    let coords = doc.canvas_tiles();
-    doc.paint_layer(layer, &coords, &|_, x, y| {
-        [x as u8, y as u8, ((x + y) / 2) as u8, 255]
-    });
+    doc.paint_canvas(layer, &source_code);
 
     let mask = feathered_marquee();
     doc.document.selection = Selection::Mask(mask.clone());
     let selection = doc.document.selection.clone();
 
     let before = doc.composite_all();
+    // The layer went in as sRGB8 and comes back as sRGB8: if the composite did
+    // not return the codes that were painted, every hand-computed value below
+    // would be measuring the wrong input.
+    for y in 0..TILE_SIZE {
+        for x in 0..TILE_SIZE {
+            assert_eq!(
+                pixel_at(&before, TILE_SIZE, x, y),
+                source_code(x, y),
+                "the unedited composite at ({x}, {y}) is not what was painted"
+            );
+        }
+    }
+
     let key = PixelKey::Layer(layer);
     let region = doc.canvas_rect();
 
     // --- what "Filter ▸ Stylize ▸ Solarize" would do to a selection ---
-    let (delta, filtered) = {
+    let delta = {
         let mut tiles = doc.tool_tiles();
         let mut patch = ColorPatch::load(&tiles, key, region).unwrap();
-        let filtered: FilterBuffer = filters::stylize::solarize(patch.buffer());
+        let filtered = filters::stylize::solarize(patch.buffer());
         let origin = patch.origin();
         let (pw, ph) = (patch.width(), patch.height());
         for y in 0..ph {
@@ -870,7 +1199,7 @@ fn a_filter_runs_only_inside_the_selection_and_fades_across_its_feather() {
                 patch.set(p, mixed);
             }
         }
-        (patch.commit(&mut tiles, key).unwrap(), filtered)
+        patch.commit(&mut tiles, key).unwrap()
     };
     assert!(!delta.is_empty(), "the filter changed nothing");
     doc.apply(Command::PaintTiles {
@@ -888,27 +1217,57 @@ fn a_filter_runs_only_inside_the_selection_and_fades_across_its_feather() {
         );
     }
 
+    // --- the pinned pixels: both halves of the expectation are constants ---
+    //
+    // This is the block that bites when `feather`'s falloff moves: the coverage
+    // it uses is [`EDGE_SAMPLES`], not the mask.
+    for &(p, coverage) in EDGE_SAMPLES {
+        assert_eq!(
+            mask.coverage_at(p),
+            coverage,
+            "the pinned coverage at {p:?} no longer matches what `feather` \
+             produces, so the expectations built on it are stale"
+        );
+        assert!(
+            coverage > 0 && coverage < 255,
+            "{p:?} is not on the feathered edge at all"
+        );
+        let orig = source_code(p.x as u32, p.y as u32);
+        let c = coverage as f32 / 255.0;
+        let got = pixel_at(&after, TILE_SIZE, p.x as u32, p.y as u32);
+        for ch in 0..3 {
+            let o = srgb8_to_linear(orig[ch]);
+            let want = store_code(o + (solarized_linear(orig[ch]) - o) * c);
+            assert!(
+                got[ch].abs_diff(want) <= 1,
+                "pinned pixel {p:?} channel {ch} at coverage {coverage}: \
+                 got {}, want {want} (source code {})",
+                got[ch],
+                orig[ch]
+            );
+        }
+    }
+
     // --- and at every pixel the result lies `coverage` of the way from the
-    //     original to the filtered value, along each channel ---
+    //     original to the filter's documented fold of it, along each channel ---
     let mut partial = 0usize;
     let mut fully = 0usize;
     for y in 0..TILE_SIZE {
         for x in 0..TILE_SIZE {
             let cov = mask.coverage_at(IVec2::new(x as i32, y as i32));
             let c = cov as f32 / 255.0;
-            let orig = pixel_at(&before, TILE_SIZE, x, y);
-            // Straight-alpha linear light: the layer is opaque throughout, so
-            // the premultiplied plane the filter works in and the straight
-            // values read back agree channel for channel.
-            let filt = unpremultiply(filtered.get(x, y));
+            let orig = source_code(x, y);
             let got = pixel_at(&after, TILE_SIZE, x, y);
             if cov == 0 {
                 assert_eq!(got, orig, "unselected pixel ({x}, {y}) must be untouched");
                 continue;
             }
             for ch in 0..3 {
+                // Straight-alpha linear light: the layer is opaque throughout,
+                // so the premultiplied plane the filter works in and the
+                // straight values read back agree channel for channel.
                 let o = srgb8_to_linear(orig[ch]);
-                let want = store_code(o + (filt[ch] - o) * c);
+                let want = store_code(o + (solarized_linear(orig[ch]) - o) * c);
                 assert!(
                     got[ch].abs_diff(want) <= 1,
                     "({x}, {y}) channel {ch} at coverage {cov}: got {}, want {want}",
@@ -948,12 +1307,16 @@ fn a_filter_runs_only_inside_the_selection_and_fades_across_its_feather() {
 
 #[test]
 fn transforming_a_layer_is_undoable_to_the_exact_document_and_pixels() {
-    let mut l = layered_document();
+    // The sRGB, multi-tile fixture: a transform is about geometry, and a 4x4
+    // canvas inside one tile has almost none. Sliding a layer here moves content
+    // across a tile boundary, and the byte comparisons below go through the
+    // product's own transfer curve rather than linear's `round(v * 255)`.
+    let mut l = photo_layered_document();
     let before_doc = l.doc.document.clone();
     let before = l.doc.composite_all();
 
     // A one-pixel slide down the y axis, in document space, of the layer whose
-    // alpha varies by row — so the picture cannot help but change.
+    // alpha varies with the row — so the picture cannot help but change.
     l.doc
         .apply(Command::TransformLayer {
             layer_id: l.clip_base,
