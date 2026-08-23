@@ -133,8 +133,13 @@ const BRUSH_OPTS: &[OptionSpec] = &[
     f("smoothing", "Smoothing", 0.0, 0.99, 0.0),
     f("angle", "Angle", -3.15, 3.15, 0.0),
     f("roundness", "Roundness", 0.01, 1.0, 1.0),
-    b("size_pressure", "Pressure → Size", true),
-    b("flow_pressure", "Pressure → Flow", false),
+    // Spelled out rather than written with an arrow. These are checkbox
+    // captions painted straight into the options bar by
+    // `ui::view::toolbar`, and egui 0.29's font stack has no glyph for
+    // U+2192, so "Pressure -> Size" written with the arrow character came out
+    // as two empty squares whenever the Brush or the Eraser was selected.
+    b("size_pressure", "Size from Pressure", true),
+    b("flow_pressure", "Flow from Pressure", false),
 ];
 
 const SELECTION_OPTS: &[OptionSpec] = &[

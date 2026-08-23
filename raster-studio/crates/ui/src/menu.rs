@@ -1047,6 +1047,18 @@ pub enum LayerClass {
 }
 
 impl LayerClass {
+    /// Every class, so a new one cannot ship without a thumbnail drawing — see
+    /// the gate in [`crate::icons`].
+    pub const ALL: [LayerClass; 7] = [
+        LayerClass::Raster,
+        LayerClass::Group,
+        LayerClass::Adjustment,
+        LayerClass::Text,
+        LayerClass::Shape,
+        LayerClass::SmartObject,
+        LayerClass::Generator,
+    ];
+
     pub fn of(kind: &LayerKind) -> Self {
         match kind {
             LayerKind::Raster(_) => LayerClass::Raster,

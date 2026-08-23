@@ -83,12 +83,12 @@ pub mod ids {
         egui::Id::new(("raster-gradient-add-stop", tool))
     }
 
-    /// A panel header's "⋯" disclosure, which reveals the move controls.
+    /// A panel header's overflow disclosure, which reveals the move controls.
     pub fn panel_menu(panel: crate::dock::PanelId) -> egui::Id {
         egui::Id::new(("raster-panel-menu", panel))
     }
 
-    /// "Move to ▸ <side>" inside a panel header's disclosure.
+    /// "Move to <side>" inside a panel header's disclosure.
     pub fn panel_dock(panel: crate::dock::PanelId, side: crate::dock::DockSide) -> egui::Id {
         egui::Id::new(("raster-panel-dock", panel, side))
     }
@@ -215,10 +215,28 @@ pub mod ids {
     }
 }
 
-/// Which of the Layers panel's four lock toggles a glyph is.
+/// The icon key for a layer class, drawn in the Layers panel's thumbnail well.
+///
+/// A key into [`crate::icons::ui_icon`], not a symbol: `"▦"`, `"◐"`, `"◈"` and
+/// `"✦"` are all absent from the font egui loads, so every well in the panel
+/// was a tofu box.
+pub(crate) const fn kind_icon(class: crate::menu::LayerClass) -> &'static str {
+    use crate::menu::LayerClass as C;
+    match class {
+        C::Raster => "layer-raster",
+        C::Group => "layer-group",
+        C::Adjustment => "layer-adjustment",
+        C::Text => "layer-text",
+        C::Shape => "layer-shape",
+        C::SmartObject => "layer-smart-object",
+        C::Generator => "layer-generator",
+    }
+}
+
+/// Which of the Layers panel's four lock toggles a button is.
 ///
 /// Named rather than indexed: the row used to decide what a click meant from
-/// the toggle's position in an array, so re-ordering the glyphs would have
+/// the toggle's position in an array, so re-ordering the buttons would have
 /// silently re-wired them.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum LockToggle {
@@ -237,13 +255,17 @@ impl LockToggle {
         LockToggle::All,
     ];
 
-    /// The glyph and the tooltip this toggle prints.
-    pub(crate) const fn glyph_and_tooltip(self) -> (&'static str, &'static str) {
+    /// The icon key and the tooltip this toggle draws.
+    ///
+    /// A *key* into [`crate::icons::ui_icon`], never a symbol: the four symbols
+    /// this row used to type (`"▨"`, `"✎"`, `"✥"`, `"🔒"`) are not in the font
+    /// egui loads, so the row was four tofu boxes.
+    pub(crate) const fn icon_and_tooltip(self) -> (&'static str, &'static str) {
         match self {
-            LockToggle::Transparency => ("▨", "Lock transparent pixels"),
-            LockToggle::Pixels => ("✎", "Lock pixels"),
-            LockToggle::Position => ("✥", "Lock position"),
-            LockToggle::All => ("🔒", "Lock all"),
+            LockToggle::Transparency => ("lock-transparency", "Lock transparent pixels"),
+            LockToggle::Pixels => ("lock-pixels", "Lock pixels"),
+            LockToggle::Position => ("lock-position", "Lock position"),
+            LockToggle::All => ("lock-all", "Lock all"),
         }
     }
 
@@ -546,56 +568,80 @@ pub(crate) fn row_layout<R>(
     )
 }
 
-/// A compact square toggle that paints a glyph, used for the eye, the lock and
+/// A compact square toggle that draws an icon, used for the eye, the lock and
 /// the twirl-down. Reads its states from the theme like every other control.
-pub(crate) fn glyph_toggle(ui: &mut Ui, glyph: &str, on: bool, tooltip: &str) -> Response {
-    glyph_toggle_id(ui, glyph, on, tooltip, None)
+///
+/// `key` names a drawing in [`crate::icons::ui_icon`]. It used to be a symbol
+/// typed into `Painter::text`, which is how the panel headers, the lock row and
+/// the Adjustments grid all came out as tofu boxes: egui's default font stack
+/// has no `"▸"`, no `"✕"`, no `"⋯"`.
+pub(crate) fn icon_toggle(ui: &mut Ui, key: &str, on: bool, tooltip: &str) -> Response {
+    icon_toggle_id(ui, key, on, tooltip, None)
 }
 
-/// [`glyph_toggle`] with an explicit id, for the toggles a headless test needs
+/// [`icon_toggle`] with an explicit id, for the toggles a headless test needs
 /// to find. See [`ids`].
-pub(crate) fn glyph_toggle_id(
+pub(crate) fn icon_toggle_id(
     ui: &mut Ui,
-    glyph: &str,
+    key: &str,
     on: bool,
     tooltip: &str,
     id: Option<egui::Id>,
 ) -> Response {
+    crate::icons::ui_icon_button_id(
+        ui,
+        key,
+        tooltip,
+        if on {
+            TextRole::Primary
+        } else {
+            TextRole::Disabled
+        },
+        id,
+    )
+}
+
+/// Draw `key` centred in `rect`, in the palette's colour for `role`.
+///
+/// The chrome's name for [`crate::icons::paint_ui_icon`], which is where the
+/// drawings and the unknown-key rule live.
+pub(crate) fn paint_icon(ui: &Ui, rect: egui::Rect, key: &str, role: TextRole) {
+    crate::icons::paint_ui_icon(ui, rect, key, role);
+}
+
+/// A compact icon button with an explicit id and a painted disabled state — the
+/// [`labelled_button`] shape for an affordance that is a picture, not a word.
+pub(crate) fn icon_button_id(ui: &mut Ui, key: &str, enabled: bool, id: egui::Id) -> Response {
     let t = current_tokens(ui);
     let side = t.metrics.min_hit_target;
-    let (rect, auto) = ui.allocate_exact_size(Vec2::splat(side), Sense::click());
-    let response = match id {
-        Some(id) => ui.interact(rect, id, Sense::click()),
-        None => auto,
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
     };
+    let response = ui.interact(rect, id, sense);
     if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        if response.hovered() {
+        if enabled && response.hovered() {
             let radius = Radius::Small.resolve(&t.radii, side);
-            painter.rect_filled(
+            ui.painter().rect_filled(
                 rect,
                 rounding(radius),
                 color32(t.palette.color(ColorRole::ControlFillHovered)),
             );
         }
-        let role = if on {
-            TextRole::Primary
-        } else {
-            TextRole::Disabled
-        };
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            glyph,
-            font_id(t, TypeRole::Footnote),
-            color32(t.palette.text(role)),
+        paint_icon(
+            ui,
+            rect,
+            key,
+            if enabled {
+                TextRole::Primary
+            } else {
+                TextRole::Disabled
+            },
         );
     }
-    if tooltip.is_empty() {
-        response
-    } else {
-        response.on_hover_text(tooltip)
-    }
+    response
 }
 
 /// A small pill badge — the mask, effects and clipping indicators.

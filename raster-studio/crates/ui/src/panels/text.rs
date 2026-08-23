@@ -58,15 +58,12 @@ pub const fn alignment_label(alignment: Alignment) -> &'static str {
     }
 }
 
-/// The glyph shown on the alignment segmented control.
-pub const fn alignment_glyph(alignment: Alignment) -> &'static str {
-    match alignment {
-        Alignment::Left => "≡",
-        Alignment::Center => "☰",
-        Alignment::Right => "⋮",
-        Alignment::Justify => "▤",
-    }
-}
+// The alignment control is a *word* control — `alignment_label` feeds
+// `design::segmented_control` in `view::docks`. There was an `alignment_glyph`
+// here too, returning "≡" / "☰" / "⋮" / "▤"; nothing drew it, and three of the
+// four are not in the font egui loads, so it was a tofu box waiting for a
+// caller. An alignment button that wants a picture takes a key from
+// `icons::ui_icon` like the rest of the chrome.
 
 /// The nearest named weight to a numeric one, for showing the combo's label.
 pub fn weight_label(weight: FontWeight) -> &'static str {
@@ -428,15 +425,14 @@ mod tests {
     }
 
     #[test]
-    fn every_alignment_has_a_label_and_a_distinct_glyph() {
+    fn every_alignment_has_a_distinct_label() {
         assert_eq!(ALIGNMENTS.len(), 4);
-        let mut glyphs: Vec<&str> = ALIGNMENTS.iter().map(|a| alignment_glyph(*a)).collect();
-        assert!(ALIGNMENTS.iter().all(|a| !alignment_label(*a).is_empty()));
-        assert!(glyphs.iter().all(|g| !g.is_empty()));
-        glyphs.sort_unstable();
-        let count = glyphs.len();
-        glyphs.dedup();
-        assert_eq!(glyphs.len(), count, "two alignments share a glyph");
+        let mut labels: Vec<&str> = ALIGNMENTS.iter().map(|a| alignment_label(*a)).collect();
+        assert!(labels.iter().all(|l| !l.is_empty()));
+        labels.sort_unstable();
+        let count = labels.len();
+        labels.dedup();
+        assert_eq!(labels.len(), count, "two alignments share a label");
     }
 
     #[test]

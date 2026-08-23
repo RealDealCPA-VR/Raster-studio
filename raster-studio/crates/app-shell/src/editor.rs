@@ -368,7 +368,7 @@ impl Editor {
         match self.keymap.bind(chord, action) {
             Ok(()) => {
                 self.pending_conflict = None;
-                self.after_keymap_change(format!("{chord} → {}", action.label()));
+                self.after_keymap_change(format!("{chord} is now {}", action.label()));
                 Ok(())
             }
             Err(conflict) => {
@@ -384,7 +384,7 @@ impl Editor {
     pub fn force_rebind(&mut self, chord: Chord, action: Action) {
         self.keymap.force_bind(chord, action);
         self.pending_conflict = None;
-        self.after_keymap_change(format!("{chord} → {}", action.label()));
+        self.after_keymap_change(format!("{chord} is now {}", action.label()));
     }
 
     /// Remove a chord's meaning, default included.

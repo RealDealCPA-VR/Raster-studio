@@ -109,11 +109,11 @@ fn item(w: &mut Workspace, ui: &mut Ui, action: MenuAction, context: &MenuContex
     // it is testable without a window.
     let label = action.label_in(context);
 
-    let check = match action.checked(context) {
-        Some(true) => "✓  ",
-        Some(false) => "     ",
-        None => "",
-    };
+    // The checkable rows reserve the gutter with spaces and the tick is *drawn*
+    // into it below. It used to be a "✓" in the label, and U+2713 is not in the
+    // font egui loads, so every checked menu row showed a tofu box.
+    let checked = action.checked(context);
+    let check = if checked.is_some() { "     " } else { "" };
     let role = if enabled {
         TextRole::Primary
     } else {
@@ -133,6 +133,23 @@ fn item(w: &mut Workspace, ui: &mut Ui, action: MenuAction, context: &MenuContex
     }
 
     let response = ui.add_enabled(enabled, button);
+    if checked == Some(true) {
+        let side = response.rect.height().min(t.metrics.min_hit_target);
+        let gutter = egui::Rect::from_center_size(
+            egui::pos2(response.rect.left() + side * 0.5, response.rect.center().y),
+            egui::Vec2::splat(side),
+        );
+        super::paint_icon(
+            ui,
+            gutter,
+            "check",
+            if enabled {
+                TextRole::Primary
+            } else {
+                TextRole::Disabled
+            },
+        );
+    }
     // A menu row's own id comes from call order, which no test can name. This
     // one is keyed by the action, so `tests/wired_controls.rs` can click the
     // exact row and assert what it posts — the gate this file's opening claim

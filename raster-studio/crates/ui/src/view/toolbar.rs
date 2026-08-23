@@ -549,8 +549,24 @@ fn gradient_control(w: &mut Workspace, ui: &mut Ui, tool: ToolId) {
                         changed = true;
                     }
                     ui.label(hint(ui, format!("{:.0}%", stop.position * 100.0)));
-                    if ui
-                        .add_enabled(can_remove, egui::Button::new(body(ui, "−")))
+                    // An empty button for the framing and the disabled-hover
+                    // text, with the drawing painted into the rect it reports.
+                    let side = current_tokens(ui).metrics.min_hit_target;
+                    let response = ui.add_enabled(
+                        can_remove,
+                        egui::Button::new("").min_size(Vec2::splat(side)),
+                    );
+                    super::paint_icon(
+                        ui,
+                        response.rect,
+                        "minus",
+                        if can_remove {
+                            TextRole::Primary
+                        } else {
+                            TextRole::Disabled
+                        },
+                    );
+                    if response
                         .on_disabled_hover_text("A ramp needs at least two stops")
                         .clicked()
                     {
@@ -640,12 +656,12 @@ pub(crate) fn color_wells(w: &mut Workspace, ui: &mut Ui) {
         {
             w.color.editing = crate::panels::color::ColorWell::Background;
         }
-        if super::glyph_toggle(ui, "⇄", false, "Swap colours  (X)").clicked() {
+        if super::icon_toggle(ui, "swap", false, "Swap colours  (X)").clicked() {
             w.color.swap();
             w.emit(Intent::SetForeground(w.color.foreground()));
             w.emit(Intent::SetBackground(w.color.background()));
         }
-        if super::glyph_toggle(ui, "◨", false, "Default colours  (D)").clicked() {
+        if super::icon_toggle(ui, "colors-default", false, "Default colours  (D)").clicked() {
             w.color.reset();
             w.emit(Intent::SetForeground(w.color.foreground()));
             w.emit(Intent::SetBackground(w.color.background()));

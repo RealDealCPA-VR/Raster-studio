@@ -73,20 +73,40 @@ pub enum StepKind {
 }
 
 impl StepKind {
-    /// The glyph the panel paints in the row's thumbnail well.
-    pub const fn glyph(self) -> &'static str {
+    /// Every kind, so a new one cannot ship without a drawing — see the gate in
+    /// [`crate::icons`].
+    pub const ALL: [StepKind; 11] = [
+        StepKind::Open,
+        StepKind::LayerAdded,
+        StepKind::LayerRemoved,
+        StepKind::LayerMoved,
+        StepKind::LayerChanged,
+        StepKind::Transformed,
+        StepKind::Painted,
+        StepKind::Filled,
+        StepKind::Cleared,
+        StepKind::Batch,
+        StepKind::Unknown,
+    ];
+
+    /// The icon key the panel draws in the row's marker.
+    ///
+    /// A *key* into [`crate::icons::ui_icon`], never a symbol: `"◻"`, `"⤡"`,
+    /// `"✎"`, `"□"` and `"≡"` are all absent from the font egui loads, so most
+    /// of the column was tofu boxes.
+    pub const fn icon(self) -> &'static str {
         match self {
-            StepKind::Open => "◻",
-            StepKind::LayerAdded => "+",
-            StepKind::LayerRemoved => "−",
-            StepKind::LayerMoved => "↕",
-            StepKind::LayerChanged => "◑",
-            StepKind::Transformed => "⤡",
-            StepKind::Painted => "✎",
-            StepKind::Filled => "■",
-            StepKind::Cleared => "□",
-            StepKind::Batch => "≡",
-            StepKind::Unknown => "·",
+            StepKind::Open => "step-open",
+            StepKind::LayerAdded => "step-layer-added",
+            StepKind::LayerRemoved => "step-layer-removed",
+            StepKind::LayerMoved => "step-layer-moved",
+            StepKind::LayerChanged => "step-layer-changed",
+            StepKind::Transformed => "step-transformed",
+            StepKind::Painted => "step-painted",
+            StepKind::Filled => "step-filled",
+            StepKind::Cleared => "step-cleared",
+            StepKind::Batch => "step-batch",
+            StepKind::Unknown => "step-unknown",
         }
     }
 
@@ -377,26 +397,14 @@ mod tests {
     }
 
     #[test]
-    fn every_command_kind_maps_to_a_distinct_enough_glyph() {
-        let kinds = [
-            StepKind::Open,
-            StepKind::LayerAdded,
-            StepKind::LayerRemoved,
-            StepKind::LayerMoved,
-            StepKind::LayerChanged,
-            StepKind::Transformed,
-            StepKind::Painted,
-            StepKind::Filled,
-            StepKind::Cleared,
-            StepKind::Batch,
-            StepKind::Unknown,
-        ];
-        let mut glyphs: Vec<&str> = kinds.iter().map(|k| k.glyph()).collect();
-        assert!(glyphs.iter().all(|g| !g.is_empty()));
-        glyphs.sort_unstable();
-        let count = glyphs.len();
-        glyphs.dedup();
-        assert_eq!(glyphs.len(), count, "two step kinds share a glyph");
+    fn every_command_kind_maps_to_a_distinct_icon_key() {
+        assert_eq!(StepKind::ALL.len(), 11);
+        let mut keys: Vec<&str> = StepKind::ALL.iter().map(|k| k.icon()).collect();
+        assert!(keys.iter().all(|k| !k.is_empty()));
+        keys.sort_unstable();
+        let count = keys.len();
+        keys.dedup();
+        assert_eq!(keys.len(), count, "two step kinds share an icon key");
     }
 
     #[test]

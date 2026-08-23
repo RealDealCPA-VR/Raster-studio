@@ -7,8 +7,8 @@
 //! looking. The drawing side reads this state and nothing else decides where a
 //! panel goes.
 //!
-//! Panels really are movable: every panel header carries a "⋯" disclosure that
-//! opens Move to ▸ Left / Right / Bottom and a pair of reorder arrows, which
+//! Panels really are movable: every panel header carries an overflow disclosure
+//! that opens Move to Left / Right / Bottom and a pair of reorder chevrons, which
 //! post [`crate::Intent::DockPanel`] and [`crate::Intent::ReorderPanel`] and
 //! come back here through [`crate::Workspace::absorb`]. `moving_a_panel_across_
 //! sides_through_the_header` in `tests/clicking_the_real_thing.rs` drives that

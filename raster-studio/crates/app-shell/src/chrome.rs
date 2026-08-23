@@ -536,6 +536,17 @@ impl Chrome {
         crate::menu_bridge::draw(ctx, editor, &self.workspace, out);
     }
 
+    /// The id of the close control on tab `index`.
+    ///
+    /// A stable id so a headless test can click the real button, the way
+    /// `ui::view::ids` does for the panels. It became worth having when the
+    /// control stopped being a text button and started being a drawing:
+    /// `read_response` is the only way to prove the thing on screen is still
+    /// wired to `ChromeOutput::close`.
+    pub fn tab_close_id(index: usize) -> egui::Id {
+        egui::Id::new(("raster-tab-close", index))
+    }
+
     fn tab_strip(&self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
         egui::TopBottomPanel::top("raster-tabs")
             .frame(panel_frame(ctx, SurfaceRole::Panel, Space::Hair))
@@ -544,7 +555,11 @@ impl Chrome {
                     let tokens = design::current_tokens(ui);
                     ui.colored_label(
                         design::color32(tokens.palette.text(TextRole::Tertiary)),
-                        "No document open — File ▸ Open, or drop an image here",
+                        // Spelled with a plain ">": the "▸" that used to point
+                        // at the menu path is not in the font egui loads, so
+                        // the first sentence a new user reads carried a tofu
+                        // box.
+                        "No document open — File > Open, or drop an image here",
                     );
                     return;
                 }
@@ -560,9 +575,18 @@ impl Chrome {
                         if response.clicked() {
                             out.activate = Some(index);
                         }
-                        if design::ghost_button(ui, "×")
-                            .on_hover_text("Close")
-                            .clicked()
+                        // Drawn, not typed. The panel headers' close is
+                        // `ui::icons`' drawing, and a tab close built the
+                        // other way — a "×" handed to a text button — is one
+                        // font change away from being an empty square again.
+                        if ui::icons::ui_icon_button_id(
+                            ui,
+                            "close",
+                            "Close",
+                            TextRole::Secondary,
+                            Some(Self::tab_close_id(index)),
+                        )
+                        .clicked()
                         {
                             out.close = Some(index);
                         }
@@ -1459,6 +1483,161 @@ mod tests {
         painted
     }
 
+    /// Every character the chrome actually laid out, paired with the font it
+    /// asked for it in.
+    ///
+    /// Read off the emitted shapes rather than off the source, because this is
+    /// the last thing before pixels: whatever is in here is what the texture
+    /// atlas will be asked to draw.
+    fn painted_characters(
+        ctx: &egui::Context,
+        chrome: &mut Chrome,
+        editor: &Editor,
+    ) -> Vec<(egui::FontId, char)> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<(egui::FontId, char)>) {
+            match shape {
+                egui::Shape::Text(text) => {
+                    let job = &text.galley.job;
+                    for section in &job.sections {
+                        let Some(run) = job.text.get(section.byte_range.clone()) else {
+                            continue;
+                        };
+                        for ch in run.chars() {
+                            out.push((section.format.font_id.clone(), ch));
+                        }
+                    }
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let output = ctx.run(raw_input(Vec::new()), |ctx| {
+            chrome.ui(ctx, editor);
+        });
+        let mut out = Vec::new();
+        for clipped in &output.shapes {
+            walk(&clipped.shape, &mut out);
+        }
+        out
+    }
+
+    #[test]
+    fn nothing_the_chrome_paints_comes_out_as_a_tofu_box() {
+        // The bug this whole exercise is about, checked at the last possible
+        // moment. epaint's own replacement glyph is U+25FB WHITE MEDIUM SQUARE
+        // — literally the empty box in the screenshot — and it is substituted
+        // silently for any character none of the loaded fonts has. So: draw the
+        // real chrome with every panel open, collect every character it laid
+        // out, and ask the fonts whether they can draw it.
+        //
+        // A source scan cannot make this claim, because it cannot see what a
+        // widget composed at run time; this can, and it is the claim that
+        // matters ("a screenshot contains no empty squares").
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        // Everything on screen at once: a panel that is closed paints nothing,
+        // and the surfaces this bug lived on were spread across all of them.
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            chrome.ui(ctx, &ed);
+        });
+        for panel in ui::PanelId::ALL.iter().copied() {
+            chrome
+                .workspace
+                .emit(ui::Intent::SetPanelOpen { panel, open: true });
+        }
+        for _ in 0..4 {
+            let _ = painted_characters(&ctx, &mut chrome, &ed);
+        }
+
+        // Every tool, not just the one that happens to be active. The options
+        // bar is redrawn from the selected tool's own `OptionSpec` labels, so a
+        // single frame only ever sees one tool's captions — which is how
+        // "Pressure \u{2192} Size" on the Brush and the Eraser survived the
+        // first pass of this fix with the suite green. `set_tool` is what a
+        // click on the palette ends up calling, and `Chrome::sync_workspace`
+        // pushes it into the workspace before the frame is laid out.
+        let mut painted: Vec<(egui::FontId, char)> = Vec::new();
+        let mut tools_drawn = 0usize;
+        for info in tools::registry::all() {
+            ed.set_tool(info.id);
+            // Two frames: the first settles the new options bar's layout, the
+            // second is the one a user would be looking at.
+            let _ = painted_characters(&ctx, &mut chrome, &ed);
+            painted.extend(painted_characters(&ctx, &mut chrome, &ed));
+            tools_drawn += 1;
+        }
+        assert!(
+            tools_drawn >= 10,
+            "only {tools_drawn} tools were drawn; the registry sweep is not \
+             reaching the options bar any more"
+        );
+        assert!(
+            painted.len() > 200,
+            "the chrome painted almost nothing ({} characters); this test would \
+             pass without looking at anything",
+            painted.len()
+        );
+
+        let mut missing: Vec<String> = Vec::new();
+        ctx.fonts(|f| {
+            for (font, ch) in &painted {
+                // Whitespace is laid out, never drawn; `has_glyph` reports
+                // `false` for '\n' by design.
+                if ch.is_whitespace() || ch.is_control() {
+                    continue;
+                }
+                if !f.has_glyph(font, *ch) {
+                    let note = format!("U+{:04X} {ch:?} at {font:?}", *ch as u32);
+                    if !missing.contains(&note) {
+                        missing.push(note);
+                    }
+                }
+            }
+        });
+        assert!(
+            missing.is_empty(),
+            "the chrome asked for {} character(s) no loaded font has. Each one \
+             is painted as U+25FB, the empty square. Draw it through \
+             `ui::icons` instead:\n{}",
+            missing.len(),
+            missing.join("\n")
+        );
+    }
+
+    #[test]
+    fn the_tofu_check_can_tell_a_missing_glyph_from_a_present_one() {
+        // The other half: a gate that only ever passes proves nothing. These
+        // are the very symbols the panels used to type, put to the same fonts
+        // the test above uses.
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let _ = ctx.run(raw_input(Vec::new()), |_| {});
+        let font = egui::FontId::new(13.0, egui::FontFamily::Proportional);
+        ctx.fonts(|f| {
+            for ch in ['\u{25B8}', '\u{2715}', '\u{22EF}', '\u{25D0}', '\u{2713}'] {
+                assert!(
+                    !f.has_glyph(&font, ch),
+                    "U+{:04X} was expected to be missing from egui's fonts",
+                    ch as u32
+                );
+            }
+            for ch in ['A', 'z', '0', '\u{2014}', '\u{00B7}'] {
+                assert!(f.has_glyph(&font, ch), "{ch:?} should be present");
+            }
+        });
+    }
+
     #[test]
     fn the_navigators_pan_and_the_zoom_field_come_out_as_camera_moves() {
         // Both used to be workspace-local writes the reviewer measured as dead:
@@ -1594,7 +1773,7 @@ mod tests {
         assert_eq!(
             after.iter().position(|q| *q == panel),
             Some(from - 1),
-            "one click on ▲ moved {panel:?} from {from} to {after:?}"
+            "one click on the up chevron moved {panel:?} from {from} to {after:?}"
         );
         // The order is otherwise untouched: exactly two panels traded places.
         let mut expected = before.clone();
@@ -1759,6 +1938,61 @@ mod tests {
             out = chrome.ui(ctx, &ed);
         });
         assert_eq!(chrome.channel_mask(), crate::presenter::ChannelMask::ALL);
+    }
+
+    #[test]
+    fn clicking_a_tabs_drawn_close_control_closes_that_document() {
+        // The tab close used to be `ghost_button(ui, "×")`. It is a drawing
+        // now, for the same reason the panel headers are, and swapping the
+        // widget under a control that had no test is how a working button
+        // becomes a decorative one. So: click the real rect, by id.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&png(dir.path(), "a.png")).unwrap();
+        ed.open_path(&png(dir.path(), "b.png")).unwrap();
+        assert_eq!(ed.documents().len(), 2);
+
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        // Settle first: the strip's height changes once the drawn button has
+        // claimed its hit target, and a rect read before that has moved by the
+        // time the pointer arrives.
+        let mut out = ChromeOutput::default();
+        for _ in 0..3 {
+            let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+                out = chrome.ui(ctx, &ed);
+            });
+        }
+        let id = Chrome::tab_close_id(0);
+        // `interact_rect`, not `rect`: `design::list_row` takes the whole
+        // available width, so the first tab's label pushes its close control
+        // hard against the right edge of the window and part of it is clipped.
+        // The pointer has to land on the part that is actually there.
+        let at = ctx
+            .read_response(id)
+            .unwrap_or_else(|| panic!("{id:?} was never drawn"))
+            .interact_rect
+            .center();
+        let events = vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            },
+        ];
+        let _ = ctx.run(raw_input(events), |ctx| {
+            out = chrome.ui(ctx, &ed);
+        });
+        assert_eq!(out.close, Some(0), "{out:?}");
     }
 
     #[test]

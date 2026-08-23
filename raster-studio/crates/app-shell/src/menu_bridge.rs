@@ -320,18 +320,35 @@ fn item(
     out: &mut ChromeOutput,
 ) {
     let outcome = resolve(action, context, editor);
-    let check = match action.checked(context) {
-        Some(true) => "✓  ",
-        Some(false) => "     ",
-        None => "",
-    };
+    // A checkable row reserves the gutter with spaces and the tick is *drawn*
+    // into it below. It used to be a "✓" in the label, and U+2713 is not in the
+    // font egui loads, so every checked row showed a tofu box.
+    let checked = action.checked(context);
+    let check = if checked.is_some() { "     " } else { "" };
     let label = format!("{check}{}", action.label_in(context));
 
     let mut button = egui::Button::new(label);
     if let Some(chord) = action.shortcut() {
         button = button.shortcut_text(chord.to_string());
     }
-    let response = ui.add_enabled(outcome.is_ok(), button);
+    let enabled = outcome.is_ok();
+    let response = ui.add_enabled(enabled, button);
+    if checked == Some(true) {
+        let side = response
+            .rect
+            .height()
+            .min(design::current_tokens(ui).metrics.min_hit_target);
+        let gutter = egui::Rect::from_center_size(
+            egui::pos2(response.rect.left() + side * 0.5, response.rect.center().y),
+            egui::Vec2::splat(side),
+        );
+        let role = if enabled {
+            design::TextRole::Primary
+        } else {
+            design::TextRole::Disabled
+        };
+        ui::icons::paint_ui_icon(ui, gutter, "check", role);
+    }
     match outcome {
         Ok(pick) => {
             if response.clicked() {

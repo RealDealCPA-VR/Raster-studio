@@ -79,10 +79,15 @@ impl Key {
             Key::Escape => "Esc".into(),
             Key::Tab => "Tab".into(),
             Key::Space => "Space".into(),
-            Key::Left => "←".into(),
-            Key::Right => "→".into(),
-            Key::Up => "↑".into(),
-            Key::Down => "↓".into(),
+            // Spelled, not drawn and not a symbol. A hint is *text* — it sits
+            // inside "Ctrl+…" in a menu row's shortcut column, where there is
+            // nothing to paint an icon into — and the four arrow symbols are
+            // absent from the font egui loads, so "Ctrl+←" was "Ctrl+" and a
+            // tofu box.
+            Key::Left => "Left".into(),
+            Key::Right => "Right".into(),
+            Key::Up => "Up".into(),
+            Key::Down => "Down".into(),
             Key::Home => "Home".into(),
             Key::End => "End".into(),
             Key::PageUp => "PgUp".into(),
@@ -261,20 +266,20 @@ impl Shortcut {
 impl fmt::Display for Shortcut {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if cfg!(target_os = "macos") {
-            // macOS order is fixed by the HIG: control, option, shift, command,
-            // and the glyphs run together with no separator.
-            if self.ctrl {
-                // `ctrl` is the *primary* modifier, which on macOS is Command.
-                f.write_str("")?;
-            }
+            // macOS orders its modifiers option, shift, command — kept — but
+            // spells them rather than using ⌥ / ⇧ / ⌘. The HIG glyphs are only
+            // legible in a face that has them, and egui's default stack has
+            // neither ⌥ nor ⇧, so a mac build would have shown two tofu boxes
+            // in front of every chord. Words are honest on every platform.
             if self.alt {
-                f.write_str("⌥")?;
+                f.write_str("Opt+")?;
             }
             if self.shift {
-                f.write_str("⇧")?;
+                f.write_str("Shift+")?;
             }
             if self.ctrl {
-                f.write_str("⌘")?;
+                // `ctrl` is the *primary* modifier, which on macOS is Command.
+                f.write_str("Cmd+")?;
             }
             f.write_str(&self.key.label())
         } else {
@@ -319,7 +324,7 @@ mod tests {
     fn modifiers_are_rendered_in_a_fixed_order() {
         let s = Shortcut::ctrl_alt_shift('s').to_string();
         if cfg!(target_os = "macos") {
-            assert_eq!(s, "⌥⇧⌘S");
+            assert_eq!(s, "Opt+Shift+Cmd+S");
         } else {
             assert_eq!(s, "Ctrl+Alt+Shift+S");
         }

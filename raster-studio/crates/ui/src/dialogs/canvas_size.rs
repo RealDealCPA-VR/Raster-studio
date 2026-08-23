@@ -148,17 +148,23 @@ impl Side {
     /// All four, in the order the anchor cell paints them.
     pub const ALL: [Side; 4] = [Self::Left, Self::Right, Self::Top, Self::Bottom];
 
-    /// The glyph this side carries for `change`, or `None` when it does not
-    /// move.
+    /// The [`crate::icons::ui_icon`] key this side carries for `change`, or
+    /// `None` when it does not move.
     ///
     /// A growing edge points **outward** — that is the direction the canvas is
     /// travelling — and a cropped one points inward.
-    pub const fn glyph(self, change: Change) -> Option<&'static str> {
+    ///
+    /// These were four typed triangles, written as `"\u{25B2}"` rather than as
+    /// the character so the tofu gate's source scan did not see them. Two of
+    /// the four — U+25B2 and U+25BC — are absent from egui 0.29's font stack,
+    /// so the top and bottom edges of the selected anchor cell were drawn as
+    /// empty squares.
+    pub const fn icon(self, change: Change) -> Option<&'static str> {
         let (outward, inward) = match self {
-            Self::Left => ("\u{25C0}", "\u{25B6}"),
-            Self::Right => ("\u{25B6}", "\u{25C0}"),
-            Self::Top => ("\u{25B2}", "\u{25BC}"),
-            Self::Bottom => ("\u{25BC}", "\u{25B2}"),
+            Self::Left => ("chevron-left", "chevron-right"),
+            Self::Right => ("chevron-right", "chevron-left"),
+            Self::Top => ("chevron-up", "chevron-down"),
+            Self::Bottom => ("chevron-down", "chevron-up"),
         };
         match change {
             Change::None => None,
@@ -634,32 +640,38 @@ pub fn anchor_grid(
                         ui.painter()
                             .rect_filled(rect, rounding(radius), color32(fill));
                         if selected {
-                            let font =
-                                design::egui_theme::font_id(t, design::tokens::TypeRole::Footnote);
+                            // Drawn, not typed: see `Side::icon`. The ink is the
+                            // palette's on-accent colour because the selected
+                            // cell is filled with the accent.
                             let ink = color32(palette.color(ColorRole::TextOnAccent));
+                            let width = t.borders.hairline * 1.5;
                             let changes = edge_changes(candidate, old, new);
-                            ui.painter().text(
-                                rect.center(),
-                                egui::Align2::CENTER_CENTER,
-                                "\u{25A0}",
-                                font.clone(),
+                            let mark = cell * 0.5;
+                            crate::icons::ui_icon("anchor-block").paint(
+                                ui.painter(),
+                                egui::Rect::from_center_size(rect.center(), vec2(mark, mark)),
                                 ink,
+                                width,
                             );
                             for side in Side::ALL {
-                                let Some(glyph) = side.glyph(changes.get(side)) else {
+                                let Some(key) = side.icon(changes.get(side)) else {
                                     continue;
                                 };
-                                let (at, align) = match side {
-                                    Side::Left => (rect.left_center(), egui::Align2::LEFT_CENTER),
-                                    Side::Right => {
-                                        (rect.right_center(), egui::Align2::RIGHT_CENTER)
-                                    }
-                                    Side::Top => (rect.center_top(), egui::Align2::CENTER_TOP),
-                                    Side::Bottom => {
-                                        (rect.center_bottom(), egui::Align2::CENTER_BOTTOM)
-                                    }
+                                // Half the mark in from the edge, so the icon's
+                                // own box sits inside the cell.
+                                let inset = mark * 0.5;
+                                let at = match side {
+                                    Side::Left => rect.left_center() + egui::Vec2::X * inset,
+                                    Side::Right => rect.right_center() - egui::Vec2::X * inset,
+                                    Side::Top => rect.center_top() + egui::Vec2::Y * inset,
+                                    Side::Bottom => rect.center_bottom() - egui::Vec2::Y * inset,
                                 };
-                                ui.painter().text(at, align, glyph, font.clone(), ink);
+                                crate::icons::ui_icon(key).paint(
+                                    ui.painter(),
+                                    egui::Rect::from_center_size(at, vec2(mark, mark)),
+                                    ink,
+                                    width,
+                                );
                             }
                         }
                     }
@@ -900,7 +912,7 @@ mod tests {
             let changes = edge_changes(anchor, OLD, OLD);
             assert!(changes.is_static(), "{anchor:?} claimed {changes:?}");
             for side in Side::ALL {
-                assert_eq!(side.glyph(changes.get(side)), None, "{anchor:?} {side:?}");
+                assert_eq!(side.icon(changes.get(side)), None, "{anchor:?} {side:?}");
             }
         }
     }
@@ -978,18 +990,16 @@ mod tests {
     #[test]
     fn a_growing_edge_points_out_and_a_cropped_one_points_in() {
         for side in Side::ALL {
-            let out = side
-                .glyph(Change::Grow)
-                .expect("a growing edge has a glyph");
-            let inward = side.glyph(Change::Shrink).expect("a cropped edge too");
+            let out = side.icon(Change::Grow).expect("a growing edge has a glyph");
+            let inward = side.icon(Change::Shrink).expect("a cropped edge too");
             assert_ne!(out, inward, "{side:?} draws the same arrow either way");
-            assert_eq!(side.glyph(Change::None), None, "{side:?}");
+            assert_eq!(side.icon(Change::None), None, "{side:?}");
         }
         // Left growing points the same way as Right shrinking: both are "the
         // edge is travelling left".
         assert_eq!(
-            Side::Left.glyph(Change::Grow),
-            Side::Right.glyph(Change::Shrink)
+            Side::Left.icon(Change::Grow),
+            Side::Right.icon(Change::Shrink)
         );
     }
 

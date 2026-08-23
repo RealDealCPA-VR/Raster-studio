@@ -220,24 +220,29 @@ impl AdjustmentsPanel {
         id.create_command()
     }
 
-    /// The one-word glyph shown on a button, so the grid reads at a glance.
-    pub const fn glyph(id: AdjustmentId) -> &'static str {
+    /// The icon key for a button, so the grid reads at a glance.
+    ///
+    /// A *key* into [`crate::icons::ui_icon`], never a symbol. All fifteen of
+    /// these were symbols once — `"◐"`, `"⊿"`, `"∿"`, `"⋔"` and the rest — and
+    /// egui's default font stack has none of them, so all fourteen visible
+    /// buttons in the panel were tofu boxes.
+    pub const fn icon(id: AdjustmentId) -> &'static str {
         match id {
-            AdjustmentId::BrightnessContrast => "◐",
-            AdjustmentId::Levels => "⊿",
-            AdjustmentId::Curves => "∿",
-            AdjustmentId::Exposure => "☀",
-            AdjustmentId::Vibrance => "▲",
-            AdjustmentId::HueSaturation => "◉",
-            AdjustmentId::ColorBalance => "⚖",
-            AdjustmentId::BlackAndWhite => "◑",
-            AdjustmentId::PhotoFilter => "◍",
-            AdjustmentId::ChannelMixer => "⋔",
-            AdjustmentId::Invert => "◧",
-            AdjustmentId::Posterize => "▤",
-            AdjustmentId::Threshold => "◪",
-            AdjustmentId::GradientMap => "▨",
-            AdjustmentId::SelectiveColor => "◈",
+            AdjustmentId::BrightnessContrast => "adj-brightness-contrast",
+            AdjustmentId::Levels => "adj-levels",
+            AdjustmentId::Curves => "adj-curves",
+            AdjustmentId::Exposure => "adj-exposure",
+            AdjustmentId::Vibrance => "adj-vibrance",
+            AdjustmentId::HueSaturation => "adj-hue-saturation",
+            AdjustmentId::ColorBalance => "adj-color-balance",
+            AdjustmentId::BlackAndWhite => "adj-black-and-white",
+            AdjustmentId::PhotoFilter => "adj-photo-filter",
+            AdjustmentId::ChannelMixer => "adj-channel-mixer",
+            AdjustmentId::Invert => "adj-invert",
+            AdjustmentId::Posterize => "adj-posterize",
+            AdjustmentId::Threshold => "adj-threshold",
+            AdjustmentId::GradientMap => "adj-gradient-map",
+            AdjustmentId::SelectiveColor => "adj-selective-color",
         }
     }
 }
@@ -482,17 +487,17 @@ mod tests {
     }
 
     #[test]
-    fn the_adjustments_panel_offers_every_adjustment_with_a_glyph() {
+    fn the_adjustments_panel_offers_every_adjustment_with_an_icon_key() {
         assert_eq!(AdjustmentsPanel::entries().len(), AdjustmentId::ALL.len());
-        let mut glyphs: Vec<&str> = AdjustmentId::ALL
+        let mut keys: Vec<&str> = AdjustmentId::ALL
             .iter()
-            .map(|id| AdjustmentsPanel::glyph(*id))
+            .map(|id| AdjustmentsPanel::icon(*id))
             .collect();
-        assert!(glyphs.iter().all(|g| !g.is_empty()));
-        glyphs.sort_unstable();
-        let count = glyphs.len();
-        glyphs.dedup();
-        assert_eq!(glyphs.len(), count, "two adjustments share a glyph");
+        assert!(keys.iter().all(|k| !k.is_empty()));
+        keys.sort_unstable();
+        let count = keys.len();
+        keys.dedup();
+        assert_eq!(keys.len(), count, "two adjustments share an icon key");
     }
 
     #[test]

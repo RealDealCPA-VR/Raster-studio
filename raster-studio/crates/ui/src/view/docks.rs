@@ -6,9 +6,7 @@
 //! Workspace, &mut Ui, ...)` below.
 
 use design::{
-    color32, current_tokens,
-    egui_theme::{font_id, rounding},
-    ColorRole, Radius, Space, TextRole, TypeRole,
+    color32, current_tokens, egui_theme::rounding, ColorRole, Radius, Space, TextRole, TypeRole,
 };
 use editor_core::{Document, History};
 use egui::{Align, Layout, Sense, Ui, Vec2};
@@ -29,8 +27,8 @@ use crate::panels::text as text_panel;
 use crate::Workspace;
 
 use super::{
-    badge, body, empty_state, glyph_toggle, glyph_toggle_id, hairline, hint, panel_frame,
-    row_layout, swatch, text,
+    badge, body, empty_state, hairline, hint, icon_toggle, icon_toggle_id, panel_frame, row_layout,
+    swatch, text,
 };
 
 /// Draw every rail.
@@ -139,7 +137,12 @@ fn header(w: &mut Workspace, ui: &mut Ui, panel: PanelId, collapsed: bool) {
         Layout::left_to_right(Align::Center),
         |ui| {
             ui.add_space(Space::Small.pt());
-            if glyph_toggle(ui, if collapsed { "▸" } else { "▾" }, true, "").clicked() {
+            let chevron = if collapsed {
+                "chevron-right"
+            } else {
+                "chevron-down"
+            };
+            if icon_toggle(ui, chevron, true, "").clicked() {
                 w.dock.toggle_collapsed(panel);
             }
             ui.label(text(
@@ -150,13 +153,13 @@ fn header(w: &mut Workspace, ui: &mut Ui, panel: PanelId, collapsed: bool) {
             ));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add_space(Space::XSmall.pt());
-                if glyph_toggle(ui, "✕", false, "Close panel").clicked() {
+                if icon_toggle(ui, "close", false, "Close panel").clicked() {
                     w.emit(Intent::SetPanelOpen { panel, open: false });
                 }
                 let open = w.panel_menu == Some(panel);
-                if glyph_toggle_id(
+                if icon_toggle_id(
                     ui,
-                    "⋯",
+                    "overflow",
                     open,
                     "Move this panel",
                     Some(super::ids::panel_menu(panel)),
@@ -170,8 +173,8 @@ fn header(w: &mut Workspace, ui: &mut Ui, panel: PanelId, collapsed: bool) {
     );
 }
 
-/// The move controls a panel header's "⋯" reveals: which side the panel sits
-/// on, and where in that side's stack.
+/// The move controls a panel header's overflow button reveals: which side the
+/// panel sits on, and where in that side's stack.
 ///
 /// Drawn inline beneath the header rather than in a floating popover, for two
 /// reasons: a rail is narrow and a popover over it hides the thing being moved,
@@ -203,14 +206,14 @@ fn move_controls(w: &mut Workspace, ui: &mut Ui, panel: PanelId) {
                 dock_to = Some(*side);
             }
         }
-        for (up, glyph) in [(true, "▲"), (false, "▼")] {
+        for (up, key) in [(true, "chevron-up"), (false, "chevron-down")] {
             let can = match (at, up) {
                 (Some(i), true) => i > 0,
                 (Some(i), false) => i + 1 < order.len(),
                 (None, _) => false,
             };
             let response =
-                super::labelled_button(ui, glyph, can, super::ids::panel_reorder(panel, up))
+                super::icon_button_id(ui, key, can, super::ids::panel_reorder(panel, up))
                     .on_hover_text(if can {
                         "Move this panel within its dock"
                     } else if up {
@@ -381,9 +384,9 @@ fn lock_row(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<Layer
         ui.label(hint(ui, "Lock"));
         let mut next = locks;
         for toggle in super::LockToggle::ALL {
-            let (glyph, tip) = toggle.glyph_and_tooltip();
+            let (key, tip) = toggle.icon_and_tooltip();
             let on = toggle.get(locks);
-            if glyph_toggle_id(ui, glyph, on, tip, Some(super::ids::layer_lock(toggle))).clicked() {
+            if icon_toggle_id(ui, key, on, tip, Some(super::ids::layer_lock(toggle))).clicked() {
                 toggle.set(&mut next, !on);
             }
         }
@@ -441,8 +444,12 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
     content.add_space(row.depth as f32 * Space::Medium.pt());
 
     if row.is_group {
-        if glyph_toggle(&mut content, if row.expanded { "▾" } else { "▸" }, true, "").clicked()
-        {
+        let chevron = if row.expanded {
+            "chevron-down"
+        } else {
+            "chevron-right"
+        };
+        if icon_toggle(&mut content, chevron, true, "").clicked() {
             w.emit(Intent::SetGroupExpanded {
                 layer: row.id,
                 expanded: !row.expanded,
@@ -453,9 +460,9 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
         content.add_space(current_tokens(&content).metrics.min_hit_target);
     }
 
-    if glyph_toggle_id(
+    if icon_toggle_id(
         &mut content,
-        "👁",
+        "eye",
         row.visible,
         "Show / hide layer",
         Some(super::ids::layer_eye(row.id)),
@@ -471,7 +478,9 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
     thumbnail(&mut content, row);
     content.add_space(Space::XSmall.pt());
     if row.is_clipping {
-        content.label(hint(&content, "↳"));
+        let side = current_tokens(&content).metrics.min_hit_target * 0.75;
+        let (rect, _) = content.allocate_exact_size(Vec2::splat(side), Sense::hover());
+        super::paint_icon(&content, rect, "clipping", TextRole::Tertiary);
     }
     content.label(body(&content, row.name.clone()));
 
@@ -532,26 +541,16 @@ fn thumbnail(ui: &mut Ui, row: &LayerRow) {
             color32(t.palette.color(ColorRole::ControlStroke)),
         ),
     );
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        kind_glyph(row.class),
-        font_id(t, TypeRole::Caption),
-        color32(t.palette.text(TextRole::Secondary)),
+    // Square, centred: the well is 4:3, and an icon stretched to fill it would
+    // stop being the same shape as the same icon anywhere else in the chrome.
+    let side = rect.height() * 0.7;
+    let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(side));
+    super::paint_icon(
+        ui,
+        icon_rect,
+        super::kind_icon(row.class),
+        TextRole::Secondary,
     );
-}
-
-const fn kind_glyph(class: crate::menu::LayerClass) -> &'static str {
-    use crate::menu::LayerClass as C;
-    match class {
-        C::Raster => "▦",
-        C::Group => "▤",
-        C::Adjustment => "◐",
-        C::Text => "T",
-        C::Shape => "◆",
-        C::SmartObject => "◈",
-        C::Generator => "✦",
-    }
 }
 
 /// Where in a row a pointer at `y` would drop.
@@ -623,10 +622,18 @@ fn row_drag_position(
 fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<LayerId>) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = Space::Hair.pt();
-        if glyph_toggle_id(ui, "+", true, "New layer", Some(super::ids::new_layer())).clicked() {
+        if icon_toggle_id(ui, "plus", true, "New layer", Some(super::ids::new_layer())).clicked() {
             w.emit(Intent::Document(LayersModel::new_layer(doc)));
         }
-        if glyph_toggle_id(ui, "▤", true, "New group", Some(super::ids::new_group())).clicked() {
+        if icon_toggle_id(
+            ui,
+            "new-group",
+            true,
+            "New group",
+            Some(super::ids::new_group()),
+        )
+        .clicked()
+        {
             w.emit(Intent::Document(LayersModel::new_group()));
         }
 
@@ -668,7 +675,26 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
                 w.layers.selection().to_vec()
             };
             let can_delete = !selection.is_empty();
-            let delete = ui.add_enabled(can_delete, egui::Button::new(body(ui, "🗑")).frame(false));
+            // An empty button for the framing and the disabled-hover text egui
+            // only offers on a disabled widget, with the drawing painted into
+            // the rect it reports — the same split `icons::icon_button` uses.
+            let side = current_tokens(ui).metrics.min_hit_target;
+            let delete = ui.add_enabled(
+                can_delete,
+                egui::Button::new("")
+                    .frame(false)
+                    .min_size(Vec2::splat(side)),
+            );
+            super::paint_icon(
+                ui,
+                delete.rect,
+                "trash",
+                if can_delete {
+                    TextRole::Primary
+                } else {
+                    TextRole::Disabled
+                },
+            );
             let delete = if can_delete {
                 delete.on_hover_text("Delete selected layers")
             } else {
@@ -697,16 +723,18 @@ fn history_body(w: &mut Workspace, ui: &mut Ui, history: &History) {
         let selected = step.index == current;
         let response = row_layout(ui, |ui| {
             ui.add_space(Space::XSmall.pt());
-            ui.label(text(
+            let side = current_tokens(ui).metrics.min_hit_target * 0.8;
+            let (marker, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
+            super::paint_icon(
                 ui,
-                step.kind.glyph(),
+                marker,
+                step.kind.icon(),
                 if step.undone {
                     TextRole::Disabled
                 } else {
                     TextRole::Secondary
                 },
-                TypeRole::Body,
-            ));
+            );
             ui.add_space(Space::XSmall.pt());
             ui.label(text(
                 ui,
@@ -803,9 +831,9 @@ fn adjustments_body(w: &mut Workspace, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = Space::Hair.pt();
             for id in chunk {
-                if glyph_toggle_id(
+                if icon_toggle_id(
                     ui,
-                    AdjustmentsPanel::glyph(*id),
+                    AdjustmentsPanel::icon(*id),
                     true,
                     id.label(),
                     Some(super::ids::adjustment_tile(*id)),
@@ -1167,9 +1195,9 @@ fn color_body(w: &mut Workspace, ui: &mut Ui) {
     }
 
     ui.horizontal(|ui| {
-        if glyph_toggle(
+        if icon_toggle(
             ui,
-            "⌖",
+            "target",
             w.color.eyedropper_armed,
             "Sample a colour from the canvas",
         )
@@ -1592,13 +1620,13 @@ fn navigator_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
 
     ui.add_space(Space::XSmall.pt());
     ui.horizontal(|ui| {
-        if glyph_toggle(ui, "−", true, "Zoom out").clicked() {
+        if icon_toggle(ui, "minus", true, "Zoom out").clicked() {
             w.emit(Intent::SetZoom(crate::panels::navigator::zoom_out(
                 w.status.zoom,
             )));
         }
         ui.label(body(ui, format_zoom(w.status.zoom)));
-        if glyph_toggle(ui, "+", true, "Zoom in").clicked() {
+        if icon_toggle(ui, "plus", true, "Zoom in").clicked() {
             w.emit(Intent::SetZoom(crate::panels::navigator::zoom_in(
                 w.status.zoom,
             )));
@@ -1635,9 +1663,9 @@ fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     let mut select: Option<ChannelKind> = None;
     for (index, row) in rows.iter().enumerate() {
         let response = row_layout(ui, |ui| {
-            if glyph_toggle_id(
+            if icon_toggle_id(
                 ui,
-                "👁",
+                "eye",
                 row.visible,
                 "Show / hide this channel",
                 Some(super::ids::channel_eye(index)),
@@ -1719,7 +1747,7 @@ fn paths_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
         let response = row_layout(ui, |ui| {
             // A path is drawn by its shape layer, so the eye here *is* that
             // layer's visibility rather than a second, parallel switch.
-            if glyph_toggle(ui, "👁", row.visible, "Show / hide this path").clicked() {
+            if icon_toggle(ui, "eye", row.visible, "Show / hide this path").clicked() {
                 toggle = Some((row.layer, !row.visible));
             }
             ui.label(body(ui, row.name.clone()));
