@@ -261,30 +261,163 @@ pub struct AdjustmentLayer {
     pub kind: AdjustmentKind,
 }
 
-/// The parametric adjustments available in Phase 1.
+/// Which of the three automatic tone / colour commands an
+/// [`AdjustmentKind::Auto`] layer stands for.
+///
+/// An auto command is an *analysis*, not a pixel function: it reads the
+/// backdrop's histogram and emits a concrete Levels. Storing the command rather
+/// than the Levels it happened to produce is what keeps it non-destructive —
+/// re-open the document against different pixels and it re-decides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AutoAdjustment {
+    /// Auto Contrast: one black/white point from the composite gray, applied to
+    /// every channel, so contrast changes and colour balance does not.
+    Contrast,
+    /// Auto Tone: an independent black/white point per channel.
+    Tone,
+    /// Auto Color: per-channel black/white points and a per-channel gamma that
+    /// lands each channel's median on mid-gray.
+    Color,
+}
+
+/// The parametric adjustments an adjustment layer can carry.
+///
+/// This is the **persisted** vocabulary: every variant here survives a
+/// save/reload, which is what "adjustments remain editable after save/reload"
+/// means. The `adjustments` crate owns the evaluation of each one and its
+/// parameter validation; the shapes here are deliberately plain data so the
+/// project format has nothing to interpret.
+///
+/// Ranges are stated per variant, but nothing here enforces them — a value out
+/// of range is a document that opens with a slider clamped back, never a
+/// refusal to open. See `adjustments::Adjustment`'s lenient `From` impl.
+///
+/// # Narrow and full spellings
+///
+/// Five adjustments have two variants each: a narrow one that predates the
+/// `adjustments` crate (`Levels`, `Curves`, `Exposure`, `HueSaturation`,
+/// `ColorBalance`) and a `*Full` one that carries the settings the narrow
+/// shape has no room for — per-channel Levels and Curves, a Levels output
+/// range, an exposure offset and gamma, a colorizing Hue/Saturation, a
+/// luminosity-preserving Colour Balance.
+///
+/// The narrow variants were **not** widened, because every existing document
+/// and every existing `match` in the workspace spells them the old way. A
+/// writer should emit the narrow variant whenever the settings fit — that is
+/// what `adjustments::Adjustment::to_layer_kind` does — and reach for the full
+/// one only when they do not, so the common document stays byte-compatible.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AdjustmentKind {
-    Levels {
-        black: f32,
-        white: f32,
-        gamma: f32,
+    /// Composite-only Levels over the full `0..=1` output range.
+    Levels { black: f32, white: f32, gamma: f32 },
+    /// Levels with per-channel mappings and an output range.
+    ///
+    /// Each `[f32; 5]` is
+    /// `[input_black, input_white, gamma, output_black, output_white]`. The
+    /// per-channel mappings run first, then `composite`. The identity mapping
+    /// is `[0.0, 1.0, 1.0, 0.0, 1.0]`.
+    LevelsFull {
+        composite: [f32; 5],
+        red: [f32; 5],
+        green: [f32; 5],
+        blue: [f32; 5],
     },
-    Curves {
-        points: Vec<[f32; 2]>,
+    /// Composite-only Curves.
+    Curves { points: Vec<[f32; 2]> },
+    /// Curves with a curve per channel. The per-channel curves run first, then
+    /// `composite`. The identity curve is `[[0.0, 0.0], [1.0, 1.0]]`, which is
+    /// how a channel that is not being curved is spelled.
+    CurvesFull {
+        composite: Vec<[f32; 2]>,
+        red: Vec<[f32; 2]>,
+        green: Vec<[f32; 2]>,
+        blue: Vec<[f32; 2]>,
     },
-    Exposure {
-        stops: f32,
-    },
+    /// Exposure in stops alone, on linear light.
+    Exposure { stops: f32 },
+    /// Exposure with the offset and gamma the control also carries:
+    /// `((v · 2^stops) + offset) ^ (1/gamma)`. `offset` is in `-1.0..=1.0` and
+    /// `gamma` in `0.01..=100.0`.
+    ExposureFull { stops: f32, offset: f32, gamma: f32 },
+    /// Hue rotation, saturation and lightness.
     HueSaturation {
         hue: f32,
         saturation: f32,
         lightness: f32,
     },
+    /// Hue/Saturation including colorize mode. When `colorize` is `Some`, it is
+    /// `[hue_degrees, saturation, lightness]` and it *replaces* the hue and
+    /// saturation of every pixel rather than shifting them; `hue`, `saturation`
+    /// and `lightness` are then unused.
+    HueSaturationFull {
+        hue: f32,
+        saturation: f32,
+        lightness: f32,
+        colorize: Option<[f32; 3]>,
+    },
+    /// Shadow / midtone / highlight colour shifts.
     ColorBalance {
         shadows: [f32; 3],
         midtones: [f32; 3],
         highlights: [f32; 3],
     },
+    /// Colour Balance with the "preserve luminosity" switch, which renormalises
+    /// each pixel back to the luminance it had before the shift.
+    ColorBalanceFull {
+        shadows: [f32; 3],
+        midtones: [f32; 3],
+        highlights: [f32; 3],
+        preserve_luminosity: bool,
+    },
+    /// Brightness and contrast, both in `-1.0..=1.0`, on encoded values.
+    BrightnessContrast { brightness: f32, contrast: f32 },
+    /// Vibrance (a saturation boost weighted toward the *dull* colours) and a
+    /// flat saturation, both in `-1.0..=1.0`.
+    Vibrance { vibrance: f32, saturation: f32 },
+    /// Black & White. `weights` is
+    /// `[red, yellow, green, cyan, blue, magenta]`, each in `-3.0..=3.0`;
+    /// `tint` is an optional `[hue_degrees, saturation]` pair.
+    BlackAndWhite {
+        weights: [f32; 6],
+        tint: Option<[f32; 2]>,
+    },
+    /// A photographic filter: an **sRGB-encoded** filter colour, a `density` in
+    /// `0.0..=1.0`, and whether the filter is allowed to darken the image.
+    PhotoFilter {
+        color_srgb: [f32; 3],
+        density: f32,
+        preserve_luminosity: bool,
+    },
+    /// Channel mixer. `rows[out]` is `[red, green, blue, constant]`; in
+    /// `monochrome` mode `rows[0]` alone drives all three outputs.
+    ChannelMixer {
+        rows: [[f32; 4]; 3],
+        monochrome: bool,
+    },
+    /// Invert. Carries no parameters, which is why it is a unit variant.
+    Invert,
+    /// Posterize to `levels` steps per channel, `2..=256`.
+    Posterize { levels: u32 },
+    /// Threshold at an encoded gray `level` in `0.0..=1.0`.
+    Threshold { level: f32 },
+    /// Gradient map. `stops` are `(position, sRGB-encoded colour)` pairs; at
+    /// least two distinct positions are needed for the map to mean anything.
+    GradientMap {
+        stops: Vec<(f32, [f32; 3])>,
+        reverse: bool,
+    },
+    /// Selective colour: nine ranges of `[cyan, magenta, yellow, black]` deltas
+    /// in `-1.0..=1.0`, ordered
+    /// `[reds, yellows, greens, cyans, blues, magentas, whites, neutrals,
+    /// blacks]`. `relative` scales the ink already present; otherwise the delta
+    /// is added outright.
+    SelectiveColor {
+        ranges: [[f32; 4]; 9],
+        relative: bool,
+    },
+    /// Auto Tone / Auto Contrast / Auto Color, with the fraction of pixels
+    /// clipped at *each* end of the histogram (`0.0..=0.1`).
+    Auto { mode: AutoAdjustment, clip: f32 },
 }
 
 /// Editable text layer. Postponed (Phase 3); shape reserved so the enum and
@@ -420,6 +553,140 @@ mod tests {
                 points: vec![[0.0, 0.0]]
             }
         );
+    }
+
+    /// Every adjustment the editor offers must survive a save/reload, which is
+    /// the whole reason `AdjustmentKind` exists as a separate, plain-data
+    /// vocabulary. A variant that cannot be stored cannot be an adjustment
+    /// *layer* at all, only a transient computation.
+    #[test]
+    fn every_adjustment_kind_round_trips_through_serde() {
+        let all = vec![
+            AdjustmentKind::Levels {
+                black: 0.05,
+                white: 0.95,
+                gamma: 1.2,
+            },
+            AdjustmentKind::LevelsFull {
+                composite: [0.02, 0.98, 1.1, 0.05, 0.9],
+                red: [0.0, 0.9, 1.0, 0.0, 1.0],
+                green: [0.1, 1.0, 1.3, 0.0, 1.0],
+                blue: [0.0, 1.0, 1.0, 0.0, 1.0],
+            },
+            AdjustmentKind::Curves {
+                points: vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]],
+            },
+            AdjustmentKind::CurvesFull {
+                composite: vec![[0.0, 0.0], [0.5, 0.55], [1.0, 1.0]],
+                red: vec![[0.0, 0.1], [1.0, 1.0]],
+                green: vec![[0.0, 0.0], [1.0, 1.0]],
+                blue: vec![[0.0, 0.0], [1.0, 0.9]],
+            },
+            AdjustmentKind::Exposure { stops: -1.5 },
+            AdjustmentKind::ExposureFull {
+                stops: 1.25,
+                offset: -0.03,
+                gamma: 1.4,
+            },
+            AdjustmentKind::HueSaturation {
+                hue: 30.0,
+                saturation: 0.2,
+                lightness: -0.1,
+            },
+            AdjustmentKind::HueSaturationFull {
+                hue: 0.0,
+                saturation: 0.0,
+                lightness: 0.0,
+                colorize: Some([210.0, 0.45, -0.05]),
+            },
+            AdjustmentKind::ColorBalance {
+                shadows: [0.1, 0.0, -0.2],
+                midtones: [0.0; 3],
+                highlights: [0.0, 0.3, 0.0],
+            },
+            AdjustmentKind::ColorBalanceFull {
+                shadows: [0.1, 0.0, -0.2],
+                midtones: [0.0; 3],
+                highlights: [0.0, 0.3, 0.0],
+                preserve_luminosity: true,
+            },
+            AdjustmentKind::BrightnessContrast {
+                brightness: 0.1,
+                contrast: -0.25,
+            },
+            AdjustmentKind::Vibrance {
+                vibrance: 0.4,
+                saturation: -0.1,
+            },
+            AdjustmentKind::BlackAndWhite {
+                weights: [0.4, 0.6, 0.4, 0.6, 0.2, 0.8],
+                tint: Some([30.0, 0.35]),
+            },
+            AdjustmentKind::BlackAndWhite {
+                weights: [1.0; 6],
+                tint: None,
+            },
+            AdjustmentKind::PhotoFilter {
+                color_srgb: [0.92, 0.69, 0.07],
+                density: 0.25,
+                preserve_luminosity: true,
+            },
+            // Every `bool` and `Option` in the fixture is set away from its
+            // default, or a field that failed to serialize would round trip
+            // back to the same value and the test would not notice.
+            AdjustmentKind::ChannelMixer {
+                rows: [
+                    [0.9, 0.1, 0.0, 0.02],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.1, 0.0, 0.9, 0.0],
+                ],
+                monochrome: true,
+            },
+            AdjustmentKind::Invert,
+            AdjustmentKind::Posterize { levels: 6 },
+            AdjustmentKind::Threshold { level: 0.45 },
+            AdjustmentKind::GradientMap {
+                stops: vec![(0.0, [0.1, 0.0, 0.3]), (1.0, [1.0, 0.9, 0.4])],
+                reverse: true,
+            },
+            AdjustmentKind::SelectiveColor {
+                ranges: [[0.2, -0.1, 0.05, 0.05]; 9],
+                relative: true,
+            },
+            AdjustmentKind::Auto {
+                mode: AutoAdjustment::Tone,
+                clip: 0.001,
+            },
+            AdjustmentKind::Auto {
+                mode: AutoAdjustment::Contrast,
+                clip: 0.0,
+            },
+            AdjustmentKind::Auto {
+                mode: AutoAdjustment::Color,
+                clip: 0.01,
+            },
+        ];
+        for kind in &all {
+            let json = serde_json::to_string(kind).unwrap();
+            let back: AdjustmentKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(&back, kind, "{json}");
+            // And inside the layer it actually lives in.
+            let layer = Layer::with_kind(
+                "Adj",
+                LayerKind::Adjustment(AdjustmentLayer { kind: kind.clone() }),
+            );
+            let json = serde_json::to_string(&layer).unwrap();
+            let back: Layer = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, layer);
+        }
+        // No two of the samples collapse onto each other, so the round trip
+        // above is really distinguishing variants and not comparing a
+        // degenerate default with itself.
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
     }
 
     #[test]

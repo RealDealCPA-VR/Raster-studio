@@ -12,3 +12,4 @@ glam.workspace = true
 rayon.workspace = true
 raster.workspace = true
 editor-core.workspace = true
+color.workspace = true

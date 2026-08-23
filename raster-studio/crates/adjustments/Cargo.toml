@@ -6,5 +6,13 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-serde.workspace = true
 color.workspace = true
+layer-model.workspace = true
+thiserror.workspace = true
+
+# Tests only. Nothing in this crate is serialized: the persisted form of an
+# adjustment is `layer_model::AdjustmentKind`, and `serde_json` is here so the
+# round-trip tests go through a real encode/decode rather than asserting on an
+# in-memory clone.
+[dev-dependencies]
+serde_json.workspace = true

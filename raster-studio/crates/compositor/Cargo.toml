@@ -7,10 +7,16 @@ license.workspace = true
 
 [dependencies]
 thiserror.workspace = true
-serde.workspace = true
+# No `serde` on purpose: nothing in this crate is persisted. A composite is
+# derived from the document and the tile store, so it is recomputed rather than
+# saved, and the only serializable things it touches (`Document`, `LayerTree`)
+# are serialized by the crates that own them.
 rayon.workspace = true
 glam.workspace = true
 color.workspace = true
 raster.workspace = true
 layer-model.workspace = true
 editor-core.workspace = true
+# The parametric adjustments. `adjust.rs` still evaluates the five adjustment
+# kinds that predate that crate itself; everything else is delegated to it.
+adjustments.workspace = true

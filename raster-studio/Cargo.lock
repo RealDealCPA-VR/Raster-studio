@@ -23,7 +23,9 @@ name = "adjustments"
 version = "0.1.0"
 dependencies = [
  "color",
- "serde",
+ "layer-model",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -442,13 +444,13 @@ dependencies = [
 name = "compositor"
 version = "0.1.0"
 dependencies = [
+ "adjustments",
  "color",
  "editor-core",
  "glam",
  "layer-model",
  "raster",
  "rayon",
- "serde",
  "thiserror 2.0.20",
 ]
 
@@ -2493,6 +2495,7 @@ dependencies = [
 name = "selection"
 version = "0.1.0"
 dependencies = [
+ "color",
  "editor-core",
  "glam",
  "raster",
