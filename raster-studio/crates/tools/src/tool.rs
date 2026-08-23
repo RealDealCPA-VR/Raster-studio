@@ -17,6 +17,7 @@ use layer_model::{LayerId, MaskId};
 use raster::PixelRect;
 use selection::{BooleanOp, Rect};
 
+use crate::brush::BrushSettings;
 use crate::error::ToolError;
 use crate::tiles::TileAccess;
 
@@ -678,6 +679,37 @@ pub trait Tool {
     /// Abandon an in-progress gesture (Esc). Must emit nothing and must leave
     /// the tool reusable.
     fn cancel(&mut self, ctx: &mut ToolContext<'_>);
+
+    /// Adopt the application's brush.
+    ///
+    /// The colours reach a tool through [`ToolContext`], but the brush cannot:
+    /// dab shape belongs to the tool's own state machine, not to the context it
+    /// reads, and [`crate::registry::make`] hands back a `Box<dyn Tool>` with no
+    /// way to reach the settings inside. An application whose options bar and
+    /// `[`/`]` keys own one brush therefore has no way to tell the tool what
+    /// size to paint — which is exactly the seam an application shell needs.
+    ///
+    /// Defaulted to a no-op: most tools have no brush, and the ones that do are
+    /// free to refuse a change that would disagree with a gesture already in
+    /// progress.
+    fn set_brush(&mut self, _brush: BrushSettings) {}
+
+    /// The brush this tool stamps with, when it has one.
+    ///
+    /// The read half of [`Tool::set_brush`], and the reason it exists is that
+    /// the settings [`crate::registry::make`] builds a tool with *are* that
+    /// tool: the Pencil is nothing but `BrushSettings::pencil(1.0)` — one hard
+    /// aliased pixel with no pressure — and the Clone Stamp nothing but a soft
+    /// 40 at 0.05 spacing. A shell that keeps one brush per tool so `[` and `]`
+    /// move the tool the user is looking at needs somewhere to seed each slot
+    /// from, and duplicating the registry's table in the shell is how the two
+    /// would drift.
+    ///
+    /// `None` for a tool that stamps no dabs at all — the marquees, the
+    /// gradient, the view tools.
+    fn brush(&self) -> Option<BrushSettings> {
+        None
+    }
 
     /// Whether a gesture is currently in progress.
     fn is_active(&self) -> bool;

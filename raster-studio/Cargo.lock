@@ -2941,6 +2941,8 @@ dependencies = [
  "glam",
  "pollster",
  "render-shaders",
+ "thiserror 2.0.20",
+ "tracing",
  "wgpu",
 ]
 

@@ -6,7 +6,43 @@ use anyhow::Result;
 use crate::context::GpuContext;
 use crate::offscreen::{read_texture_rgba8, Readback};
 
+/// Why a texture could not be created.
+///
+/// These were assertions and, for the oversized case, not a check at all: an
+/// out-of-range `create_texture` reached the driver, wgpu raised an uncaptured
+/// error, and the default handler panicked — which under `panic = "abort"` is
+/// a process kill. A caller that cannot have a texture needs to be told so, not
+/// killed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum TextureError {
+    #[error(
+        "{label}: {width}x{height} exceeds this GPU's maximum texture size of \
+         {limit} pixels per side"
+    )]
+    TooLarge {
+        label: String,
+        width: u32,
+        height: u32,
+        limit: u32,
+    },
+    #[error("{label}: a texture must have a non-zero width and height, got {width}x{height}")]
+    ZeroSized {
+        label: String,
+        width: u32,
+        height: u32,
+    },
+    #[error("{label}: pixel buffer is {found} bytes, not the {expected} that {width}x{height} RGBA8 needs")]
+    PixelBufferSize {
+        label: String,
+        width: u32,
+        height: u32,
+        expected: usize,
+        found: usize,
+    },
+}
+
 /// A GPU texture plus its default view (which spans every mip level).
+#[derive(Debug)]
 pub struct GpuTexture {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
@@ -38,7 +74,7 @@ impl GpuTexture {
         height: u32,
         rgba8: &[u8],
         label: &str,
-    ) -> Self {
+    ) -> Result<Self, TextureError> {
         Self::from_rgba8_with(
             gpu,
             width,
@@ -57,6 +93,16 @@ impl GpuTexture {
     /// `4 * width`). Set `generate_mipmaps` to `false` for textures that are
     /// only ever sampled 1:1 or used as a compositing scratch buffer; it costs
     /// one render pass per level and adds `RENDER_ATTACHMENT` usage.
+    ///
+    /// # Errors
+    ///
+    /// [`TextureError::TooLarge`] when either side exceeds
+    /// [`GpuContext::max_texture_dimension_2d`]. **This check is what keeps the
+    /// process alive**: `create_texture` does not return a `Result`, so an
+    /// oversized request goes to the device, comes back through the uncaptured
+    /// error handler, and — with wgpu's default handler — aborts. It is made
+    /// *before* the pixel-buffer length check so that a caller can ask about a
+    /// size without first allocating the pixels for it.
     pub fn from_rgba8_with(
         gpu: &GpuContext,
         width: u32,
@@ -65,13 +111,33 @@ impl GpuTexture {
         format: wgpu::TextureFormat,
         generate_mipmaps: bool,
         label: &str,
-    ) -> Self {
-        assert!(width > 0 && height > 0, "{label}: zero-sized texture");
-        assert_eq!(
-            rgba8.len(),
-            (width as usize) * (height as usize) * 4,
-            "{label}: pixel buffer is not width*height*4"
-        );
+    ) -> Result<Self, TextureError> {
+        if width == 0 || height == 0 {
+            return Err(TextureError::ZeroSized {
+                label: label.to_string(),
+                width,
+                height,
+            });
+        }
+        let limit = gpu.max_texture_dimension_2d();
+        if width > limit || height > limit {
+            return Err(TextureError::TooLarge {
+                label: label.to_string(),
+                width,
+                height,
+                limit,
+            });
+        }
+        let expected = (width as usize) * (height as usize) * 4;
+        if rgba8.len() != expected {
+            return Err(TextureError::PixelBufferSize {
+                label: label.to_string(),
+                width,
+                height,
+                expected,
+                found: rgba8.len(),
+            });
+        }
 
         let mip_level_count = if generate_mipmaps {
             Self::mip_level_count_for(width, height)
@@ -126,13 +192,13 @@ impl GpuTexture {
         }
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        Self {
+        Ok(Self {
             texture,
             view,
             width,
             height,
             mip_level_count,
-        }
+        })
     }
 
     /// Copy mip `level` back to CPU memory as tightly packed RGBA8.

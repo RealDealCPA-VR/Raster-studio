@@ -56,6 +56,20 @@ pub enum Pick {
     Action(Action),
     /// A document edit, routed through history.
     Command(Command),
+    /// An edit to a layer's kind payload — an adjustment's parameters, a text
+    /// layer's run.
+    ///
+    /// A document edit like [`Pick::Command`], and it becomes an
+    /// [`editor_core::Command::SetLayerKind`] before it reaches the document.
+    /// It travels as its own variant because a *drag* produces one of these per
+    /// frame and they must collapse into a single undo step; only
+    /// [`crate::chrome::Chrome`] knows whether the pointer is still down, so it
+    /// stamps the gesture on and [`crate::Editor::apply_kind_edit`] does the
+    /// folding.
+    Kind {
+        layer: LayerId,
+        kind: Box<layer_model::LayerKind>,
+    },
     /// Open one of the recent files.
     OpenRecent(PathBuf),
     /// A settings change — the Window ▸ Appearance items.
@@ -134,10 +148,16 @@ pub fn context(editor: &Editor, workspace: &Workspace) -> MenuContext {
 /// What the shell should do about `intent`, or `None` when this build has no
 /// answer for it.
 ///
-/// Every arm is an explicit decision, and the two that return `None` say why:
-/// [`Intent::EditLayerKind`] has no `editor_core::Command` behind it (see the
-/// variant's own documentation), and a [`MenuAction`] with no [`Action`] is a
-/// menu item this build does not implement.
+/// Every arm is an explicit decision, and the one that returns `None` says why:
+/// a [`MenuAction`] with no [`Action`] and no workspace effect is a menu item
+/// this build does not implement.
+///
+/// **A `None` here is never dropped on the floor.** The menu bar draws such an
+/// item disabled carrying [`NOT_WIRED`]; a panel control that raises one has
+/// its intent reported through [`crate::chrome::ChromeOutput::unrouted`] and
+/// named in the status bar by [`unrouted_message`]. Silence is what let
+/// [`Intent::EditLayerKind`] — every adjustment slider in the Properties panel
+/// — go unanswered for a whole wave.
 pub fn pick(intent: &Intent, editor: &Editor) -> Option<Pick> {
     match intent {
         Intent::Document(command) => Some(Pick::Command(command.clone())),
@@ -180,15 +200,79 @@ pub fn pick(intent: &Intent, editor: &Editor) -> Option<Pick> {
         | Intent::SetToolGradient { .. }
         | Intent::ResetToolOptions(_)
         | Intent::SetGroupExpanded { .. } => Some(Pick::Workspace(Box::new(intent.clone()))),
-        // No `editor_core::Command` replaces a layer's kind payload, so there
-        // is nothing to route this through history as.
-        Intent::EditLayerKind { .. } => None,
+        // The Properties panel's sliders and the Text panel's fields. Routed
+        // through [`editor_core::Command::SetLayerKind`], one undo step per
+        // drag rather than one per frame.
+        Intent::EditLayerKind { layer, kind } => Some(Pick::Kind {
+            layer: *layer,
+            kind: kind.clone(),
+        }),
     }
+}
+
+/// What the status bar should say about an intent no [`Pick`] answers.
+///
+/// The point is that it says *something*. A control whose intent falls through
+/// used to disappear without a trace, which is precisely how an inert
+/// Properties panel survived review: nothing on screen ever admitted that a
+/// click had gone nowhere.
+pub fn unrouted_message(intent: &Intent) -> String {
+    match intent {
+        Intent::Action(action) => format!("{}: {NOT_WIRED}", action.label()),
+        other => format!("{NOT_WIRED} ({other:?})"),
+    }
+}
+
+/// The View-menu items whose whole implementation is [`Workspace`]'s own.
+///
+/// [`ui::Workspace::absorb_action`] performs all four against the canvas
+/// camera, and did so for a whole release while the four sat greyed out beside
+/// Zoom In and Fit on Screen — because the bridge routed *no* [`Intent::Action`]
+/// to the workspace, so the only actions that worked were the ones the shell
+/// happened to reimplement as an [`Action`].
+///
+/// Every one is an absolute placement of the camera (fill this rectangle, frame
+/// this selection, this many pixels per inch, rotation zero), so all four
+/// satisfy the idempotence [`Pick::Workspace`] requires.
+///
+/// # Three of the four are reachable by a user; the fourth is routed only for
+/// completeness
+///
+/// Fill Screen, Zoom to Selection and Print Size can be clicked and do their
+/// work. `ResetViewRotation` is routed here for completeness and **cannot be
+/// enabled in this build at all**: `ui::menu` gates it on
+/// [`MenuContext::view_rotated`], which reads
+/// `Workspace::canvas.view.camera.rotation`, and no code path in this shell
+/// ever writes that field to anything but zero.
+/// `Chrome::sync_workspace` pushes the document camera's zoom
+/// and centre into that camera and not a rotation, and the Rotate View tool
+/// turns a *mirror* built by `tool_input::canvas_camera_of` — which starts at
+/// rotation zero every gesture — whose rotation `tool_input::write_camera_back`
+/// then drops, because [`render::Camera`], the camera this shell actually
+/// renders from, is axis-aligned (`crate::tool_input`'s own module docs say so).
+/// So the item is permanently greyed out here, the ratchet counts it under
+/// `disabled` in every state this build can reach, and the tests that cover it
+/// have to rotate the workspace camera by hand because no user path can. What
+/// they prove is the routing, not the reachability; the item becomes reachable
+/// the day the renderer can show a rotated view, and this routing is what will
+/// make it work that day without a second wiring pass.
+pub fn is_workspace_camera_action(action: MenuAction) -> bool {
+    use ui::menu::ZoomCommand as Z;
+    matches!(
+        action,
+        MenuAction::Zoom(Z::FillScreen)
+            | MenuAction::Zoom(Z::ToSelection)
+            | MenuAction::Zoom(Z::PrintSize)
+            | MenuAction::ResetViewRotation
+    )
 }
 
 /// The [`Action`] a named menu action maps onto, if this build has one.
 fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
     use ui::menu::ZoomCommand as Z;
+    if is_workspace_camera_action(action) {
+        return Some(Pick::Workspace(Box::new(Intent::Action(action))));
+    }
     let mapped = match action {
         MenuAction::NewDocument => Action::NewDocument,
         MenuAction::Open => Action::Open,
@@ -226,6 +310,13 @@ pub fn record(pick: Pick, out: &mut ChromeOutput) {
     match pick {
         Pick::Action(action) => out.actions.push(action),
         Pick::Command(command) => out.commands.push(command),
+        // `gesture` is filled in by `Chrome::harvest`, which is the only place
+        // that knows whether the pointer is still down.
+        Pick::Kind { layer, kind } => out.layer_kind.push(crate::chrome::KindEdit {
+            layer,
+            kind,
+            gesture: None,
+        }),
         Pick::OpenRecent(path) => out.open_recent = Some(path),
         Pick::Preferences(prefs) => out.preferences = Some(*prefs),
         Pick::Workspace(intent) => out.workspace.push(*intent),
@@ -512,8 +603,8 @@ mod tests {
 
     // The ratchet, and the honest measurement of where this build stands.
     //
-    // All nine menus carry 256 items. With one document open, 77 of them are
-    // performable, 51 are legitimately disabled by the shared model, and 128
+    // All nine menus carry 256 items. With one document open, 79 of them are
+    // performable, 51 are legitimately disabled by the shared model, and 126
     // still answer `NOT_WIRED` — every Filter, every Adjustment, Image Size,
     // Canvas Size, every Transform and Select All, none of which has an
     // `editor_core` command behind it yet. Before the shell hosted
@@ -521,10 +612,22 @@ mod tests {
     // moved are all four workspace presets, all thirteen panels, all thirteen
     // view overlays and the ruler units, which had nowhere to act.
     //
+    // The two that moved most recently are Fill Screen and Print Size, and
+    // their siblings Zoom to Selection and Reset View Rotation moved with them.
+    // Both of those are counted under `disabled` here, for reasons that are not
+    // the same: Zoom to Selection is disabled because *this* state has nothing
+    // selected, and a selection enables it. Reset View Rotation is disabled in
+    // every state this build can reach — nothing writes the workspace canvas
+    // camera's rotation, so `view_rotated` is permanently false and only three
+    // of the four are user-reachable today. `is_workspace_camera_action`'s doc
+    // has the whole reason. All four were implemented in
+    // `ui::Workspace::absorb_action` and unreachable, because the bridge routed
+    // no `Intent::Action` to the workspace at all.
+    //
     // The floors may only rise and the caps may only fall. A new menu item
     // nobody wired pushes the cap over and the failure lists it by name.
-    const MAX_UNWIRED_WITH_A_DOCUMENT: usize = 128;
-    const MIN_PERFORMABLE_WITH_A_DOCUMENT: usize = 77;
+    const MAX_UNWIRED_WITH_A_DOCUMENT: usize = 126;
+    const MIN_PERFORMABLE_WITH_A_DOCUMENT: usize = 79;
     const MAX_UNWIRED_WITH_NOTHING_OPEN: usize = 4;
     const MIN_PERFORMABLE_WITH_NOTHING_OPEN: usize = 30;
 
@@ -686,6 +789,98 @@ mod tests {
             Ok(Pick::Command(Command::CreateLayer { .. })) => {}
             other => panic!("New Layer resolved to {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_four_view_items_the_workspace_performs_are_routed_to_it() {
+        // Fill Screen, Zoom to Selection, Print Size and Reset View Rotation
+        // are all implemented by `ui::Workspace::absorb_action` and were all
+        // greyed out with `NOT_WIRED`, sitting beside four zoom items that
+        // worked. The cause was structural: `shell_action` mapped a
+        // `MenuAction` to a shell `Action` or to nothing, so an action whose
+        // whole implementation lives in the workspace had no way through.
+        use ui::menu::ZoomCommand as Z;
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor_with_a_document(dir.path());
+        // Zoom to Selection is (correctly) disabled with nothing selected, so
+        // the state this is measured in has a selection.
+        ed.active_mut().unwrap().document.selection = editor_core::Selection::Rect {
+            min: glam::IVec2::new(2, 2),
+            max: glam::IVec2::new(20, 20),
+        };
+        // ...and Reset View Rotation is gated on a rotated view, which is a
+        // state no user of *this* build can put the workspace canvas into: see
+        // `is_workspace_camera_action`'s doc. It is rotated by hand here because
+        // nothing else can rotate it, and what that proves is the routing —
+        // that the item reaches the workspace rather than `NOT_WIRED` — and not
+        // that a user can reach the item. Three of the four are user-reachable
+        // today; this one is wired ahead of a renderer that can show it.
+        let mut ws = Workspace::new();
+        ws.canvas.view.camera.set_rotation(0.7);
+        let context = context(&ed, &ws);
+
+        for action in [
+            MenuAction::Zoom(Z::FillScreen),
+            MenuAction::Zoom(Z::ToSelection),
+            MenuAction::Zoom(Z::PrintSize),
+            MenuAction::ResetViewRotation,
+        ] {
+            match resolve(action, &context, &ed) {
+                Ok(Pick::Workspace(intent)) => assert_eq!(*intent, Intent::Action(action)),
+                other => panic!(
+                    "{action:?} resolved to {other:?}; it must reach the workspace that \
+                     already implements it"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn an_adjustments_parameters_reach_a_real_document_edit() {
+        // `Intent::EditLayerKind` is the only channel an adjustment layer's
+        // parameters or a text layer's content can change through, and `pick`
+        // used to answer it with `None`. Every slider in the Properties panel
+        // was therefore inert, and an adjustment created at identity — Curves,
+        // Levels — could never be made to do anything at all.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor_with_a_document(dir.path());
+        let layer = layer_model::Layer::with_kind(
+            "Posterize",
+            layer_model::LayerKind::Adjustment(layer_model::AdjustmentLayer {
+                kind: layer_model::AdjustmentKind::Posterize { levels: 8 },
+            }),
+        );
+        let id = layer.id;
+        ed.apply_command(Command::create_layer(layer));
+
+        let next = layer_model::LayerKind::Adjustment(layer_model::AdjustmentLayer {
+            kind: layer_model::AdjustmentKind::Posterize { levels: 3 },
+        });
+        match pick(
+            &Intent::EditLayerKind {
+                layer: id,
+                kind: Box::new(next.clone()),
+            },
+            &ed,
+        ) {
+            Some(Pick::Kind { layer, kind }) => {
+                assert_eq!(layer, id);
+                assert_eq!(*kind, next);
+            }
+            other => panic!("an adjustment's parameters resolved to {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_intent_with_no_answer_says_what_it_was() {
+        // The reporting half of the contract this module's docs claim. A
+        // dropped intent used to be indistinguishable from a performed one.
+        let message = unrouted_message(&Intent::Action(MenuAction::FileInfo));
+        assert!(message.contains(NOT_WIRED), "{message}");
+        assert!(
+            message.contains(&MenuAction::FileInfo.label()),
+            "the message must name the item: {message}"
+        );
     }
 
     #[test]

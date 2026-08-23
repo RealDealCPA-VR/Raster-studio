@@ -39,4 +39,4 @@ pub use canvas::{backdrop_clear_color, srgb_to_linear, Canvas, DEFAULT_BACKDROP_
 pub use composite::{CompositeParams, CompositePass};
 pub use context::GpuContext;
 pub use offscreen::{read_texture_rgba8, OffscreenTarget, Readback};
-pub use texture::{GpuTexture, MipGenerator};
+pub use texture::{GpuTexture, MipGenerator, TextureError};

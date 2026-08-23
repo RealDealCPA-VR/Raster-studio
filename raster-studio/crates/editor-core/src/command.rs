@@ -350,12 +350,71 @@ pub enum Command {
         rect: PixelRect,
         delta: TileDelta,
     },
+    /// Replace a layer's **kind payload** in place: an adjustment's parameters,
+    /// a text layer's content and styling, a shape's path, a group's blending.
+    ///
+    /// This is the edit every slider in the Properties panel makes, and until
+    /// this variant existed it made none: [`LayerPatch`] deliberately covers
+    /// every field of a [`Layer`] *except* `kind`, so an adjustment layer's
+    /// parameters had no command behind them at all. The panel re-reads the
+    /// value from the document each frame, so the knob visibly sprang back the
+    /// instant the pointer was released, and an adjustment created at identity
+    /// — Curves, Levels — could never be made to change anything.
+    ///
+    /// # It cannot change a layer's *class*
+    ///
+    /// `kind` must be the same variant the layer already holds, or this is
+    /// [`CommandError::CannotChangeLayerClass`]. That is the reason
+    /// `LayerPatch` left `kind` out in the first place: turning a group into a
+    /// raster layer would orphan its children and turning a raster layer into a
+    /// group would invent them. Editing the payload *within* a class moves no
+    /// ownership, which is what makes it safe to do here.
+    ///
+    /// # A group keeps the children the tree says it has
+    ///
+    /// [`layer_model::LayerTree`] is the authority on which ids a group owns,
+    /// and [`layer_model::GroupLayer::children`] is that record. A payload
+    /// arriving here therefore has its `children` **ignored** in favour of the
+    /// list already in the document, so editing a group's blending mode cannot
+    /// duplicate or strand a subtree. Pinned by
+    /// `editing_a_groups_blending_cannot_rewrite_its_children`.
+    ///
+    /// # Wire format
+    ///
+    /// Purely additive. Every entry an earlier build wrote is one of the older
+    /// variants and still deserializes byte for byte, so no journal replay
+    /// breaks and no document migration is involved — which is why
+    /// [`crate::DOCUMENT_FORMAT_VERSION`] is unchanged.
+    SetLayerKind {
+        layer_id: LayerId,
+        /// Boxed for the reason [`Command::CreateLayer`]'s layer is: a
+        /// [`LayerKind`] carrying a full Curves or text run dwarfs the small
+        /// commands a stroke emits by the hundred, and `Box<T>` serializes
+        /// exactly like `T`.
+        kind: Box<LayerKind>,
+    },
     /// A batch of commands applied atomically (import, AI result, flatten...).
     /// Its inverse is the reversed inverses of its members.
     Transaction {
         label: String,
         commands: Vec<Command>,
     },
+}
+
+/// The class of a layer kind, as a word an error message can use.
+///
+/// A discriminant comparison answers "is this the same class?"; this answers
+/// "which classes were they?", which is what makes the refusal readable.
+pub fn layer_class_name(kind: &LayerKind) -> &'static str {
+    match kind {
+        LayerKind::Raster(_) => "raster",
+        LayerKind::Group(_) => "group",
+        LayerKind::Adjustment(_) => "adjustment",
+        LayerKind::Text(_) => "text",
+        LayerKind::Shape(_) => "shape",
+        LayerKind::SmartObject(_) => "smart object",
+        LayerKind::Generator(_) => "generator",
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -405,6 +464,22 @@ pub enum CommandError {
     CannotClearMask(LayerId),
     #[error("fill value does not match its target's storage format")]
     FillValueMismatch,
+    /// A [`Command::SetLayerKind`] carried a payload of a different class from
+    /// the one the layer already is.
+    ///
+    /// Not a near-miss to be papered over: a class change moves pixel and child
+    /// ownership, and this command moves neither. Refusing keeps the tree and
+    /// the tile store consistent, and keeps the command's inverse — the
+    /// previous payload, of the same class — exactly applicable.
+    #[error(
+        "layer {layer} is a {from} layer; a payload of class {to} cannot replace its own, \
+         because changing a layer's class would move pixel and child ownership"
+    )]
+    CannotChangeLayerClass {
+        layer: LayerId,
+        from: &'static str,
+        to: &'static str,
+    },
     #[error(transparent)]
     Pixel(#[from] PixelError),
     /// A transaction member failed *and* restoring the members that had already
@@ -680,6 +755,48 @@ impl Command {
                 })
             }
 
+            Command::SetLayerKind { layer_id, kind } => {
+                let layer = doc
+                    .layers
+                    .get(*layer_id)
+                    .ok_or(CommandError::LayerNotFound(*layer_id))?;
+                // The blanket lock is the one that bites: an adjustment's
+                // parameters are neither pixels nor a position, so the narrower
+                // locks have nothing to say about them.
+                if layer.locked.all {
+                    return Err(CommandError::LayerLocked(*layer_id));
+                }
+                if std::mem::discriminant(&layer.kind) != std::mem::discriminant(kind.as_ref()) {
+                    return Err(CommandError::CannotChangeLayerClass {
+                        layer: *layer_id,
+                        from: layer_class_name(&layer.kind),
+                        to: layer_class_name(kind),
+                    });
+                }
+                // Everything above only read; nothing has been mutated yet, so
+                // each refusal leaves the document exactly as it was.
+                let layer = doc
+                    .layers
+                    .get_mut(*layer_id)
+                    .ok_or(CommandError::LayerNotFound(*layer_id))?;
+                let mut next = (**kind).clone();
+                // The tree owns group membership, not the payload travelling
+                // through this command. Taking the children from the document
+                // rather than from `kind` is what stops a blending-mode edit —
+                // or a hand-written journal — from duplicating or losing a
+                // subtree.
+                if let (LayerKind::Group(before), LayerKind::Group(after)) =
+                    (&layer.kind, &mut next)
+                {
+                    after.children.clone_from(&before.children);
+                }
+                let previous = std::mem::replace(&mut layer.kind, next);
+                Ok(Command::SetLayerKind {
+                    layer_id: *layer_id,
+                    kind: Box::new(previous),
+                })
+            }
+
             Command::TransformLayer { layer_id, matrix } => {
                 // Invert *first*. A drag that collapses a layer to zero width
                 // is a legitimate gesture, and `Affine2::inverse` answers it
@@ -790,6 +907,20 @@ impl Command {
             Command::RestoreLayers { .. } => "Restore Layer".into(),
             Command::MoveLayer { .. } => "Move Layer".into(),
             Command::SetLayerProperties { .. } => "Change Layer Properties".into(),
+            // Named after the class rather than "Change Layer Kind", because
+            // the history panel's row is what the user reads back: "Edit
+            // Adjustment" is the step they took, and the class is the only
+            // thing that distinguishes it from an edit to a text run.
+            Command::SetLayerKind { kind, .. } => {
+                let class = layer_class_name(kind);
+                let mut label = String::from("Edit ");
+                let mut chars = class.chars();
+                if let Some(first) = chars.next() {
+                    label.extend(first.to_uppercase());
+                    label.push_str(chars.as_str());
+                }
+                label
+            }
             Command::TransformLayer { .. } => "Transform Layer".into(),
             Command::PaintTiles { target, .. } => match target {
                 PixelTarget::Layer(_) => "Paint".into(),
@@ -987,6 +1118,180 @@ mod tests {
         let id = layer.id;
         Command::create_layer(layer).apply(&mut doc).unwrap();
         (doc, id)
+    }
+
+    /// A document with one Brightness/Contrast adjustment layer at identity.
+    fn doc_with_adjustment() -> (Document, LayerId) {
+        use layer_model::{AdjustmentKind, AdjustmentLayer};
+        let mut doc = Document::new(64, 64, "t");
+        let layer = Layer::with_kind(
+            "Brightness/Contrast",
+            LayerKind::Adjustment(AdjustmentLayer {
+                kind: AdjustmentKind::BrightnessContrast {
+                    brightness: 0.0,
+                    contrast: 0.0,
+                },
+            }),
+        );
+        let id = layer.id;
+        Command::create_layer(layer).apply(&mut doc).unwrap();
+        (doc, id)
+    }
+
+    fn adjustment_of(doc: &Document, id: LayerId) -> layer_model::AdjustmentKind {
+        match &doc.layers.get(id).unwrap().kind {
+            LayerKind::Adjustment(a) => a.kind.clone(),
+            other => panic!("not an adjustment: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn setting_a_layer_kind_edits_the_payload_and_undoes_exactly() {
+        use layer_model::AdjustmentKind;
+        let (mut doc, id) = doc_with_adjustment();
+
+        let inverse = Command::SetLayerKind {
+            layer_id: id,
+            kind: Box::new(LayerKind::Adjustment(layer_model::AdjustmentLayer {
+                kind: AdjustmentKind::BrightnessContrast {
+                    brightness: 0.4,
+                    contrast: -0.2,
+                },
+            })),
+        }
+        .apply(&mut doc)
+        .expect("an adjustment's own parameters are editable");
+
+        assert_eq!(
+            adjustment_of(&doc, id),
+            AdjustmentKind::BrightnessContrast {
+                brightness: 0.4,
+                contrast: -0.2
+            }
+        );
+        // The inverse carries the payload the layer held *before*, so undo is
+        // exact rather than a return to some default.
+        inverse.apply(&mut doc).unwrap();
+        assert_eq!(
+            adjustment_of(&doc, id),
+            AdjustmentKind::BrightnessContrast {
+                brightness: 0.0,
+                contrast: 0.0
+            }
+        );
+    }
+
+    #[test]
+    fn a_kind_payload_of_another_class_is_refused_and_changes_nothing() {
+        let (mut doc, id) = doc_with_adjustment();
+        let before = doc.clone();
+        let err = Command::SetLayerKind {
+            layer_id: id,
+            kind: Box::new(LayerKind::Raster(Default::default())),
+        }
+        .apply(&mut doc)
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                CommandError::CannotChangeLayerClass { layer, from, to }
+                    if layer == id && from == "adjustment" && to == "raster"
+            ),
+            "{err:?}"
+        );
+        assert_eq!(
+            doc, before,
+            "a refused class change still mutated the layer"
+        );
+    }
+
+    #[test]
+    fn a_fully_locked_layer_refuses_a_kind_edit() {
+        use layer_model::AdjustmentKind;
+        let (mut doc, id) = doc_with_adjustment();
+        doc.layers.get_mut(id).unwrap().locked = LockState {
+            all: true,
+            ..Default::default()
+        };
+        let before = doc.clone();
+        let err = Command::SetLayerKind {
+            layer_id: id,
+            kind: Box::new(LayerKind::Adjustment(layer_model::AdjustmentLayer {
+                kind: AdjustmentKind::Invert,
+            })),
+        }
+        .apply(&mut doc)
+        .unwrap_err();
+        assert!(
+            matches!(err, CommandError::LayerLocked(l) if l == id),
+            "{err:?}"
+        );
+        assert_eq!(doc, before);
+    }
+
+    #[test]
+    fn editing_a_groups_blending_cannot_rewrite_its_children() {
+        use layer_model::{GroupBlending, GroupLayer};
+        let mut doc = Document::new(64, 64, "t");
+        let group = Layer::group("G");
+        let group_id = group.id;
+        Command::create_layer(group).apply(&mut doc).unwrap();
+        let child = Layer::raster("child");
+        let child_id = child.id;
+        Command::create_layer(child).apply(&mut doc).unwrap();
+        Command::MoveLayer {
+            layer_id: child_id,
+            parent: Some(group_id),
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+
+        // A payload that claims the group is empty, which is exactly what a
+        // panel that read the group before the child was added would send.
+        Command::SetLayerKind {
+            layer_id: group_id,
+            kind: Box::new(LayerKind::Group(GroupLayer {
+                children: Vec::new(),
+                collapsed: true,
+                blending: GroupBlending::PassThrough,
+            })),
+        }
+        .apply(&mut doc)
+        .unwrap();
+
+        let LayerKind::Group(g) = &doc.layers.get(group_id).unwrap().kind else {
+            panic!("still a group");
+        };
+        // The editable half landed...
+        assert_eq!(g.blending, GroupBlending::PassThrough);
+        assert!(g.collapsed);
+        // ...and the ownership record did not move.
+        assert_eq!(g.children, vec![child_id]);
+        assert!(doc.layers.get(child_id).is_some());
+    }
+
+    #[test]
+    fn a_kind_edit_names_its_class_in_the_history_label() {
+        use layer_model::{AdjustmentKind, AdjustmentLayer, TextLayer};
+        assert_eq!(
+            Command::SetLayerKind {
+                layer_id: LayerId::new(),
+                kind: Box::new(LayerKind::Adjustment(AdjustmentLayer {
+                    kind: AdjustmentKind::Invert
+                })),
+            }
+            .label(),
+            "Edit Adjustment"
+        );
+        assert_eq!(
+            Command::SetLayerKind {
+                layer_id: LayerId::new(),
+                kind: Box::new(LayerKind::Text(TextLayer::default())),
+            }
+            .label(),
+            "Edit Text"
+        );
     }
 
     #[test]

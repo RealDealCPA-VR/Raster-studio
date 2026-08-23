@@ -104,6 +104,28 @@ pub struct Rebind {
     pub force: bool,
 }
 
+/// One edit of a layer's kind payload, and the pointer gesture it belongs to.
+///
+/// # Why the gesture travels with the edit
+///
+/// A slider in the Properties panel emits the value it now holds on *every*
+/// frame the pointer moves. Applied naively that is two hundred history entries
+/// for one sweep of the Brightness knob, and an undo that walks back through
+/// them one thousandth at a time. So consecutive edits to the same layer that
+/// share a gesture are folded into a single entry by
+/// [`crate::Editor::apply_kind_edit`].
+///
+/// `None` means "this edit stands alone": a keyboard nudge, or a value typed
+/// into the field. Only the window knows whether a button is still down, which
+/// is why [`crate::menu_bridge::record`] leaves this `None` and
+/// [`Chrome::harvest`] stamps it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KindEdit {
+    pub layer: LayerId,
+    pub kind: Box<layer_model::LayerKind>,
+    pub gesture: Option<u64>,
+}
+
 /// What the user asked the application to do this frame.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeOutput {
@@ -111,6 +133,24 @@ pub struct ChromeOutput {
     pub actions: Vec<Action>,
     /// Document edits the layers dock emitted.
     pub commands: Vec<Command>,
+    /// Edits to a layer's kind payload: the Properties panel's adjustment
+    /// sliders, the Text panel's fields.
+    ///
+    /// Separate from [`ChromeOutput::commands`] only because a drag emits one
+    /// per frame and they must land as a single undo step — see
+    /// [`KindEdit::gesture`] and [`crate::Editor::apply_kind_edit`].
+    pub layer_kind: Vec<KindEdit>,
+    /// Intents the bridge had no answer for.
+    ///
+    /// **Not an error path that can be left empty and forgotten.** Before this
+    /// field existed [`Chrome::harvest`] dropped such an intent on the floor
+    /// with no status message and no log line, and that silence is why every
+    /// adjustment slider in the Properties panel was inert for a whole wave: a
+    /// control that does nothing looks exactly like a control that works. The
+    /// shell turns each of these into a status message through
+    /// [`crate::menu_bridge::unrouted_message`], so the *next* unwired control
+    /// announces itself the first time anybody clicks it.
+    pub unrouted: Vec<ui::Intent>,
     /// A tab was clicked.
     pub activate: Option<usize>,
     /// A tab's close button was clicked.
@@ -203,6 +243,53 @@ fn push_brush(w: &mut ui::Workspace, tool: tools::ToolId, brush: &tools::BrushSe
     ];
     for (key, value) in pairs {
         w.options.set(tool, key, value);
+    }
+}
+
+/// Read `options` back into a brush, keeping every field `tool`'s schema does
+/// not declare.
+///
+/// The mirror of [`push_brush`], and it exists for the same reason: a key the
+/// tool never had must not travel in either direction.
+/// [`ui::ToolOptions::brush_settings`] falls back to `BrushSettings::default()`
+/// for an undeclared key, so reading the Pencil back through it turned
+/// `aliased` off and `size_pressure` on — the two fields that *are* the Pencil,
+/// and neither of them a control the Pencil's options bar draws. `base` is the
+/// brush that tool already has, so an undeclared field survives the round trip
+/// untouched.
+fn brush_from_options(
+    options: &ui::ToolOptions,
+    tool: tools::ToolId,
+    base: tools::BrushSettings,
+) -> tools::BrushSettings {
+    use ui::OptionValue;
+    let float = |key: &str, was: f32| {
+        options
+            .get(tool, key)
+            .and_then(OptionValue::as_float)
+            .unwrap_or(was)
+    };
+    let flag = |key: &str, was: bool| {
+        options
+            .get(tool, key)
+            .and_then(OptionValue::as_bool)
+            .unwrap_or(was)
+    };
+    tools::BrushSettings {
+        size: float("size", base.size),
+        hardness: float("hardness", base.hardness),
+        spacing: float("spacing", base.spacing),
+        angle: float("angle", base.angle),
+        roundness: float("roundness", base.roundness),
+        opacity: float("opacity", base.opacity),
+        flow: float("flow", base.flow),
+        smoothing: float("smoothing", base.smoothing),
+        size_pressure: flag("size_pressure", base.size_pressure),
+        flow_pressure: flag("flow_pressure", base.flow_pressure),
+        // Neither is a control any tool's schema declares, so both are the
+        // tool's own and are carried through rather than defaulted.
+        min_size_ratio: base.min_size_ratio,
+        aliased: base.aliased,
     }
 }
 
@@ -306,6 +393,47 @@ pub struct Chrome {
     /// The `ui` crate's workspace: the dock, the panels, the tool palette's
     /// fly-outs, the tool options, the view overlays.
     workspace: ui::Workspace,
+    /// How many times a pointer button has gone down since the window opened.
+    ///
+    /// The identity of the drag in progress, and nothing more: two sweeps of
+    /// the same slider get different numbers, so they land as two undo steps
+    /// while one sweep lands as one. See [`KindEdit::gesture`].
+    gesture: u64,
+    /// Whether a pointer button is down right now. A release ends the run of
+    /// edits that coalesce, which is the whole reason the counter alone is not
+    /// enough: without it, a value nudged from the keyboard would be folded
+    /// into whatever drag happened last.
+    pointer_down: bool,
+    /// The two rectangles the last drawn frame settled on. `None` until a frame
+    /// has been drawn, which is the only honest answer before one has.
+    frame_geometry: Option<FrameGeometry>,
+}
+
+/// Where this frame's window is, and where the part of it the user can see the
+/// image in is. **They are not the same rectangle**, and confusing them is what
+/// made Fill Screen smaller than Fit on Screen.
+///
+/// Both are in logical points, as egui reports them; `ppp` converts either to
+/// the physical pixels [`render::Camera`] measures in.
+#[derive(Debug, Clone, Copy)]
+struct FrameGeometry {
+    /// The whole window — `Context::screen_rect`. This is the rectangle the
+    /// shell renders the image across: [`crate::shell::Shell::redraw`] gives
+    /// `OpenDocument::camera` the entire surface as its `viewport_size` and
+    /// composites with no scissor, and the panels are painted on top of the
+    /// result. [`crate::tool_input::canvas_viewport`] says the same thing on
+    /// the way in, for pointer coordinates.
+    surface: egui::Rect,
+    /// What the docks, the strips and the tool rail left — the part of the
+    /// image the user can actually see, and the rectangle Zoom to Selection
+    /// has to land inside.
+    content: egui::Rect,
+    /// Physical pixels per logical point, for this frame.
+    ppp: f32,
+    /// The canvas appearance this frame is drawn with. Only the ruler gutter
+    /// depth matters here, and this shell switches that off — see
+    /// [`Chrome::sync_canvas_host`].
+    style: ui::canvas::CanvasStyle,
 }
 
 impl Chrome {
@@ -339,6 +467,7 @@ impl Chrome {
     /// Draw one frame of chrome.
     pub fn ui(&mut self, ctx: &egui::Context, editor: &Editor) -> ChromeOutput {
         let mut out = ChromeOutput::default();
+        self.read_gesture(ctx);
         self.sync_workspace(editor);
 
         // Order matters, and it is `ui::Workspace::ui`'s: egui gives each panel
@@ -376,6 +505,24 @@ impl Chrome {
         out
     }
 
+    /// Note which press-and-drag, if any, this frame's edits belong to.
+    ///
+    /// Read before anything is drawn, so every control in the frame agrees
+    /// about the gesture it is part of.
+    fn read_gesture(&mut self, ctx: &egui::Context) {
+        let (pressed, down) = ctx.input(|i| (i.pointer.any_pressed(), i.pointer.any_down()));
+        if pressed {
+            self.gesture = self.gesture.wrapping_add(1);
+        }
+        self.pointer_down = down;
+    }
+
+    /// The gesture an edit raised this frame belongs to, or `None` when no
+    /// button is down and the edit therefore stands alone.
+    fn gesture(&self) -> Option<u64> {
+        self.pointer_down.then_some(self.gesture)
+    }
+
     /// Push the editor's state into the workspace, once, before the frame.
     ///
     /// These are the values a panel draws that the [`Editor`] owns. Without
@@ -402,6 +549,12 @@ impl Chrome {
         // so `[` and `]` move the slider the user is looking at — without this
         // the options bar and the status bar show different sizes in the same
         // window. The reverse direction is `ChromeOutput::set_brush`.
+        // `Editor::brush` is the *active tool's* brush — it keeps one per tool,
+        // see `Editor::set_tool` — so what lands in the options bar is the
+        // Pencil's 1px when the Pencil is selected and the Clone Stamp's 40px
+        // when it is, rather than one application-wide number pushed into every
+        // tool's sliders in turn. The reverse direction is `brush_from_options`,
+        // which is careful to bring back only the keys `tool` declares.
         push_brush(w, tool, editor.brush());
         w.color.set_well(
             ui::panels::color::ColorWell::Foreground,
@@ -415,16 +568,128 @@ impl Chrome {
             w.status.zoom = open.camera.zoom;
             w.view_center = (open.camera.center.x, open.camera.center.y);
             w.prune(&open.document);
+            // The `ui` canvas host is never *drawn* by this shell — the image
+            // is composited onto the surface behind egui, and
+            // `CanvasHost::central_panel` is never called — so nothing used to
+            // tell it what document it was looking at or where the camera was.
+            // The View menu's Fill Screen, Zoom to Selection and Print Size are
+            // performed by that host, against exactly those two facts; without
+            // this they framed a zero-sized document from a camera at the
+            // origin and moved nothing.
+            w.canvas.observe(&open.document);
+            w.canvas.view.camera.set_zoom(open.camera.zoom);
+            w.canvas.view.camera.center =
+                glam::Vec2::new(open.camera.center.x, open.camera.center.y);
         }
     }
 
-    /// Remember how much room the canvas has once the docks have taken theirs.
+    /// Remember this frame's two rectangles: the window, and what the docks
+    /// left of it.
+    ///
+    /// [`Workspace::viewport`](ui::Workspace::viewport) is the leftover — the
+    /// visible canvas area, which is what the Navigator draws its proxy from.
+    ///
+    /// The `ui` canvas host, though, is given the **whole window**, because
+    /// that is the rectangle the shell renders from: `OpenDocument::camera`'s
+    /// `viewport_size` is the entire surface and the composite is drawn across
+    /// all of it, with the panels painted over the top. Every zoom command this
+    /// chrome routes to that host divides by its viewport, so the host and
+    /// `render::Camera` have to be looking at the same rectangle or the zoom
+    /// they compute is for a window that does not exist.
+    ///
+    /// That mismatch was not a rounding error. Given the host the content
+    /// rectangle instead, a 400x300 document in a 1400x900 window came out at
+    /// Fit 3.0 and Fill 2.4565 — Fill *smaller* than Fit — and the image, sized
+    /// for a 732x752 rectangle but centred on the window, left a strip of bare
+    /// backdrop along the bottom of the canvas area.
+    ///
+    /// The one command that genuinely belongs to the smaller rectangle is Zoom
+    /// to Selection, and it asks for it by name: see [`Chrome::frame_selection`].
     fn record_viewport(&mut self, ctx: &egui::Context) {
-        let rect = ctx.available_rect();
-        let (w, h) = (rect.width(), rect.height());
+        let content = ctx.available_rect();
+        let (w, h) = (content.width(), content.height());
         if w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 {
             self.workspace.viewport = (w, h);
         }
+        let geometry = FrameGeometry {
+            surface: ctx.screen_rect(),
+            content,
+            ppp: ctx.pixels_per_point(),
+            style: ui::canvas::CanvasStyle::from_context(ctx),
+        };
+        // The host is never drawn by this shell and therefore never learned any
+        // of this on its own: left alone it frames documents against its default
+        // 1280x720 viewport, whatever window it is really in.
+        self.sync_canvas_host(geometry.surface, &geometry);
+        self.frame_geometry = Some(geometry);
+    }
+
+    /// Point the `ui` canvas host at `rect`, measured in the window `geometry`
+    /// describes.
+    ///
+    /// The rulers are switched off first. They are the host's own gutter, and
+    /// this shell never draws the host — so leaving them on insets the viewport
+    /// by a strip of window that nothing has actually reserved, and every zoom
+    /// computed from it comes out short.
+    fn sync_canvas_host(&mut self, rect: egui::Rect, geometry: &FrameGeometry) {
+        self.workspace.canvas.view.rulers_visible = false;
+        let surface = geometry.surface.size();
+        self.workspace.canvas.view.sync_viewport(
+            glam::Vec2::new(surface.x, surface.y),
+            rect,
+            geometry.ppp,
+            &geometry.style,
+        );
+    }
+
+    /// View ▸ Zoom to Selection, framed where the user can see it.
+    ///
+    /// Every other camera command this chrome routes is about the whole
+    /// picture, so the window is the right rectangle for all of them. This one
+    /// is about *showing the user something*, and the shell paints its docks
+    /// over the window: measured against the surface, a selection is centred on
+    /// the window and its leading edges end up behind the tool rail and the
+    /// options bar. With every dock open in a 1400x900 window that hid ~27
+    /// points of a 40x40 selection's left edge and ~29 of its top;
+    /// `zoom_to_selection_frames_the_selection_where_the_docks_are_not`
+    /// measures the same thing from the camera the shell renders with.
+    ///
+    /// So the zoom is measured against the content rectangle, and the centre is
+    /// then translated back into the surface-centred camera the shell renders
+    /// from. [`render::Camera::screen_to_image`] puts `center` at the middle of
+    /// the *surface*, so to land a document point `p` at the middle of the
+    /// content rectangle the camera has to be centred at
+    /// `p - (content_centre - surface_centre) / zoom`.
+    fn frame_selection(&mut self) {
+        let intent = ui::Intent::Action(ui::menu::MenuAction::Zoom(
+            ui::menu::ZoomCommand::ToSelection,
+        ));
+        let Some(geometry) = self.frame_geometry else {
+            // Nothing has been drawn yet, so there is no content rectangle to
+            // frame against. Perform it plainly rather than drop it.
+            self.workspace.absorb(&intent);
+            return;
+        };
+        self.sync_canvas_host(geometry.content, &geometry);
+        let moved = self.workspace.absorb(&intent);
+        self.sync_canvas_host(geometry.surface, &geometry);
+        // Nothing selected: the camera did not move, and shifting it by the
+        // panel offset would pan the image for a command that refused.
+        if !moved {
+            return;
+        }
+        let zoom = self.workspace.canvas.view.camera.zoom;
+        if !(zoom.is_finite() && zoom > 0.0) {
+            return;
+        }
+        let offset = ((geometry.content.center() - geometry.surface.min) * geometry.ppp
+            - geometry.surface.size() * (geometry.ppp * 0.5))
+            / zoom;
+        self.workspace.canvas.view.camera.center -= glam::Vec2::new(offset.x, offset.y);
+        // `Workspace::absorb_action` read the camera back into `view_center`
+        // before this correction, and `harvest` reports *that* to the shell.
+        let center = self.workspace.canvas.view.camera.center;
+        self.workspace.view_center = (center.x, center.y);
     }
 
     /// `Ctrl+2`…`Ctrl+9`: isolate the channel the Channels panel prints that
@@ -497,9 +762,21 @@ impl Chrome {
 
     fn harvest(&mut self, editor: &Editor, out: &mut ChromeOutput) {
         for intent in self.workspace.drain_intents() {
-            if let Some(pick) = crate::menu_bridge::pick(&intent, editor) {
-                crate::menu_bridge::record(pick, out);
+            match crate::menu_bridge::pick(&intent, editor) {
+                Some(pick) => crate::menu_bridge::record(pick, out),
+                // Loud, not silent. This `else` used to be absent, so a control
+                // whose intent the bridge could not answer produced no edit, no
+                // status message and no log line — indistinguishable from a
+                // control that worked. See `ChromeOutput::unrouted`.
+                None => out.unrouted.push(intent),
             }
+        }
+        // Which drag an edit belongs to is the *window's* knowledge: a slider
+        // emits the value it now holds and has no idea whether the button is
+        // still down. Stamped here so `Editor::apply_kind_edit` can fold one
+        // sweep into one undo step.
+        for edit in &mut out.layer_kind {
+            edit.gesture = self.gesture();
         }
         // Workspace-local intents are performed by the thing that owns the
         // state — this chrome — rather than travelling out to the shell and
@@ -515,14 +792,43 @@ impl Chrome {
         // the ▲ moved the panel two places — see
         // `the_header_reorder_control_moves_a_panel_exactly_one_place`.
         for intent in &out.workspace {
-            self.workspace.absorb(intent);
+            match intent {
+                // The one camera command that is measured against the rectangle
+                // the docks left rather than the whole window, because it exists
+                // to put something in front of the user. See `frame_selection`.
+                ui::Intent::Action(ui::menu::MenuAction::Zoom(
+                    ui::menu::ZoomCommand::ToSelection,
+                )) => self.frame_selection(),
+                _ => {
+                    self.workspace.absorb(intent);
+                }
+            }
         }
         // The other half of the brush's single source of truth: an options-bar
         // edit is absorbed above, so read the result back and hand it to the
         // shell for `Editor::set_brush`.
         if out.workspace.iter().any(touches_brush) {
             let tool = editor.effective_tool();
-            out.set_brush = Some(self.workspace.options.brush_settings(tool));
+            out.set_brush = Some(brush_from_options(
+                &self.workspace.options,
+                tool,
+                editor.brush_for(tool),
+            ));
+        }
+        // The other half of the four View items this bridge routes to the
+        // workspace. `absorb_action` moves the *workspace's* canvas camera, and
+        // the camera the user is looking at is the document's — the shell
+        // composites against `OpenDocument::camera`. So the result is read back
+        // and handed out the same way the Navigator's own pan is. Without this,
+        // Fill Screen moved a camera nothing renders from and `sync_workspace`
+        // put the old zoom back on the very next frame.
+        if out
+            .workspace
+            .iter()
+            .any(|i| matches!(i, ui::Intent::Action(a) if crate::menu_bridge::is_workspace_camera_action(*a)))
+        {
+            out.set_zoom = Some(self.workspace.status.zoom);
+            out.set_view_center = Some(self.workspace.view_center);
         }
     }
 
@@ -2059,6 +2365,467 @@ mod tests {
             out.set_brush.map(|b| b.size),
             Some(77.0),
             "an options-bar edit did not travel back to the editor"
+        );
+    }
+
+    /// The options bar is per tool, and it may only move the fields that tool
+    /// actually draws a control for.
+    #[test]
+    fn the_options_bar_shows_the_selected_tools_own_brush_and_keeps_what_it_cannot_draw() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(tools::ToolId::Pencil);
+        let mut chrome = Chrome::new();
+        one_frame(&mut chrome, &editor);
+
+        // Editor -> options bar: the Pencil's slider reads 1, not the
+        // application default of 24.
+        assert_eq!(
+            chrome
+                .workspace()
+                .options
+                .get(tools::ToolId::Pencil, "size")
+                .and_then(ui::OptionValue::as_float),
+            Some(1.0),
+            "the Pencil's size slider shows another tool's brush"
+        );
+
+        // Options bar -> editor: the Pencil's schema declares size, opacity and
+        // spacing. `aliased`, `hardness` and the pressure switches are not
+        // controls it draws, so moving the size slider may not touch them —
+        // and they are what make a pencil a pencil.
+        let mut out = ChromeOutput::default();
+        out.workspace.push(ui::Intent::SetToolOption {
+            tool: tools::ToolId::Pencil,
+            key: "size",
+            value: ui::OptionValue::Float(9.0),
+        });
+        chrome.harvest_workspace_for_test(&mut out, &editor);
+        let back = out.set_brush.expect("a brush edit came back");
+        assert_eq!(back.size, 9.0);
+        assert!(back.aliased, "the size slider un-aliased the Pencil");
+        assert!(
+            !back.size_pressure,
+            "the size slider gave the Pencil size-from-pressure"
+        );
+        assert_eq!(back.hardness, 1.0, "the size slider softened the Pencil");
+    }
+
+    #[test]
+    fn an_intent_the_bridge_cannot_answer_is_reported_rather_than_dropped() {
+        // `harvest` used to be `if let Some(pick) = pick(..)` with no `else`,
+        // so an intent nothing could perform produced no edit, no status line
+        // and no log record. That silence is why an entirely inert Properties
+        // panel survived a whole wave of review: on screen, a control that does
+        // nothing looks exactly like a control that works.
+        let dir = tempfile::tempdir().unwrap();
+        let ed = editor(dir.path());
+        let mut chrome = Chrome::new();
+
+        let orphan = ui::Intent::Action(ui::menu::MenuAction::FileInfo);
+        chrome.workspace.emit(orphan.clone());
+        let mut out = ChromeOutput::default();
+        chrome.harvest_workspace_for_test(&mut out, &ed);
+
+        assert_eq!(
+            out.unrouted,
+            vec![orphan.clone()],
+            "the intent went nowhere and said nothing"
+        );
+        let said = crate::menu_bridge::unrouted_message(&orphan);
+        assert!(said.contains(crate::menu_bridge::NOT_WIRED), "{said}");
+    }
+
+    /// An editor with a real image open and a Posterize adjustment layer on it.
+    fn editor_with_adjustment(
+        dir: &std::path::Path,
+    ) -> (Editor, layer_model::LayerId, layer_model::LayerKind) {
+        let p = png(dir, "adj.png");
+        let mut ed = editor(&dir.join("config"));
+        ed.open_path(&p).unwrap();
+        let layer = layer_model::Layer::with_kind(
+            "Posterize",
+            layer_model::LayerKind::Adjustment(layer_model::AdjustmentLayer {
+                kind: layer_model::AdjustmentKind::Posterize { levels: 8 },
+            }),
+        );
+        let id = layer.id;
+        ed.apply_command(Command::create_layer(layer));
+        let next = layer_model::LayerKind::Adjustment(layer_model::AdjustmentLayer {
+            kind: layer_model::AdjustmentKind::Posterize { levels: 3 },
+        });
+        (ed, id, next)
+    }
+
+    #[test]
+    fn a_slider_edit_carries_the_drag_it_belongs_to() {
+        // The panel emits the value it now holds and knows nothing about the
+        // pointer; only the window does. Without this stamp `Editor` cannot
+        // tell one sweep of a slider from two hundred separate edits.
+        let dir = tempfile::tempdir().unwrap();
+        let (ed, layer, kind) = editor_with_adjustment(dir.path());
+        let intent = ui::Intent::EditLayerKind {
+            layer,
+            kind: Box::new(kind),
+        };
+
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+
+        let at = egui::pos2(700.0, 450.0);
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+
+        let mut gestures = Vec::new();
+        let mut frame = |events: Vec<egui::Event>| {
+            chrome.workspace.emit(intent.clone());
+            let mut out = ChromeOutput::default();
+            let _ = ctx.run(raw_input(events), |ctx| {
+                out = chrome.ui(ctx, &ed);
+            });
+            assert_eq!(out.layer_kind.len(), 1, "the edit was dropped");
+            out.layer_kind[0].gesture
+        };
+
+        // Press, drag, drag: one gesture throughout.
+        gestures.push(frame(vec![egui::Event::PointerMoved(at), button(true)]));
+        gestures.push(frame(vec![egui::Event::PointerMoved(egui::pos2(
+            710.0, 450.0,
+        ))]));
+        // Release, then a value typed with no pointer down at all.
+        gestures.push(frame(vec![button(false)]));
+        // A second press is a second gesture.
+        gestures.push(frame(vec![button(true)]));
+
+        assert_eq!(
+            gestures[0], gestures[1],
+            "two frames of one drag were given different identities: {gestures:?}"
+        );
+        assert!(
+            gestures[0].is_some(),
+            "an edit made with the button down carried no gesture: {gestures:?}"
+        );
+        assert_eq!(
+            gestures[2], None,
+            "an edit with no button down must stand alone: {gestures:?}"
+        );
+        assert!(
+            gestures[3].is_some() && gestures[3] != gestures[0],
+            "a second press must start a second undo step: {gestures:?}"
+        );
+    }
+
+    #[test]
+    fn the_workspaces_canvas_learns_the_window_it_is_drawn_in() {
+        // This shell never draws the `ui` canvas — the image is composited onto
+        // the surface behind egui — so the canvas host's viewport was whatever
+        // its default said (1280x720, no panel insets) for the whole session.
+        // Every zoom command the View menu routes to the workspace divides by
+        // it, so a stale one puts the image at the zoom some other window would
+        // have needed.
+        let dir = tempfile::tempdir().unwrap();
+        let ed = editor(dir.path());
+        let mut chrome = Chrome::new();
+        one_frame(&mut chrome, &ed);
+
+        let viewport = chrome.workspace().canvas.view.viewport();
+        // `raw_input` gives the frame a 1400x900 window.
+        assert!(
+            (viewport.surface_pt().x - 1400.0).abs() < 1.0
+                && (viewport.surface_pt().y - 900.0).abs() < 1.0,
+            "the canvas host still thinks the window is {:?}",
+            viewport.surface_pt()
+        );
+        // ...and its viewport is the *whole* window, because that is the
+        // rectangle `render::Camera` centres the image on and spans with it.
+        // Handing the host the smaller content rectangle instead is what made
+        // Fill Screen come out smaller than Fit on Screen.
+        assert_eq!(
+            viewport.size_pt(),
+            glam::Vec2::new(1400.0, 900.0),
+            "the canvas host is framing against a rectangle the shell does not \
+             render from: insets {:?}",
+            viewport.insets()
+        );
+        // The chrome's own strips are still measured — they are what the
+        // Navigator draws and what Zoom to Selection frames against — they are
+        // just not the same rectangle.
+        let geometry = chrome.frame_geometry.expect("a frame was drawn");
+        assert!(
+            geometry.content.height() < 900.0 && geometry.content.width() < 1400.0,
+            "the menu, status strips and docks reserved nothing: {:?}",
+            geometry.content
+        );
+        assert_eq!(
+            chrome.workspace().viewport,
+            (geometry.content.width(), geometry.content.height()),
+            "the Navigator's viewport is no longer what the docks left"
+        );
+    }
+
+    /// The document camera the shell renders from, as `Shell::redraw` builds
+    /// it: the whole surface, in physical pixels.
+    fn render_camera(editor: &Editor, geometry: FrameGeometry) -> render::Camera {
+        let open = editor.active().expect("a document is open");
+        let mut camera = open.camera.clone();
+        camera.viewport_size =
+            glam::Vec2::new(geometry.surface.width(), geometry.surface.height()) * geometry.ppp;
+        camera
+    }
+
+    /// A 400x300 document — deliberately not the window's 14:9 — with a 40x40
+    /// selection in it.
+    fn wide_document(dir: &std::path::Path) -> Editor {
+        let path = dir.join("wide.png");
+        std::fs::write(
+            &path,
+            raster::encode(raster::ExportFormat::Png, 400, 300, &[9u8; 400 * 300 * 4]).unwrap(),
+        )
+        .unwrap();
+        let mut ed = editor(&dir.join("config"));
+        ed.open_path(&path).unwrap();
+        let open = ed.active_mut().unwrap();
+        // What `Shell::redraw` does on the first frame, and the only thing that
+        // gives `OpenDocument::camera` a real viewport in a headless test.
+        open.set_viewport(glam::Vec2::new(1400.0, 900.0));
+        open.document.selection = editor_core::Selection::Rect {
+            min: glam::IVec2::new(100, 120),
+            max: glam::IVec2::new(140, 160),
+        };
+        ed
+    }
+
+    #[test]
+    fn fill_screen_is_never_smaller_than_the_fit_the_application_performs() {
+        // Fill and Fit are the same command with `min` swapped for `max`, so
+        // Fill can only be smaller than Fit if the two are dividing by
+        // different rectangles — which is exactly what happened while the `ui`
+        // canvas host was given the content rect and `render::Camera` the whole
+        // window. Measured: Fit 3.0, Fill 2.4565, and a strip of backdrop left
+        // along the bottom of the canvas area.
+        use ui::menu::MenuAction as M;
+        use ui::menu::ZoomCommand as Z;
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = wide_document(dir.path());
+
+        let (fill, chrome) = view_item(&ed, M::Zoom(Z::FillScreen));
+        let fill_zoom = fill.set_zoom.expect("Fill Screen reports a zoom");
+        // The Fit this application actually performs, on this same editor.
+        ed.dispatch(crate::Action::ZoomFit).unwrap();
+        let fit_zoom = ed.active().unwrap().camera.zoom;
+        assert!(
+            fill_zoom >= fit_zoom,
+            "Fill Screen ({fill_zoom}) is smaller than Fit on Screen ({fit_zoom})"
+        );
+
+        // ...and it fills: at that zoom the image covers every point of the
+        // canvas area the user can see, with nothing of the backdrop left.
+        let geometry = chrome.frame_geometry.expect("a frame was drawn");
+        let mut camera = render_camera(&ed, geometry);
+        camera.zoom = fill_zoom;
+        let (cx, cy) = fill.set_view_center.expect("Fill Screen reports a centre");
+        camera.center = glam::Vec2::new(cx, cy);
+        let ppp = geometry.ppp;
+        let top_left = camera.screen_to_image(glam::Vec2::new(
+            (geometry.content.min.x - geometry.surface.min.x) * ppp,
+            (geometry.content.min.y - geometry.surface.min.y) * ppp,
+        ));
+        let bottom_right = camera.screen_to_image(glam::Vec2::new(
+            (geometry.content.max.x - geometry.surface.min.x) * ppp,
+            (geometry.content.max.y - geometry.surface.min.y) * ppp,
+        ));
+        assert!(
+            top_left.x >= 0.0
+                && top_left.y >= 0.0
+                && bottom_right.x <= 400.0
+                && bottom_right.y <= 300.0,
+            "Fill Screen left backdrop showing: the canvas area spans document \
+             {top_left:?}..{bottom_right:?}, outside the 400x300 image"
+        );
+    }
+
+    #[test]
+    fn zoom_to_selection_frames_the_selection_where_the_docks_are_not() {
+        // The camera the shell renders from is centred on the *window*, and the
+        // docks are painted over it. Framing the selection against the window
+        // therefore hides its leading edges behind the tool rail and the
+        // options bar — measured at ~27 points on the left and ~29 on the top
+        // for this very selection.
+        use ui::menu::MenuAction as M;
+        use ui::menu::ZoomCommand as Z;
+        let dir = tempfile::tempdir().unwrap();
+        let ed = wide_document(dir.path());
+
+        let (out, chrome) = view_item(&ed, M::Zoom(Z::ToSelection));
+        let geometry = chrome.frame_geometry.expect("a frame was drawn");
+        let mut camera = render_camera(&ed, geometry);
+        camera.zoom = out.set_zoom.expect("Zoom to Selection reports a zoom");
+        let (cx, cy) = out
+            .set_view_center
+            .expect("Zoom to Selection reports a centre");
+        camera.center = glam::Vec2::new(cx, cy);
+
+        // What the *visible* canvas rectangle shows, in document pixels.
+        let ppp = geometry.ppp;
+        let top_left = camera.screen_to_image(glam::Vec2::new(
+            (geometry.content.min.x - geometry.surface.min.x) * ppp,
+            (geometry.content.min.y - geometry.surface.min.y) * ppp,
+        ));
+        let bottom_right = camera.screen_to_image(glam::Vec2::new(
+            (geometry.content.max.x - geometry.surface.min.x) * ppp,
+            (geometry.content.max.y - geometry.surface.min.y) * ppp,
+        ));
+        assert!(
+            top_left.x <= 100.0
+                && top_left.y <= 120.0
+                && bottom_right.x >= 140.0
+                && bottom_right.y >= 160.0,
+            "the selection (100,120)-(140,160) is not inside what the user can \
+             see: the canvas area shows {top_left:?}..{bottom_right:?}"
+        );
+        // ...and it is framed, not merely somewhere on screen: a view showing
+        // the whole document would satisfy the containment above.
+        assert!(
+            bottom_right.x - top_left.x < 60.0 && bottom_right.y - top_left.y < 60.0,
+            "Zoom to Selection did not zoom: the canvas area shows \
+             {top_left:?}..{bottom_right:?} of a 40x40 selection"
+        );
+
+        // The framing borrows the host's viewport for the length of the one
+        // command and has to give it back. A Fill Screen later in the *same*
+        // batch of intents would otherwise be measured against the content
+        // rectangle — which is exactly the defect this distinction exists to
+        // prevent, just moved one intent along.
+        let mut both = Chrome::new();
+        one_frame(&mut both, &ed);
+        let mut batch = ChromeOutput::default();
+        batch
+            .workspace
+            .push(ui::Intent::Action(M::Zoom(Z::ToSelection)));
+        batch
+            .workspace
+            .push(ui::Intent::Action(M::Zoom(Z::FillScreen)));
+        both.harvest_workspace_for_test(&mut batch, &ed);
+        let after = batch.set_zoom.expect("Fill Screen reports a zoom");
+        let alone = view_item(&ed, M::Zoom(Z::FillScreen))
+            .0
+            .set_zoom
+            .expect("Fill Screen reports a zoom");
+        assert!(
+            (after - alone).abs() < 1e-3,
+            "Fill Screen after Zoom to Selection gave {after}, not {alone}"
+        );
+    }
+
+    #[test]
+    fn zoom_to_selection_with_nothing_selected_leaves_the_camera_alone() {
+        // The command refuses when there is no selection, and a refusal must
+        // not be paid for with the panel-offset shift the framing applies:
+        // clicking it on an empty selection would pan the image sideways.
+        use ui::menu::MenuAction as M;
+        use ui::menu::ZoomCommand as Z;
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = wide_document(dir.path());
+        ed.active_mut().unwrap().document.selection = editor_core::Selection::None;
+        let before = ed.active().unwrap().camera.center;
+
+        let (out, _) = view_item(&ed, M::Zoom(Z::ToSelection));
+        let (cx, cy) = out.set_view_center.expect("the read-back still reports");
+        assert!(
+            (cx - before.x).abs() < 1e-3 && (cy - before.y).abs() < 1e-3,
+            "Zoom to Selection panned to ({cx}, {cy}) with nothing selected; \
+             the camera was at {before:?}"
+        );
+    }
+
+    /// Run one frame, then absorb `action` as the menu bar would have.
+    fn view_item(editor: &Editor, action: ui::menu::MenuAction) -> (ChromeOutput, Chrome) {
+        let mut chrome = Chrome::new();
+        // The first frame is what tells the workspace's canvas host how big the
+        // window and the document are.
+        one_frame(&mut chrome, editor);
+        let mut out = ChromeOutput::default();
+        out.workspace.push(ui::Intent::Action(action));
+        chrome.harvest_workspace_for_test(&mut out, editor);
+        (out, chrome)
+    }
+
+    #[test]
+    fn the_three_zoom_view_items_move_the_camera_the_shell_actually_renders_from() {
+        // `Workspace::absorb_action` moves the *workspace's* canvas camera. The
+        // camera the user sees is `OpenDocument::camera` — this shell
+        // composites the image onto the surface itself and never draws the `ui`
+        // canvas — so the result has to come back out as `set_zoom` /
+        // `set_view_center`, which the shell writes to the document. Without
+        // the read-back, Fill Screen moved a number nothing renders from and
+        // `sync_workspace` overwrote it on the very next frame.
+        //
+        // Three items, not four: Reset View Rotation's effect lands on the
+        // workspace camera's rotation and stops there, because `render::Camera`
+        // is axis-aligned and has no rotation to be written back to. It is
+        // checked at the bottom against the workspace camera, and it is not
+        // user-reachable in this build at all — see
+        // `menu_bridge::is_workspace_camera_action`'s doc.
+        use ui::menu::MenuAction as M;
+        use ui::menu::ZoomCommand as Z;
+        let dir = tempfile::tempdir().unwrap();
+        // Deliberately not the window's shape: Fit and Fill only differ on a
+        // document whose aspect ratio is not the viewport's.
+        let ed = wide_document(dir.path());
+        let started = ed.active().unwrap().camera.zoom;
+
+        // *That* Fill is larger than Fit is
+        // `fill_screen_is_never_smaller_than_the_fit_the_application_performs`,
+        // which compares against the Fit the application performs rather than
+        // against another guess made on the same host. Here the claim is only
+        // that the number reaches the document's camera at all.
+        let (fill, _) = view_item(&ed, M::Zoom(Z::FillScreen));
+        assert!(
+            fill.set_zoom.is_some_and(|z| (z - started).abs() > 1e-3),
+            "Fill Screen reported {:?}, which is the zoom the document already \
+             had ({started})",
+            fill.set_zoom
+        );
+
+        let (print, _) = view_item(&ed, M::Zoom(Z::PrintSize));
+        let want = ui::canvas::workspace::POINTS_PER_INCH / ui::canvas::workspace::DEFAULT_PPI;
+        assert!(
+            print.set_zoom.is_some_and(|z| (z - want).abs() < 1e-3),
+            "Print Size reported {:?}, wanted {want}",
+            print.set_zoom
+        );
+
+        // *Where* Zoom to Selection puts the selection is
+        // `zoom_to_selection_frames_the_selection_where_the_docks_are_not`; the
+        // claim here is that it reports a centre near the selection at all.
+        let (selection, _) = view_item(&ed, M::Zoom(Z::ToSelection));
+        let center = selection
+            .set_view_center
+            .expect("Zoom to Selection reports a centre");
+        assert!(
+            (center.0 - 120.0).abs() < 20.0 && (center.1 - 140.0).abs() < 20.0,
+            "Zoom to Selection framed {center:?}, nowhere near the selection"
+        );
+
+        // Rotation is the workspace canvas's own — this shell's document camera
+        // is axis aligned — so this one is asserted *on* the workspace camera,
+        // and it is rotated by hand first because no code path in this shell
+        // can rotate it. That makes this an assertion about the routing, not
+        // about anything a user can do here today.
+        let mut chrome = Chrome::new();
+        one_frame(&mut chrome, &ed);
+        chrome.workspace.canvas.view.camera.rotation = 0.7;
+        let mut out = ChromeOutput::default();
+        out.workspace.push(ui::Intent::Action(M::ResetViewRotation));
+        chrome.harvest_workspace_for_test(&mut out, &ed);
+        assert_eq!(
+            chrome.workspace.canvas.view.camera.rotation, 0.0,
+            "Reset View Rotation left the view rotated"
         );
     }
 }

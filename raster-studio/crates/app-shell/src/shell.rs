@@ -46,17 +46,18 @@
 //!   ([`KeyboardOwner`]). The second case is what stops recording a shortcut
 //!   over Ctrl+Q from quitting the application while recording it.
 //!
-//! # Known gap: tools do not receive pointer events yet
+//! # Who owns the pointer
 //!
-//! The `tools` crate's state machines take [`tools::PointerEvent`]s, and this
-//! shell does not yet feed them: a left-drag on the canvas pans the view
-//! whatever tool is selected. Painting therefore happens through commands
-//! emitted by panels and actions, not by dragging on the image. Selecting a
-//! brush is not a lie — the tool *is* selected, the palette and status bar show
-//! it, `[`/`]` size it and the colour wells hold the colour it would use — but
-//! the canvas gesture that would consume any of it is not wired. That is the
-//! next wave's work, and it is stated here rather than implied by a tool
-//! palette that looks finished.
+//! [`crate::tool_input::ToolPointer`], which is where a canvas drag becomes a
+//! [`tools::PointerEvent`] in document coordinates, reaches the tool the palette
+//! says is selected, and leaves as one undoable command. This module's job is
+//! only the winit half: turn `MouseInput`/`CursorMoved` into a
+//! [`ui::canvas::PointerInput`], say whether the chrome is under the cursor,
+//! refuse the buttons nothing is bound to ([`pointer_button`] — the right one
+//! is among them, and its doc says why), and
+//! ask for a repaint when the answer changed something. Everything else — which
+//! gesture belongs to the camera, what a press over a panel means, how a stroke
+//! becomes a history step — lives there, without a window, under test.
 //!
 //! # The backdrop is a token
 //!
@@ -87,6 +88,8 @@ use crate::keymap::{Chord, Key};
 use crate::prefs::WindowGeometry;
 use crate::presenter::CanvasPresenter;
 use crate::session::SessionMarker;
+use crate::tool_input::ToolPointer;
+use ui::canvas::{PointerButton, PointerInput, PointerPhase};
 
 /// Translate a winit key event into a [`Chord`].
 ///
@@ -243,6 +246,45 @@ pub fn route_key(
     }
 }
 
+/// A winit mouse button as the pointer router names it.
+///
+/// `None` for the buttons nothing is bound to: routing them would claim a
+/// gesture that no release ever ends, and the router would then refuse every
+/// later press as somebody else's.
+///
+/// **The right button is one of them, deliberately.**
+/// [`ui::canvas::InputRouter`] decides a route from the *tool*, and special-
+/// cases only the middle button and the space bar — so a `Secondary` press
+/// claims a `Route::Tool` gesture exactly as a `Primary` one does, and
+/// [`tools::PointerEvent`] carries no button for a tool to tell the two apart.
+/// Routing it would mean a right-drag on the canvas painting a full undoable
+/// brush stroke the user never asked for. Nothing in this application binds the
+/// right button to anything else yet — there is no canvas context menu — so it
+/// stops here, where the platform event is named, rather than in the shared
+/// router that `ui` also uses.
+pub fn pointer_button(button: MouseButton) -> Option<PointerButton> {
+    match button {
+        MouseButton::Left => Some(PointerButton::Primary),
+        MouseButton::Middle => Some(PointerButton::Middle),
+        MouseButton::Right | MouseButton::Back | MouseButton::Forward | MouseButton::Other(_) => {
+            None
+        }
+    }
+}
+
+/// Held modifiers as the tools read them.
+///
+/// The platform modifier folds into `ctrl`, because a tool that checks `ctrl`
+/// means "the key this platform modifies with" — Cmd on macOS. The same rule
+/// [`chord_from_key`] applies to shortcuts.
+pub fn modifiers_of(mods: ModifiersState) -> tools::Modifiers {
+    tools::Modifiers {
+        shift: mods.shift_key(),
+        alt: mods.alt_key(),
+        ctrl: mods.control_key() || mods.super_key(),
+    }
+}
+
 /// Pick the surface format the canvas will draw to, preferring sRGB.
 pub fn choose_surface_format(
     formats: &[wgpu::TextureFormat],
@@ -292,7 +334,12 @@ pub struct Shell {
     /// Files named on the command line, opened once the window exists.
     startup_files: Vec<PathBuf>,
     cursor: Vec2,
-    dragging: bool,
+    /// The button currently held, so a `CursorMoved` can name the gesture it
+    /// belongs to. winit reports the button on press and release but not on the
+    /// moves in between.
+    held: Option<PointerButton>,
+    /// Pointer input, routed to the active tool or to the camera.
+    pointer: ToolPointer,
     modifiers: ModifiersState,
     repaint_at: Option<Instant>,
     /// A start-up failure that happened inside the event loop.
@@ -313,7 +360,8 @@ impl Shell {
             marker: None,
             startup_files,
             cursor: Vec2::ZERO,
-            dragging: false,
+            held: None,
+            pointer: ToolPointer::new(),
             modifiers: ModifiersState::empty(),
             repaint_at: Some(Instant::now()),
             startup_error: None,
@@ -643,7 +691,12 @@ impl Shell {
                         }
                     }
                 }
-                Err(e) => tracing::warn!("compositing failed: {e}"),
+                // Reported, not fatal. This arm now also carries the GPU's
+                // refusal of a texture it cannot make — which used to be an
+                // uncaptured wgpu error, i.e. a panic, i.e. under
+                // `panic = "abort"` the death of every open document's unsaved
+                // work.
+                Err(e) => tracing::error!("this document could not be presented: {e}"),
             }
         }
         if have_document {
@@ -788,6 +841,21 @@ impl Shell {
         for command in output.commands {
             self.editor.apply_command(command);
         }
+        // The Properties panel's adjustment sliders and the Text panel's
+        // fields. Their own path rather than `commands` because a drag emits
+        // one per frame and `apply_kind_edit` folds the run into a single undo
+        // step; see `KindEdit::gesture`.
+        for edit in output.layer_kind {
+            self.editor.apply_kind_edit(edit);
+        }
+        // A control the bridge could not answer says so. Silence here is what
+        // hid an entire inert Properties panel through a whole review: an
+        // intent that reached nobody left no trace at all.
+        for intent in &output.unrouted {
+            let message = crate::menu_bridge::unrouted_message(intent);
+            tracing::warn!("{message}");
+            self.editor.set_status(message);
+        }
         if let Some(rgba) = output.set_foreground {
             self.editor.set_foreground(rgba);
         }
@@ -878,6 +946,13 @@ impl Shell {
     ) {
         match route_key(owner, logical, state, repeat, self.modifiers) {
             KeyOutcome::Dispatch(chord) => {
+                // Escape abandons whatever the pointer is in the middle of,
+                // *then* means whatever the keymap says. Nothing binds it
+                // today, and a stroke that could not be called off would be the
+                // gap this route is here to close.
+                if chord.key == Key::Escape {
+                    self.abandon_gesture();
+                }
                 if let Some(action) = self.editor.keymap().resolve(&chord) {
                     self.perform(action);
                 }
@@ -887,6 +962,48 @@ impl Shell {
                 self.repaint_at = Some(Instant::now());
             }
             KeyOutcome::Ignore => {}
+        }
+    }
+
+    /// Abandon whatever gesture is running: Escape, or the window losing focus.
+    ///
+    /// Reports whether there was one, and forgets the held button with it — a
+    /// gesture the router still believes in refuses every later press as
+    /// somebody else's, which is how a canvas goes permanently dead.
+    fn abandon_gesture(&mut self) -> bool {
+        if !self.pointer.cancel(&mut self.editor) {
+            return false;
+        }
+        self.held = None;
+        self.repaint_at = Some(Instant::now());
+        true
+    }
+
+    /// Feed one pointer sample to [`ToolPointer`].
+    ///
+    /// Everything that decides *what happens* is one layer down; this is the
+    /// translation from winit's shape to the router's, plus the two pieces of
+    /// window state that go with it — which button is held, and whether the
+    /// frame has to be drawn again.
+    fn on_pointer(&mut self, phase: PointerPhase, button: PointerButton, over_panel: bool) {
+        let input = PointerInput {
+            phase,
+            button,
+            pos_pt: self.cursor,
+            // A mouse. Tablet pressure is a winit event this build does not
+            // subscribe to, and `PointerEvent::pressure` is documented as 1.0
+            // for a mouse — so this is the honest value, not a placeholder.
+            pressure: 1.0,
+            modifiers: modifiers_of(self.modifiers),
+        };
+        match phase {
+            PointerPhase::Down => self.held = Some(button),
+            PointerPhase::Up => self.held = None,
+            PointerPhase::Move => {}
+        }
+        let outcome = self.pointer.handle(&mut self.editor, input, over_panel);
+        if outcome.needs_repaint() {
+            self.repaint_at = Some(Instant::now());
         }
     }
 
@@ -1115,22 +1232,30 @@ impl ApplicationHandler for Shell {
                 );
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                if matches!(button, MouseButton::Left | MouseButton::Middle) {
-                    // Always honour release, so a drag that ends over a panel
-                    // cannot leave the canvas stuck dragging.
-                    self.dragging = state == ElementState::Pressed && !consumed;
+                if let Some(button) = pointer_button(button) {
+                    let phase = match state {
+                        ElementState::Pressed => PointerPhase::Down,
+                        ElementState::Released => PointerPhase::Up,
+                    };
+                    // `consumed` is egui's "the chrome wants this pointer", and
+                    // it is only ever a veto on *claiming* a gesture — a drag
+                    // already running keeps running over a panel.
+                    self.on_pointer(phase, button, consumed);
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let now = Vec2::new(position.x as f32, position.y as f32);
-                if self.dragging && !consumed {
-                    let delta = now - self.cursor;
-                    if let Some(doc) = self.editor.active_mut() {
-                        doc.camera.pan_screen(delta);
-                    }
-                    self.repaint_at = Some(Instant::now());
-                }
-                self.cursor = now;
+                self.cursor = Vec2::new(position.x as f32, position.y as f32);
+                // The move belongs to whichever button went down, which winit
+                // does not repeat here; with none held it is a hover.
+                let button = self.held.unwrap_or(PointerButton::Primary);
+                self.on_pointer(PointerPhase::Move, button, consumed);
+            }
+            // A drag cannot outlive the window's focus, and a gesture left
+            // claimed would refuse every later press as somebody else's. Not
+            // `CursorLeft`: dragging past the edge of the window and back is a
+            // gesture, and winit keeps delivering its moves.
+            WindowEvent::Focused(false) => {
+                self.abandon_gesture();
             }
             WindowEvent::MouseWheel { delta, .. } if !consumed => {
                 let scroll = match delta {
@@ -1200,6 +1325,294 @@ mod tests {
     fn press(shell: &mut Shell, owner: KeyboardOwner, key: WKey, mods: ModifiersState) {
         shell.modifiers = mods;
         shell.on_key(owner, &key, ElementState::Pressed, false);
+    }
+
+    /// A shell showing one 16x16 image in a 200x160 window, at 100% with the
+    /// image centred — so screen `(100, 80)` is document `(8, 8)`.
+    fn shell_ready_to_draw(dir: &std::path::Path) -> Shell {
+        let mut shell = shell_with_one_image(dir);
+        shell.spread_viewport(Vec2::new(200.0, 160.0));
+        let doc = shell.editor.active_mut().unwrap();
+        doc.camera.zoom = 1.0;
+        doc.camera.center = Vec2::new(8.0, 8.0);
+        // A freshly opened document owes the presenter the whole canvas. Taking
+        // it is what the first frame does, and it is what makes "the gesture
+        // invalidated these tiles" an observable claim rather than a tautology.
+        doc.take_dirty();
+        shell
+    }
+
+    /// Move the cursor to a document point and hand the shell one pointer
+    /// sample, exactly as `window_event` does after winit has spoken.
+    fn point(shell: &mut Shell, phase: PointerPhase, doc: Vec2, over_panel: bool) {
+        shell.cursor = Vec2::new(100.0, 80.0) + doc - Vec2::new(8.0, 8.0);
+        shell.on_pointer(phase, PointerButton::Primary, over_panel);
+    }
+
+    /// Press or release a *winit* button at document `x` on the row `y = 8`,
+    /// through the same `pointer_button` gate `window_event` puts it through —
+    /// so a button that routes to nothing reaches nothing here either.
+    fn mouse(shell: &mut Shell, phase: PointerPhase, button: MouseButton, x: f32) {
+        shell.cursor = Vec2::new(100.0, 80.0) + Vec2::new(x - 8.0, 0.0);
+        if let Some(button) = pointer_button(button) {
+            shell.on_pointer(phase, button, false);
+        }
+    }
+
+    /// The defect this wave exists for: a left-drag on the canvas used to pan
+    /// the view whatever tool was selected, so no tool could ever run.
+    #[test]
+    fn a_left_drag_paints_with_the_selected_tool_instead_of_panning() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_ready_to_draw(dir.path());
+        shell.editor.set_tool(tools::ToolId::Brush);
+        shell.editor.set_foreground([1.0, 0.0, 0.0, 1.0]);
+        let center = shell.editor.active().unwrap().camera.center;
+        // `Shell::new` starts owing a frame and only `about_to_wait` clears the
+        // debt, which no test calls — so without this the assertion below is
+        // true before the gesture begins and could never fail.
+        shell.repaint_at = None;
+
+        point(&mut shell, PointerPhase::Down, Vec2::new(6.0, 8.0), false);
+        point(&mut shell, PointerPhase::Move, Vec2::new(8.0, 8.0), false);
+        point(&mut shell, PointerPhase::Up, Vec2::new(10.0, 8.0), false);
+
+        assert_eq!(
+            shell.editor.active().unwrap().history_depth(),
+            1,
+            "the drag produced no undoable step"
+        );
+        assert_eq!(
+            shell.editor.active().unwrap().camera.center,
+            center,
+            "a brush drag panned the view"
+        );
+        assert!(
+            shell.repaint_at.is_some(),
+            "the stroke asked for no repaint, so the canvas keeps showing the \
+             frame from before it"
+        );
+        // The tiles it touched are outstanding — and only those, or a stroke
+        // would re-upload the whole canvas.
+        let dirty = shell.editor.active().unwrap().dirty();
+        assert!(!dirty.is_all(), "a stroke invalidated the whole canvas");
+        assert_eq!(
+            dirty.tiles().collect::<Vec<_>>(),
+            vec![raster::TileCoord::new(0, 0, 0)],
+            "the canvas will not show the stroke"
+        );
+    }
+
+    #[test]
+    fn a_drag_with_the_hand_tool_still_pans_and_edits_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_ready_to_draw(dir.path());
+        shell.editor.set_tool(tools::ToolId::Hand);
+        let center = shell.editor.active().unwrap().camera.center;
+        shell.repaint_at = None;
+
+        point(&mut shell, PointerPhase::Down, Vec2::new(6.0, 8.0), false);
+        point(&mut shell, PointerPhase::Move, Vec2::new(10.0, 8.0), false);
+        point(&mut shell, PointerPhase::Up, Vec2::new(10.0, 8.0), false);
+
+        assert_eq!(shell.editor.active().unwrap().history_depth(), 0);
+        assert_ne!(shell.editor.active().unwrap().camera.center, center);
+        // The camera path owes a frame too: the pixels are the same and the
+        // view of them is not, so a pan that asks for no repaint is a pan the
+        // user does not see until something else happens to redraw.
+        assert!(
+            shell.repaint_at.is_some(),
+            "the pan asked for no repaint, so the view moved off-screen only"
+        );
+    }
+
+    #[test]
+    fn a_press_the_chrome_wanted_reaches_neither_the_tool_nor_the_camera() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_ready_to_draw(dir.path());
+        shell.editor.set_tool(tools::ToolId::Brush);
+        let center = shell.editor.active().unwrap().camera.center;
+
+        shell.repaint_at = None;
+
+        // `over_panel` is egui's `consumed`, which is what a press on a docked
+        // panel or a menu comes back as.
+        point(&mut shell, PointerPhase::Down, Vec2::new(6.0, 8.0), true);
+        point(&mut shell, PointerPhase::Move, Vec2::new(10.0, 8.0), false);
+        point(&mut shell, PointerPhase::Up, Vec2::new(10.0, 8.0), false);
+
+        assert_eq!(shell.editor.active().unwrap().history_depth(), 0);
+        assert_eq!(shell.editor.active().unwrap().camera.center, center);
+        assert!(shell.editor.active().unwrap().dirty().is_empty());
+        // Nothing changed, so nothing is owed: a gesture the chrome took must
+        // not schedule a frame that would redraw an identical picture. This is
+        // the other half of the repaint claim — the tests above prove it is
+        // asked for when it is due, this proves it is not asked for otherwise.
+        assert!(
+            shell.repaint_at.is_none(),
+            "a press the chrome consumed scheduled a repaint of the same frame"
+        );
+    }
+
+    #[test]
+    fn escape_abandons_the_stroke_the_shell_is_in_the_middle_of() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_ready_to_draw(dir.path());
+        shell.editor.set_tool(tools::ToolId::Brush);
+        point(&mut shell, PointerPhase::Down, Vec2::new(6.0, 8.0), false);
+        point(&mut shell, PointerPhase::Move, Vec2::new(10.0, 8.0), false);
+        assert!(shell.pointer.is_tool_active());
+
+        press(
+            &mut shell,
+            KeyboardOwner::default(),
+            WKey::Named(NamedKey::Escape),
+            ModifiersState::empty(),
+        );
+        assert!(
+            !shell.pointer.is_tool_active(),
+            "Escape left the stroke live"
+        );
+        assert!(shell.held.is_none());
+
+        point(&mut shell, PointerPhase::Up, Vec2::new(10.0, 8.0), false);
+        assert_eq!(
+            shell.editor.active().unwrap().history_depth(),
+            0,
+            "a cancelled stroke was committed anyway"
+        );
+        // ...and the canvas is not dead: the next press paints.
+        point(&mut shell, PointerPhase::Down, Vec2::new(6.0, 8.0), false);
+        point(&mut shell, PointerPhase::Up, Vec2::new(10.0, 8.0), false);
+        assert_eq!(shell.editor.active().unwrap().history_depth(), 1);
+    }
+
+    #[test]
+    fn losing_focus_abandons_the_gesture_rather_than_leaving_it_claimed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_ready_to_draw(dir.path());
+        shell.editor.set_tool(tools::ToolId::Brush);
+        assert!(
+            !shell.abandon_gesture(),
+            "nothing is running, so there is nothing to abandon"
+        );
+
+        point(&mut shell, PointerPhase::Down, Vec2::new(6.0, 8.0), false);
+        assert!(shell.abandon_gesture());
+        assert!(!shell.pointer.is_gesture_active());
+        assert!(!shell.abandon_gesture());
+    }
+
+    #[test]
+    fn the_held_button_is_what_a_move_belongs_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_ready_to_draw(dir.path());
+        assert!(shell.held.is_none());
+        point(&mut shell, PointerPhase::Down, Vec2::new(6.0, 8.0), false);
+        assert_eq!(shell.held, Some(PointerButton::Primary));
+        point(&mut shell, PointerPhase::Up, Vec2::new(6.0, 8.0), false);
+        assert!(shell.held.is_none());
+    }
+
+    #[test]
+    fn only_the_two_routed_mouse_buttons_claim_a_gesture() {
+        assert_eq!(
+            pointer_button(MouseButton::Left),
+            Some(PointerButton::Primary)
+        );
+        assert_eq!(
+            pointer_button(MouseButton::Middle),
+            Some(PointerButton::Middle)
+        );
+        // A press nothing routes must not claim a gesture no release ends...
+        assert_eq!(pointer_button(MouseButton::Back), None);
+        assert_eq!(pointer_button(MouseButton::Forward), None);
+        assert_eq!(pointer_button(MouseButton::Other(9)), None);
+        // ...and the right button is one of those, because the router would
+        // give a `Secondary` press the active tool exactly as it gives it a
+        // `Primary` one. See `pointer_button`.
+        assert_eq!(pointer_button(MouseButton::Right), None);
+    }
+
+    /// The right button paints nothing, pans nothing, and claims nothing.
+    ///
+    /// It is not enough that `pointer_button` answers `None`: what matters is
+    /// that the whole drag — the press, the moves winit reports while it is
+    /// held, and the release — leaves the document and the camera exactly where
+    /// they were.
+    #[test]
+    fn a_right_drag_on_the_canvas_neither_paints_nor_pans() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_ready_to_draw(dir.path());
+        shell.editor.set_tool(tools::ToolId::Brush);
+        shell.editor.set_foreground([1.0, 0.0, 0.0, 1.0]);
+        let center = shell.editor.active().unwrap().camera.center;
+        let before = shell
+            .editor
+            .active_mut()
+            .unwrap()
+            .composite(raster::PixelRect::new(0, 0, 16, 16))
+            .unwrap();
+        shell.repaint_at = None;
+
+        mouse(&mut shell, PointerPhase::Down, MouseButton::Right, 6.0);
+        // winit reports the moves of a right-drag as plain `CursorMoved`, which
+        // the shell attributes to `held` — and nothing was held.
+        for x in [8.0, 10.0] {
+            shell.cursor = Vec2::new(100.0, 80.0) + Vec2::new(x - 8.0, 0.0);
+            let button = shell.held.unwrap_or(PointerButton::Primary);
+            shell.on_pointer(PointerPhase::Move, button, false);
+        }
+        mouse(&mut shell, PointerPhase::Up, MouseButton::Right, 10.0);
+
+        assert!(shell.held.is_none(), "the right button claimed the pointer");
+        assert!(!shell.pointer.is_gesture_active());
+        assert_eq!(
+            shell.editor.active().unwrap().history_depth(),
+            0,
+            "a right-drag painted an undoable stroke"
+        );
+        assert_eq!(
+            shell
+                .editor
+                .active_mut()
+                .unwrap()
+                .composite(raster::PixelRect::new(0, 0, 16, 16))
+                .unwrap(),
+            before,
+            "a right-drag changed the pixels"
+        );
+        assert_eq!(
+            shell.editor.active().unwrap().camera.center,
+            center,
+            "a right-drag panned the view"
+        );
+        assert!(shell.editor.active().unwrap().dirty().is_empty());
+        assert!(
+            shell.repaint_at.is_none(),
+            "a right-drag that changed nothing still scheduled a frame"
+        );
+
+        // ...and the canvas is not dead afterwards: the left button still
+        // paints, so this refuses the button rather than the gesture.
+        mouse(&mut shell, PointerPhase::Down, MouseButton::Left, 6.0);
+        mouse(&mut shell, PointerPhase::Up, MouseButton::Left, 10.0);
+        assert_eq!(shell.editor.active().unwrap().history_depth(), 1);
+        assert!(shell.repaint_at.is_some(), "the left drag owed a frame");
+    }
+
+    #[test]
+    fn the_platform_modifier_reaches_a_tool_as_ctrl() {
+        // The same rule `chord_from_key` follows: a tool that checks `ctrl`
+        // means the key this platform modifies with.
+        let m = modifiers_of(ModifiersState::SHIFT | ModifiersState::ALT);
+        assert!(m.shift && m.alt && !m.ctrl);
+        assert!(modifiers_of(ModifiersState::CONTROL).ctrl);
+        assert!(modifiers_of(ModifiersState::SUPER).ctrl);
+        assert_eq!(
+            modifiers_of(ModifiersState::empty()),
+            tools::Modifiers::NONE
+        );
     }
 
     #[test]
@@ -1525,6 +1938,79 @@ mod tests {
         assert!(
             told.contains("desktop session"),
             "the advice written for this case never reached the user: {told}"
+        );
+    }
+
+    #[test]
+    fn an_unroutable_intent_reaches_the_status_bar() {
+        // The window's own admission that a click went nowhere. Before this,
+        // `Chrome::harvest` dropped an intent the bridge could not answer with
+        // no status line and no log record — which is exactly how a Properties
+        // panel in which not one slider worked passed review.
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        let orphan = ui::Intent::Action(ui::menu::MenuAction::FileInfo);
+
+        shell.apply_chrome(ChromeOutput {
+            unrouted: vec![orphan.clone()],
+            ..Default::default()
+        });
+
+        let told = shell.editor().status().unwrap_or_default().to_string();
+        assert_eq!(told, crate::menu_bridge::unrouted_message(&orphan));
+        assert!(
+            told.contains(crate::menu_bridge::NOT_WIRED),
+            "the user was told nothing: {told}"
+        );
+    }
+
+    #[test]
+    fn a_slider_edit_from_the_chrome_reaches_the_document() {
+        // The last wire of the three: the panel emits, the bridge routes, and
+        // this is where it lands. `ChromeOutput::layer_kind` had no consumer at
+        // all before, so an adjustment's parameters travelled as far as the
+        // shell and stopped.
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        let layer = layer_model::Layer::with_kind(
+            "Posterize",
+            layer_model::LayerKind::Adjustment(layer_model::AdjustmentLayer {
+                kind: layer_model::AdjustmentKind::Posterize { levels: 8 },
+            }),
+        );
+        let id = layer.id;
+        shell
+            .editor
+            .apply_command(editor_core::Command::create_layer(layer));
+
+        shell.apply_chrome(ChromeOutput {
+            layer_kind: vec![crate::chrome::KindEdit {
+                layer: id,
+                kind: Box::new(layer_model::LayerKind::Adjustment(
+                    layer_model::AdjustmentLayer {
+                        kind: layer_model::AdjustmentKind::Posterize { levels: 3 },
+                    },
+                )),
+                gesture: Some(1),
+            }],
+            ..Default::default()
+        });
+
+        let kind = &shell
+            .editor()
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .get(id)
+            .unwrap()
+            .kind;
+        assert_eq!(
+            kind,
+            &layer_model::LayerKind::Adjustment(layer_model::AdjustmentLayer {
+                kind: layer_model::AdjustmentKind::Posterize { levels: 3 },
+            }),
+            "the slider's value never reached the document"
         );
     }
 

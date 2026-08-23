@@ -132,6 +132,10 @@ pub fn touched_by(command: &Command) -> DirtyTiles {
         | Command::RestoreLayers { .. }
         | Command::MoveLayer { .. }
         | Command::SetLayerProperties { .. }
+        // An adjustment layer's parameters reach every pixel under it, so the
+        // canvas has to be re-composited whole. Answering `none` here is what
+        // would make a Brightness slider move a value nothing repainted.
+        | Command::SetLayerKind { .. }
         | Command::TransformLayer { .. } => DirtyTiles::all(),
     }
 }
@@ -197,6 +201,17 @@ mod tests {
             Command::TransformLayer {
                 layer_id: LayerId::new(),
                 matrix: [1.0, 0.0, 0.0, 1.0, 5.0, 0.0],
+            },
+            // An adjustment layer's parameters reach every pixel beneath it,
+            // so the whole canvas has to be re-uploaded. `none` here would be a
+            // Brightness slider that moves and repaints nothing.
+            Command::SetLayerKind {
+                layer_id: LayerId::new(),
+                kind: Box::new(layer_model::LayerKind::Adjustment(
+                    layer_model::AdjustmentLayer {
+                        kind: layer_model::AdjustmentKind::Invert,
+                    },
+                )),
             },
         ] {
             assert!(touched_by(&cmd).is_all(), "{cmd:?} must invalidate all");

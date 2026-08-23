@@ -44,6 +44,36 @@ pub const DOCUMENT_FORMAT_VERSION: u32 = 3;
 /// [`DOCUMENT_FORMAT_VERSION`] loads without a migration step.
 pub const MIN_SUPPORTED_FORMAT_VERSION: u32 = 1;
 
+/// Largest canvas side, in pixels, this build will accept.
+///
+/// The canvas size is the one number in a document that every downstream stage
+/// sizes an allocation from — the compositor's canvas, the presenter's texture,
+/// the exporter's buffer — so it is bounded *here*, at the point a document
+/// enters the process, rather than at each of them. A file claiming
+/// `u32::MAX` per side is rejected before anything tries to serve it.
+///
+/// `ui::dialogs::new_document::MAX_DIMENSION` is defined *as* this constant, so
+/// the New Document dialog cannot describe a document the loader would refuse.
+pub const MAX_CANVAS_DIMENSION: u32 = 300_000;
+
+/// Largest canvas area, in pixels, this build will accept.
+///
+/// [`MAX_CANVAS_DIMENSION`] alone would permit 90 gigapixels; the area cap is
+/// what actually keeps a document servable. One gigapixel is 4 GiB of RGBA8 —
+/// large, deliberate, and finite.
+pub const MAX_CANVAS_PIXELS: u64 = 1_000_000_000;
+
+/// Whether `width` x `height` is a canvas this build will accept.
+///
+/// A zero-area canvas is *not* rejected: `0` is a legal (if useless) size the
+/// document model already carries, and refusing it here would break documents
+/// that round-trip one.
+pub fn canvas_size_is_supported(width: u32, height: u32) -> bool {
+    width <= MAX_CANVAS_DIMENSION
+        && height <= MAX_CANVAS_DIMENSION
+        && u64::from(width) * u64::from(height) <= MAX_CANVAS_PIXELS
+}
+
 /// Rejection of a document that cannot be loaded or a request that would leave
 /// it inconsistent.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -53,6 +83,16 @@ pub enum DocumentError {
          it was written by a newer Raster Studio"
     )]
     UnsupportedFormatVersion { found: u32, min: u32, max: u32 },
+    #[error(
+        "canvas {width} x {height} is outside what this build can serve \
+         (at most {max_dimension} per side and {max_pixels} pixels in total)"
+    )]
+    CanvasTooLarge {
+        width: u32,
+        height: u32,
+        max_dimension: u32,
+        max_pixels: u64,
+    },
     #[error("layer {0} is not in this document")]
     LayerNotFound(LayerId),
 }
@@ -105,6 +145,20 @@ impl TryFrom<DocumentRepr> for Document {
                 found,
                 min: MIN_SUPPORTED_FORMAT_VERSION,
                 max: DOCUMENT_FORMAT_VERSION,
+            });
+        }
+        // The canvas size is an allocation size for every stage downstream of
+        // here, and nothing between the file and those stages checks it. A
+        // `meta.size` of `[4294967295, 4294967295]` costs one JSON token to
+        // write and would otherwise be handed straight to the compositor and
+        // the GPU.
+        let (width, height) = (r.meta.size.x, r.meta.size.y);
+        if !canvas_size_is_supported(width, height) {
+            return Err(DocumentError::CanvasTooLarge {
+                width,
+                height,
+                max_dimension: MAX_CANVAS_DIMENSION,
+                max_pixels: MAX_CANVAS_PIXELS,
             });
         }
         // A stale active layer is dropped rather than fatal: it is a cursor,
@@ -496,6 +550,64 @@ mod tests {
             let back: Document = serde_json::from_str(&json).unwrap();
             assert_eq!(back.meta.format_version, v);
         }
+    }
+
+    #[test]
+    fn an_absurd_canvas_size_is_refused_on_load() {
+        // `meta.size` is the allocation size every stage downstream reads —
+        // the compositor's canvas, the presenter's GPU texture, the exporter's
+        // buffer — and nothing between the file and them checked it. Twelve
+        // characters of JSON asked the process for 73 exabytes.
+        let json = format!(
+            r#"{{"meta":{{"format_version":{DOCUMENT_FORMAT_VERSION},"size":[4294967295,4294967295],"color_space":"Srgb","title":"t"}},"layers":{}}}"#,
+            serde_json::to_string(&LayerTree::new()).unwrap()
+        );
+        let err = serde_json::from_str::<Document>(&json)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("outside what this build can serve"),
+            "a 4294967295 x 4294967295 canvas was accepted: {err}"
+        );
+
+        // The area cap bites even when each side is legal on its own.
+        let mut wide = Document::new(MAX_CANVAS_DIMENSION, MAX_CANVAS_DIMENSION, "t");
+        let json = serde_json::to_string(&wide).unwrap();
+        assert!(
+            serde_json::from_str::<Document>(&json).is_err(),
+            "{MAX_CANVAS_DIMENSION} squared is 90 gigapixels and must not load"
+        );
+
+        // ...and the largest canvas the limits allow still loads, so the check
+        // is a bound and not a ban.
+        wide.meta.size = UVec2::new(MAX_CANVAS_DIMENSION, 3_333);
+        assert!(
+            u64::from(MAX_CANVAS_DIMENSION) * 3_333 <= MAX_CANVAS_PIXELS,
+            "the fixture must be inside the area cap"
+        );
+        let json = serde_json::to_string(&wide).unwrap();
+        let back: Document = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.width(), MAX_CANVAS_DIMENSION);
+        assert_eq!(back.height(), 3_333);
+
+        // A zero-area document is legal, and refusing it here would break
+        // documents that already round-trip one.
+        let empty = Document::new(0, 0, "t");
+        let json = serde_json::to_string(&empty).unwrap();
+        assert!(serde_json::from_str::<Document>(&json).is_ok());
+    }
+
+    #[test]
+    fn the_canvas_bound_is_exactly_what_it_says() {
+        assert!(canvas_size_is_supported(MAX_CANVAS_DIMENSION, 1));
+        assert!(!canvas_size_is_supported(MAX_CANVAS_DIMENSION + 1, 1));
+        assert!(!canvas_size_is_supported(1, MAX_CANVAS_DIMENSION + 1));
+        assert!(
+            canvas_size_is_supported(31_622, 31_622),
+            "just under a gigapixel"
+        );
+        assert!(!canvas_size_is_supported(31_624, 31_624), "just over");
+        assert!(canvas_size_is_supported(0, 0));
     }
 
     #[test]

@@ -59,6 +59,18 @@ pub enum DocumentError {
     Encode(#[from] raster::CodecError),
     #[error(transparent)]
     Command(#[from] CommandError),
+    /// The composite could not be put on the GPU. Reported rather than fatal:
+    /// wgpu's default answer to an out-of-range texture is a panic, and this
+    /// build aborts on panic, which would take every other open document's
+    /// unsaved work with it.
+    #[error(transparent)]
+    Texture(#[from] render::TextureError),
+    /// A composite could not be downscaled to the size the GPU will hold. Only
+    /// reachable for a document too big to present at its own resolution — see
+    /// [`crate::presenter::downscale_levels`] — and, like the texture error, it
+    /// is reported rather than fatal.
+    #[error(transparent)]
+    Mip(#[from] raster::mipmap::MipError),
     #[error("`{0}` is not a file format Raster Studio can export to")]
     UnknownExportFormat(String),
     #[error("this document has never been saved, so it has no location to save to")]

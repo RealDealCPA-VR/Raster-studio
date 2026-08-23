@@ -1006,6 +1006,40 @@ mod tests {
         }
     }
 
+    /// The tuning a tool is built with is readable back, so a shell keeping a
+    /// brush per tool can seed each slot from here instead of from a second
+    /// copy of this table.
+    #[test]
+    fn a_tools_own_brush_reads_back_as_the_one_it_was_built_with() {
+        assert_eq!(
+            make(ToolId::Pencil).brush(),
+            Some(BrushSettings::pencil(1.0))
+        );
+        assert_eq!(make(ToolId::Brush).brush(), Some(BrushSettings::default()));
+        assert_eq!(
+            make(ToolId::CloneStamp).brush(),
+            Some(brush_of(40.0, 0.5, 0.05))
+        );
+        assert_eq!(make(ToolId::Dodge).brush(), Some(brush_of(60.0, 0.0, 0.05)));
+        // The Pencil and the Brush share `StrokeOp::Paint`, so these settings
+        // are the *only* thing that tells the two tools apart.
+        assert_ne!(make(ToolId::Pencil).brush(), make(ToolId::Brush).brush());
+        // A tool that stamps no dabs has no brush to hand back.
+        assert_eq!(make(ToolId::RectMarquee).brush(), None);
+        assert_eq!(make(ToolId::Hand).brush(), None);
+        assert_eq!(make(ToolId::Gradient).brush(), None);
+    }
+
+    /// The same shape [`make`]'s local helper builds, for the test above.
+    fn brush_of(size: f32, hardness: f32, spacing: f32) -> BrushSettings {
+        BrushSettings {
+            size,
+            hardness,
+            spacing,
+            ..BrushSettings::default()
+        }
+    }
+
     #[test]
     fn every_tool_can_be_constructed_and_cancelled_without_panicking() {
         for id in ToolId::ALL {

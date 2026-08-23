@@ -25,40 +25,50 @@ compositing, export — is an ordinary function that can be tested headlessly.
 There is exactly one implementation of each, so there is no CPU/GPU pair to
 drift apart.
 
-## What works today
+## Status
 
-- **Documents.** Open PNG, JPEG, WebP, TIFF, GIF, BMP, ICO and TGA; open and
-  save layered PSD; save and reopen the native `.rstudio` package with pixels,
-  masks, history and selections intact.
-- **Layers.** A real tree with groups, layer masks, clipping masks,
-  non-destructive adjustment layers, layer effects, and all 27 Photoshop blend
-  modes including the four non-separable ones.
-- **Selections.** Marquee, lasso (freehand, polygonal, magnetic), magic wand,
-  quick select and colour range, with per-pixel fractional coverage — feather,
-  expand, contract, smooth and border are real morphology, not rectangle maths.
-- **Tools.** A stamp-based brush with hardness, spacing, flow, opacity and
-  pressure; eraser, clone, healing, patch, red-eye, gradient, bucket,
-  blur/sharpen/smudge, dodge/burn/sponge, shapes, crop, and free transform with
-  scale, rotate, skew, distort, perspective and a warp mesh.
-- **Adjustments.** Levels, Curves (a monotone cubic spline, not line segments),
-  Exposure, Brightness/Contrast, Vibrance, Hue/Saturation, Colour Balance,
-  Black & White, Photo Filter, Channel Mixer, Invert, Posterize, Threshold,
-  Gradient Map, Selective Colour, and the Auto commands.
-- **Filters.** Blur (separable Gaussian, box, motion, radial, lens, surface),
-  sharpen, noise, distort, stylize, pixelate, render and custom convolution.
-- **Text.** Real shaping through `cosmic-text` — bidi, ligatures, kerning and
-  contextual forms — with point and paragraph text and per-character styling.
-- **Vector.** Cubic Bézier paths, anti-aliased fill under both winding rules,
-  stroke-to-outline with caps/joins/dashes, boolean ops, and SVG path I/O.
-- **Colour.** A linear premultiplied working space, sRGB/Display P3 dispatch,
-  HSL/HSV/CIELAB, and an export pipeline that converts back correctly.
-- **Undo.** Every edit is an invertible command. A brush stroke touching a
-  hundred tiles is one undo step, and undo restores the prior pixels exactly.
+**This is a work in progress, not a finished product.** The engine is largely
+complete and heavily tested; the application on top of it is partly wired. The
+split matters, so it is spelled out rather than blurred.
 
-See [`docs/parity-matrix.md`](docs/parity-matrix.md) for the feature-by-feature
-status, including what is deliberately **not** done yet. That file is kept
-honest: nothing is marked done unless it is implemented, tested, and reachable
-from the UI.
+### What you can actually do in the app
+
+- Open PNG, JPEG, WebP, TIFF, GIF, BMP, ICO and TGA, and pan, zoom and fit.
+- **Paint.** Brush, pencil, eraser, clone, gradient, bucket, dodge/burn and the
+  rest of the stamp-based tools mark the canvas. A stroke is one undo step, and
+  undo restores the prior pixels byte-for-byte.
+- Build a layer stack: groups, layer masks, clipping masks, adjustment layers,
+  opacity and fill, and all 27 blend modes, all composited correctly.
+- Edit adjustment-layer parameters and see the result live.
+- Make selections, which constrain later painting.
+- Save and reopen the native `.rstudio` package — it composites to
+  byte-identical output after a round trip.
+- Export PNG, JPEG, WebP, TIFF, GIF and BMP with a correct colour pipeline.
+
+### What exists in the engine but is not reachable from the UI yet
+
+These are implemented and tested as libraries, and the application does not yet
+have a route to them:
+
+- **Filters** — the whole library (blur, sharpen, noise, distort, stylize,
+  pixelate, render, convolution). The Filter menu is drawn but not wired.
+- **PSD read and write** — `crates/psd` is complete and is not linked into the
+  application.
+- **Text** — shaping, layout and rasterisation work; there is no type tool to
+  create a text layer with.
+- **Vector paths** — the geometry and rasteriser work; there is no pen tool.
+- **Crop, slice and free transform** — the gestures track correctly but nothing
+  applies them.
+- **Selection overlay** — a selection changes the document but draws no
+  marching ants, so it is currently invisible.
+- **Layer effects** — the data model, editor and persistence are complete; the
+  compositor does not render them.
+- Roughly half the menu items are drawn disabled, marked "This build cannot do
+  that yet".
+
+[`docs/parity-matrix.md`](docs/parity-matrix.md) has the row-by-row detail.
+Nothing there is marked done unless it is implemented, tested, and reachable
+from the UI — and where that bar is not met, it says so.
 
 ## Building
 

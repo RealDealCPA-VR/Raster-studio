@@ -21,10 +21,16 @@ use super::units::{format_bytes, ResolutionUnit, Unit, DEFAULT_PPI, MAX_PPI};
 use super::{ids, sizes};
 
 /// Largest side a new document may have, in pixels.
-pub const MAX_DIMENSION: u32 = 300_000;
+///
+/// **Defined as the engine's own limit, not a number of its own.** The dialog
+/// used to carry independent constants, so it could describe a document the
+/// loader would refuse — a dialog that offers what the application cannot build
+/// is a dialog that lies. `the_dialog_cannot_describe_a_document_the_engine_refuses`
+/// is the executable version of that.
+pub const MAX_DIMENSION: u32 = editor_core::MAX_CANVAS_DIMENSION;
 /// Largest area a new document may have, in pixels. A 300000 x 300000 document
 /// is 90 gigapixels; the area cap is what actually keeps the request sane.
-pub const MAX_PIXELS: u64 = 1_000_000_000;
+pub const MAX_PIXELS: u64 = editor_core::MAX_CANVAS_PIXELS;
 
 /// How a new document's channels are interpreted.
 ///
@@ -886,6 +892,51 @@ mod tests {
         dialog.set_pixel_height(200_000.0);
         assert!(dialog.confirm().is_none());
         assert!(dialog.blocked_reason().unwrap().contains("pixel limit"));
+    }
+
+    #[test]
+    fn the_dialog_cannot_describe_a_document_the_engine_refuses() {
+        // The dialog carried its own limits, so "valid here" and "loadable
+        // there" were two different questions with two different answers. Every
+        // size this dialog will confirm must be a size `editor-core` accepts —
+        // otherwise Create builds a document that cannot be reopened.
+        assert_eq!(MAX_DIMENSION, editor_core::MAX_CANVAS_DIMENSION);
+        assert_eq!(MAX_PIXELS, editor_core::MAX_CANVAS_PIXELS);
+
+        let mut dialog = NewDocumentDialog {
+            unit: Unit::Pixels,
+            ..Default::default()
+        };
+        // Every size at, just under, and just over each edge of the dialog's
+        // own rules, checked against the engine's.
+        for (w, h) in [
+            (1.0, 1.0),
+            (1920.0, 1080.0),
+            (f64::from(MAX_DIMENSION), 3_333.0),
+            (f64::from(MAX_DIMENSION) + 1.0, 1.0),
+            (31_622.0, 31_622.0),
+            (31_624.0, 31_624.0),
+            (200_000.0, 200_000.0),
+        ] {
+            dialog.set_pixel_width(w);
+            dialog.set_pixel_height(h);
+            let spec = dialog.spec();
+            if spec.is_valid() {
+                assert!(
+                    editor_core::canvas_size_is_supported(spec.width, spec.height),
+                    "the dialog would create {}x{}, which the engine refuses",
+                    spec.width,
+                    spec.height
+                );
+                assert!(dialog.confirm().is_some());
+            } else {
+                assert!(
+                    dialog.confirm().is_none(),
+                    "an invalid spec must not be confirmable"
+                );
+                assert!(dialog.blocked_reason().is_some(), "and must say why");
+            }
+        }
     }
 
     #[test]

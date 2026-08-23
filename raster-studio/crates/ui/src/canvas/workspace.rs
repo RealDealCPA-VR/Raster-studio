@@ -205,6 +205,25 @@ impl CanvasHost {
         self.doc_size
     }
 
+    /// Tell the host what document it is looking at, without drawing a frame.
+    ///
+    /// [`CanvasHost::central_panel`] does this as it draws, which is enough for
+    /// a host the workspace itself renders. The native shell does not render
+    /// this host — it composites the image onto the surface behind egui — so
+    /// nothing ever told it the document's size or its selection, and every
+    /// zoom command that needs one ([`CanvasHost::zoom_to_fit`],
+    /// [`CanvasHost::zoom_to_fill`], [`CanvasHost::zoom_to_selection`]) framed
+    /// an empty rectangle and returned having moved nothing. The menu item
+    /// looked live and did precisely that.
+    ///
+    /// Cheap to call every frame: the selection outline behind it is cached on
+    /// the selection and the canvas size, so an untouched document retraces
+    /// nothing.
+    pub fn observe(&mut self, doc: &Document) {
+        self.doc_size = doc_size(doc);
+        let _ = self.selection_outline(doc);
+    }
+
     /// Fit the whole document in the viewport.
     pub fn zoom_to_fit(&mut self) {
         self.view.zoom_to_fit(self.doc_size);
@@ -354,6 +373,44 @@ pub fn doc_size(doc: &Document) -> Vec2 {
 mod tests {
     use super::*;
     use editor_core::Document;
+
+    #[test]
+    fn a_host_that_never_draws_can_still_be_told_what_it_is_looking_at() {
+        // `zoom_to_fill` and `zoom_to_selection` are answered from `doc_size`
+        // and the cached selection, both of which only `central_panel` used to
+        // write. A host nobody renders — the native shell composites the image
+        // itself and never calls it — therefore framed an empty rectangle and
+        // returned having moved nothing, which is a live menu item that does
+        // precisely nothing.
+        let mut doc = Document::new(400, 300, "t");
+        doc.selection = Selection::Rect {
+            min: IVec2::new(100, 120),
+            max: IVec2::new(140, 160),
+        };
+        let mut host = CanvasHost::default();
+        assert_eq!(host.doc_size(), Vec2::ZERO, "nothing has told it yet");
+
+        let before = host.view.camera.zoom;
+        host.zoom_to_fill();
+        assert_eq!(
+            host.view.camera.zoom, before,
+            "a host with no document must not invent a zoom"
+        );
+        assert!(!host.zoom_to_selection());
+
+        host.observe(&doc);
+
+        assert_eq!(host.doc_size(), Vec2::new(400.0, 300.0));
+        host.zoom_to_fill();
+        assert_ne!(
+            host.view.camera.zoom, before,
+            "Fill Screen still did nothing"
+        );
+        assert!(
+            host.zoom_to_selection(),
+            "Zoom to Selection still did nothing"
+        );
+    }
 
     fn ctx() -> egui::Context {
         let ctx = egui::Context::default();

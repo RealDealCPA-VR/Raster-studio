@@ -49,10 +49,32 @@
 //!
 //! Stated rather than implied:
 //!
-//! * **Tools do not receive pointer events.** See [`shell`]: a canvas drag pans
-//!   the view whatever tool is selected. The tool palette, the tool letters,
-//!   the brush-size keys and the colour wells all work; the gesture that would
-//!   paint does not exist yet, and no tool consumes the foreground colour.
+//! * **A view rotation cannot be shown.** [`tool_input`] drives the Rotate View
+//!   tool like any other, but [`render::Camera`] is axis-aligned by
+//!   construction, so the angle has nowhere to be written back to. Hand and
+//!   Zoom reach the screen in full.
+//! * **A selection gesture is not undoable.** `editor-core` models the
+//!   selection as a field rather than a command, so a marquee changes the
+//!   document directly and marks it dirty. Named in [`tools::SelectionEdit`]'s
+//!   own documentation, not invented here.
+//! * **A stroke is invisible until the button is released.**
+//!   `tools::StrokeTool::commit` emits the stroke's single `PaintTiles` command
+//!   from `on_pointer_up` alone, and the document's pixel references are
+//!   rewritten by that command and nothing else — so the canvas is unchanged
+//!   for the whole drag and the stroke appears at the release. There is no live
+//!   preview layer to draw one into. See [`tool_input`].
+//! * **A shape gesture draws nothing.** The seven shape tools emit one undoable
+//!   `CreateLayer` holding a visible `layer_model::LayerKind::Shape` with the
+//!   dragged path, so the layer appears in the Layers panel — and nowhere else,
+//!   because `compositor::composite` answers `LayerKind::Text | Shape |
+//!   SmartObject` with an empty arm ("No rasterizer for these yet; they
+//!   contribute nothing"). The composited pixels are byte-identical after the
+//!   gesture. See [`tool_input`].
+//! * **The right button does nothing on the canvas.** There is no context menu
+//!   to give it, and [`ui::canvas::InputRouter`] would hand a `Secondary` press
+//!   to the active tool exactly as it hands it a `Primary` one — so a right-drag
+//!   would paint. [`shell::pointer_button`] refuses it rather than leaving the
+//!   user a stroke they did not ask for.
 //! * **There is no pen/path tool.** The brief names `P` among the tool letters,
 //!   but `tools::registry` ships no tool answering to it, so `P` is unbound.
 //!   Recorded rather than hidden — see `keymap`'s
@@ -83,6 +105,7 @@ pub mod presenter;
 pub mod recent;
 pub mod session;
 pub mod shell;
+pub mod tool_input;
 
 pub use action::{Action, Category, ToolKey};
 pub use chrome::{Chrome, ChromeOutput, Rebind, ShortcutRow};
@@ -101,6 +124,7 @@ pub use presenter::CanvasPresenter;
 pub use recent::{RecentFiles, MAX_RECENT_FILES};
 pub use session::{SessionMarker, SessionRecord};
 pub use shell::Shell;
+pub use tool_input::{PointerOutcome, Refusal, ToolPointer};
 
 use std::path::PathBuf;
 

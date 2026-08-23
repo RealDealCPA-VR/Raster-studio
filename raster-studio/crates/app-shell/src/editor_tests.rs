@@ -1217,6 +1217,352 @@ fn a_declined_recovery_only_ever_deletes_this_applications_own_scratch() {
     assert!(!mine.exists(), "the offer is not repeated at every start");
 }
 
+// ---------------------------------------------------------------------------
+// Editing an adjustment layer's parameters
+//
+// Every one of these fails without `Command::SetLayerKind` and
+// `Editor::apply_kind_edit`. Before them, `Intent::EditLayerKind` — the only
+// channel an adjustment's parameters or a text layer's content can travel
+// through — resolved to `None` in `menu_bridge::pick` and was dropped without a
+// word by `Chrome::harvest`, so every slider in the Properties panel moved a
+// value that was re-read from the document on the next frame and sprang back.
+// ---------------------------------------------------------------------------
+
+/// An editor with one 64x48 image open and a Brightness/Contrast adjustment
+/// layer above it, at identity — the state adding an adjustment leaves you in.
+fn with_adjustment(dir: &Path) -> (Editor, LayerId) {
+    let image = write_png(dir, "adj.png", 64, 48, 90);
+    let mut ed = bare(dir, ScriptedDialogs::new());
+    ed.open_path(&image).unwrap();
+    let layer = Layer::with_kind(
+        "Brightness/Contrast",
+        LayerKind::Adjustment(layer_model::AdjustmentLayer {
+            kind: layer_model::AdjustmentKind::BrightnessContrast {
+                brightness: 0.0,
+                contrast: 0.0,
+            },
+        }),
+    );
+    let id = layer.id;
+    ed.apply_command(Command::create_layer(layer));
+    assert!(
+        ed.active().unwrap().document.layers.get(id).is_some(),
+        "the fixture never got its adjustment layer: {:?}",
+        ed.status()
+    );
+    (ed, id)
+}
+
+/// The brightness the document currently holds for `layer`.
+fn brightness_of(ed: &Editor, layer: LayerId) -> f32 {
+    match &ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .get(layer)
+        .unwrap()
+        .kind
+    {
+        LayerKind::Adjustment(a) => match a.kind {
+            layer_model::AdjustmentKind::BrightnessContrast { brightness, .. } => brightness,
+            ref other => panic!("not a Brightness/Contrast: {other:?}"),
+        },
+        other => panic!("not an adjustment layer: {other:?}"),
+    }
+}
+
+/// What the Properties panel emits for one frame of a slider drag.
+fn slide_brightness(ed: &mut Editor, layer: LayerId, brightness: f32, gesture: Option<u64>) {
+    ed.apply_kind_edit(crate::chrome::KindEdit {
+        layer,
+        kind: Box::new(LayerKind::Adjustment(layer_model::AdjustmentLayer {
+            kind: layer_model::AdjustmentKind::BrightnessContrast {
+                brightness,
+                contrast: 0.0,
+            },
+        })),
+        gesture,
+    });
+}
+
+#[test]
+fn an_adjustment_slider_changes_the_document_and_what_the_canvas_shows() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut ed, layer) = with_adjustment(dir.path());
+    let region = ed.active().unwrap().canvas_rect();
+    let before = ed.active_mut().unwrap().composite(region).unwrap();
+
+    slide_brightness(&mut ed, layer, 0.5, None);
+
+    assert_eq!(
+        brightness_of(&ed, layer),
+        0.5,
+        "the value never reached the document, so the knob springs back"
+    );
+    let after = ed.active_mut().unwrap().composite(region).unwrap();
+    assert_ne!(
+        before, after,
+        "the parameter moved and the composited image did not — an adjustment \
+         nobody can see is the same decoration as one nobody can change"
+    );
+
+    // ...and it went through history like every other edit, so it can be taken
+    // back rather than being a mutation behind undo's back.
+    ed.dispatch(Action::Undo).unwrap();
+    assert_eq!(brightness_of(&ed, layer), 0.0);
+    let undone = ed.active_mut().unwrap().composite(region).unwrap();
+    assert_eq!(undone, before, "undo did not restore the pixels");
+}
+
+#[test]
+fn one_drag_of_a_slider_is_one_undo_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut ed, layer) = with_adjustment(dir.path());
+    let depth = ed.active().unwrap().history_depth();
+
+    // Two hundred frames of a single sweep, exactly as the panel emits them:
+    // one intent per frame the pointer moved, all inside one press.
+    for frame in 1..=200 {
+        slide_brightness(&mut ed, layer, frame as f32 / 200.0, Some(7));
+    }
+
+    assert_eq!(brightness_of(&ed, layer), 1.0, "the sweep did not land");
+    assert_eq!(
+        ed.active().unwrap().history_depth(),
+        depth + 1,
+        "one drag pushed {} entries, so undo would take that many presses",
+        ed.active().unwrap().history_depth() - depth
+    );
+    // One Ctrl+Z goes back to where the sweep began, not to 199/200 of the way
+    // through it — which is what makes the single entry *correct* and not
+    // merely small.
+    ed.dispatch(Action::Undo).unwrap();
+    assert_eq!(brightness_of(&ed, layer), 0.0);
+    // ...and the redo stack still holds the whole sweep.
+    ed.dispatch(Action::Redo).unwrap();
+    assert_eq!(brightness_of(&ed, layer), 1.0);
+}
+
+#[test]
+fn a_drag_writes_one_journal_record_per_frame_while_history_gains_one() {
+    // The half of the fold that is *not* folded, measured so the doc comment on
+    // `apply_kind_edit` cannot drift back into claiming otherwise. The undo the
+    // fold takes is `OpenDocument::undo`, which writes no journal record, while
+    // `OpenDocument::apply` appends and fsyncs one every single time — so a
+    // saved project collects a record per frame of the sweep even though its
+    // in-memory history collects one entry for the whole sweep.
+    //
+    // This is a statement about disk growth, not about correctness: the last
+    // assertion replays what was written and lands on the value the user
+    // settled on, because `SetLayerKind` is an absolute payload.
+    let dir = tempfile::tempdir().unwrap();
+    let (mut ed, layer) = with_adjustment(dir.path());
+    let project = dir.path().join("drag.rstudio");
+    ed.active_mut().unwrap().save_to(&project, "test").unwrap();
+    let depth = ed.active().unwrap().history_depth();
+
+    const FRAMES: usize = 20;
+    for frame in 1..=FRAMES {
+        slide_brightness(&mut ed, layer, frame as f32 / FRAMES as f32, Some(3));
+    }
+
+    assert_eq!(
+        ed.active().unwrap().history_depth(),
+        depth + 1,
+        "the in-memory fold stopped working"
+    );
+
+    let recovery =
+        project_format::CommandJournal::read(&project.join(project_format::JOURNAL_FILE)).unwrap();
+    let kind_records = recovery
+        .since_last_save()
+        .iter()
+        .filter(|c| matches!(c, Command::SetLayerKind { .. }))
+        .count();
+    assert_eq!(
+        kind_records, FRAMES,
+        "the journal folded the drag after all — if that became true on purpose, \
+         say so on `Editor::apply_kind_edit` instead of leaving this test to \
+         contradict it"
+    );
+
+    // ...and replaying every one of those records reaches the settled value, so
+    // the per-frame records cost disk and nothing else.
+    let mut replayed = ed.active().unwrap().document.clone();
+    for command in recovery.since_last_save() {
+        // The replay starts from the *current* document, so re-applying the
+        // absolute payloads must be a no-op that ends where the drag ended.
+        command.apply(&mut replayed).unwrap();
+    }
+    let settled = match &replayed.layers.get(layer).unwrap().kind {
+        LayerKind::Adjustment(a) => match a.kind {
+            layer_model::AdjustmentKind::BrightnessContrast { brightness, .. } => brightness,
+            ref other => panic!("not a Brightness/Contrast: {other:?}"),
+        },
+        other => panic!("not an adjustment layer: {other:?}"),
+    };
+    assert_eq!(settled, 1.0, "replaying the journal lost the settled value");
+}
+
+#[test]
+fn two_presses_are_two_undo_steps_and_a_typed_value_stands_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut ed, layer) = with_adjustment(dir.path());
+    let depth = ed.active().unwrap().history_depth();
+
+    slide_brightness(&mut ed, layer, 0.2, Some(1));
+    slide_brightness(&mut ed, layer, 0.3, Some(1));
+    // The pointer came up and went down again: a second gesture, a second step.
+    slide_brightness(&mut ed, layer, 0.6, Some(2));
+    // No pointer at all — a value typed into the field or nudged with the
+    // arrow keys. It has no gesture to be folded into.
+    slide_brightness(&mut ed, layer, 0.9, None);
+
+    assert_eq!(ed.active().unwrap().history_depth(), depth + 3);
+    ed.dispatch(Action::Undo).unwrap();
+    assert_eq!(brightness_of(&ed, layer), 0.6);
+    ed.dispatch(Action::Undo).unwrap();
+    assert_eq!(brightness_of(&ed, layer), 0.3);
+    ed.dispatch(Action::Undo).unwrap();
+    assert_eq!(brightness_of(&ed, layer), 0.0);
+}
+
+#[test]
+fn folding_a_drag_never_rolls_back_somebody_elses_command() {
+    // The fold works by undoing the entry the gesture already pushed. A gesture
+    // id is a claim about the pointer, not about the history stack, so it is
+    // checked against the stack before anything is rolled back.
+    let dir = tempfile::tempdir().unwrap();
+    let (mut ed, layer) = with_adjustment(dir.path());
+
+    slide_brightness(&mut ed, layer, 0.4, Some(5));
+    // Something else lands on top mid-gesture.
+    let interloper = Layer::raster("interloper");
+    let interloper_id = interloper.id;
+    ed.apply_command(Command::create_layer(interloper));
+    let depth = ed.active().unwrap().history_depth();
+
+    // The same gesture continues. It must push a new step, not eat the layer.
+    slide_brightness(&mut ed, layer, 0.7, Some(5));
+
+    assert!(
+        ed.active()
+            .unwrap()
+            .document
+            .layers
+            .get(interloper_id)
+            .is_some(),
+        "the fold undid a command that was not its own"
+    );
+    assert_eq!(ed.active().unwrap().history_depth(), depth + 1);
+    assert_eq!(brightness_of(&ed, layer), 0.7);
+}
+
+#[test]
+fn a_drag_that_outlives_a_tab_switch_does_not_disturb_the_other_document() {
+    // The gesture survives, the history it was folding into does not: the user
+    // is now looking at a different document with a different stack. The guard
+    // is what keeps the stray frame from undoing whatever is on top of *that*
+    // one.
+    let dir = tempfile::tempdir().unwrap();
+    let (mut ed, layer) = with_adjustment(dir.path());
+    slide_brightness(&mut ed, layer, 0.4, Some(9));
+
+    let other = write_png(dir.path(), "other.png", 16, 16, 3);
+    ed.open_path(&other).unwrap();
+    let marker = Layer::raster("marker");
+    let marker_id = marker.id;
+    ed.apply_command(Command::create_layer(marker));
+    let depth = ed.active().unwrap().history_depth();
+
+    // A frame of the old drag, delivered against the new document.
+    slide_brightness(&mut ed, layer, 0.6, Some(9));
+
+    assert!(
+        ed.active()
+            .unwrap()
+            .document
+            .layers
+            .get(marker_id)
+            .is_some(),
+        "a stray drag frame undid the other document's last command"
+    );
+    assert_eq!(ed.active().unwrap().history_depth(), depth);
+}
+
+#[test]
+fn an_undo_mid_drag_stops_the_fold_even_though_the_stack_still_looks_right() {
+    // The one case `tops_out_with_kind_edit` cannot answer. After an undo the
+    // top of the stack really *is* a kind edit to this layer — an older one,
+    // from an earlier gesture — so the guard says yes and folding would eat a
+    // step the user still wants. `dispatch` clears the gesture for exactly
+    // this, which the guard alone cannot cover.
+    let dir = tempfile::tempdir().unwrap();
+    let (mut ed, layer) = with_adjustment(dir.path());
+    slide_brightness(&mut ed, layer, 0.2, Some(1));
+    slide_brightness(&mut ed, layer, 0.5, Some(2));
+    let depth = ed.active().unwrap().history_depth();
+
+    // Ctrl+Z while the second drag is still under the pointer.
+    ed.dispatch(Action::Undo).unwrap();
+    assert_eq!(brightness_of(&ed, layer), 0.2);
+    // ...and the drag delivers one more frame.
+    slide_brightness(&mut ed, layer, 0.7, Some(2));
+
+    assert_eq!(
+        ed.active().unwrap().history_depth(),
+        depth,
+        "the stray frame folded into the step the undo had just uncovered"
+    );
+    ed.dispatch(Action::Undo).unwrap();
+    assert_eq!(
+        brightness_of(&ed, layer),
+        0.2,
+        "the first drag's step was swallowed"
+    );
+}
+
+#[test]
+fn a_history_panel_jump_mid_drag_stops_the_fold_too() {
+    // The History panel's click walks the same timeline Ctrl+Z does, and leaves
+    // the stack in the same shape: an older kind edit to this very layer on
+    // top. `jump_history` clears the gesture for exactly that reason.
+    let dir = tempfile::tempdir().unwrap();
+    let (mut ed, layer) = with_adjustment(dir.path());
+    slide_brightness(&mut ed, layer, 0.2, Some(1));
+    slide_brightness(&mut ed, layer, 0.5, Some(2));
+    let depth = ed.active().unwrap().history_depth();
+
+    assert_eq!(ed.jump_history(depth - 1), 1);
+    assert_eq!(brightness_of(&ed, layer), 0.2);
+    slide_brightness(&mut ed, layer, 0.7, Some(2));
+
+    assert_eq!(
+        ed.active().unwrap().history_depth(),
+        depth,
+        "the stray frame folded into the step the jump had just uncovered"
+    );
+    ed.dispatch(Action::Undo).unwrap();
+    assert_eq!(brightness_of(&ed, layer), 0.2);
+}
+
+#[test]
+fn a_kind_edit_of_the_wrong_class_is_refused_out_loud() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut ed, layer) = with_adjustment(dir.path());
+    ed.apply_kind_edit(crate::chrome::KindEdit {
+        layer,
+        kind: Box::new(LayerKind::Raster(Default::default())),
+        gesture: None,
+    });
+    let said = ed.status().unwrap_or_default().to_string();
+    assert!(
+        said.contains("adjustment") && said.contains("raster"),
+        "a refused class change said nothing useful: {said}"
+    );
+}
+
 /// Copy a package directory, so a test can plant one where it needs it.
 fn copy_tree(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();

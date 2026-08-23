@@ -144,7 +144,7 @@ fn source_renders_with_correct_orientation() {
         255, 0,   0,   255,   0,   255, 0,   255,
         0,   0,   255, 255,   255, 255, 255, 255,
     ];
-    let source = GpuTexture::from_rgba8(&gpu, 2, 2, &pixels, "orientation-src");
+    let source = GpuTexture::from_rgba8(&gpu, 2, 2, &pixels, "orientation-src").expect("texture");
     let camera = fitted_camera(2, 64);
     let img = render_canvas(&gpu, &source, &camera, 64).expect("render");
 
@@ -173,7 +173,7 @@ fn fitted_image_covers_the_whole_viewport() {
     let pixels: Vec<u8> = std::iter::repeat_n([0u8, 128, 255, 255], 64 * 64)
         .flatten()
         .collect();
-    let source = GpuTexture::from_rgba8(&gpu, 64, 64, &pixels, "fill-src");
+    let source = GpuTexture::from_rgba8(&gpu, 64, 64, &pixels, "fill-src").expect("texture");
     let camera = fitted_camera(64, 64);
     let img = render_canvas(&gpu, &source, &camera, 64).expect("render");
 
@@ -193,7 +193,7 @@ fn fitted_image_covers_the_whole_viewport() {
 fn transparent_pixels_inside_the_image_show_the_checkerboard() {
     let gpu = gpu_or_skip!();
     let pixels = vec![0u8; 8 * 8 * 4]; // fully transparent
-    let source = GpuTexture::from_rgba8(&gpu, 8, 8, &pixels, "transparent-src");
+    let source = GpuTexture::from_rgba8(&gpu, 8, 8, &pixels, "transparent-src").expect("texture");
     let camera = fitted_camera(8, 64);
     let img = render_canvas(&gpu, &source, &camera, 64).expect("render");
 
@@ -215,7 +215,7 @@ fn transparent_pixels_inside_the_image_show_the_checkerboard() {
 fn checkerboard_cell_size_is_fixed_in_pixels() {
     let gpu = gpu_or_skip!();
     let pixels = vec![0u8; 4 * 4 * 4];
-    let source = GpuTexture::from_rgba8(&gpu, 4, 4, &pixels, "checker-src");
+    let source = GpuTexture::from_rgba8(&gpu, 4, 4, &pixels, "checker-src").expect("texture");
     let cell = render_shaders::CHECKER_CELL_PX;
     let light = render_shaders::CHECKER_LIGHT_SRGB_U8;
     let dark = render_shaders::CHECKER_DARK_SRGB_U8;
@@ -245,7 +245,7 @@ fn checkerboard_cell_size_is_fixed_in_pixels() {
 fn checkerboard_is_srgb_corrected() {
     let gpu = gpu_or_skip!();
     let pixels = vec![0u8; 4 * 4 * 4];
-    let source = GpuTexture::from_rgba8(&gpu, 4, 4, &pixels, "srgb-src");
+    let source = GpuTexture::from_rgba8(&gpu, 4, 4, &pixels, "srgb-src").expect("texture");
     let camera = fitted_camera(4, 32);
     let img = render_canvas(&gpu, &source, &camera, 32).expect("render");
 
@@ -348,7 +348,7 @@ fn linear_and_srgb_targets_produce_the_same_bytes() {
             }
         }
     }
-    let source = GpuTexture::from_rgba8(&gpu, 16, 16, &pixels, "encode-src");
+    let source = GpuTexture::from_rgba8(&gpu, 16, 16, &pixels, "encode-src").expect("texture");
     let camera = fitted_camera(16, 32);
 
     let srgb_target = render_canvas_to(&gpu, Some(&source), &camera, 32, SRGB).expect("render");
@@ -405,7 +405,7 @@ fn mip_downsample_is_alpha_weighted() {
         255, 255, 255, 255,   0, 0, 0, 0,
         0,   0,   0,   0,     0, 0, 0, 0,
     ];
-    let tex = GpuTexture::from_rgba8(&gpu, 2, 2, &pixels, "alpha-mip-src");
+    let tex = GpuTexture::from_rgba8(&gpu, 2, 2, &pixels, "alpha-mip-src").expect("texture");
     assert_eq!(tex.mip_level_count, 2);
 
     let level1 = tex.read_level(&gpu, 1).expect("read level 1");
@@ -453,7 +453,7 @@ fn minified_alpha_edges_do_not_darken() {
             }
         }
     }
-    let tex = GpuTexture::from_rgba8(&gpu, 16, 16, &pixels, "fringe-src");
+    let tex = GpuTexture::from_rgba8(&gpu, 16, 16, &pixels, "fringe-src").expect("texture");
     // The claim proper: the generated level is white, not a darkened grey.
     let level1 = tex.read_level(&gpu, 1).expect("read level 1");
     assert_eq!((level1.width(), level1.height()), (8, 8));
@@ -524,7 +524,7 @@ fn mip_levels_keep_top_to_bottom_order() {
             pixels.extend_from_slice(&color);
         }
     }
-    let tex = GpuTexture::from_rgba8(&gpu, 4, 4, &pixels, "mip-orientation-src");
+    let tex = GpuTexture::from_rgba8(&gpu, 4, 4, &pixels, "mip-orientation-src").expect("texture");
     assert_eq!(tex.mip_level_count, 3);
 
     let level1 = tex.read_level(&gpu, 1).expect("read level 1");
@@ -567,7 +567,8 @@ fn image_upload_compiles_the_mip_pipeline_once() {
 
     let pixels = vec![200u8; 8 * 8 * 4];
     for i in 0..4 {
-        let tex = GpuTexture::from_rgba8(&gpu, 8, 8, &pixels, &format!("upload-{i}"));
+        let tex =
+            GpuTexture::from_rgba8(&gpu, 8, 8, &pixels, &format!("upload-{i}")).expect("texture");
         assert!(tex.mip_level_count > 1);
     }
 
@@ -582,7 +583,7 @@ fn image_upload_compiles_the_mip_pipeline_once() {
 fn uploaded_textures_get_a_full_mip_chain() {
     let gpu = gpu_or_skip!();
     let pixels = vec![255u8; 64 * 64 * 4];
-    let tex = GpuTexture::from_rgba8(&gpu, 64, 64, &pixels, "mip-src");
+    let tex = GpuTexture::from_rgba8(&gpu, 64, 64, &pixels, "mip-src").expect("texture");
     assert_eq!(tex.mip_level_count, 7);
     assert_eq!(tex.texture.mip_level_count(), 7);
 }
@@ -620,7 +621,7 @@ fn minified_detail_resolves_through_the_mip_chain() {
     }
 
     let camera = fitted_camera(64, 5);
-    let mipped = GpuTexture::from_rgba8(&gpu, 64, 64, &pixels, "mipped-src");
+    let mipped = GpuTexture::from_rgba8(&gpu, 64, 64, &pixels, "mipped-src").expect("texture");
     assert!(mipped.mip_level_count > 1, "source has no mip chain");
     let with_mips = render_canvas(&gpu, &mipped, &camera, 5).expect("render");
 
@@ -632,7 +633,8 @@ fn minified_detail_resolves_through_the_mip_chain() {
         wgpu::TextureFormat::Rgba8UnormSrgb,
         false,
         "flat-src",
-    );
+    )
+    .expect("texture");
     assert_eq!(flat.mip_level_count, 1);
     let without_mips = render_canvas(&gpu, &flat, &camera, 5).expect("render");
 
@@ -685,7 +687,7 @@ const LINEAR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn solid(gpu: &GpuContext, rgba: [u8; 4], label: &str) -> GpuTexture {
     let pixels: Vec<u8> = std::iter::repeat_n(rgba, 4 * 4).flatten().collect();
-    GpuTexture::from_rgba8_with(gpu, 4, 4, &pixels, LINEAR, false, label)
+    GpuTexture::from_rgba8_with(gpu, 4, 4, &pixels, LINEAR, false, label).expect("texture")
 }
 
 /// A 4x4 texture whose four ROWS are `rows[0..4]`, top to bottom. Vertically
@@ -697,7 +699,7 @@ fn row_striped(gpu: &GpuContext, rows: [[u8; 4]; 4], label: &str) -> GpuTexture 
             pixels.extend_from_slice(&row);
         }
     }
-    GpuTexture::from_rgba8_with(gpu, 4, 4, &pixels, LINEAR, false, label)
+    GpuTexture::from_rgba8_with(gpu, 4, 4, &pixels, LINEAR, false, label).expect("texture")
 }
 
 fn composite(
@@ -928,4 +930,103 @@ fn offscreen_target_rejects_empty_size() {
     let gpu = gpu_or_skip!();
     assert!(OffscreenTarget::new(&gpu, 0, 16, LINEAR).is_err());
     assert!(OffscreenTarget::new(&gpu, 16, 0, LINEAR).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// The texture-size limit
+//
+// `create_texture` has no `Result`: an out-of-range size is reported through
+// the device's uncaptured-error handler, whose wgpu default is `panic!` — and
+// this build aborts on panic. A photograph from any current full-frame camera
+// (a Nikon Z8 JPEG is 8256x5504) is already past the WebGPU baseline of 8192,
+// so these two tests stand between a mainstream file and a process kill.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_device_offers_at_least_the_baseline_texture_size() {
+    let gpu = gpu_or_skip!();
+    let limit = gpu.max_texture_dimension_2d();
+    assert!(limit >= 8192, "a device below the WebGPU baseline: {limit}");
+    // Whatever was requested, this is what the device will actually enforce,
+    // and the two must be the same number — the constructor validates against
+    // the cached one and the driver validates against the device's.
+    assert_eq!(limit, gpu.device.limits().max_texture_dimension_2d);
+    // And it must be the adapter's offer, not the baseline default, wherever
+    // the adapter offers more.
+    assert_eq!(limit, gpu.adapter.limits().max_texture_dimension_2d);
+}
+
+#[test]
+fn an_oversized_texture_is_an_error_not_an_abort() {
+    let gpu = gpu_or_skip!();
+    let limit = gpu.max_texture_dimension_2d();
+    // No pixels are allocated for the request: the size is refused before the
+    // buffer length is looked at, which is what lets a caller ask "would this
+    // fit?" without first building the answer.
+    let err = GpuTexture::from_rgba8(&gpu, limit + 1, 16, &[], "oversized")
+        .expect_err("a texture past the device limit must be refused");
+    let text = err.to_string();
+    assert!(
+        text.contains(&(limit + 1).to_string()) && text.contains(&limit.to_string()),
+        "the error must name the request and the limit: {text}"
+    );
+    assert!(
+        GpuTexture::from_rgba8(&gpu, 16, limit + 1, &[], "oversized-tall").is_err(),
+        "the height is bounded too"
+    );
+    // The process is still here, and so is the device: the very next texture
+    // of a legal size still works.
+    let pixels = vec![255u8; 4 * 4 * 4];
+    let ok = GpuTexture::from_rgba8(&gpu, 4, 4, &pixels, "after-refusal").expect("still usable");
+    assert_eq!((ok.width, ok.height), (4, 4));
+    assert_eq!(
+        gpu.last_error(),
+        None,
+        "the refusal must not have reached the driver at all"
+    );
+}
+
+#[test]
+fn a_device_error_is_recorded_instead_of_killing_the_process() {
+    // The handler is the second half of the fix: the constructor refuses what
+    // it can see, and anything that gets past it — a driver-side validation
+    // failure, an out-of-memory allocation — arrives here rather than at
+    // wgpu's default handler, which panics.
+    let gpu = gpu_or_skip!();
+    assert_eq!(gpu.take_last_error(), None, "a fresh device has not failed");
+    let limit = gpu.max_texture_dimension_2d();
+    // Deliberately bypass `GpuTexture` and hand the device a texture it cannot
+    // make. Without the installed handler this line aborts the process.
+    let _doomed = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("past-the-limit"),
+        size: wgpu::Extent3d {
+            width: limit + 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: LINEAR,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let reported = gpu
+        .take_last_error()
+        .expect("the device error was swallowed");
+    assert!(
+        reported.to_lowercase().contains("dimension") || reported.contains(&limit.to_string()),
+        "unhelpful device error: {reported}"
+    );
+    assert_eq!(gpu.take_last_error(), None, "taking it clears it");
+}
+
+#[test]
+fn a_zero_sized_or_mis_sized_texture_is_an_error_not_a_panic() {
+    let gpu = gpu_or_skip!();
+    assert!(GpuTexture::from_rgba8(&gpu, 0, 4, &[], "zero-wide").is_err());
+    assert!(GpuTexture::from_rgba8(&gpu, 4, 0, &[], "zero-tall").is_err());
+    let err = GpuTexture::from_rgba8(&gpu, 4, 4, &[0; 12], "short-buffer")
+        .expect_err("a buffer that is not width*height*4 must be refused");
+    assert!(err.to_string().contains("64"), "got {err}");
 }

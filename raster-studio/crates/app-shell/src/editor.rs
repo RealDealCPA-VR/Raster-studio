@@ -50,6 +50,17 @@ pub const MAX_BRUSH_SIZE: f32 = 5000.0;
 /// Zoom step of one Ctrl+= / Ctrl+-.
 pub const ZOOM_STEP: f32 = 1.25;
 
+/// The brush a tool starts life with: the one
+/// [`tools::registry::make`] builds it holding.
+///
+/// Read off a freshly built instance rather than written out again here, so
+/// there is exactly one table saying what a Pencil is. A tool that stamps no
+/// dabs — a marquee, the gradient, the hand — has no brush of its own and
+/// answers with the application default, which nothing then reads.
+fn seeded_brush(tool: ToolId) -> BrushSettings {
+    registry::make(tool).brush().unwrap_or_default()
+}
+
 /// What an action changed. There is no "nothing happened" variant on purpose:
 /// an action that would produce one is a bug, and the type is what says so.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,7 +184,20 @@ pub struct Editor {
     untitled_count: u32,
 
     tool: ToolId,
+    /// The active tool's brush — what `[`, `]`, the options bar and the status
+    /// bar all read and write.
     brush: BrushSettings,
+    /// Every *other* tool's brush, parked while it is not selected.
+    ///
+    /// The brush belongs to the tool, not to the application. The Pencil is
+    /// defined by nothing but its settings — one hard aliased pixel, no
+    /// pressure — and it draws through the same `StrokeOp::Paint` the Brush
+    /// does, so a single application-wide brush makes the two the same tool the
+    /// moment either is used. Eight tools are like that; see
+    /// [`Editor::set_tool`]. A slot is filled the first time its tool is left,
+    /// and read back through [`Editor::brush_for`], which seeds an absent one
+    /// from [`tools::registry::make`] so the registry stays the one table.
+    brushes: BTreeMap<ToolId, BrushSettings>,
     foreground: [f32; 4],
     background: [f32; 4],
 
@@ -194,6 +218,32 @@ pub struct Editor {
     /// Unique per run of the process. Part of every scratch autosave's name.
     session_tag: String,
     revision: u64,
+    /// The layer and pointer gesture whose kind edit is currently the top of
+    /// the active document's history, when one is.
+    ///
+    /// What makes a drag of an adjustment slider one undo step instead of two
+    /// hundred.
+    ///
+    /// Cleared by a history jump and by every dispatched action, because those
+    /// move the *timeline* — after an undo the top of the stack can be an
+    /// older kind edit on the same layer, which
+    /// [`tops_out_with_kind_edit`] cannot tell from the one this gesture
+    /// pushed. An ordinary command landing on top is caught by that guard
+    /// instead and deliberately does not clear this. See
+    /// [`Editor::apply_kind_edit`].
+    kind_gesture: Option<(LayerId, u64)>,
+}
+
+/// Whether the top of `doc`'s history is a kind edit to `layer`.
+///
+/// The guard on the fold in [`Editor::apply_kind_edit`]: the gesture id says
+/// the pointer never came up, which is a claim about the mouse and not about
+/// the history stack. This is the claim about the history stack.
+fn tops_out_with_kind_edit(doc: &OpenDocument, layer: LayerId) -> bool {
+    matches!(
+        doc.history.journal().last(),
+        Some(Command::SetLayerKind { layer_id, .. }) if *layer_id == layer
+    )
 }
 
 /// Black over white — the defaults `D` restores.
@@ -263,7 +313,8 @@ impl Editor {
             next_id: 1,
             untitled_count: 0,
             tool: ToolId::Move,
-            brush: BrushSettings::default(),
+            brush: seeded_brush(ToolId::Move),
+            brushes: BTreeMap::new(),
             foreground: DEFAULT_FOREGROUND,
             background: DEFAULT_BACKGROUND,
             panels_visible: true,
@@ -276,6 +327,7 @@ impl Editor {
             autosaves: BTreeMap::new(),
             session_tag: mint_session_tag(),
             revision: 0,
+            kind_gesture: None,
         }
     }
 
@@ -443,11 +495,86 @@ impl Editor {
     /// This is how the UI edits: it emits intent, the editor applies it, undo
     /// and redo stay uniform. A refusal is reported rather than swallowed.
     pub fn apply_command(&mut self, command: Command) {
+        // Deliberately does *not* clear `kind_gesture`. Another command landing
+        // on the stack is exactly the case `tops_out_with_kind_edit` is there
+        // to catch, and clearing here as well would make that guard unreachable
+        // — a safety belt nothing can test is a safety belt nobody can trust.
         let Some(doc) = self.active_mut() else {
             return;
         };
         match doc.apply(command) {
             Ok(()) => self.touch(),
+            Err(e) => {
+                let reason = e.to_string();
+                self.set_status(reason);
+            }
+        }
+    }
+
+    /// Apply an edit to a layer's kind payload, folding a drag into one step.
+    ///
+    /// This is the path every adjustment slider and every text field takes, and
+    /// it is why they do anything at all: `LayerPatch` covers no layer's `kind`,
+    /// so before [`Command::SetLayerKind`] existed the Properties panel emitted
+    /// an intent the bridge answered with `None` and the chrome threw away.
+    ///
+    /// # One sweep, one undo step
+    ///
+    /// A slider emits on every frame the pointer moves. Each of those is a real
+    /// edit and each would be a real history entry, so one drag of the
+    /// Brightness knob would cost a hundred-odd presses of Ctrl+Z to take back.
+    /// When this edit continues the gesture the previous one belonged to, the
+    /// entry that gesture already pushed is **undone first** and the new value
+    /// applied over it. The entry that lands therefore captures the payload the
+    /// layer held before the drag began, which is exactly what one undo has to
+    /// restore — no history surgery and no second inverse.
+    ///
+    /// # The fold is in memory only — the journal is not folded
+    ///
+    /// The coalescing above is a claim about [`editor_core::History`] and about
+    /// nothing else. On disk the drag is *not* folded: [`OpenDocument::apply`]
+    /// appends one `SetLayerKind` record to `commands.journal` and fsyncs it on
+    /// every call, while [`OpenDocument::undo`] writes no record at all, so a
+    /// saved project gains one journal record per frame of the sweep while its
+    /// `history_depth()` gains one. Journal growth during a drag is therefore
+    /// bounded by frames, not by gestures.
+    ///
+    /// That costs disk, not correctness: `SetLayerKind` carries an absolute
+    /// payload, so replaying every record in order converges on the value the
+    /// user settled on. It is also not a regression of this path — the Opacity
+    /// slider, which predates it, journals per frame in exactly the same way.
+    /// `a_drag_writes_one_journal_record_per_frame_while_history_gains_one`
+    /// measures both numbers, so this paragraph cannot quietly stop being true.
+    ///
+    /// The undo is taken only when the top of the stack really is this layer's
+    /// kind edit. A gesture id is a claim about the pointer, and rolling back
+    /// somebody else's command on the strength of it would be worse than
+    /// pushing an extra step.
+    pub fn apply_kind_edit(&mut self, edit: crate::chrome::KindEdit) {
+        let key = edit.gesture.map(|g| (edit.layer, g));
+        let command = Command::SetLayerKind {
+            layer_id: edit.layer,
+            kind: edit.kind,
+        };
+        let continuing = key.is_some() && key == self.kind_gesture;
+        self.kind_gesture = None;
+        let outcome = {
+            let Some(doc) = self.active_mut() else {
+                return;
+            };
+            // A failed undo leaves the document untouched — `History::undo`
+            // puts the entry back — so the fold is simply skipped and the edit
+            // lands as its own step rather than being lost.
+            if continuing && tops_out_with_kind_edit(doc, edit.layer) {
+                let _ = doc.undo();
+            }
+            doc.apply(command)
+        };
+        match outcome {
+            Ok(()) => {
+                self.kind_gesture = key;
+                self.touch();
+            }
             Err(e) => {
                 let reason = e.to_string();
                 self.set_status(reason);
@@ -466,6 +593,9 @@ impl Editor {
     /// walk and reports itself, keeping whatever it managed — the same
     /// behaviour as a recovery replay that cannot finish.
     pub fn jump_history(&mut self, target: usize) -> usize {
+        // Walking the timeline moves whatever is on top of the stack, so the
+        // entry a continuing drag would have folded into is gone.
+        self.kind_gesture = None;
         let Some(index) = self.active else {
             return 0;
         };
@@ -559,11 +689,36 @@ impl Editor {
     }
 
     /// Choose a tool directly — what the tool palette does.
+    ///
+    /// The outgoing tool's brush is parked and the incoming one's is taken up.
+    /// Without that swap the application's single brush would follow the user
+    /// from tool to tool and overwrite what each one *is*: the Pencil paints
+    /// through the same `StrokeOp::Paint` as the Brush and is told apart from
+    /// it only by size 1, hardness 1, `aliased` and no size-from-pressure, so a
+    /// shared brush makes them one tool. Blur, Sharpen and Smudge lose their
+    /// soft continuous sweep (hardness 0, spacing 0.05) the same way, Dodge,
+    /// Burn and Sponge their 60px reach, and the Clone and Healing brushes
+    /// their 40px at 0.05.
     pub fn set_tool(&mut self, tool: ToolId) {
         if self.tool != tool {
+            self.brushes.insert(self.tool, self.brush);
+            self.brush = self.brush_for(tool);
             self.tool = tool;
             self.touch();
         }
+    }
+
+    /// The brush `tool` paints with: whatever the options bar and the bracket
+    /// keys have made of it, or the tuning [`tools::registry::make`] gives that
+    /// tool if it has never been selected.
+    pub fn brush_for(&self, tool: ToolId) -> BrushSettings {
+        if tool == self.tool {
+            return self.brush;
+        }
+        self.brushes
+            .get(&tool)
+            .copied()
+            .unwrap_or_else(|| seeded_brush(tool))
     }
 
     /// The tool that is actually acting, which is the hand while Space is held.
@@ -575,10 +730,12 @@ impl Editor {
         }
     }
 
+    /// The active tool's brush. [`Editor::brush_for`] answers for any other.
     pub fn brush(&self) -> &BrushSettings {
         &self.brush
     }
 
+    /// Replace the active tool's brush — the options bar and `[` / `]`.
     pub fn set_brush(&mut self, brush: BrushSettings) {
         self.brush = brush;
         self.touch();
@@ -1123,6 +1280,10 @@ impl Editor {
     /// compile until it is handled here.
     pub fn dispatch(&mut self, action: Action) -> Result<Effect, ActionError> {
         self.can(action)?;
+        // Undo, Redo, New Layer — anything named enough to be an action puts
+        // something else on top of the history, so a drag that was coalescing
+        // must not fold its next frame into whatever is there now.
+        self.kind_gesture = None;
         match action {
             Action::NewDocument => self.act_new_document(),
             Action::Open => self.act_open(),
@@ -1174,7 +1335,10 @@ impl Editor {
                 let next = registry::cycle(key.char(), Some(self.tool)).ok_or_else(|| {
                     ActionError::unavailable(action, "no tool answers to that key")
                 })?;
-                self.tool = next;
+                // Through `set_tool`, so a tool reached by its keyboard letter
+                // takes up its own brush exactly as one clicked in the palette
+                // does.
+                self.set_tool(next);
                 self.status = Some(
                     registry::info(next)
                         .map(|i| i.name.to_string())

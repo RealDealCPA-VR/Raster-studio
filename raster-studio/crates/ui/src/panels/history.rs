@@ -115,7 +115,12 @@ impl StepKind {
             Command::CreateLayer { .. } | Command::RestoreLayers { .. } => StepKind::LayerAdded,
             Command::DeleteLayer { .. } => StepKind::LayerRemoved,
             Command::MoveLayer { .. } => StepKind::LayerMoved,
-            Command::SetLayerProperties { .. } => StepKind::LayerChanged,
+            // A kind edit changes the layer and nothing else about the
+            // document, exactly as a property patch does, so it wears the same
+            // icon rather than an eighth one nobody would learn.
+            Command::SetLayerProperties { .. } | Command::SetLayerKind { .. } => {
+                StepKind::LayerChanged
+            }
             Command::TransformLayer { .. } => StepKind::Transformed,
             Command::PaintTiles { .. } => StepKind::Painted,
             Command::FillRegion { .. } => StepKind::Filled,

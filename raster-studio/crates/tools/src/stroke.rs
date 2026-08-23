@@ -1042,6 +1042,22 @@ impl Tool for StrokeTool {
     fn is_active(&self) -> bool {
         self.emitter.is_some()
     }
+
+    /// Take the application's brush — but never mid-stroke.
+    ///
+    /// [`DabEmitter`] is built from `settings` at pointer-down and `commit`
+    /// reads `settings.opacity` at pointer-up, so a change accepted between
+    /// them would finish a stroke under settings its dabs were never spaced
+    /// for. A caller may therefore hand this the current brush on every event.
+    fn set_brush(&mut self, brush: BrushSettings) {
+        if self.emitter.is_none() {
+            self.settings = brush;
+        }
+    }
+
+    fn brush(&self) -> Option<BrushSettings> {
+        Some(self.settings)
+    }
 }
 
 #[cfg(test)]

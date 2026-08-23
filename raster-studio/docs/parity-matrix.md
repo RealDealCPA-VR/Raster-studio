@@ -9,6 +9,12 @@ existing — that is exactly the failure this project was rebuilt to escape.
 
 Status: ✅ done · 🔶 partial · ⬜ not started
 
+> **Reachability is part of the bar.** A final audit found rows marked done whose
+> feature the application had no route to. Those are corrected below and the
+> engine/UI split is stated explicitly: 🔶 now covers "the library works and is
+> tested, but you cannot get to it from the app". See README "Status".
+
+
 ## Tiers
 
 - **Tier A — Core.** Without all of these the app is not an image editor.
@@ -47,9 +53,9 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | --- | --- | --- |
 | Undo / redo with a history panel | ✅ | clickable stack with snapshots; a stroke is one step |
 | Command journal + crash recovery | ✅ | anchored to a save marker, so replay cannot duplicate work |
-| Cut / copy / paste / clear | ✅ | |
-| Free transform (scale/rotate/skew/distort/perspective/warp) | ✅ | singular matrices are refused rather than writing NaN |
-| Crop, trim, image size, canvas size, rotate canvas | ✅ | |
+| Cut / copy / paste / clear | ⬜ | |
+| Free transform (scale/rotate/skew/distort/perspective/warp) | 🔶 | singular matrices are refused rather than writing NaN |
+| Crop, trim, image size, canvas size, rotate canvas | 🔶 | |
 
 ### Selection
 | Capability | Status | Notes |
@@ -59,7 +65,7 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Magic wand / quick select / colour range | ✅ | tolerance, contiguous flag, anti-aliasing |
 | Modify: feather, expand, contract, smooth, border | ✅ | true morphology on fractional coverage |
 | Invert, grow, similar, transform selection | ✅ | |
-| Quick mask, save/load selection | ✅ | |
+| Quick mask, save/load selection | 🔶 | |
 
 ### Tools
 | Capability | Status | Notes |
@@ -91,7 +97,7 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 ### Application
 | Capability | Status | Notes |
 | --- | --- | --- |
-| Menu bar wired to real commands | ✅ | nine menus; every item is wired or explicitly disabled |
+| Menu bar wired to real commands | 🔶 | nine menus; every item is wired or explicitly disabled |
 | Keyboard shortcuts | ✅ | full customisable keymap with conflict detection |
 | Panels | ✅ | Layers, History, Adjustments, Properties, Colour, Swatches, Brushes, Channels, Paths, Navigator, Info |
 | Tool options bar | ✅ | generated from each tool's options schema |
@@ -104,20 +110,20 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 
 | Capability | Status | Notes |
 | --- | --- | --- |
-| Text layers with real shaping and fonts | ✅ | bidi, ligatures, kerning, contextual forms via cosmic-text |
-| Vector paths, pen tool, shape layers | ✅ | |
-| Filters: blur family | ✅ | separable Gaussian; a blur of a constant image returns that constant |
-| Filters: sharpen, noise, distort, stylize, pixelate, render | ✅ | |
+| Text layers with real shaping and fonts | 🔶 | bidi, ligatures, kerning, contextual forms via cosmic-text |
+| Vector paths, pen tool, shape layers | 🔶 | |
+| Filters: blur family | 🔶 | separable Gaussian; a blur of a constant image returns that constant |
+| Filters: sharpen, noise, distort, stylize, pixelate, render | 🔶 | |
 | Smart objects | ⬜ | the layer kind exists; nothing renders it |
-| PSD import | ✅ | groups, masks, blend modes, all four channel encodings |
-| PSD export | ✅ | reopens correctly in Photoshop and Photopea |
+| PSD import | 🔶 | groups, masks, blend modes, all four channel encodings |
+| PSD export | 🔶 | reopens correctly in Photoshop and Photopea |
 | Channels panel | 🔶 | isolation is real and changes the canvas; per-channel *editing* does not exist |
-| Paths panel | ✅ | |
+| Paths panel | 🔶 | |
 | Colour management | 🔶 | sRGB and Display P3 are real; an embedded ICC profile is preserved but not applied |
 | 16-bit per channel | 🔶 | decoded and stored without loss; the compositor works in f32 and exports 8-bit |
 | Actions / recorded command replay | 🔶 | commands are serialisable and replayable; there is no recording UI |
-| Batch export | ✅ | multiple presets in one run |
-| Brush / gradient / layer-style editors | ✅ | |
+| Batch export | 🔶 | multiple presets in one run |
+| Brush / gradient / layer-style editors | 🔶 | |
 | Autosave | ✅ | |
 
 ---
@@ -141,6 +147,14 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 ## Known gaps in what is marked done
 
 Kept here rather than buried, because a ✅ with a footnote is still a claim:
+
+- **Reachability, corrected after the final audit.** The filter library, PSD
+  reader/writer, text engine and vector rasteriser are complete and tested as
+  libraries, and the application has no route to any of them: the Filter menu is
+  drawn but unwired, `crates/psd` is not linked into the binary, there is no type
+  tool and no pen tool. Crop, slice and free transform track a gesture but nothing
+  applies it. A selection changes the document but draws no marching ants, so it
+  is invisible. Roughly half the menu items render disabled.
 
 - **Layer effects do not render.** The data model, the editor and persistence
   are complete; the compositor ignores them. A styled layer looks unstyled.

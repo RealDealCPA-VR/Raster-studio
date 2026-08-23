@@ -7,6 +7,11 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+thiserror.workspace = true
+# The uncaptured-error handler installed on the device (see `GpuContext`) has
+# nowhere else to report to: it runs on whatever thread provoked the error and
+# must not panic, so it logs.
+tracing.workspace = true
 glam.workspace = true
 wgpu.workspace = true
 bytemuck.workspace = true
