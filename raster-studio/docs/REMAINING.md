@@ -79,13 +79,14 @@ priority order. Each is a plan-implement-validate loop.
       canvas from the document each frame, and `Chrome::sync_guides` converges
       a canvas edit back as one `SetGuides` step. Round-trip + undo tests;
       gates green (a8f467a, e19131a).
-- [ ] S1.6 Layer and history thumbnails show glyphs, not pixels (no compositor
+- [x] S1.6 Layer and history thumbnails show glyphs, not pixels (no compositor
       pass per row / cache).
-      **Engine half done.** `OpenDocument::layer_thumbnail(layer, max_edge)`
-      composites a single layer alone through the real compositor and box-
-      downscales to a fitted RGBA8 preview, tested (`doc.rs`). What remains is
-      the GUI half: uploading these as egui textures per row in the Layers/
-      History panels, cached per layer revision.
+      **Complete.** Engine (`OpenDocument::layer_thumbnail`, box-sampled,
+      `&self`) *and* UI: the chrome uploads one fitted texture per layer into
+      `Workspace::layer_thumbs` each frame and the Layers panel draws real
+      pixels, falling back to the kind glyph when no application has uploaded
+      one (what a headless draw sees). Tests cover compositing + fit; the
+      style gate stays clean via the sanctioned `UNTINTED` tint.
 - [ ] S1.7 Embedded ICC profiles are preserved but not applied to a working
       space other than sRGB / Display P3.
 - [x] S1.8 File Info (a metadata editor — `DocumentMeta` holds only a title and a

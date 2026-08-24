@@ -475,7 +475,7 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
         )));
     }
 
-    thumbnail(&mut content, row);
+    thumbnail(&mut content, w, row);
     content.add_space(Space::XSmall.pt());
     if row.is_clipping {
         let side = current_tokens(&content).metrics.min_hit_target * 0.75;
@@ -520,10 +520,13 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
 
 /// The 4:3 thumbnail well.
 ///
-/// It shows the layer's *kind*, not its pixels: a real thumbnail needs the
-/// compositor to render the layer at thumbnail size, and nothing caches one.
-/// A well that reads "group" or "adjustment" is honest; a blank well is not.
-fn thumbnail(ui: &mut Ui, row: &LayerRow) {
+/// It shows the layer's real pixels when the application has uploaded a fitted
+/// thumbnail ([`Workspace::layer_thumbs`]); otherwise it falls back to the
+/// layer's *kind* glyph over the checkerboard. A well that reads "group" or
+/// "adjustment" is honest; a blank well is not — and the glyph fallback is
+/// also exactly what a headless draw sees, since no application has uploaded
+/// textures there.
+fn thumbnail(ui: &mut Ui, w: &Workspace, row: &LayerRow) {
     let t = current_tokens(ui);
     let height = t.metrics.list_row_height - Space::XSmall.pt();
     let size = Vec2::new(height * 4.0 / 3.0, height);
@@ -541,6 +544,16 @@ fn thumbnail(ui: &mut Ui, row: &LayerRow) {
             color32(t.palette.color(ColorRole::ControlStroke)),
         ),
     );
+    if let Some(tex) = w.layer_thumbs.get(&row.id) {
+        let r = rect;
+        ui.painter().image(
+            tex.id(),
+            r,
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+            crate::dialogs::controls::UNTINTED,
+        );
+        return;
+    }
     // Square, centred: the well is 4:3, and an icon stretched to fill it would
     // stop being the same shape as the same icon anywhere else in the chrome.
     let side = rect.height() * 0.7;

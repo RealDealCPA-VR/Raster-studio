@@ -127,6 +127,11 @@ pub struct Workspace {
     /// egui's central panel takes what the docks left — which is exactly the
     /// rectangle the camera has to be measured against.
     pub canvas: canvas::CanvasHost,
+    /// Fitted pixel thumbnails for the Layers panel, keyed by layer id. The
+    /// application uploads one texture per layer each frame; the panel draws it
+    /// when present and falls back to the kind glyph otherwise (which is also
+    /// what a headless draw without an application sees).
+    pub layer_thumbs: std::collections::HashMap<layer_model::LayerId, egui::TextureHandle>,
 
     /// Pointer samples the canvas routed to the active tool this frame, in
     /// document space, waiting for [`Workspace::drain_canvas_events`].
@@ -181,6 +186,7 @@ impl Workspace {
             has_stored_selection: false,
             saved_selections: 0,
             canvas: canvas::CanvasHost::default(),
+            layer_thumbs: std::collections::HashMap::new(),
             canvas_events: Vec::new(),
             grid_suppressed: false,
             view_readback: (1.0, (0.0, 0.0)),

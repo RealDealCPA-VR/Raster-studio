@@ -625,9 +625,10 @@ impl OpenDocument {
     /// of the Layers/History pixel thumbnails: the panel asks for a cached
     /// thumbnail per layer rather than re-tracing a glyph. Returns
     /// `(width, height, rgba8)`, both reduced to keep `width,height <= max_edge`
-    /// (box-sampled, never upscaled).
+    /// (box-sampled, never upscaled). `&self` (free compositor, not the cache)
+    /// so a frame with only an immutable borrow can upload one per layer.
     pub fn layer_thumbnail(
-        &mut self,
+        &self,
         layer_id: layer_model::LayerId,
         max_edge: u32,
     ) -> Result<(u32, u32, Vec<u8>), DocumentError> {
@@ -640,7 +641,7 @@ impl OpenDocument {
             }
         }
         let rect = self.canvas_rect();
-        let canvas = self.compositor.composite_region(
+        let canvas = compositor::composite_region(
             &staged,
             &self.tiles,
             rect,
@@ -839,7 +840,7 @@ mod tests {
 
     #[test]
     fn a_layer_thumbnail_composites_that_layer_alone_and_fits() {
-        let mut d = doc_of(600, 400);
+        let d = doc_of(600, 400);
         let layer = d.document.active_layer().unwrap();
         // A uniform 128 layer: a downscale is uniform, and its extent obeys the cap.
         let (tw, th, rgba) = d.layer_thumbnail(layer, 64).unwrap();
@@ -853,7 +854,7 @@ mod tests {
         // Aspect ratio is preserved: 600x400 at edge 64 -> 64x~42.
         assert!((tw as f32 / th as f32 - 1.5).abs() < 0.05, "{tw}x{th}");
         // A document already under the cap is not upscaled.
-        let mut small = doc_of(10, 8);
+        let small = doc_of(10, 8);
         let sl = small.document.active_layer().unwrap();
         let (sw, sh, _) = small.layer_thumbnail(sl, 64).unwrap();
         assert_eq!((sw, sh), (10, 8), "never upscales");

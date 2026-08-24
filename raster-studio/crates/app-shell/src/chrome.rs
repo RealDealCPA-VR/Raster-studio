@@ -467,6 +467,29 @@ impl Chrome {
         &self.workspace
     }
 
+    /// Upload a fitted thumbnail per layer into the workspace, so the Layers
+    /// panel draws real pixels instead of a kind glyph. The composite is read
+    /// through the immutable [`Editor`] (free compositor) and uploaded as an
+    /// egui texture; the small set is rebuilt each frame, so a layer edit shows
+    /// on the next repaint.
+    fn refresh_layer_thumbs(&mut self, ctx: &egui::Context, editor: &Editor) {
+        self.workspace.layer_thumbs.clear();
+        let Some(open) = editor.active() else {
+            return;
+        };
+        for id in open.document.layers.iter_depth_first() {
+            if let Ok((w, h, rgba)) = open.layer_thumbnail(id, 64) {
+                let img = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+                let tex = ctx.load_texture(
+                    format!("layer-thumb-{}", id),
+                    img,
+                    egui::TextureOptions::NEAREST,
+                );
+                self.workspace.layer_thumbs.insert(id, tex);
+            }
+        }
+    }
+
     /// Which colour components the canvas should show, as the Channels panel
     /// currently says.
     ///
@@ -484,6 +507,7 @@ impl Chrome {
         let mut out = ChromeOutput::default();
         self.read_gesture(ctx);
         self.sync_workspace(editor);
+        self.refresh_layer_thumbs(ctx, editor);
 
         // Order matters, and it is `ui::Workspace::ui`'s: egui gives each panel
         // what the previously added ones left, so the full-width strips — menu,
