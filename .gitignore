@@ -29,3 +29,6 @@ tmp/
 # Test output that is regenerated
 tests/output/
 tests/golden-images/*.actual.png
+
+# Local machine scaffolding, not project source
+kortix.toml
