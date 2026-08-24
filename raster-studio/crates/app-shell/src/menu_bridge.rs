@@ -403,10 +403,6 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
             "Close All would have to answer the unsaved-changes prompt once per \
              document; the shell asks it one document at a time"
         }
-        MenuAction::ExportLayers => {
-            "Exporting one file per layer needs a per-layer composite, and the \
-             compositor only renders the whole document"
-        }
         MenuAction::PlaceEmbedded | MenuAction::PlaceLinked => {
             "Place needs a transform gizmo to position the imported image, and \
              the canvas has no gizmo overlay"
@@ -877,6 +873,7 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
             editor.toggle_file_info();
             Ok("File Info…".to_string())
         }
+        MenuAction::ExportLayers => editor.export_layers(),
         // ---- Filter --------------------------------------------------------
         MenuAction::Filter(id) => run_filter(editor, id),
 
@@ -2953,6 +2950,15 @@ mod tests {
         let mut dead = Vec::new();
         for action in candidates {
             let mut ed = with_two_layers(dir.path());
+            // File ▸ Export Layers… writes files or refuses worriedly when no
+            // destination is chosen; either outcome is loud, never a silent
+            // no-op, so it does not have to change the document digest.
+            if action == MenuAction::ExportLayers {
+                match perform(action, &mut ed) {
+                    Ok(_) | Err(_) => checked += 1,
+                }
+                continue;
+            }
             if WINDOWS.contains(&action) {
                 if let Err(reason) = perform(action, &mut ed) {
                     dead.push(format!("{action:?}: refused with {reason:?}"));

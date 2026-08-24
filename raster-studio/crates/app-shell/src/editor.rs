@@ -44,6 +44,27 @@ use crate::recent::RecentFiles;
 use crate::session::{self, SessionRecord};
 use compositor::TileSource;
 
+/// Make a layer name safe for a file name: keep letters, digits, spaces,
+/// underscore and hyphen, collapse runs, and refuse a bare dot.
+fn safe_file_name(name: &str) -> String {
+    let mut out: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == ' ' || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    while out.contains("  ") {
+        out = out.replace("  ", " ");
+    }
+    let trimmed = out.trim().trim_matches('.');
+    let trimmed = if trimmed.is_empty() { "layer" } else { trimmed };
+    trimmed.to_string()
+}
+
 /// Rewrite a `PaintTiles` command so only colour component `channel` (0..=2)
 /// of each touched pixel changes, keeping the other channels of the tile's
 /// prior content. This is channel editing: with the red channel isolated as the
@@ -615,6 +636,61 @@ impl Editor {
     /// `None` to write all of them. Set from the Channels panel each frame.
     pub fn set_paint_channel(&mut self, channel: Option<usize>) {
         self.paint_channel = channel;
+    }
+
+    /// File ▸ Export Layers…: write each layer as its own PNG into a chosen
+    /// directory. A layer is composited *alone* (every other layer hidden) over
+    /// transparent, through the real compositor — the same isolation the merge
+    /// path uses — so effects and blends are honoured per layer.
+    pub fn export_layers(&mut self) -> Result<String, String> {
+        let Some(dir) = self.dialogs.pick_export_folder() else {
+            return Err("Export Layers: no destination chosen".to_string());
+        };
+        let doc = self
+            .active()
+            .ok_or_else(|| "No document is open".to_string())?;
+        let ids: Vec<LayerId> = doc.document.layers.iter_depth_first();
+        let rect = doc.canvas_rect();
+        let mut written = 0usize;
+        for id in ids {
+            let mut staged = doc.document.clone();
+            for other in staged.layers.iter_depth_first() {
+                if other != id {
+                    if let Some(l) = staged.layers.get_mut(other) {
+                        l.visible = false;
+                    }
+                }
+            }
+            let canvas = compositor::composite_region(
+                &staged,
+                &doc.tiles,
+                rect,
+                0,
+                compositor::CompositeOptions::default(),
+            )
+            .map_err(|e| e.to_string())?;
+            let rgba8 = canvas.to_rgba8(&doc.document.meta.color_space);
+            let name = doc
+                .document
+                .layers
+                .get(id)
+                .map(|l| safe_file_name(&l.name))
+                .unwrap_or_else(|| "layer".to_string());
+            let path = dir.join(format!("{name}.png"));
+            raster::encode_to_path(
+                &path,
+                raster::ExportFormat::Png,
+                doc.document.width(),
+                doc.document.height(),
+                raster::EncodedPixels::Rgba8(&rgba8),
+                &raster::EncodeOptions::default(),
+            )
+            .map_err(|e| e.to_string())?;
+            written += 1;
+        }
+        self.status = Some(format!("Exported {written} layer(s) to {}", dir.display()));
+        self.touch();
+        Ok("Exported layers".to_string())
     }
 
     pub fn recent(&self) -> &RecentFiles {

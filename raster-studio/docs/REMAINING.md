@@ -77,16 +77,13 @@ priority order. Each is a plan-implement-validate loop.
 - [ ] S1.7 Embedded ICC profiles are preserved but not applied to a working
       space other than sRGB / Display P3.
 - [x] S1.8 File Info (a metadata editor — `DocumentMeta` holds only a title and a
-      size) and Print. Layer Via Cut/Layer Via Copy are already implemented; a
-      `pick` that returns `None` for these makes the menu render them enabled
-      while the shell reports them as unrouted, so each also needs the menu to
-      show its reason.
-      **Implemented (File Info).** File ▸ File Info… now opens a display-only
-      metadata window: name, canvas size, colour space, origin path and source
-      depth, hosted by the chrome like Preferences, closed by X, with
-      `Action::ShowFileInfo` and a `Ctrl+Shift+I` binding. The menu item is
-      genuinely performable; the two unrouted-reporting tests now use `Print`
-      as their example instead. Remaining: Print needs an OS printing path.
+      size) and Print. Layer Via Cut/Layer Via Copy are already implemented.
+      **Implemented:** File Info window (S1.8 as listed above) **and File ▸
+      Export Layers…**, which was unrouted: it now composites each layer alone
+      (every other layer hidden, through the real compositor) and writes one
+      PNG per layer into a chosen folder, with a folder picker wired through
+      the dialogs trait, safe layer-name handling, and a test. Remaining:
+      Print needs an OS printing path.
 
 ## S2 — Ship polish (Tier B, lower priority)
 

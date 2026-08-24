@@ -320,6 +320,45 @@ fn painting_with_the_red_channel_isolated_writes_only_red() {
 }
 
 #[test]
+fn export_layers_writes_a_png_per_layer_into_the_chosen_folder() {
+    use editor_core::Command as Cmd;
+    use layer_model::Layer as L;
+
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("layers");
+    std::fs::create_dir(&folder).unwrap();
+    let png = write_png(dir.path(), "one.png", 8, 8, 90);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new().exporting_folder(&folder));
+    ed.open_paths(&[png]);
+    // A second, distinct layer so the export has two files and its own name.
+    ed.apply_command(Cmd::create_layer(L::raster("Photo & Bright")));
+
+    ed.export_layers().unwrap();
+
+    let pngs: Vec<_> = std::fs::read_dir(&folder)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+    assert_eq!(pngs.len(), 2, "one PNG per layer, not one per document");
+    let names: Vec<String> = pngs
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !names.contains(&"Photo & Bright.png".to_string()),
+        "a hostile layer name must be made file-safe: {names:?}"
+    );
+    assert!(
+        names
+            .iter()
+            .all(|n| n.ends_with(".png") && std::path::Path::new(n).is_file()
+                || n.chars().all(|c| c.is_alphanumeric() || " _-.".contains(c))),
+        "name is file-safe: {names:?}"
+    );
+}
+
+#[test]
 fn a_file_that_cannot_be_opened_is_reported_and_forgotten() {
     let dir = tempfile::tempdir().unwrap();
     let junk = dir.path().join("broken.png");

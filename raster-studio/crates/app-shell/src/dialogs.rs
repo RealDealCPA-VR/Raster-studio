@@ -35,6 +35,8 @@ pub trait FileDialogs {
     fn pick_save_path(&mut self, suggested: &Path) -> Option<PathBuf>;
     /// "Export…", starting at `suggested`.
     fn pick_export_path(&mut self, suggested: &Path) -> Option<PathBuf>;
+    /// "Export Layers…" — where to write the per-layer files.
+    fn pick_export_folder(&mut self) -> Option<PathBuf>;
     /// Closing a document with unsaved changes.
     fn confirm_close(&mut self, document: &str) -> CloseChoice;
     /// A previous run crashed with unsaved work in `document`.
@@ -102,6 +104,12 @@ impl FileDialogs for NativeDialogs {
         dialog.save_file()
     }
 
+    fn pick_export_folder(&mut self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Export Layers")
+            .pick_folder()
+    }
+
     fn confirm_close(&mut self, document: &str) -> CloseChoice {
         // rfd's three-button set is Yes/No/Cancel; the labels below say which
         // is which so "No" cannot be read as "do not close".
@@ -157,6 +165,8 @@ pub struct ScriptedDialogs {
     pub open_projects: Vec<PathBuf>,
     pub save_paths: Vec<PathBuf>,
     pub export_paths: Vec<PathBuf>,
+    /// Where to write exported per-layer files (Export Layers…).
+    pub export_folders: Vec<PathBuf>,
     pub close_choices: Vec<CloseChoice>,
     pub recover_answers: Vec<bool>,
     /// Every error the editor reported, in order: `(title, message)`.
@@ -190,6 +200,11 @@ impl ScriptedDialogs {
         self
     }
 
+    pub fn exporting_folder(mut self, path: impl Into<PathBuf>) -> Self {
+        self.export_folders.push(path.into());
+        self
+    }
+
     pub fn answering_close(mut self, choice: CloseChoice) -> Self {
         self.close_choices.push(choice);
         self
@@ -218,6 +233,10 @@ impl FileDialogs for ScriptedDialogs {
     fn pick_export_path(&mut self, suggested: &Path) -> Option<PathBuf> {
         self.suggested.push(suggested.to_path_buf());
         (!self.export_paths.is_empty()).then(|| self.export_paths.remove(0))
+    }
+
+    fn pick_export_folder(&mut self) -> Option<PathBuf> {
+        (!self.export_folders.is_empty()).then(|| self.export_folders.remove(0))
     }
 
     fn confirm_close(&mut self, _document: &str) -> CloseChoice {
