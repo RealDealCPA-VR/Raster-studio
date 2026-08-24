@@ -60,8 +60,11 @@ priority order. Each is a plan-implement-validate loop.
       pass per row / cache).
 - [ ] S1.7 Embedded ICC profiles are preserved but not applied to a working
       space other than sRGB / Display P3.
-- [ ] S1.8 Print, File Info (metadata editor), Layer Via Cut/Layer Via Copy
-      dialogs — items that resolve but rely on surfaces not yet drawn.
+- [ ] S1.8 File Info (a metadata editor — `DocumentMeta` holds only a title and a
+      size) and Print. Layer Via Cut/Layer Via Copy are already implemented; a
+      `pick` that returns `None` for these makes the menu render them enabled
+      while the shell reports them as unrouted, so each also needs the menu to
+      show its reason.
 
 ## S2 — Ship polish (Tier B, lower priority)
 
