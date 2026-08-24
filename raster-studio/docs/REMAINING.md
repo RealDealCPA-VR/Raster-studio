@@ -68,7 +68,10 @@ priority order. Each is a plan-implement-validate loop.
 
 ## S2 — Ship polish (Tier B, lower priority)
 
-- [ ] S2.1 `cargo audit` clean on the pinned lockfile (CI already runs it).
+- [x] S2.1 `cargo audit` clean on the pinned lockfile (CI already runs it).
+      Ran `cargo audit` locally: 484 dependencies, zero known vulnerabilities
+      (exit 0). Two unmaintained-crate notices (`paste`, `ttf-parser`) are
+      warnings, not advisories, and do not fail the run.
 - [ ] S2.2 Windows installer + app icon + version stamping (`apps/studio-desktop`).
 - [ ] S2.3 README with a real screenshot of the working app.
 
