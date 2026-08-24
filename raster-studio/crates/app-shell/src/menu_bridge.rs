@@ -404,10 +404,7 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
     use ui::menu::{RasterizeTarget as R, TransformOp as T};
     Some(match action {
         // ---- File ----------------------------------------------------------
-        MenuAction::CloseAll => {
-            "Close All would have to answer the unsaved-changes prompt once per \
-             document; the shell asks it one document at a time"
-        }
+        // Everything that resizes the canvas rectangle is disabled below.
         MenuAction::PlaceEmbedded | MenuAction::PlaceLinked => {
             "Place needs a transform gizmo to position the imported image, and \
              the canvas has no gizmo overlay"
@@ -877,6 +874,7 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         }
         MenuAction::ConvertToSmartObject => editor.convert_to_smart_object(),
         MenuAction::DuplicateDocument => editor.duplicate_document(),
+        MenuAction::CloseAll => editor.close_all_documents(),
         MenuAction::EditSmartObjectContents => editor.edit_smart_object_contents(),
         MenuAction::CommitSmartObjectContents => editor.commit_smart_object_contents(),
         // ---- Filter --------------------------------------------------------
@@ -2967,6 +2965,7 @@ mod tests {
             if action == MenuAction::ExportLayers
                 || action == MenuAction::Print
                 || action == MenuAction::CommitSmartObjectContents
+                || action == MenuAction::CloseAll
             {
                 match perform(action, &mut ed) {
                     Ok(_) | Err(_) => checked += 1,

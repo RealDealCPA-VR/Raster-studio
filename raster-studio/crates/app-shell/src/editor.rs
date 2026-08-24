@@ -888,6 +888,20 @@ impl Editor {
 
     /// File ▸ Duplicate…: open a copy of the current document's state as a new
     /// document (same pixels and layer tree, fresh undo history, `copy` title).
+    /// File ▸ Close All: close every open document, answering the unsaved-
+    /// changes prompt once per document (walking from the back so indexes stay
+    /// valid). Backing out of one prompt cancels the whole close-all.
+    pub fn close_all_documents(&mut self) -> Result<String, String> {
+        for index in (0..self.docs.len()).rev() {
+            self.close_document(index).map_err(|e| match e {
+                ActionError::Cancelled(_) => "Close All cancelled".to_string(),
+                ActionError::Unavailable { reason, .. } => reason,
+                ActionError::Failed { reason, .. } => reason,
+            })?;
+        }
+        Ok("Closed all documents".to_string())
+    }
+
     pub fn duplicate_document(&mut self) -> Result<String, String> {
         let idx = self
             .active

@@ -1931,3 +1931,16 @@ fn a_gradient_fill_layer_runs_foreground_to_background_across_the_width() {
         "right is blue-ish: {right:?}"
     );
 }
+
+#[test]
+fn close_all_closes_every_open_document() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_png(dir.path(), "a.png", 8, 8, 1);
+    let b = write_png(dir.path(), "b.png", 8, 8, 2);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&a).unwrap();
+    ed.open_path(&b).unwrap();
+    assert_eq!(ed.docs.len(), 2);
+    ed.close_all_documents().unwrap();
+    assert!(ed.docs.is_empty(), "all documents closed");
+}
