@@ -333,6 +333,14 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
             open: true,
         })));
     }
+    // File Info… opens a document-metadata window hosted by the chrome. It
+    // keeps its `unavailable_reason` (which names what the metadata editor does
+    // not yet hold) so the unrouted-message path still has a specific reason,
+    // but it is genuinely performable: routed to [`perform`] here so the click
+    // flips the editor's flag and the chrome draws the window.
+    if action == MenuAction::FileInfo {
+        return Some(Pick::Menu(MenuAction::FileInfo));
+    }
     let mapped = match action {
         MenuAction::NewDocument => Action::NewDocument,
         MenuAction::Open => Action::Open,
@@ -864,6 +872,11 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
     use ui::menu::{CanvasRotation as CR, MaskOp, TransformOp as T};
 
     let outcome = match action {
+        // ---- File ----------------------------------------------------------
+        MenuAction::FileInfo => {
+            editor.toggle_file_info();
+            Ok("File Info…".to_string())
+        }
         // ---- Filter --------------------------------------------------------
         MenuAction::Filter(id) => run_filter(editor, id),
 
@@ -2288,11 +2301,17 @@ mod tests {
         let mut ed = editor(dir.path());
         ed.dispatch(Action::NewDocument).expect("a new document");
         let context = context(&ed, &Workspace::new());
-        // The menu model allows it; this shell has no metadata editor for it —
-        // and it says which piece is missing rather than "cannot do that yet".
-        let reason = resolve(MenuAction::FileInfo, &context, &ed).unwrap_err();
-        assert!(reason.contains("DocumentMeta"), "{reason}");
+        // The menu model allows it; this shell has no printer — and it says
+        // which piece is missing rather than "cannot do that yet".
+        let reason = resolve(MenuAction::Print, &context, &ed).unwrap_err();
+        assert!(reason.contains("printer"), "{reason}");
         assert_ne!(reason, NOT_WIRED);
+        // File Info… now opens the metadata window, so it is genuinely
+        // performable rather than refused.
+        assert!(
+            resolve(MenuAction::FileInfo, &context, &ed).is_ok(),
+            "File Info… should be performable now"
+        );
         // ...and one it *can* do resolves to a real command rather than a name.
         match resolve(MenuAction::NewLayer, &context, &ed) {
             Ok(Pick::Command(Command::CreateLayer { .. })) => {}
@@ -2926,9 +2945,24 @@ mod tests {
             MenuAction::About,
         ];
 
+        // Window-opening actions change UI state (a window becomes visible),
+        // not the document digest, so they are held to flipping their editor
+        // flag rather than to touching a pixel.
+        const WINDOWS: &[MenuAction] = &[MenuAction::FileInfo];
+
         let mut dead = Vec::new();
         for action in candidates {
             let mut ed = with_two_layers(dir.path());
+            if WINDOWS.contains(&action) {
+                if let Err(reason) = perform(action, &mut ed) {
+                    dead.push(format!("{action:?}: refused with {reason:?}"));
+                }
+                if !ed.file_info_open() {
+                    dead.push(format!("{action:?}: did not open the window"));
+                }
+                checked += 1;
+                continue;
+            }
             if INFORMATIONAL.contains(&action) {
                 match perform(action, &mut ed) {
                     Ok(message) if message.len() > 20 => checked += 1,

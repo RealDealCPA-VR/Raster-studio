@@ -2081,7 +2081,7 @@ mod tests {
         // panel in which not one slider worked passed review.
         let dir = tempfile::tempdir().unwrap();
         let mut shell = shell_with_one_image(dir.path());
-        let orphan = ui::Intent::Action(ui::menu::MenuAction::FileInfo);
+        let orphan = ui::Intent::Action(ui::menu::MenuAction::Print);
 
         shell.apply_chrome(ChromeOutput {
             unrouted: vec![orphan.clone()],
@@ -2090,13 +2090,13 @@ mod tests {
 
         let told = shell.editor().status().unwrap_or_default().to_string();
         assert_eq!(told, crate::menu_bridge::unrouted_message(&orphan));
-        // `FileInfo` cannot be answered in this build; that refusal names the
-        // missing piece (there is no metadata editor) rather than the generic
+        // `Print` cannot be answered in this build; that refusal names the
+        // missing piece (nothing talks to a printer) rather than the generic
         // fallback. This test protects the *reporting* — that the window
         // admits a click went somewhere it cannot perform — not the specific
         // reason, so assert the user was told something real.
         assert!(
-            told.contains("metadata editor"),
+            told.contains("printer"),
             "the user was told nothing actionable: {told}"
         );
     }

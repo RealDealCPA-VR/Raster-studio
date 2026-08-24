@@ -355,6 +355,7 @@ impl Keymap {
         add(Chord::ctrl_shift(Key::character('z')), Redo);
         add(Chord::ctrl(Key::character('y')), Redo);
         add(Chord::ctrl(Key::character('k')), ShowPreferences);
+        add(Chord::ctrl_shift(Key::character('i')), ShowFileInfo);
         // Layer
         add(Chord::ctrl_shift(Key::character('n')), NewLayer);
         add(Chord::ctrl_shift(Key::Delete), DeleteLayer);

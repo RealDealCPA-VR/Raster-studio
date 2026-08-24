@@ -398,6 +398,12 @@ impl OpenDocument {
         self.source_path.as_deref()
     }
 
+    /// Whether this document was opened from a 16-bit source — drives the
+    /// File Info window and the 16-bit export route.
+    pub fn is_sixteen_bit(&self) -> bool {
+        self.source_sixteen_bit
+    }
+
     /// The label on this document's tab: a bullet marks unsaved changes.
     pub fn tab_label(&self) -> String {
         if self.is_dirty() {

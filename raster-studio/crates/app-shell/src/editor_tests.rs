@@ -88,6 +88,7 @@ fn expected_effect(action: Action) -> Effect {
         Action::Save | Action::SaveAs => Effect::Saved,
         Action::Export => Effect::Exported,
         Action::ShowPreferences => Effect::Preferences,
+        Action::ShowFileInfo => Effect::Preferences,
         Action::Quit => Effect::Quit,
         Action::Undo
         | Action::Redo

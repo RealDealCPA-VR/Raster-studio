@@ -507,6 +507,9 @@ impl Chrome {
         } else {
             self.capturing = None;
         }
+        if editor.file_info_open() {
+            self.file_info_window(ctx, editor, &mut out);
+        }
         // Read *after* the chrome is drawn: this is the room the image actually
         // has once every panel has taken its share, and it is what the
         // Navigator's rectangle and Fit on Screen are computed against.
@@ -984,6 +987,57 @@ impl Chrome {
                     }
                 });
             });
+    }
+
+    /// The File ▸ File Info… window: the facts about the open document that
+    /// already exist in the model — title, canvas size, colour space, origin
+    /// path and source depth. Display-only, because `DocumentMeta` holds no XMP
+    /// fields to edit; the item's `unavailable_reason` says so.
+    fn file_info_window(&mut self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
+        let mut open = true;
+        egui::Window::new("File Info")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(dock_width(ctx))
+            .frame(overlay_frame(ctx))
+            .show(ctx, |ui| {
+                let Some(doc) = editor.active() else {
+                    ui.label("No document is open");
+                    return;
+                };
+                design::section_header(ui, "DOCUMENT");
+                design::inspector_field(ui, "Name", |ui| {
+                    ui.label(doc.title().to_string());
+                });
+                design::inspector_field(ui, "Size", |ui| {
+                    ui.label(format!(
+                        "{} × {} px",
+                        doc.document.width(),
+                        doc.document.height()
+                    ))
+                });
+                design::inspector_field(ui, "Colour space", |ui| {
+                    ui.label(doc.document.meta.color_space.name().to_string())
+                });
+                let origin = doc
+                    .source_path()
+                    .or(doc.project_path())
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "Not saved yet".to_string());
+                design::inspector_field(ui, "Source", |ui| ui.label(origin));
+                design::inspector_field(ui, "Source depth", |ui| {
+                    ui.label(if doc.is_sixteen_bit() {
+                        "16-bit"
+                    } else {
+                        "8-bit"
+                    })
+                });
+            });
+        if !open {
+            // The window's own close button. Toggling the action keeps the
+            // editor the one place that knows whether the window is up.
+            out.actions.push(Action::ShowFileInfo);
+        }
     }
 
     /// Preferences, including the shortcut editor.
@@ -2433,7 +2487,7 @@ mod tests {
         let ed = editor(dir.path());
         let mut chrome = Chrome::new();
 
-        let orphan = ui::Intent::Action(ui::menu::MenuAction::FileInfo);
+        let orphan = ui::Intent::Action(ui::menu::MenuAction::Print);
         chrome.workspace.emit(orphan.clone());
         let mut out = ChromeOutput::default();
         chrome.harvest_workspace_for_test(&mut out, &ed);
@@ -2444,13 +2498,13 @@ mod tests {
             "the intent went nowhere and said nothing"
         );
         let said = crate::menu_bridge::unrouted_message(&orphan);
-        // `FileInfo` is one of the actions this build deliberately cannot
-        // answer, and its refusal names the missing piece rather than the
-        // generic fallback. What matters here is that the user is *told* —
-        // the reporting path this test guards — so assert the message is the
-        // real, specific one and not an empty or dropped it.
+        // `Print` is an action this build deliberately cannot answer (nothing
+        // talks to a printer), and its refusal names the missing piece rather
+        // than the generic fallback. What matters here is that the user is
+        // *told* — the reporting path this test guards — so assert the message
+        // is the real, specific one and not an empty or dropped it.
         assert!(
-            said.contains("metadata editor"),
+            said.contains("printer"),
             "the refusal named nothing actionable: {said}"
         );
     }

@@ -203,6 +203,8 @@ pub struct Editor {
 
     panels_visible: bool,
     preferences_open: bool,
+    /// Whether the File ▸ File Info… window (document metadata) is up.
+    file_info_open: bool,
     pending_conflict: Option<Conflict>,
     temporary_hand: bool,
     quit_requested: bool,
@@ -339,6 +341,7 @@ impl Editor {
             background: DEFAULT_BACKGROUND,
             panels_visible: true,
             preferences_open: false,
+            file_info_open: false,
             pending_conflict: None,
             temporary_hand: false,
             quit_requested: false,
@@ -494,6 +497,16 @@ impl Editor {
     /// Whether the preferences window (which holds the shortcut editor) is up.
     pub fn preferences_open(&self) -> bool {
         self.preferences_open
+    }
+
+    /// Whether the File ▸ File Info… window is up.
+    pub fn file_info_open(&self) -> bool {
+        self.file_info_open
+    }
+
+    /// Toggle the File Info… metadata window.
+    pub fn toggle_file_info(&mut self) {
+        self.file_info_open = !self.file_info_open;
     }
 
     pub fn recent(&self) -> &RecentFiles {
@@ -1227,6 +1240,7 @@ impl Editor {
             | Action::Quit
             | Action::TogglePanels
             | Action::ShowPreferences
+            | Action::ShowFileInfo
             | Action::SelectTool(_)
             | Action::DecreaseBrushSize
             | Action::IncreaseBrushSize
@@ -1359,6 +1373,11 @@ impl Editor {
                     // A conflict prompt belongs to the window that raised it.
                     self.pending_conflict = None;
                 }
+                self.touch();
+                Ok(Effect::Preferences)
+            }
+            Action::ShowFileInfo => {
+                self.toggle_file_info();
                 self.touch();
                 Ok(Effect::Preferences)
             }

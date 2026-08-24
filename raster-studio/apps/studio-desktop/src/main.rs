@@ -85,8 +85,10 @@ mod tests {
         if let Some(suffix) = rest.strip_prefix("0.1.0+") {
             assert!(suffix.starts_with("git"), "{line}");
             let hash = suffix.trim_start_matches("git");
-            assert!(!hash.is_empty() && hash.chars().all(|c| c.is_ascii_hexdigit()),
-                "{line}");
+            assert!(
+                !hash.is_empty() && hash.chars().all(|c| c.is_ascii_hexdigit()),
+                "{line}"
+            );
         }
     }
 

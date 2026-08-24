@@ -112,6 +112,8 @@ pub enum Action {
     Redo,
     /// Open or close the preferences window, which holds the shortcut editor.
     ShowPreferences,
+    /// Open or close the File Info… metadata window.
+    ShowFileInfo,
     // ---- Layer ----
     NewLayer,
     DeleteLayer,
@@ -152,7 +154,7 @@ const FIXED: &[Action] = &[
     Action::Undo,
     Action::Redo,
     Action::ShowPreferences,
-    Action::NewLayer,
+    Action::ShowFileInfo,
     Action::DeleteLayer,
     Action::DuplicateLayer,
     Action::ToggleLayerVisibility,
@@ -197,6 +199,7 @@ impl Action {
             Action::Undo => "undo".into(),
             Action::Redo => "redo".into(),
             Action::ShowPreferences => "show-preferences".into(),
+            Action::ShowFileInfo => "show-file-info".into(),
             Action::NewLayer => "new-layer".into(),
             Action::DeleteLayer => "delete-layer".into(),
             Action::DuplicateLayer => "duplicate-layer".into(),
@@ -241,7 +244,9 @@ impl Action {
             | Action::Export
             | Action::CloseDocument
             | Action::Quit => Category::File,
-            Action::Undo | Action::Redo | Action::ShowPreferences => Category::Edit,
+            Action::Undo | Action::Redo | Action::ShowPreferences | Action::ShowFileInfo => {
+                Category::Edit
+            }
             Action::NewLayer
             | Action::DeleteLayer
             | Action::DuplicateLayer
@@ -275,6 +280,7 @@ impl Action {
             Action::Undo => "Undo".into(),
             Action::Redo => "Redo".into(),
             Action::ShowPreferences => "Preferences…".into(),
+            Action::ShowFileInfo => "File Info…".into(),
             Action::NewLayer => "New Layer".into(),
             Action::DeleteLayer => "Delete Layer".into(),
             Action::DuplicateLayer => "Duplicate Layer".into(),
