@@ -2039,3 +2039,17 @@ fn trim_removes_the_transparent_margin() {
     let err = ed.trim_canvas().unwrap_err();
     assert!(err.contains("fills the canvas"), "{err}");
 }
+
+#[test]
+fn rotating_90_swaps_the_canvas_and_turns_the_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_png(dir.path(), "a.png", 4, 2, 90); // wide 4x2
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&a).unwrap();
+    ed.rotate_canvas_90(true).unwrap();
+    let (w, h) = (
+        ed.active().unwrap().document.width(),
+        ed.active().unwrap().document.height(),
+    );
+    assert_eq!((w, h), (2, 4), "dimensions swap on 90°");
+}

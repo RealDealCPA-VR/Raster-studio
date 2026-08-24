@@ -1062,6 +1062,19 @@ impl Editor {
         self.resize_canvas(new_w, new_h, glam::IVec2::new(minx as i32, miny as i32))
     }
 
+    /// Image ▸ Image Rotation ▸ 90°: rotate the whole canvas and every layer's
+    /// pixels by a quarter turn, as one undoable step.
+    pub fn rotate_canvas_90(&mut self, clockwise: bool) -> Result<String, String> {
+        let command = {
+            let doc = self
+                .active_mut()
+                .ok_or_else(|| "No document is open".to_string())?;
+            doc.rotate_canvas_90(clockwise).map_err(|e| e.to_string())?
+        };
+        self.apply_command(command);
+        Ok("Rotated canvas 90°".to_string())
+    }
+
     pub fn duplicate_document(&mut self) -> Result<String, String> {
         let idx = self
             .active

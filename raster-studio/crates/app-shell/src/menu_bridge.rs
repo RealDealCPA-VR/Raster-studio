@@ -471,15 +471,10 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
         MenuAction::ImageSize
         | MenuAction::CanvasSize
         | MenuAction::RevealAll
-        | MenuAction::RotateCanvas(ui::menu::CanvasRotation::Deg90Cw)
-        | MenuAction::RotateCanvas(ui::menu::CanvasRotation::Deg90Ccw) => {
+        | MenuAction::RotateCanvas(ui::menu::CanvasRotation::Arbitrary) => {
             "This resizes the canvas; the shell hosts no dialog for Image/Canvas \
-             Size dimensions and no live source beyond the canvas for Reveal All \
-             or a 90-degree pixel rotation"
-        }
-        MenuAction::RotateCanvas(ui::menu::CanvasRotation::Arbitrary) => {
-            "An arbitrary rotation needs an angle, and the shell hosts no \
-             dialog to ask for one"
+             Size dimensions, no live source beyond the canvas for Reveal All, \
+             and no angle dialog for an arbitrary rotation"
         }
 
         // ---- Layer ---------------------------------------------------------
@@ -906,6 +901,8 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         }
         MenuAction::CropToSelection => editor.crop_to_selection(),
         MenuAction::Trim => editor.trim_canvas(),
+        MenuAction::RotateCanvas(CR::Deg90Cw) => editor.rotate_canvas_90(true),
+        MenuAction::RotateCanvas(CR::Deg90Ccw) => editor.rotate_canvas_90(false),
 
         // ---- Edit ▸ Transform (the fixed ones) -----------------------------
         MenuAction::Transform(T::Rotate180) => {

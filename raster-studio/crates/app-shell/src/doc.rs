@@ -761,6 +761,51 @@ impl OpenDocument {
         })
     }
 
+    /// Rotate the whole canvas 90° clockwise (or anticlockwise), swapping the
+    /// dimensions and rotating every layer's pixels within one undoable
+    /// transaction — same shape as [`Self::resize_canvas`].
+    pub fn rotate_canvas_90(&mut self, clockwise: bool) -> Result<Command, DocumentError> {
+        let old_w = self.document.width();
+        let old_h = self.document.height();
+        let (new_w, new_h) = (old_h, old_w);
+        let ids: Vec<layer_model::LayerId> = self.document.layers.iter_depth_first();
+        let mut commands = Vec::new();
+        commands.push(Command::SetCanvasSize {
+            size: glam::UVec2::new(new_w, new_h),
+        });
+        for id in ids {
+            let rgba = self.layer_pixels(id)?;
+            let mut out = vec![0u8; new_w as usize * new_h as usize * 4];
+            for y in 0..old_h {
+                for x in 0..old_w {
+                    let (nx, ny) = if clockwise {
+                        (y, old_w - 1 - x)
+                    } else {
+                        (old_h - 1 - y, x)
+                    };
+                    let si = (y as usize * old_w as usize + x as usize) * 4;
+                    let di = (ny as usize * new_w as usize + nx as usize) * 4;
+                    out[di..di + 4].copy_from_slice(&rgba[si..si + 4]);
+                }
+            }
+            let grid = raster::TileGrid::from_rgba8(new_w, new_h, &out)
+                .map_err(|e| DocumentError::Io(e.to_string()))?;
+            let mut edits = Vec::new();
+            for (coord, tile) in grid.iter() {
+                let hash = self.tiles.insert_bytes(tile.data().to_vec());
+                edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+            }
+            commands.push(
+                Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(id), edits)
+                    .map_err(|e| DocumentError::Io(e.to_string()))?,
+            );
+        }
+        Ok(Command::Transaction {
+            label: "Rotate 90°".to_string(),
+            commands,
+        })
+    }
+
     /// Hit/miss counters of this document's tile cache — how the "an edit
     /// recomposites only what changed" claim is checked.
     pub fn cache_stats(&self) -> compositor::CacheStats {
