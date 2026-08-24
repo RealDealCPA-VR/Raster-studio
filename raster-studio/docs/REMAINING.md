@@ -72,7 +72,14 @@ priority order. Each is a plan-implement-validate loop.
       Ran `cargo audit` locally: 484 dependencies, zero known vulnerabilities
       (exit 0). Two unmaintained-crate notices (`paste`, `ttf-parser`) are
       warnings, not advisories, and do not fail the run.
-- [ ] S2.2 Windows installer + app icon + version stamping (`apps/studio-desktop`).
+- [x] S2.2 Windows installer + app icon + version stamping
+      (apps/studio-desktop).
+      Implemented: tools/make_icon.py generates assets/raster-studio.ico
+      (valid ICO); an Inno Setup script (installer.iss) packages the binary,
+      a Start-menu shortcut and an uninstaller using the icon; build.rs embeds
+      a RASTER_VERSION_STAMP and main.rs's about() reports it with a test.
+      Running iscc to emit an actual installer artifact needs the Inno Setup
+      toolchain (not installed here) and is a release step, not code.
 - [ ] S2.3 README with a real screenshot of the working app.
 
 ## Execution order
