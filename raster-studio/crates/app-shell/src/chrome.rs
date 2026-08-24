@@ -133,6 +133,17 @@ pub struct ChromeOutput {
     pub actions: Vec<Action>,
     /// Document edits the layers dock emitted.
     pub commands: Vec<Command>,
+    /// Menu items performed against the live document by
+    /// [`crate::menu_bridge::perform`]: the Filter menu, Image ▸ Adjustments,
+    /// the Select menu, the merges and the fixed transforms.
+    ///
+    /// Their own channel because they need `&mut Editor` — a filter's result
+    /// has to be *hashed into the tile store* before the command that
+    /// references it can be applied, and the selection is a document field with
+    /// no command behind it at all. Building either during enablement would
+    /// mean doing it for 256 items every frame the menu is open; see
+    /// [`crate::menu_bridge::Pick::Menu`].
+    pub menu: Vec<ui::MenuAction>,
     /// Edits to a layer's kind payload: the Properties panel's adjustment
     /// sliders, the Text panel's fields.
     ///
@@ -2433,7 +2444,15 @@ mod tests {
             "the intent went nowhere and said nothing"
         );
         let said = crate::menu_bridge::unrouted_message(&orphan);
-        assert!(said.contains(crate::menu_bridge::NOT_WIRED), "{said}");
+        // `FileInfo` is one of the actions this build deliberately cannot
+        // answer, and its refusal names the missing piece rather than the
+        // generic fallback. What matters here is that the user is *told* —
+        // the reporting path this test guards — so assert the message is the
+        // real, specific one and not an empty or dropped it.
+        assert!(
+            said.contains("metadata editor"),
+            "the refusal named nothing actionable: {said}"
+        );
     }
 
     /// An editor with a real image open and a Posterize adjustment layer on it.

@@ -62,9 +62,7 @@ fn busy_document() -> (Document, History) {
         .insert_at(
             Layer::with_kind(
                 "Badge",
-                LayerKind::Shape(layer_model::ShapeLayer {
-                    path_svg: "M0 0 L10 10 Z".into(),
-                }),
+                LayerKind::Shape(layer_model::ShapeLayer::from_svg("M0 0 L10 10 Z")),
             ),
             None,
             3,

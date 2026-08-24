@@ -680,13 +680,14 @@ mod tests {
 
     /// Letters of that set `tools::registry` has no tool for.
     ///
-    /// A **known gap**, recorded rather than quietly dropped from the
-    /// assertion: `P` is the pen/path group, and `crates/tools` (owned by
-    /// another crate's author) ships no tool answering to it — its letters are
-    /// b c e g h i j l m o r s t u v w z. Pressing P is therefore a no-op, and
-    /// the palette has no pen button. When the pen lands, this list empties and
-    /// the test below starts demanding it.
-    const KNOWN_MISSING_TOOL_LETTERS: [char; 1] = ['p'];
+    /// **Empty, and it was not.** `P` — the pen/path group — was the one letter
+    /// the registry could not answer, so pressing it was a no-op and the
+    /// palette had no pen button. `tools::pen::PenTool` now answers to it and
+    /// `tools::text::TypeTool` shares `T` with Free Transform, so every letter
+    /// the brief names reaches a tool. Kept as a list rather than deleted: it
+    /// is the shape the assertion below needs, and the next letter that goes
+    /// missing has somewhere to be recorded.
+    const KNOWN_MISSING_TOOL_LETTERS: [char; 0] = [];
 
     #[test]
     fn the_briefs_tool_letters_are_present_except_the_ones_recorded_as_missing() {

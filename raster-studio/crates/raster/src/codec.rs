@@ -209,11 +209,31 @@ pub enum ImportFormat {
     Ico,
     /// No magic number — see [`ImportFormat::is_self_identifying`].
     Tga,
+    /// Photoshop's layered document.
+    ///
+    /// **Recognised here, decoded elsewhere.** A `.psd` is a document, not a
+    /// picture: it carries a layer tree, groups, masks, blend modes and
+    /// per-layer opacity, and flattening all of that into one RGBA buffer —
+    /// which is the only shape this module deals in — throws away everything
+    /// that makes the format worth opening. The `psd` crate reads it and
+    /// `app-shell`'s importer turns the result into a real layered document,
+    /// so [`ImportFormat::is_decodable_here`] is `false` for this one variant
+    /// and every decode entry point refuses a `.psd` **by name**, pointing at
+    /// the path that does handle it.
+    ///
+    /// It is still listed because a file dialog has to be able to ask "is this
+    /// an extension the application opens?" and get the right answer; before
+    /// this variant existed, a `.psd` reached `image`, which cannot identify
+    /// one, and the user was told "could not identify the image format".
+    Psd,
 }
 
 impl ImportFormat {
-    /// Every format the importer can read.
-    pub const ALL: [ImportFormat; 8] = [
+    /// Every format the importer recognises.
+    ///
+    /// Recognises, not decodes — see [`ImportFormat::Psd`] and
+    /// [`ImportFormat::is_decodable_here`].
+    pub const ALL: [ImportFormat; 9] = [
         ImportFormat::Png,
         ImportFormat::Jpeg,
         ImportFormat::WebP,
@@ -222,6 +242,7 @@ impl ImportFormat {
         ImportFormat::Bmp,
         ImportFormat::Ico,
         ImportFormat::Tga,
+        ImportFormat::Psd,
     ];
 
     /// Short stable name for logs and UI.
@@ -235,6 +256,7 @@ impl ImportFormat {
             ImportFormat::Bmp => "BMP",
             ImportFormat::Ico => "ICO",
             ImportFormat::Tga => "TGA",
+            ImportFormat::Psd => "PSD",
         }
     }
 
@@ -248,7 +270,21 @@ impl ImportFormat {
         !matches!(self, ImportFormat::Tga)
     }
 
+    /// Whether *this module's* decoders can produce pixels for the format.
+    ///
+    /// `false` only for [`ImportFormat::Psd`], which is a layered document and
+    /// is opened through `app-shell`'s PSD importer instead. Everything that
+    /// asks this question gets a truthful answer rather than discovering the
+    /// gap as a decode failure.
+    pub fn is_decodable_here(self) -> bool {
+        !matches!(self, ImportFormat::Psd)
+    }
+
     /// Match a file extension, case-insensitively and without a leading dot.
+    ///
+    /// `.psb` is deliberately absent: it is the large-document variant of PSD,
+    /// with 64-bit section lengths, and nothing in this workspace reads one.
+    /// Mapping it here would advertise a format the application cannot open.
     pub fn from_extension(ext: &str) -> Option<Self> {
         Some(match ext.to_ascii_lowercase().as_str() {
             "png" | "apng" => ImportFormat::Png,
@@ -259,6 +295,7 @@ impl ImportFormat {
             "bmp" | "dib" => ImportFormat::Bmp,
             "ico" | "cur" => ImportFormat::Ico,
             "tga" | "targa" | "icb" | "vda" | "vst" => ImportFormat::Tga,
+            "psd" => ImportFormat::Psd,
             _ => return None,
         })
     }
@@ -277,8 +314,10 @@ impl ImportFormat {
         })
     }
 
-    fn to_image(self) -> image::ImageFormat {
-        match self {
+    /// The backing codec's spelling of this format, or `None` when the backing
+    /// codec has no such format at all — which is the case for PSD.
+    fn to_image(self) -> Option<image::ImageFormat> {
+        Some(match self {
             ImportFormat::Png => image::ImageFormat::Png,
             ImportFormat::Jpeg => image::ImageFormat::Jpeg,
             ImportFormat::WebP => image::ImageFormat::WebP,
@@ -287,8 +326,193 @@ impl ImportFormat {
             ImportFormat::Bmp => image::ImageFormat::Bmp,
             ImportFormat::Ico => image::ImageFormat::Ico,
             ImportFormat::Tga => image::ImageFormat::Tga,
+            ImportFormat::Psd => return None,
+        })
+    }
+}
+
+/// The four bytes every `.psd` (and `.psb`) begins with.
+pub const PSD_SIGNATURE: [u8; 4] = *b"8BPS";
+
+/// The refusal a `.psd` gets from this module, which names the path that does
+/// read one rather than leaving the caller with "unknown format".
+fn psd_refusal() -> CodecError {
+    CodecError::Unsupported(
+        "this is a Photoshop document (.psd): it is opened as a layered document \
+         through File > Open, not through the flat-image decoder"
+            .into(),
+    )
+}
+
+/// Read up to `buf.len()` bytes, tolerating short reads. Returns how many.
+fn read_head<R: BufRead>(source: &mut R, buf: &mut [u8]) -> Result<usize, CodecError> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match source.read(&mut buf[filled..])? {
+            0 => break,
+            n => filled += n,
         }
     }
+    Ok(filled)
+}
+
+/// Refuse a `.psd` before it reaches the backing codec, and rewind either way.
+///
+/// Content, not extension: a `.psd` renamed to `.png` is still a PSD, and a
+/// caller who is handed "PNG decode failed" for one has been told nothing
+/// useful. The stream is left exactly where it was found, so the ordinary
+/// decode path is unaffected.
+fn refuse_psd<R: BufRead + Seek>(source: &mut R) -> Result<(), CodecError> {
+    let start = source.stream_position()?;
+    let mut head = [0u8; 4];
+    let filled = read_head(source, &mut head)?;
+    source.seek(std::io::SeekFrom::Start(start))?;
+    if filled == PSD_SIGNATURE.len() && head == PSD_SIGNATURE {
+        return Err(psd_refusal());
+    }
+    Ok(())
+}
+
+/// Interleave planar, **big-endian** samples into packed RGBA8.
+///
+/// This is the layout half of reading a planar container — a PSD layer, a
+/// planar TIFF — where the colour channels arrive as separate buffers at the
+/// document's own bit depth rather than interleaved at eight bits. It knows
+/// nothing about any container; it is here because packing samples into the
+/// editor's RGBA8 storage is exactly what this module is for, and because a
+/// copy of it living in every importer is a copy of the same rounding bug.
+///
+/// * `color` holds either **one** plane (greyscale, replicated across R, G and
+///   B) or **three** (red, green, blue). Any other count declines.
+/// * `alpha` is optional; a source without one is fully opaque, which is what a
+///   Photoshop background layer is.
+/// * `bits_per_sample` is 8, 16 or 32. 32 is IEEE `f32`, clamped to `0.0..=1.0`
+///   — a 32-bit document's samples are scene-referred and may exceed one.
+///
+/// Returns `None` rather than panicking for every disagreement: an unsupported
+/// plane count or depth, a plane that is not exactly `width * height` samples
+/// long, or a pixel count that does not fit a `usize`.
+///
+/// # Every check happens before the allocation
+///
+/// The dimensions come from a file. A caller can hold a 30 000 × 30 000
+/// rectangle whose planes are empty — that costs a hostile file nothing — so
+/// the planes are found and length-checked *first* and the output buffer is
+/// reserved only once the conversion is known to be possible. Validating
+/// afterwards would reserve and zero 3.6 GB before discovering there was
+/// nothing to put in it.
+pub fn rgba8_from_planes(
+    width: u32,
+    height: u32,
+    color: &[&[u8]],
+    alpha: Option<&[u8]>,
+    bits_per_sample: u16,
+) -> Option<Vec<u8>> {
+    if !matches!(color.len(), 1 | 3) {
+        return None;
+    }
+    let bytes_per_sample = match bits_per_sample {
+        8 => 1usize,
+        16 => 2,
+        32 => 4,
+        _ => return None,
+    };
+    let samples = (width as usize).checked_mul(height as usize)?;
+    let total = samples.checked_mul(4)?;
+    let plane_len = samples.checked_mul(bytes_per_sample)?;
+
+    for plane in color {
+        if plane.len() != plane_len {
+            return None;
+        }
+    }
+    if let Some(a) = alpha {
+        if a.len() != plane_len {
+            return None;
+        }
+    }
+
+    let mut out = vec![255u8; total];
+    for (c, plane) in color.iter().enumerate() {
+        // One plane means greyscale: the same samples land in R, G and B.
+        let lanes: &[usize] = if color.len() == 1 { &[0, 1, 2] } else { &[c] };
+        for i in 0..samples {
+            let v = sample_to_u8(plane, i, bytes_per_sample);
+            for lane in lanes {
+                out[i * 4 + lane] = v;
+            }
+        }
+    }
+    if let Some(a) = alpha {
+        for i in 0..samples {
+            out[i * 4 + 3] = sample_to_u8(a, i, bytes_per_sample);
+        }
+    }
+    Some(out)
+}
+
+/// One big-endian sample of `bytes_per_sample` bytes, as 0..=255.
+///
+/// Indexes `plane` only within a bound the caller has already established from
+/// `plane.len()`, and uses `get` for the window regardless, so a short plane
+/// yields zero rather than panicking.
+fn sample_to_u8(plane: &[u8], index: usize, bytes_per_sample: usize) -> u8 {
+    let at = index * bytes_per_sample;
+    let Some(window) = plane.get(at..at + bytes_per_sample) else {
+        return 0;
+    };
+    match bytes_per_sample {
+        1 => window[0],
+        // A *round*, not a shift: `>> 8` maps 0..=255 to 0 and loses half a
+        // step of white. Same conversion `SurfacePixels::into_rgba8` uses.
+        2 => {
+            let v = u16::from_be_bytes([window[0], window[1]]);
+            ((u32::from(v) * 255 + 32_767) / 65_535) as u8
+        }
+        _ => {
+            let v = f32::from_be_bytes([window[0], window[1], window[2], window[3]]);
+            // NaN compares false against both bounds, so it lands on 0.
+            let clamped = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
+            (clamped * 255.0 + 0.5) as u8
+        }
+    }
+}
+
+/// Convert one plane of big-endian samples into 8-bit single-channel coverage.
+///
+/// The mask half of [`rgba8_from_planes`], and the reason it is a separate
+/// function rather than a call into that one: a mask has no colour, and routing
+/// it through the RGBA packer would reserve four bytes per pixel to keep one.
+/// On a mask as large as a decoder's whole byte budget that is the difference
+/// between a gigabyte and four.
+///
+/// `None` when the depth is unsupported, when the plane is not exactly
+/// `width * height` samples long, or when the sample count does not fit a
+/// `usize` — checked, as above, before the output is reserved.
+pub fn gray8_from_plane(
+    width: u32,
+    height: u32,
+    plane: &[u8],
+    bits_per_sample: u16,
+) -> Option<Vec<u8>> {
+    let bytes_per_sample = match bits_per_sample {
+        8 => 1usize,
+        16 => 2,
+        32 => 4,
+        _ => return None,
+    };
+    let samples = (width as usize).checked_mul(height as usize)?;
+    if plane.len() != samples.checked_mul(bytes_per_sample)? {
+        return None;
+    }
+    if bytes_per_sample == 1 {
+        return Some(plane.to_vec());
+    }
+    Some(
+        (0..samples)
+            .map(|i| sample_to_u8(plane, i, bytes_per_sample))
+            .collect(),
+    )
 }
 
 /// The format hint taken from a path's extension, if it names one we read.
@@ -487,13 +711,17 @@ fn color_space_for(profile: Option<&Vec<u8>>) -> ColorSpace {
 /// the JPEG it is, not as the PNG it pretends to be. The hint only decides
 /// formats that carry no magic number at all — in practice TGA.
 fn reader_for<R: BufRead + Seek>(
-    source: R,
+    mut source: R,
     limits: ImportLimits,
     hint: Option<ImportFormat>,
 ) -> Result<image::ImageReader<R>, CodecError> {
+    // Before anything else: a PSD is a document, and the backing codec has no
+    // idea what one is. Catching it here means every entry point in this
+    // module — probe and decode, path and bytes — refuses it by name.
+    refuse_psd(&mut source)?;
     let mut reader = image::ImageReader::new(source);
-    if let Some(hint) = hint {
-        reader.set_format(hint.to_image());
+    if let Some(format) = hint.and_then(ImportFormat::to_image) {
+        reader.set_format(format);
     }
     let mut reader = reader.with_guessed_format()?;
     reader.limits(limits.to_image_limits());
@@ -1387,8 +1615,191 @@ mod tests {
         );
 
         // --- GIF and BMP are covered as writable formats above; JPEG/PNG/
-        // WebP/TIFF too. That is all eight importable containers.
-        assert_eq!(ImportFormat::ALL.len(), 8);
+        // WebP/TIFF too. That is all eight containers this module decodes; the
+        // ninth, PSD, is recognised here and decoded by `app-shell`.
+        assert_eq!(ImportFormat::ALL.len(), 9);
+        assert_eq!(
+            ImportFormat::ALL
+                .iter()
+                .filter(|f| f.is_decodable_here())
+                .count(),
+            8
+        );
+    }
+
+    // -------------------------------------------------------------------- PSD
+
+    /// The smallest thing that is unmistakably a `.psd` header.
+    fn psd_head(width: u32, height: u32) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&PSD_SIGNATURE);
+        v.extend_from_slice(&1u16.to_be_bytes()); // version 1
+        v.extend_from_slice(&[0u8; 6]);
+        v.extend_from_slice(&4u16.to_be_bytes()); // channels
+        v.extend_from_slice(&height.to_be_bytes());
+        v.extend_from_slice(&width.to_be_bytes());
+        v.extend_from_slice(&8u16.to_be_bytes()); // depth
+        v.extend_from_slice(&3u16.to_be_bytes()); // RGB
+        v
+    }
+
+    #[test]
+    fn a_psd_is_refused_by_name_rather_than_as_an_unknown_format() {
+        // Before `ImportFormat::Psd` existed, these bytes reached `image`,
+        // which cannot identify a PSD, and the user was told "could not
+        // identify the image format" — true, useless, and wrong about why.
+        let psd = psd_head(8, 4);
+        // `.err()` rather than `unwrap_err()`: `DecodedImage` holds no `Debug`.
+        for err in [
+            decode_bytes(&psd).err().expect("a psd must be refused"),
+            probe_bytes(&psd, ImportLimits::default()).unwrap_err(),
+            decode_surface_bytes(&psd, ImportLimits::default()).unwrap_err(),
+        ] {
+            let text = err.to_string();
+            assert!(text.contains(".psd"), "{text}");
+            assert!(text.contains("File > Open"), "{text}");
+        }
+        assert_eq!(ImportFormat::from_extension("psd"), Some(ImportFormat::Psd));
+        assert_eq!(ImportFormat::from_extension("PSD"), Some(ImportFormat::Psd));
+        // `.psb` is a different format with 64-bit section lengths, and nothing
+        // here reads one, so it is not advertised.
+        assert_eq!(ImportFormat::from_extension("psb"), None);
+        assert!(ImportFormat::Psd.is_self_identifying());
+        assert!(!ImportFormat::Psd.is_decodable_here());
+        assert_eq!(ImportFormat::Psd.name(), "PSD");
+    }
+
+    #[test]
+    fn a_psd_is_recognised_by_content_even_under_a_lying_extension() {
+        // A hint cannot talk this module into decoding a PSD as a PNG, and a
+        // PSD renamed `.png` still gets the PSD refusal rather than a mangled
+        // PNG error.
+        let psd = psd_head(2, 2);
+        let err =
+            decode_surface_bytes_as(&psd, ImportLimits::default(), ImportFormat::Png).unwrap_err();
+        assert!(err.to_string().contains(".psd"), "{err}");
+
+        let dir = std::env::temp_dir().join(format!("raster-psd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lying.png");
+        std::fs::write(&path, &psd).unwrap();
+        let err = decode_surface_path(&path, ImportLimits::default()).unwrap_err();
+        assert!(err.to_string().contains(".psd"), "{err}");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn the_psd_sniff_rewinds_and_does_not_disturb_an_ordinary_decode() {
+        // The check reads four bytes off the front of every stream. If it did
+        // not put them back, every PNG in the application would fail.
+        let rgba = checker_rgba8(6, 5);
+        let png = encode(ExportFormat::Png, 6, 5, &rgba).unwrap();
+        let Ok(back) = decode_bytes(&png) else {
+            panic!("a png still decodes")
+        };
+        assert_eq!((back.width, back.height), (6, 5));
+        assert_eq!(back.rgba8, rgba);
+        // ...including for a file shorter than the four bytes the sniff wants.
+        let err = decode_bytes(&png[..3])
+            .err()
+            .expect("three bytes are not an image");
+        assert!(!err.to_string().contains(".psd"), "{err}");
+    }
+
+    // ------------------------------------------------------- planar packing
+
+    #[test]
+    fn planar_samples_pack_into_rgba8_at_every_supported_depth() {
+        // Two pixels, values chosen so a swapped channel or a byte-order slip
+        // cannot pass.
+        let r8 = [10u8, 20];
+        let g8 = [30u8, 40];
+        let b8 = [50u8, 60];
+        let a8 = [70u8, 80];
+        assert_eq!(
+            rgba8_from_planes(2, 1, &[&r8, &g8, &b8], Some(&a8), 8).unwrap(),
+            vec![10, 30, 50, 70, 20, 40, 60, 80]
+        );
+        // No alpha plane is fully opaque, which is what a background layer is.
+        assert_eq!(
+            rgba8_from_planes(2, 1, &[&r8, &g8, &b8], None, 8).unwrap(),
+            vec![10, 30, 50, 255, 20, 40, 60, 255]
+        );
+        // One plane is greyscale: the same sample in R, G and B.
+        assert_eq!(
+            rgba8_from_planes(2, 1, &[&r8], None, 8).unwrap(),
+            vec![10, 10, 10, 255, 20, 20, 20, 255]
+        );
+
+        // 16-bit is rounded, not shifted: full scale must come back as 255 and
+        // 0x0080 must not collapse to 0.
+        let r16 = [0x00u8, 0x00, 0xFF, 0xFF];
+        let g16 = [0x80u8, 0x00, 0x00, 0x80];
+        let out = rgba8_from_planes(2, 1, &[&r16, &g16, &r16], None, 16).unwrap();
+        assert_eq!(out[0], 0);
+        assert_eq!(out[4], 255, "full scale must round up to 255");
+        assert_eq!(out[1], 128);
+
+        // 32-bit float, clamped: out-of-range and NaN both land in range.
+        let mut f = Vec::new();
+        for v in [0.0f32, 1.0, 2.0, -1.0] {
+            f.extend_from_slice(&v.to_be_bytes());
+        }
+        let out = rgba8_from_planes(4, 1, &[&f], None, 32).unwrap();
+        assert_eq!(
+            out.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(),
+            vec![0, 255, 255, 0]
+        );
+        let nan = f32::NAN.to_be_bytes();
+        assert_eq!(rgba8_from_planes(1, 1, &[&nan], None, 32).unwrap()[0], 0);
+    }
+
+    #[test]
+    fn planar_packing_declines_before_it_reserves_anything() {
+        // A caller can hold a huge rectangle whose planes are empty; the
+        // conversion has to say no in constant time rather than reserve 3.6 GB
+        // and then discover there was nothing to fill it with.
+        let empty: &[u8] = &[];
+        assert_eq!(
+            rgba8_from_planes(30_000, 30_000, &[empty, empty, empty], None, 8),
+            None
+        );
+        // Wrong plane count, unsupported depth, short plane, short alpha.
+        let two = [1u8, 2];
+        assert_eq!(rgba8_from_planes(2, 1, &[&two, &two], None, 8), None);
+        assert_eq!(rgba8_from_planes(2, 1, &[&two], None, 12), None);
+        assert_eq!(rgba8_from_planes(3, 1, &[&two], None, 8), None);
+        assert_eq!(rgba8_from_planes(2, 1, &[&two], Some(&[1u8]), 8), None);
+        // ...and a pixel count that cannot be addressed at all.
+        assert_eq!(
+            rgba8_from_planes(u32::MAX, u32::MAX, &[empty], None, 8),
+            None
+        );
+    }
+
+    #[test]
+    fn a_single_plane_becomes_coverage_at_every_supported_depth() {
+        assert_eq!(
+            gray8_from_plane(2, 1, &[7u8, 9], 8).unwrap(),
+            vec![7u8, 9],
+            "8-bit coverage is the plane itself"
+        );
+        assert_eq!(
+            gray8_from_plane(2, 1, &[0x00, 0x00, 0xFF, 0xFF], 16).unwrap(),
+            vec![0u8, 255]
+        );
+        let mut f = Vec::new();
+        for v in [0.5f32, 4.0] {
+            f.extend_from_slice(&v.to_be_bytes());
+        }
+        assert_eq!(gray8_from_plane(2, 1, &f, 32).unwrap(), vec![128u8, 255]);
+
+        // Same refusals as the RGBA packer, and no allocation behind them.
+        assert_eq!(gray8_from_plane(30_000, 30_000, &[], 8), None);
+        assert_eq!(gray8_from_plane(2, 1, &[1u8, 2], 12), None);
+        assert_eq!(gray8_from_plane(2, 1, &[1u8], 8), None);
+        assert_eq!(gray8_from_plane(u32::MAX, u32::MAX, &[], 8), None);
     }
 
     // -------------------------------------------------------------------- ICC

@@ -9,7 +9,8 @@ use color::ColorSpace;
 use editor_core::Document;
 use glam::{Affine2, Vec2};
 use layer_model::{
-    AdjustmentKind, BlendMode, ClippingMode, GroupBlending, Layer, LayerId, MaskKind,
+    AdjustmentKind, BlendMode, ClippingMode, GroupBlending, Layer, LayerId, LayerKind, MaskKind,
+    ShapeLayer, TextLayer,
 };
 use raster::{PixelRect, TileCoord, TILE_SIZE};
 
@@ -2056,4 +2057,825 @@ fn a_p3_document_decodes_through_its_own_space() {
     // Both are opaque and both are red-dominant; only the working values move.
     assert_eq!(p3[3], 1.0);
     assert!(p3[0] > p3[1] && p3[0] > p3[2]);
+}
+
+// ------------------------------------------------- text, shapes and styles
+//
+// Everything below drives the *composite*, not the rasterisers underneath it.
+// `text-engine` and `vector` have their own suites for shaping and scan
+// conversion; what these pin is that a document holding one of these layers
+// produces the pixels a user would point at.
+
+/// The smallest rect containing every pixel with any alpha at all.
+fn ink_bbox(c: &Canvas) -> Option<PixelRect> {
+    let r = c.rect();
+    let (mut x0, mut y0) = (i64::MAX, i64::MAX);
+    let (mut x1, mut y1) = (i64::MIN, i64::MIN);
+    for y in r.y..r.bottom() {
+        for x in r.x..r.right() {
+            if c.get(x, y)[3] > 0.0 {
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x + 1);
+                y1 = y1.max(y + 1);
+            }
+        }
+    }
+    (x1 > x0).then(|| rect(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
+}
+
+fn total_alpha(c: &Canvas) -> f32 {
+    c.pixels().iter().map(|p| p[3]).sum()
+}
+
+/// A layer whose alpha is one opaque square and nothing else, at level 0.
+fn square_layer(
+    t: &mut TestDoc,
+    name: &str,
+    x0: u32,
+    y0: u32,
+    side: u32,
+    rgba: [u8; 4],
+) -> LayerId {
+    let id = t.push_raster(name);
+    t.paint_tile_with(id, TileCoord::new(0, 0, 0), |x, y| {
+        if (x0..x0 + side).contains(&x) && (y0..y0 + side).contains(&y) {
+            rgba
+        } else {
+            [0, 0, 0, 0]
+        }
+    });
+    id
+}
+
+// ------------------------------------------------------------------- text
+
+fn text_layer(text: &str, size_px: f32) -> Layer {
+    Layer::with_kind(
+        text,
+        LayerKind::Text(TextLayer {
+            text: text.into(),
+            font_family: crate::testkit::text_fixture_family().into(),
+            size_px,
+        }),
+    )
+}
+
+#[test]
+fn a_text_layer_composites_its_glyph_coverage_where_the_shaper_put_it() {
+    // A text run is laid out around its own origin at (0, 0) in layer space,
+    // so where it lands on the canvas is the layer transform's doing — not a
+    // special case for text, which is why the transform is what places it.
+    let mut t = TestDoc::linear(300, 160);
+    let id = t.push(text_layer("Hxg", 48.0));
+    t.doc.layers.get_mut(id).unwrap().transform = Affine2::from_translation(Vec2::new(20.0, 30.0));
+    let (doc, src) = t.finish();
+
+    let out = full(&doc, &src);
+    let drawn = ink_bbox(&out).expect("the text drew something");
+
+    // Where the shaper says the ink is, moved by the transform. The compositor
+    // resamples through the transform, so a pixel of slack either side.
+    let LayerKind::Text(tl) = &doc.layers.get(id).unwrap().kind else {
+        unreachable!()
+    };
+    let want = crate::text::ink_bounds(tl, 0);
+    assert!(!want.is_empty());
+    let want = rect(want.x + 20, want.y + 30, want.width, want.height);
+    assert!(
+        drawn.x >= want.x - 1
+            && drawn.y >= want.y - 1
+            && drawn.right() <= want.right() + 1
+            && drawn.bottom() <= want.bottom() + 1,
+        "composited ink {drawn:?} escaped the shaped ink {want:?}"
+    );
+    // And it really fills that box rather than clinging to one corner.
+    assert!(drawn.width + 2 >= want.width, "{drawn:?} vs {want:?}");
+    assert!(drawn.height + 2 >= want.height, "{drawn:?} vs {want:?}");
+
+    // Text composites in the shaper's default colour, opaque black, and
+    // touches nothing outside its own ink.
+    let mut solid = 0;
+    for y in drawn.y..drawn.bottom() {
+        for x in drawn.x..drawn.right() {
+            let px = out.get(x, y);
+            if px[3] <= 0.0 {
+                continue;
+            }
+            // Premultiplied black: every channel but alpha is zero, whatever
+            // the coverage.
+            assert_px(px, [0.0, 0.0, 0.0, px[3]], 1e-6, "a glyph's ink");
+            if px[3] > 0.9 {
+                solid += 1;
+            }
+        }
+    }
+    assert!(solid > 50, "only {solid} solid glyph pixels");
+    assert_eq!(out.get(2, 2), [0.0; 4], "nothing outside the run");
+    assert_eq!(out.get(295, 155), [0.0; 4]);
+}
+
+#[test]
+fn a_text_layer_moves_with_its_transform_and_grows_with_its_size() {
+    let compose = |size: f32, dx: f32| {
+        let mut t = TestDoc::linear(480, 320);
+        let id = t.push(text_layer("Wg", size));
+        t.doc.layers.get_mut(id).unwrap().transform =
+            Affine2::from_translation(Vec2::new(dx, 40.0));
+        let (doc, src) = t.finish();
+        let out = composite_rect(&doc, &src, rect(0, 0, 480, 320), 0, opts()).unwrap();
+        (ink_bbox(&out).expect("ink"), total_alpha(&out))
+    };
+
+    let (a, ink_a) = compose(48.0, 20.0);
+    let (b, _) = compose(48.0, 60.0);
+    assert_eq!(
+        (b.x - a.x, b.y - a.y),
+        (40, 0),
+        "a translation moves the glyphs by exactly that much: {a:?} -> {b:?}"
+    );
+    assert_eq!((a.width, a.height), (b.width, b.height));
+
+    // Twice the em size is about twice the ink in each axis, so about four
+    // times the coverage. Asserted as a ratio: the absolute number is the
+    // font's business, not the compositor's.
+    let (big, ink_big) = compose(96.0, 20.0);
+    let wide = f64::from(big.width) / f64::from(a.width);
+    assert!((1.8..2.2).contains(&wide), "width ratio {wide}");
+    let ink = f64::from(ink_big) / f64::from(ink_a);
+    assert!((3.2..4.8).contains(&ink), "coverage ratio {ink}");
+}
+
+#[test]
+fn a_text_layer_honours_opacity_and_a_mask_like_any_other() {
+    let build = |f: &dyn Fn(&mut TestDoc, LayerId)| {
+        let mut t = TestDoc::linear(250, 100);
+        solid_layer(&mut t, "Backdrop", [255, 255, 255, 255]);
+        let id = t.push(text_layer("MMMM", 48.0));
+        t.doc.layers.get_mut(id).unwrap().transform =
+            Affine2::from_translation(Vec2::new(10.0, 10.0));
+        f(&mut t, id);
+        let (doc, src) = t.finish();
+        full(&doc, &src)
+    };
+
+    let plain = build(&|_, _| {});
+    let faded = build(&|t, id| t.doc.layers.get_mut(id).unwrap().opacity = 0.5);
+    let masked = build(&|t, id| {
+        let m = t.attach_mask(id);
+        // Coverage on the left half of the canvas only.
+        t.paint_mask_with(
+            m,
+            TileCoord::new(0, 0, 0),
+            |x, _| {
+                if x < 80 {
+                    255
+                } else {
+                    0
+                }
+            },
+        );
+    });
+
+    // The backdrop is opaque white, so darker means more black text.
+    let darkness = |c: &Canvas| -> f32 { c.pixels().iter().map(|p| 1.0 - p[0]).sum::<f32>() };
+    let (p, f, m) = (darkness(&plain), darkness(&faded), darkness(&masked));
+    assert!(p > 100.0, "the text really marks the backdrop: {p}");
+    assert!(
+        (f / p - 0.5).abs() < 0.02,
+        "half opacity is half the ink: {f} vs {p}"
+    );
+    assert!(m < p * 0.75, "a mask hid the right of the run: {m} vs {p}");
+    // Nothing survives on the masked-out side.
+    for x in 90..240 {
+        for y in 0..100 {
+            assert_px(masked.get(x, y), [1.0; 4], 1e-6, "masked away");
+        }
+    }
+}
+
+// ------------------------------------------------------------------ shapes
+
+fn shape_layer(svg: &str) -> Layer {
+    Layer::with_kind("Shape", LayerKind::Shape(ShapeLayer::from_svg(svg)))
+}
+
+#[track_caller]
+fn shape_of(doc: &mut Document, id: LayerId) -> &mut ShapeLayer {
+    match &mut doc.layers.get_mut(id).expect("layer").kind {
+        LayerKind::Shape(s) => s,
+        other => panic!("{other:?} is not a shape"),
+    }
+}
+
+#[test]
+fn a_shape_layers_fill_composites_with_anti_aliased_edges() {
+    let mut t = TestDoc::linear(64, 64);
+    let id = t.push(shape_layer("M16 16 L48 48 L16 48 Z"));
+    shape_of(&mut t.doc, id).fill = Some([1.0, 0.0, 0.0, 1.0]);
+    let (doc, src) = t.finish();
+
+    let out = full(&doc, &src);
+    // Well inside the triangle.
+    assert_px(out.get(20, 44), [1.0, 0.0, 0.0, 1.0], 1e-6, "interior");
+    // Well outside it, on both sides of the hypotenuse.
+    assert_eq!(out.get(40, 20), [0.0; 4], "above the hypotenuse");
+    assert_eq!(out.get(4, 4), [0.0; 4], "off the shape entirely");
+    // The diagonal edge is anti-aliased: some pixel is partly covered, and a
+    // partly covered pixel is *premultiplied*, so its red equals its alpha.
+    let partial: Vec<[f32; 4]> = (17..47)
+        .filter_map(|i| {
+            let px = out.get(i, i);
+            (px[3] > 0.05 && px[3] < 0.95).then_some(px)
+        })
+        .collect();
+    assert!(!partial.is_empty(), "a diagonal edge must be anti-aliased");
+    for px in partial {
+        assert!((px[0] - px[3]).abs() < 1e-5, "premultiplied red: {px:?}");
+    }
+}
+
+#[test]
+fn a_shape_layers_winding_rule_decides_whether_it_has_a_hole() {
+    // Two nested squares wound the same way.
+    let svg = "M8 8 L56 8 L56 56 L8 56 Z M20 20 L44 20 L44 44 L20 44 Z";
+    let compose = |rule: layer_model::ShapeFillRule| {
+        let mut t = TestDoc::linear(64, 64);
+        let id = t.push(shape_layer(svg));
+        let s = shape_of(&mut t.doc, id);
+        s.fill_rule = rule;
+        s.fill = Some([0.0, 1.0, 0.0, 1.0]);
+        let (doc, src) = t.finish();
+        full(&doc, &src)
+    };
+
+    let nonzero = compose(layer_model::ShapeFillRule::NonZero);
+    let evenodd = compose(layer_model::ShapeFillRule::EvenOdd);
+    assert_px(nonzero.get(32, 32), [0.0, 1.0, 0.0, 1.0], 1e-6, "filled");
+    assert_eq!(evenodd.get(32, 32), [0.0; 4], "the inner square is a hole");
+    // The ring between the two squares is filled either way.
+    for c in [&nonzero, &evenodd] {
+        assert_px(c.get(12, 32), [0.0, 1.0, 0.0, 1.0], 1e-6, "the ring");
+    }
+}
+
+#[test]
+fn a_shape_layers_stroke_composites_over_its_fill_with_the_join_asked_for() {
+    let mut t = TestDoc::linear(64, 64);
+    let id = t.push(shape_layer("M16 16 L48 16 L48 48 L16 48 Z"));
+    let s = shape_of(&mut t.doc, id);
+    s.fill = Some([0.0, 0.0, 1.0, 1.0]);
+    s.stroke = Some(layer_model::ShapeStroke {
+        color: [1.0, 0.0, 0.0, 1.0],
+        width_px: 6.0,
+        join: layer_model::ShapeJoin::Miter,
+        ..Default::default()
+    });
+    let (doc, src) = t.finish();
+
+    let out = full(&doc, &src);
+    assert_px(out.get(32, 32), [0.0, 0.0, 1.0, 1.0], 1e-6, "the fill");
+    assert_px(out.get(16, 32), [1.0, 0.0, 0.0, 1.0], 1e-6, "on the path");
+    assert_px(
+        out.get(14, 32),
+        [1.0, 0.0, 0.0, 1.0],
+        1e-6,
+        "outside the path",
+    );
+    assert_px(
+        out.get(18, 32),
+        [1.0, 0.0, 0.0, 1.0],
+        1e-6,
+        "inside the path",
+    );
+    assert_eq!(out.get(10, 32), [0.0; 4], "past the stroke");
+    // A miter join fills the outer corner of the square out to (13, 13); a
+    // round one is a disc of the half-width and stops short of it.
+    assert!(out.get(13, 13)[3] > 0.9, "the mitre: {:?}", out.get(13, 13));
+
+    let mut t = TestDoc::linear(64, 64);
+    let id = t.push(shape_layer("M16 16 L48 16 L48 48 L16 48 Z"));
+    let s = shape_of(&mut t.doc, id);
+    s.fill = None;
+    s.stroke = Some(layer_model::ShapeStroke {
+        color: [1.0, 0.0, 0.0, 1.0],
+        width_px: 6.0,
+        join: layer_model::ShapeJoin::Round,
+        ..Default::default()
+    });
+    let (doc, src) = t.finish();
+    let round = full(&doc, &src);
+    assert!(
+        round.get(13, 13)[3] < 0.6,
+        "a round join must cut the corner the mitre keeps: {:?}",
+        round.get(13, 13)
+    );
+    assert_px(
+        round.get(16, 32),
+        [1.0, 0.0, 0.0, 1.0],
+        1e-6,
+        "still stroked",
+    );
+    assert_eq!(round.get(32, 32), [0.0; 4], "and no fill was asked for");
+}
+
+#[test]
+fn a_shape_layer_moves_with_its_transform() {
+    let compose = |dx: f32| {
+        let mut t = TestDoc::linear(96, 96);
+        let id = t.push(shape_layer("M8 8 L24 8 L24 24 L8 24 Z"));
+        t.doc.layers.get_mut(id).unwrap().transform =
+            Affine2::from_translation(Vec2::new(dx, 30.0));
+        let (doc, src) = t.finish();
+        let out = composite_rect(&doc, &src, rect(0, 0, 96, 96), 0, opts()).unwrap();
+        ink_bbox(&out).expect("ink")
+    };
+    assert_eq!(compose(0.0), rect(8, 38, 16, 16));
+    assert_eq!(compose(40.0), rect(48, 38, 16, 16));
+}
+
+// ----------------------------------------------------------------- effects
+
+fn black_shadow(distance_px: f32, size_px: f32) -> layer_model::ShadowEffect {
+    layer_model::ShadowEffect {
+        blend_mode: BlendMode::Normal,
+        color: [0.0, 0.0, 0.0, 1.0],
+        opacity: 1.0,
+        // 180 degrees puts the light to the left, so the shadow falls to the
+        // right along +x with no vertical component at all.
+        angle_deg: 180.0,
+        use_global_light: false,
+        distance_px,
+        spread: 0.0,
+        size_px,
+        noise: 0.0,
+        knockout: true,
+    }
+}
+
+#[test]
+fn a_drop_shadow_is_offset_blurred_and_drawn_beneath_its_layer() {
+    let compose = |size: f32, knockout: bool| {
+        let mut t = TestDoc::linear(64, 64);
+        let id = square_layer(&mut t, "Block", 16, 16, 16, [255, 255, 255, 255]);
+        t.doc.layers.get_mut(id).unwrap().effects.drop_shadow = Some(layer_model::ShadowEffect {
+            knockout,
+            ..black_shadow(8.0, size)
+        });
+        let (doc, src) = t.finish();
+        full(&doc, &src)
+    };
+
+    // With no blur the shadow is the silhouette, moved.
+    let crisp = compose(0.0, true);
+    assert_px(
+        crisp.get(36, 24),
+        [0.0, 0.0, 0.0, 1.0],
+        1e-4,
+        "in the shadow",
+    );
+    assert_px(
+        crisp.get(39, 24),
+        [0.0, 0.0, 0.0, 1.0],
+        1e-4,
+        "its far edge",
+    );
+    assert_eq!(crisp.get(41, 24), [0.0; 4], "past the offset silhouette");
+    assert_eq!(crisp.get(24, 8), [0.0; 4], "the offset is horizontal only");
+    assert_eq!(crisp.get(12, 24), [0.0; 4], "a shadow falls one way");
+    // The layer itself is untouched, with the shadow knocked out from under it.
+    assert_px(crisp.get(24, 24), [1.0; 4], 1e-6, "the layer's own pixels");
+
+    // Blurring softens the edge and carries the shadow further out.
+    let soft = compose(6.0, true);
+    assert!(soft.get(41, 24)[3] > 0.05, "{:?}", soft.get(41, 24));
+    assert!(
+        soft.get(41, 24)[3] < 0.95,
+        "and softly: {:?}",
+        soft.get(41, 24)
+    );
+    assert!(
+        soft.get(43, 24)[3] < soft.get(41, 24)[3],
+        "the falloff must decrease outward"
+    );
+    assert_eq!(
+        crisp.get(43, 24),
+        [0.0; 4],
+        "which the crisp one does not do"
+    );
+
+    // "Beneath" is testable by switching the knockout off and looking under a
+    // layer that is not opaque: the shadow shows through from below.
+    let mut t = TestDoc::linear(64, 64);
+    let id = square_layer(&mut t, "Block", 16, 16, 16, [255, 255, 255, 128]);
+    t.doc.layers.get_mut(id).unwrap().effects.drop_shadow = Some(layer_model::ShadowEffect {
+        knockout: false,
+        ..black_shadow(8.0, 0.0)
+    });
+    let (doc, src) = t.finish();
+    let over = full(&doc, &src);
+    let straight = color::unpremultiply(over.get(28, 24));
+    assert!(
+        straight[0] < 0.6,
+        "a half-transparent layer over its own shadow is darkened: {straight:?}"
+    );
+    assert!(over.get(28, 24)[3] > 0.99, "and the shadow fills the alpha");
+}
+
+#[test]
+fn an_inner_shadow_falls_inside_the_layer_and_never_outside_it() {
+    let mut t = TestDoc::linear(64, 64);
+    let id = square_layer(&mut t, "Block", 16, 16, 24, [255, 255, 255, 255]);
+    t.doc.layers.get_mut(id).unwrap().effects.inner_shadow = Some(black_shadow(6.0, 0.0));
+    let (doc, src) = t.finish();
+
+    let out = full(&doc, &src);
+    // The hole the shadow falls into moves right, so the shadow hugs the left
+    // edge of the layer.
+    assert_px(
+        out.get(18, 28),
+        [0.0, 0.0, 0.0, 1.0],
+        1e-4,
+        "inside the edge",
+    );
+    assert_px(out.get(30, 28), [1.0; 4], 1e-6, "away from the edge");
+    // And it never leaves the layer's own shape.
+    for (x, y) in [(12, 28), (44, 28), (28, 12), (28, 44)] {
+        assert_eq!(out.get(x, y), [0.0; 4], "leaked outside at ({x}, {y})");
+    }
+    assert_eq!(
+        ink_bbox(&out),
+        Some(rect(16, 16, 24, 24)),
+        "an inner shadow must not change the layer's extent"
+    );
+}
+
+#[test]
+fn a_stroke_effect_traces_the_layers_alpha_edge_on_the_side_asked_for() {
+    let compose = |position: layer_model::StrokePosition| {
+        let mut t = TestDoc::linear(64, 64);
+        let id = square_layer(&mut t, "Block", 20, 20, 24, [255, 255, 255, 255]);
+        t.doc.layers.get_mut(id).unwrap().effects.stroke = Some(layer_model::StrokeEffect {
+            size_px: 4.0,
+            position,
+            blend_mode: BlendMode::Normal,
+            opacity: 1.0,
+            fill: layer_model::FillStyle::Solid([1.0, 0.0, 0.0, 1.0]),
+            overprint: false,
+        });
+        let (doc, src) = t.finish();
+        full(&doc, &src)
+    };
+
+    let outside = compose(layer_model::StrokePosition::Outside);
+    assert_px(outside.get(18, 32), [1.0, 0.0, 0.0, 1.0], 1e-3, "outside");
+    assert_px(
+        outside.get(22, 32),
+        [1.0; 4],
+        1e-6,
+        "the layer is untouched",
+    );
+    assert_eq!(outside.get(14, 32), [0.0; 4], "past the stroke");
+    assert_eq!(
+        ink_bbox(&outside),
+        Some(rect(16, 16, 32, 32)),
+        "an outside stroke grows the layer by its width"
+    );
+
+    let inside = compose(layer_model::StrokePosition::Inside);
+    assert_px(inside.get(22, 32), [1.0, 0.0, 0.0, 1.0], 1e-3, "inside");
+    assert_px(inside.get(32, 32), [1.0; 4], 1e-6, "not the middle");
+    assert_eq!(
+        ink_bbox(&inside),
+        Some(rect(20, 20, 24, 24)),
+        "an inside stroke does not grow the layer at all"
+    );
+}
+
+#[test]
+fn a_colour_overlay_recolours_the_layer_without_reshaping_it() {
+    let mut t = TestDoc::linear(64, 64);
+    let id = square_layer(&mut t, "Block", 16, 16, 16, [255, 255, 255, 255]);
+    t.doc.layers.get_mut(id).unwrap().effects.color_overlay =
+        Some(layer_model::ColorOverlayEffect {
+            blend_mode: BlendMode::Normal,
+            color: [0.0, 0.5, 1.0, 1.0],
+            opacity: 1.0,
+        });
+    let (doc, src) = t.finish();
+    let out = full(&doc, &src);
+    assert_px(out.get(24, 24), [0.0, 0.5, 1.0, 1.0], 1e-6, "recoloured");
+    assert_eq!(ink_bbox(&out), Some(rect(16, 16, 16, 16)), "same shape");
+
+    // At half opacity it lands half way between the layer and the overlay.
+    let mut t = TestDoc::linear(64, 64);
+    let id = square_layer(&mut t, "Block", 16, 16, 16, [255, 255, 255, 255]);
+    t.doc.layers.get_mut(id).unwrap().effects.color_overlay =
+        Some(layer_model::ColorOverlayEffect {
+            blend_mode: BlendMode::Normal,
+            color: [0.0, 0.0, 0.0, 1.0],
+            opacity: 0.5,
+        });
+    let (doc, src) = t.finish();
+    // The layer is opaque, so only the colour moves: alpha stays at one.
+    assert_px(
+        full(&doc, &src).get(24, 24),
+        [0.5, 0.5, 0.5, 1.0],
+        1e-6,
+        "half way",
+    );
+}
+
+#[test]
+fn an_effect_rides_the_layers_opacity_blend_mode_and_mask() {
+    let build = |f: &dyn Fn(&mut TestDoc, LayerId)| {
+        let mut t = TestDoc::linear(64, 64);
+        solid_layer(&mut t, "Backdrop", [255, 255, 255, 255]);
+        let id = square_layer(&mut t, "Block", 16, 16, 16, [255, 0, 0, 255]);
+        t.doc.layers.get_mut(id).unwrap().effects.drop_shadow = Some(black_shadow(8.0, 0.0));
+        f(&mut t, id);
+        let (doc, src) = t.finish();
+        full(&doc, &src)
+    };
+
+    // Opacity scales the effect exactly as it scales the layer.
+    let plain = build(&|_, _| {});
+    let faded = build(&|t, id| t.doc.layers.get_mut(id).unwrap().opacity = 0.25);
+    assert_px(plain.get(36, 24), [0.0, 0.0, 0.0, 1.0], 1e-4, "full shadow");
+    assert_px(
+        faded.get(36, 24),
+        [0.75, 0.75, 0.75, 1.0],
+        1e-4,
+        "a quarter of a shadow",
+    );
+
+    // Fill opacity, by contrast, fades the layer's own pixels and leaves the
+    // shadow alone — the whole reason the two are separate numbers.
+    let filled = build(&|t, id| t.doc.layers.get_mut(id).unwrap().fill_opacity = 0.0);
+    assert_px(
+        filled.get(36, 24),
+        [0.0, 0.0, 0.0, 1.0],
+        1e-4,
+        "shadow stays",
+    );
+    assert_px(filled.get(24, 24), [1.0; 4], 1e-4, "the layer is gone");
+
+    // A blend mode applies to the styled result as a whole. `Screen` against a
+    // white backdrop is white everywhere, shadow included.
+    let screened = build(&|t, id| t.doc.layers.get_mut(id).unwrap().blend_mode = BlendMode::Screen);
+    assert_px(screened.get(36, 24), [1.0; 4], 1e-4, "screened shadow");
+    assert_px(screened.get(24, 24), [1.0; 4], 1e-4, "screened layer");
+
+    // A mask hides the effect along with the pixels it was traced from.
+    let masked = build(&|t, id| {
+        let m = t.attach_mask(id);
+        t.paint_mask_with(
+            m,
+            TileCoord::new(0, 0, 0),
+            |x, _| if x < 24 { 255 } else { 0 },
+        );
+    });
+    // The mask keeps x < 24, so the layer's shape is now 16..24 and the
+    // shadow it casts is that shape moved to 24..32 — no further.
+    assert_px(
+        masked.get(20, 24),
+        [1.0, 0.0, 0.0, 1.0],
+        1e-6,
+        "the kept half of the layer",
+    );
+    assert_px(
+        masked.get(28, 24),
+        [0.0, 0.0, 0.0, 1.0],
+        1e-4,
+        "the shadow the kept half casts",
+    );
+    assert_px(
+        masked.get(38, 24),
+        [1.0; 4],
+        1e-6,
+        "the hidden half casts no shadow at all",
+    );
+}
+
+#[test]
+fn effects_are_composited_in_photoshops_order() {
+    // An outer glow is drawn under the layer and a colour overlay over it, so a
+    // layer carrying both shows the overlay inside and the glow outside — the
+    // arrangement that distinguishes the order from its reverse.
+    let mut t = TestDoc::linear(64, 64);
+    let id = square_layer(&mut t, "Block", 24, 24, 16, [255, 255, 255, 255]);
+    let e = &mut t.doc.layers.get_mut(id).unwrap().effects;
+    e.outer_glow = Some(layer_model::GlowEffect {
+        blend_mode: BlendMode::Normal,
+        fill: layer_model::FillStyle::Solid([0.0, 1.0, 0.0, 1.0]),
+        opacity: 1.0,
+        noise: 0.0,
+        technique: layer_model::GlowTechnique::Precise,
+        spread: 0.0,
+        size_px: 6.0,
+        source: layer_model::GlowSource::Edge,
+        range: 1.0,
+        jitter: 0.0,
+    });
+    e.color_overlay = Some(layer_model::ColorOverlayEffect {
+        blend_mode: BlendMode::Normal,
+        color: [1.0, 0.0, 0.0, 1.0],
+        opacity: 1.0,
+    });
+    let (doc, src) = t.finish();
+
+    let out = full(&doc, &src);
+    assert_px(
+        out.get(32, 32),
+        [1.0, 0.0, 0.0, 1.0],
+        1e-6,
+        "overlay inside",
+    );
+    let glow = out.get(21, 32);
+    assert!(glow[1] > glow[0], "green glow outside the shape: {glow:?}");
+    assert!(glow[3] > 0.1 && glow[3] < 1.0, "and it falls off: {glow:?}");
+    assert_eq!(out.get(14, 32), [0.0; 4], "past the glow's reach");
+}
+
+#[test]
+fn a_text_or_shape_layer_can_carry_effects_too() {
+    // The point of the whole wave: the three new things compose with each other
+    // rather than each needing a path of its own.
+    let mut t = TestDoc::linear(64, 64);
+    let id = t.push(shape_layer("M20 20 L44 20 L44 44 L20 44 Z"));
+    t.doc.layers.get_mut(id).unwrap().effects.drop_shadow = Some(black_shadow(8.0, 0.0));
+    let (doc, src) = t.finish();
+    let out = full(&doc, &src);
+    assert_px(
+        out.get(28, 32),
+        [0.0, 0.0, 0.0, 1.0],
+        1e-6,
+        "the shape's fill",
+    );
+    assert_px(out.get(48, 32), [0.0, 0.0, 0.0, 1.0], 1e-4, "its shadow");
+    assert_eq!(
+        ink_bbox(&out),
+        Some(rect(20, 20, 32, 24)),
+        "the shape plus its shadow"
+    );
+
+    let mut t = TestDoc::linear(200, 120);
+    let id = t.push(text_layer("Hi", 48.0));
+    let layer = t.doc.layers.get_mut(id).unwrap();
+    layer.transform = Affine2::from_translation(Vec2::new(20.0, 20.0));
+    layer.effects.stroke = Some(layer_model::StrokeEffect {
+        size_px: 3.0,
+        position: layer_model::StrokePosition::Outside,
+        blend_mode: BlendMode::Normal,
+        opacity: 1.0,
+        fill: layer_model::FillStyle::Solid([1.0, 0.0, 0.0, 1.0]),
+        overprint: false,
+    });
+    let (doc, src) = t.finish();
+    let styled = full(&doc, &src);
+    let red = styled
+        .pixels()
+        .iter()
+        .filter(|p| p[0] > 0.5 && p[1] < 0.1)
+        .count();
+    assert!(red > 100, "the text is outlined in red: {red} pixels");
+}
+
+#[test]
+fn a_layer_with_no_effects_takes_the_plain_path_and_a_dormant_style_changes_nothing() {
+    // Byte identity has two halves. The first is that the styled path is not
+    // entered at all for an unstyled layer, whatever else the document holds —
+    // every other test in this file composites through the same arm, and their
+    // hand-computed numbers are unchanged.
+    let mut t = TestDoc::linear(64, 64);
+    solid_layer(&mut t, "Backdrop", [0, 0, 255, 255]);
+    let raster = square_layer(&mut t, "Block", 8, 8, 24, [255, 0, 0, 200]);
+    let group = t.push_group("Group");
+    let child = t.push_child(group, Layer::raster("Child"));
+    t.paint_tile(child, TileCoord::new(0, 0, 0), [0, 255, 0, 128]);
+    t.doc.layers.get_mut(child).unwrap().transform = Affine2::from_translation(Vec2::new(6.0, 6.0));
+    let m = t.attach_mask(raster);
+    t.paint_mask_with(
+        m,
+        TileCoord::new(0, 0, 0),
+        |x, _| if x < 20 { 255 } else { 90 },
+    );
+    t.push_adjustment("Exposure", AdjustmentKind::Exposure { stops: 0.5 });
+    let clipper = square_layer(&mut t, "Clipped", 4, 4, 40, [255, 255, 0, 255]);
+    t.doc.layers.get_mut(clipper).unwrap().clipping = ClippingMode::ClipToBelow;
+
+    for id in t.doc.layers.iter_depth_first() {
+        let layer = t.doc.layers.get(id).unwrap();
+        assert_eq!(
+            crate::effects::reach(&layer.effects, 0),
+            None,
+            "{} must not enter the style pipeline",
+            layer.name
+        );
+    }
+    let (doc, src) = t.finish();
+    let before = full(&doc, &src);
+
+    // The second half: filling in a whole stack of effect *parameters* and
+    // leaving the master switch off changes neither a pixel nor the tile cache
+    // key, so a document that was never styled cannot be repainted or evicted
+    // by this code existing.
+    let mut styled = doc.clone();
+    styled.layers.get_mut(raster).unwrap().effects = layer_model::LayerEffects {
+        enabled: false,
+        drop_shadow: Some(black_shadow(12.0, 9.0)),
+        inner_shadow: Some(black_shadow(4.0, 4.0)),
+        outer_glow: Some(layer_model::GlowEffect::default()),
+        inner_glow: Some(layer_model::GlowEffect::default()),
+        bevel_emboss: Some(layer_model::BevelEffect::default()),
+        satin: Some(layer_model::SatinEffect::default()),
+        color_overlay: Some(layer_model::ColorOverlayEffect::default()),
+        gradient_overlay: Some(layer_model::GradientOverlayEffect::default()),
+        pattern_overlay: Some(layer_model::PatternOverlayEffect::default()),
+        stroke: Some(layer_model::StrokeEffect::default()),
+    };
+    let after = composite_rect(&styled, &src, rect(0, 0, 64, 64), 0, opts()).unwrap();
+    assert_eq!(
+        before.pixels(),
+        after.pixels(),
+        "a switched-off style must not move a single bit"
+    );
+
+    // The same, held against the tile cache: the second document must hit the
+    // entry the first one filled, or every tile would be repainted.
+    let mut cache = TileCompositor::with_capacity(8);
+    let coord = TileCoord::new(0, 0, 0);
+    cache.composite_tile(&doc, &src, coord, opts()).unwrap();
+    let hits = cache.stats().hits;
+    cache.composite_tile(&styled, &src, coord, opts()).unwrap();
+    assert_eq!(
+        cache.stats().hits,
+        hits + 1,
+        "a dormant style must key identically"
+    );
+
+    // And switching the same stack *on* really does change the picture, which
+    // is what makes the equality above evidence rather than a tautology.
+    let mut live = styled.clone();
+    live.layers.get_mut(raster).unwrap().effects.enabled = true;
+    let lit = composite_rect(&live, &src, rect(0, 0, 64, 64), 0, opts()).unwrap();
+    assert_ne!(before.pixels(), lit.pixels());
+    let hits = cache.stats().hits;
+    cache.composite_tile(&live, &src, coord, opts()).unwrap();
+    assert_eq!(
+        cache.stats().hits,
+        hits,
+        "and a live style must key differently, so it misses"
+    );
+}
+
+#[test]
+fn a_styled_layer_composites_the_same_tile_by_tile_as_it_does_in_one_pass() {
+    // Effects read a neighbourhood, which is the one thing the tiled path is
+    // not allowed to notice. This is the region-independence claim, held
+    // against the exact operation that could break it.
+    let mut t = TestDoc::linear(2 * TILE_SIZE, TILE_SIZE);
+    // The block is placed so that the *soft edge* of its shadow lands across
+    // the tile boundary rather than its solid middle: a margin that is too
+    // small only shows up where the falloff is, and a block whose interior
+    // straddles the seam would hide the bug.
+    let id = t.push_raster("Block");
+    for tx in 0..2i32 {
+        t.paint_tile_with(id, TileCoord::new(tx, 0, 0), |x, y| {
+            let ax = i64::from(x) + i64::from(tx) * i64::from(TILE_SIZE);
+            let ay = i64::from(y);
+            if (226..346).contains(&ax) && (40..200).contains(&ay) {
+                [255, 255, 255, 255]
+            } else {
+                [0, 0, 0, 0]
+            }
+        });
+    }
+    let e = &mut t.doc.layers.get_mut(id).unwrap().effects;
+    e.drop_shadow = Some(black_shadow(20.0, 24.0));
+    e.outer_glow = Some(layer_model::GlowEffect {
+        size_px: 18.0,
+        ..Default::default()
+    });
+    e.stroke = Some(layer_model::StrokeEffect::default());
+    let (doc, src) = t.finish();
+
+    let whole = rect(0, 0, 2 * TILE_SIZE, TILE_SIZE);
+    let one_pass = composite_rect(&doc, &src, whole, 0, opts()).unwrap();
+    let tiled = composite_region(&doc, &src, whole, 0, opts()).unwrap();
+    assert_eq!(
+        one_pass.pixels(),
+        tiled.pixels(),
+        "a seam at a tile boundary"
+    );
+
+    // And an arbitrary window straddling the boundary agrees with the same
+    // sub-rect of the whole.
+    let window = rect(TILE_SIZE as i64 - 30, 10, 60, 60);
+    let part = composite_rect(&doc, &src, window, 0, opts()).unwrap();
+    for y in window.y..window.bottom() {
+        for x in window.x..window.right() {
+            assert_eq!(part.get(x, y), one_pass.get(x, y), "at ({x}, {y})");
+        }
+    }
 }

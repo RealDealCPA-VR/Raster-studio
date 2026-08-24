@@ -232,6 +232,26 @@ pub struct Editor {
     /// instead and deliberately does not clear this. See
     /// [`Editor::apply_kind_edit`].
     kind_gesture: Option<(LayerId, u64)>,
+    /// What Edit ▸ Copy last put on the clipboard.
+    ///
+    /// **In-process, not the system clipboard.** Cut, Copy, Copy Merged, Paste
+    /// and Paste Into were five menu items nothing performed, because there was
+    /// nowhere in the application to keep the pixels between the copy and the
+    /// paste — `ui::ClipboardState` records only *whether* a paste would
+    /// produce something, which is a fact about a store that did not exist.
+    /// This is that store. Crossing the process boundary is a separate job (it
+    /// needs a platform clipboard and an encode/decode of the payload) and
+    /// nothing here depends on which side of it the pixels live on.
+    clipboard: Option<Clipboard>,
+}
+
+/// A rectangle of pixels lifted out of a document, straight RGBA8.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Clipboard {
+    pub width: u32,
+    pub height: u32,
+    /// Row-major RGBA8, `width * height * 4` bytes.
+    pub rgba8: Vec<u8>,
 }
 
 /// Whether the top of `doc`'s history is a kind edit to `layer`.
@@ -328,6 +348,7 @@ impl Editor {
             session_tag: mint_session_tag(),
             revision: 0,
             kind_gesture: None,
+            clipboard: None,
         }
     }
 
@@ -782,6 +803,16 @@ impl Editor {
     /// The last thing worth telling the user, for the status bar.
     pub fn status(&self) -> Option<&str> {
         self.status.as_deref()
+    }
+
+    /// What Edit ▸ Copy last lifted, if anything. See [`Clipboard`].
+    pub fn clipboard(&self) -> Option<&Clipboard> {
+        self.clipboard.as_ref()
+    }
+
+    pub fn set_clipboard(&mut self, clipboard: Clipboard) {
+        self.clipboard = Some(clipboard);
+        self.touch();
     }
 
     pub fn set_status(&mut self, message: impl Into<String>) {

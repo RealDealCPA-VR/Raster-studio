@@ -19,7 +19,20 @@ layer-model.workspace = true
 compositor.workspace = true
 project-format.workspace = true
 raster.workspace = true
+# Photoshop documents. `psd` models a `.psd` as its own tree of planar channels
+# and deliberately owns no conversion into this application's tile/layer model —
+# that conversion is `crate::import`'s job, which is why the dependency lands
+# here and not in `raster` (whose codec facade moves flat images only).
+psd.workspace = true
 tools.workspace = true
+# The engines behind the Filter, Image ▸ Adjustments and Select menus. The
+# shell reaches them through `menu_bridge::perform`, which is what makes those
+# menus do something; before this wave every one of those items was drawn
+# disabled because nothing in the shell could call these crates at all.
+filters.workspace = true
+adjustments.workspace = true
+selection.workspace = true
+color.workspace = true
 design.workspace = true
 ui.workspace = true
 egui.workspace = true
@@ -48,3 +61,7 @@ tempfile = "3"
 # Test-only: `the_mask_covers_every_component_the_panel_lists` names every
 # colour space so the channel mask cannot silently outgrow its three bools.
 color.workspace = true
+# Test-only: `a_pen_click_sequence_builds_the_expected_path` reads the SVG the
+# Pen tool wrote back into a `vector::Path`, so the assertion is about the
+# geometry the clicks describe rather than about a formatted string.
+vector.workspace = true

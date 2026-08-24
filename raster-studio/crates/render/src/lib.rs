@@ -32,6 +32,7 @@ pub mod canvas;
 pub mod composite;
 pub mod context;
 pub mod offscreen;
+pub mod overlay;
 pub mod texture;
 
 pub use camera::{Camera, MAX_ZOOM, MIN_ZOOM};
@@ -39,4 +40,5 @@ pub use canvas::{backdrop_clear_color, srgb_to_linear, Canvas, DEFAULT_BACKDROP_
 pub use composite::{CompositeParams, CompositePass};
 pub use context::GpuContext;
 pub use offscreen::{read_texture_rgba8, OffscreenTarget, Readback};
+pub use overlay::{segment_vertices, Overlay, OverlayVertex, Segment};
 pub use texture::{GpuTexture, MipGenerator, TextureError};

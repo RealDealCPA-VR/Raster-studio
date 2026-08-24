@@ -49,6 +49,16 @@ pub enum ToolError {
     #[error("this tool has no meaning on a coverage mask")]
     UnsupportedOnMask,
 
+    /// A tool was asked to continue a gesture it is not in the middle of: a
+    /// keystroke routed to the Type tool with no run open, a pen segment with
+    /// no path started.
+    ///
+    /// Refused rather than ignored. A silent no-op here is a shell routing the
+    /// keyboard to the wrong place, and that is precisely the failure a
+    /// swallowed key hides.
+    #[error("this tool has no gesture in progress")]
+    NotStarted,
+
     /// A seed point (flood fill, wand, clone source) lies outside the region
     /// being read.
     #[error("point ({x}, {y}) lies outside the region being sampled")]

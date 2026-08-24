@@ -62,13 +62,15 @@
 //! Honest gaps, each of which changes what a document looks like and none of
 //! which is silently approximated:
 //!
-//! * **Layer effects** ([`layer_model::LayerEffects`] — drop shadow, stroke,
-//!   glow, overlays, bevel, satin) are not rendered. Because of that,
-//!   `fill_opacity` is currently multiplied straight into the layer's own
-//!   opacity — on an adjustment layer exactly as on a raster one; once effects
-//!   exist it must stop applying to them.
-//! * **Text, shape and smart-object layers** have no rasterizer here, so they
-//!   contribute nothing and cannot serve as a clipping base.
+//! * **A pattern fill** ([`layer_model::PatternFill`]) names an `AssetId`, and
+//!   this crate has no asset store to resolve one against, so a pattern overlay
+//!   — and a glow or stroke filled with a pattern — draws nothing. Solid and
+//!   gradient fills draw. See the [`effects`] module docs for the rest of the
+//!   layer-style gaps: contours, glow jitter, stroke overprint, the three bevel
+//!   techniques, and the clamp on how far an effect may reach.
+//! * **Smart-object layers** have no rasterizer here, so they contribute
+//!   nothing and cannot serve as a clipping base. Text and shape layers do
+//!   render — see [`text`] and [`shape`] for the limits of each.
 //! * **A vector layer mask** ([`layer_model::MaskKind::Vector`]) has no
 //!   rasterizer here either. Reading its (non-existent) coverage tiles would
 //!   report zero everywhere and hide the layer completely, so a vector mask
@@ -105,8 +107,11 @@ pub mod blending;
 pub mod cache;
 pub mod canvas;
 pub mod composite;
+pub mod effects;
 pub mod error;
+pub mod shape;
 pub mod source;
+pub mod text;
 
 #[cfg(test)]
 mod testkit;
@@ -121,5 +126,8 @@ pub use composite::{
     composite_rect, composite_region, composite_subtree, composite_tile, tile_rect,
     CompositeOptions, MAX_PREIMAGE_PIXELS, TAP_WINDOW,
 };
+pub use effects::MAX_REACH;
 pub use error::CompositeError;
+pub use shape::MAX_SHAPE_PIXELS;
 pub use source::{MemoryTileSource, TileSource};
+pub use text::{font_families, load_font, no_fonts};

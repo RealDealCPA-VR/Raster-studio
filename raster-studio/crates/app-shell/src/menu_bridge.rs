@@ -47,6 +47,13 @@ use crate::editor::Editor;
 use crate::prefs::{Preferences, ThemeChoice};
 
 /// Shown on an item the shared menu model allows but this build cannot perform.
+///
+/// Kept as the *fallback* only. Every item this build genuinely cannot do now
+/// carries a sentence naming the specific thing that is missing — see
+/// [`unavailable_reason`] — because "this build cannot do that yet" tells a
+/// user nothing they can act on and tells a reviewer nothing about what is
+/// left. `no_unavailable_item_falls_back_to_the_generic_reason` pins that the
+/// fallback is unreachable from any menu.
 pub const NOT_WIRED: &str = "This build cannot do that yet";
 
 /// What the shell should do about a menu click.
@@ -56,6 +63,30 @@ pub enum Pick {
     Action(Action),
     /// A document edit, routed through history.
     Command(Command),
+    /// A menu operation this build performs against the *live* document, in
+    /// [`perform`].
+    ///
+    /// # Why this is not a [`Pick::Command`]
+    ///
+    /// Three quarters of the menu bar cannot be answered with a value built
+    /// from `&Editor` alone:
+    ///
+    /// * A filter and an adjustment produce **new pixels**, and pixels reach a
+    ///   document in two halves — the bytes go into the
+    ///   [`compositor::MemoryTileSource`] (which needs `&mut`) and the
+    ///   *references* to them arrive as [`Command::PaintTiles`]. A `Pick` built
+    ///   during enablement has no `&mut` and no business hashing a megabyte.
+    /// * The selection is a **field** of [`editor_core::Document`], not a
+    ///   command — `editor_core` says so — so Select ▸ Inverse has no `Command`
+    ///   to be.
+    /// * `resolve` runs for every one of the 256 items every frame the menu is
+    ///   open. Building a Gaussian Blur's result forty times a second to decide
+    ///   whether its row should be grey is not a design, it is a hang.
+    ///
+    /// So the *decision* is cheap and eager (this variant is one enum tag) and
+    /// the *work* is expensive and lazy: [`perform`] runs once, on the click,
+    /// with `&mut Editor`.
+    Menu(MenuAction),
     /// An edit to a layer's kind payload — an adjustment's parameters, a text
     /// layer's run.
     ///
@@ -140,6 +171,13 @@ pub fn context(editor: &Editor, workspace: &Workspace) -> MenuContext {
         },
     };
     context.recent_files = recent_files;
+    // The clipboard is the *editor's*, not the workspace's. `ui::Workspace`
+    // carries a `ClipboardState`, but nothing ever wrote it, so Paste and Paste
+    // Into were greyed out no matter how many times Copy had been used.
+    context.clipboard = ui::ClipboardState {
+        pixels: editor.clipboard().is_some(),
+        layers: false,
+    };
     context.open_documents = editor.documents().len();
     context.theme = editor.preferences().theme.resolve(design::Theme::Dark);
     context
@@ -171,6 +209,12 @@ pub fn pick(intent: &Intent, editor: &Editor) -> Option<Pick> {
             Some(Pick::Preferences(Box::new(prefs)))
         }
         Intent::SelectTool(tool) => Some(Pick::Tool(*tool)),
+        // A layer row click names the layer it wants. Select ▸ Deselect Layers
+        // names *no* layer, and `ChromeOutput::select_layer` cannot carry the
+        // absence of one — which is why this arm used to answer `None` and the
+        // item sat greyed out with the generic refusal. Clearing the cursor is
+        // a document edit, so it goes down the same road every other one does.
+        Intent::SelectLayers { active: None, .. } => Some(Pick::Menu(MenuAction::DeselectLayers)),
         Intent::SelectLayers { active, .. } => active.map(Pick::SelectLayer),
         Intent::HistoryJump(jump) => {
             // The panel counts *steps* from where the document stands; the
@@ -218,7 +262,11 @@ pub fn pick(intent: &Intent, editor: &Editor) -> Option<Pick> {
 /// click had gone nowhere.
 pub fn unrouted_message(intent: &Intent) -> String {
     match intent {
-        Intent::Action(action) => format!("{}: {NOT_WIRED}", action.label()),
+        Intent::Action(action) => format!(
+            "{}: {}",
+            action.label(),
+            unavailable_reason(*action).unwrap_or(NOT_WIRED)
+        ),
         other => format!("{NOT_WIRED} ({other:?})"),
     }
 }
@@ -273,6 +321,18 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
     if is_workspace_camera_action(action) {
         return Some(Pick::Workspace(Box::new(Intent::Action(action))));
     }
+    // `Edit Adjustments…` and the Properties panel's "Open editor…" are the
+    // same request: reveal the Properties panel, which is where an adjustment
+    // layer's parameters are edited. Routing it here (rather than through
+    // [`perform`], which has no dock to reveal) keeps the menu item and the
+    // panel button agreeing about what the click means. The set is absolute, so
+    // opening an already-open panel is harmless.
+    if action == MenuAction::EditAdjustmentLayer {
+        return Some(Pick::Workspace(Box::new(Intent::SetPanelOpen {
+            panel: ui::PanelId::Properties,
+            open: true,
+        })));
+    }
     let mapped = match action {
         MenuAction::NewDocument => Action::NewDocument,
         MenuAction::Open => Action::Open,
@@ -300,9 +360,196 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
         MenuAction::Zoom(Z::Out) => Action::ZoomOut,
         MenuAction::Zoom(Z::FitOnScreen) => Action::ZoomFit,
         MenuAction::Zoom(Z::ActualPixels) => Action::ZoomActualPixels,
-        _ => return None,
+        // Everything else is either performed against the live document by
+        // `perform` or is honestly out of this build's reach; the one table in
+        // `unavailable_reason` decides which, and says why when it is the
+        // latter.
+        other => {
+            return unavailable_reason(other)
+                .is_none()
+                .then_some(Pick::Menu(other))
+        }
     };
     Some(Pick::Action(mapped))
+}
+
+// ---------------------------------------------------------------------------
+// What this build cannot do, and why
+// ---------------------------------------------------------------------------
+
+/// The sentence to show on a menu item this build cannot perform, or `None`
+/// when [`perform`] performs it.
+///
+/// **This function is the whole gate.** An item it answers `None` for is
+/// enabled, so [`perform`] must have a real arm for it —
+/// `every_enabled_menu_item_really_does_something` runs every one of them
+/// against a live document and fails on an arm that changes nothing.
+///
+/// Every reason names the *specific* missing piece. "This build cannot do that
+/// yet" is not a reason; it is the absence of one, and 126 items wore it.
+pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
+    use ui::menu::{RasterizeTarget as R, TransformOp as T};
+    Some(match action {
+        // ---- File ----------------------------------------------------------
+        MenuAction::CloseAll => {
+            "Close All would have to answer the unsaved-changes prompt once per \
+             document; the shell asks it one document at a time"
+        }
+        MenuAction::ExportLayers => {
+            "Exporting one file per layer needs a per-layer composite, and the \
+             compositor only renders the whole document"
+        }
+        MenuAction::PlaceEmbedded | MenuAction::PlaceLinked => {
+            "Place needs a transform gizmo to position the imported image, and \
+             the canvas has no gizmo overlay"
+        }
+        MenuAction::FileInfo => {
+            "There is no metadata editor: editor_core::DocumentMeta stores a \
+             title and a size and no XMP fields"
+        }
+        MenuAction::Print => "Nothing in this workspace talks to a printer",
+
+        // ---- Edit ----------------------------------------------------------
+        // Free Transform and the six interactive transforms need a handle
+        // overlay on the canvas. The five fixed ones do not, and are wired.
+        MenuAction::FreeTransform
+        | MenuAction::Transform(T::Scale)
+        | MenuAction::Transform(T::Rotate)
+        | MenuAction::Transform(T::Skew)
+        | MenuAction::Transform(T::Distort)
+        | MenuAction::Transform(T::Perspective) => {
+            "An interactive transform needs a handle overlay on the canvas, and \
+             the shell draws no gizmo; the fixed rotations and flips below work"
+        }
+        MenuAction::Transform(T::Warp) => {
+            "Warp needs a mesh gizmo and a mesh deformer; neither exists in this \
+             workspace"
+        }
+        MenuAction::StrokeDialog => {
+            "Stroking needs a rasteriser that walks selection::outline's \
+             polylines, and no tool in this build paints along a path"
+        }
+        MenuAction::DefinePattern | MenuAction::DefineBrush => {
+            "There is no pattern or brush library to define one into: \
+             asset-store holds no user presets yet"
+        }
+
+        // ---- Image ---------------------------------------------------------
+        // An adjustment whose stored starting parameters are the identity has
+        // nothing to bake until the user has moved a control, and there is no
+        // control to move without the dialog. Rather than offer an item that
+        // silently changes no pixel, this names the route that *does* work —
+        // the adjustment layer, whose parameters the Properties panel edits.
+        // The four that are defined as changing every pixel (Invert, Threshold,
+        // Black & White, Posterize) and Gradient Map fall through and are
+        // wired; which ones those are is decided by asking `adjustments`, not
+        // by a list here that could drift from it.
+        MenuAction::ApplyAdjustment(id)
+            if adjustments::PreparedAdjustment::new(&adjustments::Adjustment::from(
+                &id.identity_kind(),
+            ))
+            .is_identity() =>
+        {
+            "This adjustment starts at its identity setting and the shell hosts \
+             no dialog to change it in; add it through Layer > New Adjustment \
+             Layer and edit it in the Properties panel"
+        }
+        MenuAction::SetColorMode(_) => {
+            "Changing colour mode would rewrite every tile, and editor_core has \
+             no command that can carry that as one undoable step"
+        }
+        MenuAction::DuplicateDocument => {
+            "Duplicating a document has to copy the tile store as well as the \
+             tree, and OpenDocument has no clone"
+        }
+        // Everything that changes the canvas *rectangle*. `editor_core`'s
+        // command set has no variant that carries a resize — `DocumentMeta` is
+        // a plain field with no undo behind it — so performing one of these
+        // would be an edit the user could not take back. The 180° turn and the
+        // two flips keep the rectangle and are wired.
+        MenuAction::ImageSize
+        | MenuAction::CanvasSize
+        | MenuAction::Trim
+        | MenuAction::RevealAll
+        | MenuAction::CropToSelection
+        | MenuAction::RotateCanvas(ui::menu::CanvasRotation::Deg90Cw)
+        | MenuAction::RotateCanvas(ui::menu::CanvasRotation::Deg90Ccw) => {
+            "This resizes the canvas, and editor_core has no command that \
+             carries a resize, so it could not be undone"
+        }
+        MenuAction::RotateCanvas(ui::menu::CanvasRotation::Arbitrary) => {
+            "An arbitrary rotation needs an angle, and the shell hosts no \
+             dialog to ask for one"
+        }
+
+        // ---- Layer ---------------------------------------------------------
+        MenuAction::NewFillLayer(_) => {
+            "A fill layer is layer_model::LayerKind::Generator, and the \
+             compositor has no generator rasteriser"
+        }
+        MenuAction::ConvertToSmartObject => {
+            "A smart object embeds a whole document, and Command::SetLayerKind \
+             refuses to change a layer's class"
+        }
+        MenuAction::Rasterize(R::Text) | MenuAction::Rasterize(R::Shape) => {
+            "compositor::composite has no rasteriser for text or shape layers, \
+             so there are no pixels to bake"
+        }
+        MenuAction::Rasterize(R::SmartObject) => {
+            "A smart object has no embedded document to render in this build"
+        }
+        MenuAction::Rasterize(R::LayerStyle) => {
+            "Layer effects are not composited yet, so baking one would write the \
+             layer back unchanged"
+        }
+        MenuAction::Rasterize(R::Layer) | MenuAction::Rasterize(R::AllLayers) => {
+            "Every layer this build can rasterise is already pixels"
+        }
+
+        // ---- Select --------------------------------------------------------
+        MenuAction::SelectAllLayers => {
+            "editor_core::Document stores one active layer, not a set, so there \
+             is no multi-layer selection to fill"
+        }
+        MenuAction::SelectSubject => {
+            "Selecting the subject needs a segmentation model, and none ships \
+             with this build"
+        }
+        MenuAction::TransformSelection => {
+            "Transforming a selection needs the same canvas gizmo Free Transform \
+             does; selection::transform_selection is ready for it"
+        }
+        // Reselect, Save Selection and Load Selection all need somewhere to
+        // *keep* a selection between operations, and no such store exists —
+        // which is also why the shared model leaves all three greyed out in
+        // every state this build can reach (`has_stored_selection` and
+        // `saved_selections` are never written).
+        MenuAction::Reselect | MenuAction::SaveSelection | MenuAction::LoadSelection => {
+            "Nothing stores a selection between operations: editor_core keeps \
+             one live Selection per document and no named ones"
+        }
+
+        // ---- Filter --------------------------------------------------------
+        // Two of the forty-one are the identity at their schema defaults, so
+        // running them without the dialog would be a menu item that visibly
+        // does nothing. Every other filter has a default that is a real effect.
+        MenuAction::Filter(ui::menu::FilterId::Custom) => {
+            "Custom's default convolution kernel is the identity, and the shell \
+             hosts no dialog to edit the weights in"
+        }
+        MenuAction::Filter(ui::menu::FilterId::Offset) => {
+            "Offset's default displacement is zero, and the shell hosts no \
+             dialog to ask how far to shift the layer"
+        }
+        MenuAction::FilterGallery => {
+            "The gallery is a browser over every filter's live preview, and the \
+             shell hosts no dialog surface to draw it in"
+        }
+
+        // ---- Help ----------------------------------------------------------
+        // Nothing: all four are wired.
+        _ => return None,
+    })
 }
 
 /// Fold a pick into the frame's output.
@@ -310,6 +557,7 @@ pub fn record(pick: Pick, out: &mut ChromeOutput) {
     match pick {
         Pick::Action(action) => out.actions.push(action),
         Pick::Command(command) => out.commands.push(command),
+        Pick::Menu(action) => out.menu.push(action),
         // `gesture` is filled in by `Chrome::harvest`, which is the only place
         // that knows whether the pointer is still down.
         Pick::Kind { layer, kind } => out.layer_kind.push(crate::chrome::KindEdit {
@@ -338,7 +586,12 @@ pub fn record(pick: Pick, out: &mut ChromeOutput) {
 pub fn resolve(action: MenuAction, context: &MenuContext, editor: &Editor) -> Result<Pick, String> {
     match action.resolve(context) {
         Resolution::Disabled(reason) => Err(reason.to_string()),
-        Resolution::Enabled(intent) => pick(&intent, editor).ok_or_else(|| NOT_WIRED.to_string()),
+        Resolution::Enabled(intent) => pick(&intent, editor).ok_or_else(|| {
+            // The specific sentence, when there is one. [`NOT_WIRED`] is the
+            // last resort and no menu item reaches it — see
+            // `no_menu_item_falls_back_to_the_generic_refusal`.
+            unavailable_reason(action).unwrap_or(NOT_WIRED).to_string()
+        }),
     }
 }
 
@@ -451,6 +704,1250 @@ fn item(
             response.on_disabled_hover_text(reason);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Performing a menu operation against the live document
+// ---------------------------------------------------------------------------
+
+/// One pixel pipeline, shared by the Filter menu, Image ▸ Adjustments and
+/// Select ▸ Grow/Similar/Color Range.
+///
+/// A layer's stored tiles are read into a canvas-sized RGBA8 buffer, that
+/// buffer becomes a [`filters::FilterBuffer`] — linear, premultiplied, the form
+/// both `filters` and `adjustments` are defined on — the operation runs, and
+/// the result goes back as tiles referenced by one undoable
+/// [`Command::PaintTiles`].
+mod pixels {
+    use std::collections::HashSet;
+
+    use editor_core::pixels::{PixelTarget, TileEdit};
+    use editor_core::{Command, Selection};
+    use glam::IVec2;
+    use layer_model::LayerId;
+    use raster::{TileCoord, TileGrid, TILE_SIZE};
+
+    use crate::doc::OpenDocument;
+
+    /// A layer's pixels, flattened over the canvas rectangle.
+    ///
+    /// Tiles outside the canvas are dropped and absent tiles read as
+    /// transparent black, which is exactly what
+    /// [`raster::TileGrid::to_rgba8`] promises for the same data.
+    pub fn read_layer(doc: &OpenDocument, layer: LayerId) -> Vec<u8> {
+        let w = doc.document.width() as usize;
+        let h = doc.document.height() as usize;
+        let mut out = vec![0u8; w * h * 4];
+        let Some(map) = doc.document.layer_tiles(layer) else {
+            return out;
+        };
+        let ts = TILE_SIZE as usize;
+        let need = ts * ts * 4;
+        for (coord, hash) in map.iter() {
+            if coord.level != 0 {
+                continue;
+            }
+            let Some(bytes) = compositor::TileSource::tile(&doc.tiles, hash) else {
+                continue;
+            };
+            if bytes.len() < need {
+                continue;
+            }
+            let ox = coord.x as i64 * ts as i64;
+            let oy = coord.y as i64 * ts as i64;
+            for row in 0..ts {
+                let y = oy + row as i64;
+                if y < 0 || y >= h as i64 {
+                    continue;
+                }
+                let x0 = ox.max(0);
+                let x1 = (ox + ts as i64).min(w as i64);
+                if x1 <= x0 {
+                    continue;
+                }
+                let n = (x1 - x0) as usize * 4;
+                let s = (row * ts + (x0 - ox) as usize) * 4;
+                let d = (y as usize * w + x0 as usize) * 4;
+                out[d..d + n].copy_from_slice(&bytes[s..s + n]);
+            }
+        }
+        out
+    }
+
+    /// The command that makes `rgba` the layer's pixels, storing the bytes it
+    /// needs in the document's tile source on the way.
+    ///
+    /// Tiles the layer used to reference and the new image does not cover are
+    /// *cleared* rather than left behind, so a rewrite cannot leave a stale
+    /// tile hanging off the edge of the canvas.
+    pub fn write_layer(
+        doc: &mut OpenDocument,
+        layer: LayerId,
+        rgba: &[u8],
+        label: &str,
+    ) -> Result<Command, String> {
+        let (w, h) = (doc.document.width(), doc.document.height());
+        let grid = TileGrid::from_rgba8(w, h, rgba).map_err(|e| e.to_string())?;
+        let previous: Vec<TileCoord> = doc
+            .document
+            .layer_tiles(layer)
+            .map(|m| m.iter().map(|(c, _)| c).collect())
+            .unwrap_or_default();
+        let mut covered = HashSet::new();
+        let mut edits = Vec::new();
+        for (coord, tile) in grid.iter() {
+            covered.insert(coord);
+            let hash = doc.tiles.insert_bytes(tile.data().to_vec());
+            edits.push(TileEdit::set(coord, hash));
+        }
+        for coord in previous {
+            if !covered.contains(&coord) {
+                edits.push(TileEdit::clear(coord));
+            }
+        }
+        let paint = Command::paint_tiles(PixelTarget::Layer(layer), edits)
+            .map_err(|e: editor_core::CommandError| e.to_string())?;
+        Ok(Command::Transaction {
+            label: label.to_string(),
+            commands: vec![paint],
+        })
+    }
+
+    /// Fold `after` back towards `before` wherever the selection does not
+    /// fully cover the pixel.
+    ///
+    /// This is what makes every operation in this module honour the marquee.
+    /// [`Selection::None`] covers everything ([`Selection::coverage_at`] answers
+    /// 1.0), so the no-selection case is the whole layer and needs no branch of
+    /// its own — but it does get a fast path, because walking two million
+    /// pixels to multiply each by one is a waste.
+    pub fn mask_by_selection(before: &[u8], after: &mut [u8], sel: &Selection, w: u32, h: u32) {
+        if sel.is_none() {
+            return;
+        }
+        for y in 0..h {
+            for x in 0..w {
+                let c = sel.coverage_at(IVec2::new(x as i32, y as i32));
+                if c >= 1.0 {
+                    continue;
+                }
+                let i = (y as usize * w as usize + x as usize) * 4;
+                for k in 0..4 {
+                    let mixed = before[i + k] as f32 * (1.0 - c) + after[i + k] as f32 * c;
+                    after[i + k] = mixed.round().clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+    }
+}
+
+/// Perform a menu operation that needs the live document.
+///
+/// The other half of [`Pick::Menu`]: the bridge decides *whether* an item is
+/// usable during enablement, and this decides what it does — once, on the
+/// click, with `&mut Editor`.
+///
+/// `Ok` carries the sentence the status bar shows; `Err` carries the reason it
+/// did not happen. Both are shown: an operation that quietly did nothing is the
+/// defect this whole module exists to stop.
+///
+/// # The parameters are the schema's defaults
+///
+/// `ui::dialogs` generates a parameter dialog for every filter, and the shell
+/// hosts no dialog surface to draw one in — so a filter here runs at
+/// [`ui::dialogs::FilterParams::defaults`], and the status line says so in
+/// those words. That is a real shortfall against the ellipsis in the menu
+/// label, and it is stated at the point of use rather than hidden: the
+/// alternative was leaving all forty-one filters greyed out, which is what this
+/// wave exists to end.
+pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String> {
+    use ui::menu::{CanvasRotation as CR, MaskOp, TransformOp as T};
+
+    let outcome = match action {
+        // ---- Filter --------------------------------------------------------
+        MenuAction::Filter(id) => run_filter(editor, id),
+
+        // ---- Image ▸ Adjustments -------------------------------------------
+        MenuAction::ApplyAdjustment(id) => {
+            let kind = id.identity_kind();
+            run_adjustment(
+                editor,
+                &adjustments::Adjustment::from(&kind),
+                &format!("Apply {}", id.label()),
+            )
+        }
+        MenuAction::AutoTone => run_auto(editor, adjustments::AutoKind::Tone, "Auto Tone"),
+        MenuAction::AutoContrast => {
+            run_auto(editor, adjustments::AutoKind::Contrast, "Auto Contrast")
+        }
+        MenuAction::AutoColor => run_auto(editor, adjustments::AutoKind::Color, "Auto Color"),
+
+        // ---- Image ▸ Image Rotation ----------------------------------------
+        // Only the three that keep the canvas rectangle. The 90° pair and
+        // Arbitrary change the document's size, and there is no command that
+        // carries a resize, so they could not be undone; see
+        // `unavailable_reason`.
+        MenuAction::RotateCanvas(CR::Deg180) => {
+            remap_all_layers(editor, "Rotate 180°", |x, y, w, h| (w - 1 - x, h - 1 - y))
+        }
+        MenuAction::RotateCanvas(CR::FlipHorizontal) => {
+            remap_all_layers(editor, "Flip Canvas Horizontal", |x, y, w, _| {
+                (w - 1 - x, y)
+            })
+        }
+        MenuAction::RotateCanvas(CR::FlipVertical) => {
+            remap_all_layers(editor, "Flip Canvas Vertical", |x, y, _, h| (x, h - 1 - y))
+        }
+
+        // ---- Edit ▸ Transform (the fixed ones) -----------------------------
+        MenuAction::Transform(T::Rotate180) => {
+            remap_active_layer(editor, "Rotate Layer 180°", |x, y, w, h| {
+                (w - 1 - x, h - 1 - y)
+            })
+        }
+        MenuAction::Transform(T::FlipHorizontal) => {
+            remap_active_layer(editor, "Flip Layer Horizontal", |x, y, w, _| (w - 1 - x, y))
+        }
+        MenuAction::Transform(T::FlipVertical) => {
+            remap_active_layer(editor, "Flip Layer Vertical", |x, y, _, h| (x, h - 1 - y))
+        }
+        // A 90° turn of a *layer* keeps the canvas, so unlike Image ▸ Image
+        // Rotation it needs no resize: the layer is rotated about the canvas
+        // centre and whatever leaves the canvas is cropped, exactly as the
+        // pixel pipeline crops everything else.
+        MenuAction::Transform(T::Rotate90Cw) => {
+            remap_active_layer(editor, "Rotate Layer 90° CW", |x, y, w, h| {
+                let (cx, cy) = ((w - 1) as f32 * 0.5, (h - 1) as f32 * 0.5);
+                let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+                ((cx + dy).round() as i64, (cy - dx).round() as i64)
+            })
+        }
+        MenuAction::Transform(T::Rotate90Ccw) => {
+            remap_active_layer(editor, "Rotate Layer 90° CCW", |x, y, w, h| {
+                let (cx, cy) = ((w - 1) as f32 * 0.5, (h - 1) as f32 * 0.5);
+                let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+                ((cx - dy).round() as i64, (cy + dx).round() as i64)
+            })
+        }
+
+        // ---- Edit ----------------------------------------------------------
+        MenuAction::ClearPixels => clear_selection(editor),
+        MenuAction::FillDialog => fill_selection(editor),
+        MenuAction::Copy => copy(editor, false),
+        MenuAction::CopyMerged => copy(editor, true),
+        MenuAction::Cut => cut(editor),
+        MenuAction::Paste => paste(editor, false),
+        MenuAction::PasteInto => paste(editor, true),
+
+        // ---- Select --------------------------------------------------------
+        MenuAction::SelectAll => set_selection(editor, |_, w, h| {
+            Ok(editor_core::Selection::Rect {
+                min: glam::IVec2::ZERO,
+                max: glam::IVec2::new(w as i32, h as i32),
+            })
+        })
+        .map(|_| "Everything is selected".to_string()),
+        MenuAction::Deselect => set_selection(editor, |_, _, _| Ok(editor_core::Selection::None))
+            .map(|_| "Deselected".to_string()),
+        MenuAction::InverseSelection => set_selection(editor, |sel, w, h| {
+            selection::invert_selection(sel, canvas_rect(w, h)).map_err(|e| e.to_string())
+        })
+        .map(|_| "Selection inverted".to_string()),
+        MenuAction::Modify(op) => modify_selection(editor, op),
+        MenuAction::GrowSelection | MenuAction::SimilarSelection => {
+            grow_or_similar(editor, action == MenuAction::GrowSelection)
+        }
+        MenuAction::ColorRange => color_range(editor),
+
+        // ---- Layer ---------------------------------------------------------
+        MenuAction::LayerViaCopy => layer_via(editor, false),
+        MenuAction::LayerViaCut => layer_via(editor, true),
+        MenuAction::GroupLayers => group_layers(editor),
+        MenuAction::UngroupLayers => ungroup_layers(editor),
+        MenuAction::MergeDown => merge(editor, MergeScope::Down),
+        MenuAction::MergeVisible => merge(editor, MergeScope::Visible),
+        MenuAction::FlattenImage => merge(editor, MergeScope::All),
+        MenuAction::Mask(MaskOp::Toggle) => toggle_mask(editor, false),
+        MenuAction::Mask(MaskOp::ToggleLink) => toggle_mask(editor, true),
+        MenuAction::Mask(MaskOp::Apply) => apply_mask(editor),
+        MenuAction::LayerStyle(slot) => toggle_effect(editor, slot),
+        MenuAction::DeselectLayers => match editor.active_mut() {
+            None => Err("No document is open".to_string()),
+            Some(doc) if doc.document.active_layer().is_none() => {
+                Err("No layer is selected".to_string())
+            }
+            Some(doc) => doc
+                .document
+                .set_active_layer(None)
+                .map(|()| "No layer is selected now".to_string())
+                .map_err(|e| e.to_string()),
+        },
+
+        // ---- Help ----------------------------------------------------------
+        MenuAction::Help => Ok(format!(
+            "Raster Studio {} — the Help menu's articles are not bundled with \
+             this build; every menu item explains itself on hover",
+            env!("CARGO_PKG_VERSION")
+        )),
+        MenuAction::ReleaseNotes => Ok(format!(
+            "Raster Studio {}: this release wired the Filter, Select, Image > \
+             Adjustments and Layer menus to the engine behind them",
+            env!("CARGO_PKG_VERSION")
+        )),
+        MenuAction::ReportIssue => {
+            Ok("Report an issue at github.com/raster-studio/raster-studio/issues".to_string())
+        }
+        MenuAction::About => Ok(format!(
+            "Raster Studio {} — a layered raster editor",
+            env!("CARGO_PKG_VERSION")
+        )),
+
+        // Anything else must have been refused during enablement. Reaching here
+        // means `unavailable_reason` and this match disagree, which
+        // `every_enabled_menu_item_really_does_something` is there to catch.
+        other => Err(format!(
+            "{}: this build has no implementation for it",
+            other.label()
+        )),
+    };
+
+    match &outcome {
+        Ok(message) => editor.set_status(message.clone()),
+        Err(reason) => editor.set_status(reason.clone()),
+    }
+    outcome
+}
+
+fn canvas_rect(w: u32, h: u32) -> selection::Rect {
+    selection::Rect::from_xywh(0, 0, w, h)
+}
+
+/// A colour well's value as a stored 8-bit pixel.
+///
+/// No transfer function is applied, because the application does not put one
+/// here: [`crate::editor::color_hex`] turns the same `[f32; 4]` into `#RRGGBB`
+/// by multiplying by 255, so these components are already the display-referred
+/// codes the tile store holds.
+fn rgba8_of(rgba: [f32; 4]) -> [u8; 4] {
+    let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    [c(rgba[0]), c(rgba[1]), c(rgba[2]), c(rgba[3])]
+}
+
+/// The active document's canvas size, or the reason there is none.
+fn canvas_of(editor: &Editor) -> Result<(u32, u32), String> {
+    let doc = editor.active().ok_or("No document is open")?;
+    Ok((doc.document.width(), doc.document.height()))
+}
+
+/// The layer a pixel operation acts on: the active one, and it must own pixels.
+fn pixel_layer(editor: &Editor) -> Result<LayerId, String> {
+    let doc = editor.active().ok_or("No document is open")?;
+    let id = doc.document.active_layer().ok_or("Select a layer first")?;
+    let layer = doc
+        .document
+        .layers
+        .get(id)
+        .ok_or("The active layer is not in the document")?;
+    match &layer.kind {
+        layer_model::LayerKind::Raster(_) | layer_model::LayerKind::Generator(_) => Ok(id),
+        other => Err(format!(
+            "This works on a pixel layer; the active layer is a {}",
+            editor_core::layer_class_name(other)
+        )),
+    }
+}
+
+/// Read the active pixel layer, run `op` over a linear premultiplied buffer,
+/// mask the result by the selection and apply it as one undoable step.
+fn edit_active_pixels(
+    editor: &mut Editor,
+    label: &str,
+    op: impl FnOnce(&mut filters::FilterBuffer, &color::ColorSpace) -> Result<(), String>,
+) -> Result<(), String> {
+    let layer = pixel_layer(editor)?;
+    let (w, h) = canvas_of(editor)?;
+    if w == 0 || h == 0 {
+        return Err("The canvas has no pixels".to_string());
+    }
+    let (before, selection, space) = {
+        let doc = editor.active().ok_or("No document is open")?;
+        (
+            pixels::read_layer(doc, layer),
+            doc.document.selection.clone(),
+            doc.document.meta.color_space.clone(),
+        )
+    };
+    let mut buffer = filters::FilterBuffer::from_rgba8(w, h, &before).map_err(|e| e.to_string())?;
+    op(&mut buffer, &space)?;
+    if buffer.dimensions() != (w, h) {
+        return Err(format!(
+            "{label} changed the image from {w}x{h} to {:?}, and this build \
+             cannot resize a layer",
+            buffer.dimensions()
+        ));
+    }
+    let mut after = buffer.to_rgba8();
+    pixels::mask_by_selection(&before, &mut after, &selection, w, h);
+    if after == before {
+        return Err(format!("{label} changed nothing"));
+    }
+    let command = {
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        pixels::write_layer(doc, layer, &after, label)?
+    };
+    editor.apply_command(command);
+    Ok(())
+}
+
+fn run_filter(editor: &mut Editor, id: ui::menu::FilterId) -> Result<String, String> {
+    let spec = ui::dialogs::filter_by_id(id)
+        .ok_or("ui::dialogs has no parameter schema for this filter")?;
+    let params = ui::dialogs::FilterParams::defaults(spec.params);
+    let label = spec.name();
+    edit_active_pixels(editor, label, |buffer, _| {
+        let filtered = (spec.apply)(buffer, &params);
+        *buffer = filtered;
+        Ok(())
+    })?;
+    Ok(if spec.params.is_empty() {
+        format!("{label} applied")
+    } else {
+        format!("{label} applied with its default settings — this build has no parameter dialog")
+    })
+}
+
+fn run_adjustment(
+    editor: &mut Editor,
+    adjustment: &adjustments::Adjustment,
+    label: &str,
+) -> Result<String, String> {
+    let prepared = adjustments::PreparedAdjustment::new(adjustment);
+    if prepared.is_identity() {
+        return Err(format!(
+            "{label} starts at its identity setting, so applying it here would \
+             change nothing; add it as an adjustment layer and edit it in the \
+             Properties panel instead"
+        ));
+    }
+    edit_active_pixels(editor, label, |buffer, space| {
+        prepared.apply_premultiplied_rgba(buffer.pixels_mut(), space);
+        Ok(())
+    })?;
+    Ok(format!("{label} applied"))
+}
+
+fn run_auto(
+    editor: &mut Editor,
+    kind: adjustments::AutoKind,
+    label: &str,
+) -> Result<String, String> {
+    let mode =
+        adjustments::AutoMode::new(kind, adjustments::DEFAULT_CLIP).map_err(|e| e.to_string())?;
+    edit_active_pixels(editor, label, |buffer, space| {
+        let stats = adjustments::ImageStats::from_premultiplied_rgba(buffer.pixels(), space);
+        let prepared = adjustments::PreparedAdjustment::with_stats(
+            &adjustments::Adjustment::Auto(mode),
+            &stats,
+        );
+        if prepared.is_identity() {
+            return Err(format!("{label} found nothing to correct"));
+        }
+        prepared.apply_premultiplied_rgba(buffer.pixels_mut(), space);
+        Ok(())
+    })?;
+    Ok(format!("{label} applied"))
+}
+
+/// Rewrite one layer's pixels through a coordinate map — the flips and the
+/// fixed rotations.
+fn remap_active_layer(
+    editor: &mut Editor,
+    label: &str,
+    map: impl Fn(i64, i64, i64, i64) -> (i64, i64),
+) -> Result<String, String> {
+    let layer = pixel_layer(editor)?;
+    let (w, h) = canvas_of(editor)?;
+    let command = {
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        let before = pixels::read_layer(doc, layer);
+        let after = remap(&before, w, h, &map);
+        if after == before {
+            return Err(format!("{label} changed nothing"));
+        }
+        pixels::write_layer(doc, layer, &after, label)?
+    };
+    editor.apply_command(command);
+    Ok(format!("{label} applied"))
+}
+
+/// The same map over every pixel layer in the document, as one undoable step.
+fn remap_all_layers(
+    editor: &mut Editor,
+    label: &str,
+    map: impl Fn(i64, i64, i64, i64) -> (i64, i64),
+) -> Result<String, String> {
+    let (w, h) = canvas_of(editor)?;
+    let command = {
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        let ids: Vec<LayerId> = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter(|id| doc.document.layer_tiles(*id).is_some())
+            .collect();
+        if ids.is_empty() {
+            return Err(format!("{label}: no layer in this document has pixels"));
+        }
+        let mut commands = Vec::new();
+        for id in ids {
+            let before = pixels::read_layer(doc, id);
+            let after = remap(&before, w, h, &map);
+            if after == before {
+                continue;
+            }
+            commands.push(pixels::write_layer(doc, id, &after, label)?);
+        }
+        if commands.is_empty() {
+            return Err(format!("{label} changed nothing"));
+        }
+        Command::Transaction {
+            label: label.to_string(),
+            commands,
+        }
+    };
+    editor.apply_command(command);
+    Ok(format!("{label} applied"))
+}
+
+/// `dst[map(x, y)] = src[x, y]`, with anything landing off the canvas dropped.
+fn remap(src: &[u8], w: u32, h: u32, map: &impl Fn(i64, i64, i64, i64) -> (i64, i64)) -> Vec<u8> {
+    let mut out = vec![0u8; src.len()];
+    let (wi, hi) = (w as i64, h as i64);
+    for y in 0..hi {
+        for x in 0..wi {
+            let (nx, ny) = map(x, y, wi, hi);
+            if nx < 0 || ny < 0 || nx >= wi || ny >= hi {
+                continue;
+            }
+            let s = ((y * wi + x) * 4) as usize;
+            let d = ((ny * wi + nx) * 4) as usize;
+            out[d..d + 4].copy_from_slice(&src[s..s + 4]);
+        }
+    }
+    out
+}
+
+fn clear_selection(editor: &mut Editor) -> Result<String, String> {
+    let layer = pixel_layer(editor)?;
+    let (w, h) = canvas_of(editor)?;
+    let command = {
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        let before = pixels::read_layer(doc, layer);
+        let selection = doc.document.selection.clone();
+        let mut after = vec![0u8; before.len()];
+        pixels::mask_by_selection(&before, &mut after, &selection, w, h);
+        if after == before {
+            return Err("There is nothing to clear here".to_string());
+        }
+        pixels::write_layer(doc, layer, &after, "Clear")?
+    };
+    editor.apply_command(command);
+    Ok("Cleared".to_string())
+}
+
+fn fill_selection(editor: &mut Editor) -> Result<String, String> {
+    let layer = pixel_layer(editor)?;
+    let (w, h) = canvas_of(editor)?;
+    let rgba = editor.foreground();
+    let hex = crate::editor::color_hex(rgba);
+    let solid = rgba8_of(rgba);
+    let command = {
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        let before = pixels::read_layer(doc, layer);
+        let selection = doc.document.selection.clone();
+        let mut after: Vec<u8> = solid
+            .iter()
+            .copied()
+            .cycle()
+            .take(before.len())
+            .collect::<Vec<u8>>();
+        pixels::mask_by_selection(&before, &mut after, &selection, w, h);
+        if after == before {
+            return Err("The fill would change nothing".to_string());
+        }
+        pixels::write_layer(doc, layer, &after, "Fill")?
+    };
+    editor.apply_command(command);
+    Ok(format!(
+        "Filled with the foreground colour {hex} — this build has no fill dialog"
+    ))
+}
+
+/// Replace the active document's selection.
+///
+/// # Not undoable, and `editor_core` is why
+///
+/// The selection is a *field* of [`editor_core::Document`] with no command
+/// behind it, which the crate documents and which
+/// `crate::tools::SelectionEdit` already relies on: a marquee drag changes it
+/// directly too. So Select ▸ Inverse behaves exactly like dragging a new
+/// marquee — it marks the document dirty and it is not on the undo stack. It is
+/// stated here rather than implied because a menu item that looks undoable and
+/// is not is a trap.
+fn set_selection(
+    editor: &mut Editor,
+    next: impl FnOnce(&editor_core::Selection, u32, u32) -> Result<editor_core::Selection, String>,
+) -> Result<(), String> {
+    let (w, h) = canvas_of(editor)?;
+    let doc = editor.active_mut().ok_or("No document is open")?;
+    let value = next(&doc.document.selection, w, h)?;
+    if value == doc.document.selection {
+        return Err("The selection is already that".to_string());
+    }
+    doc.document.selection = value;
+    doc.document.mark_dirty();
+    Ok(())
+}
+
+/// The radius each Select ▸ Modify item uses, in pixels.
+///
+/// Photoshop asks; this build has no numeric prompt to ask in, so each one uses
+/// the value that dialog opens at. Named as a constant so the number is one
+/// decision in one place rather than five literals.
+pub const MODIFY_RADIUS: u32 = 4;
+
+fn modify_selection(editor: &mut Editor, op: ui::menu::ModifySelection) -> Result<String, String> {
+    use ui::menu::ModifySelection as M;
+    set_selection(editor, |sel, w, h| {
+        let rect = canvas_rect(w, h);
+        let mask = selection::to_mask(sel, rect).map_err(|e| e.to_string())?;
+        let next = match op {
+            M::Border => selection::border(&mask, MODIFY_RADIUS),
+            M::Smooth => selection::smooth(&mask, MODIFY_RADIUS),
+            M::Expand => selection::expand(&mask, MODIFY_RADIUS),
+            M::Contract => selection::contract(&mask, MODIFY_RADIUS),
+            M::Feather => selection::feather(&mask, MODIFY_RADIUS as f32),
+        }
+        .map_err(|e| e.to_string())?;
+        Ok(editor_core::Selection::Mask(next))
+    })?;
+    Ok(format!(
+        "{} by {MODIFY_RADIUS} px — this build has no radius dialog",
+        op.label().trim_end_matches('…')
+    ))
+}
+
+/// The colour distance Grow, Similar and Color Range work to.
+pub const DEFAULT_TOLERANCE: f32 = 32.0 / 255.0;
+
+fn grow_or_similar(editor: &mut Editor, contiguous: bool) -> Result<String, String> {
+    let layer = pixel_layer(editor)?;
+    let (w, h) = canvas_of(editor)?;
+    let rgba = {
+        let doc = editor.active().ok_or("No document is open")?;
+        pixels::read_layer(doc, layer)
+    };
+    let image = selection::ImageBuffer::from_rgba8(glam::IVec2::ZERO, w, h, rgba)
+        .map_err(|e| e.to_string())?;
+    set_selection(editor, |sel, w, h| {
+        let mask = selection::to_mask(sel, canvas_rect(w, h)).map_err(|e| e.to_string())?;
+        let metric = selection::ColorMetric::default();
+        let next = if contiguous {
+            selection::grow(&image.view(), &mask, DEFAULT_TOLERANCE, metric, false)
+        } else {
+            selection::similar(&image.view(), &mask, DEFAULT_TOLERANCE, metric)
+        }
+        .map_err(|e| e.to_string())?;
+        Ok(editor_core::Selection::Mask(next))
+    })?;
+    Ok(if contiguous {
+        "Grown into neighbouring pixels of a similar colour".to_string()
+    } else {
+        "Extended to every pixel of a similar colour".to_string()
+    })
+}
+
+fn color_range(editor: &mut Editor) -> Result<String, String> {
+    let layer = pixel_layer(editor)?;
+    let (w, h) = canvas_of(editor)?;
+    let fg = editor.foreground();
+    let hex = crate::editor::color_hex(fg);
+    let mut target = rgba8_of(fg);
+    target[3] = 255;
+    let rgba = {
+        let doc = editor.active().ok_or("No document is open")?;
+        pixels::read_layer(doc, layer)
+    };
+    let image = selection::ImageBuffer::from_rgba8(glam::IVec2::ZERO, w, h, rgba)
+        .map_err(|e| e.to_string())?;
+    set_selection(editor, |_, _, _| {
+        let opts = selection::ColorRangeOptions::default();
+        let mask =
+            selection::color_range(&image.view(), target, &opts).map_err(|e| e.to_string())?;
+        Ok(editor_core::Selection::Mask(mask))
+    })?;
+    Ok(format!(
+        "Selected everything near the foreground colour {hex} — this build has \
+         no colour-range dialog to pick another"
+    ))
+}
+
+/// Edit ▸ Copy and Edit ▸ Copy Merged.
+///
+/// The lifted rectangle is the selection's bounding box, with anything the
+/// selection does not cover made transparent — so copying a lasso brings back
+/// the lasso's shape and not its bounding box.
+fn copy(editor: &mut Editor, merged: bool) -> Result<String, String> {
+    let (w, h) = canvas_of(editor)?;
+    let full = if merged {
+        // The real compositor, so Copy Merged is what the canvas shows.
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        let rect = doc.canvas_rect();
+        doc.composite(rect).map_err(|e| e.to_string())?
+    } else {
+        let layer = pixel_layer(editor)?;
+        let doc = editor.active().ok_or("No document is open")?;
+        pixels::read_layer(doc, layer)
+    };
+    let selection = editor
+        .active()
+        .ok_or("No document is open")?
+        .document
+        .selection
+        .clone();
+    let mut shaped = full;
+    let empty = vec![0u8; (w as usize) * (h as usize) * 4];
+    pixels::mask_by_selection(&empty, &mut shaped, &selection, w, h);
+
+    let (min, max) = selection
+        .bounds()
+        .unwrap_or((glam::IVec2::ZERO, glam::IVec2::new(w as i32, h as i32)));
+    let x0 = min.x.clamp(0, w as i32) as u32;
+    let y0 = min.y.clamp(0, h as i32) as u32;
+    let x1 = max.x.clamp(0, w as i32) as u32;
+    let y1 = max.y.clamp(0, h as i32) as u32;
+    if x1 <= x0 || y1 <= y0 {
+        return Err("There is nothing inside the selection to copy".to_string());
+    }
+    let (cw, ch) = (x1 - x0, y1 - y0);
+    let mut rgba = vec![0u8; (cw as usize) * (ch as usize) * 4];
+    for row in 0..ch {
+        let s = (((y0 + row) as usize) * w as usize + x0 as usize) * 4;
+        let d = (row as usize) * cw as usize * 4;
+        let n = cw as usize * 4;
+        rgba[d..d + n].copy_from_slice(&shaped[s..s + n]);
+    }
+    editor.set_clipboard(crate::editor::Clipboard {
+        width: cw,
+        height: ch,
+        rgba8: rgba,
+    });
+    Ok(format!(
+        "Copied {cw}×{ch} pixels{}",
+        if merged {
+            " from every visible layer"
+        } else {
+            ""
+        }
+    ))
+}
+
+fn cut(editor: &mut Editor) -> Result<String, String> {
+    let copied = copy(editor, false)?;
+    let cleared = clear_selection(editor)?;
+    Ok(format!("{copied}, {}", cleared.to_lowercase()))
+}
+
+/// Edit ▸ Paste and Edit ▸ Paste Into.
+///
+/// The clipboard lands on a **new layer** at the canvas origin, which is one
+/// undoable step and cannot destroy what was already there. Paste Into masks it
+/// by the current selection, which is the only thing that distinguishes the two.
+fn paste(editor: &mut Editor, into: bool) -> Result<String, String> {
+    let clip = editor
+        .clipboard()
+        .cloned()
+        .ok_or("The clipboard is empty")?;
+    let (w, h) = canvas_of(editor)?;
+    let label = if into { "Paste Into" } else { "Paste" };
+    let command = {
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
+        let rows = clip.height.min(h);
+        let cols = clip.width.min(w);
+        if rows == 0 || cols == 0 {
+            return Err(format!("{label}: the clipboard does not fit the canvas"));
+        }
+        for row in 0..rows {
+            let s = (row as usize) * clip.width as usize * 4;
+            let d = (row as usize) * w as usize * 4;
+            let n = cols as usize * 4;
+            rgba[d..d + n].copy_from_slice(&clip.rgba8[s..s + n]);
+        }
+        if into {
+            let selection = doc.document.selection.clone();
+            let empty = vec![0u8; rgba.len()];
+            pixels::mask_by_selection(&empty, &mut rgba, &selection, w, h);
+            if rgba.iter().skip(3).step_by(4).all(|a| *a == 0) {
+                return Err("Paste Into: the selection hides all of it".to_string());
+            }
+        }
+        let layer = layer_model::Layer::raster(label);
+        let new_id = layer.id;
+        let mut commands = vec![Command::create_layer(layer)];
+        let grid = raster::TileGrid::from_rgba8(w, h, &rgba).map_err(|e| e.to_string())?;
+        let mut edits = Vec::new();
+        for (coord, tile) in grid.iter() {
+            let hash = doc.tiles.insert_bytes(tile.data().to_vec());
+            edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+        }
+        commands.push(
+            Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(new_id), edits)
+                .map_err(|e| e.to_string())?,
+        );
+        Command::Transaction {
+            label: label.to_string(),
+            commands,
+        }
+    };
+    editor.apply_command(command);
+    Ok(format!("{label}d onto a new layer"))
+}
+
+/// Layer via Copy / Layer via Cut.
+fn layer_via(editor: &mut Editor, cut: bool) -> Result<String, String> {
+    let source = pixel_layer(editor)?;
+    let (w, h) = canvas_of(editor)?;
+    let label = if cut {
+        "Layer via Cut"
+    } else {
+        "Layer via Copy"
+    };
+    let command = {
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        let before = pixels::read_layer(doc, source);
+        let selection = doc.document.selection.clone();
+        // The lifted pixels: the layer masked down to the selection. Blending
+        // *towards transparent black* outside the selection is exactly what
+        // "copy what is selected" means, and it is the same call that clears
+        // the hole below, run the other way round.
+        let mut lifted = before.clone();
+        let empty = vec![0u8; before.len()];
+        pixels::mask_by_selection(&empty, &mut lifted, &selection, w, h);
+        if lifted.iter().skip(3).step_by(4).all(|a| *a == 0) {
+            return Err(format!("{label}: the selection holds no pixels"));
+        }
+        let layer = layer_model::Layer::raster(label);
+        let new_id = layer.id;
+        let mut commands = vec![Command::create_layer(layer)];
+        // The new layer's pixels have to be addressable, so it is created
+        // first and painted second, inside one transaction — the shape
+        // `crate::import` uses for the same reason.
+        let grid = raster::TileGrid::from_rgba8(w, h, &lifted).map_err(|e| e.to_string())?;
+        let mut edits = Vec::new();
+        for (coord, tile) in grid.iter() {
+            let hash = doc.tiles.insert_bytes(tile.data().to_vec());
+            edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+        }
+        commands.push(
+            Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(new_id), edits)
+                .map_err(|e| e.to_string())?,
+        );
+        if cut {
+            let mut remaining = vec![0u8; before.len()];
+            pixels::mask_by_selection(&before, &mut remaining, &selection, w, h);
+            commands.push(pixels::write_layer(doc, source, &remaining, label)?);
+        }
+        Command::Transaction {
+            label: label.to_string(),
+            commands,
+        }
+    };
+    editor.apply_command(command);
+    Ok(format!("{label} created"))
+}
+
+fn group_layers(editor: &mut Editor) -> Result<String, String> {
+    let command = {
+        let doc = editor.active().ok_or("No document is open")?;
+        let id = doc.document.active_layer().ok_or("Select a layer first")?;
+        let parent = doc.document.layers.parent_of(id);
+        let index = doc.document.layers.index_in_parent(id).unwrap_or(0);
+        let group = layer_model::Layer::group("Group");
+        let gid = group.id;
+        Command::Transaction {
+            label: "Group Layers".to_string(),
+            commands: vec![
+                Command::create_layer(group),
+                Command::MoveLayer {
+                    layer_id: gid,
+                    parent,
+                    index,
+                },
+                Command::MoveLayer {
+                    layer_id: id,
+                    parent: Some(gid),
+                    index: 0,
+                },
+            ],
+        }
+    };
+    editor.apply_command(command);
+    Ok("Grouped".to_string())
+}
+
+fn ungroup_layers(editor: &mut Editor) -> Result<String, String> {
+    let command = {
+        let doc = editor.active().ok_or("No document is open")?;
+        let id = doc.document.active_layer().ok_or("Select a layer first")?;
+        let layer = doc
+            .document
+            .layers
+            .get(id)
+            .ok_or("The active layer is not in the document")?;
+        let layer_model::LayerKind::Group(group) = &layer.kind else {
+            return Err("Only a group can be ungrouped".to_string());
+        };
+        let children = group.children.clone();
+        if children.is_empty() {
+            return Err("The group is empty".to_string());
+        }
+        let parent = doc.document.layers.parent_of(id);
+        let index = doc.document.layers.index_in_parent(id).unwrap_or(0);
+        let mut commands: Vec<Command> = children
+            .iter()
+            .enumerate()
+            .map(|(i, child)| Command::MoveLayer {
+                layer_id: *child,
+                parent,
+                index: index + i,
+            })
+            .collect();
+        commands.push(Command::DeleteLayer { layer_id: id });
+        Command::Transaction {
+            label: "Ungroup Layers".to_string(),
+            commands,
+        }
+    };
+    editor.apply_command(command);
+    Ok("Ungrouped".to_string())
+}
+
+enum MergeScope {
+    /// The active layer and the one directly beneath it.
+    Down,
+    /// Every visible layer.
+    Visible,
+    /// Every layer, visible or not.
+    All,
+}
+
+/// Merge Down / Merge Visible / Flatten Image.
+///
+/// All three are the same operation with a different set of layers: composite
+/// that set through the real [`compositor`], put the result in one new raster
+/// layer, and delete the originals — as one transaction, so one Ctrl+Z takes
+/// the whole thing back.
+fn merge(editor: &mut Editor, scope: MergeScope) -> Result<String, String> {
+    let (label, doomed, home, merged) = {
+        let doc = editor.active().ok_or("No document is open")?;
+        let order = doc.document.layers.iter_depth_first();
+        // `home` is where the merged layer has to end up. Only Merge Down has
+        // one: it replaces two layers in the middle of a stack, so landing the
+        // result on top of the document would silently restack the drawing.
+        // Flatten and Merge Visible legitimately produce the root's only, or
+        // topmost, layer.
+        let (label, doomed, home) = match scope {
+            MergeScope::All => ("Flatten Image", order.clone(), None),
+            MergeScope::Visible => (
+                "Merge Visible",
+                order
+                    .iter()
+                    .copied()
+                    .filter(|id| doc.document.layers.get(*id).is_some_and(|l| l.visible))
+                    .collect(),
+                None,
+            ),
+            MergeScope::Down => {
+                let active = doc.document.active_layer().ok_or("Select a layer first")?;
+                let parent = doc.document.layers.parent_of(active);
+                let siblings = doc
+                    .document
+                    .layers
+                    .siblings_of(active)
+                    .ok_or("The active layer has no siblings")?;
+                let at = doc
+                    .document
+                    .layers
+                    .index_in_parent(active)
+                    .ok_or("The active layer is not in the tree")?;
+                let below = *siblings
+                    .get(at + 1)
+                    .ok_or("There is no layer below to merge into")?;
+                // Two layers leave that sibling list and one arrives, so
+                // the destination index is `at` clamped to the list it
+                // lands in. `at + 1` exists, so `at` never exceeds it.
+                let landing = at.min(siblings.len().saturating_sub(2));
+                ("Merge Down", vec![active, below], Some((parent, landing)))
+            }
+        };
+        if doomed.len() < 2 {
+            return Err(format!("{label} needs at least two layers"));
+        }
+        // Composite a *copy* of the document with everything but the merge set
+        // hidden, so the result is exactly what those layers draw and nothing
+        // else. The real compositor, not a second implementation of blending.
+        let mut staged = doc.document.clone();
+        for id in staged.layers.iter_depth_first() {
+            if !doomed.contains(&id) {
+                if let Some(layer) = staged.layers.get_mut(id) {
+                    layer.visible = false;
+                }
+            }
+        }
+        let rect = doc.canvas_rect();
+        let canvas = compositor::composite_region(
+            &staged,
+            &doc.tiles,
+            rect,
+            0,
+            compositor::CompositeOptions::default(),
+        )
+        .map_err(|e| e.to_string())?;
+        (
+            label,
+            doomed,
+            home,
+            canvas.to_rgba8(&doc.document.meta.color_space),
+        )
+    };
+
+    let (w, h) = canvas_of(editor)?;
+    let command = {
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        let layer = layer_model::Layer::raster(match scope {
+            MergeScope::All => "Background",
+            _ => "Merged",
+        });
+        let new_id = layer.id;
+        let mut commands = vec![Command::create_layer(layer)];
+        let grid = raster::TileGrid::from_rgba8(w, h, &merged).map_err(|e| e.to_string())?;
+        let mut edits = Vec::new();
+        for (coord, tile) in grid.iter() {
+            let hash = doc.tiles.insert_bytes(tile.data().to_vec());
+            edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+        }
+        commands.push(
+            Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(new_id), edits)
+                .map_err(|e| e.to_string())?,
+        );
+        // Deepest first, so deleting a group does not strand a child that is
+        // also on the list.
+        for id in doomed.iter().rev() {
+            if doc.document.layers.contains(*id) {
+                commands.push(Command::DeleteLayer { layer_id: *id });
+            }
+        }
+        if let Some((parent, index)) = home {
+            commands.push(Command::MoveLayer {
+                layer_id: new_id,
+                parent,
+                index,
+            });
+        }
+        Command::Transaction {
+            label: label.to_string(),
+            commands,
+        }
+    };
+    editor.apply_command(command);
+    Ok(format!("{label} applied"))
+}
+
+/// Layer ▸ Layer Style ▸ … — add the effect at its defaults, or take it off
+/// again.
+///
+/// # Why a toggle and not a dialog
+///
+/// `ui::dialogs::LayerStyleDialog` is written and the shell hosts no dialog
+/// surface to draw it in, so the choice was between ten permanently greyed-out
+/// rows and ten that put a real, undoable, default-valued effect on the layer —
+/// which the Properties panel can then edit, because
+/// [`Command::SetLayerProperties`] is the same command it emits. Toggling is
+/// what makes the second option honest: an item that only ever *added* would do
+/// nothing the second time it was clicked, and nothing is what this wave is
+/// about ending. The status line says which way it went.
+fn toggle_effect(editor: &mut Editor, slot: ui::menu::EffectSlot) -> Result<String, String> {
+    let (command, added) = {
+        let doc = editor.active().ok_or("No document is open")?;
+        let id = doc.document.active_layer().ok_or("Select a layer first")?;
+        let layer = doc
+            .document
+            .layers
+            .get(id)
+            .ok_or("The active layer is not in the document")?;
+        let mut effects = layer.effects.clone();
+        let added = !slot.is_set(&effects);
+        set_effect(&mut effects, slot, added);
+        (
+            Command::SetLayerProperties {
+                layer_id: id,
+                patch: editor_core::LayerPatch {
+                    effects: Some(Box::new(effects)),
+                    ..Default::default()
+                },
+            },
+            added,
+        )
+    };
+    editor.apply_command(command);
+    let name = slot.label().trim_end_matches('…');
+    Ok(if added {
+        format!("{name} added at its default settings — pick it again to remove it")
+    } else {
+        format!("{name} removed")
+    })
+}
+
+/// Fill or clear one slot of a layer's effect block.
+///
+/// Exhaustive with no wildcard, so a new [`ui::menu::EffectSlot`] does not
+/// compile until it is wired here.
+fn set_effect(effects: &mut layer_model::LayerEffects, slot: ui::menu::EffectSlot, on: bool) {
+    use ui::menu::EffectSlot as S;
+    match slot {
+        S::DropShadow => effects.drop_shadow = on.then(Default::default),
+        S::InnerShadow => effects.inner_shadow = on.then(Default::default),
+        S::OuterGlow => effects.outer_glow = on.then(Default::default),
+        S::InnerGlow => effects.inner_glow = on.then(Default::default),
+        S::BevelEmboss => effects.bevel_emboss = on.then(Default::default),
+        S::Satin => effects.satin = on.then(Default::default),
+        S::ColorOverlay => effects.color_overlay = on.then(Default::default),
+        S::GradientOverlay => effects.gradient_overlay = on.then(Default::default),
+        S::PatternOverlay => effects.pattern_overlay = on.then(Default::default),
+        S::Stroke => effects.stroke = on.then(Default::default),
+    }
+}
+
+fn toggle_mask(editor: &mut Editor, link: bool) -> Result<String, String> {
+    let (command, message) = {
+        let doc = editor.active().ok_or("No document is open")?;
+        let id = doc.document.active_layer().ok_or("Select a layer first")?;
+        let layer = doc
+            .document
+            .layers
+            .get(id)
+            .ok_or("The active layer is not in the document")?;
+        let mut mask = layer.mask.clone().ok_or("The layer has no mask")?;
+        let message = if link {
+            mask.linked = !mask.linked;
+            if mask.linked {
+                "Mask linked to the layer"
+            } else {
+                "Mask unlinked from the layer"
+            }
+        } else {
+            mask.enabled = !mask.enabled;
+            if mask.enabled {
+                "Mask enabled"
+            } else {
+                "Mask disabled"
+            }
+        };
+        (
+            Command::SetLayerProperties {
+                layer_id: id,
+                patch: editor_core::LayerPatch {
+                    mask: editor_core::Patch::Set(mask),
+                    ..Default::default()
+                },
+            },
+            message,
+        )
+    };
+    editor.apply_command(command);
+    Ok(message.to_string())
+}
+
+/// Bake a layer's mask into its alpha and remove the mask.
+fn apply_mask(editor: &mut Editor) -> Result<String, String> {
+    let (w, h) = canvas_of(editor)?;
+    let command = {
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        let id = doc.document.active_layer().ok_or("Select a layer first")?;
+        let has_mask = doc
+            .document
+            .layers
+            .get(id)
+            .is_some_and(|l| l.mask.is_some());
+        if !has_mask {
+            return Err("The layer has no mask".to_string());
+        }
+        let before = pixels::read_layer(doc, id);
+        let coverage = read_mask_coverage(doc, id, w, h);
+        let mut after = before.clone();
+        for (i, c) in coverage.iter().enumerate() {
+            let a = i * 4 + 3;
+            after[a] = ((after[a] as u32 * *c as u32) / 255) as u8;
+        }
+        let mut commands = vec![pixels::write_layer(doc, id, &after, "Apply Mask")?];
+        commands.push(Command::SetLayerProperties {
+            layer_id: id,
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Clear,
+                ..Default::default()
+            },
+        });
+        Command::Transaction {
+            label: "Apply Mask".to_string(),
+            commands,
+        }
+    };
+    editor.apply_command(command);
+    Ok("Mask applied".to_string())
+}
+
+/// One coverage byte per canvas pixel, read out of a layer's mask tiles.
+///
+/// An absent mask tile is *hidden* — the table in [`editor_core::pixels`] says
+/// so — which is why the buffer starts at zero rather than at 255.
+fn read_mask_coverage(doc: &crate::doc::OpenDocument, layer: LayerId, w: u32, h: u32) -> Vec<u8> {
+    let (w, h) = (w as usize, h as usize);
+    let mut out = vec![0u8; w * h];
+    let Some(map) = doc.document.mask_tiles(layer) else {
+        return out;
+    };
+    let ts = raster::TILE_SIZE as usize;
+    for (coord, hash) in map.iter() {
+        if coord.level != 0 {
+            continue;
+        }
+        let Some(bytes) = compositor::TileSource::tile(&doc.tiles, hash) else {
+            continue;
+        };
+        if bytes.len() < ts * ts {
+            continue;
+        }
+        let ox = coord.x as i64 * ts as i64;
+        let oy = coord.y as i64 * ts as i64;
+        for row in 0..ts {
+            let y = oy + row as i64;
+            if y < 0 || y >= h as i64 {
+                continue;
+            }
+            let x0 = ox.max(0);
+            let x1 = (ox + ts as i64).min(w as i64);
+            if x1 <= x0 {
+                continue;
+            }
+            let n = (x1 - x0) as usize;
+            let s = row * ts + (x0 - ox) as usize;
+            let d = y as usize * w + x0 as usize;
+            out[d..d + n].copy_from_slice(&bytes[s..s + n]);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -577,6 +2074,13 @@ mod tests {
     }
 
     /// Walk all nine menus and sort every item into the three outcomes.
+    ///
+    /// "Unwired" is measured against [`unavailable_reason`], not against the
+    /// text of the refusal. Giving every dead item a nicely worded sentence
+    /// would otherwise move it out of the `unwired` bucket and into `disabled`
+    /// — the ratchet would fall to zero and nothing would have been wired at
+    /// all. The bucket an item lands in is decided by *who* refused it: the
+    /// shared model (disabled) or this shell (unwired).
     fn tally(ed: &Editor, ws: &Workspace) -> Tally {
         let context = context(ed, ws);
         let mut tally = Tally::default();
@@ -584,7 +2088,12 @@ mod tests {
             for action in menu.actions() {
                 match resolve(action, &context, ed) {
                     Ok(_) => tally.performable.push(action),
-                    Err(reason) if reason == NOT_WIRED => tally.unwired.push(action),
+                    Err(reason)
+                        if reason == NOT_WIRED
+                            || unavailable_reason(action) == Some(reason.as_str()) =>
+                    {
+                        tally.unwired.push(action)
+                    }
                     Err(reason) => tally.disabled.push((action, reason)),
                 }
             }
@@ -626,9 +2135,9 @@ mod tests {
     //
     // The floors may only rise and the caps may only fall. A new menu item
     // nobody wired pushes the cap over and the failure lists it by name.
-    const MAX_UNWIRED_WITH_A_DOCUMENT: usize = 126;
-    const MIN_PERFORMABLE_WITH_A_DOCUMENT: usize = 79;
-    const MAX_UNWIRED_WITH_NOTHING_OPEN: usize = 4;
+    const MAX_UNWIRED_WITH_A_DOCUMENT: usize = 45;
+    const MIN_PERFORMABLE_WITH_A_DOCUMENT: usize = 159;
+    const MAX_UNWIRED_WITH_NOTHING_OPEN: usize = 0;
     const MIN_PERFORMABLE_WITH_NOTHING_OPEN: usize = 30;
 
     #[test]
@@ -779,11 +2288,11 @@ mod tests {
         let mut ed = editor(dir.path());
         ed.dispatch(Action::NewDocument).expect("a new document");
         let context = context(&ed, &Workspace::new());
-        // The menu model allows it; this shell has no gallery for it.
-        assert_eq!(
-            resolve(MenuAction::FileInfo, &context, &ed),
-            Err(NOT_WIRED.to_string())
-        );
+        // The menu model allows it; this shell has no metadata editor for it —
+        // and it says which piece is missing rather than "cannot do that yet".
+        let reason = resolve(MenuAction::FileInfo, &context, &ed).unwrap_err();
+        assert!(reason.contains("DocumentMeta"), "{reason}");
+        assert_ne!(reason, NOT_WIRED);
         // ...and one it *can* do resolves to a real command rather than a name.
         match resolve(MenuAction::NewLayer, &context, &ed) {
             Ok(Pick::Command(Command::CreateLayer { .. })) => {}
@@ -876,11 +2385,18 @@ mod tests {
         // The reporting half of the contract this module's docs claim. A
         // dropped intent used to be indistinguishable from a performed one.
         let message = unrouted_message(&Intent::Action(MenuAction::FileInfo));
-        assert!(message.contains(NOT_WIRED), "{message}");
+        assert!(
+            message.contains(unavailable_reason(MenuAction::FileInfo).unwrap()),
+            "{message}"
+        );
         assert!(
             message.contains(&MenuAction::FileInfo.label()),
             "the message must name the item: {message}"
         );
+        // An intent the bridge answers has no message to give, so the fallback
+        // is what an *unknown* one gets — and it is still not silence.
+        let message = unrouted_message(&Intent::SetZoom(2.0));
+        assert!(message.contains(NOT_WIRED), "{message}");
     }
 
     #[test]
@@ -900,6 +2416,595 @@ mod tests {
             resolve(MenuAction::OpenRecent(1), &context, &ed),
             Err("This slot has no recent file".to_string())
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // The wired menus
+    // -----------------------------------------------------------------------
+
+    /// A small document with real, deliberately non-uniform pixels.
+    ///
+    /// Non-uniform on purpose: a flat image is a fixed point of half the filter
+    /// catalogue, so "the blur changed the pixels" would prove nothing on one.
+    fn probe_png(dir: &std::path::Path, w: u32, h: u32) -> std::path::PathBuf {
+        let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                rgba[i] = (x * 5 % 251) as u8;
+                rgba[i + 1] = (y * 7 % 241) as u8;
+                rgba[i + 2] = ((x * 13 + y * 3) % 239) as u8;
+                rgba[i + 3] = 255;
+            }
+        }
+        let bytes = raster::encode(raster::ExportFormat::Png, w, h, &rgba).unwrap();
+        let path = dir.join(format!("probe-{w}x{h}.png"));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// An open document with pixels, two layers, and a selection: the state in
+    /// which most of the menu bar is live.
+    fn opened(dir: &std::path::Path) -> Editor {
+        let mut ed = editor(dir);
+        ed.open_path(&probe_png(dir, 48, 32))
+            .expect("the probe opens");
+        ed
+    }
+
+    /// Two layers, both holding pixels, the topmost active.
+    ///
+    /// Both halves matter. An *empty* second layer would make Clear, the
+    /// filters and the adjustments honestly no-ops on it, and the topmost is
+    /// active so Merge Down has a layer below it to merge into — which is the
+    /// state a user is in whenever they have stacked anything at all.
+    fn with_two_layers(dir: &std::path::Path) -> Editor {
+        let mut ed = opened(dir);
+        let source = ed.active().unwrap().document.active_layer().unwrap();
+        let extra = layer_model::Layer::raster("Second");
+        let id = extra.id;
+        ed.apply_command(Command::create_layer(extra));
+
+        let mut rgba = pixels::read_layer(ed.active().unwrap(), source);
+        for (i, byte) in rgba.iter_mut().enumerate() {
+            if i % 4 != 3 {
+                *byte = byte.wrapping_add(37);
+            }
+        }
+        let paint = {
+            let doc = ed.active_mut().unwrap();
+            pixels::write_layer(doc, id, &rgba, "Second").unwrap()
+        };
+        ed.apply_command(paint);
+
+        let top = ed.active().unwrap().document.layers.root()[0];
+        ed.set_active_layer(top);
+        ed
+    }
+
+    fn select_rect(ed: &mut Editor, min: (i32, i32), max: (i32, i32)) {
+        ed.active_mut().unwrap().document.selection = editor_core::Selection::Rect {
+            min: glam::IVec2::new(min.0, min.1),
+            max: glam::IVec2::new(max.0, max.1),
+        };
+    }
+
+    /// Everything about the active document a menu operation could change.
+    ///
+    /// The layers' *tile hashes* are in it, so a change to one pixel changes
+    /// the digest — which is what makes "this item is not a no-op" a real
+    /// assertion rather than a claim about the history depth.
+    fn digest(ed: &Editor) -> String {
+        // The clipboard is part of it: Copy's whole effect is on the clipboard,
+        // so leaving it out would make Copy read as a no-op and this oracle
+        // would have to grow an exception instead of an answer.
+        let clip = ed.clipboard().map(|c| {
+            (
+                c.width,
+                c.height,
+                c.rgba8.iter().map(|b| *b as u64).sum::<u64>(),
+            )
+        });
+        let Some(d) = ed.active() else {
+            return format!("no document {clip:?}");
+        };
+        let mut s = format!("{clip:?} ");
+        s += &format!(
+            "{} {:?} {:?} {}x{}",
+            d.history_depth(),
+            d.document.selection,
+            d.document.active_layer(),
+            d.document.width(),
+            d.document.height()
+        );
+        for id in d.document.layers.iter_depth_first() {
+            let layer = d.document.layers.get(id).expect("a listed layer exists");
+            s.push_str(&format!(
+                "|{id:?} v{} {:?} {:?}",
+                layer.visible, layer.mask, layer.kind
+            ));
+            if let Some(map) = d.document.layer_tiles(id) {
+                let mut tiles: Vec<_> = map.iter().collect();
+                tiles.sort_by_key(|(c, _)| (c.level, c.y, c.x));
+                s.push_str(&format!("{tiles:?}"));
+            }
+        }
+        s
+    }
+
+    /// Drive one menu item the way the shell does and report whether the
+    /// document is different afterwards.
+    fn invoke(ed: &mut Editor, action: MenuAction) -> Result<bool, String> {
+        let before = digest(ed);
+        let context = context(ed, &Workspace::new());
+        match resolve(action, &context, ed)? {
+            Pick::Menu(a) => perform(a, ed)?,
+            Pick::Command(c) => {
+                ed.apply_command(c);
+                String::new()
+            }
+            other => {
+                return Err(format!(
+                    "{action:?} resolved to {other:?}, not a document edit"
+                ))
+            }
+        };
+        Ok(digest(ed) != before)
+    }
+
+    #[test]
+    fn a_filter_menu_item_really_filters_the_active_layers_pixels() {
+        // The whole Filter menu answered `NOT_WIRED`: `crates/filters` was
+        // complete, tested, and unreachable from every user gesture there is.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let before = digest(&ed);
+        let depth = ed.active().unwrap().history_depth();
+
+        assert!(
+            invoke(
+                &mut ed,
+                MenuAction::Filter(ui::menu::FilterId::GaussianBlur)
+            )
+            .unwrap(),
+            "Gaussian Blur left every pixel alone"
+        );
+        assert_eq!(
+            ed.active().unwrap().history_depth(),
+            depth + 1,
+            "a filter must be exactly one undoable step"
+        );
+        // ...and one Ctrl+Z puts every pixel back.
+        ed.dispatch(Action::Undo).expect("undo");
+        assert_eq!(digest(&ed), before, "undoing the filter did not restore it");
+    }
+
+    #[test]
+    fn a_filter_honours_the_selection_as_a_mask() {
+        // The claim the Filter menu makes by being in the same window as the
+        // marquee: pixels outside the selection are not touched.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let before = pixels::read_layer(ed.active().unwrap(), layer);
+        select_rect(&mut ed, (0, 0), (16, 32));
+
+        assert!(invoke(&mut ed, MenuAction::Filter(ui::menu::FilterId::Mosaic)).unwrap());
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+
+        let w = 48usize;
+        let inside = (0..32usize)
+            .flat_map(|y| (0..16usize).map(move |x| y * w + x))
+            .any(|i| after[i * 4..i * 4 + 4] != before[i * 4..i * 4 + 4]);
+        let outside_changed = (0..32usize)
+            .flat_map(|y| (20..48usize).map(move |x| y * w + x))
+            .any(|i| after[i * 4..i * 4 + 4] != before[i * 4..i * 4 + 4]);
+        assert!(inside, "the filter did not reach the selected pixels");
+        assert!(
+            !outside_changed,
+            "the filter escaped the selection and changed pixels outside it"
+        );
+    }
+
+    #[test]
+    fn every_filter_in_the_menu_is_reachable_and_changes_the_document() {
+        // Not "the crate has a function" — the menu item, resolved and
+        // performed, over the real document.
+        let dir = tempfile::tempdir().unwrap();
+        let mut dead = Vec::new();
+        for id in ui::menu::FilterId::ALL {
+            // A filter the shell refuses on purpose is not in the menu as a
+            // live item; it is greyed out with its reason, and
+            // `no_menu_item_falls_back_to_the_generic_refusal` covers that.
+            if unavailable_reason(MenuAction::Filter(*id)).is_some() {
+                continue;
+            }
+            let mut ed = opened(dir.path());
+            match invoke(&mut ed, MenuAction::Filter(*id)) {
+                Ok(true) => {}
+                Ok(false) => dead.push(format!("{}: changed nothing", id.label())),
+                Err(reason) => dead.push(format!("{}: {reason}", id.label())),
+            }
+        }
+        assert!(
+            dead.is_empty(),
+            "live Filter items that do nothing:\n{dead:#?}"
+        );
+    }
+
+    #[test]
+    fn the_select_menu_moves_the_documents_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+
+        assert!(invoke(&mut ed, MenuAction::SelectAll).unwrap());
+        assert_eq!(
+            ed.active().unwrap().document.selection,
+            editor_core::Selection::Rect {
+                min: glam::IVec2::ZERO,
+                max: glam::IVec2::new(48, 32),
+            }
+        );
+
+        // Inverse really is the complement, measured on the document.
+        select_rect(&mut ed, (0, 0), (24, 32));
+        assert!(invoke(&mut ed, MenuAction::InverseSelection).unwrap());
+        let (min, max) = ed
+            .active()
+            .unwrap()
+            .document
+            .selection
+            .bounds()
+            .expect("the complement of the left half is the right half");
+        assert_eq!(((min.x, min.y), (max.x, max.y)), ((24, 0), (48, 32)));
+
+        assert!(invoke(&mut ed, MenuAction::Deselect).unwrap());
+        assert!(ed.active().unwrap().document.selection.is_none());
+
+        // ...and inverting the *whole* canvas selects nothing, which is a
+        // different thing from no selection at all — see
+        // `editor_core::Selection`'s table.
+        assert!(invoke(&mut ed, MenuAction::SelectAll).unwrap());
+        assert!(invoke(&mut ed, MenuAction::InverseSelection).unwrap());
+        let nothing = &ed.active().unwrap().document.selection;
+        assert!(nothing.is_empty(), "{nothing:?}");
+        assert!(!nothing.is_none());
+    }
+
+    #[test]
+    fn select_modify_reshapes_the_selection_by_the_radius_it_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        select_rect(&mut ed, (10, 10), (20, 20));
+
+        let message = {
+            let context = context(&ed, &Workspace::new());
+            let Ok(Pick::Menu(a)) = resolve(
+                MenuAction::Modify(ui::menu::ModifySelection::Expand),
+                &context,
+                &ed,
+            ) else {
+                panic!("Select ▸ Modify ▸ Expand is not wired");
+            };
+            perform(a, &mut ed).expect("expand")
+        };
+        assert!(message.contains(&MODIFY_RADIUS.to_string()), "{message}");
+
+        let (min, max) = ed.active().unwrap().document.selection.bounds().unwrap();
+        assert_eq!(
+            (min.x, min.y),
+            (10 - MODIFY_RADIUS as i32, 10 - MODIFY_RADIUS as i32),
+            "expand must grow the selection by its radius"
+        );
+        assert_eq!(
+            (max.x, max.y),
+            (20 + MODIFY_RADIUS as i32, 20 + MODIFY_RADIUS as i32)
+        );
+
+        // ...and Contract by the same radius takes it back.
+        let context = context(&ed, &Workspace::new());
+        let Ok(Pick::Menu(a)) = resolve(
+            MenuAction::Modify(ui::menu::ModifySelection::Contract),
+            &context,
+            &ed,
+        ) else {
+            panic!("Select ▸ Modify ▸ Contract is not wired");
+        };
+        perform(a, &mut ed).expect("contract");
+        let (min, max) = ed.active().unwrap().document.selection.bounds().unwrap();
+        assert_eq!(((min.x, min.y), (max.x, max.y)), ((10, 10), (20, 20)));
+    }
+
+    #[test]
+    fn edit_clear_and_fill_reach_the_pixels_inside_the_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        select_rect(&mut ed, (0, 0), (8, 8));
+
+        assert!(invoke(&mut ed, MenuAction::ClearPixels).unwrap());
+        let cleared = pixels::read_layer(ed.active().unwrap(), layer);
+        assert_eq!(cleared[3], 0, "the top-left pixel is not cleared");
+        let outside = ((8 * 48) + 40) * 4;
+        assert_ne!(cleared[outside + 3], 0, "Clear escaped the selection");
+
+        ed.set_foreground([1.0, 0.0, 0.0, 1.0]);
+        assert!(invoke(&mut ed, MenuAction::FillDialog).unwrap());
+        let filled = pixels::read_layer(ed.active().unwrap(), layer);
+        assert_eq!(&filled[0..4], &[255, 0, 0, 255], "Fill used another colour");
+        assert_eq!(
+            &filled[outside..outside + 4],
+            &cleared[outside..outside + 4],
+            "Fill escaped the selection"
+        );
+    }
+
+    #[test]
+    fn copy_and_paste_move_pixels_through_the_editors_clipboard() {
+        // Five Edit-menu items in one round trip. Paste was greyed out with
+        // "The clipboard is empty" *forever*, because `ui::ClipboardState` was
+        // never written by anything — the flag described a store that did not
+        // exist.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let original = pixels::read_layer(ed.active().unwrap(), layer);
+        select_rect(&mut ed, (4, 4), (12, 10));
+
+        // Paste is off until something has been copied, and it says so.
+        let context = context(&ed, &Workspace::new());
+        assert_eq!(
+            resolve(MenuAction::Paste, &context, &ed),
+            Err("The clipboard is empty".to_string())
+        );
+
+        assert!(invoke(&mut ed, MenuAction::Copy).unwrap());
+        let clip = ed.clipboard().expect("Copy filled the clipboard").clone();
+        assert_eq!((clip.width, clip.height), (8, 6), "Copy took the wrong box");
+        let first = ((4 * 48) + 4) * 4;
+        assert_eq!(&clip.rgba8[0..4], &original[first..first + 4]);
+
+        // ...and now Paste is live, and lands on a layer of its own.
+        let layers_before = ed.active().unwrap().document.layers.len();
+        assert!(invoke(&mut ed, MenuAction::Paste).unwrap());
+        let doc = ed.active().unwrap();
+        assert_eq!(doc.document.layers.len(), layers_before + 1);
+        let pasted = doc.document.layers.root()[0];
+        assert_eq!(
+            &pixels::read_layer(doc, pasted)[0..4],
+            &original[first..first + 4],
+            "the pasted layer does not hold the copied pixels"
+        );
+
+        // Cut copies and then clears, as one visible outcome.
+        let mut ed = opened(dir.path());
+        select_rect(&mut ed, (0, 0), (8, 8));
+        assert!(invoke(&mut ed, MenuAction::Cut).unwrap());
+        assert!(ed.clipboard().is_some(), "Cut did not copy");
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        assert_eq!(after[3], 0, "Cut did not clear the selected pixels");
+    }
+
+    #[test]
+    fn the_fixed_transforms_flip_the_active_layer_and_are_undoable() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let before = pixels::read_layer(ed.active().unwrap(), layer);
+
+        assert!(invoke(
+            &mut ed,
+            MenuAction::Transform(ui::menu::TransformOp::FlipHorizontal)
+        )
+        .unwrap());
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        let w = 48usize;
+        for y in 0..32usize {
+            for x in 0..w {
+                let s = (y * w + x) * 4;
+                let d = (y * w + (w - 1 - x)) * 4;
+                assert_eq!(
+                    &after[d..d + 4],
+                    &before[s..s + 4],
+                    "the flip did not mirror ({x}, {y})"
+                );
+            }
+        }
+        ed.dispatch(Action::Undo).expect("undo");
+        assert_eq!(pixels::read_layer(ed.active().unwrap(), layer), before);
+    }
+
+    #[test]
+    fn flatten_replaces_every_layer_with_one_that_holds_the_composite() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = with_two_layers(dir.path());
+        assert_eq!(ed.active().unwrap().document.layers.len(), 2);
+        let before = digest(&ed);
+
+        assert!(invoke(&mut ed, MenuAction::FlattenImage).unwrap());
+        let doc = ed.active().unwrap();
+        assert_eq!(
+            doc.document.layers.len(),
+            1,
+            "flatten left more than one layer"
+        );
+        let id = doc.document.layers.root()[0];
+        assert!(
+            doc.document.layer_tiles(id).is_some(),
+            "the flattened layer has no pixels"
+        );
+        // One transaction, so one undo brings both layers back.
+        ed.dispatch(Action::Undo).expect("undo");
+        assert_eq!(digest(&ed), before, "flatten is not one undoable step");
+    }
+
+    #[test]
+    fn grouping_and_ungrouping_move_the_layer_through_the_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = with_two_layers(dir.path());
+        let active = ed.active().unwrap().document.active_layer().unwrap();
+
+        assert!(invoke(&mut ed, MenuAction::GroupLayers).unwrap());
+        let doc = &ed.active().unwrap().document;
+        let parent = doc
+            .layers
+            .parent_of(active)
+            .expect("the layer has a parent now");
+        assert!(doc.layers.get(parent).unwrap().is_group());
+
+        // Ungroup acts on the group, so point the cursor at it first — which is
+        // exactly what a user does by clicking the group's row.
+        ed.set_active_layer(parent);
+        assert!(invoke(&mut ed, MenuAction::UngroupLayers).unwrap());
+        let doc = &ed.active().unwrap().document;
+        assert!(!doc.layers.contains(parent), "the group survived");
+        assert!(doc.layers.contains(active), "ungroup lost the child");
+        assert_eq!(doc.layers.parent_of(active), None);
+    }
+
+    #[test]
+    fn an_adjustment_that_is_not_the_identity_is_applied_to_the_pixels() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let before = pixels::read_layer(ed.active().unwrap(), layer);
+
+        assert!(invoke(
+            &mut ed,
+            MenuAction::ApplyAdjustment(ui::menu::AdjustmentId::Invert)
+        )
+        .unwrap());
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        assert_ne!(after, before);
+        // Inverting twice is the identity, which is a property rather than a
+        // number and therefore the same on every libm.
+        assert!(invoke(
+            &mut ed,
+            MenuAction::ApplyAdjustment(ui::menu::AdjustmentId::Invert)
+        )
+        .unwrap());
+        let twice = pixels::read_layer(ed.active().unwrap(), layer);
+        let worst = twice
+            .iter()
+            .zip(&before)
+            .map(|(a, b)| (*a as i32 - *b as i32).abs())
+            .max()
+            .unwrap();
+        assert!(worst <= 2, "invert twice moved a channel by {worst}");
+    }
+
+    #[test]
+    fn no_enabled_menu_item_resolves_to_a_no_op() {
+        // The bar this whole wave is measured against: an item that is *not*
+        // greyed out has to change the document when it is clicked. Every item
+        // is driven exactly the way the shell drives it — resolve, then either
+        // `perform` or `apply_command` — against a fresh document each time, so
+        // one item cannot leave another with nothing to do.
+        let dir = tempfile::tempdir().unwrap();
+        let mut checked = 0usize;
+        let template = with_two_layers(dir.path());
+        let context = context(&template, &Workspace::new());
+        let candidates: Vec<MenuAction> = menus(&template)
+            .into_iter()
+            .flat_map(|m| m.actions())
+            .filter(|a| {
+                matches!(
+                    resolve(*a, &context, &template),
+                    Ok(Pick::Menu(_)) | Ok(Pick::Command(_))
+                )
+            })
+            .collect();
+        drop(template);
+
+        // The four Help items are the only live ones whose effect is a
+        // *message* rather than a document edit, so they are held to that
+        // instead — not skipped. An item here that fell silent would fail.
+        const INFORMATIONAL: &[MenuAction] = &[
+            MenuAction::Help,
+            MenuAction::ReleaseNotes,
+            MenuAction::ReportIssue,
+            MenuAction::About,
+        ];
+
+        let mut dead = Vec::new();
+        for action in candidates {
+            let mut ed = with_two_layers(dir.path());
+            if INFORMATIONAL.contains(&action) {
+                match perform(action, &mut ed) {
+                    Ok(message) if message.len() > 20 => checked += 1,
+                    Ok(message) => dead.push(format!("{action:?}: said only {message:?}")),
+                    Err(reason) => dead.push(format!("{action:?}: refused with {reason:?}")),
+                }
+                assert_eq!(
+                    ed.status().map(str::to_string),
+                    Some(perform(action, &mut ed).unwrap()),
+                    "{action:?} did not reach the status bar"
+                );
+                continue;
+            }
+            match invoke(&mut ed, action) {
+                Ok(true) => checked += 1,
+                Ok(false) => dead.push(format!("{action:?}: changed nothing")),
+                Err(reason) => dead.push(format!("{action:?}: refused with {reason:?}")),
+            }
+        }
+        assert!(
+            dead.is_empty(),
+            "{} enabled menu items do nothing when clicked:\n{dead:#?}",
+            dead.len()
+        );
+        assert!(
+            checked > 60,
+            "only {checked} items were exercised; the walk stopped finding them"
+        );
+    }
+
+    #[test]
+    fn no_menu_item_falls_back_to_the_generic_refusal() {
+        // `NOT_WIRED` is the fallback, and nothing may reach it: every item
+        // this build cannot perform names the specific piece that is missing.
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new();
+        for ed in [editor(dir.path()), with_two_layers(dir.path())] {
+            let context = context(&ed, &ws);
+            for menu in menus(&ed) {
+                for action in menu.actions() {
+                    if let Err(reason) = resolve(action, &context, &ed) {
+                        assert_ne!(
+                            reason, NOT_WIRED,
+                            "{action:?} still wears the generic refusal"
+                        );
+                        // A refusal from the shared model ("No document is
+                        // open") is short because the whole state is the
+                        // reason. A refusal from *this shell* has to name the
+                        // missing piece, and that takes more than four words.
+                        if unavailable_reason(action) == Some(reason.as_str()) {
+                            assert!(
+                                reason.len() > 30,
+                                "{action:?}'s reason is too thin to act on: {reason}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_reason_this_shell_gives_names_something_specific() {
+        // A sentence that says "not supported" is the generic refusal with
+        // extra words. Each of these has to name the crate, the type or the
+        // surface that is missing, which is what makes the gap actionable.
+        for action in MenuAction::all() {
+            let Some(reason) = unavailable_reason(action) else {
+                continue;
+            };
+            assert!(
+                reason.len() > 30,
+                "{action:?}: {reason:?} is not a reason, it is a shrug"
+            );
+            assert_ne!(reason, NOT_WIRED);
+        }
     }
 
     #[test]

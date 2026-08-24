@@ -595,6 +595,35 @@ const TOOLS: &[ToolInfo] = &[
         ],
     ),
     t(
+        ToolId::Pen,
+        "Pen",
+        ToolGroup::Draw,
+        "pen",
+        Cursor::Crosshair,
+        // `P`, the one letter of the brief no tool answered to.
+        Some('p'),
+        &[],
+    ),
+    t(
+        ToolId::Type,
+        "Type",
+        ToolGroup::Draw,
+        "type",
+        Cursor::Crosshair,
+        // Shares `T` with Free Transform, so the letter cycles between them —
+        // the same arrangement every other shared letter here uses.
+        Some('t'),
+        &[
+            f("size_px", "Size", 4.0, 512.0, 24.0),
+            c(
+                "font_family",
+                "Font",
+                &["sans-serif", "serif", "monospace"],
+                0,
+            ),
+        ],
+    ),
+    t(
         ToolId::Rectangle,
         "Rectangle",
         ToolGroup::Draw,
@@ -881,6 +910,8 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
                 mode: SpongeMode::Desaturate,
             },
         )),
+        ToolId::Pen => Box::new(crate::pen::PenTool::default()),
+        ToolId::Type => Box::new(crate::text::TypeTool::default()),
         ToolId::Rectangle => Box::new(ShapeTool::new(ShapeKind::Rectangle, ShapeMode::VectorLayer)),
         ToolId::RoundedRectangle => Box::new(ShapeTool::new(
             ShapeKind::RoundedRectangle { radius: 8.0 },

@@ -333,12 +333,8 @@ impl Tool for ShapeTool {
                         .unwrap_or("Shape")
                         .to_string(),
                 };
-                let layer = Layer::with_kind(
-                    name,
-                    LayerKind::Shape(ShapeLayer {
-                        path_svg: to_svg(&path),
-                    }),
-                );
+                let layer =
+                    Layer::with_kind(name, LayerKind::Shape(ShapeLayer::from_svg(to_svg(&path))));
                 ctx.emit(Command::create_layer(layer));
             }
             ShapeMode::Rasterize => {

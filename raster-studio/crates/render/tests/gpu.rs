@@ -8,7 +8,7 @@
 use glam::Vec2;
 use render::{
     Camera, Canvas, CompositeParams, CompositePass, GpuContext, GpuTexture, OffscreenTarget,
-    Readback,
+    Overlay, Readback, Segment,
 };
 
 /// Format used for every canvas test: the canvas shader emits linear values and
@@ -674,6 +674,146 @@ fn red_variance(img: &Readback) -> f64 {
         .collect();
     let mean = reds.iter().sum::<f64>() / reds.len() as f64;
     reds.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / reds.len() as f64
+}
+
+// ---------------------------------------------------------------------------
+// Overlay (marching ants)
+// ---------------------------------------------------------------------------
+
+/// Draw a fitted image, then the overlay on top, and read the result back.
+fn render_with_overlay(
+    gpu: &GpuContext,
+    source: &GpuTexture,
+    size: u32,
+    segments: &[Segment],
+) -> anyhow::Result<Readback> {
+    let target = OffscreenTarget::new(gpu, size, size, SRGB)?;
+    let mut canvas = Canvas::new(gpu, SRGB);
+    canvas.set_source(gpu, source);
+    canvas.update_camera(gpu, &fitted_camera(source.width, size));
+
+    let mut overlay = Overlay::new(gpu, SRGB);
+    overlay.set_viewport(gpu, Vec2::splat(size as f32));
+    overlay.set_segments(gpu, segments);
+
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    canvas.render(&mut encoder, target.view());
+    overlay.render(&mut encoder, target.view());
+    gpu.queue.submit(Some(encoder.finish()));
+    target.read_rgba8(gpu)
+}
+
+/// The claim the whole overlay pass exists for: a segment handed to it lands on
+/// the framebuffer, at the pixels it names, in the colour it names — and
+/// nowhere else.
+///
+/// Before this the shell composited through `render::Canvas`, which has no
+/// concept of a selection, so a marquee the user dragged changed the document
+/// and not one pixel of the picture.
+#[test]
+fn an_overlay_segment_reaches_the_framebuffer_where_it_was_asked_for() {
+    let gpu = gpu_or_skip!();
+    let pixels: Vec<u8> = std::iter::repeat_n([0u8, 0, 0, 255], 32 * 32)
+        .flatten()
+        .collect();
+    let source = GpuTexture::from_rgba8(&gpu, 32, 32, &pixels, "ants-src").expect("texture");
+
+    let plain = render_with_overlay(&gpu, &source, 32, &[]).expect("render");
+    assert_near("no overlay", plain.pixel(16, 8), [0, 0, 0], 3);
+
+    // A horizontal white run across the middle, four pixels tall.
+    let white = [1.0, 1.0, 1.0, 1.0];
+    let drawn = render_with_overlay(
+        &gpu,
+        &source,
+        32,
+        &[Segment::new(
+            Vec2::new(4.0, 16.0),
+            Vec2::new(28.0, 16.0),
+            4.0,
+            white,
+        )],
+    )
+    .expect("render");
+
+    assert_ne!(
+        plain.as_rgba8(),
+        drawn.as_rgba8(),
+        "the overlay did not change a single pixel of the frame"
+    );
+    // On the line: white. The stroke straddles y = 16, so 15 and 17 are inside.
+    for y in [15u32, 16, 17] {
+        assert_near(
+            &format!("on the ants at y={y}"),
+            drawn.pixel(16, y),
+            [255; 3],
+            4,
+        );
+    }
+    // Off the line: the image, untouched.
+    for (x, y) in [(16u32, 4u32), (16, 28), (1, 16)] {
+        assert_near(
+            &format!("away from the ants at ({x},{y})"),
+            drawn.pixel(x, y),
+            [0, 0, 0],
+            3,
+        );
+    }
+    assert_eq!(gpu.take_last_error(), None, "the overlay pass errored");
+}
+
+/// The animation, at the level that matters: the same outline at a different
+/// phase puts different pixels on screen. This is what makes the ants *march*
+/// rather than sit still.
+#[test]
+fn moving_the_dashes_changes_the_frame() {
+    let gpu = gpu_or_skip!();
+    let pixels: Vec<u8> = std::iter::repeat_n([0u8, 0, 0, 255], 32 * 32)
+        .flatten()
+        .collect();
+    let source = GpuTexture::from_rgba8(&gpu, 32, 32, &pixels, "phase-src").expect("texture");
+    let white = [1.0, 1.0, 1.0, 1.0];
+    let dashes_at = |offset: f32| {
+        (0..4)
+            .map(|i| {
+                let x = offset + i as f32 * 8.0;
+                Segment::new(Vec2::new(x, 16.0), Vec2::new(x + 4.0, 16.0), 4.0, white)
+            })
+            .collect::<Vec<_>>()
+    };
+    let a = render_with_overlay(&gpu, &source, 32, &dashes_at(0.0)).expect("render");
+    let b = render_with_overlay(&gpu, &source, 32, &dashes_at(4.0)).expect("render");
+    assert_ne!(a.as_rgba8(), b.as_rgba8(), "the ants did not move");
+}
+
+/// An empty overlay costs nothing and draws nothing — a document with no
+/// selection must be byte-identical to one rendered without the pass at all.
+#[test]
+fn an_empty_overlay_is_invisible() {
+    let gpu = gpu_or_skip!();
+    let pixels: Vec<u8> = std::iter::repeat_n([80u8, 120, 200, 255], 16 * 16)
+        .flatten()
+        .collect();
+    let source = GpuTexture::from_rgba8(&gpu, 16, 16, &pixels, "empty-overlay").expect("texture");
+    let with_pass = render_with_overlay(&gpu, &source, 32, &[]).expect("render");
+    let without = render_canvas(&gpu, &source, &fitted_camera(16, 32), 32).expect("render");
+    assert_eq!(with_pass.as_rgba8(), without.as_rgba8());
+
+    let mut overlay = Overlay::new(&gpu, SRGB);
+    assert!(overlay.is_empty());
+    assert_eq!(overlay.set_segments(&gpu, &[]), 0);
+    assert!(overlay.is_empty());
+}
+
+/// The overlay hard-codes 8-bit display encoding exactly as the canvas does, so
+/// a float target is refused rather than silently written in the wrong space.
+#[test]
+fn the_overlay_refuses_a_target_the_canvas_refuses() {
+    let gpu = gpu_or_skip!();
+    assert!(Overlay::try_new(&gpu, wgpu::TextureFormat::Rgba16Float).is_err());
+    Overlay::try_new(&gpu, SRGB).expect("an 8-bit sRGB target must be accepted");
 }
 
 // ---------------------------------------------------------------------------

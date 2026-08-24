@@ -426,9 +426,7 @@ mod tests {
             .insert_at(
                 Layer::with_kind(
                     "Star",
-                    LayerKind::Shape(ShapeLayer {
-                        path_svg: "M0 0 L10 10 Z".into(),
-                    }),
+                    LayerKind::Shape(ShapeLayer::from_svg("M0 0 L10 10 Z")),
                 ),
                 None,
                 1,

@@ -1301,6 +1301,22 @@ fn cmd(command: Command) -> Resolution {
     Resolution::Enabled(Intent::Document(command))
 }
 
+/// Put the Properties panel in front of the user, or say it is already there.
+///
+/// The panel *is* the editor for a layer's blending and for an adjustment
+/// layer's parameters, so the two menu items that name those are requests to
+/// reveal it. Absolute (`open: true`), which is what [`crate::Intent`] requires
+/// of anything the workspace absorbs.
+fn reveal_properties(ctx: &MenuContext, already: &'static str) -> Resolution {
+    gate(
+        ctx.dock.is_open(PanelId::Properties).then_some(already),
+        Resolution::Enabled(Intent::SetPanelOpen {
+            panel: PanelId::Properties,
+            open: true,
+        }),
+    )
+}
+
 fn gate(reason: Option<&'static str>, resolution: Resolution) -> Resolution {
     match reason {
         Some(r) => Resolution::Disabled(r),
@@ -1820,6 +1836,21 @@ impl MenuAction {
                 Err(r) => Resolution::Disabled(r),
             },
             MenuAction::Mask(op) => resolve_mask(op, ctx),
+            // Both of these *are* the Properties panel: an adjustment layer's
+            // parameters and a layer's blending mode, opacity and effects are
+            // all edited there, through `Intent::EditLayerKind` and
+            // `Command::SetLayerProperties`. So the item's whole job is to put
+            // that panel in front of the user — which is a `SetPanelOpen`, not
+            // a separate window somebody still has to write. They resolved to
+            // `Intent::Action` and nothing performed them for a whole release.
+            //
+            // Disabled when the panel is already open, because opening an open
+            // panel is exactly the "menu item that does nothing" this module
+            // exists to refuse. `EditAdjustmentLayer` is the exception: it is
+            // the Properties panel's "Open editor…" surfacing as a menu item,
+            // and the panel showing the adjustment editor is the point, not a
+            // thing to refuse — so it stays enabled whenever the active layer
+            // is an adjustment, and the bridge reveals the panel.
             MenuAction::EditAdjustmentLayer => match ctx.need_adjustment_layer() {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
@@ -1849,7 +1880,15 @@ impl MenuAction {
                 }),
                 Err(r) => Resolution::Disabled(r),
             },
-            MenuAction::BlendingOptions | MenuAction::LayerStyle(_) => match ctx.need_layer() {
+            MenuAction::BlendingOptions => match ctx.need_layer() {
+                Ok(_) => reveal_properties(
+                    ctx,
+                    "The Properties panel is already open; blending mode and \
+                     opacity are there",
+                ),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::LayerStyle(_) => match ctx.need_layer() {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
             },

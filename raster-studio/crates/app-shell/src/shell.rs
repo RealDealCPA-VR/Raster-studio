@@ -78,7 +78,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
-use render::{Camera, Canvas, GpuContext, MAX_ZOOM, MIN_ZOOM};
+use render::{Camera, Canvas, GpuContext, Overlay, MAX_ZOOM, MIN_ZOOM};
 
 use crate::action::Action;
 use crate::chrome::Chrome;
@@ -86,7 +86,7 @@ use crate::editor::{ActionError, Editor};
 use crate::error::ShellError;
 use crate::keymap::{Chord, Key};
 use crate::prefs::WindowGeometry;
-use crate::presenter::CanvasPresenter;
+use crate::presenter::{ants_segments, selection_ants, CanvasPresenter, SelectionOutline};
 use crate::session::SessionMarker;
 use crate::tool_input::ToolPointer;
 use ui::canvas::{PointerButton, PointerInput, PointerPhase};
@@ -308,12 +308,24 @@ pub fn choose_surface_format(
         })
 }
 
+/// How often the marching ants are redrawn while a selection is on screen.
+///
+/// Thirty a second: the pattern moves three grid units a second, so this is
+/// several frames per dash — enough to read as motion, and far short of asking
+/// for a full repaint at the display's rate for an animation that is four
+/// hairlines wide.
+const ANTS_FRAME: Duration = Duration::from_millis(33);
+
 struct WindowState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
     gpu: GpuContext,
     canvas: Canvas,
+    /// The marching-ants pass, drawn over the canvas and under the chrome.
+    overlay: Overlay,
+    /// The traced selection boundary the ants follow, cached across frames.
+    outline: SelectionOutline,
     presenter: CanvasPresenter,
     egui_ctx: egui::Context,
     egui_state: egui_winit::State,
@@ -341,6 +353,11 @@ pub struct Shell {
     /// Pointer input, routed to the active tool or to the camera.
     pointer: ToolPointer,
     modifiers: ModifiersState,
+    /// When this shell started, which is the clock the marching ants crawl on.
+    /// A wall-clock reading would jump when the system clock is adjusted; the
+    /// phase is a pure function of this elapsed time, so a dropped frame catches
+    /// up rather than making the ants stutter.
+    started: Instant,
     repaint_at: Option<Instant>,
     /// A start-up failure that happened inside the event loop.
     ///
@@ -363,6 +380,7 @@ impl Shell {
             held: None,
             pointer: ToolPointer::new(),
             modifiers: ModifiersState::empty(),
+            started: Instant::now(),
             repaint_at: Some(Instant::now()),
             startup_error: None,
         }
@@ -526,6 +544,10 @@ impl Shell {
             .resolve(system_theme(&window));
         let mut canvas = Canvas::new(&gpu, format);
         canvas.set_backdrop(backdrop_srgb(theme));
+        // `choose_surface_format` already refused anything `Canvas` cannot
+        // draw into, and the overlay's rule is the same one, so this cannot
+        // fail here.
+        let overlay = Overlay::new(&gpu, format);
 
         let egui_ctx = egui::Context::default();
         crate::chrome::install_theme(&egui_ctx, theme);
@@ -554,6 +576,8 @@ impl Shell {
             surface_config,
             gpu,
             canvas,
+            overlay,
+            outline: SelectionOutline::new(),
             presenter: CanvasPresenter::new(),
             egui_ctx,
             egui_state,
@@ -707,6 +731,37 @@ impl Shell {
             state.canvas.update_camera(&state.gpu, &camera);
         }
 
+        // ---- the selection, which is in no texture ----
+        //
+        // The canvas draws the document's composite and nothing else, so a
+        // marquee used to change the document and not one pixel of the picture.
+        // The ants are screen-space geometry over the top of it: traced from
+        // the selection mask, projected through the same camera a click is
+        // routed against, and cut into dashes whose phase is a pure function of
+        // the clock.
+        let ants = self
+            .editor
+            .active()
+            .map(|doc| {
+                let geometry = selection_ants(
+                    &mut state.outline,
+                    doc,
+                    self.started.elapsed().as_secs_f64(),
+                    &Default::default(),
+                );
+                ants_segments(&geometry)
+            })
+            .unwrap_or_default();
+        let has_ants = !ants.is_empty();
+        state.overlay.set_viewport(
+            &state.gpu,
+            Vec2::new(
+                state.surface_config.width as f32,
+                state.surface_config.height as f32,
+            ),
+        );
+        state.overlay.set_segments(&state.gpu, &ants);
+
         // ---- chrome ----
         let raw_input = state.egui_state.take_egui_input(&state.window);
         let (full_output, chrome_output) = {
@@ -739,6 +794,9 @@ impl Shell {
                 });
         if have_document {
             state.canvas.render(&mut encoder, &view);
+            // Over the image, under the chrome — a panel must cover the ants,
+            // not the other way round.
+            state.overlay.render(&mut encoder, &view);
         } else {
             clear(
                 &mut encoder,
@@ -800,6 +858,14 @@ impl Shell {
             .get(&egui::ViewportId::ROOT)
             .map(|v| v.repaint_delay)
             .unwrap_or(Duration::ZERO);
+        // Ants that are on screen have to keep crawling: nothing else in the
+        // frame is changing, so without this the chrome's own repaint delay
+        // (which is `Duration::MAX` for an idle window) would freeze them.
+        let delay = if has_ants {
+            delay.min(ANTS_FRAME)
+        } else {
+            delay
+        };
         self.repaint_at = Instant::now().checked_add(delay);
 
         self.apply_chrome(chrome_output);
@@ -840,6 +906,18 @@ impl Shell {
         }
         for command in output.commands {
             self.editor.apply_command(command);
+        }
+        // The Filter, Select, Adjustments and merge items. They cannot be a
+        // `Command` built during enablement — the pixels have to be hashed into
+        // the tile store first, and the selection is a document field with no
+        // command behind it — so the bridge names the operation and performs it
+        // here, once, with `&mut Editor`. Both halves of the answer reach the
+        // status bar: `perform` sets it either way, so an operation that
+        // refused says why instead of looking like it worked.
+        for action in output.menu {
+            if let Err(reason) = crate::menu_bridge::perform(action, &mut self.editor) {
+                tracing::warn!("{}: {reason}", action.label());
+            }
         }
         // The Properties panel's adjustment sliders and the Text panel's
         // fields. Their own path rather than `commands` because a drag emits
@@ -934,6 +1012,38 @@ impl Shell {
         }
     }
 
+    /// Hand one key press to a text run open on the canvas, if there is one.
+    ///
+    /// Reports whether it was consumed. The rules are the narrow ones: only
+    /// while [`ToolPointer::is_text_editing`], only when egui does not hold the
+    /// keyboard, and never with Ctrl or Alt held — so Ctrl+S still saves while
+    /// the user is typing. Enter and Escape deliberately fall through: they end
+    /// the run through the commit and cancel routes below, which is the only
+    /// way out of a text session.
+    fn route_text_key(&mut self, owner: KeyboardOwner, logical: &winit::keyboard::Key) -> bool {
+        use winit::keyboard::Key as WKey;
+        if owner.egui_text_focus || owner.recording_shortcut || !self.pointer.is_text_editing() {
+            return false;
+        }
+        if self.modifiers.control_key() || self.modifiers.alt_key() || self.modifiers.super_key() {
+            return false;
+        }
+        let edit = match logical {
+            // The platform's own text for the key, so a shifted letter arrives
+            // as a capital and a dead-key composition arrives composed. This is
+            // what `Chord` cannot carry: it normalises case on purpose.
+            WKey::Character(text) => tools::TextEdit::Insert(text.as_str()),
+            WKey::Named(NamedKey::Space) => tools::TextEdit::Insert(" "),
+            WKey::Named(NamedKey::Backspace) => tools::TextEdit::Backspace,
+            _ => return false,
+        };
+        let outcome = self.pointer.text_edit(&mut self.editor, edit);
+        if outcome.needs_repaint() {
+            self.repaint_at = Some(Instant::now());
+        }
+        outcome.had_pending
+    }
+
     /// Route one key press. Separated from `window_event` so it can be driven
     /// without an event loop, which is how [`route_key`]'s decisions are shown
     /// to reach [`Editor::dispatch`].
@@ -944,6 +1054,13 @@ impl Shell {
         state: ElementState,
         repeat: bool,
     ) {
+        // A Type-tool run open on the canvas owns the keyboard, the way a
+        // focused egui field does. Without this the Type tool could create a
+        // layer and never put a character in it: every letter would be a tool
+        // shortcut and the space bar would grab the hand tool.
+        if state == ElementState::Pressed && self.route_text_key(owner, logical) {
+            return;
+        }
         match route_key(owner, logical, state, repeat, self.modifiers) {
             KeyOutcome::Dispatch(chord) => {
                 // Escape abandons whatever the pointer is in the middle of,
@@ -952,6 +1069,21 @@ impl Shell {
                 // gap this route is here to close.
                 if chord.key == Key::Escape {
                     self.abandon_gesture();
+                }
+                // Enter confirms the gesture the live tool is *holding*: the
+                // crop box, the slice set, the free-transform quad. Those three
+                // tools publish only from `Tool::commit`, so without this the
+                // user drew a crop rectangle that could never become a crop.
+                // Only when there is something to confirm — otherwise Enter
+                // stays whatever the keymap says it is.
+                if chord == Chord::plain(Key::Enter) {
+                    let outcome = self.pointer.commit(&mut self.editor);
+                    if outcome.needs_repaint() {
+                        self.repaint_at = Some(Instant::now());
+                    }
+                    if outcome.had_pending {
+                        return;
+                    }
                 }
                 if let Some(action) = self.editor.keymap().resolve(&chord) {
                     self.perform(action);
@@ -1958,9 +2090,14 @@ mod tests {
 
         let told = shell.editor().status().unwrap_or_default().to_string();
         assert_eq!(told, crate::menu_bridge::unrouted_message(&orphan));
+        // `FileInfo` cannot be answered in this build; that refusal names the
+        // missing piece (there is no metadata editor) rather than the generic
+        // fallback. This test protects the *reporting* — that the window
+        // admits a click went somewhere it cannot perform — not the specific
+        // reason, so assert the user was told something real.
         assert!(
-            told.contains(crate::menu_bridge::NOT_WIRED),
-            "the user was told nothing: {told}"
+            told.contains("metadata editor"),
+            "the user was told nothing actionable: {told}"
         );
     }
 

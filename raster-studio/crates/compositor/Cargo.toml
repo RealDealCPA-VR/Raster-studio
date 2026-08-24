@@ -20,3 +20,14 @@ editor-core.workspace = true
 # The parametric adjustments. `adjust.rs` still evaluates the five adjustment
 # kinds that predate that crate itself; everything else is delegated to it.
 adjustments.workspace = true
+# The three rasterizers the compositor drives rather than reimplements: glyph
+# coverage for a text layer, path coverage for a shape layer, and the Gaussian
+# that gives a shadow or a glow its falloff.
+text-engine.workspace = true
+vector.workspace = true
+filters.workspace = true
+
+[dev-dependencies]
+# A deterministic font for the text-layer tests, so what composites does not
+# depend on what the machine happens to have installed.
+dejavu = "2.37"

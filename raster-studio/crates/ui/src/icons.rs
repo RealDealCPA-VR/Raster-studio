@@ -602,6 +602,28 @@ const TRANSFORM: &[Prim] = &[
     Prim::Dot([0.78, 0.78], 0.07),
 ];
 
+/// The pen: a nib with a slit, and the anchor it is placing.
+///
+/// Deliberately distinct from [`PENCIL`] (a plain barrel) — the two sit in
+/// different palette groups and a user has to tell them apart at 16 px, which
+/// is what `no_two_tools_share_a_drawing` exists to enforce.
+const PEN: &[Prim] = &[
+    Prim::Poly(
+        &[[0.20, 0.84], [0.30, 0.46], [0.62, 0.14], [0.80, 0.32]],
+        true,
+    ),
+    Prim::Line([0.30, 0.46], [0.52, 0.68]),
+    Prim::Line([0.20, 0.84], [0.41, 0.57]),
+    Prim::Dot([0.20, 0.84], 0.06),
+];
+
+/// Type: a serifed capital I, the mark every editor uses for a text tool.
+const TYPE: &[Prim] = &[
+    Prim::Line([0.26, 0.20], [0.74, 0.20]),
+    Prim::Line([0.50, 0.20], [0.50, 0.80]),
+    Prim::Line([0.32, 0.80], [0.68, 0.80]),
+];
+
 /// The drawing for a registry icon key.
 ///
 /// Total over `tools::registry` — see the module note and the gate that keeps
@@ -609,6 +631,8 @@ const TRANSFORM: &[Prim] = &[
 pub fn icon_for(key: &str) -> Icon {
     Icon(match key {
         "move" => CROSS_ARROWS,
+        "pen" => PEN,
+        "type" => TYPE,
         "marquee-rect" => MARQUEE_RECT,
         "marquee-ellipse" => MARQUEE_ELLIPSE,
         "marquee-row" => MARQUEE_ROW,

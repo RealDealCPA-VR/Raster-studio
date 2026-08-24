@@ -111,7 +111,7 @@ use color::{to_linear, unpremultiply, ColorSpace};
 use editor_core::{Document, PixelKey};
 use layer_model::{
     dissolve_keeps_source, BlendMode, ClippingMode, GroupBlending, GroupLayer, Layer, LayerId,
-    LayerKind, LayerMask, MaskId, MaskKind,
+    LayerKind, LayerMask, MaskId, MaskKind, ShapeLayer, TextLayer,
 };
 use raster::mipmap::{level_count, level_dimensions};
 use raster::{PixelFormat, PixelRect, Tile, TileCoord, TileGrid, TILE_SIZE};
@@ -119,6 +119,7 @@ use raster::{PixelFormat, PixelRect, Tile, TileCoord, TileGrid, TILE_SIZE};
 use crate::adjust::PreparedAdjustment;
 use crate::blending::{blend_atop, blend_over, dissolve_noise, BlendContext, BlendSpace};
 use crate::canvas::Canvas;
+use crate::effects::StyleContext;
 use crate::error::CompositeError;
 use crate::source::TileSource;
 
@@ -413,15 +414,90 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
                     *d = lerp4(*d, src[i], k);
                 }
             }
-            LayerKind::Group(_) | LayerKind::Raster(_) | LayerKind::Generator(_) => {
-                let src = self.render_source(layer, rect)?;
-                self.blend_source(&src, layer, backdrop);
-            }
-            // No rasterizer for these yet; they contribute nothing. See the
+            LayerKind::Group(_)
+            | LayerKind::Raster(_)
+            | LayerKind::Generator(_)
+            | LayerKind::Text(_)
+            | LayerKind::Shape(_) => match self.style_reach(layer) {
+                // The common path, untouched: no styles, so the layer's own
+                // pixels are the whole of its contribution.
+                None => {
+                    let src = self.render_source(layer, rect)?;
+                    self.blend_source(&src, layer, backdrop);
+                }
+                Some(margin) => {
+                    let work = self.style_rect(rect, margin);
+                    let src = self.render_source(layer, work)?;
+                    let styled = self.render_styled(layer, &src)?;
+                    self.blend_styled(&styled.sub(rect)?, layer, backdrop);
+                }
+            },
+            // No rasterizer for this one yet; it contributes nothing. See the
             // crate docs' "Not yet" list.
-            LayerKind::Text(_) | LayerKind::Shape(_) | LayerKind::SmartObject(_) => {}
+            LayerKind::SmartObject(_) => {}
         }
         Ok(())
+    }
+
+    /// The margin a styled layer must be rendered with, or `None` when the
+    /// plain path applies.
+    ///
+    /// A layer kind with no pixels of its own has nothing for a style to trace,
+    /// so an adjustment layer — and a smart object, which does not render at
+    /// all yet — takes the plain path however it is styled.
+    fn style_reach(&self, layer: &Layer) -> Option<i64> {
+        match &layer.kind {
+            LayerKind::Adjustment(_) | LayerKind::SmartObject(_) => None,
+            _ => crate::effects::reach(&layer.effects, self.level),
+        }
+    }
+
+    /// `rect` grown by a style's reach, falling back to `rect` itself when the
+    /// grown rect could not be allocated.
+    ///
+    /// Falling back changes what the effect looks like near the edge of the
+    /// region rather than failing the frame, on the same terms as the mask
+    /// feather clamp — and it takes a rect already close to the coordinate
+    /// ceiling to reach, which no visible layer is.
+    fn style_rect(&self, rect: PixelRect, margin: i64) -> PixelRect {
+        expand_rect(rect, margin).unwrap_or(rect)
+    }
+
+    /// Apply the layer's effects to its own rendered shape.
+    fn render_styled(&self, layer: &Layer, src: &Canvas) -> Result<Canvas, CompositeError> {
+        let ctx = StyleContext {
+            space: &self.space,
+            blend: BlendContext {
+                space: &self.space,
+                blend_space: self.opts.blend_space,
+            },
+            level: self.level,
+            dissolve_seed: self.opts.dissolve_seed,
+            layer_bounds: self.document_bounds(layer),
+            doc_bounds: PixelRect::new(0, 0, self.width, self.height),
+        };
+        crate::effects::render(src, &layer.effects, layer.effective_fill_opacity(), &ctx)
+    }
+
+    /// Where the layer's own content lands in document space at this level.
+    ///
+    /// Region-independent by construction — it is the layer's whole extent, not
+    /// the part of it the current region happens to see — which is what lets an
+    /// `align_with_layer` gradient overlay fit to it without stepping at every
+    /// tile boundary.
+    fn document_bounds(&self, layer: &Layer) -> PixelRect {
+        let Some(b) = self.content_bounds(layer) else {
+            return EMPTY_RECT;
+        };
+        if b.is_empty() {
+            return EMPTY_RECT;
+        }
+        let t = self.level_transform(layer);
+        if is_identity(&t) {
+            b
+        } else {
+            image_rect(&t, b).unwrap_or(EMPTY_RECT)
+        }
     }
 
     /// Draw a base layer together with the run of layers clipped to it.
@@ -439,9 +515,16 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
         if base.is_noop() {
             return Ok(());
         }
+        // A styled base traces the finished group, so the whole group is
+        // assembled over the grown rect and only its centre is kept.
+        let style = self.style_reach(base);
+        let work = match style {
+            None => rect,
+            Some(margin) => self.style_rect(rect, margin),
+        };
         // The group's buffer starts as the base's own content, so its alpha is
         // the base's shape and stays that way through every `atop`.
-        let mut buf = self.render_source(base, rect)?;
+        let mut buf = self.render_source(base, work)?;
         for &id in clipped {
             let Some(layer) = self.doc.layers.get(id) else {
                 continue;
@@ -453,19 +536,25 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
                 LayerKind::Adjustment(adj) => {
                     let prepared = PreparedAdjustment::new(&adj.kind);
                     if !prepared.is_identity() {
-                        let cov = self.adjustment_coverage(layer, rect)?;
+                        let cov = self.adjustment_coverage(layer, work)?;
                         // `buf`'s alpha is the base's shape, and the adjustment
                         // skips zero-alpha pixels, so the clip is automatic.
                         self.apply_adjustment(&prepared, layer, &mut buf, cov.as_deref());
                     }
                 }
                 _ => {
-                    let src = self.render_source(layer, rect)?;
+                    let src = self.render_source(layer, work)?;
                     self.blend_atop_buffer(&src, layer, &mut buf);
                 }
             }
         }
-        self.blend_source(&buf, base, backdrop);
+        match style {
+            None => self.blend_source(&buf, base, backdrop),
+            Some(_) => {
+                let styled = self.render_styled(base, &buf)?;
+                self.blend_styled(&styled.sub(rect)?, base, backdrop);
+            }
+        }
         Ok(())
     }
 
@@ -596,10 +685,11 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
                 }
                 Some(acc)
             }
-            LayerKind::Adjustment(_)
-            | LayerKind::Text(_)
-            | LayerKind::Shape(_)
-            | LayerKind::SmartObject(_) => Some(EMPTY_RECT),
+            // Ink is bounded by the ink: a text run and a shape's path each
+            // rasterise to a box the size of what they draw and nothing more.
+            LayerKind::Text(t) => Some(crate::text::ink_bounds(t, self.level)),
+            LayerKind::Shape(s) => Some(crate::shape::ink_bounds(s, self.level)),
+            LayerKind::Adjustment(_) | LayerKind::SmartObject(_) => Some(EMPTY_RECT),
         }
     }
 
@@ -658,26 +748,107 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
         match &layer.kind {
             LayerKind::Group(g) => self.composite_ids(&g.children, rect, &mut c)?,
             LayerKind::Raster(_) | LayerKind::Generator(_) => self.fill_layer(layer.id, &mut c),
-            _ => {}
+            LayerKind::Text(t) => self.fill_text(t, &mut c),
+            LayerKind::Shape(s) => self.fill_shape(s, &mut c),
+            LayerKind::Adjustment(_) | LayerKind::SmartObject(_) => {}
         }
         Ok(c)
+    }
+
+    /// Blit a text layer's shaped, rasterised ink into `out`.
+    ///
+    /// The ink arrives premultiplied and linear from `text-engine`, which is
+    /// exactly what a [`Canvas`] holds, so there is no conversion here — only
+    /// the intersection of the two rects.
+    fn fill_text(&self, text: &TextLayer, out: &mut Canvas) {
+        let Some(img) = crate::text::run_image(text, self.level) else {
+            return;
+        };
+        let rect = out.rect();
+        let ink = PixelRect::new(
+            i64::from(img.origin_x),
+            i64::from(img.origin_y),
+            img.width,
+            img.height,
+        );
+        let overlap = intersect_rects(rect, ink);
+        for y in overlap.y..overlap.bottom() {
+            for x in overlap.x..overlap.right() {
+                // `ink` is inside `i32` by construction: it came from one.
+                let (Ok(ix), Ok(iy)) = (i32::try_from(x), i32::try_from(y)) else {
+                    continue;
+                };
+                let px = img.pixel(ix, iy);
+                if px[3] > 0.0 {
+                    out.set(x, y, px);
+                }
+            }
+        }
+    }
+
+    /// Paint a shape layer's fill and stroke coverage into `out`.
+    ///
+    /// Coverage is area, so it multiplies alpha directly; the colours are
+    /// straight-alpha in the document's space and are decoded and premultiplied
+    /// here, the same way a stored tile is.
+    fn fill_shape(&self, shape: &ShapeLayer, out: &mut Canvas) {
+        let Some(cov) = crate::shape::coverage(shape, self.level) else {
+            return;
+        };
+        let paint = |c: [f32; 4]| -> [f32; 4] {
+            let a = layer_model::blend::unit(c[3]);
+            let lin = to_linear(&self.space, [c[0], c[1], c[2]]);
+            [lin[0] * a, lin[1] * a, lin[2] * a, a]
+        };
+        let fill = shape.fill.map(paint);
+        let stroke = shape.stroke.as_ref().map(|s| paint(s.color));
+        let overlap = intersect_rects(out.rect(), cov.rect);
+        let stride = cov.rect.width as usize;
+        for y in overlap.y..overlap.bottom() {
+            let row = (y - cov.rect.y) as usize * stride;
+            for x in overlap.x..overlap.right() {
+                let i = row + (x - cov.rect.x) as usize;
+                let mut px = [0.0f32; 4];
+                if let Some(c) = fill {
+                    let k = cov.fill.get(i).map_or(0.0, |v| f32::from(*v) / 255.0);
+                    px = scale4(c, k);
+                }
+                if let Some(c) = stroke {
+                    let k = cov.stroke.get(i).map_or(0.0, |v| f32::from(*v) / 255.0);
+                    px = over4(scale4(c, k), px);
+                }
+                if px[3] > 0.0 {
+                    out.set(x, y, px);
+                }
+            }
+        }
     }
 
     /// Blend a rendered source over the backdrop with the layer's mode and
     /// opacity.
     fn blend_source(&self, src: &Canvas, layer: &Layer, backdrop: &mut Canvas) {
-        self.blend_into(src, layer, backdrop, false);
+        let w = layer.effective_opacity() * layer.effective_fill_opacity();
+        self.blend_into(src, layer, backdrop, false, w);
+    }
+
+    /// Blend a layer's **styled** result over the backdrop.
+    ///
+    /// Fill opacity is deliberately absent: it has already been applied to the
+    /// layer's own pixels inside the style buffer, and applying it again would
+    /// fade the effects with them — the one thing "fill" exists not to do.
+    fn blend_styled(&self, src: &Canvas, layer: &Layer, backdrop: &mut Canvas) {
+        self.blend_into(src, layer, backdrop, false, layer.effective_opacity());
     }
 
     /// Composite a rendered source *atop* the buffer, keeping the buffer's
     /// alpha. Used for the members of a clipping group.
     fn blend_atop_buffer(&self, src: &Canvas, layer: &Layer, buf: &mut Canvas) {
-        self.blend_into(src, layer, buf, true);
+        let w = layer.effective_opacity() * layer.effective_fill_opacity();
+        self.blend_into(src, layer, buf, true, w);
     }
 
-    fn blend_into(&self, src: &Canvas, layer: &Layer, dst: &mut Canvas, atop: bool) {
+    fn blend_into(&self, src: &Canvas, layer: &Layer, dst: &mut Canvas, atop: bool, w: f32) {
         debug_assert_eq!(src.rect(), dst.rect());
-        let w = layer.effective_opacity() * layer.effective_fill_opacity();
         if w <= 0.0 {
             return;
         }
@@ -767,10 +938,9 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
     /// Rewrite a backdrop in place. Alpha is never touched.
     ///
     /// The weight is opacity × fill opacity, the same product
-    /// [`Ctx::blend_into`] uses. While no layer effects are rendered the two are
-    /// indistinguishable on any layer (see the crate docs' "Not yet" list); an
-    /// adjustment layer is no exception, and hashing `fill_opacity` into the
-    /// tile key would otherwise evict tiles to repaint an identical picture.
+    /// [`Ctx::blend_source`] uses. The two are distinguishable only on a layer
+    /// whose effects are drawn, and an adjustment layer has no pixels for an
+    /// effect to trace, so folding them together stays exact here.
     fn apply_adjustment(
         &self,
         prepared: &PreparedAdjustment,
@@ -1007,6 +1177,15 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             hash_layer_props(layer, h);
             let t = self.level_transform(layer);
             let identity = is_identity(&t);
+            // A styled layer traces its own pixels over a grown rect, so that
+            // is the rect whose inputs decide this tile.
+            let rect = match self.style_reach(layer) {
+                None => rect,
+                Some(margin) => {
+                    margin.hash(h);
+                    self.style_rect(rect, margin)
+                }
+            };
             // The same rect the traversal will sample, bounds and all — a
             // superset would only hash tiles nobody reads, but for a strong
             // minification that superset is thousands of tiles per layer.
@@ -1126,6 +1305,22 @@ fn multiply_alpha(c: &mut Canvas, cov: &[f32]) {
             *ch *= k;
         }
     }
+}
+
+/// A premultiplied pixel scaled by a coverage in `0..=1`.
+fn scale4(px: [f32; 4], k: f32) -> [f32; 4] {
+    [px[0] * k, px[1] * k, px[2] * k, px[3] * k]
+}
+
+/// Premultiplied source-over of one pixel on another.
+fn over4(src: [f32; 4], dst: [f32; 4]) -> [f32; 4] {
+    let inv = 1.0 - src[3];
+    [
+        src[0] + dst[0] * inv,
+        src[1] + dst[1] * inv,
+        src[2] + dst[2] * inv,
+        src[3] + dst[3] * inv,
+    ]
 }
 
 fn lerp4(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
@@ -1428,7 +1623,7 @@ fn bilinear(src: &Canvas, fx: f32, fy: f32) -> [f32; 4] {
 /// The standard construction (Kovesi): pick an odd box width just below the
 /// ideal, then use the wider one for the remaining passes so the combined
 /// variance matches `3 * sigma²`.
-fn boxes_for_gauss(sigma: f32) -> [i64; 3] {
+pub(crate) fn boxes_for_gauss(sigma: f32) -> [i64; 3] {
     const N: f32 = 3.0;
     let ideal = (12.0 * sigma * sigma / N + 1.0).sqrt();
     let mut wl = ideal.floor() as i64;
@@ -1526,6 +1721,12 @@ fn hash_layer_props(layer: &Layer, h: &mut DefaultHasher) {
         }
         None => 0u8.hash(h),
     }
+    // Nothing is written for an unstyled layer, so a document that has never
+    // been styled keys exactly as it did before layer effects existed and its
+    // cached tiles survive.
+    if layer.effects.affects_composite() {
+        hash_effects(&layer.effects, h);
+    }
     match &layer.kind {
         LayerKind::Raster(_) => 0u8.hash(h),
         LayerKind::Group(g) => {
@@ -1548,6 +1749,24 @@ fn hash_layer_props(layer: &Layer, h: &mut DefaultHasher) {
         LayerKind::Shape(s) => {
             4u8.hash(h);
             s.path_svg.hash(h);
+            s.fill_rule.hash(h);
+            hash_opt_rgba(s.fill, h);
+            match &s.stroke {
+                Some(st) => {
+                    1u8.hash(h);
+                    hash_rgba(st.color, h);
+                    hash_f32(st.width_px, h);
+                    st.cap.hash(h);
+                    st.join.hash(h);
+                    hash_f32(st.miter_limit, h);
+                    st.dash.len().hash(h);
+                    for v in &st.dash {
+                        hash_f32(*v, h);
+                    }
+                    hash_f32(st.dash_offset, h);
+                }
+                None => 0u8.hash(h),
+            }
         }
         LayerKind::SmartObject(s) => {
             5u8.hash(h);
@@ -1558,6 +1777,193 @@ fn hash_layer_props(layer: &Layer, h: &mut DefaultHasher) {
             6u8.hash(h);
             g.provenance_key.hash(h);
         }
+    }
+}
+
+fn hash_rgba(c: layer_model::Rgba, h: &mut DefaultHasher) {
+    for v in c {
+        hash_f32(v, h);
+    }
+}
+
+fn hash_opt_rgba(c: Option<layer_model::Rgba>, h: &mut DefaultHasher) {
+    match c {
+        Some(c) => {
+            1u8.hash(h);
+            hash_rgba(c, h);
+        }
+        None => 0u8.hash(h),
+    }
+}
+
+fn hash_fill_style(f: &layer_model::FillStyle, h: &mut DefaultHasher) {
+    use layer_model::FillStyle as F;
+    match f {
+        F::Solid(c) => {
+            0u8.hash(h);
+            hash_rgba(*c, h);
+        }
+        F::Gradient(g) => {
+            1u8.hash(h);
+            hash_gradient(g, h);
+        }
+        F::Pattern(p) => {
+            2u8.hash(h);
+            p.asset.map(|a| a.0).hash(h);
+            hash_f32(p.scale, h);
+            hash_f32(p.offset_px[0], h);
+            hash_f32(p.offset_px[1], h);
+            hash_f32(p.angle_deg, h);
+            p.link_with_layer.hash(h);
+        }
+    }
+}
+
+fn hash_gradient(g: &layer_model::Gradient, h: &mut DefaultHasher) {
+    for stops in [&g.stops, &g.alpha_stops] {
+        stops.len().hash(h);
+        for s in stops {
+            hash_f32(s.position, h);
+            hash_rgba(s.color, h);
+            hash_f32(s.midpoint, h);
+        }
+    }
+    hash_f32(g.smoothness, h);
+}
+
+fn hash_shadow(s: &layer_model::ShadowEffect, h: &mut DefaultHasher) {
+    s.blend_mode.shader_index().hash(h);
+    hash_rgba(s.color, h);
+    for v in [
+        s.opacity,
+        s.angle_deg,
+        s.distance_px,
+        s.spread,
+        s.size_px,
+        s.noise,
+    ] {
+        hash_f32(v, h);
+    }
+    s.use_global_light.hash(h);
+    s.knockout.hash(h);
+}
+
+fn hash_glow(g: &layer_model::GlowEffect, h: &mut DefaultHasher) {
+    g.blend_mode.shader_index().hash(h);
+    hash_fill_style(&g.fill, h);
+    for v in [g.opacity, g.noise, g.spread, g.size_px, g.range, g.jitter] {
+        hash_f32(v, h);
+    }
+    g.technique.hash(h);
+    g.source.hash(h);
+}
+
+/// Every layer-effect parameter that can change a pixel.
+///
+/// Written only for a block that will actually be drawn, so an unstyled layer
+/// contributes nothing to its tile's key — see [`hash_layer_props`].
+fn hash_effects(e: &layer_model::LayerEffects, h: &mut DefaultHasher) {
+    0xE7u8.hash(h);
+    for s in [&e.drop_shadow, &e.inner_shadow] {
+        match s {
+            Some(s) => {
+                1u8.hash(h);
+                hash_shadow(s, h);
+            }
+            None => 0u8.hash(h),
+        }
+    }
+    for g in [&e.outer_glow, &e.inner_glow] {
+        match g {
+            Some(g) => {
+                1u8.hash(h);
+                hash_glow(g, h);
+            }
+            None => 0u8.hash(h),
+        }
+    }
+    match &e.bevel_emboss {
+        Some(b) => {
+            1u8.hash(h);
+            b.style.hash(h);
+            b.technique.hash(h);
+            b.direction.hash(h);
+            for v in [
+                b.depth,
+                b.size_px,
+                b.soften_px,
+                b.angle_deg,
+                b.altitude_deg,
+                b.highlight_opacity,
+                b.shadow_opacity,
+            ] {
+                hash_f32(v, h);
+            }
+            b.use_global_light.hash(h);
+            b.highlight_mode.shader_index().hash(h);
+            b.shadow_mode.shader_index().hash(h);
+            hash_rgba(b.highlight_color, h);
+            hash_rgba(b.shadow_color, h);
+        }
+        None => 0u8.hash(h),
+    }
+    match &e.satin {
+        Some(s) => {
+            1u8.hash(h);
+            s.blend_mode.shader_index().hash(h);
+            hash_rgba(s.color, h);
+            for v in [s.opacity, s.angle_deg, s.distance_px, s.size_px] {
+                hash_f32(v, h);
+            }
+            s.invert.hash(h);
+        }
+        None => 0u8.hash(h),
+    }
+    match &e.color_overlay {
+        Some(c) => {
+            1u8.hash(h);
+            c.blend_mode.shader_index().hash(h);
+            hash_rgba(c.color, h);
+            hash_f32(c.opacity, h);
+        }
+        None => 0u8.hash(h),
+    }
+    match &e.gradient_overlay {
+        Some(g) => {
+            1u8.hash(h);
+            g.blend_mode.shader_index().hash(h);
+            hash_f32(g.opacity, h);
+            hash_gradient(&g.gradient, h);
+            g.style.hash(h);
+            g.reverse.hash(h);
+            g.align_with_layer.hash(h);
+            for v in [g.angle_deg, g.scale, g.offset_px[0], g.offset_px[1]] {
+                hash_f32(v, h);
+            }
+            g.dither.hash(h);
+        }
+        None => 0u8.hash(h),
+    }
+    match &e.pattern_overlay {
+        Some(p) => {
+            1u8.hash(h);
+            p.blend_mode.shader_index().hash(h);
+            hash_f32(p.opacity, h);
+            hash_fill_style(&layer_model::FillStyle::Pattern(p.pattern.clone()), h);
+        }
+        None => 0u8.hash(h),
+    }
+    match &e.stroke {
+        Some(s) => {
+            1u8.hash(h);
+            hash_f32(s.size_px, h);
+            s.position.hash(h);
+            s.blend_mode.shader_index().hash(h);
+            hash_f32(s.opacity, h);
+            hash_fill_style(&s.fill, h);
+            s.overprint.hash(h);
+        }
+        None => 0u8.hash(h),
     }
 }
 

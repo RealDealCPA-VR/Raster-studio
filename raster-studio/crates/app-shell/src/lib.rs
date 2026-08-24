@@ -63,22 +63,25 @@
 //!   rewritten by that command and nothing else — so the canvas is unchanged
 //!   for the whole drag and the stroke appears at the release. There is no live
 //!   preview layer to draw one into. See [`tool_input`].
-//! * **A shape gesture draws nothing.** The seven shape tools emit one undoable
-//!   `CreateLayer` holding a visible `layer_model::LayerKind::Shape` with the
-//!   dragged path, so the layer appears in the Layers panel — and nowhere else,
-//!   because `compositor::composite` answers `LayerKind::Text | Shape |
-//!   SmartObject` with an empty arm ("No rasterizer for these yet; they
-//!   contribute nothing"). The composited pixels are byte-identical after the
-//!   gesture. See [`tool_input`].
+//! * **A slice set cannot be exported.** The Slice tool's regions reach
+//!   [`tool_input::ToolPointer::commit`] and the status bar and stop there:
+//!   writing one file per region needs a folder picker that is not wired. The
+//!   crop beside it *is* performed, as one undoable step — see
+//!   [`tool_input::crop_command`], and the `straighten`/`delete_cropped` halves
+//!   of a crop request that it deliberately does not do.
 //! * **The right button does nothing on the canvas.** There is no context menu
 //!   to give it, and [`ui::canvas::InputRouter`] would hand a `Secondary` press
 //!   to the active tool exactly as it hands it a `Primary` one — so a right-drag
 //!   would paint. [`shell::pointer_button`] refuses it rather than leaving the
 //!   user a stroke they did not ask for.
-//! * **There is no pen/path tool.** The brief names `P` among the tool letters,
-//!   but `tools::registry` ships no tool answering to it, so `P` is unbound.
-//!   Recorded rather than hidden — see `keymap`'s
-//!   `the_briefs_tool_letters_are_present_except_the_ones_recorded_as_missing`.
+//! * **A text run cannot be re-entered.** A Type-tool click makes a text layer
+//!   and opens it for typing; clicking *back into* an existing one to move the
+//!   caret does not, because placing a caret needs the glyph boxes
+//!   `ui::canvas::text_overlay` computes and a hit test the canvas does not
+//!   run. The run can still be edited from the Properties panel's text field.
+//!   Nor does the Pen draw curves: a click makes a corner, and dragging out of
+//!   one to pull a control handle is not wired. See `tools::text` and
+//!   `tools::pen`.
 //! * **The scratch location is shown, not edited.** The preferences window
 //!   ([`chrome`]) covers theme, UI scale, autosave interval, history depth and
 //!   the whole keymap; the scratch directory is displayed read-only because

@@ -859,6 +859,14 @@ impl Tool for TransformTool {
         self.grabbed = None;
     }
 
+    fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
+        TransformTool::commit(self, ctx)
+    }
+
+    fn has_pending_commit(&self) -> bool {
+        self.state.is_some()
+    }
+
     fn is_active(&self) -> bool {
         self.state.is_some()
     }

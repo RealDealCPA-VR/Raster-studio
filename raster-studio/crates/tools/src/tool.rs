@@ -59,6 +59,11 @@ pub enum ToolId {
     Dodge,
     Burn,
     Sponge,
+    /// Author a path one click at a time. See [`crate::pen::PenTool`].
+    Pen,
+    /// Click to place a text layer and type into it. See
+    /// [`crate::text::TypeTool`].
+    Type,
     Rectangle,
     RoundedRectangle,
     Ellipse,
@@ -113,6 +118,8 @@ impl ToolId {
         ToolId::Dodge,
         ToolId::Burn,
         ToolId::Sponge,
+        ToolId::Pen,
+        ToolId::Type,
         ToolId::Rectangle,
         ToolId::RoundedRectangle,
         ToolId::Ellipse,
@@ -451,6 +458,20 @@ pub struct Slice {
     pub name: String,
 }
 
+/// One keystroke aimed at a tool that is editing text.
+///
+/// Deliberately tiny. A full caret model — arrow keys, selection, home/end —
+/// needs the glyph boxes `ui::canvas::text_overlay` computes and a click that
+/// lands inside an existing run, and neither is wired; growing this enum ahead
+/// of that would be inventing a text editor nothing drives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextEdit<'a> {
+    /// Append this text at the caret.
+    Insert(&'a str),
+    /// Remove the character before the caret.
+    Backspace,
+}
+
 /// Something a tool wants that is not a [`Command`] and not a selection.
 ///
 /// The two outboxes are separate because a selection edit is by far the most
@@ -679,6 +700,57 @@ pub trait Tool {
     /// Abandon an in-progress gesture (Esc). Must emit nothing and must leave
     /// the tool reusable.
     fn cancel(&mut self, ctx: &mut ToolContext<'_>);
+
+    /// Confirm a gesture the tool is *holding* rather than one it has finished
+    /// (Enter, or the options bar's Apply).
+    ///
+    /// Three tools work this way and none of them could be reached without it.
+    /// [`crate::edit::CropTool`] draws its box on release and waits, so the
+    /// user can nudge the edges before the cut; [`crate::edit::SliceTool`]
+    /// accumulates regions across several drags and publishes the set once;
+    /// [`crate::transform::TransformTool`] keeps a live quad the handles move
+    /// and resamples exactly once. Each has
+    /// an inherent `commit` of its own and this is what makes it reachable
+    /// through a `Box<dyn Tool>` — an application holding one had no way to
+    /// call it, so a crop drag produced a box and never a pixel.
+    ///
+    /// Defaulted to "nothing to confirm", which is the truth for every tool
+    /// whose gesture ends at pointer-up. Emits through the same outboxes a
+    /// pointer sample does, so a committed gesture is one undoable step.
+    fn commit(&mut self, _ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
+        Ok(())
+    }
+
+    /// Whether [`Tool::commit`] has something to confirm right now.
+    ///
+    /// The read half: it is what lets a shell answer Enter with "the crop was
+    /// applied" or leave the key to the keymap, instead of guessing.
+    fn has_pending_commit(&self) -> bool {
+        false
+    }
+
+    /// `true` while the tool has a text run open, so the keyboard belongs to
+    /// the canvas rather than to the shortcut table.
+    ///
+    /// Only [`crate::text::TypeTool`] ever answers `true`. It is on the trait
+    /// rather than reached by downcasting because a shell holds a
+    /// `Box<dyn Tool>` and has no other way to ask.
+    fn is_text_editing(&self) -> bool {
+        false
+    }
+
+    /// Feed one keystroke to a tool that is editing text.
+    ///
+    /// Defaulted to a refusal rather than to a no-op: a shell that routes the
+    /// keyboard at a tool which is not typing has routed it to the wrong place,
+    /// and a swallowed key is exactly how that stays invisible.
+    fn text_edit(
+        &mut self,
+        _ctx: &mut ToolContext<'_>,
+        _edit: TextEdit<'_>,
+    ) -> Result<(), ToolError> {
+        Err(ToolError::NotStarted)
+    }
 
     /// Adopt the application's brush.
     ///

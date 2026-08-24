@@ -136,6 +136,11 @@ pub fn touched_by(command: &Command) -> DirtyTiles {
         // canvas has to be re-composited whole. Answering `none` here is what
         // would make a Brightness slider move a value nothing repainted.
         | Command::SetLayerKind { .. }
+        // A crop changes which document pixels exist at all, so every tile of
+        // the new canvas is new. The presenter rebuilds its texture on a size
+        // change anyway; saying `all` here is what keeps a resize that happens
+        // to leave the size alone (an undo of a no-op crop) honest.
+        | Command::SetCanvasSize { .. }
         | Command::TransformLayer { .. } => DirtyTiles::all(),
     }
 }

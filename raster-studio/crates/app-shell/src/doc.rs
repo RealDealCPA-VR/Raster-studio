@@ -102,6 +102,11 @@ pub fn next_layer_name(doc: &Document) -> String {
 }
 
 /// The export format implied by a file name.
+///
+/// `.psd` is deliberately absent: [`raster::ExportFormat`] describes flat
+/// images, and writing a layered document as one flattened frame is the exact
+/// thing that made "save a PSD" worthless. [`exports_as_psd`] answers for that
+/// destination, and [`OpenDocument::export_to`] asks it first.
 pub fn export_format_for(path: &Path) -> Option<raster::ExportFormat> {
     let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
     Some(match ext.as_str() {
@@ -113,6 +118,45 @@ pub fn export_format_for(path: &Path) -> Option<raster::ExportFormat> {
         "bmp" | "dib" => raster::ExportFormat::Bmp,
         _ => return None,
     })
+}
+
+/// `true` when this destination asks for a layered Photoshop document.
+///
+/// By name, unlike [`crate::import::looks_like_psd`], which asks by content:
+/// nothing exists at an export destination yet, so the name is all there is.
+pub fn exports_as_psd(path: &Path) -> bool {
+    path.extension()
+        .map(|e| e.eq_ignore_ascii_case("psd"))
+        .unwrap_or(false)
+}
+
+/// Write `bytes` to `path` without destroying what is already there if the
+/// write fails.
+///
+/// The same rule [`raster::encode_to_path`] follows: a save that dies half way
+/// through must not have eaten the previous version. The temporary file is a
+/// sibling so the rename stays on one filesystem, and it is removed when the
+/// rename does not happen.
+fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "export".to_string());
+    let temp_name = format!(".{name}.{}.part", std::process::id());
+    let temp = match dir {
+        Some(dir) => dir.join(temp_name),
+        None => PathBuf::from(temp_name),
+    };
+    if let Err(e) = std::fs::write(&temp, bytes) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(e);
+    }
+    if let Err(e) = std::fs::rename(&temp, path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// A document the user has open.
@@ -135,6 +179,13 @@ pub struct OpenDocument {
     /// construction the only size known is the document's own and fitting an
     /// image to itself is exactly `zoom = 1.0`.
     fit_pending: bool,
+    /// What the last PSD exchange — the open that created this document, or the
+    /// last export to a `.psd` — could not carry across.
+    ///
+    /// Empty is the good case. It is kept on the document rather than reported
+    /// once and forgotten because "which parts of my file did not survive?" is
+    /// a question the user asks *later*, once they notice something missing.
+    psd_notes: crate::import::PsdNotes,
     /// Labels of the steps that have been undone, mirroring `History`'s redo
     /// stack: last is the one a redo would re-apply.
     ///
@@ -179,22 +230,50 @@ impl OpenDocument {
             compositor: TileCompositor::new(),
             // Nothing has been presented yet, so everything is outstanding.
             dirty: DirtyTiles::all(),
+            psd_notes: crate::import::PsdNotes::default(),
             undone_labels: Vec::new(),
             fit_pending: true,
         }
     }
 
-    /// Open an image file as a new document with one raster layer.
+    /// Open an image file as a new document.
+    ///
+    /// A Photoshop document takes the other road: it is a *document*, not a
+    /// picture, and [`OpenDocument::open_psd`] builds its real layer tree
+    /// rather than flattening it. The choice is made on the file's leading
+    /// bytes, not its extension — see [`crate::import::looks_like_psd`].
     pub fn open_image(
         id: DocumentId,
         path: &Path,
         history_depth: usize,
     ) -> Result<Self, DocumentError> {
+        if crate::import::looks_like_psd(path) {
+            return OpenDocument::open_psd(id, path, history_depth);
+        }
         let image = DecodedImage::decode_path(path)?;
         let title = DecodedImage::title_for(path);
         let imported = crate::import::document_from_image(&image, &title, history_depth)?;
         let mut open = OpenDocument::from_import(id, imported);
         open.source_path = Some(path.to_path_buf());
+        Ok(open)
+    }
+
+    /// Open a `.psd` as a layered document: groups, masks, blend modes,
+    /// opacity and pixels, not a flattened frame.
+    ///
+    /// Anything the file carried that this document model has no home for is
+    /// left in [`OpenDocument::psd_notes`] rather than dropped in silence.
+    pub fn open_psd(
+        id: DocumentId,
+        path: &Path,
+        history_depth: usize,
+    ) -> Result<Self, DocumentError> {
+        let bytes = crate::import::read_psd_bytes(path)?;
+        let title = DecodedImage::title_for(path);
+        let import = crate::import::document_from_psd(&bytes, &title, history_depth)?;
+        let mut open = OpenDocument::from_import(id, import.imported);
+        open.source_path = Some(path.to_path_buf());
+        open.psd_notes = import.notes;
         Ok(open)
     }
 
@@ -219,6 +298,7 @@ impl OpenDocument {
             source_path: None,
             compositor: TileCompositor::new(),
             dirty: DirtyTiles::all(),
+            psd_notes: crate::import::PsdNotes::default(),
             undone_labels: Vec::new(),
             fit_pending: true,
         })
@@ -522,8 +602,37 @@ impl OpenDocument {
         self.save_to(&path, app_version)
     }
 
-    /// Flatten the document and write it as an image file.
+    /// What the last PSD exchange could not carry — see the field's note.
+    pub fn psd_notes(&self) -> &crate::import::PsdNotes {
+        &self.psd_notes
+    }
+
+    /// Write the document as a layered `.psd`.
+    ///
+    /// The flattened image every previewer and thumbnailer shows is taken from
+    /// *this* application's compositor, not from the `psd` crate's fallback
+    /// flattener — that one ignores clipping groups, layer effects and
+    /// adjustment layers, and a file whose thumbnail disagrees with its layers
+    /// is worse than one with no thumbnail at all.
+    ///
+    /// Returns what the document could not express in the format; the same
+    /// report is left on [`OpenDocument::psd_notes`].
+    pub fn export_psd_to(&mut self, path: &Path) -> Result<crate::import::PsdNotes, DocumentError> {
+        let rgba8 = self.composite(self.canvas_rect())?;
+        let (bytes, notes) = crate::import::psd_from_document(&self.document, &self.tiles, &rgba8)?;
+        write_atomically(path, &bytes).map_err(crate::import::ImportError::from)?;
+        self.psd_notes = notes.clone();
+        Ok(notes)
+    }
+
+    /// Write the document as an image file.
+    ///
+    /// Flattened for every format but `.psd`, which keeps its layers.
     pub fn export_to(&mut self, path: &Path) -> Result<(), DocumentError> {
+        if exports_as_psd(path) {
+            self.export_psd_to(path)?;
+            return Ok(());
+        }
         let format = export_format_for(path).ok_or_else(|| {
             DocumentError::UnknownExportFormat(
                 path.extension()
@@ -782,9 +891,11 @@ mod tests {
     fn export_refuses_a_format_it_cannot_write() {
         let dir = tempfile::tempdir().unwrap();
         let mut d = doc_of(8, 8);
-        let err = d.export_to(&dir.path().join("out.psd")).unwrap_err();
-        assert!(err.to_string().contains("psd"), "{err}");
-        assert!(!dir.path().join("out.psd").exists(), "nothing was written");
+        let err = d.export_to(&dir.path().join("out.exr")).unwrap_err();
+        assert!(err.to_string().contains("exr"), "{err}");
+        assert!(!dir.path().join("out.exr").exists(), "nothing was written");
+        // A destination with no extension at all names no format either.
+        assert!(d.export_to(&dir.path().join("out")).is_err());
     }
 
     #[test]
@@ -885,5 +996,200 @@ mod tests {
         let mut d = doc_of(8, 8);
         let err = d.save("test").unwrap_err();
         assert!(matches!(err, DocumentError::NoPath), "{err}");
+    }
+
+    // ------------------------------------------------------------------ PSD
+
+    /// A two-layer `.psd`: a red background under a half-opaque Multiply layer
+    /// inside a group. Small, but it exercises every part of the path — a
+    /// group, a blend mode, an opacity and pixels at an offset.
+    fn layered_psd_bytes() -> Vec<u8> {
+        let (w, h) = (40u32, 30u32);
+        let canvas = psd::Rect::sized(w, h);
+        let mut file = psd::PsdFile::new(psd::PsdHeader::rgba8(w, h));
+
+        let mut background = psd::PsdLayer::raster("Background", canvas);
+        background
+            .set_rgba8(&[220u8, 40, 40, 255].repeat((w * h) as usize))
+            .unwrap();
+
+        let patch = psd::Rect::new(8, 6, 24, 20);
+        let mut top = psd::PsdLayer::raster("Top", patch);
+        top.set_rgba8(&[20u8, 220, 90, 255].repeat((patch.width() * patch.height()) as usize))
+            .unwrap();
+        top.blend_mode = layer_model::BlendMode::Multiply;
+        top.opacity = 128;
+
+        let mut group = psd::PsdLayer::group("Folder");
+        group.push_child(top).unwrap();
+
+        file.layers = vec![background, group];
+        psd::write(&file).expect("the fixture is writable")
+    }
+
+    fn layer_names(doc: &Document, ids: &[layer_model::LayerId]) -> Vec<String> {
+        ids.iter()
+            .filter_map(|id| doc.layers.get(*id).map(|l| l.name.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn file_open_on_a_psd_builds_a_layered_document() {
+        // `Editor::open_path` calls exactly this for every non-project path, so
+        // this is File ▸ Open, drag-and-drop and the recent-files list at once.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("artwork.psd");
+        std::fs::write(&path, layered_psd_bytes()).unwrap();
+
+        let d = OpenDocument::open_image(DocumentId(7), &path, 100).unwrap();
+        assert_eq!(d.title(), "artwork.psd");
+        assert_eq!(
+            layer_names(&d.document, d.document.layers.root()),
+            ["Folder", "Background"],
+            "the layer tree is real, not one flattened frame"
+        );
+        let folder = d.document.layers.get(d.document.layers.root()[0]).unwrap();
+        assert!(folder.is_group());
+        let top = d.document.layers.get(folder.children()[0]).unwrap();
+        assert_eq!(top.name, "Top");
+        assert_eq!(top.blend_mode, layer_model::BlendMode::Multiply);
+        assert!((top.opacity - 128.0 / 255.0).abs() < 1e-6);
+
+        assert!(!d.is_dirty(), "opening a file is not unsaved work");
+        assert_eq!(d.source_path(), Some(path.as_path()));
+        assert!(
+            d.psd_notes().is_empty(),
+            "nothing was lost: {:?}",
+            d.psd_notes()
+        );
+        // Save As next to it still suggests the project package.
+        assert_eq!(d.suggested_save_path(), dir.path().join("artwork.rstudio"));
+    }
+
+    #[test]
+    fn a_psd_is_recognised_by_its_contents_and_not_by_its_name() {
+        let dir = tempfile::tempdir().unwrap();
+        // A Photoshop document that somebody renamed.
+        let mislabelled = dir.path().join("artwork.png");
+        std::fs::write(&mislabelled, layered_psd_bytes()).unwrap();
+        let d = OpenDocument::open_image(DocumentId(8), &mislabelled, 10).unwrap();
+        assert_eq!(d.document.layers.len(), 3, "it is still a layered document");
+
+        // ...and a PNG that somebody renamed the other way still opens as the
+        // picture it is, rather than being sent to the PSD reader.
+        let png = raster::encode(raster::ExportFormat::Png, 6, 4, &[90u8; 96]).unwrap();
+        let lying = dir.path().join("photo.psd");
+        std::fs::write(&lying, &png).unwrap();
+        let d = OpenDocument::open_image(DocumentId(9), &lying, 10).unwrap();
+        assert_eq!((d.document.width(), d.document.height()), (6, 4));
+        assert_eq!(d.document.layers.len(), 1);
+    }
+
+    #[test]
+    fn a_corrupt_psd_reports_an_error_instead_of_opening_a_blank_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = layered_psd_bytes();
+        for (name, bytes) in [
+            ("cut.psd", &good[..good.len() / 3]),
+            ("head.psd", &good[..20]),
+            ("stub.psd", &b"8BPS"[..]),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            let err = OpenDocument::open_image(DocumentId(10), &path, 10)
+                .err()
+                .unwrap_or_else(|| panic!("{name} must not open"));
+            let told = err.to_string();
+            assert!(
+                told.contains("Photoshop document"),
+                "{name} said {told:?} — the user has to learn it was the file"
+            );
+        }
+    }
+
+    #[test]
+    fn exporting_to_a_psd_keeps_the_layers_and_reopens() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("in.psd");
+        std::fs::write(&source, layered_psd_bytes()).unwrap();
+        let mut d = OpenDocument::open_image(DocumentId(11), &source, 100).unwrap();
+        let before = d.composite(d.canvas_rect()).unwrap();
+
+        let out = dir.path().join("out.psd");
+        let notes = d.export_psd_to(&out).unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert!(out.is_file());
+        assert_eq!(&std::fs::read(&out).unwrap()[..4], b"8BPS");
+
+        let mut back = OpenDocument::open_image(DocumentId(12), &out, 100).unwrap();
+        assert_eq!(
+            layer_names(&back.document, back.document.layers.root()),
+            ["Folder", "Background"],
+            "a saved .psd reopens with its structure"
+        );
+        let folder = back
+            .document
+            .layers
+            .get(back.document.layers.root()[0])
+            .unwrap();
+        assert!(folder.is_group());
+        let top = back.document.layers.get(folder.children()[0]).unwrap();
+        assert_eq!(top.name, "Top");
+        assert_eq!(top.blend_mode, layer_model::BlendMode::Multiply);
+        assert_eq!(back.composite(back.canvas_rect()).unwrap(), before);
+
+        // The generic export route reaches the same code, which is what File ▸
+        // Export with a `.psd` name does.
+        let via_export = dir.path().join("again.psd");
+        d.export_to(&via_export).unwrap();
+        assert_eq!(
+            std::fs::read(&via_export).unwrap(),
+            std::fs::read(&out).unwrap()
+        );
+        assert!(exports_as_psd(&via_export));
+        assert!(exports_as_psd(Path::new("X.PSD")));
+        assert!(!exports_as_psd(Path::new("x.png")));
+    }
+
+    #[test]
+    fn a_psd_export_replaces_the_previous_file_without_leaving_a_temporary() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.psd");
+        std::fs::write(&out, b"the previous version").unwrap();
+
+        let mut d = doc_of(24, 16);
+        d.export_to(&out).unwrap();
+        assert_eq!(&std::fs::read(&out).unwrap()[..4], b"8BPS");
+
+        // Exporting again over a real file works too, and nothing is left
+        // beside it: an export that scatters `.part` files is a bug report.
+        d.export_to(&out).unwrap();
+        let strays: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+            .filter(|n| n != "out.psd")
+            .collect();
+        assert!(strays.is_empty(), "left behind {strays:?}");
+    }
+
+    #[test]
+    fn a_psd_export_reports_what_it_could_not_write() {
+        // A vector-mask layer and a blanket lock: two things this document
+        // model has and a `.psd` does not. The file is still written; the user
+        // is told what did not go into it.
+        let mut d = doc_of(32, 24);
+        let id = d.document.active_layer().unwrap();
+        {
+            let layer = d.document.layers.get_mut(id).unwrap();
+            layer.locked.all = true;
+            layer.set_mask(layer_model::LayerMask::vector(layer_model::MaskId::new()));
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("noted.psd");
+        let notes = d.export_psd_to(&out).unwrap();
+        let told = notes.summary().expect("this document loses things");
+        assert!(told.contains("blanket lock"), "{told}");
+        assert!(out.is_file(), "the file is still written");
+        assert_eq!(d.psd_notes().summary(), Some(told));
     }
 }

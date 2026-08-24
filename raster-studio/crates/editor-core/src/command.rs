@@ -393,6 +393,29 @@ pub enum Command {
         /// exactly like `T`.
         kind: Box<LayerKind>,
     },
+    /// Resize the canvas — the rectangle every export, composite and selection
+    /// is measured against ([`crate::DocumentMeta::size`]).
+    ///
+    /// This is the command a **crop** is built from, and it exists because
+    /// there was no way to express one: `tools::CropRequest` documented "not a
+    /// [`Command`], because `editor-core` has no canvas-resize command yet", so
+    /// a crop could not go through [`crate::History`] and therefore could not
+    /// be undone. It carries only the size; moving the pixels under the new
+    /// origin is a [`Command::TransformLayer`] per layer, and a crop is the
+    /// [`Command::Transaction`] of the two — which is what makes the whole crop
+    /// one undo step.
+    ///
+    /// The inverse is this same command holding the size the document had, so
+    /// undo restores it exactly. A size this build cannot serve is refused
+    /// ([`CommandError::CanvasTooLarge`]) *before* anything is written, on the
+    /// same terms [`crate::Document`] refuses one at load.
+    ///
+    /// # Wire format
+    ///
+    /// Purely additive, like [`Command::SetLayerKind`]: every entry an earlier
+    /// build wrote is one of the older variants and still deserializes, so
+    /// [`crate::DOCUMENT_FORMAT_VERSION`] is unchanged.
+    SetCanvasSize { size: glam::UVec2 },
     /// A batch of commands applied atomically (import, AI result, flatten...).
     /// Its inverse is the reversed inverses of its members.
     Transaction {
@@ -480,6 +503,18 @@ pub enum CommandError {
         from: &'static str,
         to: &'static str,
     },
+    /// A [`Command::SetCanvasSize`] named a canvas this build cannot serve.
+    ///
+    /// The same predicate the loader applies ([`crate::canvas_size_is_supported`]),
+    /// so a resize can never leave a document that would be refused when it is
+    /// reopened.
+    #[error(
+        "a {width} x {height} canvas is larger than this build serves \
+         ({max_dimension} px per side, {max_pixels} px total)",
+        max_dimension = crate::MAX_CANVAS_DIMENSION,
+        max_pixels = crate::MAX_CANVAS_PIXELS
+    )]
+    CanvasTooLarge { width: u32, height: u32 },
     #[error(transparent)]
     Pixel(#[from] PixelError),
     /// A transaction member failed *and* restoring the members that had already
@@ -867,6 +902,22 @@ impl Command {
                 })
             }
 
+            Command::SetCanvasSize { size } => {
+                // Refused before anything is written, so the document is
+                // unchanged on `Err` like every other arm. The same predicate
+                // the loader uses, so a resize cannot reach a size a reopen
+                // would reject.
+                if !crate::canvas_size_is_supported(size.x, size.y) {
+                    return Err(CommandError::CanvasTooLarge {
+                        width: size.x,
+                        height: size.y,
+                    });
+                }
+                let previous = doc.meta.size;
+                doc.meta.size = *size;
+                Ok(Command::SetCanvasSize { size: previous })
+            }
+
             Command::Transaction { label, commands } => {
                 let mut inverses: Vec<Command> = Vec::with_capacity(commands.len());
                 for c in commands {
@@ -931,6 +982,7 @@ impl Command {
                 PixelTarget::Mask(_) => "Fill Mask".into(),
             },
             Command::ClearRegion { .. } => "Clear".into(),
+            Command::SetCanvasSize { .. } => "Resize Canvas".into(),
             Command::Transaction { label, .. } => label.clone(),
         }
     }

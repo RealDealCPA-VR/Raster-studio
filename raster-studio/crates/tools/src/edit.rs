@@ -332,6 +332,14 @@ impl Tool for CropTool {
         self.box_rect = None;
     }
 
+    fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
+        CropTool::commit(self, ctx)
+    }
+
+    fn has_pending_commit(&self) -> bool {
+        self.box_rect.is_some()
+    }
+
     fn is_active(&self) -> bool {
         self.anchor.is_some() || self.box_rect.is_some()
     }
@@ -429,6 +437,15 @@ impl Tool for SliceTool {
     fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {
         self.anchor = None;
         self.slices.clear();
+    }
+
+    fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
+        SliceTool::commit(self, ctx);
+        Ok(())
+    }
+
+    fn has_pending_commit(&self) -> bool {
+        !self.slices.is_empty()
     }
 
     /// Active while a drag is in flight *or* while slices are waiting to be

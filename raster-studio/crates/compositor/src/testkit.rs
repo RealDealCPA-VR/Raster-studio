@@ -154,3 +154,19 @@ pub(crate) fn solid_layer(t: &mut TestDoc, name: &str, rgba: [u8; 4]) -> LayerId
     t.fill(id, rgba);
     id
 }
+
+/// Load the embedded test font into the compositor's font library and return
+/// the family name to ask for.
+///
+/// The library is process-wide, and every text test needs a face that is
+/// present whatever the machine has installed, so this is idempotent: loading
+/// the same bytes twice adds the face twice to `fontdb`, which resolves to the
+/// same family either way.
+pub(crate) fn text_fixture_family() -> &'static str {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        crate::text::load_font(dejavu::sans::regular().to_vec());
+    });
+    "DejaVu Sans"
+}

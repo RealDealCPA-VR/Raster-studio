@@ -4,9 +4,12 @@ use glam::Affine2;
 use serde::{Deserialize, Serialize};
 
 use crate::blend::BlendMode;
-use crate::effects::LayerEffects;
+use crate::effects::{LayerEffects, Rgba};
 use crate::ids::{AssetId, LayerId, MaskId};
 use crate::mask::LayerMask;
+
+/// Straight-alpha opaque black in the document's colour space.
+const OPAQUE_BLACK: Rgba = [0.0, 0.0, 0.0, 1.0];
 
 /// The variant-specific payload of a layer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -430,12 +433,138 @@ pub struct TextLayer {
     pub size_px: f32,
 }
 
-/// Vector shape layer (Phase 3).
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+/// Which points a shape layer's path encloses.
+///
+/// The same two rules every vector renderer offers, and the same two
+/// `vector::FillRule` spells — kept as a separate enum here because this is the
+/// *persisted* vocabulary and `layer-model` sits below `vector`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ShapeFillRule {
+    /// Inside when the signed winding number is not zero.
+    #[default]
+    NonZero,
+    /// Inside when a ray crosses the path an odd number of times.
+    EvenOdd,
+}
+
+/// End treatment for the open ends of a shape layer's stroke.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ShapeCap {
+    #[default]
+    Butt,
+    Round,
+    Square,
+}
+
+/// Corner treatment for a shape layer's stroke.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ShapeJoin {
+    #[default]
+    Miter,
+    Round,
+    Bevel,
+}
+
+/// The stroke drawn along a shape layer's path.
+///
+/// This is the shape's *own* stroke — the one the pen and shape tools set — and
+/// is a different thing from [`crate::StrokeEffect`], which traces the alpha
+/// edge of whatever the layer already drew.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ShapeStroke {
+    /// Straight-alpha RGBA in the document's colour space.
+    pub color: Rgba,
+    /// Total stroke width in document pixels; half sits either side of the
+    /// path. Expected `>= 0.0`; the compositor clamps.
+    pub width_px: f32,
+    pub cap: ShapeCap,
+    pub join: ShapeJoin,
+    /// Longest miter as a multiple of half the width before a
+    /// [`ShapeJoin::Miter`] degrades to a bevel. SVG's default is 4.
+    pub miter_limit: f32,
+    /// Alternating on/off dash lengths in document pixels, starting with "on".
+    /// Empty means a solid stroke; an odd-length pattern repeats to make it
+    /// even, the SVG rule.
+    pub dash: Vec<f32>,
+    /// How far into the dash pattern the stroke starts.
+    pub dash_offset: f32,
+}
+
+impl Default for ShapeStroke {
+    fn default() -> Self {
+        Self {
+            color: OPAQUE_BLACK,
+            width_px: 1.0,
+            cap: ShapeCap::default(),
+            join: ShapeJoin::default(),
+            miter_limit: 4.0,
+            dash: Vec::new(),
+            dash_offset: 0.0,
+        }
+    }
+}
+
+/// Vector shape layer: a path plus how it is painted.
+///
+/// # Why the path is still SVG text
+///
+/// `path_svg` is not a placeholder any more — it is the serialised form of a
+/// real `vector::Path`, written by `vector::to_svg` and read back by
+/// `vector::parse_svg` with the geometry intact (`vector`'s own
+/// `a_shape_survives_a_full_round_of_editing` pins the round trip). Storing the
+/// path as its standard text encoding rather than as a second, bespoke list of
+/// segments keeps one representation instead of two, and keeps `layer-model`
+/// below `vector` in the dependency order rather than beside it.
+///
+/// # Fill and stroke
+///
+/// A shape with no `fill` and no `stroke` draws nothing. The default is an
+/// opaque black fill and no stroke, which is what a freshly drawn shape looks
+/// like — and, because container-level `#[serde(default)]` fills missing keys
+/// from [`ShapeLayer::default`], what a document written before these fields
+/// existed loads as. Such a document used to composite to nothing at all, so
+/// the change can only make an old shape layer visible, never change one that
+/// was already drawn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShapeLayer {
-    /// Placeholder path representation; a real path model lands with the pen tool.
+    /// The path, as SVG path data in the layer's own pixel space.
     pub path_svg: String,
+    /// Interior paint. Straight-alpha RGBA in the document's colour space;
+    /// `None` leaves the shape unfilled.
+    pub fill: Option<Rgba>,
+    /// Which points the fill considers inside.
+    pub fill_rule: ShapeFillRule,
+    /// Outline paint, or `None` for no stroke.
+    pub stroke: Option<ShapeStroke>,
+}
+
+impl Default for ShapeLayer {
+    fn default() -> Self {
+        Self {
+            path_svg: String::new(),
+            fill: Some(OPAQUE_BLACK),
+            fill_rule: ShapeFillRule::NonZero,
+            stroke: None,
+        }
+    }
+}
+
+impl ShapeLayer {
+    /// A black-filled shape from SVG path data.
+    pub fn from_svg(path_svg: impl Into<String>) -> Self {
+        Self {
+            path_svg: path_svg.into(),
+            ..Self::default()
+        }
+    }
+
+    /// `true` when the layer names geometry to draw *and* something to draw it
+    /// with. A shape that is neither filled nor stroked contributes nothing.
+    pub fn is_drawable(&self) -> bool {
+        !self.path_svg.trim().is_empty() && (self.fill.is_some() || self.stroke.is_some())
+    }
 }
 
 /// Embedded or linked document rendered non-destructively (Phase 3).
@@ -686,6 +815,71 @@ mod tests {
             for b in &all[i + 1..] {
                 assert_ne!(a, b);
             }
+        }
+    }
+
+    #[test]
+    fn a_shape_layer_defaults_to_a_black_fill_and_no_stroke() {
+        let s = ShapeLayer::from_svg("M0 0 L10 0 L10 10 Z");
+        assert_eq!(s.fill, Some([0.0, 0.0, 0.0, 1.0]));
+        assert_eq!(s.fill_rule, ShapeFillRule::NonZero);
+        assert!(s.stroke.is_none());
+        assert!(s.is_drawable());
+
+        // Geometry with nothing to paint it with, and paint with no geometry,
+        // are both nothing to draw.
+        let mut unpainted = s.clone();
+        unpainted.fill = None;
+        assert!(!unpainted.is_drawable());
+        assert!(!ShapeLayer::default().is_drawable(), "no path");
+    }
+
+    #[test]
+    fn a_shape_layer_written_before_fill_and_stroke_loads_with_a_black_fill() {
+        // The historical payload: geometry and nothing else. It used to
+        // composite to nothing, so defaulting it to a visible black fill can
+        // only reveal it, never restyle a shape that was already drawn.
+        let s: ShapeLayer = serde_json::from_str(r#"{"path_svg":"M0 0 L4 4 Z"}"#).unwrap();
+        assert_eq!(s.path_svg, "M0 0 L4 4 Z");
+        assert_eq!(s.fill, Some([0.0, 0.0, 0.0, 1.0]));
+        assert!(s.stroke.is_none());
+        assert!(s.is_drawable());
+    }
+
+    #[test]
+    fn a_shape_layers_fill_and_stroke_round_trip() {
+        let s = ShapeLayer {
+            path_svg: "M0 0 L10 10 Z".into(),
+            fill: Some([0.25, 0.5, 0.75, 0.5]),
+            fill_rule: ShapeFillRule::EvenOdd,
+            stroke: Some(ShapeStroke {
+                color: [1.0, 0.0, 0.0, 1.0],
+                width_px: 4.5,
+                cap: ShapeCap::Round,
+                join: ShapeJoin::Bevel,
+                miter_limit: 2.0,
+                dash: vec![6.0, 3.0],
+                dash_offset: 1.5,
+            }),
+        };
+        let layer = Layer::with_kind("Shape", LayerKind::Shape(s.clone()));
+        let back: Layer = serde_json::from_str(&serde_json::to_string(&layer).unwrap()).unwrap();
+        assert_eq!(back, layer);
+        // And every field really participates in equality, so the round trip
+        // above is not comparing two defaults.
+        for mutate in [
+            (|s: &mut ShapeLayer| s.fill = None) as fn(&mut ShapeLayer),
+            |s: &mut ShapeLayer| s.fill_rule = ShapeFillRule::NonZero,
+            |s: &mut ShapeLayer| s.stroke.as_mut().unwrap().width_px = 1.0,
+            |s: &mut ShapeLayer| s.stroke.as_mut().unwrap().cap = ShapeCap::Butt,
+            |s: &mut ShapeLayer| s.stroke.as_mut().unwrap().join = ShapeJoin::Miter,
+            |s: &mut ShapeLayer| s.stroke.as_mut().unwrap().dash.clear(),
+            |s: &mut ShapeLayer| s.stroke.as_mut().unwrap().dash_offset = 0.0,
+            |s: &mut ShapeLayer| s.stroke.as_mut().unwrap().miter_limit = 4.0,
+        ] {
+            let mut other = s.clone();
+            mutate(&mut other);
+            assert_ne!(other, s);
         }
     }
 

@@ -121,7 +121,10 @@ impl StepKind {
             Command::SetLayerProperties { .. } | Command::SetLayerKind { .. } => {
                 StepKind::LayerChanged
             }
-            Command::TransformLayer { .. } => StepKind::Transformed,
+            // A crop is a canvas resize plus one translation per layer, and
+            // the resize is the part the user asked for — so it reads as a
+            // geometry step rather than as a layer edit.
+            Command::TransformLayer { .. } | Command::SetCanvasSize { .. } => StepKind::Transformed,
             Command::PaintTiles { .. } => StepKind::Painted,
             Command::FillRegion { .. } => StepKind::Filled,
             Command::ClearRegion { .. } => StepKind::Cleared,

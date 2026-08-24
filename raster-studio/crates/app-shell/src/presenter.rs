@@ -626,6 +626,122 @@ fn write_rect(gpu: &GpuContext, texture: &GpuTexture, rect: PixelRect, rgba8: &[
     );
 }
 
+// -------------------------------------------------- the selection overlay ---
+
+/// Stroke width of the ants, in framebuffer pixels.
+///
+/// Two, not one: a single device pixel disappears against a busy image at any
+/// scaling factor above 1, and the light run has to sit *on* the dark one.
+pub const ANTS_WIDTH_PX: f32 = 2.0;
+
+/// The unbroken run drawn under the dashes, straight-alpha **linear** RGBA.
+pub const ANTS_BASE: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
+/// The crawling dashes drawn on top of it, straight-alpha **linear** RGBA.
+///
+/// Two colours rather than one because a one-colour outline vanishes wherever
+/// the image beneath it happens to match — see `ui::canvas::ants`, which is
+/// where the geometry of both runs comes from.
+pub const ANTS_DASH: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+
+/// How opaque a coverage sample has to be to count as inside the selection.
+/// The same midpoint `ui::canvas::workspace` traces at.
+const OUTLINE_THRESHOLD: u8 = 128;
+
+/// The traced selection boundary, recomputed only when it actually changed.
+///
+/// `selection::outline` is one pass over the whole coverage mask, so tracing it
+/// on every frame of a 4K document would cost more than compositing one. The
+/// key is the selection *and* the canvas size, because
+/// [`selection::outline_selection`] measures a mask against the canvas.
+#[derive(Default)]
+pub struct SelectionOutline {
+    key: Option<(editor_core::Selection, u32, u32)>,
+    loops: Vec<selection::Polyline>,
+}
+
+impl SelectionOutline {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The boundary loops of `document`'s selection, in document pixel-corner
+    /// coordinates. Empty when nothing is selected.
+    ///
+    /// [`editor_core::Selection::None`] is deliberately *not* traced.
+    /// `selection::outline_selection` answers it with the canvas outline —
+    /// which is the region it selects — and drawing that would put marching
+    /// ants around every document that has no selection at all.
+    pub fn of(&mut self, document: &editor_core::Document) -> &[selection::Polyline] {
+        let key = (
+            document.selection.clone(),
+            document.width(),
+            document.height(),
+        );
+        if self.key.as_ref() != Some(&key) {
+            self.loops = match &document.selection {
+                editor_core::Selection::None => Vec::new(),
+                sel => {
+                    let canvas =
+                        selection::Rect::from_xywh(0, 0, document.width(), document.height());
+                    // A selection too large or too odd to trace draws no ants
+                    // at all: an outline that is wrong is worse than one that
+                    // is missing.
+                    selection::outline_selection(sel, canvas, OUTLINE_THRESHOLD).unwrap_or_default()
+                }
+            };
+            self.key = Some(key);
+        }
+        &self.loops
+    }
+}
+
+/// The marching ants for `doc` at `time_secs`, in framebuffer pixels.
+///
+/// The camera and the viewport are the *same* ones
+/// [`crate::tool_input::ToolPointer`] routes a click against, so the ants land
+/// on exactly the pixels a click at that point would hit — which is what makes
+/// the outline agree with the selection it is tracing rather than sitting a
+/// panel's width away from it.
+pub fn selection_ants(
+    outline: &mut SelectionOutline,
+    doc: &OpenDocument,
+    time_secs: f64,
+    style: &ui::canvas::AntsStyle,
+) -> ui::canvas::AntsGeometry {
+    let viewport = crate::tool_input::canvas_viewport(doc.camera.viewport_size);
+    let camera = crate::tool_input::canvas_camera_of(&doc.camera);
+    let phase = ui::canvas::ants_phase(time_secs, style);
+    let loops = outline.of(&doc.document);
+    if loops.is_empty() {
+        return ui::canvas::AntsGeometry::default();
+    }
+    ui::canvas::ants::build(loops, &camera, &viewport, style, phase)
+}
+
+/// Turn ants geometry into the segments [`render::Overlay`] draws.
+///
+/// The whole outline first, in [`ANTS_BASE`], then the dashes on top in
+/// [`ANTS_DASH`] — order matters, because the second run is what has to be
+/// visible over the first.
+pub fn ants_segments(geometry: &ui::canvas::AntsGeometry) -> Vec<render::Segment> {
+    let mut out = Vec::new();
+    for ring in &geometry.outlines {
+        for pair in ring.windows(2) {
+            out.push(render::Segment::new(
+                pair[0],
+                pair[1],
+                ANTS_WIDTH_PX,
+                ANTS_BASE,
+            ));
+        }
+    }
+    for [a, b] in &geometry.dashes {
+        out.push(render::Segment::new(*a, *b, ANTS_WIDTH_PX, ANTS_DASH));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -642,6 +758,123 @@ mod tests {
             height,
             rgba8,
         }
+    }
+
+    /// A 64x64 document with the camera at 100%, centred — the same fixture
+    /// `tool_input`'s tests route clicks against.
+    fn framed(width: u32, height: u32) -> OpenDocument {
+        let image = swatch(width, height);
+        let mut doc = crate::doc::OpenDocument::from_import(
+            crate::doc::DocumentId(1),
+            crate::import::document_from_image(&image, "swatch.png", 100).unwrap(),
+        );
+        doc.set_viewport(glam::Vec2::new(400.0, 300.0));
+        doc.camera.zoom = 1.0;
+        doc.camera.center = glam::Vec2::new(width as f32 / 2.0, height as f32 / 2.0);
+        doc
+    }
+
+    /// The gap this whole overlay exists for: a selection was invisible.
+    /// `render::Canvas` draws one texture, that texture is the composite, and
+    /// the composite has no idea a selection exists — so a marquee changed the
+    /// document and not one pixel of the picture.
+    #[test]
+    fn a_selection_produces_an_outline_to_draw_and_no_selection_produces_none() {
+        let mut doc = framed(64, 64);
+        let mut outline = SelectionOutline::new();
+        let style = ui::canvas::AntsStyle::default();
+
+        // Nothing selected: nothing to draw. Deliberately *not* the canvas
+        // outline, which is what `selection::outline_selection` answers
+        // `Selection::None` with.
+        let none = selection_ants(&mut outline, &doc, 0.0, &style);
+        assert!(none.is_empty(), "an unselected document grew ants");
+        assert!(ants_segments(&none).is_empty());
+
+        doc.document.selection = editor_core::Selection::Rect {
+            min: glam::IVec2::new(10, 12),
+            max: glam::IVec2::new(40, 44),
+        };
+        let some = selection_ants(&mut outline, &doc, 0.0, &style);
+        assert!(!some.is_empty(), "a marquee produced no outline");
+        assert_eq!(some.outlines.len(), 1, "one rectangle is one loop");
+        assert!(!some.dashes.is_empty(), "the outline has no dashes on it");
+
+        let segments = ants_segments(&some);
+        assert!(segments.len() >= some.dashes.len() + 4);
+        // Two colours, base and dash, or the ants vanish over an image that
+        // happens to match one of them.
+        assert!(segments.iter().any(|s| s.color == ANTS_BASE));
+        assert!(segments.iter().any(|s| s.color == ANTS_DASH));
+        assert!(segments.iter().all(|s| s.a.is_finite() && s.b.is_finite()));
+
+        // The loop is where the camera puts it: document (10, 12) is screen
+        // (200 - 32 + 10, 150 - 32 + 12) at this fixture's camera.
+        let corner = glam::Vec2::new(200.0 - 32.0 + 10.0, 150.0 - 32.0 + 12.0);
+        assert!(
+            some.outlines[0]
+                .iter()
+                .any(|p| (*p - corner).length() < 0.5),
+            "the outline is not where the camera puts the selection: {:?}",
+            some.outlines[0]
+        );
+    }
+
+    /// The ants march: the same selection at a later moment puts the dashes
+    /// somewhere else, while the outline under them does not move.
+    #[test]
+    fn the_ants_move_with_the_clock() {
+        let mut doc = framed(64, 64);
+        doc.document.selection = editor_core::Selection::Rect {
+            min: glam::IVec2::new(4, 4),
+            max: glam::IVec2::new(60, 60),
+        };
+        let mut outline = SelectionOutline::new();
+        let style = ui::canvas::AntsStyle::default();
+        let a = selection_ants(&mut outline, &doc, 0.0, &style);
+        let b = selection_ants(
+            &mut outline,
+            &doc,
+            f64::from(style.dash() / style.speed_pt_per_sec),
+            &style,
+        );
+        assert_ne!(a.dashes, b.dashes, "the ants stood still");
+        assert_eq!(a.outlines, b.outlines, "the outline itself moved");
+        assert_ne!(ants_segments(&a), ants_segments(&b));
+    }
+
+    /// The trace is cached: it is one pass over the whole coverage mask, and it
+    /// runs on every frame the selection is visible.
+    #[test]
+    fn the_outline_is_retraced_only_when_the_selection_changes() {
+        let mut doc = framed(32, 32);
+        let mut outline = SelectionOutline::new();
+        assert!(outline.of(&doc.document).is_empty());
+
+        doc.document.selection = editor_core::Selection::Rect {
+            min: glam::IVec2::new(2, 2),
+            max: glam::IVec2::new(20, 20),
+        };
+        let first = outline.of(&doc.document).to_vec();
+        assert_eq!(first.len(), 1);
+        assert_eq!(outline.of(&doc.document), first.as_slice());
+
+        // A different selection retraces...
+        doc.document.selection = editor_core::Selection::Rect {
+            min: glam::IVec2::new(2, 2),
+            max: glam::IVec2::new(10, 10),
+        };
+        assert_ne!(outline.of(&doc.document), first.as_slice());
+        // ...and so does the same selection on a canvas of another size, which
+        // is what the mask is measured against.
+        let traced = outline.of(&doc.document).to_vec();
+        doc.document.meta.size = glam::UVec2::new(64, 64);
+        let _ = outline.of(&doc.document);
+        assert_eq!(
+            outline.of(&doc.document),
+            traced.as_slice(),
+            "a rectangle's outline should not depend on the canvas size"
+        );
     }
 
     #[test]

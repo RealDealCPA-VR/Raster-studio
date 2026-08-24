@@ -100,6 +100,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "app-shell"
 version = "0.1.0"
 dependencies = [
+ "adjustments",
  "anyhow",
  "color",
  "compositor",
@@ -109,15 +110,18 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "egui-winit",
+ "filters",
  "glam",
  "layer-model",
  "libc",
  "pollster",
  "project-format",
+ "psd",
  "raster",
  "render",
  "rfd",
  "rmp-serde",
+ "selection",
  "serde",
  "serde_json",
  "tempfile",
@@ -125,6 +129,7 @@ dependencies = [
  "tools",
  "tracing",
  "ui",
+ "vector",
  "wgpu",
  "windows-sys 0.59.0",
  "winit",
@@ -665,12 +670,16 @@ version = "0.1.0"
 dependencies = [
  "adjustments",
  "color",
+ "dejavu",
  "editor-core",
+ "filters",
  "glam",
  "layer-model",
  "raster",
  "rayon",
+ "text-engine",
  "thiserror 2.0.20",
+ "vector",
 ]
 
 [[package]]

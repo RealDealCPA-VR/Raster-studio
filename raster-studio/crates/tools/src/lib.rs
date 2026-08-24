@@ -73,6 +73,8 @@
 //! | [`shape`] | the shape tools, in vector-layer and rasterise modes |
 //! | [`transform`] | free transform: homography, warp mesh, handles, resampling |
 //! | [`edit`] | move, crop, slice, eyedropper, red-eye, patch, magic eraser |
+//! | [`text`] | the Type tool: click to place a text layer, then type into it |
+//! | [`pen`] | the Pen tool: author a path one click at a time |
 //! | [`view`] | hand, zoom and rotate-view — the tools that emit nothing |
 //! | [`registry`] | metadata and construction for every tool in the palette |
 //!
@@ -82,13 +84,27 @@
 //!   document, not a command target, so the selection tools emit a
 //!   [`tool::SelectionEdit`] on their own outbox and the application folds it
 //!   in.
-//! * **Crop and slice.** A crop resizes the canvas and there is no
-//!   canvas-resize command yet, so [`edit::CropTool`] reports a
-//!   [`tool::CropRequest`] instead. Until that command exists, **a crop is not
-//!   undoable through [`editor_core::History`]**. Both of these two publish on
-//!   an explicit `commit`, never on pointer-up: the crop box waits for Enter,
-//!   and [`edit::SliceTool`] collects slices until the application asks for
-//!   them, so the outbox never holds several overlapping versions of one set.
+//! * **Crop and slice.** A crop resizes the canvas *and* moves every layer
+//!   under the new origin, which is two commands rather than one, so
+//!   [`edit::CropTool`] reports a [`tool::CropRequest`] and the application
+//!   turns it into the [`editor_core::Command::Transaction`] that performs it —
+//!   see `app_shell::tool_input::crop_command`. A crop **is** undoable, as one
+//!   step. A slice set is not an edit at all: it is a set of export regions,
+//!   and this crate hands it over as [`tool::ToolRequest::Slices`].
+//!
+//!   Both publish on an explicit [`Tool::commit`], never on pointer-up: the
+//!   crop box waits for Enter so the user can nudge its edges, and
+//!   [`edit::SliceTool`] collects slices until the application asks for them,
+//!   so the outbox never holds several overlapping versions of one set.
+//!
+//! # Two tools whose gesture *is* the layer
+//!
+//! [`text::TypeTool`] and [`pen::PenTool`] are the two that create rather than
+//! edit: a Type click makes a [`layer_model::LayerKind::Text`] layer and opens
+//! it for typing, and a Pen click sequence builds a path that becomes a
+//! [`layer_model::LayerKind::Shape`] when it is closed or committed. Before
+//! them there was no gesture in this crate that could produce either kind, and
+//! `P` was the one letter of the brief the registry could not answer.
 
 #![forbid(unsafe_code)]
 
@@ -98,10 +114,12 @@ pub mod edit;
 pub mod error;
 pub mod gradient;
 pub mod patch;
+pub mod pen;
 pub mod registry;
 pub mod select;
 pub mod shape;
 pub mod stroke;
+pub mod text;
 pub mod tiles;
 pub mod tool;
 pub mod transform;
@@ -110,10 +128,12 @@ pub mod view;
 pub use brush::{BrushSettings, Dab, DabEmitter};
 pub use error::ToolError;
 pub use patch::{ColorPatch, CoveragePatch, TileBox};
+pub use pen::PenTool;
 pub use registry::{Cursor, OptionKind, OptionSpec, ToolGroup, ToolInfo};
 pub use stroke::{StrokeBuffer, StrokeOp, StrokeTool};
+pub use text::{TextSession, TypeTool};
 pub use tiles::{MemoryTiles, TileAccess};
 pub use tool::{
-    CropRequest, Modifiers, PaintTarget, Pattern, PointerEvent, SelectionEdit, Slice, Tool,
-    ToolContext, ToolId, ToolRequest, ViewState,
+    CropRequest, Modifiers, PaintTarget, Pattern, PointerEvent, SelectionEdit, Slice, TextEdit,
+    Tool, ToolContext, ToolId, ToolRequest, ViewState,
 };

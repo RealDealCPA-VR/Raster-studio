@@ -73,6 +73,24 @@
 //! from [`tools::registry::make`], so `[`, `]` and the options bar move the
 //! selected tool's brush and leave every other tool as the registry built it.
 //!
+//! # Some gestures do not end at pointer-up
+//!
+//! Crop, Slice and Free Transform hold the gesture *after* the button comes up
+//! — the crop box waits so its edges can be nudged, the slice set grows across
+//! several drags, the transform quad stays live under its handles — and publish
+//! only from `Tool::commit`. Nothing called it, so `grep '\.commit('` over this
+//! crate returned nothing and a crop drag produced a rectangle, no command, no
+//! status and no pixel. [`ToolPointer::commit`] is that call: Enter confirms
+//! (see [`crate::shell::Shell::on_key`]) and Escape cancels through the same
+//! [`ToolPointer::cancel`] that abandons a stroke. Type and Pen hold a gesture
+//! the same way — an open text run, an unfinished path — and end on the same
+//! key.
+//!
+//! A [`tools::ToolRequest`] is not a command, so the two that arrive here are
+//! performed rather than applied: a crop becomes the transaction
+//! [`crop_command`] builds (a canvas resize plus one translation per root
+//! layer, one undo step), and a slice set is reported.
+//!
 //! # What this cannot do yet
 //!
 //! * **Rotate View changes nothing on screen.** [`render::Camera`] is
@@ -101,26 +119,28 @@
 //!   stamping tool routed here (Brush, Pencil, Eraser, Clone, Blur, Smudge,
 //!   Dodge and the rest) is a `StrokeTool` and behaves the same way. Pinned by
 //!   `a_stroke_is_invisible_until_the_button_is_released`.
-//! * **A shape gesture draws nothing on the canvas.** The seven shape tools —
-//!   Rectangle, RoundedRectangle, Ellipse, Polygon, Star, Line and CustomShape —
-//!   route and run correctly: a drag emits one undoable `Command::CreateLayer`
-//!   holding a visible [`layer_model::LayerKind::Shape`] with the dragged path,
-//!   and the layer appears in the Layers panel. It appears *nowhere else*,
-//!   because the compositor has no rasteriser for it: see the
-//!   `LayerKind::Text(_) | LayerKind::Shape(_) | LayerKind::SmartObject(_) => {}`
-//!   arm of `compositor::composite`, "No rasterizer for these yet; they
-//!   contribute nothing." So a shape gesture costs an undo step and a layer row
-//!   and leaves the composited pixels byte-identical. Pinned by
-//!   `a_shape_gesture_creates_a_layer_the_compositor_cannot_draw` — which fails
-//!   the day that arm grows a rasteriser, and this bullet must go with it.
+//! * **A slice set has nowhere to go.** [`ToolPointer::commit`] performs a
+//!   crop and hands the caller the slices, and the caller — the shell — has no
+//!   route that exports them: slicing means writing one file per region and
+//!   nothing in this build asks for a folder. The status bar says so rather
+//!   than letting the gesture look like it worked. Pinned by
+//!   `committing_slices_reports_them_and_says_they_cannot_be_exported`.
+//! * **A crop does not straighten and does not delete.**
+//!   [`tools::CropRequest::straighten`] would need every layer resampled and
+//!   `delete_cropped` would need the off-canvas pixels thrown away; the crop
+//!   this performs resizes the canvas and slides the layers under it, which is
+//!   the whole of what [`crop_command`] claims. Both are reported in the status
+//!   bar when the user asked for them.
 
-use glam::Vec2;
+use glam::{UVec2, Vec2};
 
 use compositor::{MemoryTileSource, TileSource};
-use editor_core::{PixelKey, PixelStore};
+use editor_core::{Command, Document, PixelKey, PixelStore};
 use raster::{PixelRect, TileCoord, TileHash};
 use render::{Camera, MAX_ZOOM, MIN_ZOOM};
-use tools::{registry, PaintTarget, TileAccess, Tool, ToolContext, ToolId};
+use tools::{
+    registry, CropRequest, PaintTarget, Slice, TileAccess, Tool, ToolContext, ToolId, ToolRequest,
+};
 use ui::canvas::{
     CanvasCamera, Dispatch, InputRouter, PanelInsets, PointerInput, PointerPhase, Rejected, Route,
     Viewport,
@@ -265,6 +285,75 @@ impl PointerOutcome {
     }
 }
 
+/// What confirming a held gesture did — see [`ToolPointer::commit`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CommitOutcome {
+    /// The live tool had something to confirm. `false` means the key belongs to
+    /// whoever else wants it: there was no crop box, no slice set and no
+    /// transform session.
+    pub had_pending: bool,
+    /// Undoable steps this commit added to the document's history.
+    pub steps: usize,
+    /// The keep-region a crop was applied at, in the coordinates of the canvas
+    /// *before* the cut.
+    pub cropped_to: Option<PixelRect>,
+    /// The slice set the gesture published.
+    pub slices: Vec<Slice>,
+    /// Why the commit did not happen.
+    pub failed: Option<String>,
+}
+
+impl CommitOutcome {
+    /// `true` when the window has to be drawn again.
+    pub fn needs_repaint(&self) -> bool {
+        self.had_pending
+    }
+}
+
+/// The one undoable command that performs `req`, or `None` when the request
+/// describes no canvas at all.
+///
+/// A crop is two things at once: the canvas becomes the kept rectangle, and
+/// every layer slides so the pixel that was at the rectangle's top-left is now
+/// at the origin. Both are commands ([`Command::SetCanvasSize`] and one
+/// [`Command::TransformLayer`] per **root** layer — a group's transform already
+/// carries its whole subtree, so translating the children as well would move
+/// them twice), and wrapping them in a [`Command::Transaction`] is what makes
+/// the whole crop a single Ctrl+Z.
+///
+/// # What a crop still does not do
+///
+/// * [`CropRequest::straighten`] is **not** applied. The angle rides along in
+///   the request and [`CropRequest::straightened_corners`] says exactly which
+///   quad it means, but resampling that quad back into an axis-aligned document
+///   is a re-render of every layer, not a translation. The caller reports it
+///   rather than silently cutting the un-straightened rectangle in silence.
+/// * [`CropRequest::delete_cropped`] is **not** honoured. The pixels outside
+///   the new canvas stay in their layers, off-canvas — which is the
+///   non-destructive behaviour, and the one that makes the undo above exact.
+pub fn crop_command(document: &Document, req: &CropRequest) -> Option<Command> {
+    let rect = req.rect;
+    if rect.width == 0 || rect.height == 0 {
+        return None;
+    }
+    let mut commands = vec![Command::SetCanvasSize {
+        size: UVec2::new(rect.width, rect.height),
+    }];
+    if rect.x != 0 || rect.y != 0 {
+        let delta = Vec2::new(-(rect.x as f32), -(rect.y as f32));
+        for id in document.layers.root() {
+            commands.push(Command::TransformLayer {
+                layer_id: *id,
+                matrix: tools::edit::translation_matrix(delta),
+            });
+        }
+    }
+    Some(Command::Transaction {
+        label: "Crop".into(),
+        commands,
+    })
+}
+
 /// The pointer half of the shell: the gesture router and the live tool.
 ///
 /// One tool instance is kept alive across the events of a gesture, because a
@@ -354,6 +443,176 @@ impl ToolPointer {
             }
         }
         had
+    }
+
+    /// `true` when the live tool is holding a gesture Enter would confirm.
+    pub fn has_pending_commit(&self) -> bool {
+        self.current
+            .as_ref()
+            .is_some_and(|(_, t)| t.has_pending_commit())
+    }
+
+    /// `true` while the live tool has a text run open, so the keyboard belongs
+    /// to the canvas rather than to the shortcut table.
+    pub fn is_text_editing(&self) -> bool {
+        self.current
+            .as_ref()
+            .is_some_and(|(_, t)| t.is_text_editing())
+    }
+
+    /// Run something on the live tool that is not a pointer sample — a commit,
+    /// a keystroke — against a context over the active document.
+    ///
+    /// The same context [`ToolPointer::handle`] builds, minus the parts that
+    /// only a pointer sample has (the view, the pressure). Factored out because
+    /// these routes have to read the *same* selection, layer and colours a drag
+    /// does: a commit that saw a different active layer from the gesture it is
+    /// confirming would write to the wrong one.
+    fn off_pointer(
+        &mut self,
+        editor: &mut Editor,
+        action: impl FnOnce(&mut dyn Tool, &mut ToolContext<'_>) -> Result<(), tools::ToolError>,
+    ) -> (Result<(), tools::ToolError>, Vec<Command>, Vec<ToolRequest>) {
+        let Some((_, tool)) = &mut self.current else {
+            return (Ok(()), Vec::new(), Vec::new());
+        };
+        let foreground = editor.foreground();
+        let background = editor.background();
+        let Some(doc) = editor.active_mut() else {
+            return (Ok(()), Vec::new(), Vec::new());
+        };
+        let canvas = doc.canvas_rect();
+        let active_layer = doc.document.active_layer();
+        let active_mask = active_layer
+            .and_then(|id| doc.document.layers.get(id))
+            .and_then(|layer| layer.mask_id());
+        let selection = doc.document.selection.clone();
+        let layer_stack = doc.document.layers.iter_depth_first();
+        let mut access = DocumentTiles::new(&doc.document.pixels, &mut doc.tiles);
+        let mut ctx = ToolContext::new(&mut access, canvas);
+        ctx.active_layer = active_layer;
+        ctx.active_mask = active_mask;
+        ctx.paint_target = PaintTarget::Layer;
+        ctx.selection = selection;
+        ctx.foreground = foreground;
+        ctx.background = background;
+        ctx.layer_stack = layer_stack;
+        let result = action(tool.as_mut(), &mut ctx);
+        let drained = (result, ctx.drain(), ctx.drain_requests());
+        drop(ctx);
+        drained
+    }
+
+    /// Feed one keystroke to a tool that is editing text.
+    ///
+    /// This is the second half of the Type tool: the click makes the layer and
+    /// this is what puts characters in it. Reports whether the keystroke was
+    /// consumed — `false` means no run is open and the key belongs to the
+    /// keymap, which is what stops Space from typing a space when nobody is
+    /// typing.
+    pub fn text_edit(&mut self, editor: &mut Editor, edit: tools::TextEdit<'_>) -> CommitOutcome {
+        let mut out = CommitOutcome::default();
+        if !self.is_text_editing() || editor.active().is_none() {
+            return out;
+        }
+        out.had_pending = true;
+        let (result, commands, _) = self.off_pointer(editor, |tool, ctx| tool.text_edit(ctx, edit));
+        if let Err(e) = result {
+            out.failed = Some(e.to_string());
+            editor.set_status(e.to_string());
+        }
+        let before = editor.active().map(|d| d.history_depth()).unwrap_or(0);
+        for command in commands {
+            editor.apply_command(command);
+        }
+        let after = editor.active().map(|d| d.history_depth()).unwrap_or(0);
+        out.steps = after.saturating_sub(before);
+        out
+    }
+
+    /// Confirm the gesture the live tool is holding: Enter, or the options
+    /// bar's Apply.
+    ///
+    /// Three tools end a gesture here rather than at pointer-up — Crop, Slice
+    /// and Free Transform — and until this existed none of them could finish at
+    /// all: they publish only from their own `commit`, `Box<dyn Tool>` had no
+    /// way to call it, and a crop drag therefore produced a rectangle on the
+    /// screen and never a pixel, never a command and never a history step.
+    ///
+    /// The two outboxes are drained exactly as a pointer sample drains them:
+    /// commands go through [`Editor::apply_command`], so Free Transform's
+    /// resample is one Ctrl+Z. A [`ToolRequest`] is *not* a command, so this is
+    /// where each is performed — a crop becomes the transaction
+    /// [`crop_command`] builds and lands on the same history, and a slice set
+    /// is reported (see [`CommitOutcome::slices`]; nothing in this build
+    /// exports one yet, so it reaches the status bar and the caller and no
+    /// further).
+    pub fn commit(&mut self, editor: &mut Editor) -> CommitOutcome {
+        let mut out = CommitOutcome::default();
+        if !self.has_pending_commit() {
+            return out;
+        }
+        if editor.active().is_none() {
+            return out;
+        }
+        out.had_pending = true;
+        let (result, commands, requests) = self.off_pointer(editor, |tool, ctx| tool.commit(ctx));
+
+        if let Err(e) = result {
+            out.failed = Some(e.to_string());
+            editor.set_status(e.to_string());
+        }
+
+        let before = editor.active().map(|d| d.history_depth()).unwrap_or(0);
+        for command in commands {
+            editor.apply_command(command);
+        }
+
+        for request in requests {
+            match request {
+                ToolRequest::Crop(req) => {
+                    let command = editor
+                        .active()
+                        .and_then(|doc| crop_command(&doc.document, &req));
+                    match command {
+                        Some(command) => {
+                            editor.apply_command(command);
+                            out.cropped_to = Some(req.rect);
+                            // Both halves of the request this build cannot
+                            // perform are said out loud rather than left to
+                            // look like they happened. See `crop_command`.
+                            if req.straighten != 0.0 && req.straighten.is_finite() {
+                                editor.set_status("Cropped; the straighten angle was not applied");
+                            } else if req.delete_cropped {
+                                editor
+                                    .set_status("Cropped; the pixels outside the canvas were kept");
+                            } else {
+                                editor.set_status(format!(
+                                    "Cropped to {} x {}",
+                                    req.rect.width, req.rect.height
+                                ));
+                            }
+                        }
+                        None => {
+                            let reason = "That crop region is empty".to_string();
+                            out.failed = Some(reason.clone());
+                            editor.set_status(reason);
+                        }
+                    }
+                }
+                ToolRequest::Slices(slices) => {
+                    editor.set_status(format!(
+                        "{} slice(s) defined; this build cannot export them yet",
+                        slices.len()
+                    ));
+                    out.slices = slices;
+                }
+            }
+        }
+
+        let after = editor.active().map(|d| d.history_depth()).unwrap_or(0);
+        out.steps = after.saturating_sub(before);
+        out
     }
 
     /// Abandon the gesture without touching any document.
@@ -570,12 +829,16 @@ impl ToolPointer {
         }
 
         if !requests.is_empty() {
-            // Unreachable from a pointer sample as things stand — the crop and
-            // slice tools publish on an explicit commit, which nothing calls —
-            // but a request that arrived and was dropped in silence would be a
-            // gesture that looked like it worked. See `tools::ToolRequest`.
-            tracing::warn!("{} tool request(s) have nowhere to go", requests.len());
-            editor.set_status("Crop and slice cannot be applied from the canvas yet");
+            // Unreachable as things stand: the crop and slice tools publish
+            // only from `Tool::commit`, which is [`ToolPointer::commit`]'s
+            // path, not this one. A request that arrived here and was dropped
+            // in silence would be a gesture that looked like it worked, so it
+            // is said rather than swallowed.
+            tracing::warn!(
+                "{} tool request(s) arrived from a pointer sample rather than a commit",
+                requests.len()
+            );
+            editor.set_status("Press Enter to apply the crop or the slices");
         }
 
         out
@@ -1590,12 +1853,15 @@ mod tests {
         );
     }
 
-    /// The seven shape tools run, and draw nothing: the compositor has no
-    /// rasteriser for `LayerKind::Shape`. Stated in the module docs, pinned
-    /// here — the day that arm grows a rasteriser this test fails and the
-    /// bullet has to come out with it.
+    /// The seven shape tools run, create a layer, **and** put it on the canvas.
+    ///
+    /// This test used to assert the opposite, and said so: `compositor` had no
+    /// rasteriser for `LayerKind::Shape`, so a shape gesture cost an undo step
+    /// and a layer row and left the composited pixels byte-identical. It now
+    /// has one, so the assertion is inverted and the "draws nothing" bullets
+    /// that stood in this module's docs and in `lib.rs` are gone with it.
     #[test]
-    fn a_shape_gesture_creates_a_layer_the_compositor_cannot_draw() {
+    fn a_shape_gesture_creates_a_layer_the_compositor_draws() {
         for tool in [
             ToolId::Rectangle,
             ToolId::RoundedRectangle,
@@ -1619,22 +1885,23 @@ mod tests {
                 &[(10.0, 10.0), (25.0, 25.0), (40.0, 40.0)],
             );
 
-            // Nothing reached the canvas: the compositor's
-            // Text/Shape/SmartObject arm contributes nothing, so the picture is
-            // byte-identical. Asserted first, because it is the claim the doc
-            // bullet makes and the one that has to break when the gap closes.
+            // The pixels moved, and they moved inside the dragged box.
+            // Asserted first, because it is the claim the whole gesture is for.
             let after = composite(&mut editor);
             let reached = changed_pixels(&before, &after);
             assert!(
-                reached.is_empty(),
-                "{tool:?} put {} pixels on the canvas — the compositor grew a \
-                 shape rasteriser, so the 'draws nothing' bullet in this \
-                 module's docs and in lib.rs is now false and must be deleted",
-                reached.len()
+                !reached.is_empty(),
+                "{tool:?} put nothing on the canvas: the shape rasteriser is \
+                 not reached from a canvas gesture"
             );
+            for (x, y) in &reached {
+                assert!(
+                    (9..=41).contains(x) && (9..=41).contains(y),
+                    "{tool:?} painted ({x}, {y}), outside the dragged box"
+                );
+            }
 
-            // ...and yet it ran, and cost the user an undo step and a layer
-            // row: that pairing is exactly what makes this worth stating.
+            // ...and it is a real undoable step with a real layer row.
             assert_eq!(
                 editor.active().unwrap().history_depth(),
                 1,
@@ -1651,7 +1918,407 @@ mod tests {
                 .find(|layer| matches!(layer.kind, layer_model::LayerKind::Shape(_)))
                 .unwrap_or_else(|| panic!("{tool:?} created no shape layer"));
             assert!(shape.visible, "{tool:?} created a hidden layer");
+
+            // ...and undo takes the pixels back with the layer.
+            assert!(editor.active_mut().unwrap().undo().unwrap());
+            assert_eq!(
+                composite(&mut editor),
+                before,
+                "{tool:?}: undo did not restore the canvas"
+            );
         }
+    }
+
+    // ------------------------------------------------ the commit route ----
+
+    /// The headline of the commit route: a crop drag followed by Enter really
+    /// cuts the canvas, moves the pixels under the new origin, and is one
+    /// Ctrl+Z.
+    ///
+    /// Before this, `grep '\.commit(' crates/app-shell/src` returned nothing:
+    /// the crop tool published its [`tools::CropRequest`] from a method the
+    /// shell never called, so a drag left a rectangle on screen and produced no
+    /// command, no status and no pixel.
+    #[test]
+    fn a_crop_drag_then_enter_cuts_the_canvas_and_one_undo_puts_it_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        let mut pointer = ToolPointer::new();
+
+        // A single black pixel at (45, 35), so "the layers slid under the new
+        // origin" is checkable rather than asserted about a uniform white
+        // canvas. The Pencil is one hard aliased pixel.
+        editor.set_tool(ToolId::Pencil);
+        editor.set_foreground([0.0, 0.0, 0.0, 1.0]);
+        stroke(&mut pointer, &mut editor, &[(45.0, 35.0)]);
+        let full = composite(&mut editor);
+        let at = |buf: &[u8], x: usize, y: usize, w: usize| {
+            let i = (y * w + x) * 4;
+            [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+        };
+        assert!(
+            at(&full, 45, 35, W as usize)[0] < 40,
+            "the fixture's mark is not where the test thinks it is"
+        );
+        let steps_before = editor.active().unwrap().history_depth();
+
+        // Drag a keep-region of (40, 20)..(60, 40).
+        editor.set_tool(ToolId::Crop);
+        stroke(&mut pointer, &mut editor, &[(40.0, 20.0), (60.0, 40.0)]);
+        // The drag alone changes nothing: the box waits for Enter.
+        assert_eq!(editor.active().unwrap().document.width(), W);
+        assert_eq!(
+            editor.active().unwrap().history_depth(),
+            steps_before,
+            "the drag committed something on its own"
+        );
+        assert!(pointer.has_pending_commit(), "the crop box was not held");
+
+        let outcome = pointer.commit(&mut editor);
+        assert!(outcome.had_pending);
+        assert_eq!(
+            outcome.cropped_to.map(|r| (r.x, r.y, r.width, r.height)),
+            Some((40, 20, 20, 20))
+        );
+        assert_eq!(outcome.steps, 1, "a crop is one undoable step: {outcome:?}");
+        assert_eq!(outcome.failed, None);
+
+        let doc = editor.active().unwrap();
+        assert_eq!((doc.document.width(), doc.document.height()), (20, 20));
+        assert_eq!(doc.history_depth(), steps_before + 1);
+        assert!(editor.status().is_some_and(|s| s.contains("Cropped")));
+
+        // The mark moved with the canvas: (45, 35) is (5, 15) now.
+        let cropped = editor
+            .active_mut()
+            .unwrap()
+            .composite(PixelRect::new(0, 0, 20, 20))
+            .unwrap();
+        assert!(
+            at(&cropped, 5, 15, 20)[0] < 40,
+            "the layers did not slide under the new origin: {:?}",
+            at(&cropped, 5, 15, 20)
+        );
+
+        // ...and one undo takes the whole crop back, canvas and pixels.
+        assert!(editor.active_mut().unwrap().undo().unwrap());
+        let doc = editor.active().unwrap();
+        assert_eq!((doc.document.width(), doc.document.height()), (W, H));
+        assert_eq!(
+            composite(&mut editor),
+            full,
+            "undo did not restore the crop"
+        );
+    }
+
+    /// Escape after a crop drag leaves the document exactly as it was, and the
+    /// Enter that follows has nothing to confirm.
+    #[test]
+    fn escape_after_a_crop_drag_leaves_the_canvas_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Crop);
+        let mut pointer = ToolPointer::new();
+        let before = composite(&mut editor);
+
+        stroke(&mut pointer, &mut editor, &[(10.0, 10.0), (50.0, 40.0)]);
+        assert!(pointer.has_pending_commit());
+        assert!(pointer.cancel(&mut editor), "there was a box to abandon");
+        assert!(!pointer.has_pending_commit(), "the box survived Escape");
+
+        let outcome = pointer.commit(&mut editor);
+        assert!(!outcome.had_pending, "Enter re-applied a cancelled crop");
+        assert_eq!(outcome.steps, 0);
+        let doc = editor.active().unwrap();
+        assert_eq!((doc.document.width(), doc.document.height()), (W, H));
+        assert_eq!(doc.history_depth(), 0);
+        assert_eq!(composite(&mut editor), before);
+    }
+
+    /// Enter with nothing held is not the commit route's business: it must
+    /// report that it did nothing so the shell can hand the key on.
+    #[test]
+    fn enter_with_no_held_gesture_does_nothing_at_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Brush);
+        let mut pointer = ToolPointer::new();
+        assert_eq!(pointer.commit(&mut editor), CommitOutcome::default());
+        // ...and after a stroke, which ends at pointer-up rather than here.
+        stroke(&mut pointer, &mut editor, &[(20.0, 20.0), (30.0, 30.0)]);
+        assert!(!pointer.has_pending_commit());
+        assert!(!pointer.commit(&mut editor).had_pending);
+        assert_eq!(editor.active().unwrap().history_depth(), 1);
+    }
+
+    /// A free-transform session ends on Enter with one resample and one step.
+    #[test]
+    fn committing_a_free_transform_paints_once_and_is_undoable() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        // Something to transform: a black mark off-centre.
+        editor.set_tool(ToolId::Pencil);
+        editor.set_foreground([0.0, 0.0, 0.0, 1.0]);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(20.0, 20.0), (28.0, 28.0)]);
+        let painted = composite(&mut editor);
+
+        editor.set_tool(ToolId::FreeTransform);
+        // A press starts the session over the canvas; the drag moves a handle.
+        stroke(&mut pointer, &mut editor, &[(0.0, 0.0), (10.0, 10.0)]);
+        assert!(
+            pointer.has_pending_commit(),
+            "the transform session did not stay live after the release"
+        );
+
+        let outcome = pointer.commit(&mut editor);
+        assert!(outcome.had_pending);
+        assert_eq!(outcome.failed, None, "{outcome:?}");
+        assert_eq!(outcome.steps, 1, "{outcome:?}");
+        assert_ne!(composite(&mut editor), painted, "the transform did nothing");
+        assert!(!pointer.has_pending_commit(), "the session did not end");
+
+        assert!(editor.active_mut().unwrap().undo().unwrap());
+        assert_eq!(composite(&mut editor), painted);
+    }
+
+    /// Slices reach the caller and the status bar, and go no further — this
+    /// build cannot export them. An honest gap, said out loud.
+    #[test]
+    fn committing_slices_reports_them_and_says_they_cannot_be_exported() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Slice);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(4.0, 4.0), (20.0, 20.0)]);
+        stroke(&mut pointer, &mut editor, &[(30.0, 30.0), (50.0, 50.0)]);
+        assert!(pointer.has_pending_commit());
+
+        let outcome = pointer.commit(&mut editor);
+        assert_eq!(outcome.slices.len(), 2, "{outcome:?}");
+        assert_eq!(
+            outcome.slices[0].rect.width, 16,
+            "the slice is not the dragged rectangle"
+        );
+        assert_eq!(outcome.steps, 0, "a slice set is not a document edit");
+        assert!(editor
+            .status()
+            .is_some_and(|s| s.contains("2 slice(s)") && s.contains("cannot export")));
+        // Committing twice does not publish the same slices again.
+        assert!(!pointer.commit(&mut editor).had_pending);
+    }
+
+    // --------------------------------------------- creating with a click ----
+
+    /// A Type-tool click creates exactly one text layer, at the document point
+    /// that was clicked.
+    #[test]
+    fn a_type_click_creates_exactly_one_text_layer_at_the_clicked_point() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Type);
+        let mut pointer = ToolPointer::new();
+        let layers_before = editor.active().unwrap().document.layers.len();
+
+        stroke(&mut pointer, &mut editor, &[(20.0, 30.0)]);
+
+        let doc = editor.active().unwrap();
+        assert_eq!(
+            doc.document.layers.len(),
+            layers_before + 1,
+            "a click made {} layers",
+            doc.document.layers.len() - layers_before
+        );
+        assert_eq!(doc.history_depth(), 1, "the layer is not undoable");
+        let text: Vec<_> = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter_map(|id| doc.document.layers.get(id))
+            .filter(|l| matches!(l.kind, layer_model::LayerKind::Text(_)))
+            .collect();
+        assert_eq!(text.len(), 1, "expected exactly one text layer");
+        assert_eq!(
+            text[0].transform.translation,
+            Vec2::new(20.0, 30.0),
+            "the text layer is not where the click landed"
+        );
+        assert!(text[0].visible);
+        // ...and the tool is holding the run open for typing.
+        assert!(pointer.is_text_editing());
+    }
+
+    /// The other half of the Type tool: a keystroke reaches the layer's run.
+    #[test]
+    fn typing_after_a_type_click_rewrites_the_layers_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Type);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(8.0, 8.0)]);
+
+        for ch in ["H", "i"] {
+            let out = pointer.text_edit(&mut editor, tools::TextEdit::Insert(ch));
+            assert!(out.had_pending, "the keystroke reached nobody: {out:?}");
+            assert_eq!(out.steps, 1, "{out:?}");
+        }
+        let run = |editor: &Editor| {
+            let doc = editor.active().unwrap();
+            doc.document
+                .layers
+                .iter_depth_first()
+                .into_iter()
+                .filter_map(|id| doc.document.layers.get(id))
+                .find_map(|l| match &l.kind {
+                    layer_model::LayerKind::Text(t) => Some(t.text.clone()),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(run(&editor), "Hi");
+        pointer.text_edit(&mut editor, tools::TextEdit::Backspace);
+        assert_eq!(run(&editor), "H");
+
+        // Enter ends the run, and the keyboard goes back to the shortcut table.
+        assert!(pointer.commit(&mut editor).had_pending);
+        assert!(!pointer.is_text_editing());
+        assert!(
+            !pointer
+                .text_edit(&mut editor, tools::TextEdit::Insert("x"))
+                .had_pending,
+            "a keystroke was consumed after the run ended"
+        );
+        assert_eq!(run(&editor), "H");
+    }
+
+    /// A pen click sequence builds the path those clicks describe, and Enter
+    /// turns it into one shape layer.
+    #[test]
+    fn a_pen_click_sequence_builds_the_expected_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Pen);
+        let mut pointer = ToolPointer::new();
+
+        for at in [(10.0, 10.0), (50.0, 10.0), (50.0, 40.0)] {
+            stroke(&mut pointer, &mut editor, &[at]);
+            // Nothing is emitted while the path is being drawn.
+            assert_eq!(editor.active().unwrap().history_depth(), 0);
+        }
+        assert!(pointer.has_pending_commit());
+
+        let outcome = pointer.commit(&mut editor);
+        assert_eq!(outcome.steps, 1, "{outcome:?}");
+        let doc = editor.active().unwrap();
+        let shape = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter_map(|id| doc.document.layers.get(id))
+            .find_map(|l| match &l.kind {
+                layer_model::LayerKind::Shape(s) => Some(s.clone()),
+                _ => None,
+            })
+            .expect("the pen created no shape layer");
+
+        let path = vector::parse_svg(&shape.path_svg).expect("the pen wrote unreadable SVG");
+        assert_eq!(
+            path.elements(),
+            &[
+                vector::PathEl::MoveTo(vector::point(10.0, 10.0)),
+                vector::PathEl::LineTo(vector::point(50.0, 10.0)),
+                vector::PathEl::LineTo(vector::point(50.0, 40.0)),
+            ],
+            "the pen authored a path the clicks do not describe"
+        );
+        // Left open, so it is stroked rather than filled.
+        assert!(shape.stroke.is_some() && shape.fill.is_none());
+    }
+
+    /// Clicking back on the first anchor closes the path and publishes it with
+    /// no Enter at all.
+    #[test]
+    fn a_pen_click_on_the_first_anchor_closes_the_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Pen);
+        editor.set_foreground([1.0, 0.0, 0.0, 1.0]);
+        let mut pointer = ToolPointer::new();
+        for at in [(10.0, 10.0), (50.0, 10.0), (50.0, 40.0), (11.0, 11.0)] {
+            stroke(&mut pointer, &mut editor, &[at]);
+        }
+        assert_eq!(editor.active().unwrap().history_depth(), 1);
+        assert!(!pointer.has_pending_commit(), "the path was not published");
+
+        let doc = editor.active().unwrap();
+        let shape = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter_map(|id| doc.document.layers.get(id))
+            .find_map(|l| match &l.kind {
+                layer_model::LayerKind::Shape(s) => Some(s.clone()),
+                _ => None,
+            })
+            .expect("no shape layer");
+        assert!(
+            shape.path_svg.trim_end().ends_with('Z'),
+            "the closed path did not close: {}",
+            shape.path_svg
+        );
+        assert_eq!(
+            shape.fill,
+            Some([1.0, 0.0, 0.0, 1.0]),
+            "a closed path is filled in the foreground colour"
+        );
+    }
+
+    /// A crop of the whole canvas is still a crop, and a request that describes
+    /// no canvas is refused rather than applied as a zero-sized document.
+    #[test]
+    fn a_crop_command_is_built_only_for_a_region_with_area() {
+        let dir = tempfile::tempdir().unwrap();
+        let editor = editor(dir.path());
+        let document = &editor.active().unwrap().document;
+        let empty = tools::CropRequest {
+            rect: PixelRect::new(0, 0, 0, 10),
+            straighten: 0.0,
+            delete_cropped: false,
+        };
+        assert!(crop_command(document, &empty).is_none());
+
+        // A crop at the origin needs no translation at all.
+        let at_origin = tools::CropRequest {
+            rect: PixelRect::new(0, 0, 32, 32),
+            straighten: 0.0,
+            delete_cropped: false,
+        };
+        let Some(Command::Transaction { commands, .. }) = crop_command(document, &at_origin) else {
+            panic!("a crop at the origin built no transaction");
+        };
+        assert_eq!(commands.len(), 1, "{commands:?}");
+        assert!(matches!(commands[0], Command::SetCanvasSize { .. }));
+
+        // ...and one away from it moves each root layer once.
+        let moved = tools::CropRequest {
+            rect: PixelRect::new(4, 6, 32, 32),
+            straighten: 0.0,
+            delete_cropped: false,
+        };
+        let Some(Command::Transaction { commands, .. }) = crop_command(document, &moved) else {
+            panic!("no transaction");
+        };
+        assert_eq!(commands.len(), 1 + document.layers.root().len());
+        assert!(matches!(
+            commands[1],
+            Command::TransformLayer {
+                matrix: [1.0, 0.0, 0.0, 1.0, -4.0, -6.0],
+                ..
+            }
+        ));
     }
 
     #[test]
