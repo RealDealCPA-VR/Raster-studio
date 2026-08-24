@@ -51,8 +51,8 @@ priority order. Each is a plan-implement-validate loop.
       The mask runs at the apply boundary, so the command that reaches history
       and the journal is already masked (journal-safe, undo restores the whole
       prior tile). Test: a stroke with red isolated writes only red and undoes
-      whole. Residual: masking `FillRegion`/`ClearRegion` (the eraser) to a
-      channel, and per-channel *filter* application.
+      whole. Residual: masking `ClearRegion` (the eraser) to a channel, and
+      per-channel *filter* application.
 - [ ] S1.2 Smart objects exist as a layer kind but nothing renders them.
 - [x] S1.3 Export is 8-bit; 16-bit sources are decoded, composited in f32 and
       written out at 8 bits/channel. `ExportFormat::supports_16_bit` exists but
