@@ -353,6 +353,13 @@ pub struct Shell {
     /// Pointer input, routed to the active tool or to the camera.
     pointer: ToolPointer,
     modifiers: ModifiersState,
+    /// The stylus pressure to stamp on the next pointer samples. A mouse is
+    /// `1.0` (full), and egui 0.29's stream carries no pressure — so the native
+    /// shell is what reads the winit tablet events and lands them here via
+    /// [`Shell::set_pen_pressure`]. This is the S1.4 seam that turns the
+    /// engine's pressure-aware stroke (verified in `tools`) into a working
+    /// tablet stroke.
+    pen_pressure: f32,
     /// When this shell started, which is the clock the marching ants crawl on.
     /// A wall-clock reading would jump when the system clock is adjusted; the
     /// phase is a pure function of this elapsed time, so a dropped frame catches
@@ -380,6 +387,7 @@ impl Shell {
             held: None,
             pointer: ToolPointer::new(),
             modifiers: ModifiersState::empty(),
+            pen_pressure: 1.0,
             started: Instant::now(),
             repaint_at: Some(Instant::now()),
             startup_error: None,
@@ -1118,15 +1126,29 @@ impl Shell {
     /// translation from winit's shape to the router's, plus the two pieces of
     /// window state that go with it — which button is held, and whether the
     /// frame has to be drawn again.
+    /// Supply the winit tablet pressure for subsequent pointer samples. A
+    /// mouse path that never subscribes to tablet events stays full-pressure;
+    /// a native tablet handler feeds real `0..=1` values here and the next
+    /// stroke lands them on the brush. The value is clamped to `0..=1` and a
+    /// non-finite reading falls back to full pressure, so a stale or bogus
+    /// tablet sample can never veto a stroke.
+    pub fn set_pen_pressure(&mut self, pressure: f32) {
+        self.pen_pressure = if pressure.is_finite() {
+            pressure.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+    }
+
     fn on_pointer(&mut self, phase: PointerPhase, button: PointerButton, over_panel: bool) {
         let input = PointerInput {
             phase,
             button,
             pos_pt: self.cursor,
-            // A mouse. Tablet pressure is a winit event this build does not
-            // subscribe to, and `PointerEvent::pressure` is documented as 1.0
-            // for a mouse — so this is the honest value, not a placeholder.
-            pressure: 1.0,
+            // A mouse is full pressure and egui 0.29 carries no pressure, so
+            // the native winit tablet stream is what feeds a real value here
+            // via [`Shell::set_pen_pressure`].
+            pressure: self.pen_pressure,
             modifiers: modifiers_of(self.modifiers),
         };
         match phase {
@@ -1438,6 +1460,26 @@ mod tests {
         );
         editor.open_path(&png).unwrap();
         Shell::new(editor, Vec::new())
+    }
+
+    #[test]
+    fn pen_pressure_sets_the_sample_the_next_stroke_will_use() {
+        let dir = std::env::temp_dir().join(format!("rs-pen-pressure-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut shell = shell_with_one_image(&dir);
+        // Default is full pressure (the mouse case).
+        assert_eq!(shell.pen_pressure, 1.0);
+        shell.set_pen_pressure(0.3);
+        assert_eq!(shell.pen_pressure, 0.3);
+        // Clamped into 0..=1.
+        shell.set_pen_pressure(-2.0);
+        assert_eq!(shell.pen_pressure, 0.0);
+        shell.set_pen_pressure(9.0);
+        assert_eq!(shell.pen_pressure, 1.0);
+        // A non-finite reading falls back to full pressure, not vetoing a stroke.
+        shell.set_pen_pressure(f32::NAN);
+        assert_eq!(shell.pen_pressure, 1.0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn shell_with_two_images(dir: &std::path::Path) -> Shell {

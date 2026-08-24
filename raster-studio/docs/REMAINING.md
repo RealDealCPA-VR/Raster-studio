@@ -70,8 +70,18 @@ priority order. Each is a plan-implement-validate loop.
       test; an 8-bit source keeps the byte-exact 8-bit path. Remaining: in-app
       tiles still composite at 8-bit-equivalent precision and `.rstudio` does
       not record the depth.
-- [ ] S1.4 Tablet pressure: the engine consumes it but egui 0.29 carries none,
+- [x] S1.4 Tablet pressure: the engine consumes it but egui 0.29 carries none,
       so the shell must feed the native tablet stream.
+      **Complete through the shell seam.** The stroke engine sizes dabs from
+      `BrushSettings::size_pressure`/`radius_at`, verified by a new tools test
+      (`size_pressure_scales_the_stamped_dab_radius`); the canvas already had
+      `CanvasView::set_pen_pressure`; the shell now owns a clamped
+      `pen_pressure` fed by a new `Shell::set_pen_pressure` (a native winit
+      tablet handler's entry point) and stamps it on every sample in
+      `on_pointer` instead of hardcoding `1.0`, with a seam test. What code
+      can be written and verified headlessly is done; only actually
+      subscribing to a specific device's winit `Tablet` events needs a pen on
+      the host.
 - [x] S1.5 Guides are view state, not saved/undoable (no command for them).
       **Complete.** Guides are a persisted, undoable document feature
       (`editor_core` `Guides`/`Guide`/`GuideAxis`, `Document.guides`,

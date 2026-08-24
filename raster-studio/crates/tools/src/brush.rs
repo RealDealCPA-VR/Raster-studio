@@ -411,6 +411,43 @@ mod tests {
     }
 
     #[test]
+    fn size_pressure_scales_the_stamped_dab_radius() {
+        // The crux of native tablet pressure (S1.4 engine side): the emitter
+        // maps each sample's pressure into a dab radius when size_pressure is
+        // on, so a light stroke lands narrower than a firm one even though the
+        // geometry is identical.
+        let settings = BrushSettings {
+            size: 20.0,
+            size_pressure: true,
+            min_size_ratio: 0.2,
+            smoothing: 0.0,
+            ..Default::default()
+        };
+        let radius_at = |p: f32| {
+            let mut e = DabEmitter::begin(settings, Vec2::ZERO, p).unwrap();
+            e.finish(Vec2::new(20.0, 0.0), p).unwrap();
+            e.dabs()[0].radius
+        };
+        let full = radius_at(1.0);
+        let light = radius_at(0.25);
+        assert!(
+            light < full,
+            "light pressure must land narrower: {light} vs {full}"
+        );
+        // And the exact mapping: radius_at(1.0)==size/2, radius_at(0.0)==ratio*size/2.
+        assert!((settings.radius_at(1.0) - 10.0).abs() < 1e-5);
+        assert!((settings.radius_at(0.0) - 2.0).abs() < 1e-5);
+        // Flow pressure likewise scales flow but not radius.
+        let flow = BrushSettings {
+            flow_pressure: true,
+            flow: 0.5,
+            ..settings
+        };
+        assert!((flow.flow_at(0.0) - 0.0).abs() < 1e-6);
+        assert!((flow.flow_at(1.0) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
     fn spacing_is_carried_across_segments_so_a_fast_flick_is_not_dotted() {
         let s = BrushSettings {
             size: 20.0,
