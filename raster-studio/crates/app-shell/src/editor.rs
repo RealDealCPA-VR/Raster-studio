@@ -41,6 +41,70 @@ use crate::keymap::{Chord, Conflict, Keymap};
 use crate::prefs::{AppPaths, Preferences};
 use crate::recent::RecentFiles;
 use crate::session::{self, SessionRecord};
+use compositor::TileSource;
+
+/// Rewrite a `PaintTiles` command so only colour component `channel` (0..=2)
+/// of each touched pixel changes, keeping the other channels of the tile's
+/// prior content. This is channel editing: with the red channel isolated as the
+/// edit target, a brush stroke darkens only red, leaving green and blue where
+/// they were.
+///
+/// The masking happens *here*, at the shell's apply boundary, so the command
+/// that reaches history and the journal already carries masked hashes — undo,
+/// redo and crash replay all see a fully-specified edit and do not need to know
+/// any channel state. The inverse is built by `apply` from the prior hashes, so
+/// undo restores the whole prior tile exactly.
+fn mask_paint_to_channel(doc: &mut OpenDocument, command: Command, channel: usize) -> Command {
+    let Command::PaintTiles { target, delta } = command else {
+        return command;
+    };
+    // Only colour components (R/G/B) are isolated for editing; an alpha or a
+    // mask coverage target is a singular channel and paints normally.
+    if channel >= 3 {
+        return Command::PaintTiles { target, delta };
+    }
+    let Ok(key) = editor_core::resolve_target(&doc.document, target) else {
+        return Command::PaintTiles { target, delta };
+    };
+
+    let mut edits: Vec<editor_core::pixels::TileEdit> = Vec::with_capacity(delta.len());
+    for edit in delta.edits() {
+        let Some(new_hash) = edit.hash else {
+            // A tile removal edits the whole pixel (there is nothing to keep);
+            // it is orthogonal to colour-channel editing and stays as-is.
+            edits.push(*edit);
+            continue;
+        };
+        let Some(new_bytes) = doc.tiles.tile(new_hash).map(<[u8]>::to_vec) else {
+            edits.push(*edit);
+            continue;
+        };
+        let prior_hash = doc.document.pixels.tile(key, edit.coord);
+        let prior_bytes = prior_hash
+            .and_then(|h| doc.tiles.tile(h))
+            .map(<[u8]>::to_vec)
+            .unwrap_or_else(|| vec![0u8; new_bytes.len()]);
+        if prior_bytes.len() != new_bytes.len() {
+            edits.push(*edit);
+            continue;
+        }
+        // Keep the prior value on every channel but the target one.
+        let mut masked = prior_bytes;
+        for i in (channel..new_bytes.len()).step_by(4) {
+            masked[i] = new_bytes[i];
+        }
+        let masked_hash = doc.tiles.insert_bytes(masked);
+        edits.push(editor_core::pixels::TileEdit::set(edit.coord, masked_hash));
+    }
+
+    match editor_core::pixels::TileDelta::new(edits) {
+        Ok(new_delta) => Command::PaintTiles {
+            target,
+            delta: new_delta,
+        },
+        Err(_) => Command::PaintTiles { target, delta },
+    }
+}
 
 /// Canvas size of a File ▸ New document.
 pub const NEW_DOCUMENT_SIZE: (u32, u32) = (1920, 1080);
@@ -205,6 +269,9 @@ pub struct Editor {
     preferences_open: bool,
     /// Whether the File ▸ File Info… window (document metadata) is up.
     file_info_open: bool,
+    /// The colour component paint/fill should write, when the Channels panel
+    /// has selected one channel to edit. `None` edits all components.
+    paint_channel: Option<usize>,
     pending_conflict: Option<Conflict>,
     temporary_hand: bool,
     quit_requested: bool,
@@ -342,6 +409,7 @@ impl Editor {
             panels_visible: true,
             preferences_open: false,
             file_info_open: false,
+            paint_channel: None,
             pending_conflict: None,
             temporary_hand: false,
             quit_requested: false,
@@ -509,6 +577,12 @@ impl Editor {
         self.file_info_open = !self.file_info_open;
     }
 
+    /// Set the single colour component paint/fill commands should write, or
+    /// `None` to write all of them. Set from the Channels panel each frame.
+    pub fn set_paint_channel(&mut self, channel: Option<usize>) {
+        self.paint_channel = channel;
+    }
+
     pub fn recent(&self) -> &RecentFiles {
         &self.recent
     }
@@ -533,8 +607,13 @@ impl Editor {
         // on the stack is exactly the case `tops_out_with_kind_edit` is there
         // to catch, and clearing here as well would make that guard unreachable
         // — a safety belt nothing can test is a safety belt nobody can trust.
+        let channel = self.paint_channel;
         let Some(doc) = self.active_mut() else {
             return;
+        };
+        let command = match channel {
+            Some(c) => mask_paint_to_channel(doc, command, c),
+            None => command,
         };
         match doc.apply(command) {
             Ok(()) => self.touch(),

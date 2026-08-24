@@ -247,6 +247,79 @@ fn opening_files_fills_tabs_and_the_recent_list() {
 }
 
 #[test]
+fn painting_with_the_red_channel_isolated_writes_only_red() {
+    use editor_core::pixels::{PixelTarget, TileDelta, TileEdit};
+    use raster::TileCoord;
+
+    let dir = tempfile::tempdir().unwrap();
+    let png = write_png(dir.path(), "one.png", 256, 256, 0);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_paths(&[png]);
+    let layer = ed.active().unwrap().document.active_layer().unwrap();
+
+    // A solid RGBA8 tile with the same byte pattern on every pixel.
+    let solid = |p: [u8; 4]| {
+        let n = (raster::TILE_SIZE as usize).pow(2) * 4;
+        let mut v = Vec::with_capacity(n);
+        for _ in 0..(n / 4) {
+            v.extend_from_slice(&p);
+        }
+        v
+    };
+
+    // First lay down a known pattern on every channel.
+    let hash_a = ed
+        .active_mut()
+        .unwrap()
+        .tiles
+        .insert_bytes(solid([11, 22, 33, 255]));
+    ed.apply_command(Command::PaintTiles {
+        target: PixelTarget::Layer(layer),
+        delta: TileDelta::single(TileEdit::set(TileCoord::new(0, 0, 0), hash_a)),
+    });
+
+    // Isolate red as the edit target, then paint a different pattern.
+    ed.set_paint_channel(Some(0));
+    let hash_b = ed
+        .active_mut()
+        .unwrap()
+        .tiles
+        .insert_bytes(solid([200, 40, 50, 255]));
+    ed.apply_command(Command::PaintTiles {
+        target: PixelTarget::Layer(layer),
+        delta: TileDelta::single(TileEdit::set(TileCoord::new(0, 0, 0), hash_b)),
+    });
+
+    // Only the red channel moved; green and blue kept the prior values.
+    let key = editor_core::pixels::PixelKey::Layer(layer);
+    let coord = TileCoord::new(0, 0, 0);
+    let stored = ed
+        .active()
+        .unwrap()
+        .document
+        .pixels
+        .tile(key, coord)
+        .expect("tile stored");
+    let bytes = ed.active().unwrap().tiles.tile(stored).unwrap();
+    assert_eq!(&bytes[0..4], &[200, 22, 33, 255], "only red changed");
+    assert_eq!(&bytes[123 * 4..123 * 4 + 4], &[200, 22, 33, 255]);
+
+    // Undo restores the whole prior tile (all channels).
+    ed.active_mut().unwrap().undo().unwrap();
+    let back = ed
+        .active()
+        .unwrap()
+        .document
+        .pixels
+        .tile(key, coord)
+        .unwrap();
+    assert_eq!(
+        &ed.active().unwrap().tiles.tile(back).unwrap()[0..4],
+        &[11, 22, 33, 255]
+    );
+}
+
+#[test]
 fn a_file_that_cannot_be_opened_is_reported_and_forgotten() {
     let dir = tempfile::tempdir().unwrap();
     let junk = dir.path().join("broken.png");

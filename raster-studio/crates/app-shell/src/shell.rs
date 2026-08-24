@@ -896,6 +896,7 @@ impl Shell {
         for action in output.actions {
             self.perform(action);
         }
+        self.editor.set_paint_channel(output.paint_channel);
         if let Some(index) = output.activate {
             if let Err(e) = self.editor.activate(index) {
                 self.editor.set_status(e.to_string());

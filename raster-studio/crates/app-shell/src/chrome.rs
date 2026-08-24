@@ -162,6 +162,10 @@ pub struct ChromeOutput {
     /// [`crate::menu_bridge::unrouted_message`], so the *next* unwired control
     /// announces itself the first time anybody clicks it.
     pub unrouted: Vec<ui::Intent>,
+    /// The single colour component (0..=2) the Channels panel has selected as
+    /// the edit target, or `None` to edit all. Applied to the editor each
+    /// frame; the paint path masks tile edits to it.
+    pub paint_channel: Option<usize>,
     /// A tab was clicked.
     pub activate: Option<usize>,
     /// A tab's close button was clicked.
@@ -510,6 +514,12 @@ impl Chrome {
         if editor.file_info_open() {
             self.file_info_window(ctx, editor, &mut out);
         }
+        // The Channels panel's selected row is an *edit target*: when it is one
+        // colour component, painting lands on that channel only.
+        out.paint_channel = match self.workspace.channels.selected {
+            ui::panels::channels::ChannelKind::Component(i) => Some(i),
+            _ => None,
+        };
         // Guides: the canvas view was seeded from the document in `observe`;
         // a guide edited on the canvas this frame diverges, and this converges
         // the document back as one undoable `SetGuides`. When nothing was

@@ -41,8 +41,18 @@ marching ants", and layer effects "do not render". All of that is false on
 These are the rows that are honestly still 🔶 or ⬜ after wave-8, kept in
 priority order. Each is a plan-implement-validate loop.
 
-- [ ] S1.1 Channels can be isolated but not edited in place. Painting/filtering
+- [x] S1.1 Channels can be isolated but not edited in place. Painting/filtering
       into a single channel is not implemented; every tool writes all components.
+      **Implemented.** The Channels panel's selected row is now an *edit
+      target*: `ChromeOutput::paint_channel` (from `ChannelKind::Component`)
+      is applied to the editor each frame, and the paint path masks
+      `Command::PaintTiles` so only the target colour component (R/G/B) of
+      each touched pixel changes, keeping the other channels' prior values.
+      The mask runs at the apply boundary, so the command that reaches history
+      and the journal is already masked (journal-safe, undo restores the whole
+      prior tile). Test: a stroke with red isolated writes only red and undoes
+      whole. Residual: masking `FillRegion`/`ClearRegion` (the eraser) to a
+      channel, and per-channel *filter* application.
 - [ ] S1.2 Smart objects exist as a layer kind but nothing renders them.
 - [x] S1.3 Export is 8-bit; 16-bit sources are decoded, composited in f32 and
       written out at 8 bits/channel. `ExportFormat::supports_16_bit` exists but

@@ -1063,7 +1063,7 @@ fn kind_owning_pixels(kind: &LayerKind) -> Result<(), &'static str> {
 /// forbids: a missing layer, a kind that owns no pixels, a missing mask, or a
 /// lock. Runs before any mutation, so every refusal here leaves the document
 /// untouched.
-fn resolve_target(doc: &Document, target: PixelTarget) -> Result<PixelKey, CommandError> {
+pub fn resolve_target(doc: &Document, target: PixelTarget) -> Result<PixelKey, CommandError> {
     match target {
         PixelTarget::Layer(id) => {
             let layer = doc.layers.get(id).ok_or(CommandError::LayerNotFound(id))?;
