@@ -146,13 +146,14 @@ the manifests actually support.
 
 Stated here rather than left for someone to discover:
 
-- **`psd` has no dependents.** Nothing in the workspace converts between
-  `editor_core::Document` and `psd::PsdFile`. `app-shell` imports images only
-  through `raster::decode_path`, which has no PSD decoder behind it, and
-  `OpenDocument::export_to` refuses a `.psd` destination outright. The crate's
-  reader and writer agree with each other — that is what
-  `tests/integration/tests/interchange_and_recovery.rs` proves — but the
-  application can neither open nor save a PSD today.
+- **`psd` is now wired.** `app-shell` depends on `psd` and converts both ways:
+  `OpenDocument::open_psd` builds a real `Document` (groups, masks, blend
+  modes, channels, adjustments) from the layer section, and
+  `OpenDocument::export_psd_to` lowers a document back to a layered PSD.
+  `OpenDocument::export_to` routes a `.psd` destination there rather than
+  flattening, so "Save as PSD" keeps its layers, and `looks_like_psd` picks the
+  document road on content rather than extension. What the format cannot carry
+  in either direction is reported in `PsdNotes` rather than dropped silently.
 - **`render::CompositePass` and `composite.wgsl` are unused by the application.**
   They are constructed only in `crates/render/tests/gpu.rs`. Nothing composites
   on the GPU; see [`render-pipeline.md`](render-pipeline.md).

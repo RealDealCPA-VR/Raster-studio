@@ -25,14 +25,16 @@ transform "track a gesture but nothing applies it", a selection "draws no
 marching ants", and layer effects "do not render". All of that is false on
 `main` today.
 
-- [ ] S0.1 Rewrite README **Status** so "What you can do in the app" matches the
+- [x] S0.1 Rewrite README **Status** so "What you can do in the app" matches the
       wired reality, and move the newly reachable engines out of "not reachable".
-- [ ] S0.2 Update `docs/parity-matrix.md`: flip the 🔶 "reachability" rows that
+- [x] S0.2 Update `docs/parity-matrix.md`: flip the 🔶 "reachability" rows that
       wave-8 closed (Filters, PSD read/write, Text, Vector/pen, Crop/slice/free
       transform, Selection overlay, Layer effects) and refresh the "Known gaps"
       list to name what is honestly left.
-- [ ] S0.3 Re-verify the four-file doc set (`architecture.md`, `render-pipeline.md`,
-      `file-format.md`, `threat-model.md`) still describe the system that exists.
+- [x] S0.3 Re-verify the four-file doc set (`architecture.md`, `render-pipeline.md`,
+      `file-format.md`, `threat-model.md`) still describe the system that exists
+      (fixed the stale "psd has no dependents / cannot open or save a PSD" claims
+      in `architecture.md` and `threat-model.md`).
 
 ## S1 — Genuine remaining engine/UI gaps (from the matrix, Tier A first)
 

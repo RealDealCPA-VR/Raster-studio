@@ -106,13 +106,12 @@ and its full-size `.new-` sibling is left on disk for a human to delete.
 | A header alone asking the allocator for fourteen gigabytes | `flatten` takes its canvas size from a header a caller can supply with no file behind it, so it draws every canvas from `WriteOptions::max_flatten_bytes` (2 GiB) and refuses before it reserves. | `psd/src/flatten.rs` |
 | Colour modes read as RGB producing silently wrong pixels | CMYK, Lab, Indexed, Duotone, Multichannel and Bitmap are **refused by name** rather than approximated. PSB (`.psb`, version 2) is refused with `UnsupportedVersion`. | `psd/src/header.rs`, `read.rs` |
 
-**Reachability, stated:** no code path in the application reaches this parser.
-`psd` has no dependents in the workspace; `app-shell` imports only through
-`raster::decode_path`, which has no PSD decoder behind it, and
-`OpenDocument::export_to` refuses a `.psd` destination. These defences are real
-and tested; today they protect a library, not a user. When the
-`Document`↔`PsdFile` bridge is written, this section becomes live and this
-paragraph must be deleted.
+**Reachability, live:** `psd` is wired into `app-shell`. `OpenDocument::open_psd`
+parses untrusted `.psd` bytes into a `Document`, and `export_psd_to` writes a
+layered PSD back out; `looks_like_psd` picks that road on content.
+`OpenDocument::export_to` routes a `.psd` destination to the layered writer
+rather than refusing it. These defences therefore protect a user, not just a
+library.
 
 ## 4. Malicious ordinary image
 
