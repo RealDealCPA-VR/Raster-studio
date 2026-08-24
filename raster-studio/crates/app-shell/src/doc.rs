@@ -173,6 +173,12 @@ pub struct OpenDocument {
     source_path: Option<PathBuf>,
     compositor: TileCompositor,
     dirty: DirtyTiles,
+    /// Whether the source this document was opened from carried 16 bits per
+    /// channel. When true and the export format supports it,
+    /// [`OpenDocument::export_to`] writes 16 bits per channel so a deep source
+    /// is not crushed to eight on the way out. A `.rstudio` package does not
+    /// record this, so it stays false for a project re-opened from disk.
+    source_sixteen_bit: bool,
     /// The camera still owes the user a fit — see [`OpenDocument::set_viewport`].
     ///
     /// Set at construction and cleared by the first real viewport, because at
@@ -230,6 +236,7 @@ impl OpenDocument {
             compositor: TileCompositor::new(),
             // Nothing has been presented yet, so everything is outstanding.
             dirty: DirtyTiles::all(),
+            source_sixteen_bit: false,
             psd_notes: crate::import::PsdNotes::default(),
             undone_labels: Vec::new(),
             fit_pending: true,
@@ -255,6 +262,11 @@ impl OpenDocument {
         let imported = crate::import::document_from_image(&image, &title, history_depth)?;
         let mut open = OpenDocument::from_import(id, imported);
         open.source_path = Some(path.to_path_buf());
+        // A 16-bit-capable export destination can carry more than eight bits;
+        // record the depth the file actually arrived in so the export route
+        // below can choose to honor it.
+        let surface = raster::decode_surface_path(path, raster::ImportLimits::default())?;
+        open.source_sixteen_bit = surface.format() == raster::PixelFormat::Rgba16;
         Ok(open)
     }
 
@@ -298,6 +310,7 @@ impl OpenDocument {
             source_path: None,
             compositor: TileCompositor::new(),
             dirty: DirtyTiles::all(),
+            source_sixteen_bit: false,
             psd_notes: crate::import::PsdNotes::default(),
             undone_labels: Vec::new(),
             fit_pending: true,
@@ -524,6 +537,19 @@ impl OpenDocument {
         Ok(canvas.to_rgba8(&self.document.meta.color_space))
     }
 
+    /// Composite `region` as straight-alpha 16-bit RGBA in the document's
+    /// colour space, for exports that can carry a third sample of precision.
+    pub fn composite_rgba16(&mut self, region: PixelRect) -> Result<Vec<u16>, DocumentError> {
+        let canvas = self.compositor.composite_region(
+            &self.document,
+            &self.tiles,
+            region,
+            0,
+            CompositeOptions::default(),
+        )?;
+        Ok(canvas.to_rgba16(&self.document.meta.color_space))
+    }
+
     /// Hit/miss counters of this document's tile cache — how the "an edit
     /// recomposites only what changed" claim is checked.
     pub fn cache_stats(&self) -> compositor::CacheStats {
@@ -640,15 +666,32 @@ impl OpenDocument {
                     .unwrap_or_else(|| path.display().to_string()),
             )
         })?;
-        let rgba8 = self.composite(self.canvas_rect())?;
-        raster::encode_to_path(
-            path,
-            format,
-            self.document.width(),
-            self.document.height(),
-            raster::EncodedPixels::Rgba8(&rgba8),
-            &raster::EncodeOptions::default(),
-        )?;
+        // A deep source (PNG/TIFF at 16 bits) may go back out at 16 bits to the
+        // formats that carry them, instead of being crushed to eight on the way
+        // out. The composite is `f32` either way; the depth only changes how it
+        // is quantized into the file.
+        let rect = self.canvas_rect();
+        if self.source_sixteen_bit && format.supports_16_bit() {
+            let rgba16 = self.composite_rgba16(rect)?;
+            raster::encode_to_path(
+                path,
+                format,
+                self.document.width(),
+                self.document.height(),
+                raster::EncodedPixels::Rgba16(&rgba16),
+                &raster::EncodeOptions::default(),
+            )?
+        } else {
+            let rgba8 = self.composite(rect)?;
+            raster::encode_to_path(
+                path,
+                format,
+                self.document.width(),
+                self.document.height(),
+                raster::EncodedPixels::Rgba8(&rgba8),
+                &raster::EncodeOptions::default(),
+            )?
+        };
         Ok(())
     }
 
@@ -896,6 +939,63 @@ mod tests {
         assert!(!dir.path().join("out.exr").exists(), "nothing was written");
         // A destination with no extension at all names no format either.
         assert!(d.export_to(&dir.path().join("out")).is_err());
+    }
+
+    #[test]
+    fn a_deep_source_export_stays_sixteen_bit_and_an_eight_bit_source_still_exports_at_eight() {
+        // A 16-bit source must not be crushed to eight bits by an export to a
+        // format that can carry sixteen (PNG, TIFF); an 8-bit source must keep
+        // the long-standing 8-bit path so existing round-trips stay byte-exact.
+        let dir = tempfile::tempdir().unwrap();
+
+        let deep = dir.path().join("deep.png");
+        let one = vec![
+            0xABCDu16, 0x1020, 0x3040, 0xFFFF, // straight alpha, fully opaque
+        ];
+        raster::encode_to_path(
+            &deep,
+            raster::ExportFormat::Png,
+            1,
+            1,
+            raster::EncodedPixels::Rgba16(&one),
+            &raster::EncodeOptions::default(),
+        )
+        .unwrap();
+        let d = OpenDocument::open_image(DocumentId(100), &deep, 10).unwrap();
+        let out = dir.path().join("flattened.png");
+        let mut d = d;
+        d.export_to(&out).unwrap();
+        let back = raster::decode_surface_path(&out, raster::ImportLimits::default()).unwrap();
+        assert_eq!(
+            back.format(),
+            raster::PixelFormat::Rgba16,
+            "a deep source must export at 16 bits, not 8"
+        );
+
+        let shallow = dir.path().join("shallow.png");
+        let eight = vec![128u8, 0, 0, 255];
+        raster::encode_to_path(
+            &shallow,
+            raster::ExportFormat::Png,
+            1,
+            1,
+            raster::EncodedPixels::Rgba8(&eight),
+            &raster::EncodeOptions::default(),
+        )
+        .unwrap();
+        let mut s = OpenDocument::open_image(DocumentId(101), &shallow, 10).unwrap();
+        assert!(
+            !s.source_sixteen_bit,
+            "an 8-bit source is remembered as 8-bit"
+        );
+        let out8 = dir.path().join("flattened8.png");
+        s.export_to(&out8).unwrap();
+        let back8 = raster::decode_surface_path(&out8, raster::ImportLimits::default()).unwrap();
+        assert_eq!(
+            back8.format(),
+            raster::PixelFormat::Rgba8,
+            "an 8-bit source keeps the 8-bit export path"
+        );
     }
 
     #[test]

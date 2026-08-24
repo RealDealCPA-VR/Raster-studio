@@ -120,7 +120,7 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Channels panel | 🔶 | isolation is real and changes the canvas; per-channel *editing* is still not implemented — see the gaps list |
 | Paths panel | 🔶 | |
 | Colour management | 🔶 | sRGB and Display P3 are real; an embedded ICC profile is preserved but not applied |
-| 16-bit per channel | 🔶 | decoded and stored without loss; the compositor works in f32 and exports 8-bit |
+| 16-bit per channel | 🔶 | a 16-bit source is recognized and exported at 16 bits to the formats that carry them (PNG/TIFF); in-app tiles still composite at 8-bit-equivalent precision, and `.rstudio` does not record the depth |
 | Actions / recorded command replay | 🔶 | commands are serialisable and replayable; there is no recording UI |
 | Batch export | 🔶 | multiple presets in one run |
 | Brush / gradient / layer-style editors | 🔶 | |
@@ -158,8 +158,11 @@ Kept here rather than buried, because a ✅ with a footnote is still a claim:
   three components. The mask is a view setting and is not saved with the
   document.
 - **Smart objects are not rendered.** The layer kind exists; nothing draws one.
-- **Export is 8-bit.** 16-bit sources are decoded and composited without loss
-  and then written out at 8 bits per channel.
+- **Export is 8-bit.** 16-bit sources are now honored on the way *out*: a deep
+  source exports at 16 bits to the formats that carry them (PNG/TIFF), and an
+  8-bit source keeps the byte-exact 8-bit path. What remains is that in-app
+  editing still composites at 8-bit-equivalent precision (import collapses to
+  8-bit tiles) and that `.rstudio` does not record the source depth.
 - **Tablet pressure needs the shell.** egui 0.29's input carries no pressure,
   so without the native tablet stream every sample is a mouse at full pressure.
 - **Guides are view state.** They are not saved with the document and not

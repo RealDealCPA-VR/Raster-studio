@@ -44,9 +44,15 @@ priority order. Each is a plan-implement-validate loop.
 - [ ] S1.1 Channels can be isolated but not edited in place. Painting/filtering
       into a single channel is not implemented; every tool writes all components.
 - [ ] S1.2 Smart objects exist as a layer kind but nothing renders them.
-- [ ] S1.3 Export is 8-bit; 16-bit sources are decoded, composited in f32 and
+- [x] S1.3 Export is 8-bit; 16-bit sources are decoded, composited in f32 and
       written out at 8 bits/channel. `ExportFormat::supports_16_bit` exists but
       is not exercised by the export route.
+      **Implemented.** A 16-bit source is recognized at open and exported at 16
+      bits to the formats that carry them (`Canvas::to_rgba16`,
+      `OpenDocument::composite_rgba16`, `export_to` branch) with a round-trip
+      test; an 8-bit source keeps the byte-exact 8-bit path. Remaining: in-app
+      tiles still composite at 8-bit-equivalent precision and `.rstudio` does
+      not record the depth.
 - [ ] S1.4 Tablet pressure: the engine consumes it but egui 0.29 carries none,
       so the shell must feed the native tablet stream.
 - [ ] S1.5 Guides are view state, not saved/undoable (no command for them).

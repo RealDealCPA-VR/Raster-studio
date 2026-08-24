@@ -64,8 +64,9 @@ These are the gaps, named rather than blurred. Each is tracked in
 - **Channel editing** — the Channels panel isolates a component (really changes
   the canvas) but tools still paint all three components.
 - **Smart objects** — the layer kind exists but nothing renders it.
-- **16-bit export** — 16-bit sources are decoded and composited without loss,
-  then written out at 8 bits/channel.
+- **16-bit export** — 16-bit sources now export at 16 bits to the formats that
+  carry them (PNG/TIFF), but in-app editing still composites at 8-bit-equivalent
+  precision.
 - **Tablet pressure** — the engine consumes it, but egui 0.29 carries none, so
   the shell must still feed the native tablet stream.
 - **Guides are view state** — not saved with the document and not undoable.

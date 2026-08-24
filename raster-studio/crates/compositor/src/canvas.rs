@@ -163,6 +163,25 @@ impl Canvas {
         }
         out
     }
+
+    /// Convert to packed, straight-alpha 16-bit RGBA encoded in `space`.
+    ///
+    /// The 8-bit twin of [`Canvas::to_rgba8`]: unpremultiply, encode out of the
+    /// linear working space, quantize to a 16-bit code. The composite is always
+    /// `f32`, so a 16-bit-capable destination (PNG, TIFF) can carry more of it
+    /// than eight bits can.
+    pub fn to_rgba16(&self, space: &ColorSpace) -> Vec<u16> {
+        let mut out = Vec::with_capacity(self.pixels.len() * 4);
+        for px in &self.pixels {
+            let straight = unpremultiply(*px);
+            let enc = from_linear(space, [straight[0], straight[1], straight[2]]);
+            out.push(quantize16(enc[0]));
+            out.push(quantize16(enc[1]));
+            out.push(quantize16(enc[2]));
+            out.push(quantize16(straight[3]));
+        }
+        out
+    }
 }
 
 /// One channel of display-referred float to an 8-bit code.
@@ -170,6 +189,14 @@ fn quantize(v: f32) -> u8 {
     // `unit` maps non-finite to 0.0 rather than letting a NaN reach `as u8`,
     // which would be an unspecified value rather than a black pixel.
     (unit(v) * 255.0).round() as u8
+}
+
+/// One channel of display-referred float to a 16-bit code.
+fn quantize16(v: f32) -> u16 {
+    // Round, not truncate, so a value that came in as an exact 16-bit code
+    // goes back out as the same code; `unit` keeps NaN/±inf deterministic
+    // rather than relying on `as u16` saturation.
+    (unit(v) * 65535.0).round() as u16
 }
 
 #[cfg(test)]
@@ -257,6 +284,22 @@ mod tests {
     fn a_fully_transparent_pixel_encodes_to_zero_rather_than_dividing() {
         let c = Canvas::from_pixels(rect(0, 0, 1, 1), vec![[0.0, 0.0, 0.0, 0.0]]).unwrap();
         assert_eq!(c.to_rgba8(&ColorSpace::Srgb), vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn to_rgba16_premultiplies_encodes_and_rounds_to_a_16_bit_code() {
+        // Linear 0.5 premultiplied by alpha 0.5 -> stored 0.25, the same
+        // starting point the 8-bit twin uses.
+        let c = Canvas::from_pixels(rect(0, 0, 1, 1), vec![[0.25, 0.0, 0.0, 0.5]]).unwrap();
+        let bytes = c.to_rgba16(&ColorSpace::Srgb);
+        let expect = (color::linear_to_srgb(0.5) * 65535.0).round() as u16;
+        assert_eq!(bytes, vec![expect, 0, 0, 32768]);
+        // Straight alpha 0.5 quantizes to 32768 by rounding (0.5 * 65535 =
+        // 32767.5), not to 32767 by truncation.
+        assert_eq!(bytes[3], 32768);
+        // A NaN channel stays dark, like the 8-bit quantizer.
+        let c = Canvas::from_pixels(rect(0, 0, 1, 1), vec![[f32::NAN, 0.0, 0.0, 1.0]]).unwrap();
+        assert_eq!(c.to_rgba16(&ColorSpace::Srgb)[0], 0);
     }
 
     #[test]
