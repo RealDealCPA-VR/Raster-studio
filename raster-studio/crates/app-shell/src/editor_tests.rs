@@ -1895,3 +1895,39 @@ fn duplicating_a_document_copies_its_pixels_with_a_fresh_history() {
     );
     assert_eq!(ed.active().unwrap().id(), copy_id, "undo was a no-op");
 }
+
+#[test]
+fn a_gradient_fill_layer_runs_foreground_to_background_across_the_width() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_png(dir.path(), "a.png", 8, 4, 0);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&a).unwrap();
+    // Distinct foreground and background colours: fg red, bg blue.
+    ed.set_foreground([1.0, 0.0, 0.0, 1.0]);
+    ed.set_background([0.0, 0.0, 1.0, 1.0]);
+    ed.new_gradient_fill_layer().unwrap();
+    let doc = ed.active().unwrap();
+    let layer = doc
+        .document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|id| {
+            doc.document
+                .layers
+                .get(*id)
+                .is_some_and(|l| l.name == "Gradient Fill")
+        })
+        .expect("a gradient fill layer exists");
+    let w = doc.document.width();
+    let px = doc.layer_pixels(layer).unwrap();
+    // Left edge is near the foreground (red), right edge near the background
+    // (blue); for an 8px-wide doc px 0 ~ fg, px 7 ~ bg.
+    let left = &px[..4];
+    let right = &px[(w as usize - 1) * 4..(w as usize) * 4];
+    assert!(left[0] > 200 && left[2] < 60, "left is red-ish: {left:?}");
+    assert!(
+        right[2] > 200 && right[0] < 60,
+        "right is blue-ish: {right:?}"
+    );
+}

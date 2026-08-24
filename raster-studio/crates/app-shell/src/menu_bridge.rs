@@ -487,10 +487,9 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
         }
 
         // ---- Layer ---------------------------------------------------------
-        MenuAction::NewFillLayer(ui::menu::FillLayerKind::Gradient)
-        | MenuAction::NewFillLayer(ui::menu::FillLayerKind::Pattern) => {
-            "A gradient/pattern fill layer is layer_model::LayerKind::Generator, \
-             and the compositor has no generator rasteriser"
+        MenuAction::NewFillLayer(ui::menu::FillLayerKind::Pattern) => {
+            "A pattern fill layer is layer_model::LayerKind::Generator, and \
+             the compositor has no generator rasteriser"
         }
         MenuAction::Rasterize(R::SmartObject) => {
             "Rasterizing a linked smart object would break the link, and this \
@@ -872,6 +871,9 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         }
         MenuAction::NewFillLayer(ui::menu::FillLayerKind::SolidColor) => {
             editor.new_solid_fill_layer()
+        }
+        MenuAction::NewFillLayer(ui::menu::FillLayerKind::Gradient) => {
+            editor.new_gradient_fill_layer()
         }
         MenuAction::ConvertToSmartObject => editor.convert_to_smart_object(),
         MenuAction::DuplicateDocument => editor.duplicate_document(),
