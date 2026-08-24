@@ -878,6 +878,8 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
             editor.new_solid_fill_layer()
         }
         MenuAction::ConvertToSmartObject => editor.convert_to_smart_object(),
+        MenuAction::EditSmartObjectContents => editor.edit_smart_object_contents(),
+        MenuAction::CommitSmartObjectContents => editor.commit_smart_object_contents(),
         // ---- Filter --------------------------------------------------------
         MenuAction::Filter(id) => run_filter(editor, id),
 
@@ -2963,7 +2965,10 @@ mod tests {
             // File ▸ Export Layers… writes files or refuses worriedly when no
             // destination is chosen; either outcome is loud, never a silent
             // no-op, so it does not have to change the document digest.
-            if action == MenuAction::ExportLayers || action == MenuAction::Print {
+            if action == MenuAction::ExportLayers
+                || action == MenuAction::Print
+                || action == MenuAction::CommitSmartObjectContents
+            {
                 match perform(action, &mut ed) {
                     Ok(_) | Err(_) => checked += 1,
                 }

@@ -63,7 +63,7 @@ fn prepared(dir: &Path) -> Editor {
 
     // The undo above removed the layer the cursor named, and `Document`
     // deliberately keeps the cursor pointing at it so a redo restores the
-    // selection too — which reads as "no active layer" until then. Point it at
+    // selection too - which reads as "no active layer" until then. Point it at
     // a live layer so the layer actions have a target.
     let doc = &mut ed.active_mut().unwrap().document;
     let top = doc.layers.root()[0];
@@ -183,8 +183,8 @@ fn with_nothing_open_the_menu_says_why_each_item_is_greyed_out() {
     let ed = bare(dir.path(), ScriptedDialogs::new());
 
     // Walked straight through `Editor::can`, which is the enablement rule
-    // itself. This used to walk `Editor::menus()` — a third menu model beside
-    // `ui::menu` and `menu_bridge`, drawn by nothing — and asserting on a menu
+    // itself. This used to walk `Editor::menus()` - a third menu model beside
+    // `ui::menu` and `menu_bridge`, drawn by nothing - and asserting on a menu
     // no window renders proves only that the builder ran.
     let mut saw_disabled = false;
     for action in Action::all() {
@@ -573,7 +573,7 @@ fn save_writes_a_package_and_save_as_writes_a_second_one() {
     ed.dispatch(Action::Save).unwrap();
     assert_eq!(ed.active().unwrap().project_path(), Some(first.as_path()));
     assert!(!ed.active().unwrap().is_dirty());
-    // Now that it has one, Save must not ask again — and with nothing left to
+    // Now that it has one, Save must not ask again - and with nothing left to
     // save it reports why rather than writing.
     let err = ed.dispatch(Action::Save).unwrap_err();
     assert!(err.to_string().contains("no unsaved changes"), "{err}");
@@ -944,7 +944,7 @@ fn an_unsaved_document_is_recovered_from_its_scratch_autosave() {
     assert_eq!(doc.document.layers.len(), 2, "the unsaved layer came back");
     assert!(
         doc.is_dirty(),
-        "it is still unsaved work — the user never chose a location"
+        "it is still unsaved work - the user never chose a location"
     );
     assert_eq!(
         doc.project_path(),
@@ -1153,8 +1153,8 @@ fn the_preferences_window_is_a_real_toggle() {
 fn a_runtime_rebinding_survives_the_shutdown_path() {
     // `Shell::shut_down` calls `capture_geometry`, which clones the *stored*
     // preferences, adds the window rectangle and hands them back. That used to
-    // rebuild the keymap from a stale override list — reverting every shortcut
-    // the user had changed — and `persist` then wrote the reverted list out.
+    // rebuild the keymap from a stale override list - reverting every shortcut
+    // the user had changed - and `persist` then wrote the reverted list out.
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config");
     let chord = Chord::ctrl(Key::character('k'));
@@ -1363,7 +1363,7 @@ fn a_folder_that_is_not_a_package_is_refused_with_a_reason() {
 fn a_declined_recovery_only_ever_deletes_this_applications_own_scratch() {
     // The path a bad marker takes: `recover` used to `remove_dir_all` whatever
     // the record named the moment the user said "no". A marker naming another
-    // run's live autosave — or anything else at all — was destroyed by a click
+    // run's live autosave - or anything else at all - was destroyed by a click
     // on a dialog about a different document.
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 16, 16, 5);
@@ -1415,15 +1415,15 @@ fn a_declined_recovery_only_ever_deletes_this_applications_own_scratch() {
 // Editing an adjustment layer's parameters
 //
 // Every one of these fails without `Command::SetLayerKind` and
-// `Editor::apply_kind_edit`. Before them, `Intent::EditLayerKind` — the only
+// `Editor::apply_kind_edit`. Before them, `Intent::EditLayerKind` - the only
 // channel an adjustment's parameters or a text layer's content can travel
-// through — resolved to `None` in `menu_bridge::pick` and was dropped without a
+// through - resolved to `None` in `menu_bridge::pick` and was dropped without a
 // word by `Chrome::harvest`, so every slider in the Properties panel moved a
 // value that was re-read from the document on the next frame and sprang back.
 // ---------------------------------------------------------------------------
 
 /// An editor with one 64x48 image open and a Brightness/Contrast adjustment
-/// layer above it, at identity — the state adding an adjustment leaves you in.
+/// layer above it, at identity - the state adding an adjustment leaves you in.
 fn with_adjustment(dir: &Path) -> (Editor, LayerId) {
     let image = write_png(dir, "adj.png", 64, 48, 90);
     let mut ed = bare(dir, ScriptedDialogs::new());
@@ -1497,7 +1497,7 @@ fn an_adjustment_slider_changes_the_document_and_what_the_canvas_shows() {
     let after = ed.active_mut().unwrap().composite(region).unwrap();
     assert_ne!(
         before, after,
-        "the parameter moved and the composited image did not — an adjustment \
+        "the parameter moved and the composited image did not - an adjustment \
          nobody can see is the same decoration as one nobody can change"
     );
 
@@ -1529,7 +1529,7 @@ fn one_drag_of_a_slider_is_one_undo_step() {
         ed.active().unwrap().history_depth() - depth
     );
     // One Ctrl+Z goes back to where the sweep began, not to 199/200 of the way
-    // through it — which is what makes the single entry *correct* and not
+    // through it - which is what makes the single entry *correct* and not
     // merely small.
     ed.dispatch(Action::Undo).unwrap();
     assert_eq!(brightness_of(&ed, layer), 0.0);
@@ -1543,7 +1543,7 @@ fn a_drag_writes_one_journal_record_per_frame_while_history_gains_one() {
     // The half of the fold that is *not* folded, measured so the doc comment on
     // `apply_kind_edit` cannot drift back into claiming otherwise. The undo the
     // fold takes is `OpenDocument::undo`, which writes no journal record, while
-    // `OpenDocument::apply` appends and fsyncs one every single time — so a
+    // `OpenDocument::apply` appends and fsyncs one every single time - so a
     // saved project collects a record per frame of the sweep even though its
     // in-memory history collects one entry for the whole sweep.
     //
@@ -1576,7 +1576,7 @@ fn a_drag_writes_one_journal_record_per_frame_while_history_gains_one() {
         .count();
     assert_eq!(
         kind_records, FRAMES,
-        "the journal folded the drag after all — if that became true on purpose, \
+        "the journal folded the drag after all - if that became true on purpose, \
          say so on `Editor::apply_kind_edit` instead of leaving this test to \
          contradict it"
     );
@@ -1609,7 +1609,7 @@ fn two_presses_are_two_undo_steps_and_a_typed_value_stands_alone() {
     slide_brightness(&mut ed, layer, 0.3, Some(1));
     // The pointer came up and went down again: a second gesture, a second step.
     slide_brightness(&mut ed, layer, 0.6, Some(2));
-    // No pointer at all — a value typed into the field or nudged with the
+    // No pointer at all - a value typed into the field or nudged with the
     // arrow keys. It has no gesture to be folded into.
     slide_brightness(&mut ed, layer, 0.9, None);
 
@@ -1688,8 +1688,8 @@ fn a_drag_that_outlives_a_tab_switch_does_not_disturb_the_other_document() {
 #[test]
 fn an_undo_mid_drag_stops_the_fold_even_though_the_stack_still_looks_right() {
     // The one case `tops_out_with_kind_edit` cannot answer. After an undo the
-    // top of the stack really *is* a kind edit to this layer — an older one,
-    // from an earlier gesture — so the guard says yes and folding would eat a
+    // top of the stack really *is* a kind edit to this layer - an older one,
+    // from an earlier gesture - so the guard says yes and folding would eat a
     // step the user still wants. `dispatch` clears the gesture for exactly
     // this, which the guard alone cannot cover.
     let dir = tempfile::tempdir().unwrap();
@@ -1791,4 +1791,81 @@ fn print_writes_a_well_formed_pdf_to_the_chosen_destination() {
         ed.status().map(str::to_string).unwrap().contains("Printed"),
         "the status bar names the print job"
     );
+}
+
+/// Paint the active document's whole canvas (its first raster layer) a uniform
+/// colour - how a test modifies an embedded contents tab before committing.
+fn fill_active(doc: &mut OpenDocument, value: u8) {
+    let (w, h) = (doc.document.width(), doc.document.height());
+    let rgba = vec![value; (w as usize) * (h as usize) * 4];
+    let layer = doc.document.layers.iter_depth_first()[0];
+    let grid = raster::TileGrid::from_rgba8(w, h, &rgba).unwrap();
+    let mut edits = Vec::new();
+    for (coord, tile) in grid.iter() {
+        let hash = doc.tiles.insert_bytes(tile.data().to_vec());
+        edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+    }
+    doc.apply(
+        editor_core::Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(layer), edits)
+            .unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn editing_a_smart_objects_contents_commits_the_edits_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_png(dir.path(), "a.png", 32, 32, 90);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&a).unwrap();
+    ed.convert_to_smart_object().unwrap();
+
+    // Edit Contents opens a scratch tab seeded with the object's pixels.
+    ed.edit_smart_object_contents().unwrap();
+    assert!(ed.embedded.is_some(), "embedded session recorded");
+    // The tab is active and its raster is the object's own (90).
+    let tab = ed.active().unwrap();
+    let (tw, th) = (tab.document.width(), tab.document.height());
+    assert_eq!((tw, th), (32, 32));
+    let tab_px = tab
+        .layer_pixels(tab.document.layers.iter_depth_first()[0])
+        .unwrap();
+    assert!(
+        tab_px.iter().all(|&b| b == 90),
+        "the tab is seeded from the object's pixels"
+    );
+
+    // Change the tab's contents to 40 and commit.
+    fill_active(ed.active_mut().unwrap(), 40);
+    ed.commit_smart_object_contents().unwrap();
+    assert!(ed.embedded.is_none(), "session cleared after commit");
+
+    // The parent smart object now carries the edited pixels, and the action is
+    // undoable on the parent: one undo step restores the original 90.
+    let parent = ed.active().unwrap();
+    let layer = parent.document.layers.iter_depth_first()[0];
+    let px = parent.layer_pixels(layer).unwrap();
+    assert!(px.iter().all(|&b| b == 40), "commit wrote 40 back");
+    ed.dispatch(Action::Undo).unwrap();
+    let parent = ed.active().unwrap();
+    let px = parent
+        .layer_pixels(parent.document.layers.iter_depth_first()[0])
+        .unwrap();
+    assert!(
+        px.iter().all(|&b| b == 90),
+        "undo restored the original contents"
+    );
+}
+
+#[test]
+fn commit_with_no_contents_tab_is_refused_loudly() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_png(dir.path(), "a.png", 16, 16, 7);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&a).unwrap();
+    let err = ed.commit_smart_object_contents().unwrap_err();
+    assert!(err.contains("smart object contents"), "{err}");
+    // And we cannot open contents on a non-smart-object layer.
+    let err = ed.edit_smart_object_contents().unwrap_err();
+    assert!(err.contains("smart object layer first"), "{err}");
 }

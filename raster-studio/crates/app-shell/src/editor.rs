@@ -288,6 +288,16 @@ impl RecoveryReport {
     }
 }
 
+/// A smart object whose contents are being edited in a scratch tab (the S1.2
+/// embedded-document editor). `layer` owns the object's pixels in `parent`;
+/// `contents` is the id of the scratch document currently showing them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EmbeddedContents {
+    parent: DocumentId,
+    layer: LayerId,
+    contents: DocumentId,
+}
+
 /// The application.
 pub struct Editor {
     paths: AppPaths,
@@ -327,6 +337,10 @@ pub struct Editor {
     /// The colour component paint/fill should write, when the Channels panel
     /// has selected one channel to edit. `None` edits all components.
     paint_channel: Option<usize>,
+    /// A smart object whose contents are open in an embedded-document tab
+    /// (S1.2 editor): which document and layer own it, and which scratch
+    /// document is showing its pixels right now.
+    embedded: Option<EmbeddedContents>,
     pending_conflict: Option<Conflict>,
     temporary_hand: bool,
     quit_requested: bool,
@@ -475,6 +489,7 @@ impl Editor {
             revision: 0,
             kind_gesture: None,
             clipboard: None,
+            embedded: None,
         }
     }
 
@@ -869,6 +884,158 @@ impl Editor {
         };
         self.apply_command(command);
         Ok("Converted layer to a smart object".to_string())
+    }
+
+    /// Layer ▸ Smart Object ▸ Edit Contents…: open a smart object's stored
+    /// pixels in a scratch document so they can be edited as their own raster,
+    /// keeping the (parent, layer) pair so a later [`Self::commit_smart_object_contents`]
+    /// writes the edits back as one undoable step on the parent. This is the
+    /// S1.2 embedded-document editor.
+    pub fn edit_smart_object_contents(&mut self) -> Result<String, String> {
+        let (parent, layer_id, name, w, h, rgba) = {
+            let open = self
+                .active()
+                .ok_or_else(|| "No document is open".to_string())?;
+            // The active layer when it is a smart object, else the first smart
+            // object in the tree: conversion does not re-point the selection,
+            // so Edit Contents must not depend on it having done so.
+            let layer = open
+                .document
+                .active_layer()
+                .filter(|id| {
+                    matches!(
+                        open.document.layers.get(*id).map(|l| &l.kind),
+                        Some(LayerKind::SmartObject(_))
+                    )
+                })
+                .or_else(|| {
+                    open.document
+                        .layers
+                        .iter_depth_first()
+                        .into_iter()
+                        .find(|id| {
+                            matches!(
+                                open.document.layers.get(*id).map(|l| &l.kind),
+                                Some(LayerKind::SmartObject(_))
+                            )
+                        })
+                })
+                .ok_or_else(|| "Select a smart object layer first".to_string())?;
+            let name = open
+                .document
+                .layers
+                .get(layer)
+                .map(|l| l.name.clone())
+                .unwrap_or_else(|| "Smart Object".to_string());
+            let rgba = open.layer_pixels(layer).map_err(|e| e.to_string())?;
+            (
+                open.id(),
+                layer,
+                name,
+                open.document.width(),
+                open.document.height(),
+                rgba,
+            )
+        };
+        let title = format!("{name} @ Contents");
+        let contents_id = self.mint_id();
+        let doc = OpenDocument::blank(contents_id, w, h, &title, self.prefs.history_depth)
+            .map_err(|e| e.to_string())?;
+        self.docs.push(doc);
+        self.active = Some(self.docs.len() - 1);
+        self.embedded = Some(EmbeddedContents {
+            parent,
+            layer: layer_id,
+            contents: contents_id,
+        });
+        // Seed the tab with the object's own pixels as its first undoable step,
+        // so the tab's raster IS the smart object's contents from frame one.
+        let seed = {
+            let target_layer = self
+                .active()
+                .and_then(|d| d.document.layers.iter_depth_first().first().copied())
+                .ok_or_else(|| "Contents document has no layer".to_string())?;
+            let grid = raster::TileGrid::from_rgba8(w, h, &rgba).map_err(|e| e.to_string())?;
+            let mut edits = Vec::new();
+            let doc = self.active_mut().ok_or("Contents document missing")?;
+            for (coord, tile) in grid.iter() {
+                let hash = doc.tiles.insert_bytes(tile.data().to_vec());
+                edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+            }
+            Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(target_layer), edits)
+                .map_err(|e| e.to_string())?
+        };
+        self.apply_command(seed);
+        self.touch();
+        self.status = Some(format!("Editing contents of {name}"));
+        Ok("Edit Contents…".to_string())
+    }
+
+    /// Commit the open embedded tab's pixels back into its parent smart object
+    /// as one undoable step on the parent, then close the tab and return to the
+    /// parent document. A no-op with a clear reason when no contents tab is open.
+    pub fn commit_smart_object_contents(&mut self) -> Result<String, String> {
+        let embedded = self
+            .embedded
+            .clone()
+            .ok_or_else(|| "No smart object contents are being edited".to_string())?;
+
+        // Composite the scratch tab at its own resolution.
+        let (w, h, rgba) = {
+            let idx = self
+                .docs
+                .iter()
+                .position(|d| d.id() == embedded.contents)
+                .ok_or_else(|| "The contents document is gone".to_string())?;
+            let doc = self
+                .docs
+                .get_mut(idx)
+                .ok_or_else(|| "The contents document is gone".to_string())?;
+            let rect = doc.canvas_rect();
+            let rgba = doc.composite(rect).map_err(|e| e.to_string())?;
+            (doc.document.width(), doc.document.height(), rgba)
+        };
+
+        // Write those pixels onto the parent smart object as a command, so the
+        // whole commit is one undo step.
+        let layer = embedded.layer;
+        let command = {
+            let parent_idx = self
+                .docs
+                .iter()
+                .position(|d| d.id() == embedded.parent)
+                .ok_or_else(|| "The parent document is gone".to_string())?;
+            let parent = self
+                .docs
+                .get_mut(parent_idx)
+                .ok_or_else(|| "The parent document is gone".to_string())?;
+            let grid = raster::TileGrid::from_rgba8(w, h, &rgba).map_err(|e| e.to_string())?;
+            let mut edits = Vec::new();
+            for (coord, tile) in grid.iter() {
+                let hash = parent.tiles.insert_bytes(tile.data().to_vec());
+                edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+            }
+            Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(layer), edits)
+                .map_err(|e| e.to_string())?
+        };
+
+        // Switch to the parent, apply (undoable), then drop the scratch tab.
+        let parent_idx = self
+            .docs
+            .iter()
+            .position(|d| d.id() == embedded.parent)
+            .ok_or_else(|| "The parent document is gone".to_string())?;
+        self.active = Some(parent_idx);
+        self.apply_command(command);
+        if let Some(ci) = self.docs.iter().position(|d| d.id() == embedded.contents) {
+            self.docs.remove(ci);
+            if self.active.map(|a| a >= ci).unwrap_or(false) {
+                self.active = Some(self.active.unwrap_or(0).saturating_sub(1));
+            }
+        }
+        self.embedded = None;
+        self.touch();
+        Ok("Committed smart object contents".to_string())
     }
 
     /// Layer ▸ New Fill Layer ▸ Solid Color: add a raster layer filled with

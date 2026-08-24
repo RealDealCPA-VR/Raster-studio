@@ -53,14 +53,23 @@ priority order. Each is a plan-implement-validate loop.
       prior tile). Test: a stroke with red isolated writes only red and undoes
       whole. Residual: masking `ClearRegion` (the eraser) to a channel, and
       per-channel *filter* application.
-- [ ] S1.2 Smart objects exist as a layer kind but nothing renders them.
-      **v1 done.** Smart objects now own pixels and render them: the compositor
+- [x] S1.2 Smart objects exist as a layer kind but nothing renders them.
+      **v1 done.** Smart objects own pixels and render them: the compositor
       includes `SmartObject` in its pixel paths (content bounds, style reach,
       fill, tile hashing), `kind_owning_pixels` accepts it, and Layer ▸ Convert
-      to Smart Object bakes the active layer into a smart-object layer in place
-      (renders what the source drew). Test pins kind + composite. Residual: an
-      embedded-document *editor* and linked objects (the `asset` is a cache
-      key, not a nested document).
+      to Smart Object bakes the active layer into a smart-object layer in place.
+      **Embedded-document editor done.** Layer ▸ Smart Object ▸ Edit Contents…
+      (`Editor::edit_smart_object_contents`) opens the object's stored pixels
+      in a scratch tab; tools edit them as a normal raster; Layer ▸ Smart
+      Object ▸ Commit Contents
+      (`Editor::commit_smart_object_contents`) writes the tab back to the
+      parent smart object as **one undoable step** in the parent's history and
+      returns to the parent. Round-trip test: seed → edit → commit → parent
+      pixels updated → Undo restores the originals; a loud refusal when no
+      contents tab is open or the layer isn't a smart object. `OpenDocument::
+      layer_pixels` is the full-resolution isolation used to seed/read. Linked
+      objects (the `asset` as a nested source rather than a cache key) remain
+      out of scope, tracked as `Place Embedded…`.
 - [x] S1.3 Export is 8-bit; 16-bit sources are decoded, composited in f32 and
       written out at 8 bits/channel. `ExportFormat::supports_16_bit` exists but
       is not exercised by the export route.

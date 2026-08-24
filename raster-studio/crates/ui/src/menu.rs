@@ -945,6 +945,8 @@ pub enum MenuAction {
     LayerStyle(EffectSlot),
     ClearLayerStyle,
     ConvertToSmartObject,
+    EditSmartObjectContents,
+    CommitSmartObjectContents,
     Rasterize(RasterizeTarget),
     GroupLayers,
     UngroupLayers,
@@ -1431,6 +1433,8 @@ impl MenuAction {
         out.extend(EffectSlot::ALL.iter().copied().map(MenuAction::LayerStyle));
         out.push(MenuAction::ClearLayerStyle);
         out.push(MenuAction::ConvertToSmartObject);
+        out.push(MenuAction::EditSmartObjectContents);
+        out.push(MenuAction::CommitSmartObjectContents);
         out.extend(
             RasterizeTarget::ALL
                 .iter()
@@ -1555,6 +1559,8 @@ impl MenuAction {
             MenuAction::LayerStyle(s) => s.label().into(),
             MenuAction::ClearLayerStyle => "Clear Layer Style".into(),
             MenuAction::ConvertToSmartObject => "Convert to Smart Object".into(),
+            MenuAction::EditSmartObjectContents => "Edit Contents…".into(),
+            MenuAction::CommitSmartObjectContents => "Commit Contents".into(),
             MenuAction::Rasterize(t) => t.label().into(),
             MenuAction::GroupLayers => "Group Layers".into(),
             MenuAction::UngroupLayers => "Ungroup Layers".into(),
@@ -1910,6 +1916,12 @@ impl MenuAction {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
             },
+            MenuAction::EditSmartObjectContents => match ctx.need_layer() {
+                Ok(l) if l.class == LayerClass::SmartObject => act(self),
+                Ok(_) => Resolution::Disabled("The active layer is not a smart object"),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::CommitSmartObjectContents => gate(ctx.need_document(), act(self)),
             MenuAction::Rasterize(target) => resolve_rasterize(target, ctx),
             MenuAction::GroupLayers => gate(
                 ctx.need_document()
@@ -2340,6 +2352,13 @@ fn layer_menu() -> Menu {
                 e
             }),
             item(MenuAction::ConvertToSmartObject),
+            Entry::submenu(
+                "Smart Object",
+                vec![
+                    item(MenuAction::EditSmartObjectContents),
+                    item(MenuAction::CommitSmartObjectContents),
+                ],
+            ),
             Entry::submenu(
                 "Rasterize",
                 items(RasterizeTarget::ALL, MenuAction::Rasterize),

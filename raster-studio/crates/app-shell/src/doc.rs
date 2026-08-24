@@ -655,6 +655,31 @@ impl OpenDocument {
         Ok(Self::box_downscale(&rgba8, w, h, max_edge))
     }
 
+    /// The pixels of one layer composited *alone* (every other layer hidden)
+    /// over transparent at **full resolution** — no downscale — for the
+    /// embedded-document editor: the bytes an `Edit Contents` tab should show
+    /// and that a `Commit` writes back. `&self`, so a caller holding only an
+    /// immutable borrow can seed a thumbnail or a contents document.
+    pub fn layer_pixels(&self, layer_id: layer_model::LayerId) -> Result<Vec<u8>, DocumentError> {
+        let mut staged = self.document.clone();
+        for other in staged.layers.iter_depth_first() {
+            if other != layer_id {
+                if let Some(l) = staged.layers.get_mut(other) {
+                    l.visible = false;
+                }
+            }
+        }
+        let rect = self.canvas_rect();
+        let canvas = compositor::composite_region(
+            &staged,
+            &self.tiles,
+            rect,
+            0,
+            CompositeOptions::default(),
+        )?;
+        Ok(canvas.to_rgba8(&self.document.meta.color_space))
+    }
+
     /// Hit/miss counters of this document's tile cache — how the "an edit
     /// recomposites only what changed" claim is checked.
     pub fn cache_stats(&self) -> compositor::CacheStats {
