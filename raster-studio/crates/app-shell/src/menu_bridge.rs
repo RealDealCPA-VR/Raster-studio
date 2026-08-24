@@ -470,13 +470,12 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
         // two flips keep the rectangle and are wired.
         MenuAction::ImageSize
         | MenuAction::CanvasSize
-        | MenuAction::Trim
         | MenuAction::RevealAll
-        | MenuAction::CropToSelection
         | MenuAction::RotateCanvas(ui::menu::CanvasRotation::Deg90Cw)
         | MenuAction::RotateCanvas(ui::menu::CanvasRotation::Deg90Ccw) => {
-            "This resizes the canvas, and editor_core has no command that \
-             carries a resize, so it could not be undone"
+            "This resizes the canvas; the shell hosts no dialog for Image/Canvas \
+             Size dimensions and no live source beyond the canvas for Reveal All \
+             or a 90-degree pixel rotation"
         }
         MenuAction::RotateCanvas(ui::menu::CanvasRotation::Arbitrary) => {
             "An arbitrary rotation needs an angle, and the shell hosts no \
@@ -905,6 +904,8 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::RotateCanvas(CR::FlipVertical) => {
             remap_all_layers(editor, "Flip Canvas Vertical", |x, y, _, h| (x, h - 1 - y))
         }
+        MenuAction::CropToSelection => editor.crop_to_selection(),
+        MenuAction::Trim => editor.trim_canvas(),
 
         // ---- Edit ▸ Transform (the fixed ones) -----------------------------
         MenuAction::Transform(T::Rotate180) => {
@@ -2960,6 +2961,8 @@ mod tests {
                 || action == MenuAction::Print
                 || action == MenuAction::CommitSmartObjectContents
                 || action == MenuAction::CloseAll
+                || action == MenuAction::Trim
+                || action == MenuAction::CropToSelection
             {
                 match perform(action, &mut ed) {
                     Ok(_) | Err(_) => checked += 1,

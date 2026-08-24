@@ -968,6 +968,100 @@ impl Editor {
         Ok("Closed all documents".to_string())
     }
 
+    /// Resize the active document's canvas, resampling every pixel-bearing
+    /// layer by `src_min` (crop/pad with transparency), as one undoable step.
+    /// The engine is [`OpenDocument::resize_canvas`]; this applies it through
+    /// history so undo restores the previous canvas and pixels.
+    pub fn resize_canvas(
+        &mut self,
+        new_w: u32,
+        new_h: u32,
+        src_min: glam::IVec2,
+    ) -> Result<String, String> {
+        if new_w == 0 || new_h == 0 {
+            return Err("The canvas cannot be empty".to_string());
+        }
+        let command = {
+            let doc = self
+                .active_mut()
+                .ok_or_else(|| "No document is open".to_string())?;
+            doc.resize_canvas(new_w, new_h, src_min)
+                .map_err(|e| e.to_string())?
+        };
+        self.apply_command(command);
+        self.status = Some(format!("Canvas resized to {new_w}×{new_h}"));
+        Ok("Resized canvas".to_string())
+    }
+
+    /// Image ▸ Crop to Selection: resize the canvas to the live selection's
+    /// bounds, moving the selected content to the origin. No-op with a clear
+    /// reason when there is no selection.
+    pub fn crop_to_selection(&mut self) -> Result<String, String> {
+        let (min, max) = {
+            let open = self
+                .active()
+                .ok_or_else(|| "No document is open".to_string())?;
+            open.document
+                .selection
+                .bounds()
+                .ok_or_else(|| "There is no selection to crop to".to_string())?
+        };
+        let (w, h) = ((max.x - min.x), (max.y - min.y));
+        self.resize_canvas(w as u32, h as u32, min)
+    }
+
+    /// Image ▸ Trim: resize the canvas to the bounding box of the visible
+    /// (non-transparent) composite, moving that content to the origin. A no-op
+    /// (with a status note) when the content already fills the canvas.
+    pub fn trim_canvas(&mut self) -> Result<String, String> {
+        let (w, h, rgba) = {
+            let idx = self
+                .active
+                .ok_or_else(|| "No document is open".to_string())?;
+            let doc = self
+                .docs
+                .get_mut(idx)
+                .ok_or_else(|| "No document is open".to_string())?;
+            let rect = doc.canvas_rect();
+            let rgba = doc.composite(rect).map_err(|e| e.to_string())?;
+            (doc.document.width(), doc.document.height(), rgba)
+        };
+        let mut minx = w;
+        let mut miny = h;
+        let mut maxx = 0;
+        let mut maxy = 0;
+        let mut any = false;
+        for y in 0..h {
+            for x in 0..w {
+                let a = rgba[((y * w + x) as usize) * 4 + 3];
+                if a > 0 {
+                    any = true;
+                    if x < minx {
+                        minx = x;
+                    }
+                    if x > maxx {
+                        maxx = x;
+                    }
+                    if y < miny {
+                        miny = y;
+                    }
+                    if y > maxy {
+                        maxy = y;
+                    }
+                }
+            }
+        }
+        if !any {
+            return Err("The document has no content to trim to".to_string());
+        }
+        if minx == 0 && miny == 0 && maxx + 1 == w && maxy + 1 == h {
+            return Err("The content already fills the canvas".to_string());
+        }
+        let new_w = maxx - minx + 1;
+        let new_h = maxy - miny + 1;
+        self.resize_canvas(new_w, new_h, glam::IVec2::new(minx as i32, miny as i32))
+    }
+
     pub fn duplicate_document(&mut self) -> Result<String, String> {
         let idx = self
             .active
@@ -981,8 +1075,7 @@ impl Editor {
     }
 
     /// Layer ▸ Smart Object ▸ Edit Contents…: open a smart object's stored
-    /// pixels in a scratch document so they can be edited as their own raster,
-    /// keeping the (parent, layer) pair so a later [`Self::commit_smart_object_contents`]
+    /// pixels in a scratch document so they can be edited as their own raster,    /// keeping the (parent, layer) pair so a later [`Self::commit_smart_object_contents`]
     /// writes the edits back as one undoable step on the parent. This is the
     /// S1.2 embedded-document editor.
     pub fn edit_smart_object_contents(&mut self) -> Result<String, String> {

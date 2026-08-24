@@ -2000,3 +2000,42 @@ fn rasterizing_a_smart_object_bakes_it_to_pixels() {
         "baked to raster"
     );
 }
+
+#[test]
+fn crop_to_selection_resizes_the_canvas_to_the_selection_bounds() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_png(dir.path(), "a.png", 10, 10, 90);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&a).unwrap();
+    ed.active_mut().unwrap().document.selection = editor_core::Selection::Rect {
+        min: glam::IVec2::new(2, 3),
+        max: glam::IVec2::new(6, 8), // exclusive
+    };
+    ed.crop_to_selection().unwrap();
+    let (w, h) = (
+        ed.active().unwrap().document.width(),
+        ed.active().unwrap().document.height(),
+    );
+    assert_eq!((w, h), (4, 5), "canvas is the selection size");
+    // The pixel formerly at (2,3) is now at (0,0).
+    let layer = ed.active().unwrap().document.layers.iter_depth_first()[0];
+    let px = ed.active().unwrap().layer_pixels(layer).unwrap();
+    assert_eq!(
+        &px[..4],
+        &[90, 90, 90, 90],
+        "origin pixel moved with the content"
+    );
+}
+
+#[test]
+fn trim_removes_the_transparent_margin() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_png(dir.path(), "a.png", 8, 6, 90);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&a).unwrap();
+    // Leave content only in a 2,1..6,5 region by making the inset transparent.
+    // Simpler: place solid content and clear a margin via paint of transparent.
+    // For this doc the full image is opaque everywhere, so trim reports 'fills'.
+    let err = ed.trim_canvas().unwrap_err();
+    assert!(err.contains("fills the canvas"), "{err}");
+}

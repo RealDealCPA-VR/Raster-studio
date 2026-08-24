@@ -705,6 +705,62 @@ impl OpenDocument {
         Ok(canvas.to_rgba8(&self.document.meta.color_space))
     }
 
+    /// Resample the whole canvas to `new_w × new_h`, moving every pixel-bearing
+    /// layer's content by `src_min` and cropping or padding with transparency
+    /// at the edges. Returns an undoable [`Command::Transaction`]: a
+    /// [`Command::SetCanvasSize`] (which editor_core already validates and
+    /// inverts) plus one [`Command::PaintTiles`] per layer carrying the
+    /// resampled tile hashes. This is the engine half of Image Size / Canvas
+    /// Size / Crop to Selection / Trim / Reveal All.
+    pub fn resize_canvas(
+        &mut self,
+        new_w: u32,
+        new_h: u32,
+        src_min: glam::IVec2,
+    ) -> Result<Command, DocumentError> {
+        let old_w = self.document.width();
+        let old_h = self.document.height();
+        let ids: Vec<layer_model::LayerId> = self.document.layers.iter_depth_first();
+        let mut commands = Vec::new();
+        commands.push(Command::SetCanvasSize {
+            size: glam::UVec2::new(new_w, new_h),
+        });
+        for id in ids {
+            let rgba = self.layer_pixels(id)?;
+            let mut out = vec![0u8; new_w as usize * new_h as usize * 4];
+            for dy in 0..new_h {
+                let sy = dy as i64 + src_min.y as i64;
+                if sy < 0 || sy >= old_h as i64 {
+                    continue;
+                }
+                for dx in 0..new_w {
+                    let sx = dx as i64 + src_min.x as i64;
+                    if sx < 0 || sx >= old_w as i64 {
+                        continue;
+                    }
+                    let si = (sy as usize * old_w as usize + sx as usize) * 4;
+                    let di = (dy as usize * new_w as usize + dx as usize) * 4;
+                    out[di..di + 4].copy_from_slice(&rgba[si..si + 4]);
+                }
+            }
+            let grid = raster::TileGrid::from_rgba8(new_w, new_h, &out)
+                .map_err(|e| DocumentError::Io(e.to_string()))?;
+            let mut edits = Vec::new();
+            for (coord, tile) in grid.iter() {
+                let hash = self.tiles.insert_bytes(tile.data().to_vec());
+                edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+            }
+            commands.push(
+                Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(id), edits)
+                    .map_err(|e| DocumentError::Io(e.to_string()))?,
+            );
+        }
+        Ok(Command::Transaction {
+            label: "Resize Canvas".to_string(),
+            commands,
+        })
+    }
+
     /// Hit/miss counters of this document's tile cache — how the "an edit
     /// recomposites only what changed" claim is checked.
     pub fn cache_stats(&self) -> compositor::CacheStats {
