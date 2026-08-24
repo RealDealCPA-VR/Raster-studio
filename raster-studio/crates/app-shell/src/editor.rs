@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use editor_core::pixels::{PixelTarget, TileDelta};
 use editor_core::{Command, LayerPatch};
 use layer_model::{Layer, LayerId, LayerKind, MaskId};
 use tools::{registry, BrushSettings, ToolId};
@@ -55,23 +56,59 @@ use compositor::TileSource;
 /// any channel state. The inverse is built by `apply` from the prior hashes, so
 /// undo restores the whole prior tile exactly.
 fn mask_paint_to_channel(doc: &mut OpenDocument, command: Command, channel: usize) -> Command {
-    let Command::PaintTiles { target, delta } = command else {
-        return command;
-    };
     // Only colour components (R/G/B) are isolated for editing; an alpha or a
     // mask coverage target is a singular channel and paints normally.
     if channel >= 3 {
-        return Command::PaintTiles { target, delta };
+        return command;
     }
+    match command {
+        Command::PaintTiles { target, delta } => mask_delta(
+            doc,
+            channel,
+            |d| Command::PaintTiles { target, delta: d },
+            target,
+            delta,
+        ),
+        Command::FillRegion {
+            target,
+            rect,
+            value,
+            delta,
+        } => mask_delta(
+            doc,
+            channel,
+            |d| Command::FillRegion {
+                target,
+                rect,
+                value,
+                delta: d,
+            },
+            target,
+            delta,
+        ),
+        _ => command,
+    }
+}
+
+/// Mask `delta` so only colour component `channel` changes, returning the
+/// command rebuilt with the masked delta (or the original when the delta
+/// cannot be rewritten). `build` re-assembles the active variant.
+fn mask_delta(
+    doc: &mut OpenDocument,
+    channel: usize,
+    build: impl FnOnce(TileDelta) -> Command,
+    target: PixelTarget,
+    delta: TileDelta,
+) -> Command {
     let Ok(key) = editor_core::resolve_target(&doc.document, target) else {
-        return Command::PaintTiles { target, delta };
+        return build(delta);
     };
 
     let mut edits: Vec<editor_core::pixels::TileEdit> = Vec::with_capacity(delta.len());
     for edit in delta.edits() {
         let Some(new_hash) = edit.hash else {
-            // A tile removal edits the whole pixel (there is nothing to keep);
-            // it is orthogonal to colour-channel editing and stays as-is.
+            // A tile removal edits the whole pixel (there is nothing to keep),
+            // and is orthogonal to colour-channel editing; it stays as-is.
             edits.push(*edit);
             continue;
         };
@@ -97,12 +134,9 @@ fn mask_paint_to_channel(doc: &mut OpenDocument, command: Command, channel: usiz
         edits.push(editor_core::pixels::TileEdit::set(edit.coord, masked_hash));
     }
 
-    match editor_core::pixels::TileDelta::new(edits) {
-        Ok(new_delta) => Command::PaintTiles {
-            target,
-            delta: new_delta,
-        },
-        Err(_) => Command::PaintTiles { target, delta },
+    match TileDelta::new(edits) {
+        Ok(new_delta) => build(new_delta),
+        Err(_) => build(delta),
     }
 }
 
