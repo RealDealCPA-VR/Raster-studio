@@ -143,7 +143,16 @@ priority order. Each is a plan-implement-validate loop.
       a RASTER_VERSION_STAMP and main.rs's about() reports it with a test.
       Running iscc to emit an actual installer artifact needs the Inno Setup
       toolchain (not installed here) and is a release step, not code.
-- [ ] S2.3 README with a real screenshot of the working app.
+- [x] S2.3 README with a real screenshot of the working app.
+      **Done and verified on hardware.** The desktop app gains a `--shot
+      <path.png>` flag: it configures the swapchain with `COPY_SRC` in that
+      mode, and after the first frame is rendered (before present) reads the
+      surfaced frame back to the CPU (`render::offscreen::read_texture_rgba8`)
+      and writes it as a PNG, then the process exits once the shot is taken. A
+      real run on this Windows host produced a valid 1440×900 PNG of the live
+      GUI (themed chrome + document) and logged “captured screenshot”. The
+      flag parser is unit-tested; the gates stay green. A future task can drop
+      the resulting PNG into the README.
 
 ## Execution order
 

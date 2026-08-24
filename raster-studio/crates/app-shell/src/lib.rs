@@ -133,6 +133,6 @@ use std::path::PathBuf;
 
 /// Start the application: real dialogs, the user's configuration directory, and
 /// whatever files were named on the command line.
-pub fn launch(files: Vec<PathBuf>) -> Result<(), ShellError> {
-    Shell::new(Editor::native(), files).run()
+pub fn launch(files: Vec<PathBuf>, shot: Option<PathBuf>) -> Result<(), ShellError> {
+    Shell::with_shot(Editor::native(), files, shot).run()
 }

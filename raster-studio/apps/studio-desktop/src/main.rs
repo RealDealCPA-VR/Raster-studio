@@ -27,15 +27,36 @@ fn main() -> Result<()> {
     telemetry::init_tracing();
     tracing::info!("Raster Studio {}", env!("CARGO_PKG_VERSION"));
 
-    let files = collect_files(std::env::args_os().skip(1));
+    // `--shot <path>` captures a literal GUI screenshot of the first frame to a
+    // PNG and then exits (S2.3); everything else is a file to open.
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let (shot, path_args) = take_shot_flag(args);
+    if let Some(p) = &shot {
+        tracing::info!("will capture a screenshot to {}", p.display());
+    }
+
+    let files = collect_files(path_args.into_iter());
     if files.is_empty() {
         tracing::info!("no files given; starting with an empty workspace");
     } else {
         tracing::info!("opening {} file(s) from the command line", files.len());
     }
 
-    app_shell::launch(files)?;
+    app_shell::launch(files, shot)?;
     Ok(())
+}
+
+/// Split a leading `--shot <path>` pair off the argument list, if present.
+fn take_shot_flag(mut args: Vec<std::ffi::OsString>) -> (Option<PathBuf>, Vec<std::ffi::OsString>) {
+    if let Some(first) = args.first() {
+        if first == "--shot" {
+            let value = args.get(1).cloned();
+            args.drain(..2.min(args.len()));
+            let path = value.map(PathBuf::from);
+            return (path, args);
+        }
+    }
+    (None, args)
 }
 
 /// The full product name and the build version stamp.
@@ -115,5 +136,21 @@ mod tests {
     #[test]
     fn no_arguments_means_no_files() {
         assert!(collect_files(std::iter::empty()).is_empty());
+    }
+
+    #[test]
+    fn the_shot_flag_is_split_off_with_its_value() {
+        let (shot, rest) = take_shot_flag(vec![
+            OsString::from("--shot"),
+            OsString::from("out.png"),
+            OsString::from("a.png"),
+        ]);
+        assert_eq!(shot, Some(PathBuf::from("out.png")));
+        assert_eq!(rest, vec![OsString::from("a.png")]);
+
+        // Without `--shot`, nothing is consumed and nothing is a shot path.
+        let (none, rest2) = take_shot_flag(vec![OsString::from("a.png")]);
+        assert_eq!(none, None);
+        assert_eq!(rest2, vec![OsString::from("a.png")]);
     }
 }

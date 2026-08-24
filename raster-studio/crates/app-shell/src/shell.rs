@@ -316,6 +316,46 @@ pub fn choose_surface_format(
 /// hairlines wide.
 const ANTS_FRAME: Duration = Duration::from_millis(33);
 
+/// Read the rendered surface back to the CPU and write it as a PNG at the
+/// `--shot` path (S2.3: a literal screenshot of the GUI). Reported, never
+/// fatal: a failed capture logs and returns `false`, and the session carries
+/// on rather than aborting every other document's unsaved work.
+fn capture_shot(
+    gpu: &render::context::GpuContext,
+    texture: &wgpu::Texture,
+    path: Option<&std::path::Path>,
+) -> bool {
+    let Some(path) = path else { return false };
+    let readback = render::offscreen::read_texture_rgba8(gpu, texture, 0);
+    match readback {
+        Ok(pixels) => match raster::encode(
+            raster::ExportFormat::Png,
+            pixels.width(),
+            pixels.height(),
+            pixels.as_rgba8(),
+        ) {
+            Ok(png) => match std::fs::write(path, png) {
+                Ok(()) => {
+                    tracing::info!("captured screenshot to {}", path.display());
+                    true
+                }
+                Err(e) => {
+                    tracing::error!("could not write screenshot {}: {e}", path.display());
+                    false
+                }
+            },
+            Err(e) => {
+                tracing::error!("could not encode screenshot: {e}");
+                false
+            }
+        },
+        Err(e) => {
+            tracing::error!("could not read back the surface for the screenshot: {e}");
+            false
+        }
+    }
+}
+
 struct WindowState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -372,11 +412,23 @@ pub struct Shell {
     /// nowhere to go: it waits here until [`Shell::finish`] hands it back as
     /// the process's exit status.
     startup_error: Option<ShellError>,
+    /// A literal GUI screenshot to capture (`--shot`): after the first frame
+    /// is rendered and before it is presented, the surface is read back to
+    /// this PNG path and the process exits (S2.3).
+    shot: Option<PathBuf>,
+    /// Whether the shot has already been taken, so capture happens once.
+    shot_taken: bool,
 }
 
 impl Shell {
     /// The shell the desktop binary runs.
     pub fn new(editor: Editor, startup_files: Vec<PathBuf>) -> Self {
+        Shell::with_shot(editor, startup_files, None)
+    }
+
+    /// As [`Shell::new`], but capture one rendered frame to `shot` (a literal
+    /// GUI screenshot) and then exit — the S2.3 path, see [`Shell::run`].
+    pub fn with_shot(editor: Editor, startup_files: Vec<PathBuf>, shot: Option<PathBuf>) -> Self {
         Shell {
             editor,
             chrome: Chrome::new(),
@@ -391,6 +443,8 @@ impl Shell {
             started: Instant::now(),
             repaint_at: Some(Instant::now()),
             startup_error: None,
+            shot,
+            shot_taken: false,
         }
     }
 
@@ -534,7 +588,13 @@ impl Shell {
         let caps = surface.get_capabilities(&gpu.adapter);
         let format = choose_surface_format(&caps.formats)?;
         let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            // The literal `--shot` screenshot reads the surface back to the CPU,
+            // which needs `COPY_SRC`; an ordinary session does not pay for it.
+            usage: if self.shot.is_some() {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+            } else {
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+            },
             format,
             width: size.width.max(1),
             height: size.height.max(1),
@@ -679,6 +739,11 @@ impl Shell {
 
     fn redraw(&mut self) {
         self.sync_appearance();
+        // Snapshot the shot target before the mutable borrow of `state` below,
+        // so the capture (which only needs `&state.gpu`) does not compete for
+        // `&mut self` mid-frame.
+        let shot_target = self.shot.clone();
+        let shot_requested = self.shot.is_some() && !self.shot_taken;
         let Some(state) = &mut self.state else { return };
         let frame = match state.surface.get_current_texture() {
             Ok(f) => f,
@@ -859,7 +924,20 @@ impl Shell {
             state.egui_renderer.free_texture(id);
         }
         state.gpu.queue.submit(std::iter::once(encoder.finish()));
+
+        // A literal GUI screenshot (`--shot`): read the just-rendered surface
+        // back to the CPU and write it as a PNG before presenting. Queued work
+        // has retired (the readback submits and polls with Wait), so the bytes
+        // are the frame the user is about to see; `shot_taken` is set below,
+        // once the borrow of `state` has ended, so `about_to_wait` clears the
+        // window for us.
+        let mut captured = false;
+        if shot_requested {
+            captured = capture_shot(&state.gpu, &frame.texture, shot_target.as_deref());
+        }
+
         frame.present();
+        self.shot_taken |= captured;
 
         let delay = full_output
             .viewport_output
@@ -1286,7 +1364,7 @@ impl ApplicationHandler for Shell {
             self.sync_marker();
         }
         let Some(state) = &self.state else { return };
-        if self.editor.quit_requested() {
+        if self.editor.quit_requested() || self.shot_taken {
             self.shut_down();
             event_loop.exit();
             return;
