@@ -636,6 +636,11 @@ impl Chrome {
             w.status.zoom = open.camera.zoom;
             w.view_center = (open.camera.center.x, open.camera.center.y);
             w.prune(&open.document);
+            // Select ▸ Reselect / Save / Load enablement reads the stored
+            // selection; publish it from the document so the menu is truthful.
+            w.has_stored_selection = open.document.stored_selection.is_some()
+                || !open.document.saved_selections.is_empty();
+            w.saved_selections = open.document.saved_selections.len();
             // The `ui` canvas host is never *drawn* by this shell — the image
             // is composited onto the surface behind egui, and
             // `CanvasHost::central_panel` is never called — so nothing used to

@@ -174,6 +174,10 @@ struct DocumentRepr {
     #[serde(default)]
     pixels: PixelStore,
     #[serde(default)]
+    stored_selection: Option<Selection>,
+    #[serde(default)]
+    saved_selections: Vec<(String, Selection)>,
+    #[serde(default)]
     active_layer: Option<LayerId>,
     #[serde(default)]
     guides: Guides,
@@ -214,6 +218,8 @@ impl TryFrom<DocumentRepr> for Document {
             layers: r.layers,
             selection: r.selection,
             pixels: r.pixels,
+            stored_selection: r.stored_selection,
+            saved_selections: r.saved_selections,
             active_layer,
             guides: r.guides,
             dirty: false,
@@ -267,6 +273,12 @@ pub struct Document {
     /// Content hashes of every layer's and mask's pixels. Omitted while empty
     /// so a vector-only document costs nothing for it.
     pub pixels: PixelStore,
+    /// A copy of a selection set aside for Reselect, and the named selections
+    /// kept for Save/Load Selection. Persisted like [`Document::selection`];
+    /// selection edits (including these) are direct field writes, not commands,
+    /// matching how the marquee and Select ▸ Inverse behave.
+    pub stored_selection: Option<Selection>,
+    pub saved_selections: Vec<(String, Selection)>,
     /// The document's guides. Persisted and undoable through [`Command::SetGuides`].
     pub guides: Guides,
     /// Raw cursor. Private, and read through [`Document::active_layer`], which
@@ -314,14 +326,24 @@ impl Serialize for Document {
         let selection = (!self.selection.is_none()).then_some(&self.selection);
         let pixels = (!self.pixels.is_empty()).then_some(&self.pixels);
         let active_layer = self.active_layer();
+        let stored = self.stored_selection.as_ref();
+        let saved = (!self.saved_selections.is_empty()).then_some(&self.saved_selections);
         let fields = 3
             + usize::from(selection.is_some())
             + usize::from(pixels.is_some())
-            + usize::from(active_layer.is_some());
+            + usize::from(active_layer.is_some())
+            + usize::from(stored.is_some())
+            + usize::from(saved.is_some());
         let mut s = serializer.serialize_struct("Document", fields)?;
         s.serialize_field("meta", &self.meta)?;
         s.serialize_field("layers", &self.layers)?;
         s.serialize_field("guides", &self.guides)?;
+        if let Some(stored) = stored {
+            s.serialize_field("stored_selection", stored)?;
+        }
+        if let Some(saved) = saved {
+            s.serialize_field("saved_selections", saved)?;
+        }
         if let Some(selection) = selection {
             s.serialize_field("selection", selection)?;
         }
@@ -341,6 +363,8 @@ impl PartialEq for Document {
             || self.selection != other.selection
             || self.pixels != other.pixels
             || self.guides != other.guides
+            || self.stored_selection != other.stored_selection
+            || self.saved_selections != other.saved_selections
             // Through the accessor, not the field: a cursor left pointing at a
             // deleted layer reads as "no active layer" everywhere else, so it
             // must here too.
@@ -369,6 +393,8 @@ impl Document {
             selection: Selection::None,
             pixels: PixelStore::default(),
             active_layer: None,
+            stored_selection: None,
+            saved_selections: Vec::new(),
             guides: Guides::default(),
             dirty: false,
             path: None,

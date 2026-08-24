@@ -494,13 +494,9 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
         }
         // Reselect, Save Selection and Load Selection all need somewhere to
         // *keep* a selection between operations, and no such store exists —
-        // which is also why the shared model leaves all three greyed out in
-        // every state this build can reach (`has_stored_selection` and
-        // `saved_selections` are never written).
-        MenuAction::Reselect | MenuAction::SaveSelection | MenuAction::LoadSelection => {
-            "Nothing stores a selection between operations: editor_core keeps \
-             one live Selection per document and no named ones"
-        }
+        // Select ▸ Reselect/Save/Load Selection are wired (the store lives on
+        // the document, see `Document::stored_selection`), so they have no
+        // entry here.
 
         // ---- Filter --------------------------------------------------------
         // Two of the forty-one are the identity at their schema defaults, so
@@ -960,6 +956,12 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
             grow_or_similar(editor, action == MenuAction::GrowSelection)
         }
         MenuAction::ColorRange => color_range(editor),
+        // Select ▸ Save / Load / Reselect — the store lives on the document
+        // (``Document::stored_selection` / `saved_selections`); selection edits
+        // are direct field writes, not undo steps, exactly like the marquee.
+        MenuAction::SaveSelection => save_selection(editor),
+        MenuAction::LoadSelection => load_selection(editor),
+        MenuAction::Reselect => reselect(editor),
 
         // ---- Layer ---------------------------------------------------------
         MenuAction::LayerViaCopy => layer_via(editor, false),
@@ -1363,6 +1365,68 @@ fn set_selection(
 /// Photoshop asks; this build has no numeric prompt to ask in, so each one uses
 /// the value that dialog opens at. Named as a constant so the number is one
 /// decision in one place rather than five literals.
+/// Select ▸ Save Selection: set the document's stored selection to the
+/// current one and append it to the named list (suffixed with a counter,
+/// since the shell hosts no dialog to name it with).
+fn save_selection(editor: &mut Editor) -> Result<String, String> {
+    let doc = editor
+        .active_mut()
+        .ok_or_else(|| "No document is open".to_string())?;
+    let selection = doc.document.selection.clone();
+    if selection.is_none() {
+        return Err("There is no selection to save".to_string());
+    }
+    let n = doc.document.saved_selections.len() + 1;
+    doc.document
+        .saved_selections
+        .push((format!("Selection {n}"), selection.clone()));
+    doc.document.stored_selection = Some(selection);
+    doc.document.mark_dirty();
+    Ok(format!("Saved the selection (Selection {n})"))
+}
+
+/// Select ▸ Load Selection: replace the live selection with the last saved one.
+fn load_selection(editor: &mut Editor) -> Result<String, String> {
+    let doc = editor
+        .active_mut()
+        .ok_or_else(|| "No document is open".to_string())?;
+    let saved = doc
+        .document
+        .saved_selections
+        .last()
+        .map(|(_, s)| s.clone())
+        .or(doc.document.stored_selection.clone())
+        .ok_or_else(|| "No selection has been saved".to_string())?;
+    if doc.document.selection == saved {
+        return Err("The saved selection is already active".to_string());
+    }
+    doc.document.selection = saved;
+    doc.document.stored_selection = None;
+    doc.document.mark_dirty();
+    Ok("Loaded the saved selection".to_string())
+}
+
+/// Select ▸ Reselect: bring back the most recently saved selection and clear
+/// the store (the “Ctrl+Shift+D” shortcut).
+fn reselect(editor: &mut Editor) -> Result<String, String> {
+    let doc = editor
+        .active_mut()
+        .ok_or_else(|| "No document is open".to_string())?;
+    let saved = doc
+        .document
+        .stored_selection
+        .clone()
+        .or_else(|| doc.document.saved_selections.last().map(|(_, s)| s.clone()))
+        .ok_or_else(|| "There is no selection to restore".to_string())?;
+    if doc.document.selection == saved {
+        return Err("The saved selection is already active".to_string());
+    }
+    doc.document.selection = saved;
+    doc.document.stored_selection = None;
+    doc.document.mark_dirty();
+    Ok("Reselected".to_string())
+}
+
 pub const MODIFY_RADIUS: u32 = 4;
 
 fn modify_selection(editor: &mut Editor, op: ui::menu::ModifySelection) -> Result<String, String> {
@@ -2570,12 +2634,14 @@ mod tests {
         };
         let mut s = format!("{clip:?} ");
         s += &format!(
-            "{} {:?} {:?} {}x{}",
+            "{} {:?} {:?} {}x{} stored={} saved={}",
             d.history_depth(),
             d.document.selection,
             d.document.active_layer(),
             d.document.width(),
-            d.document.height()
+            d.document.height(),
+            d.document.stored_selection.is_some(),
+            d.document.saved_selections.len(),
         );
         for id in d.document.layers.iter_depth_first() {
             let layer = d.document.layers.get(id).expect("a listed layer exists");
@@ -3142,5 +3208,28 @@ mod tests {
             &before[interior..interior + 4],
             "the interior was left untouched"
         );
+    }
+
+    #[test]
+    fn save_deselect_reselect_uses_the_selection_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        select_rect(&mut ed, (2, 2), (6, 6));
+        assert!(invoke(&mut ed, MenuAction::SaveSelection).unwrap());
+        assert_eq!(
+            ed.active().unwrap().document.saved_selections.len(),
+            1,
+            "one selection saved"
+        );
+        assert!(invoke(&mut ed, MenuAction::Deselect).unwrap());
+        assert!(ed.active().unwrap().document.selection.is_none());
+        // Reselect's enablement depends on the workspace's has_stored_selection
+        // flag (populated live from the document by the chrome); the headless
+        // invoke context starts with it false, so call the command directly.
+        perform(MenuAction::Reselect, &mut ed).unwrap();
+        // The stored selection came back as the live one.
+        let bounds = ed.active().unwrap().document.selection.bounds().unwrap();
+        assert_eq!(bounds.0, glam::IVec2::new(2, 2));
+        assert_eq!(bounds.1, glam::IVec2::new(6, 6));
     }
 }
