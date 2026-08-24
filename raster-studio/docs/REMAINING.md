@@ -55,7 +55,13 @@ priority order. Each is a plan-implement-validate loop.
       not record the depth.
 - [ ] S1.4 Tablet pressure: the engine consumes it but egui 0.29 carries none,
       so the shell must feed the native tablet stream.
-- [ ] S1.5 Guides are view state, not saved/undoable (no command for them).
+- [x] S1.5 Guides are view state, not saved/undoable (no command for them).
+      **Model complete.** Promoted guides into the document: `editor_core`
+      `Guides`/`Guide`/`GuideAxis`, `Document.guides` (serde(default)),
+      `Command::SetGuides` (undoable, replaces the set whole), persisted by
+      `.rstudio` automatically, re-exported, with a serde round-trip + undo test.
+      Remaining: the live ruler-drag plumb that emits `SetGuides` from the
+      canvas and seeds the canvas view from `Document.guides`.
 - [ ] S1.6 Layer and history thumbnails show glyphs, not pixels (no compositor
       pass per row / cache).
 - [ ] S1.7 Embedded ICC profiles are preserved but not applied to a working
