@@ -175,8 +175,9 @@ Kept here rather than buried, because a ✅ with a footnote is still a claim:
   filter gallery (need a parameter dialog), Pattern fill and Define
   Pattern/Brush (need a generator rasteriser and a presets library), Select
   Subject (needs a segmentation model). Duplicate, Close All, Gradient fill,
-  Rasterize Smart Object/Layer, Flatten All, Crop to Selection, Trim and
-  Rotate 90° are all wired via the new undoable canvas-resize command. The
+  Rasterize Smart Object/Layer, Flatten All, Crop to Selection, Trim,
+  Rotate 90° and Edit ▸ Stroke are all wired via the new undoable
+  canvas-resize command and the selection-border stroke. The
   count is pinned by `menu_bridge`'s
   `every_ui_menu_item_is_either_performable_or_disabled_with_a_reason`.
 - **Per-channel masking stops at painting.** The Channels panel both isolates

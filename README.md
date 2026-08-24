@@ -67,7 +67,8 @@ and claims get checked against the code.
   the canvas undoably — **Crop to Selection**, **Trim** the transparent
   margin, or **rotate 90°** — each a single undoable step.
 - **Make selections** that constrain painting and draw real marching ants;
-  crop, slice and free-transform with real, undoable edits.
+  crop, slice and free-transform with real, undoable edits — and **Fill** or
+  **Stroke** them with the foreground colour in one undoable step.
 - **Smart objects.** Convert a layer to a smart object, then open its contents
   in an embedded-document tab, edit them as a raster and commit them back as a
   single undo step.
