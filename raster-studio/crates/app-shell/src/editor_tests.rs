@@ -1944,3 +1944,59 @@ fn close_all_closes_every_open_document() {
     ed.close_all_documents().unwrap();
     assert!(ed.docs.is_empty(), "all documents closed");
 }
+
+#[test]
+fn flatten_all_makes_one_layer_with_the_full_composite() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_png(dir.path(), "a.png", 16, 16, 90);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&a).unwrap();
+    // Put an opaque solid-colour layer on top covering the whole canvas.
+    ed.set_foreground([40.0 / 255.0, 40.0 / 255.0, 40.0 / 255.0, 1.0]);
+    ed.new_solid_fill_layer().unwrap();
+    let fill_id = ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|id| {
+            ed.active()
+                .unwrap()
+                .document
+                .layers
+                .get(*id)
+                .is_some_and(|l| l.name == "Color Fill")
+        })
+        .expect("a colour fill layer exists");
+    let expected = ed.active().unwrap().layer_pixels(fill_id).unwrap();
+    ed.flatten_all_layers().unwrap();
+    let doc = ed.active().unwrap();
+    let ids = doc.document.layers.iter_depth_first();
+    assert_eq!(ids.len(), 1, "one layer after flatten");
+    let id = ids[0];
+    assert_eq!(doc.document.layers.get(id).unwrap().name, "Flattened");
+    let px = doc.layer_pixels(id).unwrap();
+    assert_eq!(
+        px, expected,
+        "flattened to the full composite (the covering layer)"
+    );
+}
+
+#[test]
+fn rasterizing_a_smart_object_bakes_it_to_pixels() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_png(dir.path(), "a.png", 8, 8, 77);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&a).unwrap();
+    ed.convert_to_smart_object().unwrap();
+    ed.rasterize_layer().unwrap();
+    let doc = ed.active().unwrap();
+    let id = doc.document.layers.iter_depth_first()[0];
+    let kind = &doc.document.layers.get(id).unwrap().kind;
+    assert!(
+        matches!(kind, layer_model::LayerKind::Raster(_)),
+        "baked to raster"
+    );
+}

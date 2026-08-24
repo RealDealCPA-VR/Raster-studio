@@ -738,7 +738,13 @@ impl Editor {
         let Some(open) = self.active() else {
             return Err("No document is open".to_string());
         };
-        let Some(source) = open.document.active_layer() else {
+        // Conversion does not re-point the selection, so fall back to the first
+        // layer when no layer is marked active rather than refusing.
+        let Some(source) = open
+            .document
+            .active_layer()
+            .or_else(|| open.document.layers.iter_depth_first().first().copied())
+        else {
             return Err("Select a layer first".to_string());
         };
         let rect = open.canvas_rect();
@@ -803,6 +809,66 @@ impl Editor {
         };
         self.apply_command(command);
         Ok("Rasterized layer".to_string())
+    }
+
+    /// Layer ▸ Rasterize ▸ Layer / Smart Object: bake any non-pixel active
+    /// layer (text, shape, style, or a smart object's contents) into plain
+    /// pixels. `rasterize_active_layer` already composites whichever layer is
+    /// active, so these targets are the same engine with a different label.
+    pub fn rasterize_layer(&mut self) -> Result<String, String> {
+        self.rasterize_active_layer()
+    }
+
+    /// Layer ▸ Rasterize ▸ All Layers: flatten the whole document to a single
+    /// raster layer holding the full composite, replacing the layer tree as one
+    /// undoable transaction.
+    pub fn flatten_all_layers(&mut self) -> Result<String, String> {
+        let (w, h, rgba) = {
+            let open = self
+                .active()
+                .ok_or_else(|| "No document is open".to_string())?;
+            let rect = open.canvas_rect();
+            let canvas = compositor::composite_region(
+                &open.document,
+                &open.tiles,
+                rect,
+                0,
+                compositor::CompositeOptions::default(),
+            )
+            .map_err(|e| e.to_string())?;
+            (
+                open.document.width(),
+                open.document.height(),
+                canvas.to_rgba8(&open.document.meta.color_space),
+            )
+        };
+        let command = {
+            let doc = self.active_mut().ok_or("No document is open")?;
+            let mut commands = Vec::new();
+            let ids: Vec<LayerId> = doc.document.layers.iter_depth_first();
+            for id in ids {
+                commands.push(Command::DeleteLayer { layer_id: id });
+            }
+            let layer = layer_model::Layer::raster("Flattened");
+            let new_id = layer.id;
+            commands.push(Command::create_layer(layer));
+            let grid = raster::TileGrid::from_rgba8(w, h, &rgba).map_err(|e| e.to_string())?;
+            let mut edits = Vec::new();
+            for (coord, tile) in grid.iter() {
+                let hash = doc.tiles.insert_bytes(tile.data().to_vec());
+                edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+            }
+            commands.push(
+                Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(new_id), edits)
+                    .map_err(|e| e.to_string())?,
+            );
+            Command::Transaction {
+                label: "Flatten Image".to_string(),
+                commands,
+            }
+        };
+        self.apply_command(command);
+        Ok("Flattened all layers".to_string())
     }
 
     /// Layer ▸ Convert to Smart Object: bake the active layer's pixels into a

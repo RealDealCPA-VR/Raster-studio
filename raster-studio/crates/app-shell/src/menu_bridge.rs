@@ -401,7 +401,7 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
 /// Every reason names the *specific* missing piece. "This build cannot do that
 /// yet" is not a reason; it is the absence of one, and 126 items wore it.
 pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
-    use ui::menu::{RasterizeTarget as R, TransformOp as T};
+    use ui::menu::TransformOp as T;
     Some(match action {
         // ---- File ----------------------------------------------------------
         // Everything that resizes the canvas rectangle is disabled below.
@@ -487,13 +487,6 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
         MenuAction::NewFillLayer(ui::menu::FillLayerKind::Pattern) => {
             "A pattern fill layer is layer_model::LayerKind::Generator, and \
              the compositor has no generator rasteriser"
-        }
-        MenuAction::Rasterize(R::SmartObject) => {
-            "Rasterizing a linked smart object would break the link, and this \
-             build hosts no smart-object editor to ask"
-        }
-        MenuAction::Rasterize(R::Layer) | MenuAction::Rasterize(R::AllLayers) => {
-            "Every layer this build can rasterise is already pixels"
         }
 
         // ---- Select --------------------------------------------------------
@@ -863,9 +856,10 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::Print => editor.print_pdf(),
         MenuAction::Rasterize(ui::menu::RasterizeTarget::Text)
         | MenuAction::Rasterize(ui::menu::RasterizeTarget::Shape)
-        | MenuAction::Rasterize(ui::menu::RasterizeTarget::LayerStyle) => {
-            editor.rasterize_active_layer()
-        }
+        | MenuAction::Rasterize(ui::menu::RasterizeTarget::LayerStyle)
+        | MenuAction::Rasterize(ui::menu::RasterizeTarget::Layer)
+        | MenuAction::Rasterize(ui::menu::RasterizeTarget::SmartObject) => editor.rasterize_layer(),
+        MenuAction::Rasterize(ui::menu::RasterizeTarget::AllLayers) => editor.flatten_all_layers(),
         MenuAction::NewFillLayer(ui::menu::FillLayerKind::SolidColor) => {
             editor.new_solid_fill_layer()
         }
