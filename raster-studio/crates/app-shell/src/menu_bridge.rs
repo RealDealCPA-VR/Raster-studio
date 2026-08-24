@@ -487,9 +487,10 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
         }
 
         // ---- Layer ---------------------------------------------------------
-        MenuAction::NewFillLayer(_) => {
-            "A fill layer is layer_model::LayerKind::Generator, and the \
-             compositor has no generator rasteriser"
+        MenuAction::NewFillLayer(ui::menu::FillLayerKind::Gradient)
+        | MenuAction::NewFillLayer(ui::menu::FillLayerKind::Pattern) => {
+            "A gradient/pattern fill layer is layer_model::LayerKind::Generator, \
+             and the compositor has no generator rasteriser"
         }
         MenuAction::ConvertToSmartObject => {
             "A smart object embeds a whole document, and Command::SetLayerKind \
@@ -870,6 +871,9 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         | MenuAction::Rasterize(ui::menu::RasterizeTarget::Shape)
         | MenuAction::Rasterize(ui::menu::RasterizeTarget::LayerStyle) => {
             editor.rasterize_active_layer()
+        }
+        MenuAction::NewFillLayer(ui::menu::FillLayerKind::SolidColor) => {
+            editor.new_solid_fill_layer()
         }
         // ---- Filter --------------------------------------------------------
         MenuAction::Filter(id) => run_filter(editor, id),

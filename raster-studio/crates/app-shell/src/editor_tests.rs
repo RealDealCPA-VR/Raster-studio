@@ -385,6 +385,26 @@ fn rasterizing_a_non_raster_layer_bakes_it_to_a_raster() {
 }
 
 #[test]
+fn a_solid_fill_layer_covers_the_canvas_in_the_foreground_colour() {
+    let dir = tempfile::tempdir().unwrap();
+    let png = write_png(dir.path(), "one.png", 16, 16, 0);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_paths(&[png]);
+    ed.set_foreground([1.0, 0.0, 0.0, 1.0]);
+
+    ed.new_solid_fill_layer().unwrap();
+
+    let doc = ed.active_mut().unwrap();
+    assert_eq!(doc.document.layers.len(), 2, "a fill layer was added");
+    let rgba = doc.composite(doc.canvas_rect()).unwrap();
+    assert_eq!(
+        &rgba[0..4],
+        &[255, 0, 0, 255],
+        "the canvas reads as the fill"
+    );
+}
+
+#[test]
 fn a_file_that_cannot_be_opened_is_reported_and_forgotten() {
     let dir = tempfile::tempdir().unwrap();
     let junk = dir.path().join("broken.png");

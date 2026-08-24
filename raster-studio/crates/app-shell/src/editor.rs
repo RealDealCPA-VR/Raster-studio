@@ -768,6 +768,51 @@ impl Editor {
         Ok("Rasterized layer".to_string())
     }
 
+    /// Layer ▸ New Fill Layer ▸ Solid Color: add a raster layer filled with
+    /// the current foreground colour across the whole canvas.
+    pub fn new_solid_fill_layer(&mut self) -> Result<String, String> {
+        let (w, h) = self
+            .active()
+            .map(|d| (d.document.width(), d.document.height()))
+            .ok_or_else(|| "No document is open".to_string())?;
+        let fg = self.foreground();
+        let [r, g, b, a] = [
+            (fg[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+            (fg[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+            (fg[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+            (fg[3].clamp(0.0, 1.0) * 255.0).round() as u8,
+        ];
+        let pixels = {
+            let n = (w as usize) * (h as usize) * 4;
+            let mut v = Vec::with_capacity(n);
+            for _ in 0..(w as usize * h as usize) {
+                v.extend_from_slice(&[r, g, b, a]);
+            }
+            v
+        };
+        let command = {
+            let doc = self.active_mut().ok_or("No document is open")?;
+            let layer = layer_model::Layer::raster("Color Fill");
+            let new_id = layer.id;
+            let grid = raster::TileGrid::from_rgba8(w, h, &pixels).map_err(|e| e.to_string())?;
+            let mut edits = Vec::new();
+            for (coord, tile) in grid.iter() {
+                let hash = doc.tiles.insert_bytes(tile.data().to_vec());
+                edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+            }
+            Command::Transaction {
+                label: "New Fill Layer".to_string(),
+                commands: vec![
+                    Command::create_layer(layer),
+                    Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(new_id), edits)
+                        .map_err(|e| e.to_string())?,
+                ],
+            }
+        };
+        self.apply_command(command);
+        Ok("Added solid color fill layer".to_string())
+    }
+
     pub fn recent(&self) -> &RecentFiles {
         &self.recent
     }
