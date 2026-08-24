@@ -58,7 +58,9 @@ and claims get checked against the code.
 - **Build a layer stack.** Groups, layer masks, clipping masks, adjustment
   layers, opacity and fill, all 27 blend modes — and layer effects (drop
   shadow, glows, satin, gradients) that the compositor really renders, with
-  thumbnails that really show the pixels.
+  thumbnails that really show the pixels. Add **Solid Color and Gradient**
+  fill layers, and **rasterize** any layer (text, shape, style, smart object)
+  — or flatten the whole document to one layer.
 - **Edit non-destructively.** Adjustment layers, filters and Image ▸
   Adjustments run against the live document and stay undoable. The Channels
   panel lets you isolate *and* paint into a single colour component.
@@ -70,7 +72,8 @@ and claims get checked against the code.
 - **Save and reopen** the native `.rstudio` package — composites to
   byte-identical output after a round trip — and export PNG, JPEG, WebP, TIFF,
   GIF, BMP, layered PSD, and **print as PDF**, with 16-bit sources honoured
-  all the way out.
+  all the way out. Duplicate any document with one click, or **Close All**
+  with the unsaved-changes prompt answered per document.
 
 ### What is honestly still remaining
 
@@ -92,9 +95,14 @@ The short, named, current list:
   seam and verified; actually subscribing to one device's winit tablet events
   needs hardware on the host.
 - **The OS printer-spooler dialog** (Print ▸ As PDF is fully implemented).
-- **A minority of menu items are drawn disabled with a named reason** — the
-  handful needing a dialog or gizmo surface this build has not drawn. The count
-  is pinned by a test, so it cannot drift into prose.
+- **A small set of menu items stays honestly disabled with a named reason**:
+  the interactive transforms (Free Transform, Transform Selection, Warp) and
+  Place Embedded…/Linked… need a canvas gizmo; Pattern fill and Define
+  Pattern/Brush need a generator rasteriser and a presets library; Select
+  Subject needs a segmentation model; and a handful of items (arbitrary
+  rotation, Offset, Custom filter, Filter gallery) need a parameter dialog this
+  build has not drawn. The count is pinned by a test, so it cannot drift into
+  prose.
 
 [`raster-studio/docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md)
 has the row-by-row detail. Nothing there is marked done unless it is
