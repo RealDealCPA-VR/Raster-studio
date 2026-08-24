@@ -341,6 +341,11 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
     if action == MenuAction::FileInfo {
         return Some(Pick::Menu(MenuAction::FileInfo));
     }
+    // Print… renders the composite to a print-ready PDF through [`perform`]
+    // (the file half is the tested raster::pdf encoder).
+    if action == MenuAction::Print {
+        return Some(Pick::Menu(MenuAction::Print));
+    }
     let mapped = match action {
         MenuAction::NewDocument => Action::NewDocument,
         MenuAction::Open => Action::Open,
@@ -411,7 +416,6 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
             "There is no metadata editor: editor_core::DocumentMeta stores a \
              title and a size and no XMP fields"
         }
-        MenuAction::Print => "Nothing in this workspace talks to a printer",
 
         // ---- Edit ----------------------------------------------------------
         // Free Transform and the six interactive transforms need a handle
@@ -864,6 +868,7 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
             Ok("File Info…".to_string())
         }
         MenuAction::ExportLayers => editor.export_layers(),
+        MenuAction::Print => editor.print_pdf(),
         MenuAction::Rasterize(ui::menu::RasterizeTarget::Text)
         | MenuAction::Rasterize(ui::menu::RasterizeTarget::Shape)
         | MenuAction::Rasterize(ui::menu::RasterizeTarget::LayerStyle) => {
@@ -2297,16 +2302,22 @@ mod tests {
         let mut ed = editor(dir.path());
         ed.dispatch(Action::NewDocument).expect("a new document");
         let context = context(&ed, &Workspace::new());
-        // The menu model allows it; this shell has no printer — and it says
-        // which piece is missing rather than "cannot do that yet".
-        let reason = resolve(MenuAction::Print, &context, &ed).unwrap_err();
-        assert!(reason.contains("printer"), "{reason}");
+        // The menu model allows it; this build places no embedded document —
+        // and it says which piece is missing rather than "cannot do that yet".
+        let reason = resolve(MenuAction::PlaceEmbedded, &context, &ed).unwrap_err();
+        assert!(reason.contains("Place"), "{reason}");
         assert_ne!(reason, NOT_WIRED);
         // File Info… now opens the metadata window, so it is genuinely
         // performable rather than refused.
         assert!(
             resolve(MenuAction::FileInfo, &context, &ed).is_ok(),
             "File Info… should be performable now"
+        );
+        // ...and Print… is a real command too (it renders the composite to a
+        // print-ready PDF), not a disabled orphan.
+        assert!(
+            resolve(MenuAction::Print, &context, &ed).is_ok(),
+            "Print… should be performable now"
         );
         // ...and one it *can* do resolves to a real command rather than a name.
         match resolve(MenuAction::NewLayer, &context, &ed) {
@@ -2952,7 +2963,7 @@ mod tests {
             // File ▸ Export Layers… writes files or refuses worriedly when no
             // destination is chosen; either outcome is loud, never a silent
             // no-op, so it does not have to change the document digest.
-            if action == MenuAction::ExportLayers {
+            if action == MenuAction::ExportLayers || action == MenuAction::Print {
                 match perform(action, &mut ed) {
                     Ok(_) | Err(_) => checked += 1,
                 }

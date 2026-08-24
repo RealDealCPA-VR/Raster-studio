@@ -2833,6 +2833,7 @@ dependencies = [
  "blake3",
  "bytemuck",
  "color",
+ "flate2",
  "image",
  "serde",
  "thiserror 2.0.20",

@@ -1770,3 +1770,25 @@ fn copy_tree(from: &Path, to: &Path) {
         }
     }
 }
+
+#[test]
+fn print_writes_a_well_formed_pdf_to_the_chosen_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_png(dir.path(), "a.png", 16, 16, 3);
+    let target = dir.path().join("print.pdf");
+    let mut ed = bare(
+        dir.path(),
+        ScriptedDialogs::new().exporting_to(target.clone()),
+    );
+    ed.open_path(&a).unwrap();
+
+    let msg = ed.print_pdf().unwrap();
+    assert_eq!(msg, "Print…");
+    assert!(target.is_file(), "the print job was written");
+    let bytes = std::fs::read(&target).unwrap();
+    assert!(bytes.starts_with(b"%PDF-1.4"), "a PDF, not something else");
+    assert!(
+        ed.status().map(str::to_string).unwrap().contains("Printed"),
+        "the status bar names the print job"
+    );
+}

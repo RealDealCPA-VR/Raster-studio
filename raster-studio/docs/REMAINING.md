@@ -116,9 +116,18 @@ priority order. Each is a plan-implement-validate loop.
       **Implemented:** File Info window (S1.8 as listed above) **and File ▸
       Export Layers…**, which was unrouted: it now composites each layer alone
       (every other layer hidden, through the real compositor) and writes one
-      PNG per layer into a chosen folder, with a folder picker wired through
-      the dialogs trait, safe layer-name handling, and a test. Remaining:
-      Print needs an OS printing path.
+      one PNG per layer into a chosen folder, with a folder picker wired through
+      the dialogs trait, safe layer-name handling, and a test.
+      **Print: implemented as “Print as PDF”.** File ▸ Print… is now routed
+      (`MenuAction::Print` → [`Editor::print_pdf`] → [`OpenDocument::print_to`]),
+      rendering the active composite to a print-ready single-page PDF via a
+      pure, tested encoder (`raster::pdf`): one page whose media box is the
+      raster size, artwork as a FlateDecode `DeviceRGB` XObject composited onto
+      white, correct xref/startxref. Tests: `raster::pdf` (header/trailer,
+      xref-offset integrity, white compositing) and `print_to` writes a
+      well-formed PDF. The unrouted-intent tests now use `Place Embedded…` as
+      the canonical unroutable claim. The remaining OS-only surface is the
+      actual printer-spooler dialog; the print file path is done.
 
 ## S2 — Ship polish (Tier B, lower priority)
 

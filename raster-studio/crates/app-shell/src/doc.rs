@@ -73,6 +73,8 @@ pub enum DocumentError {
     Mip(#[from] raster::mipmap::MipError),
     #[error("`{0}` is not a file format Raster Studio can export to")]
     UnknownExportFormat(String),
+    #[error("writing print output failed: {0}")]
+    Io(String),
     #[error("this document has never been saved, so it has no location to save to")]
     NoPath,
 }
@@ -798,6 +800,18 @@ impl OpenDocument {
         Ok(())
     }
 
+    /// Write the whole composite as a print-ready single-page PDF (the S1.8
+    /// Print path). Alpha is composited onto white paper; the file carries no
+    /// document state, only the rendered pixels at the document's own size.
+    pub fn print_to(&mut self, path: &std::path::Path) -> Result<(), DocumentError> {
+        let rect = self.canvas_rect();
+        let rgba8 = self.composite(rect)?;
+        let (w, h) = (self.document.width(), self.document.height());
+        let pdf = raster::pdf::encode_pdf(w, h, &rgba8);
+        std::fs::write(path, pdf).map_err(|e| DocumentError::Io(e.to_string()))?;
+        Ok(())
+    }
+
     /// The digest of this document as it would be written — for pairing a save
     /// marker with a snapshot.
     pub fn document_digest(&self) -> Option<DocumentDigest> {
@@ -836,6 +850,35 @@ mod tests {
         assert_eq!(d.tab_label(), "test.png");
         assert_eq!(d.canvas_rect(), PixelRect::new(0, 0, 600, 400));
         assert!(d.project_path().is_none());
+    }
+
+    #[test]
+    fn print_to_writes_a_well_formed_pdf_of_the_composite() {
+        let mut d = doc_of(40, 30);
+        let dir = std::env::temp_dir().join(format!("rs-print-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("out.pdf");
+        d.print_to(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(bytes.starts_with(b"%PDF-1.4"), "PDF header");
+        assert!(
+            bytes.windows(9).any(|w| w == b"startxref"),
+            "startxref present"
+        );
+        assert!(
+            bytes.ends_with(
+                b"%%EOF
+"
+            ),
+            "trailer"
+        );
+        // The page media box is the document's own pixel size (this check is
+        // done on the ASCII head of the file, before the compressed stream).
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("/MediaBox [0 0 40 30]"),
+            "media box matches the composite"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

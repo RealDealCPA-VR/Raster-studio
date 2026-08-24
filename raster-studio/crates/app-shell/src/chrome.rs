@@ -2541,7 +2541,7 @@ mod tests {
         let ed = editor(dir.path());
         let mut chrome = Chrome::new();
 
-        let orphan = ui::Intent::Action(ui::menu::MenuAction::Print);
+        let orphan = ui::Intent::Action(ui::menu::MenuAction::PlaceEmbedded);
         chrome.workspace.emit(orphan.clone());
         let mut out = ChromeOutput::default();
         chrome.harvest_workspace_for_test(&mut out, &ed);
@@ -2552,13 +2552,14 @@ mod tests {
             "the intent went nowhere and said nothing"
         );
         let said = crate::menu_bridge::unrouted_message(&orphan);
-        // `Print` is an action this build deliberately cannot answer (nothing
-        // talks to a printer), and its refusal names the missing piece rather
-        // than the generic fallback. What matters here is that the user is
-        // *told* — the reporting path this test guards — so assert the message
-        // is the real, specific one and not an empty or dropped it.
+        // `Place Embedded…` is an action this build deliberately cannot answer
+        // (nothing places an embedded document), and its refusal names the
+        // missing piece rather than the generic fallback. What matters here is
+        // that the user is *told* — the reporting path this test guards — so
+        // assert the message is the real, specific one and not an empty or
+        // dropped it.
         assert!(
-            said.contains("printer"),
+            said.contains("Place"),
             "the refusal named nothing actionable: {said}"
         );
     }

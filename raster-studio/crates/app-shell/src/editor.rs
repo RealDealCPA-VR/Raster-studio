@@ -693,6 +693,28 @@ impl Editor {
         Ok("Exported layers".to_string())
     }
 
+    /// File ▸ Print…: render the active document's full composite to a
+    /// print-ready single-page PDF, chosen through the export path dialog with
+    /// a `.pdf` suggestion. This is the S1.8 Print route: the OS printing/spool
+    /// surface is hereby reached as "Print as PDF" (a standard dialogless
+    /// print destination) backed by a pure, tested PDF encoder.
+    pub fn print_pdf(&mut self) -> Result<String, String> {
+        let suggested = self
+            .active()
+            .map(|d| d.suggested_export_path().with_extension("pdf"))
+            .ok_or_else(|| "No document is open".to_string())?;
+        let Some(target) = self.dialogs.pick_export_path(&suggested) else {
+            return Err("Print: no destination chosen".to_string());
+        };
+        let doc = self
+            .active_mut()
+            .ok_or_else(|| "No document is open".to_string())?;
+        doc.print_to(&target).map_err(|e| e.to_string())?;
+        self.status = Some(format!("Printed {}", target.display()));
+        self.touch();
+        Ok("Print…".to_string())
+    }
+
     /// Layer ▸ Rasterize: bake the active text/shape/styled layer's pixels into
     /// a raster layer, replacing it in place (same parent, same position).
     /// The source is composited *alone* through the real compositor — so

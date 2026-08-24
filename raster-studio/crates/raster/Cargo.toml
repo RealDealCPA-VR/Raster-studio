@@ -22,3 +22,4 @@ image = { workspace = true, features = ["gif", "bmp", "ico", "tga"] }
 color.workspace = true
 # Reinterpreting `&[u16]` as `&[u8]` for 16-bit encoders, without a copy.
 bytemuck.workspace = true
+flate2.workspace = true

@@ -23,6 +23,7 @@ pub mod export;
 pub mod format;
 pub mod grid;
 pub mod mipmap;
+pub mod pdf;
 pub mod tile;
 
 pub use codec::{

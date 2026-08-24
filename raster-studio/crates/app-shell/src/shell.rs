@@ -2124,7 +2124,7 @@ mod tests {
         // panel in which not one slider worked passed review.
         let dir = tempfile::tempdir().unwrap();
         let mut shell = shell_with_one_image(dir.path());
-        let orphan = ui::Intent::Action(ui::menu::MenuAction::Print);
+        let orphan = ui::Intent::Action(ui::menu::MenuAction::PlaceEmbedded);
 
         shell.apply_chrome(ChromeOutput {
             unrouted: vec![orphan.clone()],
@@ -2133,13 +2133,13 @@ mod tests {
 
         let told = shell.editor().status().unwrap_or_default().to_string();
         assert_eq!(told, crate::menu_bridge::unrouted_message(&orphan));
-        // `Print` cannot be answered in this build; that refusal names the
-        // missing piece (nothing talks to a printer) rather than the generic
-        // fallback. This test protects the *reporting* — that the window
-        // admits a click went somewhere it cannot perform — not the specific
-        // reason, so assert the user was told something real.
+        // `Place Embedded…` cannot be answered in this build; that refusal
+        // names the missing piece (nothing places an embedded document) rather
+        // than the generic fallback. This test protects the *reporting* — that
+        // the window admits a click went somewhere it cannot perform — not the
+        // specific reason, so assert the user was told something real.
         assert!(
-            told.contains("printer"),
+            told.contains("Place"),
             "the user was told nothing actionable: {told}"
         );
     }
