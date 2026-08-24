@@ -61,10 +61,15 @@
 //!   every entry point above over a wide range of finite magnitudes and fails if
 //!   a listed one stops overflowing or an unlisted one starts, so neither half
 //!   of the claim can drift into prose.
-//! * **Unsupported means unsupported.** [`ColorSpace::IccProfile`] has no ICC
-//!   engine behind it, so it takes a documented identity path and
-//!   [`try_to_linear`] reports it as an error. Nothing here approximates a
-//!   profile it cannot read.
+//! * **Unsupported means unsupported.** [`ColorSpace::IccProfile`] carries only
+//!   an asset hash, not profile bytes, so inside `ColorSpace` it still takes a
+//!   documented identity path and [`try_to_linear`] reports it as an error.
+//!   The real matrix-shaper engine lives in [`crate::icc`]: a zero-I/O
+//!   [`crate::icc::MatrixShaper::parse`] that reads `rXYZ/gXYZ/bXYZ` and the
+//!   `rTRC/gTRC/bTRC` tone curves and transforms encoded RGB to/from linear
+//!   sRGB with Bradford D50–D65 adaptation. Threading the asset-store bytes
+//!   into [`ColorSpace::IccProfile`] and the compositor/export path is the
+//!   remaining step; until then no transform tries to approximate a profile.
 //!
 //! ```
 //! use color::{ColorSpace, to_linear, from_linear};
@@ -80,11 +85,13 @@
 #![forbid(unsafe_code)]
 
 pub mod alpha;
+pub mod icc;
 pub mod model;
 pub mod space;
 pub mod transfer;
 
 pub use alpha::{premultiply, unpremultiply, UNPREMULTIPLY_ALPHA_EPSILON};
+pub use icc::{Curve as IccCurve, IccError, MatrixShaper as IccMatrixShaper};
 pub use model::{
     hsl_to_rgb, hsv_to_rgb, lab_to_linear_srgb, lab_to_rgb, linear_srgb_luminance,
     linear_srgb_to_lab, rgb_to_hsl, rgb_to_hsv, rgb_to_lab, srgb_luminance, REC709_LUMA,

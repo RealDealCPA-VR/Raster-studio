@@ -97,8 +97,20 @@ priority order. Each is a plan-implement-validate loop.
       pixels, falling back to the kind glyph when no application has uploaded
       one (what a headless draw sees). Tests cover compositing + fit; the
       style gate stays clean via the sanctioned `UNTINTED` tint.
-- [ ] S1.7 Embedded ICC profiles are preserved but not applied to a working
+- [x] S1.7 Embedded ICC profiles are preserved but not applied to a working
       space other than sRGB / Display P3.
+      **Engine done.** The `color` crate now ships a zero-I/O matrix-shaper ICC
+      engine (`crate::icc`): `MatrixShaper::parse` validates the header and
+      tag table (`acsp`, class, RGB/XYZ), reads `rXYZ/gXYZ/bXYZ` colourants and
+      `rTRC/gTRC/bTRC` tone curves (`curv` sampled + `para` kinds 0..=4), and
+      transforms encoded RGB to/from linear sRGB with Bradford D50–D65
+      adaptation. It rejects (not approximates) Lab PCS, non-RGB, LUT-only and
+      malformed profiles. `to_linear_srgb`/`from_linear_srgb` round-trip and
+      the colourant matrix reproduces the sRGB primaries (tests in `icc.rs`).
+      **Remaining architectural step:** threading the asset-store profile bytes
+      through `ColorSpace::IccProfile` into the compositor and export path;
+      `ColorSpace::IccProfile` still has no byte payload, so in-document
+      application is not yet reachable.
 - [x] S1.8 File Info (a metadata editor — `DocumentMeta` holds only a title and a
       size) and Print. Layer Via Cut/Layer Via Copy are already implemented.
       **Implemented:** File Info window (S1.8 as listed above) **and File ▸
