@@ -63,7 +63,9 @@ and claims get checked against the code.
   — or flatten the whole document to one layer.
 - **Edit non-destructively.** Adjustment layers, filters and Image ▸
   Adjustments run against the live document and stay undoable. The Channels
-  panel lets you isolate *and* paint into a single colour component.
+  panel lets you isolate *and* paint into a single colour component. Resize
+  the canvas undoably — **Crop to Selection**, **Trim** the transparent
+  margin, or **rotate 90°** — each a single undoable step.
 - **Make selections** that constrain painting and draw real marching ants;
   crop, slice and free-transform with real, undoable edits.
 - **Smart objects.** Convert a layer to a smart object, then open its contents
@@ -97,12 +99,13 @@ The short, named, current list:
 - **The OS printer-spooler dialog** (Print ▸ As PDF is fully implemented).
 - **A small set of menu items stays honestly disabled with a named reason**:
   the interactive transforms (Free Transform, Transform Selection, Warp) and
-  Place Embedded…/Linked… need a canvas gizmo; Pattern fill and Define
-  Pattern/Brush need a generator rasteriser and a presets library; Select
-  Subject needs a segmentation model; and a handful of items (arbitrary
-  rotation, Offset, Custom filter, Filter gallery) need a parameter dialog this
-  build has not drawn. The count is pinned by a test, so it cannot drift into
-  prose.
+  Place Embedded…/Linked… need a canvas gizmo; Image/Canvas Size, arbitrary
+  rotation, Offset, the Custom filter and the Filter gallery need a parameter
+  dialog this build has not drawn; Pattern fill and Define Pattern/Brush need a
+  generator rasteriser and a presets library; Select Subject needs a
+  segmentation model. The count is pinned by a test, so it cannot drift into
+  prose. Crop/Trim/rotate-90°, Duplicate, Close All, Gradient fill and
+  Rasterize are wired.
 
 [`raster-studio/docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md)
 has the row-by-row detail. Nothing there is marked done unless it is

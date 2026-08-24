@@ -171,12 +171,14 @@ Kept here rather than buried, because a ✅ with a footnote is still a claim:
   not part of the build.
 - **A small set of menu items stays honestly disabled with a named reason**:
   the interactive transforms and Place Embedded/Linked (need a canvas gizmo),
-  Pattern fill and Define Pattern/Brush (need a generator rasteriser and a
-  presets library), Select Subject (needs a segmentation model), and the
-  handful needing a parameter dialog (arbitrary rotation, Offset, Custom
-  filter, the filter gallery). Duplicate, Close All, Gradient fill, Rasterize
-  Smart Object/Layer and Flatten All are now wired. The count is pinned by
-  `menu_bridge`'s `every_ui_menu_item_is_either_performable_or_disabled_with_a_reason`.
+  Image/Canvas Size, arbitrary rotation, Offset, the Custom filter and the
+  filter gallery (need a parameter dialog), Pattern fill and Define
+  Pattern/Brush (need a generator rasteriser and a presets library), Select
+  Subject (needs a segmentation model). Duplicate, Close All, Gradient fill,
+  Rasterize Smart Object/Layer, Flatten All, Crop to Selection, Trim and
+  Rotate 90° are all wired via the new undoable canvas-resize command. The
+  count is pinned by `menu_bridge`'s
+  `every_ui_menu_item_is_either_performable_or_disabled_with_a_reason`.
 - **Per-channel masking stops at painting.** The Channels panel both isolates
   and paints into a single RGB component (masked at the command boundary, so
   the masked command reaches history and the journal). ClearRegion (the
