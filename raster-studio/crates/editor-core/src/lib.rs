@@ -37,8 +37,8 @@ pub mod selection;
 
 pub use command::{layer_class_name, Command, CommandError, LayerPatch, Patch};
 pub use document::{
-    canvas_size_is_supported, Document, DocumentError, DocumentMeta, DOCUMENT_FORMAT_VERSION,
-    MAX_CANVAS_DIMENSION, MAX_CANVAS_PIXELS, MIN_SUPPORTED_FORMAT_VERSION,
+    canvas_size_is_supported, Document, DocumentError, DocumentMeta, Guide, GuideAxis, Guides,
+    DOCUMENT_FORMAT_VERSION, MAX_CANVAS_DIMENSION, MAX_CANVAS_PIXELS, MIN_SUPPORTED_FORMAT_VERSION,
 };
 pub use history::{History, DEFAULT_HISTORY_LIMIT};
 pub use pixels::{

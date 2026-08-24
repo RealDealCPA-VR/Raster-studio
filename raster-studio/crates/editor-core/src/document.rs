@@ -97,6 +97,48 @@ pub enum DocumentError {
     LayerNotFound(LayerId),
 }
 
+/// Which way a guide runs. The UI's `Axis` is camera-aware and lives in the
+/// `ui` crate; this is the persisted, axis-neutral model form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GuideAxis {
+    Horizontal,
+    Vertical,
+}
+
+/// One guide, in document coordinates. Persisted with the document so "where
+/// were my guides" is answered from the file, not from a view that may not
+/// have been open.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Guide {
+    pub axis: GuideAxis,
+    /// The document coordinate the guide sits at.
+    pub doc: f32,
+    /// A locked guide is drawn but cannot be dragged or deleted by pointer.
+    pub locked: bool,
+}
+
+impl Default for Guide {
+    fn default() -> Self {
+        Self {
+            axis: GuideAxis::Horizontal,
+            doc: 0.0,
+            locked: false,
+        }
+    }
+}
+
+/// The document's guide set, plus the group visibility and lock in force over
+/// all of them.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Guides {
+    pub list: Vec<Guide>,
+    /// Hidden guides still snap nothing and are not hit-testable.
+    pub visible: bool,
+    /// Locks every guide at once, on top of each guide's own flag.
+    pub locked: bool,
+}
+
 /// Document-level metadata (size, color space, versioning).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocumentMeta {
@@ -133,6 +175,8 @@ struct DocumentRepr {
     pixels: PixelStore,
     #[serde(default)]
     active_layer: Option<LayerId>,
+    #[serde(default)]
+    guides: Guides,
 }
 
 impl TryFrom<DocumentRepr> for Document {
@@ -171,6 +215,7 @@ impl TryFrom<DocumentRepr> for Document {
             selection: r.selection,
             pixels: r.pixels,
             active_layer,
+            guides: r.guides,
             dirty: false,
             path: None,
         })
@@ -222,6 +267,8 @@ pub struct Document {
     /// Content hashes of every layer's and mask's pixels. Omitted while empty
     /// so a vector-only document costs nothing for it.
     pub pixels: PixelStore,
+    /// The document's guides. Persisted and undoable through [`Command::SetGuides`].
+    pub guides: Guides,
     /// Raw cursor. Private, and read through [`Document::active_layer`], which
     /// filters an id whose layer has left the tree. Equality and serialization
     /// go through that same accessor — see the type's "One view of the active
@@ -267,13 +314,14 @@ impl Serialize for Document {
         let selection = (!self.selection.is_none()).then_some(&self.selection);
         let pixels = (!self.pixels.is_empty()).then_some(&self.pixels);
         let active_layer = self.active_layer();
-        let fields = 2
+        let fields = 3
             + usize::from(selection.is_some())
             + usize::from(pixels.is_some())
             + usize::from(active_layer.is_some());
         let mut s = serializer.serialize_struct("Document", fields)?;
         s.serialize_field("meta", &self.meta)?;
         s.serialize_field("layers", &self.layers)?;
+        s.serialize_field("guides", &self.guides)?;
         if let Some(selection) = selection {
             s.serialize_field("selection", selection)?;
         }
@@ -292,6 +340,7 @@ impl PartialEq for Document {
         if self.meta != other.meta
             || self.selection != other.selection
             || self.pixels != other.pixels
+            || self.guides != other.guides
             // Through the accessor, not the field: a cursor left pointing at a
             // deleted layer reads as "no active layer" everywhere else, so it
             // must here too.
@@ -320,6 +369,7 @@ impl Document {
             selection: Selection::None,
             pixels: PixelStore::default(),
             active_layer: None,
+            guides: Guides::default(),
             dirty: false,
             path: None,
         }

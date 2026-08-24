@@ -112,6 +112,9 @@ pub fn touched_by(command: &Command) -> DirtyTiles {
         Command::PaintTiles { delta, .. }
         | Command::FillRegion { delta, .. }
         | Command::ClearRegion { delta, .. } => from_delta(delta),
+        // Guides are alignment state, not pixels: changing them never dirties
+        // a tile of the composite.
+        Command::SetGuides { .. } => DirtyTiles::none(),
         Command::Transaction { commands, .. } => {
             let mut out = DirtyTiles::none();
             for c in commands {

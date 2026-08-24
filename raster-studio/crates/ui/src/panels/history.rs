@@ -125,6 +125,7 @@ impl StepKind {
             // the resize is the part the user asked for — so it reads as a
             // geometry step rather than as a layer edit.
             Command::TransformLayer { .. } | Command::SetCanvasSize { .. } => StepKind::Transformed,
+            Command::SetGuides { .. } => StepKind::Transformed,
             Command::PaintTiles { .. } => StepKind::Painted,
             Command::FillRegion { .. } => StepKind::Filled,
             Command::ClearRegion { .. } => StepKind::Cleared,

@@ -43,7 +43,7 @@ use layer_model::{
 };
 use raster::PixelRect;
 
-use crate::document::Document;
+use crate::document::{Document, Guides};
 use crate::pixels::{
     pixel_rect_serde, tile_intersects_region, tiles_covering, Coverage, FillValue, PixelError,
     PixelKey, PixelTarget, TileDelta, TileEdit,
@@ -416,6 +416,10 @@ pub enum Command {
     /// build wrote is one of the older variants and still deserializes, so
     /// [`crate::DOCUMENT_FORMAT_VERSION`] is unchanged.
     SetCanvasSize { size: glam::UVec2 },
+    /// Replace the whole document guide set (add, move, remove, or flip the
+    /// group visibility/lock all land here as one undoable step per gesture).
+    /// The inverse captures the previous set, so undo restores it exactly.
+    SetGuides { guides: Guides },
     /// A batch of commands applied atomically (import, AI result, flatten...).
     /// Its inverse is the reversed inverses of its members.
     Transaction {
@@ -918,6 +922,11 @@ impl Command {
                 Ok(Command::SetCanvasSize { size: previous })
             }
 
+            Command::SetGuides { guides } => {
+                let previous = std::mem::replace(&mut doc.guides, guides.clone());
+                Ok(Command::SetGuides { guides: previous })
+            }
+
             Command::Transaction { label, commands } => {
                 let mut inverses: Vec<Command> = Vec::with_capacity(commands.len());
                 for c in commands {
@@ -983,6 +992,7 @@ impl Command {
             },
             Command::ClearRegion { .. } => "Clear".into(),
             Command::SetCanvasSize { .. } => "Resize Canvas".into(),
+            Command::SetGuides { .. } => "Edit Guides".into(),
             Command::Transaction { label, .. } => label.clone(),
         }
     }
@@ -1150,6 +1160,7 @@ fn current_location(doc: &Document, id: LayerId) -> Option<(Option<LayerId>, usi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::document::{Guide, GuideAxis};
     use crate::pixels::{FillColor, MaskCoverage};
     use glam::Vec2;
     use layer_model::{Layer, LayerMask, MaskId, ShadowEffect, StrokeEffect};
@@ -1571,6 +1582,46 @@ mod tests {
             Command::SetLayerProperties { patch, .. } if patch.mask == Patch::<LayerMask>::Clear
         ));
         inverse.apply(&mut doc).unwrap();
+        assert_eq!(doc, before);
+    }
+
+    #[test]
+    fn a_guide_edit_is_applied_and_inverted_whole() {
+        // Guides are document state now: adding, moving or removing one is one
+        // undoable step that restores the exact prior set.
+        let (mut doc, _id) = doc_with_layer();
+        let before = doc.clone();
+        assert!(doc.guides.list.is_empty(), "a fresh document has no guides");
+
+        let guides = Guides {
+            visible: true,
+            locked: false,
+            list: vec![
+                Guide {
+                    axis: GuideAxis::Vertical,
+                    doc: 24.0,
+                    locked: false,
+                },
+                Guide {
+                    axis: GuideAxis::Horizontal,
+                    doc: 120.5,
+                    locked: true,
+                },
+            ],
+        };
+        let inverse = Command::SetGuides {
+            guides: guides.clone(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(doc.guides, guides, "the new set is in place");
+        // The DOM is cheap to serialize; a save/load round trip keeps the set.
+        let json = serde_json::to_string(&doc).unwrap();
+        let back: Document = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.guides, guides, "guides survive serialization");
+        // Undo restores the emptor set.
+        inverse.apply(&mut doc).unwrap();
+        assert_eq!(doc.guides, before.guides, "undo restored the prior set");
         assert_eq!(doc, before);
     }
 
