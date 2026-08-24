@@ -418,7 +418,8 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             | LayerKind::Raster(_)
             | LayerKind::Generator(_)
             | LayerKind::Text(_)
-            | LayerKind::Shape(_) => match self.style_reach(layer) {
+            | LayerKind::Shape(_)
+            | LayerKind::SmartObject(_) => match self.style_reach(layer) {
                 // The common path, untouched: no styles, so the layer's own
                 // pixels are the whole of its contribution.
                 None => {
@@ -432,9 +433,6 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
                     self.blend_styled(&styled.sub(rect)?, layer, backdrop);
                 }
             },
-            // No rasterizer for this one yet; it contributes nothing. See the
-            // crate docs' "Not yet" list.
-            LayerKind::SmartObject(_) => {}
         }
         Ok(())
     }
@@ -447,7 +445,7 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
     /// all yet — takes the plain path however it is styled.
     fn style_reach(&self, layer: &Layer) -> Option<i64> {
         match &layer.kind {
-            LayerKind::Adjustment(_) | LayerKind::SmartObject(_) => None,
+            LayerKind::Adjustment(_) => None,
             _ => crate::effects::reach(&layer.effects, self.level),
         }
     }
@@ -662,7 +660,7 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
     /// only there inside some sibling's extent.
     fn content_bounds(&self, layer: &Layer) -> Option<PixelRect> {
         match &layer.kind {
-            LayerKind::Raster(_) | LayerKind::Generator(_) => {
+            LayerKind::Raster(_) | LayerKind::Generator(_) | LayerKind::SmartObject(_) => {
                 Some(self.tile_map_bounds(PixelKey::Layer(layer.id)))
             }
             LayerKind::Group(g) => {
@@ -689,7 +687,7 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             // rasterise to a box the size of what they draw and nothing more.
             LayerKind::Text(t) => Some(crate::text::ink_bounds(t, self.level)),
             LayerKind::Shape(s) => Some(crate::shape::ink_bounds(s, self.level)),
-            LayerKind::Adjustment(_) | LayerKind::SmartObject(_) => Some(EMPTY_RECT),
+            LayerKind::Adjustment(_) => Some(EMPTY_RECT),
         }
     }
 
@@ -747,10 +745,12 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
         let mut c = Canvas::transparent(rect)?;
         match &layer.kind {
             LayerKind::Group(g) => self.composite_ids(&g.children, rect, &mut c)?,
-            LayerKind::Raster(_) | LayerKind::Generator(_) => self.fill_layer(layer.id, &mut c),
+            LayerKind::Raster(_) | LayerKind::Generator(_) | LayerKind::SmartObject(_) => {
+                self.fill_layer(layer.id, &mut c)
+            }
             LayerKind::Text(t) => self.fill_text(t, &mut c),
             LayerKind::Shape(s) => self.fill_shape(s, &mut c),
-            LayerKind::Adjustment(_) | LayerKind::SmartObject(_) => {}
+            LayerKind::Adjustment(_) => {}
         }
         Ok(c)
     }
@@ -1203,7 +1203,7 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
                     };
                     self.hash_ids(&g.children, child_rect, h);
                 }
-                LayerKind::Raster(_) | LayerKind::Generator(_) => {
+                LayerKind::Raster(_) | LayerKind::Generator(_) | LayerKind::SmartObject(_) => {
                     self.hash_tiles(PixelKey::Layer(id), content_rect, h);
                 }
                 _ => {}

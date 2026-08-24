@@ -492,12 +492,9 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
             "A gradient/pattern fill layer is layer_model::LayerKind::Generator, \
              and the compositor has no generator rasteriser"
         }
-        MenuAction::ConvertToSmartObject => {
-            "A smart object embeds a whole document, and Command::SetLayerKind \
-             refuses to change a layer's class"
-        }
         MenuAction::Rasterize(R::SmartObject) => {
-            "A smart object has no embedded document to render in this build"
+            "Rasterizing a linked smart object would break the link, and this \
+             build hosts no smart-object editor to ask"
         }
         MenuAction::Rasterize(R::Layer) | MenuAction::Rasterize(R::AllLayers) => {
             "Every layer this build can rasterise is already pixels"
@@ -875,6 +872,7 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::NewFillLayer(ui::menu::FillLayerKind::SolidColor) => {
             editor.new_solid_fill_layer()
         }
+        MenuAction::ConvertToSmartObject => editor.convert_to_smart_object(),
         // ---- Filter --------------------------------------------------------
         MenuAction::Filter(id) => run_filter(editor, id),
 

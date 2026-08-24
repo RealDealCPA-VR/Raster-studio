@@ -768,6 +768,87 @@ impl Editor {
         Ok("Rasterized layer".to_string())
     }
 
+    /// Layer ▸ Convert to Smart Object: bake the active layer's pixels into a
+    /// smart-object layer and replace it in place (same parent, position, name).
+    /// The compositor renders a smart object from its stored pixels (an
+    /// embedded-document cache), so the result draws exactly what the source
+    /// drew before conversion.
+    pub fn convert_to_smart_object(&mut self) -> Result<String, String> {
+        let Some(open) = self.active() else {
+            return Err("No document is open".to_string());
+        };
+        let Some(source) = open.document.active_layer() else {
+            return Err("Select a layer first".to_string());
+        };
+        let rect = open.canvas_rect();
+        let mut staged = open.document.clone();
+        for other in staged.layers.iter_depth_first() {
+            if other != source {
+                if let Some(l) = staged.layers.get_mut(other) {
+                    l.visible = false;
+                }
+            }
+        }
+        let canvas = compositor::composite_region(
+            &staged,
+            &open.tiles,
+            rect,
+            0,
+            compositor::CompositeOptions::default(),
+        )
+        .map_err(|e| e.to_string())?;
+        let rgba = canvas.to_rgba8(&open.document.meta.color_space);
+        let parent = open.document.layers.parent_of(source);
+        let index = open
+            .document
+            .layers
+            .index_in_parent(source)
+            .ok_or("The layer is not in the tree")?;
+        let name = open
+            .document
+            .layers
+            .get(source)
+            .map(|l| l.name.clone())
+            .unwrap_or_else(|| "Smart Object".to_string());
+        let (w, h) = (open.document.width(), open.document.height());
+        let command = {
+            let doc = self.active_mut().ok_or("No document is open")?;
+            let layer = layer_model::Layer::with_kind(
+                name,
+                layer_model::LayerKind::SmartObject(layer_model::SmartObjectLayer {
+                    asset: layer_model::AssetId::new(),
+                    linked: false,
+                }),
+            );
+            let new_id = layer.id;
+            let mut commands = vec![Command::create_layer(layer)];
+            let grid = raster::TileGrid::from_rgba8(w, h, &rgba).map_err(|e| e.to_string())?;
+            let mut edits = Vec::new();
+            for (coord, tile) in grid.iter() {
+                let hash = doc.tiles.insert_bytes(tile.data().to_vec());
+                edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+            }
+            commands.push(
+                Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(new_id), edits)
+                    .map_err(|e| e.to_string())?,
+            );
+            commands.push(Command::MoveLayer {
+                layer_id: new_id,
+                parent,
+                index,
+            });
+            if doc.document.layers.contains(source) {
+                commands.push(Command::DeleteLayer { layer_id: source });
+            }
+            Command::Transaction {
+                label: "Convert to Smart Object".to_string(),
+                commands,
+            }
+        };
+        self.apply_command(command);
+        Ok("Converted layer to a smart object".to_string())
+    }
+
     /// Layer ▸ New Fill Layer ▸ Solid Color: add a raster layer filled with
     /// the current foreground colour across the whole canvas.
     pub fn new_solid_fill_layer(&mut self) -> Result<String, String> {

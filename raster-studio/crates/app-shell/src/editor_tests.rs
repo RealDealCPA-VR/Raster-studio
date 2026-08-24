@@ -405,6 +405,41 @@ fn a_solid_fill_layer_covers_the_canvas_in_the_foreground_colour() {
 }
 
 #[test]
+fn converting_a_layer_to_a_smart_object_keeps_its_pixels() {
+    let dir = tempfile::tempdir().unwrap();
+    let png = write_png(dir.path(), "one.png", 32, 32, 77);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_paths(&[png]);
+    let rect = ed.active().unwrap().canvas_rect();
+    let before = ed.active_mut().unwrap().composite(rect).unwrap();
+
+    ed.convert_to_smart_object().unwrap();
+
+    let kind = ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .iter_depth_first()
+        .iter()
+        .find_map(|id| {
+            ed.active()
+                .unwrap()
+                .document
+                .layers
+                .get(*id)
+                .map(|l| &l.kind)
+        });
+    assert!(
+        matches!(kind, Some(layer_model::LayerKind::SmartObject(_))),
+        "the layer became a smart object"
+    );
+    let rect = ed.active().unwrap().canvas_rect();
+    let after = ed.active_mut().unwrap().composite(rect).unwrap();
+    assert_eq!(after, before, "a smart object renders what the source drew");
+}
+
+#[test]
 fn a_file_that_cannot_be_opened_is_reported_and_forgotten() {
     let dir = tempfile::tempdir().unwrap();
     let junk = dir.path().join("broken.png");

@@ -54,6 +54,13 @@ priority order. Each is a plan-implement-validate loop.
       whole. Residual: masking `ClearRegion` (the eraser) to a channel, and
       per-channel *filter* application.
 - [ ] S1.2 Smart objects exist as a layer kind but nothing renders them.
+      **v1 done.** Smart objects now own pixels and render them: the compositor
+      includes `SmartObject` in its pixel paths (content bounds, style reach,
+      fill, tile hashing), `kind_owning_pixels` accepts it, and Layer ▸ Convert
+      to Smart Object bakes the active layer into a smart-object layer in place
+      (renders what the source drew). Test pins kind + composite. Residual: an
+      embedded-document *editor* and linked objects (the `asset` is a cache
+      key, not a nested document).
 - [x] S1.3 Export is 8-bit; 16-bit sources are decoded, composited in f32 and
       written out at 8 bits/channel. `ExportFormat::supports_16_bit` exists but
       is not exercised by the export route.

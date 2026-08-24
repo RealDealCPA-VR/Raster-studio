@@ -1050,12 +1050,11 @@ fn invert_delta(matrix: &[f32; 6]) -> Result<Affine2, CommandError> {
 /// compile until it is classified here.
 fn kind_owning_pixels(kind: &LayerKind) -> Result<(), &'static str> {
     match kind {
-        LayerKind::Raster(_) | LayerKind::Generator(_) => Ok(()),
+        LayerKind::Raster(_) | LayerKind::Generator(_) | LayerKind::SmartObject(_) => Ok(()),
         LayerKind::Group(_) => Err("group"),
         LayerKind::Adjustment(_) => Err("adjustment"),
         LayerKind::Text(_) => Err("text"),
         LayerKind::Shape(_) => Err("shape"),
-        LayerKind::SmartObject(_) => Err("smart object"),
     }
 }
 
@@ -2798,15 +2797,14 @@ mod tests {
     #[test]
     fn a_layer_kind_that_owns_no_pixels_refuses_a_pixel_edit() {
         // A group has no pixels of its own — it is its children — and neither
-        // does an adjustment, a text, a shape, or a smart object. Storing tiles
-        // under one used to succeed silently: the compositor would never read
-        // them and `PixelStore::retain_referenced` would keep them alive for as
-        // long as the layer existed, because it only asks whether the layer is
-        // still in the tree.
-        use layer_model::{
-            AdjustmentKind, AdjustmentLayer, AssetId, GeneratorLayer, ShapeLayer, SmartObjectLayer,
-            TextLayer,
-        };
+        // does an adjustment, a text, a shape. (A smart object *does* own
+        // pixels: the compositor renders its cached composite from tiles
+        // stored under its layer id.) Storing tiles under one used to succeed
+        // silently: the compositor would never read them and
+        // `PixelStore::retain_referenced` would keep them alive for as long as
+        // the layer existed, because it only asks whether the layer is still
+        // in the tree.
+        use layer_model::{AdjustmentKind, AdjustmentLayer, GeneratorLayer, ShapeLayer, TextLayer};
 
         for (kind, name) in [
             (LayerKind::Group(Default::default()), "group"),
@@ -2818,13 +2816,6 @@ mod tests {
             ),
             (LayerKind::Text(TextLayer::default()), "text"),
             (LayerKind::Shape(ShapeLayer::default()), "shape"),
-            (
-                LayerKind::SmartObject(SmartObjectLayer {
-                    asset: AssetId::new(),
-                    linked: false,
-                }),
-                "smart object",
-            ),
         ] {
             let mut doc = Document::new(1024, 1024, "t");
             let layer = Layer::with_kind(name, kind);
