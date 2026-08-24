@@ -510,6 +510,11 @@ impl Chrome {
         if editor.file_info_open() {
             self.file_info_window(ctx, editor, &mut out);
         }
+        // Guides: the canvas view was seeded from the document in `observe`;
+        // a guide edited on the canvas this frame diverges, and this converges
+        // the document back as one undoable `SetGuides`. When nothing was
+        // edited they agree and no command is emitted.
+        self.sync_guides(editor, &mut out);
         // Read *after* the chrome is drawn: this is the room the image actually
         // has once every panel has taken its share, and it is what the
         // Navigator's rectangle and Fit on Screen are computed against.
@@ -517,6 +522,21 @@ impl Chrome {
         self.channel_chords(ctx, editor);
         self.harvest(editor, &mut out);
         out
+    }
+
+    /// Converge the document's guides to what the canvas view currently holds,
+    /// when they differ. The reverse of `CanvasHost::observe`'s seed: the
+    /// document is the persisted, undoable record, so a guide movement made on
+    /// the canvas lands here as one `SetGuides` step.
+    fn sync_guides(&mut self, editor: &Editor, out: &mut ChromeOutput) {
+        let Some(open) = editor.active() else {
+            return;
+        };
+        let canvas = self.workspace.canvas.view.guides.to_document();
+        if canvas != open.document.guides {
+            out.commands
+                .push(editor_core::Command::SetGuides { guides: canvas });
+        }
     }
 
     /// Note which press-and-drag, if any, this frame's edits belong to.

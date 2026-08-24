@@ -221,6 +221,11 @@ impl CanvasHost {
     /// nothing.
     pub fn observe(&mut self, doc: &Document) {
         self.doc_size = doc_size(doc);
+        // The document owns the guide truth; the view is rebuilt from it each
+        // frame so loaded/edited guides actually appear. A guide edit made on
+        // the canvas this same frame diverges again and the shell converges the
+        // document back via `Command::SetGuides`.
+        self.view.guides = crate::canvas::rulers::Guides::from_document(&doc.guides);
         let _ = self.selection_outline(doc);
     }
 

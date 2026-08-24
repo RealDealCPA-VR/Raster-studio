@@ -547,6 +547,52 @@ impl Guides {
         }
     }
 
+    /// Rebuild from the document's persisted guide model, replacing every
+    /// guide. This is the draw-time half of the guide seam: `observe` seeds the
+    /// view from [`editor_core::Document::guides`] each frame, and
+    /// [`Guides::to_document`] hands the result back so the shell can persist
+    /// and undo an edit. The axis mapping: the model's `Horizontal`/`Vertical`
+    /// free the display layer from the camera-aware `Axis`, so X-constant
+    /// (vertical) maps one way and Y-constant (horizontal) the other.
+    pub fn from_document(src: &editor_core::Guides) -> Self {
+        Self {
+            guides: src
+                .list
+                .iter()
+                .map(|g| Guide {
+                    axis: match g.axis {
+                        editor_core::GuideAxis::Vertical => Axis::X,
+                        editor_core::GuideAxis::Horizontal => Axis::Y,
+                    },
+                    doc: g.doc,
+                    locked: g.locked,
+                })
+                .collect(),
+            visible: src.visible,
+            locked: src.locked,
+        }
+    }
+
+    /// The persisted model this draw-time set stands for.
+    pub fn to_document(&self) -> editor_core::Guides {
+        editor_core::Guides {
+            list: self
+                .guides
+                .iter()
+                .map(|g| editor_core::Guide {
+                    axis: match g.axis {
+                        Axis::X => editor_core::GuideAxis::Vertical,
+                        Axis::Y => editor_core::GuideAxis::Horizontal,
+                    },
+                    doc: g.doc,
+                    locked: g.locked,
+                })
+                .collect(),
+            visible: self.visible,
+            locked: self.locked,
+        }
+    }
+
     /// The guide nearest a screen position, within `tolerance_pt`.
     ///
     /// Hidden guides are never hit; locked ones are, so the UI can explain why
@@ -790,6 +836,33 @@ impl GuideGesture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_document_guide_set_round_trips_through_the_view() {
+        // `from_document` (seed for drawing) and `to_document` (persistence) are
+        // exact inverses, so a guide dragged on the canvas is captured unchanged.
+        let doc = editor_core::Guides {
+            visible: true,
+            locked: false,
+            list: vec![
+                editor_core::Guide {
+                    axis: editor_core::GuideAxis::Vertical,
+                    doc: 24.0,
+                    locked: false,
+                },
+                editor_core::Guide {
+                    axis: editor_core::GuideAxis::Horizontal,
+                    doc: 120.5,
+                    locked: true,
+                },
+            ],
+        };
+        let view = Guides::from_document(&doc);
+        // Axis mapping: X-constant (vertical) stays a vertical guide.
+        assert_eq!(view.iter().next().unwrap().axis, Axis::X);
+        assert_eq!(view.iter().nth(1).unwrap().axis, Axis::Y);
+        assert_eq!(view.to_document(), doc);
+    }
     use crate::canvas::viewport::PanelInsets;
     use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
