@@ -359,6 +359,32 @@ fn export_layers_writes_a_png_per_layer_into_the_chosen_folder() {
 }
 
 #[test]
+fn rasterizing_a_non_raster_layer_bakes_it_to_a_raster() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut ed, adj) = with_adjustment(dir.path());
+    ed.active_mut()
+        .unwrap()
+        .document
+        .set_active_layer(Some(adj))
+        .unwrap();
+
+    ed.rasterize_active_layer().unwrap();
+
+    let doc = &ed.active().unwrap().document;
+    assert_eq!(doc.layers.len(), 2, "one layer replaced, not duplicated");
+    let ids = doc.layers.iter_depth_first();
+    assert!(
+        ids.iter().any(|id| {
+            matches!(
+                doc.layers.get(*id).map(|l| &l.kind),
+                Some(layer_model::LayerKind::Raster(_))
+            )
+        }),
+        "the baked layer became a raster layer"
+    );
+}
+
+#[test]
 fn a_file_that_cannot_be_opened_is_reported_and_forgotten() {
     let dir = tempfile::tempdir().unwrap();
     let junk = dir.path().join("broken.png");

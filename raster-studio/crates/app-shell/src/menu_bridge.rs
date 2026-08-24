@@ -495,16 +495,8 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
             "A smart object embeds a whole document, and Command::SetLayerKind \
              refuses to change a layer's class"
         }
-        MenuAction::Rasterize(R::Text) | MenuAction::Rasterize(R::Shape) => {
-            "compositor::composite has no rasteriser for text or shape layers, \
-             so there are no pixels to bake"
-        }
         MenuAction::Rasterize(R::SmartObject) => {
             "A smart object has no embedded document to render in this build"
-        }
-        MenuAction::Rasterize(R::LayerStyle) => {
-            "Layer effects are not composited yet, so baking one would write the \
-             layer back unchanged"
         }
         MenuAction::Rasterize(R::Layer) | MenuAction::Rasterize(R::AllLayers) => {
             "Every layer this build can rasterise is already pixels"
@@ -874,6 +866,11 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
             Ok("File Info…".to_string())
         }
         MenuAction::ExportLayers => editor.export_layers(),
+        MenuAction::Rasterize(ui::menu::RasterizeTarget::Text)
+        | MenuAction::Rasterize(ui::menu::RasterizeTarget::Shape)
+        | MenuAction::Rasterize(ui::menu::RasterizeTarget::LayerStyle) => {
+            editor.rasterize_active_layer()
+        }
         // ---- Filter --------------------------------------------------------
         MenuAction::Filter(id) => run_filter(editor, id),
 
