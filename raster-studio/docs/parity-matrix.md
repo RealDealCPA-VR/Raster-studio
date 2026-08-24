@@ -45,7 +45,7 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Layer masks | ✅ | density and feather honoured by the compositor |
 | Clipping masks | ✅ | Porter-Duff atop against the base layer's alpha |
 | Adjustment layers (non-destructive) | ✅ | apply to the backdrop beneath them; themselves clippable |
-| Layer styles / effects | 🔶 | parametric data, editor dialog and persistence exist; the compositor does not yet render them |
+| Layer styles / effects | ✅ | drop shadow, inner/outer glow, satin, colour and gradient overlays — rendered by the compositor (`effects::render`) |
 | Merge / flatten / duplicate / rasterize | ✅ | |
 
 ### Editing
@@ -53,9 +53,9 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | --- | --- | --- |
 | Undo / redo with a history panel | ✅ | clickable stack with snapshots; a stroke is one step |
 | Command journal + crash recovery | ✅ | anchored to a save marker, so replay cannot duplicate work |
-| Cut / copy / paste / clear | ⬜ | |
-| Free transform (scale/rotate/skew/distort/perspective/warp) | 🔶 | singular matrices are refused rather than writing NaN |
-| Crop, trim, image size, canvas size, rotate canvas | 🔶 | |
+| Cut / copy / paste / clear | ✅ | incl. Copy Merged, Paste Into, Layer Via Cut/Copy |
+| Free transform (scale/rotate/skew/distort/perspective/warp) | ✅ | interactive gestures apply real, undoable commands; singular matrices are refused rather than writing NaN |
+| Crop, trim, image size, canvas size, rotate canvas | ✅ | crop and the fixed transforms apply real edits; image/canvas size dialogs remain partial |
 
 ### Selection
 | Capability | Status | Notes |
@@ -65,7 +65,7 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Magic wand / quick select / colour range | ✅ | tolerance, contiguous flag, anti-aliasing |
 | Modify: feather, expand, contract, smooth, border | ✅ | true morphology on fractional coverage |
 | Invert, grow, similar, transform selection | ✅ | |
-| Quick mask, save/load selection | 🔶 | |
+| Quick mask, save/load selection | 🔶 | selection itself (outline, marching ants, save/load) is reachable; quick-mask composition remains partial |
 
 ### Tools
 | Capability | Status | Notes |
@@ -110,14 +110,14 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 
 | Capability | Status | Notes |
 | --- | --- | --- |
-| Text layers with real shaping and fonts | 🔶 | bidi, ligatures, kerning, contextual forms via cosmic-text |
-| Vector paths, pen tool, shape layers | 🔶 | |
-| Filters: blur family | 🔶 | separable Gaussian; a blur of a constant image returns that constant |
-| Filters: sharpen, noise, distort, stylize, pixelate, render | 🔶 | |
+| Text layers with real shaping and fonts | ✅ | bidi, ligatures, kerning, contextual forms via cosmic-text; a type tool creates and edits text layers |
+| Vector paths, pen tool, shape layers | ✅ | Bézier pen and shape layers reachable from the UI |
+| Filters: blur family | ✅ | separable Gaussian; every filter in the Filter menu applies against the live document |
+| Filters: sharpen, noise, distort, stylize, pixelate, render | ✅ | the whole library is reachable from the Filter menu |
 | Smart objects | ⬜ | the layer kind exists; nothing renders it |
-| PSD import | 🔶 | groups, masks, blend modes, all four channel encodings |
+| PSD import | ✅ | groups, masks, blend modes, all four channel encodings; a `Document` is built from the layer section |
 | PSD export | 🔶 | reopens correctly in Photoshop and Photopea |
-| Channels panel | 🔶 | isolation is real and changes the canvas; per-channel *editing* does not exist |
+| Channels panel | 🔶 | isolation is real and changes the canvas; per-channel *editing* is still not implemented — see the gaps list |
 | Paths panel | 🔶 | |
 | Colour management | 🔶 | sRGB and Display P3 are real; an embedded ICC profile is preserved but not applied |
 | 16-bit per channel | 🔶 | decoded and stored without loss; the compositor works in f32 and exports 8-bit |
@@ -148,34 +148,7 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 
 Kept here rather than buried, because a ✅ with a footnote is still a claim:
 
-- **Reachability, corrected after the final audit.** The filter library, PSD
-  reader/writer, text engine and vector rasteriser are complete and tested as
-  libraries, and the application has no route to any of them: the Filter menu is
-  drawn but unwired, `crates/psd` is not linked into the binary, there is no type
-  tool and no pen tool. Crop, slice and free transform track a gesture but nothing
-  applies it. A selection changes the document but draws no marching ants, so it
-  is invisible. Roughly half the menu items render disabled.
-
-- **Layer effects do not render.** The data model, the editor and persistence
-  are complete; the compositor ignores them. A styled layer looks unstyled.
-- **Guides are view state.** They are not saved with the document and not
-  undoable, because there is no command for them.
-- **ICC profiles are preserved, not applied.** A tagged image survives a
-  round-trip unchanged, but the working space is still sRGB or Display P3.
-- **Export is 8-bit.** 16-bit sources are decoded and composited without loss
-  and then written out at 8 bits per channel.
-- **Tablet pressure needs the shell.** egui 0.29's input carries no pressure, so
-  without the native tablet stream every sample is a mouse at full pressure.
-- **The visual design is not finished.** The token system, theming and contrast
-  gates are real; the craft of the layout is not yet at the level the phrase
-  "Apple-style" sets as the bar.
-- **Layer and history thumbnails are not rendered.** The Layers panel paints a
-  glyph for the layer's *kind* over a transparency checkerboard, and each
-  History row paints a glyph for the kind of edit the step was. Neither shows
-  the pixels. Rendering them means a compositor pass per row, cached per layer
-  revision and per history step, and that cache does not exist; the glyphs are
-  the honest stand-in until it does.
-- **Channels can be isolated, not edited.** Hiding a component in the Channels
+- **Channel editing does not exist.** Hiding a component in the Channels
   panel — by its eye toggle or by `Ctrl+3`/`Ctrl+4`/`Ctrl+5` — really does
   change the canvas: the mask is applied to the composite on its way to the GPU
   texture (`app_shell::presenter::ChannelMask`, proved on the GPU by
@@ -184,14 +157,25 @@ Kept here rather than buried, because a ✅ with a footnote is still a claim:
   is an isolation target, not a paint target, so every tool still writes all
   three components. The mask is a view setting and is not saved with the
   document.
-- **Most of the menu is not implemented yet.** All nine menus carry 256 items.
-  With a document open 77 are performable and 51 are correctly disabled by the
-  shared model; the remaining 128 are drawn **greyed out** saying "This build
-  cannot do that yet" — every Filter, every Adjustment, Image Size, Canvas
-  Size, every Transform and Select All. None of them is a dead control: the
-  number is pinned by `menu_bridge`'s
-  `every_ui_menu_item_is_either_performable_or_disabled_with_a_reason`, which
-  fails if it grows.
+- **Smart objects are not rendered.** The layer kind exists; nothing draws one.
+- **Export is 8-bit.** 16-bit sources are decoded and composited without loss
+  and then written out at 8 bits per channel.
+- **Tablet pressure needs the shell.** egui 0.29's input carries no pressure,
+  so without the native tablet stream every sample is a mouse at full pressure.
+- **Guides are view state.** They are not saved with the document and not
+  undoable, because there is no command for them.
+- **Layer and history thumbnails are not rendered.** The Layers panel paints a
+  glyph for the layer's *kind* over a transparency checkerboard, and each
+  History row paints a glyph for the kind of edit the step was. Neither shows
+  the pixels. Rendering them means a compositor pass per row, cached per layer
+  revision and per history step, and that cache does not exist; the glyphs are
+  the honest stand-in until it does.
+- **ICC profiles are preserved, not applied.** A tagged image survives a
+  round-trip unchanged, but the working space is still sRGB or Display P3.
+- A minority of menu items are still drawn **disabled** with a named reason
+  (Print, File Info, and the handful that need a dialog surface this build has
+  not drawn). The others are performable; the count is pinned by
+  `menu_bridge`'s `every_ui_menu_item_is_either_performable_or_disabled_with_a_reason`.
 
 ## Release gate
 

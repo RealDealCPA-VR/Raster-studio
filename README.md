@@ -27,44 +27,53 @@ drift apart.
 
 ## Status
 
-**This is a work in progress, not a finished product.** The engine is largely
-complete and heavily tested; the application on top of it is partly wired. The
-split matters, so it is spelled out rather than blurred.
+**This is a work in progress, not a finished product — but it is well past the
+scaffold.** The engine is complete and heavily tested, and the application on
+top of it is largely wired: every engine capability below is reachable from the
+UI, not merely present as a library. The honest list of what is *still* missing
+is a short, named one, and [`docs/REMAINING.md`](raster-studio/docs/REMAINING.md)
+keeps it current against the code.
 
 ### What you can actually do in the app
 
-- Open PNG, JPEG, WebP, TIFF, GIF, BMP, ICO and TGA, and pan, zoom and fit.
-- **Paint.** Brush, pencil, eraser, clone, gradient, bucket, dodge/burn and the
-  rest of the stamp-based tools mark the canvas. A stroke is one undo step, and
-  undo restores the prior pixels byte-for-byte.
+- Open PNG, JPEG, WebP, TIFF, GIF, BMP, ICO, TGA **and layered `.psd`** (the PSD
+  reader lowers groups, masks, blend modes, channels and adjustments into a real
+  document, reporting what cannot carry over), and pan, zoom and fit.
+- **Paint.** Brush, pencil, eraser, clone, healing, gradient, bucket,
+  dodge/burn, blur/sharpen/smudge and the rest of the tools mark the canvas. A
+  stroke is one undo step, and undo restores the prior pixels byte-for-byte.
+- **Draw and typeset.** Pen and shape tools produce real vector layers, and a
+  type tool creates text layers with real shaping.
 - Build a layer stack: groups, layer masks, clipping masks, adjustment layers,
-  opacity and fill, and all 27 blend modes, all composited correctly.
-- Edit adjustment-layer parameters and see the result live.
-- Make selections, which constrain later painting.
+  opacity and fill, all 27 blend modes, **and layer effects (drop shadow,
+  glows, satin, gradients) that the compositor really renders**.
+- **Edit non-destructively.** Adjustment layers, filters, and every Image ▸
+  Adjustments operation apply against the live document and are undoable.
+- Make selections, which constrain later painting and draw real marching ants.
+- Crop, slice, and free transform — gestures apply real, undoable edits.
 - Save and reopen the native `.rstudio` package — it composites to
   byte-identical output after a round trip.
-- Export PNG, JPEG, WebP, TIFF, GIF and BMP with a correct colour pipeline.
+- Export PNG, JPEG, WebP, TIFF, GIF and BMP, **and layered PSD**, with a correct
+  colour pipeline.
 
-### What exists in the engine but is not reachable from the UI yet
+### What is honestly still missing
 
-These are implemented and tested as libraries, and the application does not yet
-have a route to them:
+These are the gaps, named rather than blurred. Each is tracked in
+[`docs/REMAINING.md`](raster-studio/docs/REMAINING.md):
 
-- **Filters** — the whole library (blur, sharpen, noise, distort, stylize,
-  pixelate, render, convolution). The Filter menu is drawn but not wired.
-- **PSD read and write** — `crates/psd` is complete and is not linked into the
-  application.
-- **Text** — shaping, layout and rasterisation work; there is no type tool to
-  create a text layer with.
-- **Vector paths** — the geometry and rasteriser work; there is no pen tool.
-- **Crop, slice and free transform** — the gestures track correctly but nothing
-  applies them.
-- **Selection overlay** — a selection changes the document but draws no
-  marching ants, so it is currently invisible.
-- **Layer effects** — the data model, editor and persistence are complete; the
-  compositor does not render them.
-- Roughly half the menu items are drawn disabled, marked "This build cannot do
-  that yet".
+- **Channel editing** — the Channels panel isolates a component (really changes
+  the canvas) but tools still paint all three components.
+- **Smart objects** — the layer kind exists but nothing renders it.
+- **16-bit export** — 16-bit sources are decoded and composited without loss,
+  then written out at 8 bits/channel.
+- **Tablet pressure** — the engine consumes it, but egui 0.29 carries none, so
+  the shell must still feed the native tablet stream.
+- **Guides are view state** — not saved with the document and not undoable.
+- **Layer/history thumbnails** show kind glyphs, not the pixels.
+- **Embedded ICC profiles** are preserved but not applied to a working space.
+- A minority of menu items are still drawn disabled with a named reason
+  (Print, File Info, and the handful that need a dialog surface this build has
+  not drawn). The count is pinned by a test.
 
 [`raster-studio/docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md) has the row-by-row detail.
 Nothing there is marked done unless it is implemented, tested, and reachable
