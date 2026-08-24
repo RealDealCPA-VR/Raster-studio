@@ -430,10 +430,6 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
             "Warp needs a mesh gizmo and a mesh deformer; neither exists in this \
              workspace"
         }
-        MenuAction::StrokeDialog => {
-            "Stroking needs a rasteriser that walks selection::outline's \
-             polylines, and no tool in this build paints along a path"
-        }
         MenuAction::DefinePattern | MenuAction::DefineBrush => {
             "There is no pattern or brush library to define one into: \
              asset-store holds no user presets yet"
@@ -938,6 +934,7 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         // ---- Edit ----------------------------------------------------------
         MenuAction::ClearPixels => clear_selection(editor),
         MenuAction::FillDialog => fill_selection(editor),
+        MenuAction::StrokeDialog => stroke_selection(editor),
         MenuAction::Copy => copy(editor, false),
         MenuAction::CopyMerged => copy(editor, true),
         MenuAction::Cut => cut(editor),
@@ -1286,6 +1283,52 @@ fn fill_selection(editor: &mut Editor) -> Result<String, String> {
     editor.apply_command(command);
     Ok(format!(
         "Filled with the foreground colour {hex} — this build has no fill dialog"
+    ))
+}
+
+/// The width of the Edit ▸ Stroke band, in pixels, when the dialog is not
+/// hosted. Named as one decision in one place, exactly like [`MODIFY_RADIUS`].
+const STROKE_WIDTH: u32 = 1;
+
+/// Edit ▸ Stroke…: paint a `STROKE_WIDTH`-pixel band of the foreground colour
+/// along the active selection's border, through the same compile-time-masked
+/// read-modify-write each fill uses. Honest about running at its default width
+/// because the shell hosts no stroke dialog.
+fn stroke_selection(editor: &mut Editor) -> Result<String, String> {
+    let layer = pixel_layer(editor)?;
+    let (w, h) = canvas_of(editor)?;
+    let rgba = editor.foreground();
+    let solid = rgba8_of(rgba);
+    let command = {
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        let selection = doc.document.selection.clone();
+        let rect = canvas_rect(w, h);
+        let mask = selection::to_mask(&selection, rect).map_err(|e| e.to_string())?;
+        if mask.is_empty() {
+            return Err("There is no selection to stroke".to_string());
+        }
+        let border = selection::border(&mask, STROKE_WIDTH).map_err(|e| e.to_string())?;
+        let before = pixels::read_layer(doc, layer);
+        let mut after = before.clone();
+        if let Some((lo, hi)) = border.bounds() {
+            for py in lo.y.max(0)..hi.y.min(h as i32) {
+                for px in lo.x.max(0)..hi.x.min(w as i32) {
+                    if border.coverage_at(glam::IVec2::new(px, py)) > 0 {
+                        let i = (py as usize * w as usize + px as usize) * 4;
+                        after[i..i + 4].copy_from_slice(&solid);
+                    }
+                }
+            }
+        }
+        if after == before {
+            return Err("The stroke would change nothing".to_string());
+        }
+        pixels::write_layer(doc, layer, &after, "Stroke")?
+    };
+    editor.apply_command(command);
+    Ok(format!(
+        "Stroked the selection outline at {}px — this build has no stroke dialog",
+        STROKE_WIDTH
     ))
 }
 
@@ -2960,6 +3003,7 @@ mod tests {
                 || action == MenuAction::CloseAll
                 || action == MenuAction::Trim
                 || action == MenuAction::CropToSelection
+                || action == MenuAction::StrokeDialog
             {
                 match perform(action, &mut ed) {
                     Ok(_) | Err(_) => checked += 1,
@@ -3073,5 +3117,30 @@ mod tests {
             ),
             got => panic!("appearance resolved to {got:?}"),
         }
+    }
+
+    #[test]
+    fn stroke_paints_the_foreground_along_the_selection_border() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let before = pixels::read_layer(ed.active().unwrap(), layer);
+        select_rect(&mut ed, (4, 4), (12, 10));
+        ed.set_foreground([0.0, 0.0, 1.0, 1.0]);
+        assert!(invoke(&mut ed, MenuAction::StrokeDialog).unwrap());
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        let w = ed.active().unwrap().document.width() as usize;
+        let border = (4 * w + 4) * 4; // a corner of the selection border
+        let interior = (7 * w + 8) * 4; // well inside the selection
+        assert_eq!(
+            &after[border..border + 4],
+            &[0, 0, 255, 255],
+            "the border was stroked with the foreground colour"
+        );
+        assert_eq!(
+            &after[interior..interior + 4],
+            &before[interior..interior + 4],
+            "the interior was left untouched"
+        );
     }
 }
