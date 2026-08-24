@@ -886,6 +886,20 @@ impl Editor {
         Ok("Converted layer to a smart object".to_string())
     }
 
+    /// File ▸ Duplicate…: open a copy of the current document's state as a new
+    /// document (same pixels and layer tree, fresh undo history, `copy` title).
+    pub fn duplicate_document(&mut self) -> Result<String, String> {
+        let idx = self
+            .active
+            .ok_or_else(|| "No document is open".to_string())?;
+        let new_id = self.mint_id();
+        let copy = self.docs[idx].duplicate(new_id);
+        self.docs.push(copy);
+        self.active = Some(self.docs.len() - 1);
+        self.touch();
+        Ok("Duplicated document".to_string())
+    }
+
     /// Layer ▸ Smart Object ▸ Edit Contents…: open a smart object's stored
     /// pixels in a scratch document so they can be edited as their own raster,
     /// keeping the (parent, layer) pair so a later [`Self::commit_smart_object_contents`]

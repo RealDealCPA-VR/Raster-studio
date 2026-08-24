@@ -388,6 +388,31 @@ impl OpenDocument {
         &self.document.meta.title
     }
 
+    /// A fresh copy of the document's current state as a new document: same
+    /// pixels, same layer tree, same tiles — a new id, an empty undo stack
+    /// (the copy *starts* at the current state) and a `copy` title. The engine
+    /// half of File ▸ Duplicate Document.
+    pub fn duplicate(&self, new_id: DocumentId) -> Self {
+        let mut doc = self.document.clone();
+        doc.meta.title = format!("{} copy", self.title());
+        let size = glam::Vec2::new(doc.width() as f32, doc.height() as f32);
+        OpenDocument {
+            id: new_id,
+            document: doc,
+            history: History::default(),
+            tiles: self.tiles.clone(),
+            camera: Camera::new(size, size),
+            project_path: None,
+            source_path: None,
+            compositor: TileCompositor::new(),
+            dirty: DirtyTiles::all(),
+            source_sixteen_bit: self.source_sixteen_bit,
+            psd_notes: crate::import::PsdNotes::default(),
+            undone_labels: Vec::new(),
+            fit_pending: true,
+        }
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.document.is_dirty()
     }

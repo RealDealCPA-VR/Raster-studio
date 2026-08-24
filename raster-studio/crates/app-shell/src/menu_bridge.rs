@@ -466,10 +466,6 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
             "Changing colour mode would rewrite every tile, and editor_core has \
              no command that can carry that as one undoable step"
         }
-        MenuAction::DuplicateDocument => {
-            "Duplicating a document has to copy the tile store as well as the \
-             tree, and OpenDocument has no clone"
-        }
         // Everything that changes the canvas *rectangle*. `editor_core`'s
         // command set has no variant that carries a resize — `DocumentMeta` is
         // a plain field with no undo behind it — so performing one of these
@@ -878,6 +874,7 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
             editor.new_solid_fill_layer()
         }
         MenuAction::ConvertToSmartObject => editor.convert_to_smart_object(),
+        MenuAction::DuplicateDocument => editor.duplicate_document(),
         MenuAction::EditSmartObjectContents => editor.edit_smart_object_contents(),
         MenuAction::CommitSmartObjectContents => editor.commit_smart_object_contents(),
         // ---- Filter --------------------------------------------------------

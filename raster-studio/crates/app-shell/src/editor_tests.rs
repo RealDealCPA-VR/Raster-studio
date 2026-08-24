@@ -1869,3 +1869,29 @@ fn commit_with_no_contents_tab_is_refused_loudly() {
     let err = ed.edit_smart_object_contents().unwrap_err();
     assert!(err.contains("smart object layer first"), "{err}");
 }
+
+#[test]
+fn duplicating_a_document_copies_its_pixels_with_a_fresh_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_png(dir.path(), "a.png", 32, 24, 60);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&a).unwrap();
+    ed.duplicate_document().unwrap();
+
+    // Two documents, the copy active.
+    assert_eq!(ed.docs.len(), 2);
+    let copy_id = {
+        let copy = ed.active().unwrap();
+        assert!(copy.title().contains("copy"), "{}", copy.title());
+        let layer = copy.document.layers.iter_depth_first()[0];
+        let px = copy.layer_pixels(layer).unwrap();
+        assert!(px.iter().all(|&b| b == 60), "pixels copied");
+        copy.id()
+    };
+    // The copy has a fresh undo stack: undo changes nothing.
+    assert!(
+        ed.dispatch(Action::Undo).is_err(),
+        "the copy's history is fresh: nothing to undo"
+    );
+    assert_eq!(ed.active().unwrap().id(), copy_id, "undo was a no-op");
+}
