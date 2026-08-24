@@ -148,38 +148,39 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 
 Kept here rather than buried, because a ✅ with a footnote is still a claim:
 
-- **Channel editing does not exist.** Hiding a component in the Channels
-  panel — by its eye toggle or by `Ctrl+3`/`Ctrl+4`/`Ctrl+5` — really does
-  change the canvas: the mask is applied to the composite on its way to the GPU
-  texture (`app_shell::presenter::ChannelMask`, proved on the GPU by
-  `hiding_a_channel_changes_the_texture_the_canvas_samples`). What does not
-  exist is painting or filtering **into** one channel: the panel's selected row
-  is an isolation target, not a paint target, so every tool still writes all
-  three components. The mask is a view setting and is not saved with the
-  document.
-- **Smart objects are not rendered.** The layer kind exists; nothing draws one.
-- **Export is 8-bit.** 16-bit sources are now honored on the way *out*: a deep
-  source exports at 16 bits to the formats that carry them (PNG/TIFF), and an
-  8-bit source keeps the byte-exact 8-bit path. What remains is that in-app
-  editing still composites at 8-bit-equivalent precision (import collapses to
-  8-bit tiles) and that `.rstudio` does not record the source depth.
-- **Tablet pressure needs the shell.** egui 0.29's input carries no pressure,
-  so without the native tablet stream every sample is a mouse at full pressure.
-- **Guides are view state.** They are not saved with the document and not
-  undoable, because there is no command for them.
-- **Layer and history thumbnails are not rendered.** The Layers panel paints a
-  glyph for the layer's *kind* over a transparency checkerboard, and each
-  History row paints a glyph for the kind of edit the step was. Neither shows
-  the pixels. Rendering them means a compositor pass per row, cached per layer
-  revision and per history step, and that cache does not exist; the glyphs are
-  the honest stand-in until it does.
-- **ICC profiles are preserved, not applied.** A tagged image survives a
-  round-trip unchanged, but the working space is still sRGB or Display P3.
-- A minority of menu items are still drawn **disabled** with a named reason
-  (Print, File Info, and the handful that need a dialog surface this build has
-  not drawn). The others are performable; the count is pinned by
-  `menu_bridge`'s `every_ui_menu_item_is_either_performable_or_disabled_with_a_reason`.
-
+- **Linked smart objects.** The embedded-document editor is done (“Layer ▸
+  Smart Object ▸ Edit Contents…” opens the object's pixels in a tab and Commit
+  writes them back as one undo step), but Place Embedded… / Place Linked… still
+  need a nested-source model and a placement gizmo, so they remain disabled
+  with a reason.
+- **Live editing composites at 8-bit-equivalent precision.** Deep sources are
+  honoured on export (a 16-bit source writes 16 bits to PNG/TIFF; an 8-bit
+  source keeps the byte-exact path), but the live tiles composite at 8 bits
+  and `.rstudio` does not record the source depth.
+- **ICC application is wired for the engine, not the pipeline.** The `color`
+  crate parses and applies matrix-shaper ICC profiles (`rXYZ/gXYZ/bXYZ` +
+  `curv`/`para` TRCs, Bradford D50–D65) with round-trip tests, but
+  `ColorSpace::IccProfile` still carries no bytes, so a tagged image is
+  preserved on a round trip rather than applied to the working space.
+- **Native tablet events need a pen.** Pressure is wired through the shell
+  seam (`Shell::set_pen_pressure`) and the stroke engine is pressure-aware,
+  but subscribing to one device's winit tablet events requires hardware on
+  the host.
+- **The OS printer-spooler dialog.** Print ▸ As PDF renders the composite to a
+  tested single-page PDF; talking to an actual printer spooler is OS-only and
+  not part of the build.
+- **A minority of menu items are still drawn disabled with a named reason**
+  (Place Embedded…/Linked…, the interactive-transform gizmo items, and the
+  handful needing a dialog surface this build has not drawn). The others are
+  performable; the count is pinned by `menu_bridge`'s
+  `every_ui_menu_item_is_either_performable_or_disabled_with_a_reason`.
+- **Per-channel masking stops at painting.** The Channels panel both isolates
+  and paints into a single RGB component (masked at the command boundary, so
+  the masked command reaches history and the journal). ClearRegion (the
+  eraser) and per-channel *filter* application are not yet masked to a
+  component.
+- **Quick mask composition is partial** (Tier C, deferred): the selection
+  itself, its outline, marching ants and save/load are all reachable.
 ## Release gate
 
 1. Every Tier A row is ✅ or has its gap named above.

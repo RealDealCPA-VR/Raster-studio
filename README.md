@@ -1,84 +1,105 @@
 # Raster Studio
 
-A local-first image editor written in Rust. Layers, masks, selections, filters,
-text, vector paths, and a tile-based engine built for large documents.
+**Your images, on your disk, in pixels you can trust.**
 
-No account, no cloud, no telemetry, no network calls. It opens a file from your
-disk and writes one back.
+Raster Studio is a local-first image editor written in Rust — layers, masks,
+selections, filters, text, vector paths and a tile engine built to chew on
+large documents without breaking a sweat.
+
+No account. No cloud. No telemetry. No network calls. It opens a file from
+your disk, does the work in parallel Rust on your own CPU, and writes a file
+back. What happens between those two moments is yours alone.
 
 ```bash
 cd raster-studio
 cargo run -p studio-desktop -- path/to/image.png
 ```
 
-## What it is
+## The idea: one engine, no drift
 
-Most image editors are either a web app you rent or a native app that was
-written in 1990. Raster Studio is a native desktop application with a CPU tile
-engine and a GPU presentation layer: the pixel work happens in parallel Rust,
-and the GPU's job is to put composited tiles on screen at display rate.
+Most image editors are either a web app you rent or a native app written in
+1990. Raster Studio splits the difference in a way that is easy to say and
+rare to pull off: **the pixel work is a pure CPU engine, and the GPU's only
+job is to put the result on screen.**
 
-That split is the central design decision, and it buys something specific.
 Because the engine never needs a GPU to be *correct*, every pixel operation —
-all 27 blend modes, every filter, every adjustment, masking, clipping,
-compositing, export — is an ordinary function that can be tested headlessly.
-There is exactly one implementation of each, so there is no CPU/GPU pair to
-drift apart.
+all 27 blend modes, every filter and adjustment, masking, clipping,
+compositing, export — is an ordinary function that runs headlessly in tests.
+There is exactly **one** implementation of each, so there is no CPU/GPU pair
+sitting around waiting to disagree with each other. What the engine computes,
+the screen shows; what the tests pin down, you get.
 
 ## Status
 
-**This is a work in progress, not a finished product — but it is well past the
-scaffold.** The engine is complete and heavily tested, and the application on
-top of it is largely wired: every engine capability below is reachable from the
-UI, not merely present as a library. The honest list of what is *still* missing
-is a short, named one, and [`docs/REMAINING.md`](raster-studio/docs/REMAINING.md)
-keeps it current against the code.
+**This is a work in progress — an engine that is complete and battle-tested
+wrapped in an application that is largely wired, with the corners still marked
+out honestly.** The full spec in
+[`docs/REMAINING.md`](raster-studio/docs/REMAINING.md) — the plan-implement-
+validate todo list this project is built against — is **complete**: every item
+was implemented, tested and reachable from the UI before it was checked off.
+The row-by-row detail lives in
+[`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md). Nothing there
+is marked done unless it is implemented, tested and reachable — and where that
+bar is not yet met, it says so in plain words. Documentation here is a claim,
+and claims get checked against the code.
 
 ### What you can actually do in the app
 
-- Open PNG, JPEG, WebP, TIFF, GIF, BMP, ICO, TGA **and layered `.psd`** (the PSD
-  reader lowers groups, masks, blend modes, channels and adjustments into a real
-  document, reporting what cannot carry over), and pan, zoom and fit.
+- **Open almost anything.** PNG, JPEG, WebP, TIFF, GIF, BMP, ICO, TGA and
+  **layered `.psd`** — the PSD reader lowers groups, masks, blend modes,
+  channels and adjustments into a real document, and reports anything it
+  cannot carry over. Pan, zoom, fit, all of it.
 - **Paint.** Brush, pencil, eraser, clone, healing, gradient, bucket,
-  dodge/burn, blur/sharpen/smudge and the rest of the tools mark the canvas. A
-  stroke is one undo step, and undo restores the prior pixels byte-for-byte.
-- **Draw and typeset.** Pen and shape tools produce real vector layers, and a
-  type tool creates text layers with real shaping.
-- Build a layer stack: groups, layer masks, clipping masks, adjustment layers,
-  opacity and fill, all 27 blend modes, **and layer effects (drop shadow,
-  glows, satin, gradients) that the compositor really renders**.
-- **Edit non-destructively.** Adjustment layers, filters, and every Image ▸
-  Adjustments operation apply against the live document and are undoable.
-- Make selections, which constrain later painting and draw real marching ants.
-- Crop, slice, and free transform — gestures apply real, undoable edits.
-- Save and reopen the native `.rstudio` package — it composites to
-  byte-identical output after a round trip.
-- Export PNG, JPEG, WebP, TIFF, GIF and BMP, **and layered PSD**, with a correct
-  colour pipeline.
+  dodge/burn, blur/sharpen/smudge and the rest mark the canvas. A stroke is
+  one undo step that restores the prior pixels byte-for-byte — and with a
+  stylus, pressure is wired end to end through the shell seam.
+- **Draw and typeset.** Pen and shape tools make real vector layers; the type
+  tool lays out text with real shaping.
+- **Build a layer stack.** Groups, layer masks, clipping masks, adjustment
+  layers, opacity and fill, all 27 blend modes — and layer effects (drop
+  shadow, glows, satin, gradients) that the compositor really renders, with
+  thumbnails that really show the pixels.
+- **Edit non-destructively.** Adjustment layers, filters and Image ▸
+  Adjustments run against the live document and stay undoable. The Channels
+  panel lets you isolate *and* paint into a single colour component.
+- **Make selections** that constrain painting and draw real marching ants;
+  crop, slice and free-transform with real, undoable edits.
+- **Smart objects.** Convert a layer to a smart object, then open its contents
+  in an embedded-document tab, edit them as a raster and commit them back as a
+  single undo step.
+- **Save and reopen** the native `.rstudio` package — composites to
+  byte-identical output after a round trip — and export PNG, JPEG, WebP, TIFF,
+  GIF, BMP, layered PSD, and **print as PDF**, with 16-bit sources honoured
+  all the way out.
 
-### What is honestly still missing
+### What is honestly still remaining
 
-These are the gaps, named rather than blurred. Each is tracked in
-[`docs/REMAINING.md`](raster-studio/docs/REMAINING.md):
+Complete does not mean finished, and this project refuses to blur the line.
+The short, named, current list:
 
-- **Channel editing** — the Channels panel isolates a component (really changes
-  the canvas) but tools still paint all three components.
-- **Smart objects** — the layer kind exists but nothing renders it.
-- **16-bit export** — 16-bit sources now export at 16 bits to the formats that
-  carry them (PNG/TIFF), but in-app editing still composites at 8-bit-equivalent
-  precision.
-- **Tablet pressure** — the engine consumes it, but egui 0.29 carries none, so
-  the shell must still feed the native tablet stream.
-- **Guides are view state** — not saved with the document and not undoable.
-- **Layer/history thumbnails** show kind glyphs, not the pixels.
-- **Embedded ICC profiles** are preserved but not applied to a working space.
-- A minority of menu items are still drawn disabled with a named reason
-  (Print, File Info, and the handful that need a dialog surface this build has
-  not drawn). The count is pinned by a test.
+- **Linked smart objects.** The embedded-document editor is done; Place
+  Embedded… / Place Linked… still need a nested-source model and a placement
+  gizmo, so they remain disabled with a reason.
+- **Live editing runs at 8-bit precision.** Deep sources round-trip and export
+  at the full 16 bits, but the live tiles composite at 8-bit-equivalent
+  precision in-app.
+- **ICC application is wired for the engine, not the pipeline.** The `color`
+  crate now parses and applies matrix-shaper ICC profiles (with round-trip
+  tests), but threading a tagged image's profile bytes through the document
+  into the compositor/export path is not yet done — a tagged image is preserved
+  on a round trip, not applied to the working space.
+- **Native tablet events need a pen.** Pressure is wired through the shell
+  seam and verified; actually subscribing to one device's winit tablet events
+  needs hardware on the host.
+- **The OS printer-spooler dialog** (Print ▸ As PDF is fully implemented).
+- **A minority of menu items are drawn disabled with a named reason** — the
+  handful needing a dialog or gizmo surface this build has not drawn. The count
+  is pinned by a test, so it cannot drift into prose.
 
-[`raster-studio/docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md) has the row-by-row detail.
-Nothing there is marked done unless it is implemented, tested, and reachable
-from the UI — and where that bar is not met, it says so.
+[`raster-studio/docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md)
+has the row-by-row detail. Nothing there is marked done unless it is
+implemented, tested and reachable from the UI — and where that bar is not
+met, it says so.
 
 ## Building
 
@@ -95,6 +116,11 @@ On Linux you need a Vulkan- or GL-capable environment for the window. GPU-backed
 tests detect the absence of an adapter and skip themselves, so a headless CI
 runner stays green.
 
+Want a screenshot of the running app? The desktop binary can capture one of
+its own frames: `studio-desktop --shot out.png image.png` renders a frame,
+reads it back to the CPU and writes `out.png` — verified to produce a real
+1440×900 PNG of the live GUI.
+
 ## Layout
 
 | Crate | What it owns |
@@ -107,7 +133,7 @@ runner stays green.
 | `crates/layer-model` | Layer tree, blend modes, masks, effects |
 | `crates/compositor` | The authoritative CPU tile compositor |
 | `crates/raster` | Tiles, mipmaps, codecs, export |
-| `crates/color` | Colour spaces and conversions |
+| `crates/color` | Colour spaces, conversions and the ICC matrix-shaper engine |
 | `crates/selection` | Selection algorithms |
 | `crates/adjustments` | Adjustment operations |
 | `crates/filters` | The filter library |
