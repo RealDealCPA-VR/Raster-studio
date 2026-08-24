@@ -531,6 +531,69 @@ impl OpenDocument {
         PixelRect::new(0, 0, self.document.width(), self.document.height())
     }
 
+    /// Box-sample `rgba8` (`w`x`h`, straight alpha) down to a thumbnail keeping
+    /// aspect ratio under `max_edge` on both axes. Every output pixel is the mean
+    /// of the source pixels it covers, so a downscale never deletes a channel's
+    /// contribution.
+    fn box_downscale(rgba8: &[u8], w: u32, h: u32, max_edge: u32) -> (u32, u32, Vec<u8>) {
+        let scale = if max_edge == 0 {
+            1.0
+        } else {
+            let m = w.max(h);
+            if m <= max_edge {
+                1.0
+            } else {
+                max_edge as f64 / m as f64
+            }
+        };
+        if scale >= 1.0 || w == 0 || h == 0 {
+            return (w, h, rgba8.to_vec());
+        }
+        let nw = ((w as f64 * scale).round() as u32).max(1);
+        let nh = ((h as f64 * scale).round() as u32).max(1);
+        let mut out = vec![0u8; (nw as usize) * (nh as usize) * 4];
+
+        for oy in 0..nh {
+            for ox in 0..nw {
+                let x0 = (ox as f64 / nw as f64) * w as f64;
+                let x1 = ((ox + 1) as f64 / nw as f64) * w as f64;
+                let y0 = (oy as f64 / nh as f64) * h as f64;
+                let y1 = ((oy + 1) as f64 / nh as f64) * h as f64;
+                let sx0 = x0.floor() as usize;
+                let sx1 = x1.ceil().max(x0 + 1.0) as usize;
+                let sy0 = y0.floor() as usize;
+                let sy1 = y1.ceil().max(y0 + 1.0) as usize;
+                let mut acc = [0f64; 4];
+                let mut n = 0usize;
+                for sy in sy0..sy1 {
+                    for sx in sx0..sx1 {
+                        if (sx as f64) < x1
+                            && (sy as f64) < y1
+                            && (sx as f64) >= x0
+                            && (sy as f64) >= y0
+                        {
+                            let i = ((sy as u32 * w) as usize + sx) * 4;
+                            acc[0] += rgba8[i] as f64;
+                            acc[1] += rgba8[i + 1] as f64;
+                            acc[2] += rgba8[i + 2] as f64;
+                            acc[3] += rgba8[i + 3] as f64;
+                            n += 1;
+                        }
+                    }
+                }
+                let oi = ((oy * nw) as usize + ox as usize) * 4;
+                for c in 0..4 {
+                    out[oi + c] = if n == 0 {
+                        0
+                    } else {
+                        (acc[c] / n as f64).round().clamp(0.0, 255.0) as u8
+                    };
+                }
+            }
+        }
+        (nw, nh, out)
+    }
+
     /// Composite `region`, reusing every cached tile whose inputs are unchanged.
     pub fn composite(&mut self, region: PixelRect) -> Result<Vec<u8>, DocumentError> {
         let canvas = self.compositor.composite_region(
@@ -554,6 +617,39 @@ impl OpenDocument {
             CompositeOptions::default(),
         )?;
         Ok(canvas.to_rgba16(&self.document.meta.color_space))
+    }
+
+    /// A small (fitted to `max_edge`) RGBA8 preview of the canvas a *single*
+    /// layer draws on its own — every other layer hidden — with its effects
+    /// and blending honoured by the real compositor. This is the engine half
+    /// of the Layers/History pixel thumbnails: the panel asks for a cached
+    /// thumbnail per layer rather than re-tracing a glyph. Returns
+    /// `(width, height, rgba8)`, both reduced to keep `width,height <= max_edge`
+    /// (box-sampled, never upscaled).
+    pub fn layer_thumbnail(
+        &mut self,
+        layer_id: layer_model::LayerId,
+        max_edge: u32,
+    ) -> Result<(u32, u32, Vec<u8>), DocumentError> {
+        let mut staged = self.document.clone();
+        for other in staged.layers.iter_depth_first() {
+            if other != layer_id {
+                if let Some(l) = staged.layers.get_mut(other) {
+                    l.visible = false;
+                }
+            }
+        }
+        let rect = self.canvas_rect();
+        let canvas = self.compositor.composite_region(
+            &staged,
+            &self.tiles,
+            rect,
+            0,
+            CompositeOptions::default(),
+        )?;
+        let rgba8 = canvas.to_rgba8(&self.document.meta.color_space);
+        let (w, h) = (self.document.width(), self.document.height());
+        Ok(Self::box_downscale(&rgba8, w, h, max_edge))
     }
 
     /// Hit/miss counters of this document's tile cache — how the "an edit
@@ -739,6 +835,28 @@ mod tests {
         assert_eq!(d.tab_label(), "test.png");
         assert_eq!(d.canvas_rect(), PixelRect::new(0, 0, 600, 400));
         assert!(d.project_path().is_none());
+    }
+
+    #[test]
+    fn a_layer_thumbnail_composites_that_layer_alone_and_fits() {
+        let mut d = doc_of(600, 400);
+        let layer = d.document.active_layer().unwrap();
+        // A uniform 128 layer: a downscale is uniform, and its extent obeys the cap.
+        let (tw, th, rgba) = d.layer_thumbnail(layer, 64).unwrap();
+        assert!(tw <= 64 && th <= 64, "fits max_edge: {tw}x{th}");
+        assert_eq!(tw as usize * th as usize * 4, rgba.len());
+        assert!(
+            rgba.chunks_exact(4).all(|p| *p == [128, 128, 128, 128]),
+            "uniform source stays uniform (first px: {:?})",
+            &rgba[0..4]
+        );
+        // Aspect ratio is preserved: 600x400 at edge 64 -> 64x~42.
+        assert!((tw as f32 / th as f32 - 1.5).abs() < 0.05, "{tw}x{th}");
+        // A document already under the cap is not upscaled.
+        let mut small = doc_of(10, 8);
+        let sl = small.document.active_layer().unwrap();
+        let (sw, sh, _) = small.layer_thumbnail(sl, 64).unwrap();
+        assert_eq!((sw, sh), (10, 8), "never upscales");
     }
 
     #[test]

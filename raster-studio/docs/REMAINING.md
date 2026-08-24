@@ -74,6 +74,11 @@ priority order. Each is a plan-implement-validate loop.
       gates green (a8f467a, e19131a).
 - [ ] S1.6 Layer and history thumbnails show glyphs, not pixels (no compositor
       pass per row / cache).
+      **Engine half done.** `OpenDocument::layer_thumbnail(layer, max_edge)`
+      composites a single layer alone through the real compositor and box-
+      downscales to a fitted RGBA8 preview, tested (`doc.rs`). What remains is
+      the GUI half: uploading these as egui textures per row in the Layers/
+      History panels, cached per layer revision.
 - [ ] S1.7 Embedded ICC profiles are preserved but not applied to a working
       space other than sRGB / Display P3.
 - [x] S1.8 File Info (a metadata editor — `DocumentMeta` holds only a title and a
