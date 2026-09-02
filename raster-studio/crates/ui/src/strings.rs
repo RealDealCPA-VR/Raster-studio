@@ -69,6 +69,17 @@ fn active() -> Locale {
 /// translations. A locale missing from a row falls back to English at lookup.
 const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("actions.record", &[(Locale::En, "Record")]),
+    ("ui.gradient_editor.spectrum", &[(Locale::En, "Spectrum")]),
+    ("ui.gradient_editor.sunset", &[(Locale::En, "Sunset")]),
+    ("ui.gradient_editor.copper", &[(Locale::En, "Copper")]),
+    ("ui.gradient_editor.black.to.white", &[(Locale::En, "Black to White")]),
+    ("ui.gradient_editor.white.to.black", &[(Locale::En, "White to Black")]),
+    ("ui.gradient_editor.black.to.transparent", &[(Locale::En, "Black to Transparent")]),
+    ("ui.gradient_editor.opacity.stops.sit.above.the.bar", &[(Locale::En, "Opacity stops sit above the bar, colour stops below it.")]),
+    ("ui.gradient_editor.no.stop.selected", &[(Locale::En, "No stop selected")]),
+    ("ui.gradient_editor.the.last.stop.has.no.segment", &[(Locale::En, "The last stop has no segment after it.")]),
+    ("ui.gradient_editor.delete.stop", &[(Locale::En, "Delete stop")]),
+    ("ui.gradient_editor.gradient.editor", &[(Locale::En, "Gradient Editor")]),
     ("ui.image_size.change.how.many.pixels.the.document", &[(Locale::En, "Change how many pixels the document has, or how large it prints.")]),
     ("ui.image_size.pixel.dimensions", &[(Locale::En, "Pixel dimensions")]),
     ("ui.image_size.turn.on.resample.to.change.the", &[(Locale::En, "Turn on Resample to change the pixel count.")]),

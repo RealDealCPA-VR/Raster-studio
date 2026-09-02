@@ -41,6 +41,7 @@ use super::color_edit::ColorEdit;
 use super::color_picker::{ColorValue, ScreenSampler};
 use super::controls::{color_of, numeric, swatch};
 use super::{ids, sizes};
+use crate::strings::tr;
 
 /// The fewest stops a ramp may have.
 pub const MIN_STOPS: usize = 2;
@@ -87,7 +88,9 @@ pub struct StopKey(u64);
 /// A named starting ramp.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct GradientPreset {
-    pub name: &'static str,
+    /// The catalogue key the display name resolves through — a const cannot
+    /// call `tr`, so the name is looked up where the preset is shown.
+    pub name_key: &'static str,
     /// `(position, rgba)` pairs, already in order.
     pub stops: &'static [(f32, Rgba)],
 }
@@ -95,19 +98,19 @@ pub struct GradientPreset {
 /// The built-in ramps.
 pub const PRESETS: &[GradientPreset] = &[
     GradientPreset {
-        name: "Black to White",
+        name_key: "ui.gradient_editor.black.to.white",
         stops: &[(0.0, [0.0, 0.0, 0.0, 1.0]), (1.0, [1.0, 1.0, 1.0, 1.0])],
     },
     GradientPreset {
-        name: "White to Black",
+        name_key: "ui.gradient_editor.white.to.black",
         stops: &[(0.0, [1.0, 1.0, 1.0, 1.0]), (1.0, [0.0, 0.0, 0.0, 1.0])],
     },
     GradientPreset {
-        name: "Black to Transparent",
+        name_key: "ui.gradient_editor.black.to.transparent",
         stops: &[(0.0, [0.0, 0.0, 0.0, 1.0]), (1.0, [0.0, 0.0, 0.0, 0.0])],
     },
     GradientPreset {
-        name: "Spectrum",
+        name_key: "ui.gradient_editor.spectrum",
         stops: &[
             (0.0, [1.0, 0.0, 0.0, 1.0]),
             (0.17, [1.0, 1.0, 0.0, 1.0]),
@@ -119,7 +122,7 @@ pub const PRESETS: &[GradientPreset] = &[
         ],
     },
     GradientPreset {
-        name: "Sunset",
+        name_key: "ui.gradient_editor.sunset",
         stops: &[
             (0.0, [0.15, 0.09, 0.30, 1.0]),
             (0.45, [0.85, 0.29, 0.31, 1.0]),
@@ -128,7 +131,7 @@ pub const PRESETS: &[GradientPreset] = &[
         ],
     },
     GradientPreset {
-        name: "Copper",
+        name_key: "ui.gradient_editor.copper",
         stops: &[
             (0.0, [0.08, 0.04, 0.02, 1.0]),
             (0.5, [0.72, 0.45, 0.20, 1.0]),
@@ -545,7 +548,9 @@ impl GradientEditorDialog {
             ctx,
             id_salt,
             self.title(),
-            Some("Opacity stops sit above the bar, colour stops below it."),
+            Some(crate::strings::tr(
+                "ui.gradient_editor.opacity.stops.sit.above.the.bar",
+            )),
             style,
             |ui| self.body(ui),
         );
@@ -583,7 +588,7 @@ impl GradientEditorDialog {
                         .collect();
                     paint_ramp(ui, rect, &ramp, selected);
                 }
-                if response.on_hover_text(preset.name).clicked() {
+                if response.on_hover_text(tr(preset.name_key)).clicked() {
                     self.apply_preset(index);
                 }
             }
@@ -702,7 +707,10 @@ impl GradientEditorDialog {
     fn inspector(&mut self, ui: &mut egui::Ui) {
         let selection = self.selected;
         let Some(stop) = self.stops(selection.kind).get(selection.index).cloned() else {
-            caption(ui, "No stop selected");
+            caption(
+                ui,
+                crate::strings::tr("ui.gradient_editor.no.stop.selected"),
+            );
             return;
         };
         design::section_header(ui, &format!("{} stop", selection.kind.label()));
@@ -752,13 +760,19 @@ impl GradientEditorDialog {
             });
         });
         if is_last {
-            caption(ui, "The last stop has no segment after it.");
+            caption(
+                ui,
+                crate::strings::tr("ui.gradient_editor.the.last.stop.has.no.segment"),
+            );
         }
         let blocked = self.removal_blocked(selection.kind);
         ui.horizontal(|ui| {
             let response = ui
                 .add_enabled_ui(blocked.is_none(), |ui| {
-                    design::secondary_button(ui, "Delete stop")
+                    design::secondary_button(
+                        ui,
+                        crate::strings::tr("ui.gradient_editor.delete.stop"),
+                    )
                 })
                 .inner;
             match &blocked {
@@ -777,7 +791,7 @@ impl GradientEditorDialog {
 
 impl Dialog for GradientEditorDialog {
     fn title(&self) -> &'static str {
-        "Gradient Editor"
+        crate::strings::tr("ui.gradient_editor.gradient.editor")
     }
 
     fn confirm_label(&self) -> &'static str {
