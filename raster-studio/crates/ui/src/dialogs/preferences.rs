@@ -837,22 +837,26 @@ impl PreferencesDialog {
             if integer(ui, &mut minutes, 0..=1440).changed() {
                 self.prefs.general.autosave_minutes = minutes.max(0) as u32;
             }
-            caption(ui, "minutes (0 is off)");
+            caption(ui, crate::strings::tr("ui.preferences.minutes.0.is.off"));
         });
-        design::inspector_field(ui, "Recent files", |ui| {
-            let mut count = i64::from(self.prefs.general.recent_documents);
-            if integer(ui, &mut count, 0..=100).changed() {
-                self.prefs.general.recent_documents = count.max(0) as u32;
-            }
-        });
+        design::inspector_field(
+            ui,
+            crate::strings::tr("ui.preferences.recent.files"),
+            |ui| {
+                let mut count = i64::from(self.prefs.general.recent_documents);
+                if integer(ui, &mut count, 0..=100).changed() {
+                    self.prefs.general.recent_documents = count.max(0) as u32;
+                }
+            },
+        );
         checkbox_row(
             ui,
-            "Reopen the last session at startup",
+            crate::strings::tr("ui.preferences.reopen.the.last.session.at.startup"),
             &mut self.prefs.general.restore_session,
         );
         checkbox_row(
             ui,
-            "Ask before discarding unsaved work",
+            crate::strings::tr("ui.preferences.ask.before.discarding.unsaved.work"),
             &mut self.prefs.general.confirm_before_discarding,
         );
         if self.prefs.general.autosave_minutes == 0 {
@@ -875,7 +879,7 @@ impl PreferencesDialog {
                 |_| None,
             );
         });
-        design::inspector_field(ui, "UI scale", |ui| {
+        design::inspector_field(ui, crate::strings::tr("ui.preferences.ui.scale"), |ui| {
             let mut scale = f64::from(self.prefs.interface.ui_scale) * 100.0;
             let lo = f64::from(*UI_SCALE_RANGE.start()) * 100.0;
             let hi = f64::from(*UI_SCALE_RANGE.end()) * 100.0;
@@ -883,32 +887,44 @@ impl PreferencesDialog {
                 self.prefs.interface.ui_scale = (scale / 100.0) as f32;
             }
         });
-        checkbox_row(ui, "Show tooltips", &mut self.prefs.interface.show_tooltips);
         checkbox_row(
             ui,
-            "Show the status bar",
+            crate::strings::tr("ui.preferences.show.tooltips"),
+            &mut self.prefs.interface.show_tooltips,
+        );
+        checkbox_row(
+            ui,
+            crate::strings::tr("ui.preferences.show.the.status.bar"),
             &mut self.prefs.interface.show_status_bar,
         );
     }
 
     fn tools(&mut self, ui: &mut egui::Ui) {
         design::section_header(ui, "Pointer");
-        design::inspector_field(ui, "Brush cursor", |ui| {
-            combo(
-                ui,
-                "pref-cursor",
-                &mut self.prefs.tools.brush_cursor,
-                BrushCursor::ALL,
-                |c| c.label().to_string(),
-                |_| None,
-            );
-        });
+        design::inspector_field(
+            ui,
+            crate::strings::tr("ui.preferences.brush.cursor"),
+            |ui| {
+                combo(
+                    ui,
+                    "pref-cursor",
+                    &mut self.prefs.tools.brush_cursor,
+                    BrushCursor::ALL,
+                    |c| c.label().to_string(),
+                    |_| None,
+                );
+            },
+        );
         checkbox_row(
             ui,
-            "Scroll wheel zooms instead of scrolling",
+            crate::strings::tr("ui.preferences.scroll.wheel.zooms.instead.of.scrolling"),
             &mut self.prefs.tools.scroll_wheel_zooms,
         );
-        checkbox_row(ui, "Snap to guides", &mut self.prefs.tools.snap_to_guides);
+        checkbox_row(
+            ui,
+            crate::strings::tr("ui.preferences.snap.to.guides"),
+            &mut self.prefs.tools.snap_to_guides,
+        );
         design::slider_row(
             ui,
             "Smoothing",
@@ -925,24 +941,28 @@ impl PreferencesDialog {
                 self.prefs.history.states = states.max(1) as u32;
             }
         });
-        design::inspector_field(ui, "Snapshot every", |ui| {
-            let mut interval = i64::from(self.prefs.history.snapshot_interval);
-            let max = i64::from(self.prefs.history.states.max(1));
-            if integer(ui, &mut interval, 1..=max).changed() {
-                self.prefs.history.snapshot_interval = interval.max(1) as u32;
-            }
-            caption(ui, "states");
-        });
+        design::inspector_field(
+            ui,
+            crate::strings::tr("ui.preferences.snapshot.every"),
+            |ui| {
+                let mut interval = i64::from(self.prefs.history.snapshot_interval);
+                let max = i64::from(self.prefs.history.states.max(1));
+                if integer(ui, &mut interval, 1..=max).changed() {
+                    self.prefs.history.snapshot_interval = interval.max(1) as u32;
+                }
+                caption(ui, "states");
+            },
+        );
         checkbox_row(
             ui,
-            "Record the edit log in saved files",
+            crate::strings::tr("ui.preferences.record.the.edit.log.in.saved"),
             &mut self.prefs.history.log_history_to_metadata,
         );
     }
 
     fn performance(&mut self, ui: &mut egui::Ui) {
         design::section_header(ui, "Memory");
-        design::inspector_field(ui, "Tile cache", |ui| {
+        design::inspector_field(ui, crate::strings::tr("ui.preferences.tile.cache"), |ui| {
             let mut mb = i64::from(self.prefs.performance.memory_budget_mb);
             if integer(ui, &mut mb, 64..=i64::from(MAX_MEMORY_MB)).changed() {
                 self.prefs.performance.memory_budget_mb = mb.max(64) as u32;
@@ -966,13 +986,13 @@ impl PreferencesDialog {
         });
         checkbox_row(
             ui,
-            "Use the GPU where available",
+            crate::strings::tr("ui.preferences.use.the.gpu.where.available"),
             &mut self.prefs.performance.gpu_acceleration,
         );
     }
 
     fn scratch(&mut self, ui: &mut egui::Ui) {
-        design::section_header(ui, "Scratch disks");
+        design::section_header(ui, crate::strings::tr("ui.preferences.scratch.disks"));
         let count = self.prefs.scratch.disks.len();
         // Both decided while drawing and applied after it: either one changes
         // the length or the order of the very list being iterated.
@@ -986,11 +1006,16 @@ impl PreferencesDialog {
                     egui::TextEdit::singleline(&mut disk.path)
                         .desired_width(sizes::text_field_path()),
                 );
-                if index > 0 && design::ghost_button(ui, "Move up").clicked() {
+                if index > 0
+                    && design::ghost_button(ui, crate::strings::tr("ui.preferences.move.up"))
+                        .clicked()
+                {
                     promote = Some(index);
                 }
                 if design::ghost_button(ui, "Remove")
-                    .on_hover_text("Stop using this location for scratch")
+                    .on_hover_text(crate::strings::tr(
+                        "ui.preferences.stop.using.this.location.for.scratch",
+                    ))
                     .clicked()
                 {
                     remove = Some(index);
@@ -1003,7 +1028,8 @@ impl PreferencesDialog {
         if let Some(index) = remove {
             self.prefs.scratch.remove(index);
         }
-        if design::ghost_button(ui, "Add scratch disk").clicked() {
+        if design::ghost_button(ui, crate::strings::tr("ui.preferences.add.scratch.disk")).clicked()
+        {
             self.prefs.scratch.disks.push(ScratchDisk {
                 path: String::new(),
                 enabled: true,
@@ -1025,10 +1051,14 @@ impl PreferencesDialog {
                 .map_or(id, |c| c.label);
             warning(ui, format!("{} for {label}: {error}", shortcut.display()));
             ui.horizontal(|ui| {
-                if design::primary_button(ui, "Reassign anyway").clicked() {
+                if design::primary_button(ui, crate::strings::tr("ui.preferences.reassign.anyway"))
+                    .clicked()
+                {
                     self.resolve_conflict();
                 }
-                if design::secondary_button(ui, "Keep as it was").clicked() {
+                if design::secondary_button(ui, crate::strings::tr("ui.preferences.keep.as.it.was"))
+                    .clicked()
+                {
                     self.last_conflict = None;
                     self.capturing = None;
                 }
@@ -1065,7 +1095,9 @@ impl PreferencesDialog {
             });
         }
         ui.add_space(Space::Small.pt());
-        if design::secondary_button(ui, "Reset all shortcuts").clicked() {
+        if design::secondary_button(ui, crate::strings::tr("ui.preferences.reset.all.shortcuts"))
+            .clicked()
+        {
             self.prefs.keymap.reset();
         }
         for (first, second) in self.prefs.keymap.conflicts() {
