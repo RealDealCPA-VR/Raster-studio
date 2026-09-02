@@ -121,12 +121,13 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | PSD export | 🔶 | reopens correctly in Photoshop and Photopea |
 | Channels panel | 🔶 | isolation is real and changes the canvas; per-channel *editing* is still not implemented — see the gaps list |
 | Paths panel | 🔶 | |
-| Colour management | 🔶 | sRGB and Display P3 are real; an embedded ICC profile is preserved but not applied |
-| 16-bit per channel | 🔶 | a 16-bit source is recognized and exported at 16 bits to the formats that carry them (PNG/TIFF); in-app tiles still composite at 8-bit-equivalent precision, and `.rstudio` does not record the depth |
+| Colour management | ✅ | sRGB and Display P3 are real; an embedded ICC profile is carried, composites through its profile and re-tags on export — `a_tagged_image_composites_through_its_profile_and_retags_on_export` |
+| 16-bit per channel | 🔶 | a 16-bit source is recognized, exported at 16 bits to the formats that carry them (PNG/TIFF) and `.rstudio` records the depth (`a_rstudio_package_round_trips_the_bit_depth`); in-app tiles still composite at 8-bit-equivalent precision (P2.5b, open) |
 | Actions / recorded command replay | 🔶 | commands are serialisable and replayable; there is no recording UI |
 | Batch export | 🔶 | multiple presets in one run |
 | Brush / gradient / layer-style editors | 🔶 | |
 | Autosave | ✅ | |
+| Localization | 🔶 | Scope, stated exactly (P3.12/P6.6): the string catalogue (`crates/ui/src/strings.rs`) and its 209 `tr()` call sites cover `src/view` and `src/dialogs`, enforced by the `no_localized_literals` gate. NOT localized: `src/menu.rs` (every menu label — a large user-facing surface — is still an English literal), `src/panels` and `src/canvas`. Three whole-file exemptions carry **161 prose literals** (`filter_dialog.rs` 89, `new_document.rs` 40, `preferences.rs` 32); they clear with the `tools::OptionSpec`/`DocumentPreset` label-key refactor the gate's own comment names (the gradient editor's `name_key` is the pattern). No claim of translation support beyond the catalogue's locale keying is made. |
 
 ---
 
@@ -151,20 +152,12 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 
 Kept here rather than buried, because a ✅ with a footnote is still a claim:
 
-- **Linked smart objects.** The embedded-document editor is done (“Layer ▸
-  Smart Object ▸ Edit Contents…” opens the object's pixels in a tab and Commit
-  writes them back as one undo step), but Place Embedded… / Place Linked… still
-  need a nested-source model and a placement gizmo, so they remain disabled
-  with a reason.
-- **Live editing composites at 8-bit-equivalent precision.** Deep sources are
-  honoured on export (a 16-bit source writes 16 bits to PNG/TIFF; an 8-bit
-  source keeps the byte-exact path), but the live tiles composite at 8 bits
-  and `.rstudio` does not record the source depth.
-- **ICC application is wired for the engine, not the pipeline.** The `color`
-  crate parses and applies matrix-shaper ICC profiles (`rXYZ/gXYZ/bXYZ` +
-  `curv`/`para` TRCs, Bradford D50–D65) with round-trip tests, but
-  `ColorSpace::IccProfile` still carries no bytes, so a tagged image is
-  preserved on a round trip rather than applied to the working space.
+- **Live editing composites at 8-bit-equivalent precision (P2.5b, open).**
+  Deep sources are honoured on export (a 16-bit source writes 16 bits to
+  PNG/TIFF; an 8-bit source keeps the byte-exact path), `.rstudio` records
+  each layer's depth (`a_rstudio_package_round_trips_the_bit_depth`), but the
+  live tiles still composite at 8 bits and the New Document dialog refuses
+  16-bit rather than confirm a document that would draw as garbage.
 - **Native tablet events need a pen.** Pressure is wired through the shell
   seam (`Shell::set_pen_pressure`) and the stroke engine is pressure-aware,
   but subscribing to one device's winit tablet events requires hardware on
@@ -172,23 +165,21 @@ Kept here rather than buried, because a ✅ with a footnote is still a claim:
 - **The OS printer-spooler dialog.** Print ▸ As PDF renders the composite to a
   tested single-page PDF; talking to an actual printer spooler is OS-only and
   not part of the build.
-- **A small set of menu items stays honestly disabled with a named reason**:
-  the interactive transforms and Place Embedded/Linked (need a canvas gizmo),
-  Image/Canvas Size, arbitrary rotation, Offset, the Custom filter and the
-  filter gallery (need a parameter dialog), Pattern fill and Define
-  Pattern/Brush (need a generator rasteriser and a presets library), Select
-  Subject (needs a segmentation model). Duplicate, Close All, Gradient fill,
-  Rasterize Smart Object/Layer, Flatten All, Crop to Selection, Trim,
-  Rotate 90°, Edit ▸ Stroke and Select ▸ Reselect/Save/Load are all wired
-  via the undoable canvas-resize command, the selection-border stroke, and the
-  new selection store on the document. The
-  count is pinned by `menu_bridge`'s
-  `every_ui_menu_item_is_either_performable_or_disabled_with_a_reason`.
-- **Per-channel masking stops at painting.** The Channels panel both isolates
-  and paints into a single RGB component (masked at the command boundary, so
-  the masked command reaches history and the journal). ClearRegion (the
-  eraser) and per-channel *filter* application are not yet masked to a
-  component.
+- **Disabled menu items are gone; one conditional refusal remains.** After
+  C7, every enabled menu item routes to real code. The only refusal in
+  `unavailable_reason` besides the File-Info note is an adjustment clicked
+  while its parameters still sit at the identity — the status line says to
+  add it as an adjustment layer and edit it in Properties instead. The
+  route coverage is pinned by `menu_bridge`'s
+  `no_enabled_menu_item_resolves_to_a_no_op` digest.
+- **Per-channel masking stops at colour components.** The Channels panel
+  isolates, paints into, erases within, fills, filters and bakes adjustments
+  into a single RGB component — every one rides `mask_paint_to_channel` at
+  the command boundary (`the_eraser_through_the_red_channel_clears_only_red`,
+  `gaussian_blur_through_the_red_channel_blurs_only_red`), so the masked
+  command reaches history and the journal. An alpha or mask-coverage target
+  paints normally rather than being isolatable, and the panel has no
+  per-channel histogram.
 - **Quick mask composes** (Tier C, landed): `Q` toggles it, pixel edits land
   in a scratch mask, and leaving turns the painted coverage into the
   selection; the selection itself, its outline, marching ants and save/load

@@ -454,14 +454,16 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
 pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
     Some(match action {
         // ---- File ----------------------------------------------------------
-        // Everything that resizes the canvas rectangle is disabled below.
-        MenuAction::PlaceEmbedded | MenuAction::PlaceLinked => {
-            "Place needs a transform gizmo to position the imported image, and \
-             the canvas has no gizmo overlay"
-        }
+        // Place Embedded/Linked route to `editor.place_from_dialog` (P2.4);
+        // the transform gizmo the old reason awaited landed in P2.1.
+        // File Info is deliberately retained — see its own note below.
         MenuAction::FileInfo => {
-            "There is no metadata editor: editor_core::DocumentMeta stores a \
-             title and a size and no XMP fields"
+            // Not a disabled item: `pick` routes File Info to [`perform`]
+            // before this table is ever consulted. The text stays so the
+            // unrouted-message path still has a specific sentence to show
+            // (what the metadata window holds today, and what it does not).
+            "File Info shows the metadata editor_core stores — a title and a \
+             size; it has no XMP fields to edit yet"
         }
 
         // ---- Edit ----------------------------------------------------------
@@ -493,24 +495,19 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
              no dialog to change it in; add it through Layer > New Adjustment \
              Layer and edit it in the Properties panel"
         }
-        MenuAction::SetColorMode(_) => {
-            "Changing colour mode would rewrite every tile, and editor_core has \
-             no command that can carry that as one undoable step"
-        }
         // Everything that changes the canvas *rectangle* is hosted now:
         // `ImageSize`, `CanvasSize` and `RotateCanvas(Arbitrary)` open real
         // dialogs whose confirmed specs land as one undoable step each (right-
         // angle rotations take the exact fixed path), and Reveal All performs
-        // directly in [`perform`] — it asks nothing.
+        // directly in [`perform`] — it asks nothing. SetColorMode has no
+        // reason here either: P2.9's depth-aware command carries it.
 
         // ---- Layer ---------------------------------------------------------
         // Select ▸ All Layers performs now — the document keeps a real
         // multi-selection set (see `perform`), so it has no reason here.
         // ---- Select --------------------------------------------------------
-        MenuAction::SelectSubject => {
-            "Selecting the subject needs a segmentation model, and none ships \
-             with this build"
-        }
+        // SelectSubject has no reason here either: P2.12 removed the item
+        // from `select_menu()` entirely, so no user can reach the arm.
         // Transform Selection routes to the gizmo wearing its Selection
         // target now (P2.2): the drag resamples the selection mask and
         // commits as one undoable SetSelection step. It has no reason here.
@@ -861,18 +858,20 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
     use ui::menu::{CanvasRotation as CR, MaskOp, TransformOp as T};
 
     /// The Help destinations (P3.14): open the URL in the user's browser and
-    /// report it. **Under test the browser never opens** — the digest gate
-    /// invokes these arms on every `cargo test` run, and a test that opens
-    /// three tabs is a test that deserves to be closed. The URL is still
-    /// reported, which is what the gate's message-length check wants; the
-    /// shipped app performs the real open.
-    fn open_help_url(url: &str, fallback_prefix: &str) -> Result<String, String> {
-        if cfg!(test) {
-            return Ok(format!("{fallback_prefix} {url}"));
-        }
-        match webbrowser::open(url) {
-            Ok(()) => Ok(format!("Opened {url}")),
-            Err(_) => Ok(format!("{fallback_prefix} {url}")),
+    /// report it. The open rides the injected [`UrlLauncher`] seam — the
+    /// shipped `BrowserUrls` opens the platform browser, tests inject a
+    /// recorder so the digest gate can reach these arms without opening tabs
+    /// (C5). The URL is reported either way, which is what the gate's
+    /// message-length check wants.
+    fn open_help_url(
+        editor: &mut Editor,
+        url: &str,
+        fallback_prefix: &str,
+    ) -> Result<String, String> {
+        if editor.url_launcher_mut().open_url(url) {
+            Ok(format!("Opened {url}"))
+        } else {
+            Ok(format!("{fallback_prefix} {url}"))
         }
     }
 
@@ -1098,15 +1097,18 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
 
         // ---- Help ----------------------------------------------------------
         MenuAction::Help => open_help_url(
+            editor,
             "https://github.com/RealDealCPA-VR/Raster-studio/wiki",
             "Help lives at",
         ),
         MenuAction::ExportDiagnostics => editor.export_diagnostics(),
         MenuAction::ReleaseNotes => open_help_url(
+            editor,
             "https://github.com/RealDealCPA-VR/Raster-studio/releases",
             "Release notes live at",
         ),
         MenuAction::ReportIssue => open_help_url(
+            editor,
             "https://github.com/RealDealCPA-VR/Raster-studio/issues/new",
             "File issues at",
         ),
@@ -2308,9 +2310,61 @@ fn read_mask_coverage(doc: &crate::doc::OpenDocument, layer: LayerId, w: u32, h:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dialogs::ScriptedDialogs;
+    use crate::dialogs::{RecordingUrls, ScriptedDialogs, UrlLauncher};
     use crate::prefs::AppPaths;
     use crate::recent::RecentFiles;
+
+    /// A launcher the test can read after the editor used it: the recorded
+    /// URLs live behind an `Rc`, so the test keeps its own handle while the
+    /// editor owns the box.
+    #[derive(Clone, Default)]
+    struct SharedRecorder(std::rc::Rc<std::cell::RefCell<Vec<String>>>);
+
+    impl UrlLauncher for SharedRecorder {
+        fn open_url(&mut self, url: &str) -> bool {
+            self.0.borrow_mut().push(url.to_string());
+            true
+        }
+    }
+
+    /// C5: the Help menu's browser launches ride the injected seam, so a
+    /// test can assert exactly what the shipped `BrowserUrls` would be asked
+    /// to open — and nothing ever opens a browser tab on a CI runner.
+    #[test]
+    fn the_help_menu_opens_the_recorded_urls_through_the_injected_seam() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        let recorder = SharedRecorder::default();
+        ed.set_url_launcher(Box::new(recorder.clone()));
+
+        let status = perform(MenuAction::Help, &mut ed).unwrap();
+        assert_eq!(
+            status,
+            "Opened https://github.com/RealDealCPA-VR/Raster-studio/wiki"
+        );
+        let status = perform(MenuAction::ReleaseNotes, &mut ed).unwrap();
+        assert_eq!(
+            status,
+            "Opened https://github.com/RealDealCPA-VR/Raster-studio/releases"
+        );
+        let status = perform(MenuAction::ReportIssue, &mut ed).unwrap();
+        assert_eq!(
+            status,
+            "Opened https://github.com/RealDealCPA-VR/Raster-studio/issues/new"
+        );
+
+        assert_eq!(
+            recorder.0.borrow().as_slice(),
+            [
+                "https://github.com/RealDealCPA-VR/Raster-studio/wiki",
+                "https://github.com/RealDealCPA-VR/Raster-studio/releases",
+                "https://github.com/RealDealCPA-VR/Raster-studio/issues/new",
+            ]
+        );
+        // The shipped type still compiles to the real browser call.
+        let _ = crate::dialogs::BrowserUrls;
+        let _ = RecordingUrls::default();
+    }
 
     fn editor(dir: &std::path::Path) -> Editor {
         with_recent(dir, RecentFiles::new())
@@ -2643,11 +2697,13 @@ mod tests {
         let mut ed = editor(dir.path());
         ed.dispatch(Action::NewDocument).expect("a new document");
         let context = context(&ed, &Workspace::new());
-        // The menu model allows it; this build places no embedded document —
-        // and it says which piece is missing rather than "cannot do that yet".
-        let reason = resolve(MenuAction::PlaceEmbedded, &context, &ed).unwrap_err();
-        assert!(reason.contains("Place"), "{reason}");
-        assert_ne!(reason, NOT_WIRED);
+        // Place routes and performs now (P2.4): the item resolves to a real
+        // command — the dialog asks where the file lives (C7 removed the
+        // stale reason that read as a live product limitation).
+        assert!(
+            resolve(MenuAction::PlaceEmbedded, &context, &ed).is_ok(),
+            "Place Embedded… should be performable now"
+        );
         // File Info… now opens the metadata window, so it is genuinely
         // performable rather than refused.
         assert!(
@@ -3313,6 +3369,9 @@ mod tests {
         let mut dead = Vec::new();
         for action in candidates {
             let mut ed = with_two_layers(dir.path());
+            // C5/C6: the Help arms open a browser through the editor's
+            // launcher — record instead of opening tabs on the CI runner.
+            ed.set_url_launcher(Box::new(SharedRecorder::default()));
             // File ▸ Export Layers… writes files or refuses worriedly when no
             // destination is chosen; either outcome is loud, never a silent
             // no-op, so it does not have to change the document digest.
@@ -3321,6 +3380,15 @@ mod tests {
                 // Export Diagnostics writes a file (or refuses when the dialog
                 // is declined) — loud either way, and the digest cannot move.
                 || action == MenuAction::ExportDiagnostics
+                // Place Embedded/Linked route now (C7 removed the stale
+                // reasons): with no file queued the scripted dialog cancels,
+                // and a cancelled place refuses loudly — its point.
+                || action == MenuAction::PlaceEmbedded
+                || action == MenuAction::PlaceLinked
+                // SetColorMode refuses when the document already wears the
+                // requested mode — the correct loud answer to a no-op
+                // request; the other modes genuinely rewrite the tiles.
+                || matches!(action, MenuAction::SetColorMode(_))
                 || action == MenuAction::CommitSmartObjectContents
                 || action == MenuAction::CloseAll
                 || action == MenuAction::Trim
@@ -3355,16 +3423,28 @@ mod tests {
                 continue;
             }
             if INFORMATIONAL.contains(&action) {
-                match perform(action, &mut ed) {
-                    Ok(message) if message.len() > 20 => checked += 1,
-                    Ok(message) => dead.push(format!("{action:?}: said only {message:?}")),
-                    Err(reason) => dead.push(format!("{action:?}: refused with {reason:?}")),
-                }
+                // C6: perform exactly ONCE — the old code called it a second
+                // time to build the expected status, which double-executed
+                // any informational action with a side effect (and turned an
+                // environment-dependent message into the hard CI failure
+                // 2d2fde9 chased). Capture the first call's message instead.
+                let message = match perform(action, &mut ed) {
+                    Ok(message) if message.len() > 20 => message,
+                    Ok(message) => {
+                        dead.push(format!("{action:?}: said only {message:?}"));
+                        continue;
+                    }
+                    Err(reason) => {
+                        dead.push(format!("{action:?}: refused with {reason:?}"));
+                        continue;
+                    }
+                };
                 assert_eq!(
                     ed.status().map(str::to_string),
-                    Some(perform(action, &mut ed).unwrap()),
+                    Some(message),
                     "{action:?} did not reach the status bar"
                 );
+                checked += 1;
                 continue;
             }
             // The Layer Style rows are hosted by the chrome's dialog host:

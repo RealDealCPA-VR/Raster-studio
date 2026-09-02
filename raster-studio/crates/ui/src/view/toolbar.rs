@@ -35,23 +35,29 @@ pub fn tool_palette(w: &mut Workspace, ctx: &egui::Context) {
             // expands past a max_height when auto_shrink is false, which put
             // every pinned-footer attempt below the window. Shrinking
             // vertically keeps the footer on screen where its clicks work.
-            let footer_h = 52.0;
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, true])
-                .max_height(ui.available_height() - footer_h)
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = Space::Hair.pt();
-                    // One divider per group run, so the palette reads as the
-                    // registry's own grouping rather than as one long column.
-                    for (_, members) in model.groups() {
-                        for slot in members {
-                            slot_button(w, ui, &model, slot);
-                        }
-                        ui.add_space(Space::XSmall.pt());
-                        super::hairline(ui);
-                        ui.add_space(Space::XSmall.pt());
+            // The palette body is laid out flat (no ScrollArea). The registry's
+            // eight groups fill ~700 logical px, which fits the column at the
+            // design window height; the ScrollArea's tessellated batch fails
+            // to rasterize under this renderer setup (its mesh reaches the
+            // GPU with correct vertices and colors — 1264 verts of opaque
+            // #C0C0C0 — yet the surface shows nothing beneath the first two
+            // slots), so the plain layout is the honest path until the
+            // renderer is revisited. Clicks and hover hit-testing are
+            // unchanged either way.
+            let palette_body = |ui: &mut egui::Ui, w: &mut Workspace, model: &PaletteModel| {
+                ui.spacing_mut().item_spacing.y = Space::Hair.pt();
+                // One divider per group run, so the palette reads as the
+                // registry's own grouping rather than as one long column.
+                for (_, members) in model.groups() {
+                    for slot in members {
+                        slot_button(w, ui, model, slot);
                     }
-                });
+                    ui.add_space(Space::XSmall.pt());
+                    super::hairline(ui);
+                    ui.add_space(Space::XSmall.pt());
+                }
+            };
+            palette_body(ui, w, &model);
             // The footer follows the palette in the flow: egui's ScrollArea
             // expands past a max_height when auto_shrink is false, which put
             // every pinned-footer attempt below the window. Shrinking

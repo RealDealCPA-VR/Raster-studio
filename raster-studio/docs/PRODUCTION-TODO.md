@@ -3,6 +3,12 @@
 **Goal:** ship-ready Raster Studio whose style and UI/UX match
 [Photopea](https://www.photopea.com/).
 
+> **Picking up work?** Start at
+> [`CORRECTIONS-TODO.md`](CORRECTIONS-TODO.md) — every item still open in this
+> file (the P5 and P6 queues below) pulled into one ordered, directly
+> implementable list with a Validate line each. This file is the evidence and
+> the history; that one is the work.
+
 **How to use this file.** Each task is one self-contained unit of work: an
 action, the files it touches, and a **Validate** line that is objectively
 checkable. Do not tick a box without the Validate line passing. Every task must
@@ -29,36 +35,34 @@ regression queue (always drain it first).
 
 ---
 
-## Verified baseline (measured 2026-09-01, commit `e001c8a`)
+## Verified baseline (measured 2026-09-02, post-corrections C1–C4)
 
 | Fact | Value |
 | --- | --- |
 | `cargo check --workspace --all-targets` | exit 0 |
 | `cargo clippy --workspace --all-targets` | exit 0, no warnings |
 | `cargo fmt --check` | exit 0 |
-| `cargo test --workspace` | **3288 passed, 0 failed, 10 ignored** |
-| App launches, renders, screenshots | yes — `studio-desktop --shot out.png img.png` |
+| `cargo test --workspace` | **3402 passed, 0 failed** |
+| `cargo audit` | exit 0 (`.cargo/audit.toml` carries two named, expiring ignores — see `threat-model.md` §8) |
+| App launches, renders, screenshots | yes — `studio-desktop --shot out.png img.png`; the shot runs 24 warm-up frames first (C1), so the image shows laid-out UI: populated tool column and, with no document, the start screen |
 | Workspace size | 22 crates, ~280 `.rs` files, ~135k LOC |
 | Tools implemented | 47 (`tools::ToolId::ALL`) |
 | Menus | 9 (File Edit Image Layer Select Filter View Window Help) |
 | Panels | 13 (`ui::dock::PanelId::ALL`) |
 
-The engine is genuinely complete and tested. **The gap is almost entirely
-integration and presentation**, and the two largest items are:
-
-1. **`crates/ui/src/dialogs/` (~12k LOC, 10 finished dialogs) is never hosted by
-   the shell.** Grepping `crates/app-shell`, `apps`, `tests` for
-   `NewDocumentDialog`, `ExportAsDialog`, `ImageSizeDialog`, `CanvasSizeDialog`,
-   `LayerStyleDialog`, `ColorPickerDialog`, `GradientEditorDialog`,
-   `BrushEditorDialog`, `PreferencesDialog`, `FilterDialog` returns **zero call
-   sites**. Roughly two dozen menu items are disabled with the reason "the shell
-   hosts no dialog" while the dialog they need is already written and tested.
-2. **The canvas has no gizmo overlay.** That single missing overlay is the stated
-   reason Free Transform, five Transform ops, Warp, Transform Selection, Place
-   Embedded and Place Linked are all disabled.
+The two largest integration gaps of the 2026-09-01 baseline are **closed**:
+all ten dialogs are hosted by the shell's dialog host (P0.1–P0.16), and the
+canvas has a transform-gizmo overlay (P2.1–P2.3). The live open-items queue is
+**P2.5b** (live tiles composite deeper than 8 bits — P2.5 split by C8), the
+P5 regression queue, and the P6 documentation-truth queue; the ordered,
+implementable list of everything still open is
+[`CORRECTIONS-TODO.md`](CORRECTIONS-TODO.md). After C7 there are no disabled
+menu items with vague reasons: the only `unavailable_reason` arms left are the
+File-Info note and an adjustment clicked while its parameters sit at the
+identity.
 
 Reference list of everything currently greyed out:
-`app_shell::menu_bridge::unavailable_reason` (`crates/app-shell/src/menu_bridge.rs:403`).
+`app_shell::menu_bridge::unavailable_reason` (`crates/app-shell/src/menu_bridge.rs`).
 
 ---
 
@@ -348,11 +352,25 @@ cache key) and use P2.1's gizmo for placement.
 a smart-object layer that renders it, and Edit Contents… round-trips; a linked
 source re-read from disk updates the parent.
 
-### P2.5 16-bit live compositing
-Deep sources round-trip and export at 16 bits, but live tiles composite at
-8-bit-equivalent precision and `.rstudio` does not record the depth.
-**Validate:** a 16-bit gradient survives ten adjustment-layer edits without
-banding, asserted by a histogram test; `.rstudio` round-trips the depth field.
+### P2.5a `.rstudio` records the source depth — DONE
+Deep sources round-trip: the project package stores each layer's bit depth and
+restores it on open (`a_rstudio_package_round_trips_the_bit_depth`), and export
+writes 16-bit data.
+**Validate:** `.rstudio` round-trips the depth field. ✅
+
+### P2.5b live tiles composite deeper than 8 bits — OPEN
+The store holds 16-bit tiles and export writes them, but live compositing still
+runs at 8-bit-equivalent precision: `OpenDocument::composite` returns `Vec<u8>`
+(doc.rs), and `NewDocumentDialog` refuses to create a 16-bit document rather
+than confirm one that would draw as garbage (its test pins the refusal with
+that reason).
+**Validate:** `composite` returns a deep buffer (or a depth-parameterised one);
+a 16-bit gradient survives ten adjustment-layer edits without banding,
+asserted by a histogram test (the existing banding test proves non-destructive
+adjustment composition — live f32 parameters — which is necessary but not
+sufficient for this); `NewDocumentDialog` offers 16-bit without refusing and
+its refusal test is replaced by one that creates and composites a 16-bit
+document; the parity-matrix row stays 🔶 until then.
 
 ### P2.6 ICC through the pipeline
 `color::icc` parses and applies matrix-shaper profiles, but
@@ -641,6 +659,122 @@ the code does.
 
 ---
 
+## P6 — Verification audit, 2026-09-02, commit `171bc3c`
+
+Commit `171bc3c` says *"T-FIN — the final release gate passes; the production
+todo is complete."* Re-measured independently, that claim does not hold. What
+follows is what an audit of the code (not the ledger) found.
+
+| Gate | Result |
+| --- | --- |
+| `cargo fmt --check` | exit 0 ✅ |
+| `cargo clippy --workspace --all-targets` | exit 0, no warnings ✅ |
+| `cargo check --workspace --all-targets` | exit 0 ✅ |
+| `cargo test --workspace` | 3399 passed, 0 failed ✅ |
+| `cargo audit` | **exit 1 — unchanged** ❌ |
+
+**The P5 queue was never worked.** It was committed into the repo (in
+`6f1303d`) and then the ledger was closed without a single P5 entry; T-FIN's own
+note says "the **four** gates re-run GREEN" — `cargo audit` was never run. Six of
+the seven remain open, verified by inspection at `171bc3c`:
+
+| Task | State |
+| --- | --- |
+| P5.1 audit | **open** — same two `quick-xml` 7.5-high advisories, no `.cargo/audit.toml`, no dependency change |
+| P5.2 menu-item digest | **satisfied** — 395/395, the fix in `2d2fde9` holds |
+| P5.3 `cfg!(test)` hole | **open** — `menu_bridge.rs:870` |
+| P5.4 double `perform` | **open** — `menu_bridge.rs:3365` |
+| P5.5 hardware verification | **open** |
+| P5.6 stale `unavailable_reason` arms | **open** — all four still present |
+| P5.7 stale header | **open** — still dated 2026-09-01 / `e001c8a` |
+
+### P6.1 The app draws no tool buttons and no start screen — **most severe**
+Reproduced independently, and identical to the project's own committed
+`docs/main-window.png`, which the README embeds as the product shot: the left
+tool column contains **only the foreground/background wells** — none of the 47
+tool buttons — and with no document open the canvas area is **empty**, with no
+start screen.
+
+P1.9's Validate line reads *"a `--shot` with no arguments shows the start
+screen"*. It does not, and the task is ticked.
+
+Most likely cause, for whoever picks this up: `--shot` captures the **first**
+rendered frame (`shell.rs:791`, `shot_requested = self.shot.is_some() &&
+!self.shot_taken`), and `tool_palette` sizes its scroll area as
+`.max_height(ui.available_height() - footer_h)`
+(`crates/ui/src/view/toolbar.rs:41`). Before egui has learned the real screen
+rect, that expression collapses to zero and the palette renders nothing — which
+is exactly what both screenshots show, while the docks and canvas, which do no
+such arithmetic, render correctly.
+
+**Validate:** a `--shot` with no arguments shows the start screen and a full tool
+column; a `--shot` with a document shows the same column. Add a headless test
+asserting the palette allocates ≥ 20 visible slot rects at a 1440×900 viewport,
+so the count cannot silently drop to zero again.
+
+### P6.2 Decide whether `--shot` is a valid instrument at all
+If P6.1 is frame-one settling, then every P1 claim validated "by `--shot`"
+(P1.2 dark default, P1.3 density, P1.5 layout, P1.9 start screen, P1.10 tool
+footer, P1.15 icons) rests on an image of an unsettled frame, and so does
+P3.13's README hero shot and release-gate item 4.
+**Validate:** `--shot` renders and discards N frames before capturing (N chosen
+so the image is stable), a test pins N, and `docs/main-window.png` is retaken and
+shows the tool column.
+
+### P6.3 `footer_h = 52.0` is a hardcoded style literal
+`crates/ui/src/view/toolbar.rs:38`. The crate's own rule is that no gap is a bare
+number, and `no_hardcoded_style.rs` misses it because
+`no_spacing_or_stroke_width_is_a_bare_number` only inspects literals passed to
+known calls, not `let` bindings.
+**Validate:** the footer height comes from a `design` metric; the gate is
+widened to catch a bare `f32` binding used as a layout extent, and fails on the
+old line when reintroduced.
+
+### P6.4 P2.5 (16-bit live compositing) is ticked but not delivered
+`OpenDocument::composite` still returns `Vec<u8>` (`doc.rs:738`), and
+`NewDocumentDialog` **refuses** to create a 16-bit document — its own test says
+why: *"The store holds 16-bit tiles and export writes them, but the compositor
+reads RGBA8"* (`new_document.rs:968`). The task's headline deliverable was
+exactly that compositor change.
+
+The banding test that was written
+(`a_16bit_gradient_survives_ten_adjustment_layers_without_banding`) proves
+adjustment layers are live f32 parameters, so ten stacked exposures equal one
+equivalent — a true and useful property, but a statement about **non-destructive
+adjustment composition**, not about 16-bit tile precision. The depth half of the
+Validate line *is* done (`a_rstudio_package_round_trips_the_bit_depth`).
+**Validate:** untick P2.5 and split it — "`.rstudio` records depth" (done) and
+"live tiles composite deeper than 8 bits" (open); the New Document dialog offers
+16-bit without refusing; `parity-matrix` keeps the row at 🔶 until then.
+**Status:** DONE 2026-09-02 — P2.5 split into P2.5a (done) and P2.5b (open,
+with its own Validate) in the P2 section above.
+
+### P6.5 Parity-matrix rows contradict the code
+- **Line 124, Colour management 🔶** — "an embedded ICC profile is preserved but
+  not applied". False now: P2.6 genuinely landed. `ColorSpace::IccProfile`
+  carries `profile` bytes, and
+  `a_tagged_image_composites_through_its_profile_and_retags_on_export` proves the
+  composite differs from the untagged file and the export re-tags. This row
+  under-claims working code.
+- **Line 125, 16-bit 🔶** — half stale: `.rstudio` *does* record the depth now.
+  The "8-bit-equivalent compositing" half is still accurate (see P6.4).
+- **README** still says "~2900 tests"; the suite is 3399.
+**Validate:** each row states what the code does, checked against the named test.
+
+### P6.6 Localization coverage is narrower than "done" suggests
+P3.12 landed honestly — the catalogue, 209 `tr()` sites, and a real gate. Two
+limits are worth recording rather than discovering later:
+- Three whole-file exemptions carry **161 prose literals** still untranslated
+  (`filter_dialog.rs` 89, `new_document.rs` 40, `preferences.rs` 32), pending
+  the `OptionSpec`/`DocumentPreset` label-key refactor the gate names.
+- The gate scans only `src/view` and `src/dialogs`. **`menu.rs` has zero `tr()`
+  calls**, so every menu label — one of the largest user-facing surfaces in the
+  app — is still an English literal, as are `src/panels` and `src/canvas`.
+**Validate:** the gate's scanned set covers every module that renders text, or
+the parity matrix states which modules are localized and which are not.
+
+---
+
 ## P4 — Scope decisions to confirm before calling it 1.0
 
 These are currently listed as deferred. Confirm each is deferred *for this
@@ -667,7 +801,7 @@ reason, and no menu item promises any of them.
 
 ## Release gate
 
-1. Every P0, P1 and P5 box ticked with its Validate line passing.
+1. Every P0, P1, P5 and P6 box ticked with its Validate line passing.
 2. `unavailable_reason` returns `None` for every action except those P4 confirms
    as deferred, and
    `every_ui_menu_item_is_either_performable_or_disabled_with_a_reason` still

@@ -246,3 +246,80 @@ fn drawing_emits_nothing_when_nobody_clicks() {
     let intents = run(design::Theme::Dark, 3, |_| {});
     assert!(intents.is_empty(), "an untouched frame emitted {intents:?}");
 }
+
+/// C2: the tool palette must show its slots — the committed product shot
+/// showed an empty column because the capture took frame one, where
+/// `available_height() - footer_h` clamped before egui knew the screen. The
+/// shell now warms up frames before its `--shot`; this test mirrors that:
+/// after three frames at a 1440x900 viewport the palette column must carry at
+/// least twenty distinct tool icons, and a clamped-to-zero palette must not
+/// (restoring `max_height(0.0)` makes this test red — tried and verified).
+#[test]
+fn the_palette_shows_its_tool_icons_across_the_warmup_frames() {
+    fn visible_icon_rows(ctx: &egui::Context, w: &mut Workspace) -> usize {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1440.0, 900.0),
+            )),
+            ..Default::default()
+        };
+        if std::env::var("PROBE").is_ok() {
+            let model = ui::palette::PaletteModel::build();
+            println!(
+                "PROBE slots={} groups={:?}",
+                model.slots().len(),
+                model.groups().len()
+            );
+        }
+        let full = ctx.run(input.clone(), |ctx| {
+            ui::view::tool_palette(w, ctx);
+            ui::view::tool_options(w, ctx);
+        });
+        // A slot paints its icon as small paths clustered around the button's
+        // centre (~26 px apart down the column). Bucket the icon-sized shapes
+        // by their vertical centre, counting only shapes inside their clip.
+        let mut rows: Vec<i64> = Vec::new();
+        let dbg = std::env::var("PROBE").is_ok();
+        let mut seen = 0;
+        for clipped in &full.shapes {
+            let bounds = clipped.shape.visual_bounding_rect();
+            if dbg && seen < 14 && bounds.left() < 60.0 {
+                println!(
+                    "DBG kind-height={:.1} width={:.1} y={:.1}",
+                    bounds.height(),
+                    bounds.width(),
+                    bounds.center().y
+                );
+                seen += 1;
+            }
+            if bounds.width() >= 12.0 || bounds.height() >= 12.0 {
+                continue; // icons are small; bigger shapes are chrome
+            }
+            let visible = bounds.intersect(clipped.clip_rect);
+            if visible.area() <= 0.0 || visible.left() >= 48.0 {
+                continue; // culled, or not in the tool column
+            }
+            let row = (bounds.center().y / 8.0).round() as i64;
+            if !rows.contains(&row) {
+                rows.push(row);
+            }
+        }
+        rows.len()
+    }
+
+    let ctx = egui::Context::default();
+    design::apply_theme(&ctx, design::Theme::Dark);
+    let style = design::style_for(design::Theme::Dark);
+    ctx.set_style_of(egui::Theme::Dark, style.clone());
+    ctx.set_style_of(egui::Theme::Light, style);
+    let mut w = Workspace::new();
+
+    for _ in 0..3 {
+        let visible = visible_icon_rows(&ctx, &mut w);
+        assert!(
+            visible >= 20,
+            "the tool palette showed only {visible} tool icons across three              frames — the first-frame hole reopened"
+        );
+    }
+}

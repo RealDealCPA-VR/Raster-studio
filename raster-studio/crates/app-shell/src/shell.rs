@@ -317,6 +317,17 @@ pub fn choose_surface_format(
 /// hairlines wide.
 const ANTS_FRAME: Duration = Duration::from_millis(33);
 
+/// C1: how many frames a `--shot` renders and discards before capturing.
+/// egui learns layout over several passes — the first frame drew an empty tool
+/// column and no start screen — and it also ANIMATES: widget fades ease out
+/// over ~0.3 s, so a capture before the curves settle differs from a settled
+/// one by a uniform one-step fade (measured: 1563 bytes, rows 415-517, every
+/// pixel one level darker). 24 frames at the poll rate clears layout AND the
+/// longest default animation; two consecutive captures then come out
+/// byte-identical (the C1 validate, verified by running `--shot` twice and
+/// hashing the PNGs).
+const SHOT_WARMUP_FRAMES: u32 = 24;
+
 /// Read the rendered surface back to the CPU and write it as a PNG at the
 /// `--shot` path (S2.3: a literal screenshot of the GUI). Reported, never
 /// fatal: a failed capture logs and returns `false`, and the session carries
@@ -439,6 +450,9 @@ pub struct Shell {
     shot: Option<PathBuf>,
     /// Whether the shot has already been taken, so capture happens once.
     shot_taken: bool,
+    /// How many frames have rendered since the `--shot` was requested (C1):
+    /// the capture waits out the warm-up so egui's layout is settled.
+    shot_frames: u32,
 }
 
 impl Shell {
@@ -468,6 +482,7 @@ impl Shell {
             startup_error: None,
             shot,
             shot_taken: false,
+            shot_frames: 0,
         }
     }
 
@@ -788,7 +803,16 @@ impl Shell {
         // so the capture (which only needs `&state.gpu`) does not compete for
         // `&mut self` mid-frame.
         let shot_target = self.shot.clone();
-        let shot_requested = self.shot.is_some() && !self.shot_taken;
+        // C1: a `--shot` must not capture frame one — egui learns layout over
+        // several frames, and the first one drew an empty tool column and no
+        // start screen (the committed main-window.png showed exactly that).
+        // Warm up: count frames while the shot is pending and capture only
+        // after SHOT_WARMUP_FRAMES.
+        if shot_target.is_some() && !self.shot_taken {
+            self.shot_frames += 1;
+        }
+        let shot_requested =
+            self.shot.is_some() && !self.shot_taken && self.shot_frames >= SHOT_WARMUP_FRAMES;
         let Some(state) = &mut self.state else { return };
         let frame = match state.surface.get_current_texture() {
             Ok(f) => f,
@@ -1630,6 +1654,16 @@ impl ApplicationHandler<crate::shell::AppEvent> for Shell {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_none() {
+            return;
+        }
+        // C1: keep redrawing until the shot's warm-up frames have all rendered
+        // — an idle window under `ControlFlow::Wait` would otherwise never
+        // produce them.
+        if self.shot.is_some() && !self.shot_taken && self.shot_frames < SHOT_WARMUP_FRAMES {
+            if let Some(state) = &self.state {
+                state.window.request_redraw();
+            }
+            event_loop.set_control_flow(ControlFlow::Poll);
             return;
         }
         if let Some(report) = self.editor.autosave_tick(Instant::now()) {

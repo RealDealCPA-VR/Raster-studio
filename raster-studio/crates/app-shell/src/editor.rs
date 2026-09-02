@@ -37,7 +37,9 @@ use raster::TILE_SIZE;
 use tools::{registry, BrushSettings, ToolId};
 
 use crate::action::Action;
-use crate::dialogs::{CloseChoice, FileDialogs, NativeDialogs, PROJECT_EXTENSION};
+use crate::dialogs::{
+    BrowserUrls, CloseChoice, FileDialogs, NativeDialogs, UrlLauncher, PROJECT_EXTENSION,
+};
 use crate::doc::{DocumentError, DocumentId, OpenDocument};
 use crate::keymap::{Chord, Conflict, Keymap};
 use crate::prefs::{AppPaths, Preferences};
@@ -458,6 +460,9 @@ pub struct Editor {
     /// Named patterns and brushes the Edit and Layer menus define and reuse.
     presets: asset_store::presets::PresetStore,
     dialogs: Box<dyn FileDialogs>,
+    /// Help-menu browser launches (see [`dialogs::UrlLauncher`]); the shipped
+    /// default opens the platform browser, tests inject a recorder.
+    urls: Box<dyn UrlLauncher>,
     app_version: String,
     /// The GPU adapter the window actually got, for the diagnostics bundle.
     gpu_adapter_name: Option<String>,
@@ -638,6 +643,7 @@ impl Editor {
             recent,
             presets,
             dialogs,
+            urls: Box::new(BrowserUrls),
             app_version: env!("CARGO_PKG_VERSION").to_string(),
             gpu_adapter_name: None,
             docs: Vec::new(),
@@ -691,6 +697,19 @@ impl Editor {
 
     pub fn preferences(&self) -> &Preferences {
         &self.prefs
+    }
+
+    /// Swap the Help-menu browser launcher.
+    ///
+    /// The shipped editor never calls this; tests inject a recorder so the
+    /// digest gate can reach the Help arms without opening browser tabs (C5).
+    pub fn set_url_launcher(&mut self, urls: Box<dyn UrlLauncher>) {
+        self.urls = urls;
+    }
+
+    /// The Help-menu browser launcher, for `menu_bridge::perform`.
+    pub fn url_launcher_mut(&mut self) -> &mut dyn UrlLauncher {
+        self.urls.as_mut()
     }
 
     /// The dialog-facing view of the application preferences.

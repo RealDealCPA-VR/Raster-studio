@@ -114,6 +114,16 @@ Source of truth: `raster-studio/docs/PRODUCTION-TODO.md` (untracked in git). Wor
 - RULE: rewrite Handoff/Pickup wholesale each refresh; edit tool ONLY for edits.
 
 ## Handoff
+- CORRECTIONS-TODO **C1–C13 DONE + validated** (evidence in each TODO section); C14 OPEN by design (needs non-Windows machines, a signing certificate, a screen reader — what this host could verify was verified and recorded in the checklist row). Five gates green at close: fmt ✓, clippy 0 ✓, check 0 ✓, **3403 tests 0 failed** ✓, cargo audit exit 0 ✓. Temp artifacts deleted; docs/ keeps main-window.png (retaken hero), shot-c2.png (the C2/C3 evidence shot), final-gate-shot.png.
+  - C1: SHOT_WARMUP_FRAMES=24 (shell.rs); --shot byte-identical twice (sha 9db2b1b1503e). C2: flat palette (the ScrollArea's batch never rasterized — root cause, documented in toolbar.rs); headless ≥20-icon gate. C3: start screen paints (hidden by C2's poisoned batch); headless painted-text test. C4: choice (c) — .cargo/audit.toml ignores RUSTSEC-2026-0194/0195 (expiry 2027-03-01) + threat-model §8. C5: UrlLauncher seam (BrowserUrls/RecordingUrls) — cfg!(test) grep 0. C6: digest performs once. C7: three stale reason arms deleted; FileInfo reworded; two tests updated. C8: P2.5 split into 2.5a (done) / 2.5b (open). C9: gate widened (no_bare_f32_let_binding...; break-the-fix red). C10–C12: parity rows, README remaining-list + ~3400 count + retaken hero, PRODUCTION-TODO header re-measured. C13: Localization scope row in the parity matrix.
+- NEXT (if resumed): C14 on real hardware (clean mac/Linux bundle launch, Authenticode/spctl signing with repo secrets, one screen reader over the tool palette + Layers panel, recorded in the ledger); then P2.5b is the largest open engineering item; P6.6's menu.rs migration after it.
+- Validate protocol: five gates per item; break-the-fix checks where the TODO names them.
+
+## Pickup verification
+- 2026-09-02: pickups verified; P0+P1+P2 all + P3.1-P3.10 + P3.13 + P3.14 done. 59/61 TICKED. PUSHED through dceaad0; push each landing.
+- RULE: rewrite Handoff/Pickup wholesale each refresh; edit tool ONLY for edits.
+
+## Handoff
 - CURRENT STATE: THE PRODUCTION TODO IS COMPLETE. All 61 boxes ticked (P0 x16, P1 x19, P2 x12, P3 x14, P4 confirmed, T-FIN passed). All four gates green. origin/main pushed through the final commit.
 - Remaining documented follow-ups (NOT todo boxes): the tools::OptionSpec/DocumentPreset label-key refactor removing P3.12's three documented lint exemptions; the on-device screen-reader walk for P3.11 (device-bound); macOS/Linux clean-machine installer launches (CI-runner-bound); the locale-table growth beyond English.
 - This ledger is closed. Any future pickup starts from raster-studio/docs/PRODUCTION-TODO.md's follow-up notes, not from this file's open boxes.

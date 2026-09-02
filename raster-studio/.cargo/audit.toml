@@ -1,0 +1,26 @@
+# cargo-audit configuration — choice (c) from docs/CORRECTIONS-TODO.md C4.
+#
+# quick-xml 0.30 carries RUSTSEC-2026-0194 (quadratic run time on duplicate
+# attribute names) and RUSTSEC-2026-0195 (unbounded namespace allocation).
+# Both enter the lockfile ONLY through the Linux AT-SPI accessibility chain:
+#   quick-xml 0.30 <- zbus_xml 4.0 <- zbus-lockstep 0.4.4 <- atspi 0.22
+#     <- accesskit_unix 0.12.3 <- accesskit_winit 0.22 <- egui-winit 0.29
+# zbus_xml 4.0 pins ^0.30, so the advisory cannot be fixed by a direct bump;
+# raising accesskit_winit is blocked by egui-winit 0.29's own pin. The chain
+# arrived with P3.11 (AccessKit screen-reader support, commit 7a3ee3f) and
+# dropping it (option (b)) would trade a Linux-only parsing DoS for losing
+# Linux screen-reader support outright — recorded as the trade-off in
+# docs/threat-model.md.
+#
+# These ignores EXPIRE: when egui is upgraded past 0.29 (raising
+# accesskit_winit past the atspi/zbus generation that pins quick-xml 0.30),
+# delete both entries. Revisit on or before 2027-03-01.
+[advisories]
+ignore = [
+    # RUSTSEC-2026-0194 — quick-xml 0.30 via the accesskit_unix AT-SPI chain;
+    #   upstream-pinned by zbus_xml 4.0 / egui-winit 0.29. Linux-only surface.
+    #   Expires 2027-03-01.
+    "RUSTSEC-2026-0194",
+    # RUSTSEC-2026-0195 — same chain and expiry as 0194 above.
+    "RUSTSEC-2026-0195",
+]

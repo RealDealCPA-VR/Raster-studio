@@ -88,30 +88,23 @@ and claims get checked against the code.
 Complete does not mean finished, and this project refuses to blur the line.
 The short, named, current list:
 
-- **Linked smart objects.** The embedded-document editor is done; Place
-  Embedded… / Place Linked… still need a nested-source model and a placement
-  gizmo, so they remain disabled with a reason.
 - **Live editing runs at 8-bit precision.** Deep sources round-trip and export
-  at the full 16 bits, but the live tiles composite at 8-bit-equivalent
-  precision in-app.
-- **ICC application is wired for the engine, not the pipeline.** The `color`
-  crate now parses and applies matrix-shaper ICC profiles (with round-trip
-  tests), but threading a tagged image's profile bytes through the document
-  into the compositor/export path is not yet done — a tagged image is preserved
-  on a round trip, not applied to the working space.
+  at the full 16 bits, and `.rstudio` records each layer's depth, but the live
+  tiles composite at 8-bit-equivalent precision in-app (P2.5b in the
+  production todo, open).
 - **Native tablet events need a pen.** Pressure is wired through the shell
   seam and verified; actually subscribing to one device's winit tablet events
   needs hardware on the host.
 - **The OS printer-spooler dialog** (Print ▸ As PDF is fully implemented).
-- **A small set of menu items stays honestly disabled with a named reason**:
-  the interactive transforms (Free Transform, Transform Selection, Warp) and
-  Place Embedded…/Linked… need a canvas gizmo; Image/Canvas Size, arbitrary
-  rotation, Offset, the Custom filter and the Filter gallery need a parameter
-  dialog this build has not drawn; Pattern fill and Define Pattern/Brush need a
-  generator rasteriser and a presets library; Select Subject needs a
-  segmentation model. The count is pinned by a test, so it cannot drift into
-  prose. Crop/Trim/rotate-90°, Duplicate, Close All, Gradient fill and
-  Rasterize are wired.
+- **Deferred Tier C rows** (documented with reasons in the parity matrix, not
+  silently dropped): quick-mask *editing* refinements beyond the landed
+  compose-and-paint loop, per-channel editing, a recording UI for Actions,
+  batch export, paths, and Select Subject (no segmentation model ships, and
+  the menu carries no item for it). No menu item in this build is disabled
+  with a vague reason: every enabled item routes to real code, and the only
+  refusal left in `unavailable_reason` besides the File-Info note is an
+  adjustment clicked while its parameters still sit at the identity — the
+  status line tells you to add it as an adjustment layer instead.
 
 [`raster-studio/docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md)
 has the row-by-row detail. Nothing there is marked done unless it is
@@ -125,7 +118,7 @@ Requires a Rust toolchain (1.82 or newer) and, on Windows, the MSVC build tools.
 ```bash
 cd raster-studio
 cargo check --workspace --all-targets   # type-check everything
-cargo test  --workspace                 # ~2900 tests
+cargo test  --workspace                 # ~3400 tests
 cargo run   -p studio-desktop           # launch
 ```
 

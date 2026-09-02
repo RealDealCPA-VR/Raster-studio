@@ -2496,6 +2496,27 @@ mod tests {
             out
         }
 
+        /// The strings this layout paints as text.
+        ///
+        /// C3's validate: the start screen must actually be *painted*, not
+        /// merely laid out — galleys are still readable from the shape list
+        /// before tessellation, so this walks `FullOutput::shapes`.
+        fn painted_texts(&mut self, editor: &Editor) -> Vec<String> {
+            let mut out = ChromeOutput::default();
+            let chrome = &mut self.chrome;
+            let full = self.ctx.run(raw_input(Vec::new()), |ctx| {
+                out = chrome.ui(ctx, editor);
+            });
+            drop(out);
+            full.shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                    _ => None,
+                })
+                .collect()
+        }
+
         /// Click a widget by id and return what that frame meant.
         fn click(&mut self, editor: &Editor, id: egui::Id) -> ChromeOutput {
             let pos = self
@@ -2734,6 +2755,52 @@ mod tests {
         assert!(
             out.actions.contains(&Action::Open),
             "the Open button meant {out:?}"
+        );
+    }
+
+    /// C3: the start screen must be *painted* on the empty state — the audit
+    /// found a build where its shapes were emitted but never reached the
+    /// screen (the palette's ScrollArea batch poisoned the egui pass). The
+    /// galley strings are asserted in the shape list when no document is
+    /// open, and absent when one is.
+    #[test]
+    fn the_start_screen_title_and_buttons_are_painted_only_when_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let ed = editor(&dir.path().join("config"));
+        assert!(ed.documents().is_empty());
+
+        let mut window = Window::new(&ed);
+        let texts = window.painted_texts(&ed);
+        let joined = texts.join("\n");
+        assert!(
+            joined.contains("Raster Studio"),
+            "the start-screen title must be painted; got {joined:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == "New"),
+            "the New button must be painted; got {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == "Open\u{2026}"),
+            "the Open button must be painted; got {texts:?}"
+        );
+
+        // A document open means the start screen is gone entirely.
+        let ed = {
+            let mut ed = editor(&dir.path().join("config"));
+            ed.open_path(&png(dir.path(), "shown.png")).unwrap();
+            ed
+        };
+        assert_eq!(ed.documents().len(), 1);
+        let texts = window.painted_texts(&ed);
+        let joined = texts.join("\n");
+        assert!(
+            !joined.contains("Raster Studio"),
+            "the start screen must not paint over a document; got {joined:?}"
+        );
+        assert!(
+            !texts.iter().any(|t| t == "Open\u{2026}"),
+            "the start screen must not paint over a document; got {texts:?}"
         );
     }
 
@@ -3370,7 +3437,13 @@ mod tests {
         let ed = editor(dir.path());
         let mut chrome = Chrome::new();
 
-        let orphan = ui::Intent::Action(ui::menu::MenuAction::PlaceEmbedded);
+        // C7: Place Embedded is routable now (P2.4), so the orphan here is an
+        // action that still genuinely has no route: an adjustment at its
+        // identity, which the shell hosts no dialog for (its reason says to
+        // add it as an adjustment layer instead).
+        let orphan = ui::Intent::Action(ui::menu::MenuAction::ApplyAdjustment(
+            ui::menu::AdjustmentId::BrightnessContrast,
+        ));
         chrome.workspace.emit(orphan.clone());
         let mut out = ChromeOutput::default();
         chrome.harvest_workspace_for_test(&mut out, &ed);
@@ -3381,14 +3454,12 @@ mod tests {
             "the intent went nowhere and said nothing"
         );
         let said = crate::menu_bridge::unrouted_message(&orphan);
-        // `Place Embedded…` is an action this build deliberately cannot answer
-        // (nothing places an embedded document), and its refusal names the
-        // missing piece rather than the generic fallback. What matters here is
-        // that the user is *told* — the reporting path this test guards — so
-        // assert the message is the real, specific one and not an empty or
-        // dropped it.
+        // The refusal names the missing piece rather than the generic
+        // fallback. What matters here is that the user is *told* — the
+        // reporting path this test guards — so assert the message is the
+        // real, specific one and not an empty or generic string.
         assert!(
-            said.contains("Place"),
+            said.contains("adjustment"),
             "the refusal named nothing actionable: {said}"
         );
     }

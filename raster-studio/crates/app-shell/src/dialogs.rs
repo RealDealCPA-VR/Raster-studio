@@ -5,6 +5,11 @@
 //! what lets "Ctrl+O opens a file and it lands in a tab" be a unit test rather
 //! than a claim. [`NativeDialogs`] is the real implementation over `rfd`;
 //! [`ScriptedDialogs`] answers from a queue and records what it was asked.
+//!
+//! [`UrlLauncher`] is the same idea for the Help menu's browser launches: the
+//! shipped [`BrowserUrls`] calls `webbrowser::open`, and tests inject
+//! [`RecordingUrls`] so a digest gate can reach those arms without opening
+//! tabs on a CI runner.
 
 use std::path::{Path, PathBuf};
 
@@ -46,6 +51,42 @@ pub trait FileDialogs {
     /// Something failed and the user has to be told. This is the path that
     /// exists so a GPU failure is a dialog rather than a silent abort.
     fn report_error(&mut self, title: &str, message: &str);
+}
+
+/// Opens a Help destination in the user's browser.
+///
+/// The Help menu is the one place the editor reaches *outside* its process on
+/// a menu click, which makes it both untestable through the real path (a test
+/// that opens three browser tabs is a test that deserves to be closed) and
+/// worth testing (C5: the shipped `webbrowser::open` call had zero coverage).
+/// [`BrowserUrls`] is what ships; [`RecordingUrls`] is the test double.
+pub trait UrlLauncher {
+    /// Open `url`. `false` means the open failed, and the caller falls back
+    /// to reporting where the page lives instead.
+    fn open_url(&mut self, url: &str) -> bool;
+}
+
+/// The shipped launcher: the platform browser.
+pub struct BrowserUrls;
+
+impl UrlLauncher for BrowserUrls {
+    fn open_url(&mut self, url: &str) -> bool {
+        webbrowser::open(url).is_ok()
+    }
+}
+
+/// Test double: records every URL it is asked to open, opens nothing.
+#[derive(Default)]
+pub struct RecordingUrls {
+    /// The URLs in the order they were requested.
+    pub opened: Vec<String>,
+}
+
+impl UrlLauncher for RecordingUrls {
+    fn open_url(&mut self, url: &str) -> bool {
+        self.opened.push(url.to_string());
+        true
+    }
 }
 
 /// The real dialogs.

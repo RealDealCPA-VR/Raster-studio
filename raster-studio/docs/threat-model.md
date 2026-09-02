@@ -192,6 +192,24 @@ this repository.
   regenerated from the manifests and `Cargo.lock`.
 - `Cargo.lock` is committed, so every build resolves the same versions.
 - CI runs `cargo audit` alongside `fmt`, `clippy -D warnings` and the test suite.
+- Advisory policy for the two known findings (C4): the lockfile carries
+  `quick-xml 0.30` (RUSTSEC-2026-0194 — quadratic run time on duplicate
+  attribute names; RUSTSEC-2026-0195 — unbounded namespace allocation, both
+  7.5 high) through the Linux-only AT-SPI accessibility chain
+  `accesskit_unix 0.12.3 → atspi 0.22 → zbus-lockstep 0.4.4 → zbus_xml 4.0 →
+  quick-xml ^0.30`, which arrived with P3.11 (AccessKit screen-reader
+  support). The fix version (≥ 0.41.0) cannot be reached by a direct bump
+  (`zbus_xml 4.0` pins `^0.30`), and raising `accesskit_winit` past that
+  generation is blocked today by `egui-winit 0.29`'s own pin. Of the three
+  remedies, the chosen one is **(c)**: `.cargo/audit.toml` ignores both
+  advisories with a named expiry (**2027-03-01**) and the reason inline.
+  The trade-off, stated plainly: this is a suppression, not a fix — the
+  affected surface is Linux-only XML parsing inside the screen-reader bridge
+  (no document XML is ever parsed with `quick-xml`), and dropping the
+  accessibility backend instead (option (b)) was rejected because it would
+  trade a parsing-DoS advisory for losing Linux screen-reader support
+  entirely. The fix arrives with the egui upgrade that lifts the
+  `accesskit_winit` pin; the ignore entries are deleted then.
 - `#![forbid(unsafe_code)]` is set on ten crates: `adjustments`, `color`,
   `compositor`, `design`, `filters`, `project-format`, `selection`, `tools`,
   `ui` and `vector`. It is **not** workspace-wide. In the crates that lack it,

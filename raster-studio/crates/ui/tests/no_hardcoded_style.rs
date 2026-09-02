@@ -169,6 +169,61 @@ fn no_spacing_or_stroke_width_is_a_bare_number() {
     );
 }
 
+/// Is `rhs` a bare `f32` literal — nothing but digits, a sign, a dot and an
+/// exponent? `52.0` fires; `Space::Small.pt()`, `x * 2.0` and `h - 52.0` do
+/// not.
+fn is_bare_f32(rhs: &str) -> bool {
+    let trimmed = rhs.trim().trim_end_matches(';').trim();
+    !trimmed.is_empty()
+        && trimmed
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E'))
+        && trimmed.chars().any(|c| c.is_ascii_digit())
+        && trimmed.contains('.')
+}
+
+/// C9: a bare `f32` `let` binding is a layout extent written in numbers.
+///
+/// The old `let footer_h = 52.0;` slipped past the call-site scan above —
+/// the number sat in a `let`, not an argument. A gap, a height or an inset
+/// must come from a `design` token, so any binding whose right-hand side is
+/// a bare literal fails here, in the same scanned set as the other gates.
+#[test]
+fn no_bare_f32_let_binding_passes_as_a_layout_extent() {
+    let mut files = Vec::new();
+    rust_files(&crate_src(), &mut files);
+
+    let mut violations = Vec::new();
+    for path in &files {
+        for (number, line) in shipping_source(path).lines().enumerate() {
+            let code = without_comments(line);
+            let Some(rest) = code.trim_start().strip_prefix("let ") else {
+                continue;
+            };
+            let Some(eq) = rest.find('=') else {
+                continue;
+            };
+            let name = rest[..eq].trim();
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                continue;
+            }
+            if is_bare_f32(&rest[eq + 1..]) {
+                violations.push(format!(
+                    "{}:{}: `let {name} = …;` is a bare f32 — use a design \
+                     Space/Metrics/Radius token",
+                    path.display(),
+                    number + 1
+                ));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "layout extents written as bare f32 bindings:\n{}",
+        violations.join("\n")
+    );
+}
+
 #[test]
 fn the_gate_actually_catches_something() {
     // A gate nobody has seen fail is a gate nobody knows works. Run the same
@@ -198,6 +253,15 @@ fn the_gate_actually_catches_something() {
         .chars()
         .next()
         .is_some_and(|c| c.is_ascii_digit()));
+
+    // C9's regression: the footer height as a bare f32 `let` fires the
+    // binding gate; a token-driven binding does not.
+    assert!(is_bare_f32(" 52.0;"), "the old footer_h line must fire");
+    assert!(is_bare_f32(" -4.0;"));
+    assert!(!is_bare_f32(" Space::Small.pt();"));
+    assert!(!is_bare_f32(" h - 52.0;"));
+    assert!(!is_bare_f32(" x * 2.0;"));
+    assert!(!is_bare_f32(" tokens.metrics.footer_height.pt();"));
 }
 
 #[test]
