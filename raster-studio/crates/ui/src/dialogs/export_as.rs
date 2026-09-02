@@ -207,10 +207,12 @@ impl ExportJob {
     /// Why the job cannot run, in words.
     pub fn validation_error(&self) -> Option<String> {
         if self.base_name.trim().is_empty() {
-            return Some("Give the export a file name".to_string());
+            return Some(
+                crate::strings::tr("ui.export_as.give.the.export.a.file.name").to_string(),
+            );
         }
         if self.entries.is_empty() {
-            return Some("Enable at least one export".to_string());
+            return Some(crate::strings::tr("ui.export_as.enable.at.least.one.export").to_string());
         }
         for entry in &self.entries {
             if let Err(error) = entry.preset.validate() {
@@ -341,7 +343,9 @@ impl ExportAsDialog {
 
     /// Why a row cannot be removed, if it cannot.
     pub fn removal_blocked(&self) -> Option<&'static str> {
-        (self.entries.len() <= 1).then_some("An export needs at least one output")
+        (self.entries.len() <= 1).then_some(crate::strings::tr(
+            "ui.export_as.an.export.needs.at.least.one",
+        ))
     }
 
     /// Mutable access to a row, invalidating the preview and size caches.
@@ -554,7 +558,9 @@ impl ExportAsDialog {
             ctx,
             "export-as",
             self.title(),
-            Some("Every enabled row is written when you export."),
+            Some(crate::strings::tr(
+                "ui.export_as.every.enabled.row.is.written.when",
+            )),
             DialogWidth::Split,
             |ui| self.body(ui),
         );
@@ -611,7 +617,7 @@ impl ExportAsDialog {
             });
         });
         hairline(ui);
-        design::inspector_field(ui, "File name", |ui| {
+        design::inspector_field(ui, crate::strings::tr("ui.export_as.file.name"), |ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.base_name)
                     .desired_width(sizes::text_field_wide()),
@@ -635,7 +641,13 @@ impl ExportAsDialog {
 
     fn preview_panel(&mut self, ui: &mut egui::Ui) {
         let mut show = self.show_preview;
-        if checkbox_row(ui, "Live preview", &mut show).changed() {
+        if checkbox_row(
+            ui,
+            crate::strings::tr("ui.export_as.live.preview"),
+            &mut show,
+        )
+        .changed()
+        {
             self.set_show_preview(show);
         }
         match (&self.texture, self.show_preview) {
@@ -656,10 +668,13 @@ impl ExportAsDialog {
                 }
             }
             (_, true) => {
-                caption(ui, "This format could not be previewed.");
+                caption(
+                    ui,
+                    crate::strings::tr("ui.export_as.this.format.could.not.be.previewed"),
+                );
             }
             (_, false) => {
-                caption(ui, "Live preview is off.");
+                caption(ui, crate::strings::tr("ui.export_as.live.preview.is.off"));
             }
         }
     }
@@ -695,13 +710,13 @@ impl ExportAsDialog {
             self.select(index);
         }
         ui.horizontal(|ui| {
-            if design::ghost_button(ui, "Add export").clicked() {
+            if design::ghost_button(ui, crate::strings::tr("ui.export_as.add.export")).clicked() {
                 self.add_entry();
             }
             let blocked = self.removal_blocked();
             let response = ui
                 .add_enabled_ui(blocked.is_none(), |ui| {
-                    design::ghost_button(ui, "Remove export")
+                    design::ghost_button(ui, crate::strings::tr("ui.export_as.remove.export"))
                 })
                 .inner;
             match blocked {
@@ -721,7 +736,7 @@ impl ExportAsDialog {
         design::section_header(ui, "Settings");
         let index = self.selected;
         let Some(entry) = self.entries.get(index).cloned() else {
-            caption(ui, "No export selected");
+            caption(ui, crate::strings::tr("ui.export_as.no.export.selected"));
             return;
         };
         design::inspector_field(ui, "Format", |ui| {
@@ -808,8 +823,9 @@ impl ExportAsDialog {
                     BitDepth::Sixteen => "16 bit".to_string(),
                 },
                 |d| {
-                    (d == BitDepth::Sixteen && !supports_16)
-                        .then_some("This format stores 8 bits per channel")
+                    (d == BitDepth::Sixteen && !supports_16).then_some(crate::strings::tr(
+                        "ui.export_as.this.format.stores.8.bits.per",
+                    ))
                 },
             ) {
                 if let Some(entry) = self.entry_mut(index) {
@@ -820,7 +836,13 @@ impl ExportAsDialog {
 
         design::section_header(ui, "Metadata");
         let mut include = entry.preset.include_metadata;
-        if checkbox_row(ui, "Embed colour profile", &mut include).changed() {
+        if checkbox_row(
+            ui,
+            crate::strings::tr("ui.export_as.embed.colour.profile"),
+            &mut include,
+        )
+        .changed()
+        {
             if let Some(entry) = self.entry_mut(index) {
                 entry.preset.include_metadata = include;
             }
@@ -836,7 +858,11 @@ impl ExportAsDialog {
         }
         ui.add_enabled_ui(false, |ui| {
             let mut exif = false;
-            checkbox_row(ui, "Embed EXIF and XMP", &mut exif)
+            checkbox_row(
+                ui,
+                crate::strings::tr("ui.export_as.embed.exif.and.xmp"),
+                &mut exif,
+            )
         })
         .inner
         .on_disabled_hover_text("EXIF and XMP writing is not implemented — only ICC is embedded");
@@ -859,7 +885,7 @@ pub fn format_name(format: ExportFormat) -> String {
     match format {
         ExportFormat::Png => "PNG".to_string(),
         ExportFormat::Jpeg(_) => "JPEG".to_string(),
-        ExportFormat::WebP => "WebP (lossless)".to_string(),
+        ExportFormat::WebP => crate::strings::tr("ui.export_as.webp.lossless").to_string(),
         ExportFormat::Tiff => "TIFF".to_string(),
         ExportFormat::Gif => "GIF".to_string(),
         ExportFormat::Bmp => "BMP".to_string(),
@@ -868,7 +894,7 @@ pub fn format_name(format: ExportFormat) -> String {
 
 impl Dialog for ExportAsDialog {
     fn title(&self) -> &'static str {
-        "Export As"
+        crate::strings::tr("ui.export_as.export.as")
     }
 
     fn confirm_label(&self) -> &'static str {
