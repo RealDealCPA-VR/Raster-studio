@@ -183,7 +183,7 @@ fn downscale_to_fit(source: &FilterBuffer, max_edge: u32) -> FilterBuffer {
 
 impl Dialog for FilterGalleryDialog {
     fn title(&self) -> &'static str {
-        "Filter Gallery"
+        crate::strings::tr("ui.filter_gallery.filter.gallery")
     }
 
     fn confirm_label(&self) -> &'static str {

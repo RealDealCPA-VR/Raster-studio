@@ -56,8 +56,10 @@ impl ArbitraryRotationDialog {
                 });
                 ui.add_space(Space::Small.pt());
                 ui.label(
-                    egui::RichText::new("The canvas grows to fit the rotated image.")
-                        .text_style(egui::TextStyle::Small),
+                    egui::RichText::new(crate::strings::tr(
+                        "ui.canvas_rotation.the.canvas.grows.to.fit.the",
+                    ))
+                    .text_style(egui::TextStyle::Small),
                 );
                 action_row(ui, confirm_label, blocked.as_deref(), &[])
             },
@@ -77,7 +79,7 @@ impl ArbitraryRotationDialog {
 
 impl Dialog for ArbitraryRotationDialog {
     fn title(&self) -> &'static str {
-        "Rotate Canvas"
+        crate::strings::tr("ui.canvas_rotation.rotate.canvas")
     }
 
     fn confirm_label(&self) -> &'static str {
@@ -94,7 +96,7 @@ impl Dialog for ArbitraryRotationDialog {
         if self.degrees.is_finite() {
             None
         } else {
-            Some("The angle must be a finite number of degrees".to_string())
+            Some(crate::strings::tr("ui.canvas_rotation.the.angle.must.be.a.finite").to_string())
         }
     }
 }

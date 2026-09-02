@@ -142,7 +142,7 @@ fn footer(w: &mut Workspace, ui: &mut Ui) {
         area.top() + 27.0,
         super::ids::color_swap(),
         "swap",
-        "Swap foreground and background (X)",
+        crate::strings::tr("ui.toolbar.swap.foreground.and.background.x"),
     );
     if swap.clicked() {
         w.emit(Intent::SetForeground(bg));
@@ -154,7 +154,7 @@ fn footer(w: &mut Workspace, ui: &mut Ui) {
         area.top() + 27.0,
         super::ids::color_reset(),
         "reset-colors",
-        "Default colours (D)",
+        crate::strings::tr("ui.toolbar.default.colours.d"),
     );
     if reset.clicked() {
         let (black, white) = (
@@ -446,7 +446,10 @@ pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
                         ui.label(text(ui, info.name, TextRole::Primary, TypeRole::Headline));
                         separator(ui);
                         if specs.is_empty() && !wants_gradient_stops(info) {
-                            ui.label(hint(ui, "This tool has no options"));
+                            ui.label(hint(
+                                ui,
+                                crate::strings::tr("ui.toolbar.this.tool.has.no.options"),
+                            ));
                             return;
                         }
                         for spec in &specs {
@@ -465,9 +468,9 @@ pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
                             super::ids::tool_options_reset(tool),
                         );
                         let reset = reset.on_hover_text(if at_defaults {
-                            "This tool is already at its defaults"
+                            crate::strings::tr("ui.toolbar.this.tool.is.already.at.its")
                         } else {
-                            "Return this tool to its defaults"
+                            crate::strings::tr("ui.toolbar.return.this.tool.to.its.defaults")
                         });
                         if reset.clicked() && w.options.reset(tool) {
                             // Reset travels as an intent like every other
@@ -723,12 +726,26 @@ pub(crate) fn color_wells(w: &mut Workspace, ui: &mut Ui) {
                 crate::panels::color::ColorWell::Background,
             ));
         }
-        if super::icon_toggle(ui, "swap", false, "Swap colours  (X)").clicked() {
+        if super::icon_toggle(
+            ui,
+            "swap",
+            false,
+            crate::strings::tr("ui.toolbar.swap.colours.x"),
+        )
+        .clicked()
+        {
             w.color.swap();
             w.emit(Intent::SetForeground(w.color.foreground()));
             w.emit(Intent::SetBackground(w.color.background()));
         }
-        if super::icon_toggle(ui, "colors-default", false, "Default colours  (D)").clicked() {
+        if super::icon_toggle(
+            ui,
+            "colors-default",
+            false,
+            crate::strings::tr("ui.toolbar.default.colours.d.2"),
+        )
+        .clicked()
+        {
             w.color.reset();
             w.emit(Intent::SetForeground(w.color.foreground()));
             w.emit(Intent::SetBackground(w.color.background()));

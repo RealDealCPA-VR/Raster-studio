@@ -89,7 +89,9 @@ fn entries(w: &mut Workspace, ui: &mut Ui, entries: &[Entry], context: &MenuCont
                     .response
                 } else {
                     ui.add_enabled(false, egui::Button::new(title))
-                        .on_disabled_hover_text("Nothing in this submenu is available right now")
+                        .on_disabled_hover_text(crate::strings::tr(
+                            "ui.menu_bar.nothing.in.this.submenu.is.available",
+                        ))
                 };
                 super::mark(ui, opener.rect, super::ids::menu_submenu(label));
             }

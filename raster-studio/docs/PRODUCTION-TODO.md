@@ -14,11 +14,18 @@ cargo fmt --check
 cargo clippy --workspace --all-targets   # CI runs with RUSTFLAGS=-D warnings
 cargo check --workspace --all-targets
 cargo test  --workspace
+cargo audit                              # the fifth gate — CI runs it and it can fail alone
 ```
+
+> **`cargo audit` is a release gate, not a footnote.** It is a separate CI job
+> that fails the build on its own, and a task that leaves the other four green
+> while adding an advisory to `Cargo.lock` is not done. Run it after any change
+> that touches `Cargo.toml` or `Cargo.lock`.
 
 Work top-down: **P0** unblocks the largest amount of already-written code, **P1**
 is the visual/interaction identity, **P2** closes named engine gaps, **P3** is
-release engineering, **P4** is scope decisions.
+release engineering, **P4** is scope decisions, **P5** is the CI-blocking
+regression queue (always drain it first).
 
 ---
 
@@ -471,6 +478,169 @@ and `workspace.package.repository` is empty.
 
 ---
 
+## Review checkpoint — 2026-09-02, commit `35a03d0`
+
+Independent re-measurement by the reviewer (not copied from the ledger):
+
+| Gate | Result |
+| --- | --- |
+| `cargo fmt --check` | exit 0 |
+| `cargo clippy --workspace --all-targets` | exit 0, no warnings |
+| `cargo test --workspace` | **3398 passed, 0 failed** (was 3288) |
+| `cargo test -p app-shell --lib` | 395 passed, 0 failed |
+| `cargo audit` | **exit 1 — 2 vulnerabilities** ❌ |
+| `git rev-list --count origin/main...HEAD` | 0 — main is pushed, nothing local-only |
+
+**60 of 61 tasks are closed** (P0.1–P0.16, P1.1–P1.19, P2.1–P2.12, P3.1–P3.11,
+P3.13, P3.14, and P4 confirmed). Progress ledger: `.pi/goals/ACTIVE.md`.
+
+Still open from the original list:
+
+- **P3.12 Localization** — infrastructure landed (`crates/ui/src/strings.rs`:
+  `Locale`, a process-wide active locale, a keyed table, `tr()`, three tests) and
+  the Actions panel migrated as a proof slice. The migration wave is **not**
+  done: 311 prose literals across 19 files in `crates/ui/src/{view,dialogs}`
+  remain, and the no-literal lint that is this task's Validate line is not yet
+  written. Correctly left unticked.
+- **P3.4 / P3.6 / P3.11** are ticked "as far as this host allows" — packaging
+  configs and signing commands are written but no `.dmg`/`.deb` has been built,
+  no artifact has been signed, and no screen-reader walk has been performed.
+  Treat these as **needing a verification pass on real hardware**, not as
+  finished. See P5.5.
+
+Two pieces of drift found while reviewing (neither breaks a test, both mislead
+the next reader) are filed as P5.6 and P5.7.
+
+---
+
+## P5 — CI-blocking regressions (drain before resuming P3.12)
+
+### P5.1 `cargo audit` fails on two high-severity advisories — **the live CI break**
+`cargo audit` exits 1. The reported cause is **not** the two unmaintained-crate
+warnings that appear at the tail of the log (`paste` RUSTSEC-2024-0436,
+`ttf-parser` RUSTSEC-2026-0192) — those are already non-fatal, and the run says
+so: `warning: 2 allowed warnings found`. The failure line is
+`error: 2 vulnerabilities found!`, and both are `quick-xml 0.30.0`:
+
+| ID | Severity | Fix |
+| --- | --- | --- |
+| RUSTSEC-2026-0194 — quadratic run time on duplicate attribute names | 7.5 high | upgrade to ≥ 0.41.0 |
+| RUSTSEC-2026-0195 — unbounded namespace allocation, memory-exhaustion DoS | 7.5 high | upgrade to ≥ 0.41.0 |
+
+Provenance (`cargo tree -i quick-xml@0.30.0 --target all`):
+
+```
+quick-xml 0.30.0 ← zbus_xml 4.0.0 ← zbus-lockstep 0.4.4 ← atspi 0.22.0
+                 ← accesskit_unix 0.12.3 ← accesskit_winit 0.22.4 ← app-shell
+```
+
+**This chain entered the lockfile with P3.11 (AccessKit, commit `7a3ee3f`)** and
+is Linux-only, which is why the ubuntu `audit` job is the one that breaks. The
+same commit is also what pulled in the `paste` warning, via `accesskit_windows`.
+`quick-xml` cannot simply be bumped: `zbus_xml 4.0` pins `^0.30`, so the version
+is decided upstream.
+
+Pick one and record which, with the reason:
+- **(a)** Raise `accesskit_winit` past the `atspi`/`zbus` generation that carries
+  `quick-xml 0.30`. Blocked today by `egui-winit 0.29`, which itself pins
+  `accesskit_winit 0.22` — a mismatched bump produced two copies of the crate
+  once already (see the ledger). Realistically this arrives with an egui upgrade.
+- **(b)** `accesskit_winit = { version = "0.22", default-features = false }` to
+  drop the AT-SPI (Linux) backend. Removes the advisory chain outright; costs
+  Linux screen-reader support, which contradicts P3.11 — say so in the
+  parity matrix if chosen.
+- **(c)** A time-boxed `.cargo/audit.toml` ignore with a named expiry and a
+  tracking issue. A suppression, not a fix — and the weakest option for a
+  project whose first rule is that documentation is a claim.
+
+**Validate:** `cargo audit` exits 0 from `raster-studio/`; the ubuntu `audit` CI
+job is green; whichever option was taken is named in `docs/threat-model.md` with
+its trade-off, and if it is (c) the ignore carries an expiry date.
+
+### P5.2 Confirm the pasted `no_enabled_menu_item_resolves_to_a_no_op` failure is closed
+The reported failure —
+
+```
+ReleaseNotes did not reach the status bar
+  left:  Some("Release notes live at https://…/releases")
+  right: Some("Opened https://…/releases")
+```
+
+— **no longer reproduces at `35a03d0`**; `cargo test -p app-shell --lib` is
+395/395 locally. Commit `2d2fde9` is the fix: the three Help arms were folded
+into `open_help_url`, which short-circuits on `cfg!(test)`.
+
+Root cause, for the record: each Help arm returned `"Opened …"` or a fallback
+**depending on the live result of `webbrowser::open`**, and the gate test calls
+`perform` twice — once for the message-length check and once inside the
+`assert_eq!` to build the expected value (`menu_bridge.rs:3363`). On a runner
+with no browser the two calls disagreed. The pasted log therefore comes from a CI
+run at or before `f7d8161`.
+
+**Validate:** re-run the failing CI job at `35a03d0` (or later) and confirm it is
+green; if it still fails, the diagnosis above is wrong and P5.3/P5.4 become
+urgent rather than preventive.
+
+### P5.3 Close the `cfg!(test)` hole around the Help URLs
+`cfg!(test)` is true only while compiling the crate *under test*. Every
+integration test — `tests/integration/`, `crates/app-shell/tests/gpu.rs`,
+`crates/ui/tests/*` — links `app-shell` as an ordinary dependency where it is
+**false**. Any of them that reaches a Help action will really launch a browser on
+the CI runner and bring the flake straight back. The crate already has the right
+pattern for this: the `FileDialogs` / `ScriptedDialogs` seam.
+**Validate:** URL opening goes through an injected seam whose test double records
+the URL instead of opening it; a test asserts the recorded URL for each of Help,
+Release Notes and Report Issue; `grep -rn "cfg!(test)" crates/app-shell/src`
+returns nothing that changes user-visible behaviour.
+
+### P5.4 Stop the gate test invoking `perform` twice
+`menu_bridge.rs:3363` computes the expected status by calling
+`perform(action, &mut ed)` a second time. For any action with a side effect that
+is a double execution, and it is what turned an environment-dependent message
+into a hard failure. Capture the first call's `Ok(message)` and assert the status
+against that value.
+**Validate:** the `INFORMATIONAL` branch calls `perform` exactly once per action
+(asserted by reading the code, and by a counter in a test double if the seam from
+P5.3 lands); the test still fails if an informational action does not reach the
+status bar.
+
+### P5.5 Verify the three "as far as this host allows" tasks on real hardware
+P3.4 (macOS/Linux packaging), P3.6 (signing/notarisation) and P3.11 (AccessKit)
+are ticked with the honest caveat that this Windows host could not finish them.
+They are not verified.
+**Validate:** a `.dmg`/`.app` and a `.deb` or AppImage are built and launch on a
+clean machine; the Windows installer is Authenticode-signed and the macOS bundle
+passes `spctl --assess`; one screen reader (NVDA, VoiceOver or Orca) reads the
+tool palette and the Layers panel aloud, recorded in the ledger.
+
+### P5.6 Delete the four stale `unavailable_reason` arms
+`unavailable_reason` still returns a reason for actions that are now enabled or
+gone, and `resolve` only consults it when `pick` returns `None`, so these arms
+are dead text that reads as a live limitation:
+- `PlaceEmbedded | PlaceLinked` — says "the canvas has no gizmo overlay". The
+  gizmo landed in P2.1 and both route to `editor.place_from_dialog` (P2.4).
+- `SetColorMode(_)` — says "`editor_core` has no command that can carry that as
+  one undoable step". P2.9 added one.
+- `SelectSubject` — the item was removed from `select_menu()` by P2.12, so the
+  arm is unreachable.
+- `FileInfo` — deliberately retained to feed the unrouted-message path
+  (`shell_action` routes the item and it performs). Keep it, but say *that* in
+  the arm, because as written it reads as a disabled item.
+**Validate:** each removed arm's action resolves to `Ok(_)` in a populated
+context; `no_menu_item_falls_back_to_the_generic_refusal` still passes; the
+remaining arms are exactly the ones a user can still hit.
+
+### P5.7 Refresh the file header — it describes a state that no longer exists
+The "Verified baseline" block and the two numbered findings above it still say
+the dialogs have zero call sites and the canvas has no gizmo. Both were closed by
+P0.1–P0.16 and P2.1. A future agent reading top-down is told the opposite of what
+the code does.
+**Validate:** the baseline block carries the 2026-09-02 numbers, and the two
+"largest items" paragraphs are replaced by the current ones (P3.12's remaining
+311-literal migration, and the P5 queue).
+
+---
+
 ## P4 — Scope decisions to confirm before calling it 1.0
 
 These are currently listed as deferred. Confirm each is deferred *for this
@@ -497,12 +667,13 @@ reason, and no menu item promises any of them.
 
 ## Release gate
 
-1. Every P0 and P1 box ticked with its Validate line passing.
+1. Every P0, P1 and P5 box ticked with its Validate line passing.
 2. `unavailable_reason` returns `None` for every action except those P4 confirms
    as deferred, and
    `every_ui_menu_item_is_either_performable_or_disabled_with_a_reason` still
    passes.
-3. The four gates green on Linux, Windows and macOS in CI.
+3. All **five** gates green on Linux, Windows and macOS in CI — `fmt`, `clippy`,
+   `check`, `test` **and `cargo audit`**.
 4. A side-by-side `--shot` against Photopea at 1440×900 shows the same layout
    grammar: dark chrome, one left tool column, tabbed right dock, document tabs,
    flat pasteboard, compact rows.

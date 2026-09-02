@@ -47,7 +47,7 @@ pub fn status_bar(w: &mut Workspace, ctx: &egui::Context, doc: &Document) {
                     if doc.is_dirty() {
                         ui.label(text(
                             ui,
-                            "Unsaved changes",
+                            crate::strings::tr("ui.status.unsaved.changes"),
                             TextRole::Tertiary,
                             TypeRole::Footnote,
                         ));
@@ -78,7 +78,8 @@ fn zoom_field(w: &mut Workspace, ui: &mut Ui) {
     let width = current_tokens(ui).metrics.numeric_field_width;
     let shown = format_zoom(w.status.zoom);
     let edit = super::text_field_sized(ui, super::ids::status_zoom(), &shown, width);
-    edit.response.on_hover_text("Type a zoom level");
+    edit.response
+        .on_hover_text(crate::strings::tr("ui.status.type.a.zoom.level"));
     let Some(text) = edit.committed else {
         return;
     };

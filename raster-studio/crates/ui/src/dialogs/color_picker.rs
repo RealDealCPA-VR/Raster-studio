@@ -464,11 +464,13 @@ impl ColorPickerDialog {
     /// that can never complete — telling the user to click, then doing nothing
     /// when they do — is worse than a disabled button, so the button is
     /// disabled and says this instead.
-    pub const fn eyedropper_unavailable(has_sampler: bool) -> Option<&'static str> {
+    pub fn eyedropper_unavailable(has_sampler: bool) -> Option<&'static str> {
         if has_sampler {
             None
         } else {
-            Some("This window cannot read screen pixels, so the eyedropper is unavailable")
+            Some(crate::strings::tr(
+                "ui.color_picker.this.window.cannot.read.screen.pixels",
+            ))
         }
     }
 
@@ -606,7 +608,9 @@ impl ColorPickerDialog {
                 self.original.rgba,
                 sizes::swatch_compare(),
             )
-            .on_hover_text("Back to the colour this opened on")
+            .on_hover_text(crate::strings::tr(
+                "ui.color_picker.back.to.the.colour.this.opened",
+            ))
             .clicked()
             {
                 self.set_color(self.original);
@@ -621,7 +625,13 @@ impl ColorPickerDialog {
         });
 
         let mut web_safe = self.web_safe_only;
-        if checkbox_row(ui, "Only web-safe colours", &mut web_safe).changed() {
+        if checkbox_row(
+            ui,
+            crate::strings::tr("ui.color_picker.only.web.safe.colours"),
+            &mut web_safe,
+        )
+        .changed()
+        {
             self.set_web_safe_only(web_safe);
         }
 
@@ -645,7 +655,10 @@ impl ColorPickerDialog {
         }
 
         if self.eyedropper == Eyedropper::Armed {
-            caption(ui, "Click anywhere to sample a colour, or press Escape.");
+            caption(
+                ui,
+                crate::strings::tr("ui.color_picker.click.anywhere.to.sample.a.colour"),
+            );
         }
 
         ui.add_space(Space::Small.pt());
@@ -848,14 +861,14 @@ impl ColorPickerDialog {
             }
         });
         if ColorValue::from_hex(&self.hex).is_none() {
-            caption(ui, "Not a hex colour");
+            caption(ui, crate::strings::tr("ui.color_picker.not.a.hex.colour"));
         }
     }
 }
 
 impl Dialog for ColorPickerDialog {
     fn title(&self) -> &'static str {
-        "Color Picker"
+        crate::strings::tr("ui.color_picker.color.picker")
     }
 
     fn confirm_label(&self) -> &'static str {

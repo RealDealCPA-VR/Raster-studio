@@ -266,7 +266,9 @@ impl Dialog for FillDialog {
             return Some("Opacity must be between 0% and 100%".to_string());
         }
         if self.spec.contents.kind() == FillContentsKind::Pattern && self.pattern_names.is_empty() {
-            return Some("No patterns are defined yet".to_string());
+            return Some(
+                crate::strings::tr("ui.fill_stroke.no.patterns.are.defined.yet").to_string(),
+            );
         }
         None
     }
@@ -312,7 +314,9 @@ impl Dialog for StrokeDialog {
 
     fn blocked_reason(&self) -> Option<String> {
         if !(1..=250).contains(&self.spec.width) {
-            return Some("Width must be between 1 and 250 pixels".to_string());
+            return Some(
+                crate::strings::tr("ui.fill_stroke.width.must.be.between.1.and").to_string(),
+            );
         }
         if !self.spec.is_valid() {
             return Some("Opacity must be between 0% and 100%".to_string());
@@ -338,7 +342,9 @@ impl FillDialog {
             ctx,
             "fill",
             self.title(),
-            Some("Fills the active selection with the chosen contents."),
+            Some(crate::strings::tr(
+                "ui.fill_stroke.fills.the.active.selection.with.the",
+            )),
             DialogWidth::Narrow,
             |ui| self.body(ui),
         );
@@ -361,7 +367,10 @@ impl FillDialog {
     }
 
     fn body(&mut self, ui: &mut egui::Ui) -> Option<DialogButton> {
-        caption(ui, "Fills the active selection with the chosen contents.");
+        caption(
+            ui,
+            crate::strings::tr("ui.fill_stroke.fills.the.active.selection.with.the"),
+        );
         hairline(ui);
 
         design::section_header(ui, "Contents");
@@ -449,7 +458,7 @@ impl FillDialog {
         });
         checkbox_row(
             ui,
-            "Preserve Transparency",
+            crate::strings::tr("ui.fill_stroke.preserve.transparency"),
             &mut self.spec.preserve_transparency,
         );
     }
@@ -463,7 +472,9 @@ impl StrokeDialog {
             ctx,
             "stroke",
             self.title(),
-            Some("Paints a band along the active selection's border."),
+            Some(crate::strings::tr(
+                "ui.fill_stroke.paints.a.band.along.the.active",
+            )),
             DialogWidth::Narrow,
             |ui| self.body(ui),
         );
@@ -480,7 +491,10 @@ impl StrokeDialog {
     }
 
     fn body(&mut self, ui: &mut egui::Ui) -> Option<DialogButton> {
-        caption(ui, "Paints a band along the active selection's border.");
+        caption(
+            ui,
+            crate::strings::tr("ui.fill_stroke.paints.a.band.along.the.active"),
+        );
         hairline(ui);
 
         design::section_header(ui, "Stroke");
@@ -526,7 +540,7 @@ impl StrokeDialog {
         });
         checkbox_row(
             ui,
-            "Preserve Transparency",
+            crate::strings::tr("ui.fill_stroke.preserve.transparency"),
             &mut self.spec.preserve_transparency,
         );
 
