@@ -69,6 +69,18 @@ fn active() -> Locale {
 /// translations. A locale missing from a row falls back to English at lookup.
 const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("actions.record", &[(Locale::En, "Record")]),
+    ("ui.image_size.change.how.many.pixels.the.document", &[(Locale::En, "Change how many pixels the document has, or how large it prints.")]),
+    ("ui.image_size.pixel.dimensions", &[(Locale::En, "Pixel dimensions")]),
+    ("ui.image_size.turn.on.resample.to.change.the", &[(Locale::En, "Turn on Resample to change the pixel count.")]),
+    ("ui.image_size.document.size", &[(Locale::En, "Document size")]),
+    ("ui.image_size.constrain.proportions", &[(Locale::En, "Constrain proportions")]),
+    ("ui.image_size.nearest.neighbour", &[(Locale::En, "Nearest Neighbour")]),
+    ("ui.image_size.soft.and.cheap.good.for.a", &[(Locale::En, "Soft and cheap. Good for a small enlargement.")]),
+    ("ui.image_size.the.balanced.default.for.photographs", &[(Locale::En, "The balanced default for photographs.")]),
+    ("ui.image_size.sharpest.with.a.little.ringing.on", &[(Locale::En, "Sharpest, with a little ringing on hard edges.")]),
+    ("ui.image_size.image.size", &[(Locale::En, "Image Size")]),
+    ("ui.image_size.width.and.height.must.be.at", &[(Locale::En, "Width and height must be at least 1 pixel")]),
+    ("ui.image_size.resolution.must.be.greater.than.zero", &[(Locale::En, "Resolution must be greater than zero")]),
     ("ui.canvas_size.top.left", &[(Locale::En, "Top left")]),
     ("ui.canvas_size.top.right", &[(Locale::En, "Top right")]),
     ("ui.canvas_size.bottom.left", &[(Locale::En, "Bottom left")]),

@@ -35,6 +35,7 @@ use super::chrome::{
 use super::controls::{checkbox_row, combo, numeric, readout};
 use super::new_document::{MAX_DIMENSION, MAX_PIXELS};
 use super::units::{format_bytes, ResolutionUnit, Unit, MAX_PPI};
+use crate::strings::tr;
 
 /// Bytes one pixel of a flattened 8-bit RGBA document occupies.
 pub const BYTES_PER_PIXEL: u64 = 4;
@@ -311,7 +312,9 @@ impl ImageSizeDialog {
             ctx,
             "image-size",
             self.title(),
-            Some("Change how many pixels the document has, or how large it prints."),
+            Some(crate::strings::tr(
+                "ui.image_size.change.how.many.pixels.the.document",
+            )),
             DialogWidth::Standard,
             |ui| self.body(ui),
         );
@@ -342,7 +345,7 @@ impl ImageSizeDialog {
         );
         hairline(ui);
 
-        design::section_header(ui, "Pixel dimensions");
+        design::section_header(ui, crate::strings::tr("ui.image_size.pixel.dimensions"));
         let editable = self.pixels_editable();
         ui.add_enabled_ui(editable, |ui| {
             design::inspector_field(ui, "Width", |ui| {
@@ -391,10 +394,13 @@ impl ImageSizeDialog {
             });
         });
         if !editable {
-            caption(ui, "Turn on Resample to change the pixel count.");
+            caption(
+                ui,
+                crate::strings::tr("ui.image_size.turn.on.resample.to.change.the"),
+            );
         }
 
-        design::section_header(ui, "Document size");
+        design::section_header(ui, crate::strings::tr("ui.image_size.document.size"));
         design::inspector_field(ui, "Width", |ui| {
             let mut value = self.print_field(self.print_width_in());
             if numeric(
@@ -453,7 +459,13 @@ impl ImageSizeDialog {
 
         design::section_header(ui, "Options");
         let mut constrain = self.constrain;
-        if checkbox_row(ui, "Constrain proportions", &mut constrain).changed() {
+        if checkbox_row(
+            ui,
+            crate::strings::tr("ui.image_size.constrain.proportions"),
+            &mut constrain,
+        )
+        .changed()
+        {
             self.set_constrain(constrain);
         }
         let mut resample = self.resample;
@@ -514,7 +526,7 @@ pub const FILTERS: &[ResampleFilter] = &[
 /// Menu label for a resampling method.
 pub fn filter_label(filter: ResampleFilter) -> &'static str {
     match filter {
-        ResampleFilter::Nearest => "Nearest Neighbour",
+        ResampleFilter::Nearest => crate::strings::tr("ui.image_size.nearest.neighbour"),
         ResampleFilter::Triangle => "Bilinear",
         ResampleFilter::Mitchell => "Bicubic",
         ResampleFilter::Lanczos3 => "Lanczos",
@@ -527,15 +539,19 @@ pub fn filter_hint(filter: ResampleFilter) -> &'static str {
         ResampleFilter::Nearest => {
             "Hard edges, no blending. Pixel art only — it aliases on downscale."
         }
-        ResampleFilter::Triangle => "Soft and cheap. Good for a small enlargement.",
-        ResampleFilter::Mitchell => "The balanced default for photographs.",
-        ResampleFilter::Lanczos3 => "Sharpest, with a little ringing on hard edges.",
+        ResampleFilter::Triangle => crate::strings::tr("ui.image_size.soft.and.cheap.good.for.a"),
+        ResampleFilter::Mitchell => {
+            crate::strings::tr("ui.image_size.the.balanced.default.for.photographs")
+        }
+        ResampleFilter::Lanczos3 => {
+            crate::strings::tr("ui.image_size.sharpest.with.a.little.ringing.on")
+        }
     }
 }
 
 impl Dialog for ImageSizeDialog {
     fn title(&self) -> &'static str {
-        "Image Size"
+        crate::strings::tr("ui.image_size.image.size")
     }
 
     fn confirm_label(&self) -> &'static str {
@@ -550,7 +566,9 @@ impl Dialog for ImageSizeDialog {
     fn blocked_reason(&self) -> Option<String> {
         let spec = self.spec();
         if spec.width < 1 || spec.height < 1 {
-            return Some("Width and height must be at least 1 pixel".to_string());
+            return Some(
+                crate::strings::tr("ui.image_size.width.and.height.must.be.at").to_string(),
+            );
         }
         if spec.width > MAX_DIMENSION || spec.height > MAX_DIMENSION {
             return Some(format!("No side may exceed {MAX_DIMENSION} pixels"));
@@ -562,7 +580,10 @@ impl Dialog for ImageSizeDialog {
             ));
         }
         if !(spec.resolution_ppi.is_finite() && spec.resolution_ppi > 0.0) {
-            return Some("Resolution must be greater than zero".to_string());
+            return Some(
+                crate::strings::tr("ui.image_size.resolution.must.be.greater.than.zero")
+                    .to_string(),
+            );
         }
         (spec.resolution_ppi > MAX_PPI).then(|| format!("Resolution may not exceed {MAX_PPI} ppi"))
     }
