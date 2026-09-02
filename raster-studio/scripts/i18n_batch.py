@@ -36,7 +36,9 @@ manifest += [
     ('crates/ui/src/dialogs/preferences.rs', 'preferences', json.load(open('/tmp/i18n_b2.json'))['preferences']),
     ]
 
-manifest = [m for m in manifest if all(
+import sys
+ONLY = sys.argv[1:] if len(sys.argv) > 1 else None
+manifest = [m for m in manifest if (ONLY is None or m[1] in ONLY) and all(
     ('("%s"' % ('ui.' + m[1] + '.' + slug(l))) not in existing for l in m[2]
 )]
 for path, mod, lits in manifest:
@@ -45,10 +47,6 @@ for path, mod, lits in manifest:
     code, tests = (src[:cut], src[cut:]) if cut >= 0 else (src, '')
     # Mask the constructs a fn call cannot live in: const initialisers and
     # write!-macro format strings. Their literals stay for a hand edit.
-    masked = []
-    for pat in [r'(const\s+\w+\s*:\s*&?['"]?str\s*=\s*)("(?:[^"\]|\.)*")',
-                r'(write!\(\s*f,\s*)("(?:[^"\]|\.)*")']:
-        code = re.sub(pat, lambda m: m.group(1) + MASK_PREFIX + m.group(2) + MASK_SUFFIX, code)
     for lit in lits:
         key = 'ui.' + mod + '.' + slug(lit)
         base, n = key, 2

@@ -321,12 +321,15 @@ impl LockToggle {
     /// A *key* into [`crate::icons::ui_icon`], never a symbol: the four symbols
     /// this row used to type (`"▨"`, `"✎"`, `"✥"`, `"🔒"`) are not in the font
     /// egui loads, so the row was four tofu boxes.
-    pub(crate) const fn icon_and_tooltip(self) -> (&'static str, &'static str) {
+    pub(crate) fn icon_and_tooltip(self) -> (&'static str, &'static str) {
         match self {
-            LockToggle::Transparency => ("lock-transparency", "Lock transparent pixels"),
-            LockToggle::Pixels => ("lock-pixels", "Lock pixels"),
-            LockToggle::Position => ("lock-position", "Lock position"),
-            LockToggle::All => ("lock-all", "Lock all"),
+            LockToggle::Transparency => (
+                "lock-transparency",
+                crate::strings::tr("ui.mod.lock.transparent.pixels"),
+            ),
+            LockToggle::Pixels => ("lock-pixels", crate::strings::tr("ui.mod.lock.pixels")),
+            LockToggle::Position => ("lock-position", crate::strings::tr("ui.mod.lock.position")),
+            LockToggle::All => ("lock-all", crate::strings::tr("ui.mod.lock.all")),
         }
     }
 

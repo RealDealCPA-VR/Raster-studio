@@ -69,6 +69,10 @@ fn active() -> Locale {
 /// translations. A locale missing from a row falls back to English at lookup.
 const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("actions.record", &[(Locale::En, "Record")]),
+    ("ui.mod.lock.transparent.pixels", &[(Locale::En, "Lock transparent pixels")]),
+    ("ui.mod.lock.pixels", &[(Locale::En, "Lock pixels")]),
+    ("ui.mod.lock.position", &[(Locale::En, "Lock position")]),
+    ("ui.mod.lock.all", &[(Locale::En, "Lock all")]),
     ("ui.menu_bar.nothing.in.this.submenu.is.available", &[(Locale::En, "Nothing in this submenu is available right now")]),
     ("ui.status.unsaved.changes", &[(Locale::En, "Unsaved changes")]),
     ("ui.status.type.a.zoom.level", &[(Locale::En, "Type a zoom level")]),
