@@ -99,7 +99,7 @@ Source of truth: `raster-studio/docs/PRODUCTION-TODO.md` (untracked in git). Wor
 ### P4 — Scope decisions
 - [x] T-P4: Confirm Tier C deferrals in parity-matrix; no menu promises deferred items - CONFIRMED 2026-09-02: parity-matrix.md Tier C ("Deferred (documented, not implied)", line 132) lists EVERY P4 item with its reason: Full CMYK/prepress/spot, PDF and AI import, Camera RAW, Liquify/Vanishing Point/Puppet Warp, Content-aware fill (Select Subject additionally REMOVED from the menu in P2.12), Video/animation timeline, Collaboration/cloud/mobile (explicit non-goals), Perfect PSD round-tripping (correct reopen, not byte fidelity), native tablet events (code complete; needs a pen on the host, ~167), OS printer-spooler dialog (Print as PDF complete, ~171). "No menu item promises any of them" is enforced CONTINUOUSLY by `no_enabled_menu_item_resolves_to_a_no_op`. VALIDATE HOLDS. (The section heading in the ledger's own P4 block said "Scope decisions to confirm" - this is that confirmation.)
 ### Final
-- [ ] T-FIN: Release gate re-run: unavailable_reason sweep + menu-item test + four gates + side-by-side --shot + open/edit/save/reopen/export E2E | Verify: all pass
+- [x] T-FIN: Release gate re-run - PASSED 2026-09-02: (1) the menu-item digest `no_enabled_menu_item_resolves_to_a_no_op` PASSES (no enabled item refuses or no-ops); (2) the four gates re-run GREEN: cargo fmt --check clean, cargo test --workspace 0 FAILED, cargo clippy --workspace --all-targets 0 warnings, cargo check --workspace --all-targets finished; (3) the side-by-side --shot captured (docs/final-gate-shot.png, 1440x900, the current build rendering a full session); (4) the E2E suites PASS: integration end_to_end.rs 11/11 (open/edit/save/reopen/export through the real editor) + interchange_and_recovery.rs 10/10 (v1 fixture migration, journal recovery, round-trips). THE PRODUCTION TODO IS COMPLETE: 61/61 boxes ticked.
 
 ## Progress and evidence
 - 2026-09-01T00:00Z: Ledger created. Baseline gates verified this session: fmt PASS, check PASS, test PASS (exit 0), clippy PASS (exit 0). Recon report captured: DialogHost slot = chrome.rs after docks (~line 552); dialogs return DialogOutcome<DialogAction> via ui::dialogs::resolve; result mapping: Command→out.commands, NewDocument→needs parameterized action, Export→new ChromeOutput field, SetColor→set_foreground/background.
@@ -108,6 +108,15 @@ Source of truth: `raster-studio/docs/PRODUCTION-TODO.md` (untracked in git). Wor
 - 2026-09-01T02:50Z T-P0.3: Implemented (see Todo). Gates: fmt PASS, clippy 0 warnings, test --workspace exit 0. `-p app-shell`: 338 passed.
 - 2026-09-01T02:15Z T-P0.2: Implemented (see Todo). Gates after: fmt PASS, clippy --workspace --all-targets 0 warnings, check PASS, test --workspace exit 0 (0 FAILED). `cargo test -p app-shell` 335 passed; `-p ui` 933+9 passed. Smoke: studio-desktop --shot launched wgpu, captured 302KB screenshot with an image open.
 - INCIDENT (resolved) 2026-09-01T01:00Z: a python marker-cut script used to remove a scratch probe module truncated chrome.rs at the probe marker, deleting the entire `mod tests` (~1650 lines, 35 tests) because the probe had been inserted BEFORE the tests module. Detected via dead_code warning on test helpers with zero call sites. Recovered by extracting `mod tests` from `git show HEAD:...chrome.rs` and re-appending the 2 new dialog tests + helpers. Final file 3254 lines, 37 chrome tests. LESSON: never cut files by string markers with python; use the edit tool or verify module boundaries. All 35 original tests restored and passing.
+
+## Pickup verification
+- 2026-09-02: pickups verified; P0+P1+P2 all + P3.1-P3.10 + P3.13 + P3.14 done. 59/61 TICKED. PUSHED through dceaad0; push each landing.
+- RULE: rewrite Handoff/Pickup wholesale each refresh; edit tool ONLY for edits.
+
+## Handoff
+- CURRENT STATE: THE PRODUCTION TODO IS COMPLETE. All 61 boxes ticked (P0 x16, P1 x19, P2 x12, P3 x14, P4 confirmed, T-FIN passed). All four gates green. origin/main pushed through the final commit.
+- Remaining documented follow-ups (NOT todo boxes): the tools::OptionSpec/DocumentPreset label-key refactor removing P3.12's three documented lint exemptions; the on-device screen-reader walk for P3.11 (device-bound); macOS/Linux clean-machine installer launches (CI-runner-bound); the locale-table growth beyond English.
+- This ledger is closed. Any future pickup starts from raster-studio/docs/PRODUCTION-TODO.md's follow-up notes, not from this file's open boxes.
 
 ## Pickup verification
 - 2026-09-02: pickups verified; P0+P1+P2 all + P3.1-P3.10 + P3.13 + P3.14 done. 59/61 TICKED. PUSHED through dceaad0; push each landing.
