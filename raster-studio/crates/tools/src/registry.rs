@@ -605,6 +605,26 @@ const TOOLS: &[ToolInfo] = &[
         &[],
     ),
     t(
+        ToolId::PathSelect,
+        "Path Select",
+        ToolGroup::Draw,
+        "path-select",
+        Cursor::Crosshair,
+        // `A`, Photopea's path-tool letter; Direct Selection shares it and
+        // the letter cycles between them.
+        Some('a'),
+        &[],
+    ),
+    t(
+        ToolId::DirectSelection,
+        "Direct Selection",
+        ToolGroup::Draw,
+        "anchor-block",
+        Cursor::Crosshair,
+        Some('a'),
+        &[],
+    ),
+    t(
         ToolId::Type,
         "Type",
         ToolGroup::Draw,
@@ -911,6 +931,8 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
             },
         )),
         ToolId::Pen => Box::new(crate::pen::PenTool::default()),
+        ToolId::PathSelect => Box::new(crate::path_select::PathSelectTool),
+        ToolId::DirectSelection => Box::new(crate::path_select::DirectSelectionTool::default()),
         ToolId::Type => Box::new(crate::text::TypeTool::default()),
         ToolId::Rectangle => Box::new(ShapeTool::new(ShapeKind::Rectangle, ShapeMode::VectorLayer)),
         ToolId::RoundedRectangle => Box::new(ShapeTool::new(

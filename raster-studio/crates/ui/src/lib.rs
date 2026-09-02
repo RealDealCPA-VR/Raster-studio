@@ -51,6 +51,7 @@
 use editor_core::{Command, Document, History};
 
 pub mod canvas;
+pub mod context_menu;
 pub mod dialogs;
 pub mod dock;
 pub mod icons;
@@ -67,7 +68,7 @@ pub mod view;
 pub use dock::{DockSide, DockState, LayoutId, PanelId};
 pub use intent::{ClipboardState, Intent, Progress, ViewFlag, ViewFlags};
 pub use menu::{MenuAction, MenuContext, Resolution};
-pub use palette::{PaletteModel, PaletteState};
+pub use palette::{PaletteModel, PaletteState, HOLD_SECONDS};
 pub use shortcut::{Key, Shortcut};
 pub use status::StatusBar;
 pub use tool_options::{OptionValue, ToolOptions};
@@ -82,6 +83,12 @@ pub struct Workspace {
     /// The panel whose header disclosure is showing its move controls, if any.
     /// At most one at a time, so the rail never grows two of them.
     pub panel_menu: Option<PanelId>,
+    /// The right-click context menu awaiting its clicks, if any: which surface
+    /// opened it and where. Drawn by [`context_menu::draw_open`].
+    pub context_menu: Option<(context_menu::ContextTarget, egui::Pos2)>,
+    /// True on the frame the menu opened, so its own release click does not
+    /// close it again.
+    pub context_menu_fresh: bool,
     /// The tool palette's selection and fly-out state.
     pub palette: PaletteState,
     /// Per-tool option values.
@@ -164,6 +171,8 @@ impl Workspace {
         Self {
             dock: DockState::default(),
             panel_menu: None,
+            context_menu: None,
+            context_menu_fresh: false,
             palette: PaletteState::new(),
             options: ToolOptions::new(),
             layers: panels::layers::LayersState::new(),
@@ -425,6 +434,9 @@ impl Workspace {
         self.sync_canvas_view();
         let out = self.canvas.central_panel(ctx, doc, tool, &brush);
         self.consume_canvas(out);
+        // Last of all, the right-click menu: it floats above everything.
+        let context = self.menu_context(doc, history);
+        context_menu::draw_open(self, ctx, &context);
     }
 
     /// Put the View menu's toggles onto the canvas.
@@ -474,6 +486,9 @@ impl Workspace {
         self.info.pointer = out.pointer_doc.map(|p| (p.x, p.y));
         self.grid_suppressed = out.grid_suppressed;
         self.canvas_events.extend(out.tool_events);
+        if let Some(pos) = out.context_menu {
+            context_menu::open(self, context_menu::ContextTarget::Canvas, pos);
+        }
     }
 
     /// Copy the canvas camera into the numbers the chrome reads.
@@ -674,14 +689,20 @@ mod tests {
         let mut w = Workspace::new();
         let before = w.dock.panels_on(DockSide::Right);
         let last = *before.last().expect("Essentials fills the right rail");
-        let to = u8::try_from(before.len() - 2).unwrap();
-        assert!(w.absorb(&Intent::ReorderPanel { panel: last, to }));
+        // Groups travel whole, so "to 0" brings the last panel's whole tab
+        // group to the front of the rail — the group's first member leads.
+        assert!(w.absorb(&Intent::ReorderPanel { panel: last, to: 0 }));
         assert_ne!(w.dock.panels_on(DockSide::Right), before);
-        assert_eq!(w.dock.panels_on(DockSide::Right)[usize::from(to)], last);
+        let group_lead = w.dock.panels_on(DockSide::Right)[0];
+        assert_eq!(
+            w.dock.panels_on(DockSide::Right)[1],
+            last,
+            "the dragged panel rides with its group"
+        );
         // Absorbing the very same intent again leaves it exactly there: the
         // destination is absolute, so a second application is a no-op.
-        assert!(!w.absorb(&Intent::ReorderPanel { panel: last, to }));
-        assert_eq!(w.dock.panels_on(DockSide::Right)[usize::from(to)], last);
+        assert!(!w.absorb(&Intent::ReorderPanel { panel: last, to: 0 }));
+        assert_eq!(w.dock.panels_on(DockSide::Right)[0], group_lead);
         // Index 0 is where the first panel already is.
         let first = w.dock.panels_on(DockSide::Right)[0];
         assert!(!w.absorb(&Intent::ReorderPanel {

@@ -79,11 +79,11 @@ safety controls that the threat model claimed were in place.
 Only **one line of real code** referenced ComfyUI (`dist_path` in a default);
 the coupling was 99% documentation. The editor's compile graph is untouched.
 
-### D4 — An Apple-style design system as its own crate
+### D4 — A design system as its own crate
 
 `crates/design` owns tokens (color, type scale, spacing, radii, shadows, motion,
-elevation) and themed egui widgets. The design language is calm, light-first,
-high-contrast-on-demand, generous in spacing, restrained in chrome: content is
+elevation) and themed egui widgets. The design language is Photopea’s: neutral greys,
+dark-first, compact density, restrained chrome: content is
 the interface, panels recede. Tokens are plain data, so they are unit-testable
 and a dark/light pair can be verified for contrast ratios programmatically.
 
@@ -153,7 +153,7 @@ Ends with: *you can draw, select, and transform.*
 **Wave 4 — Persistence and interop.** `.rstudio` with real tile persistence and
 migrations, PSD read/write, export presets. Ends with: *work survives a restart.*
 
-**Wave 5 — The application.** The Apple-style UI: menu bar, tool palette, tool
+**Wave 5 — The application.** The Photopea-style UI: menu bar, tool palette, tool
 options, all panels, dialogs, rulers/guides/grid/snap, shortcuts, drag-and-drop,
 preferences, multi-document. Ends with: *it feels like a product.*
 

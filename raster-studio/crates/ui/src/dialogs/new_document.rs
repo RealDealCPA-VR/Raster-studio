@@ -743,9 +743,12 @@ impl Dialog for NewDocumentDialog {
     }
 
     fn confirm(&self) -> Option<DialogAction> {
-        let spec = self.spec();
-        spec.is_valid()
-            .then(|| DialogAction::NewDocument(Box::new(spec)))
+        // `blocked_reason` is the one gate — every condition that must refuse
+        // the confirm lives there, so `confirm()` and the disabled primary
+        // button cannot disagree about what is committable.
+        self.blocked_reason()
+            .is_none()
+            .then(|| DialogAction::NewDocument(Box::new(self.spec())))
     }
 
     fn blocked_reason(&self) -> Option<String> {
@@ -773,6 +776,17 @@ impl Dialog for NewDocumentDialog {
         }
         if spec.resolution_ppi > MAX_PPI {
             return Some(format!("Resolution may not exceed {MAX_PPI} ppi"));
+        }
+        if spec.bit_depth == BitDepth::Sixteen {
+            // The tile store holds 16-bit tiles and the export path writes
+            // them, but the compositor reads tiles as RGBA8 — a 16-bit
+            // document would composite as garbage. This lifts when live
+            // compositing handles depth (PRODUCTION-TODO P2.5).
+            return Some(
+                "16-bit documents arrive with live 16-bit compositing; this \
+                 build creates 8-bit documents"
+                    .to_string(),
+            );
         }
         spec.color_mode.unavailable().map(str::to_string)
     }
@@ -947,6 +961,25 @@ mod tests {
         assert_eq!(
             BackgroundContents::Custom([0.2, 0.4, 0.6, 0.5]).fill(),
             Some([0.2, 0.4, 0.6, 0.5])
+        );
+    }
+
+    #[test]
+    fn a_sixteen_bit_document_is_refused_until_live_compositing_handles_it() {
+        // The store holds 16-bit tiles and export writes them, but the
+        // compositor reads RGBA8 — so the dialog refuses the depth with a
+        // reason rather than confirming a document that would draw as garbage.
+        let dialog = NewDocumentDialog {
+            bit_depth: BitDepth::Sixteen,
+            ..Default::default()
+        };
+        let reason = dialog.blocked_reason().expect("16-bit creation is refused");
+        assert!(reason.contains("16-bit"), "{reason}");
+        let outcome =
+            super::super::chrome::resolve(&dialog, super::super::chrome::DialogKeys::CONFIRM);
+        assert!(
+            matches!(outcome, DialogOutcome::Open),
+            "a blocked dialog must not confirm: {outcome:?}"
         );
     }
 

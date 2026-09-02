@@ -33,6 +33,7 @@ use editor_core::Command;
 use filters::{EdgeMode, FilterBuffer};
 use glam::{IVec2, Vec2};
 use raster::PixelRect;
+use selection::transform_selection;
 
 use crate::error::ToolError;
 use crate::patch::{ColorPatch, CoveragePatch};
@@ -55,6 +56,27 @@ pub enum TransformMode {
     Perspective,
     /// The control mesh bends the interior, not just the outline.
     Warp,
+}
+
+impl TransformMode {
+    /// Every mode, in the registry's choice-option order — the same order the
+    /// options bar's segmented control and [`Tool::set_choice`] speak.
+    pub const ALL: [TransformMode; 6] = [
+        TransformMode::Scale,
+        TransformMode::Rotate,
+        TransformMode::Skew,
+        TransformMode::Distort,
+        TransformMode::Perspective,
+        TransformMode::Warp,
+    ];
+
+    /// The mode a choice index names, clamped into range.
+    pub fn from_index(index: usize) -> Self {
+        Self::ALL
+            .get(index)
+            .copied()
+            .unwrap_or(TransformMode::Scale)
+    }
 }
 
 /// What the pointer grabbed.
@@ -690,10 +712,39 @@ pub fn resample(
     Ok(out)
 }
 
+/// The affine that maps three source points onto three destination points —
+/// the parallelogram a Scale-mode gizmo produces. `None` when either triangle
+/// is degenerate, which a collapsed destination always is.
+fn quad_affine(src: [Vec2; 4], dst: [Vec2; 4]) -> Option<glam::Affine2> {
+    let (s0, s1, s3) = (src[0], src[1], src[3]);
+    let (c0, c1, c3) = (dst[0], dst[1], dst[3]);
+    let a = s1 - s0;
+    let b = s3 - s0;
+    let det = a.x * b.y - a.y * b.x;
+    if !det.is_finite() || det.abs() < 1e-9 {
+        return None;
+    }
+    // Solve the 2x2 that maps the source basis onto the destination basis:
+    // columns [ma | mb] = M [a | b], so M = [ma | mb] [a | b]⁻¹, and the
+    // affine carries the translation so s0 lands on c0.
+    let ma = c1 - c0;
+    let mb = c3 - c0;
+    // [a|b]⁻¹ = 1/det · [ b.y −b.x ; −a.y a.x ]
+    let inv = glam::Mat2::from_cols_array(&[b.y / det, -a.y / det, -b.x / det, a.x / det]);
+    let m = glam::Mat2::from_cols_array(&[ma.x, ma.y, mb.x, mb.y]) * inv;
+    Some(glam::Affine2 {
+        matrix2: m,
+        translation: c0 - m * s0,
+    })
+}
+
 /// The free transform tool.
 pub struct TransformTool {
     pub mode: TransformMode,
     pub state: Option<TransformState>,
+    /// Transform the active SELECTION's mask instead of the layer's pixels —
+    /// the `target` option's second choice.
+    pub selection_only: bool,
     grabbed: Option<Handle>,
     last: Vec2,
 }
@@ -703,6 +754,7 @@ impl Default for TransformTool {
         Self {
             mode: TransformMode::Scale,
             state: None,
+            selection_only: false,
             grabbed: None,
             last: Vec2::ZERO,
         }
@@ -740,6 +792,35 @@ impl TransformTool {
         let Some(state) = self.state.clone() else {
             return Ok(());
         };
+        // The selection target resamples the selection MASK, not pixels: an
+        // affine (Scale mode's parallelogram) maps source corners to current
+        // ones. The projective modes are refused with a sentence rather than
+        // silently downgraded.
+        if self.selection_only {
+            if self.mode != TransformMode::Scale {
+                self.state = None;
+                self.grabbed = None;
+                return Err(ToolError::Degenerate);
+            }
+            let xf = quad_affine(state.source_corners(), state.corners)
+                .ok_or_else(ToolError::not_invertible)?;
+            let canvas = selection::rect::Rect::from_xywh(
+                ctx.canvas.x as i32,
+                ctx.canvas.y as i32,
+                ctx.canvas.width,
+                ctx.canvas.height,
+            );
+            let next = transform_selection(
+                &ctx.selection,
+                canvas,
+                xf,
+                selection::transform::ResampleFilter::Bilinear,
+            )?;
+            self.state = None;
+            self.grabbed = None;
+            ctx.emit(Command::SetSelection { selection: next });
+            return Ok(());
+        }
         // Refuse before reading anything: a collapsed quad has no inverse, and
         // mapping through it would write NaN into every pixel it touched.
         match state.mesh.filter(|_| self.mode == TransformMode::Warp) {
@@ -802,6 +883,21 @@ fn union_clipped(a: PixelRect, b: PixelRect, canvas: PixelRect) -> Option<PixelR
 impl Tool for TransformTool {
     fn id(&self) -> ToolId {
         ToolId::FreeTransform
+    }
+
+    fn set_choice(&mut self, key: &str, index: usize) {
+        match key {
+            "mode" => {
+                // A live session keeps the mode it started with: switching to
+                // Warp half-way through a drag would re-shape the quad under
+                // the pointer.
+                if self.state.is_none() {
+                    self.mode = TransformMode::from_index(index);
+                }
+            }
+            "target" => self.selection_only = index == 1,
+            _ => {}
+        }
     }
 
     fn on_pointer_down(

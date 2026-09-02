@@ -110,6 +110,9 @@ pub struct PaletteState {
     last_used: HashMap<usize, ToolId>,
     /// The slot whose fly-out is open, if any.
     pub open_flyout: Option<usize>,
+    /// A press-and-hold in flight: the slot pressed and the egui time it went
+    /// down. Holding past [`HOLD_SECONDS`] opens the fly-out without a click.
+    pub hold: Option<(usize, f64)>,
 }
 
 impl Default for PaletteState {
@@ -118,9 +121,13 @@ impl Default for PaletteState {
             active: ToolId::Brush,
             last_used: HashMap::new(),
             open_flyout: None,
+            hold: None,
         }
     }
 }
+
+/// How long a press-and-hold on a variant tool's slot opens its fly-out.
+pub const HOLD_SECONDS: f64 = 0.3;
 
 impl PaletteState {
     pub fn new() -> Self {
@@ -257,7 +264,7 @@ pub fn info(tool: ToolId) -> Option<&'static ToolInfo> {
 /// The tooltip a palette button shows: the tool's name and its key.
 pub fn tooltip(info: &ToolInfo) -> String {
     match info.shortcut {
-        Some(key) => format!("{}  ({})", info.name, key.to_ascii_uppercase()),
+        Some(key) => format!("{} ({})", info.name, key.to_ascii_uppercase()),
         None => info.name.to_string(),
     }
 }

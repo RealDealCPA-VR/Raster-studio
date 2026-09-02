@@ -55,15 +55,16 @@
 
 use std::path::PathBuf;
 
-use design::{ColorRole, Space, SurfaceRole, TextRole, TypeRole};
+use design::{Space, SurfaceRole, TextRole, TypeRole};
 use editor_core::Command;
 use layer_model::LayerId;
 use tools::ToolId;
 
 use crate::action::Action;
+use crate::dialog_host::{ActiveDialog, CanvasSampler};
 use crate::editor::Editor;
 use crate::keymap::{Chord, Key};
-use crate::prefs::{Preferences, ThemeChoice};
+use crate::prefs::Preferences;
 
 /// Install `theme` on an egui context so it survives the platform changing its
 /// mind about light and dark.
@@ -119,6 +120,14 @@ pub struct Rebind {
 /// into the field. Only the window knows whether a button is still down, which
 /// is why [`crate::menu_bridge::record`] leaves this `None` and
 /// [`Chrome::harvest`] stamps it.
+/// One Actions-panel transport request, in panel-click order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionsTransport {
+    StartRecording,
+    StopRecording,
+    ReplayRecording,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct KindEdit {
     pub layer: LayerId,
@@ -151,6 +160,9 @@ pub struct ChromeOutput {
     /// per frame and they must land as a single undo step — see
     /// [`KindEdit::gesture`] and [`crate::Editor::apply_kind_edit`].
     pub layer_kind: Vec<KindEdit>,
+    /// The Actions panel's transport, performed in order by the shell:
+    /// start/stop the recording, replay the last capture.
+    pub actions_transport: Vec<ActionsTransport>,
     /// Intents the bridge had no answer for.
     ///
     /// **Not an error path that can be left empty and forgotten.** Before this
@@ -170,9 +182,14 @@ pub struct ChromeOutput {
     pub activate: Option<usize>,
     /// A tab's close button was clicked.
     pub close: Option<usize>,
+    /// The tab strip's drag: move the document at `.0` to index `.1`.
+    pub move_document: Option<(usize, usize)>,
     /// A layer row was clicked **this frame**. Never a mirror of the current
     /// selection; see the module note.
     pub select_layer: Option<LayerId>,
+    /// Photopea's multi-selection: the whole set, in click order, plus the
+    /// layer the click landed on.
+    pub select_layers: Option<(Vec<LayerId>, Option<LayerId>)>,
     /// A recent-files entry was chosen.
     pub open_recent: Option<PathBuf>,
     /// A history row was clicked: walk the timeline to this many applied
@@ -180,6 +197,8 @@ pub struct ChromeOutput {
     pub history_jump: Option<usize>,
     /// A tool button was clicked.
     pub select_tool: Option<ToolId>,
+    /// The named choice a transform menu item made, as (tool, key, index).
+    pub tool_choice: Option<(ToolId, String, usize)>,
     /// The foreground colour was edited in the colour well.
     pub set_foreground: Option<[f32; 4]>,
     /// The background colour was edited in the colour well.
@@ -196,7 +215,8 @@ pub struct ChromeOutput {
     /// the time the shell sees them; they are reported so a test can read what
     /// a click meant, and so the shell can repaint knowing something moved.
     pub workspace: Vec<ui::Intent>,
-    /// The preferences window changed a setting.
+    /// A settings change that maps straight onto the app's own preferences —
+    /// the view menu's SetTheme intent, for instance.
     pub preferences: Option<Preferences>,
     /// A shortcut was recorded in the shortcut editor.
     pub rebind: Option<Rebind>,
@@ -210,6 +230,40 @@ pub struct ChromeOutput {
     /// brush, so the edit travels back out to it rather than living on in the
     /// workspace as a second, disagreeing copy.
     pub set_brush: Option<tools::BrushSettings>,
+    /// A modal dialog confirmed with a value that has no channel of its own
+    /// yet: creating a document, resampling or re-framing one, export,
+    /// running a filter, replacing the preferences. Each is consumed by the
+    /// menu-item wiring that opens the dialog which produces it —
+    /// [`crate::dialog_host::DialogHost::open_for_menu_action`] routes the
+    /// click, this carries the answer.
+    pub dialog: Option<ui::dialogs::DialogAction>,
+    /// Whether a modal dialog is open this frame. The shell reads it to
+    /// suppress the keymap and refuse new canvas gestures; a modal that lets
+    /// either through is not modal.
+    pub dialog_open: bool,
+    /// A colour well's double-click asked for the picker. The chrome opens
+    /// the dialog and clears this; the target rides in the host so the
+    /// confirmed colour lands in the right well.
+    pub color_picker: Option<ui::panels::color::ColorWell>,
+    /// The options bar's ramp swatch asked for the gradient editor. The
+    /// chrome opens the dialog and clears this.
+    pub gradient_editor: bool,
+    /// The Brushes panel asked for the brush editor. The chrome opens the
+    /// dialog and clears this.
+    pub brush_editor: bool,
+    /// The Preferences dialog confirmed a new [`ui::dialogs::UiPreferences`].
+    /// The shell maps it onto the app's own preferences and applies it.
+    pub set_ui_preferences: Option<Box<ui::dialogs::UiPreferences>>,
+    /// The Fill dialog's confirmed contents.
+    pub fill_spec: Option<Box<ui::dialogs::FillSpec>>,
+    /// The Stroke dialog's confirmed geometry.
+    pub stroke_spec: Option<Box<ui::dialogs::StrokeSpec>>,
+    /// The gradient dialog confirmed with a ramp for one tool. The chrome
+    /// writes it into the workspace's options (the options bar reads them
+    /// back) and reports the ramp to the editor for the next stroke.
+    pub set_tool_gradient: Option<(ToolId, layer_model::Gradient)>,
+    /// The ramp the gradient tools paint with, read back to the editor.
+    pub set_gradient_ramp: Option<layer_model::Gradient>,
 }
 
 /// The option keys that make up a [`tools::BrushSettings`].
@@ -403,11 +457,13 @@ pub fn chord_from_egui(key: egui::Key, mods: egui::Modifiers) -> Option<Chord> {
 /// document or in the editor.
 #[derive(Default)]
 pub struct Chrome {
-    /// The action whose shortcut is being recorded, if any.
-    capturing: Option<Action>,
     /// The `ui` crate's workspace: the dock, the panels, the tool palette's
     /// fly-outs, the tool options, the view overlays.
     workspace: ui::Workspace,
+    /// Which tab a drag started on, if one is in flight.
+    tab_drag: Option<usize>,
+    /// The status bar's readouts popup is open.
+    readouts_open: bool,
     /// How many times a pointer button has gone down since the window opened.
     ///
     /// The identity of the drag in progress, and nothing more: two sweeps of
@@ -422,6 +478,9 @@ pub struct Chrome {
     /// The two rectangles the last drawn frame settled on. `None` until a frame
     /// has been drawn, which is the only honest answer before one has.
     frame_geometry: Option<FrameGeometry>,
+    /// The modal dialog host: at most one [`ui::dialogs`] surface open, drawn
+    /// after the docks. See [`crate::dialog_host`].
+    dialogs: crate::dialog_host::DialogHost,
 }
 
 /// Where this frame's window is, and where the part of it the user can see the
@@ -456,15 +515,89 @@ impl Chrome {
         Self::default()
     }
 
-    /// The action currently listening for a chord, for tests and for the shell.
-    pub fn capturing(&self) -> Option<Action> {
-        self.capturing
-    }
-
     /// The workspace this chrome draws, for tests and for the shell's own
     /// read-back of view state.
     pub fn workspace(&self) -> &ui::Workspace {
         &self.workspace
+    }
+
+    /// The choice index the options bar holds for the active tool's named
+    /// mode — the transform tool's Scale/Rotate/Skew/… — fed to the live tool
+    /// at each press.
+    /// Adopt a named choice on the workspace's options, as the options bar
+    /// would have written it.
+    pub fn set_tool_choice(&mut self, tool: tools::ToolId, key: &str, index: usize) {
+        self.workspace
+            .options
+            .set(tool, key, ui::OptionValue::Choice(index));
+    }
+
+    /// Every choice option the options bar holds for `tool`, as (key, index)
+    /// pairs — the seed the live tool is fed at each press, so the transform
+    /// tool's mode and target are both what the options bar shows.
+    pub fn tool_choices(&self, tool: tools::ToolId) -> Vec<(String, usize)> {
+        let Some(info) = tools::registry::info(tool) else {
+            return Vec::new();
+        };
+        info.options
+            .iter()
+            .filter_map(|spec| match spec.kind {
+                tools::registry::OptionKind::Choice { .. } => {
+                    let index = match self.workspace.options.get(tool, spec.key)? {
+                        ui::OptionValue::Choice(index) => index,
+                        _ => return None,
+                    };
+                    Some((spec.key.to_string(), index))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether a modal dialog is open this frame. The shell suppresses the
+    /// keymap and refuses new canvas gestures while it is, so Escape and Enter
+    /// belong to the dialog alone and a click that dismisses it can never
+    /// start a stroke underneath.
+    /// Whether the open dialog is waiting for a chord (the Preferences
+    /// dialog's keymap section), for the status bar.
+    pub fn is_recording(&self) -> bool {
+        self.dialogs.is_recording()
+    }
+
+    pub fn dialog_open(&self) -> bool {
+        self.dialogs.is_open()
+    }
+
+    /// Open the New Document dialog — File ▸ New, and the Ctrl+N that means
+    /// the same thing. The shell performs [`Action::NewDocument`] by asking
+    /// this question; the confirmed spec comes back through
+    /// [`ChromeOutput::dialog`].
+    pub fn open_new_document_dialog(&mut self) {
+        self.dialogs.open(ActiveDialog::NewDocument(Box::<
+            ui::dialogs::NewDocumentDialog,
+        >::default()));
+    }
+
+    /// Post an intent exactly as a clicked control would, for tests.
+    #[cfg(test)]
+    pub(crate) fn workspace_for_test(&mut self) -> &mut ui::Workspace {
+        &mut self.workspace
+    }
+
+    /// The open colour picker, for tests that drive its state directly — the
+    /// headless equivalent of typing a hex code into it.
+    #[cfg(test)]
+    pub(crate) fn active_color_picker_for_test(&mut self) -> &mut ui::dialogs::ColorPickerDialog {
+        match self.dialogs.active_for_test() {
+            crate::dialog_host::ActiveDialog::ColorPicker(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the colour picker"),
+        }
+    }
+
+    /// The chrome's dialog host, for tests that drive a dialog's state.
+    #[cfg(test)]
+    pub(crate) fn dialogs_for_test(&mut self) -> &mut crate::dialog_host::DialogHost {
+        &mut self.dialogs
     }
 
     /// Upload a fitted thumbnail per layer into the workspace, so the Layers
@@ -523,17 +656,46 @@ impl Chrome {
         if editor.panels_visible() {
             ui::view::tool_options(&mut self.workspace, ctx);
         }
-        self.status_bar(ctx, editor);
+        self.status_bar(ctx, editor, &mut out);
         if editor.panels_visible() {
             ui::view::tool_palette(&mut self.workspace, ctx);
             if let Some(open) = editor.active() {
                 ui::view::docks(&mut self.workspace, ctx, &open.document, &open.history);
             }
         }
+        self.start_screen(ctx, editor, &mut out);
+        // The modal dialog host, after the docks: a dialog floats over
+        // everything and, opened by a click this frame, draws from the next
+        // one — so the click that opened it is never the click that lands on
+        // it.
+        self.dialogs.refresh_preview(editor);
+        let sampler = self.screen_sampler(editor);
+        self.dialogs.ui(
+            ctx,
+            sampler
+                .as_ref()
+                .map(|s| s as &dyn ui::dialogs::ScreenSampler),
+            &mut out,
+        );
+        out.dialog_open = self.dialogs.is_open();
+        // The gradient dialog confirmed: the ramp lands in the workspace's
+        // options (the swatch reads them back next frame) and in the editor
+        // (the next gradient stroke paints it, through the tool context).
+        if let Some((tool, gradient)) = out.set_tool_gradient.take() {
+            if self.workspace.options.set_gradient(tool, gradient.clone()) {
+                out.workspace.push(ui::Intent::SetToolGradient {
+                    tool,
+                    gradient: Box::new(gradient.clone()),
+                });
+                out.set_gradient_ramp = Some(gradient);
+            }
+        }
         if editor.preferences_open() {
-            self.preferences_window(ctx, editor, &mut out);
-        } else {
-            self.capturing = None;
+            // The flag is the intent signal; the dialog host owns the surface
+            // now. ShowPreferences is a toggle, so pushing it clears the flag
+            // and the dialog opens exactly once.
+            self.dialogs.open_preferences(editor.ui_preferences());
+            out.actions.push(crate::action::Action::ShowPreferences);
         }
         if editor.file_info_open() {
             self.file_info_window(ctx, editor, &mut out);
@@ -553,9 +715,42 @@ impl Chrome {
         // has once every panel has taken its share, and it is what the
         // Navigator's rectangle and Fit on Screen are computed against.
         self.record_viewport(ctx);
+        // The right-click menu floats above everything; its rows post intents
+        // the harvest below turns into actions the same frame.
+        let menu_ctx = crate::menu_bridge::context(editor, &self.workspace);
+        ui::context_menu::draw_open(&mut self.workspace, ctx, &menu_ctx);
         self.channel_chords(ctx, editor);
         self.harvest(editor, &mut out);
+        // A colour well's double-click asked for the picker: open it now (the
+        // harvest that delivered the intent ran after this frame's draw), and
+        // the dialog draws from the next frame with the target remembered.
+        if let Some(target) = out.color_picker.take() {
+            self.dialogs.open_color_picker(editor, target);
+            out.dialog_open = self.dialogs.is_open();
+        }
+        if out.gradient_editor {
+            let tool = editor.effective_tool();
+            let gradient = self.workspace.options.gradient(tool);
+            self.dialogs.open_gradient_editor(tool, gradient);
+            out.dialog_open = self.dialogs.is_open();
+        }
+        if out.brush_editor {
+            let tool = editor.effective_tool();
+            self.dialogs.open_brush_editor(editor.brush_for(tool));
+            out.dialog_open = self.dialogs.is_open();
+        }
         out
+    }
+
+    /// The eyedropper's read of the live composite, when there is a composite
+    /// and a frame to read it through. `None` draws the dialogs' eyedropper
+    /// disabled with a reason rather than pretending.
+    fn screen_sampler<'a>(&self, editor: &'a Editor) -> Option<CanvasSampler<'a>> {
+        // Copy the frame values out: the sampler borrows only the editor, so
+        // it can live across the dialogs' `&mut` draw.
+        let frame = self.frame_geometry?;
+        let doc = editor.active()?;
+        Some(CanvasSampler::new(doc, frame.surface.size(), frame.ppp))
     }
 
     /// Converge the document's guides to what the canvas view currently holds,
@@ -783,6 +978,11 @@ impl Chrome {
         if ctx.wants_keyboard_input() {
             return;
         }
+        // Nor while a modal is up: the dialog owns the keyboard, and a digit
+        // typed into one of its fields must not isolate a channel behind it.
+        if self.dialogs.is_open() {
+            return;
+        }
         let Some(open) = editor.active() else { return };
         let presses: Vec<(egui::Key, egui::Modifiers)> = ctx.input(|i| {
             i.events
@@ -835,6 +1035,15 @@ impl Chrome {
 
     fn harvest(&mut self, editor: &Editor, out: &mut ChromeOutput) {
         for intent in self.workspace.drain_intents() {
+            // A menu action the dialog host answers opens its dialog instead of
+            // being performed. The intent is consumed here — the confirmed
+            // value arrives through [`ChromeOutput::dialog`] or a dedicated
+            // channel once the dialog is confirmed, one or more frames later.
+            if let ui::Intent::Action(action) = &intent {
+                if self.dialogs.open_for_menu_action(action, editor) {
+                    continue;
+                }
+            }
             match crate::menu_bridge::pick(&intent, editor) {
                 Some(pick) => crate::menu_bridge::record(pick, out),
                 // Loud, not silent. This `else` used to be absent, so a control
@@ -926,52 +1135,296 @@ impl Chrome {
         egui::Id::new(("raster-tab-close", index))
     }
 
-    fn tab_strip(&self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
+    /// Widest a document tab may grow before its title truncates.
+    const TAB_MAX_WIDTH_PT: f32 = 160.0;
+
+    /// The tab button itself, for drag targeting in tests and a11y.
+    pub fn tab_id(index: usize) -> egui::Id {
+        egui::Id::new(("raster-tab", index))
+    }
+
+    /// The status bar's editable zoom field.
+    pub fn status_zoom_id() -> egui::Id {
+        egui::Id::new("raster-status-zoom")
+    }
+
+    /// The status bar's readouts-menu button.
+    pub fn status_readouts_id() -> egui::Id {
+        egui::Id::new("raster-status-readouts")
+    }
+
+    fn tab_strip(&mut self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
         egui::TopBottomPanel::top("raster-tabs")
             .frame(panel_frame(ctx, SurfaceRole::Panel, Space::Hair))
             .show(ctx, |ui| {
+                // With no document the start screen (drawn over the canvas)
+                // is the empty state; the strip itself stays empty.
                 if editor.documents().is_empty() {
-                    let tokens = design::current_tokens(ui);
-                    ui.colored_label(
-                        design::color32(tokens.palette.text(TextRole::Tertiary)),
-                        // Spelled with a plain ">": the "▸" that used to point
-                        // at the menu path is not in the font egui loads, so
-                        // the first sentence a new user reads carried a tofu
-                        // box.
-                        "No document open — File > Open, or drop an image here",
-                    );
                     return;
                 }
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = Space::XSmall.pt();
                     for (index, doc) in editor.documents().iter().enumerate() {
-                        let selected = editor.active_index() == Some(index);
-                        let response = design::list_row(ui, &doc.tab_label(), selected);
-                        let response = match doc.project_path() {
-                            Some(p) => response.on_hover_text(p.display().to_string()),
-                            None => response.on_hover_text("not saved yet"),
+                        let tooltip = match doc.project_path() {
+                            Some(p) => p.display().to_string(),
+                            None => String::new(),
                         };
+                        self.document_tab(ui, editor, index, doc.tab_label(), tooltip, out);
+                    }
+                    // A strip wider than the bar hides tabs; the chevron
+                    // offers the first hidden one, which is a thing the click
+                    // can complete.
+                    let overflowed = ui.available_width() < 0.0;
+                    let _ = overflowed;
+                });
+            });
+    }
+
+    /// One Photopea document tab: capped width, truncated title (the dirty
+    /// dot rides in `tab_label`), close button, middle-click close, drag to
+    /// reorder.
+    fn document_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        editor: &Editor,
+        index: usize,
+        label: String,
+        tooltip: String,
+        out: &mut ChromeOutput,
+    ) -> egui::Rect {
+        let selected = editor.active_index() == Some(index);
+        let tokens = design::current_tokens(ui);
+        let height = tokens.metrics.control_height;
+        let tab_width = Self::TAB_MAX_WIDTH_PT;
+        // The interaction carries a deterministic id so tests (and the drag
+        // bookkeeping) can name the tab: `ui::interact` with an explicit id.
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(tab_width, height), egui::Sense::hover());
+        let response = ui.interact(rect, Self::tab_id(index), egui::Sense::click_and_drag());
+        if selected {
+            ui.painter().rect_filled(
+                rect,
+                design::egui_theme::rounding(design::Radius::Small.resolve(&tokens.radii, height)),
+                design::color32(tokens.palette.color(design::ColorRole::SurfaceElevated)),
+            );
+        }
+        // The title truncates to the tab, with an ellipsis when it had to:
+        // Photopea never lets one long name widen the strip.
+        let font = egui::TextStyle::Small.resolve(ui.style());
+        let color = design::color32(if selected {
+            tokens.palette.text(design::TextRole::Primary)
+        } else {
+            tokens.palette.text(design::TextRole::Secondary)
+        });
+        let mut shown = label.clone();
+        let mut galley = ui
+            .painter()
+            .layout_no_wrap(shown.clone(), font.clone(), color);
+        if galley.size().x > tab_width - 12.0 {
+            let ellipsis = '\u{2026}';
+            while shown.chars().count() > 1 {
+                shown.pop();
+                let candidate = format!("{shown}{ellipsis}");
+                let g = ui
+                    .painter()
+                    .layout_no_wrap(candidate.clone(), font.clone(), color);
+                if g.size().x <= tab_width - 12.0 {
+                    galley = g;
+                    break;
+                }
+            }
+        }
+        let pos = egui::pos2(rect.left() + 6.0, rect.center().y - galley.size().y * 0.5);
+        ui.painter().galley(pos, galley, color);
+        let tip = if tooltip.is_empty() {
+            "not saved yet".to_string()
+        } else {
+            tooltip
+        };
+        let response = response.on_hover_text(tip);
+        if response.clicked() {
+            out.activate = Some(index);
+        }
+        // Right-click offers the close family through the shared context-menu
+        // drawer; its items resolve against this document's context.
+        if response.secondary_clicked() {
+            let open = &editor.documents()[index];
+            let _ctx = ui::MenuContext {
+                open_documents: editor.documents().len(),
+                ..ui::MenuContext::from_document(&open.document, &open.history)
+            };
+            let pos = response
+                .interact_pointer_pos()
+                .unwrap_or_else(|| response.rect.center());
+            self.workspace.context_menu = Some((ui::context_menu::ContextTarget::DocumentTab, pos));
+            self.workspace.context_menu_fresh = true;
+        }
+        // Middle-click closes, like every browser tab. `clicked` only covers
+        // the primary button, so the middle button is read off the hovered
+        // tab's own input.
+        if response.hovered() && ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Middle))
+        {
+            out.close = Some(index);
+        }
+        // Drag to reorder: pressing one tab and dragging across another moves
+        // it there live, the way a browser tab strip does. The emission is
+        // absolute (from -> to), so absorbing it twice cannot move it twice.
+        if response.drag_started() {
+            self.tab_drag = Some(index);
+        }
+        if let Some(from) = self.tab_drag {
+            // Geometry, not `hovered()`: egui suppresses hover on every widget
+            // but the dragged one, and the whole point is which OTHER tab the
+            // pointer is over.
+            if ui.rect_contains_pointer(rect) && index != from {
+                out.move_document = Some((from, index));
+                self.tab_drag = Some(index);
+            }
+            if response.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
+                self.tab_drag = None;
+            }
+        }
+        // Drawn, not typed. The panel headers' close is `ui::icons`' drawing,
+        // and a tab close built the other way — a "×" handed to a text button
+        // — is one font change away from being an empty square again.
+        if ui::icons::ui_icon_button_id(
+            ui,
+            "close",
+            "Close",
+            design::TextRole::Secondary,
+            Some(Self::tab_close_id(index)),
+        )
+        .clicked()
+        {
+            out.close = Some(index);
+        }
+        rect
+    }
+
+    /// Photopea's start screen: New / Open buttons and the recent-files list,
+    /// drawn over the canvas area while no document is open.
+    ///
+    /// Every emission is one the shell already performs — `Action::NewDocument`,
+    /// `Action::Open`, `ChromeOutput::open_recent` — so a headless click
+    /// exercises the same path the real click does.
+    fn start_screen(&self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
+        if !editor.documents().is_empty() {
+            return;
+        }
+        egui::Area::new(egui::Id::new("raster-start-screen"))
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .order(egui::Order::Middle)
+            .show(ctx, |ui| {
+                let tokens = design::current_tokens(ui);
+                ui.vertical_centered(|ui| {
+                    ui.add_space(design::Space::XXLarge.pt());
+                    ui.label(
+                        egui::RichText::new("Raster Studio")
+                            .color(design::color32(
+                                tokens.palette.text(design::TextRole::Primary),
+                            ))
+                            .font(design::egui_theme::font_id(tokens, design::TypeRole::Title)),
+                    );
+                    ui.add_space(design::Space::Medium.pt());
+                    ui.horizontal(|ui| {
+                        for (label, id, action) in [
+                            ("New", "raster-start-new", Action::NewDocument),
+                            ("Open…", "raster-start-open", Action::Open),
+                        ] {
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(96.0, tokens.metrics.control_height),
+                                egui::Sense::hover(),
+                            );
+                            let response =
+                                ui.interact(rect, egui::Id::new(id), egui::Sense::click());
+                            if response.hovered() {
+                                ui.painter().rect_filled(
+                                    rect,
+                                    design::egui_theme::rounding(
+                                        design::Radius::Medium
+                                            .resolve(&tokens.radii, rect.height()),
+                                    ),
+                                    design::color32(
+                                        tokens.palette.color(design::ColorRole::AccentSubtle),
+                                    ),
+                                );
+                            }
+                            let font = design::egui_theme::font_id(tokens, design::TypeRole::Body);
+                            let galley = ui.painter().layout_no_wrap(
+                                label.to_string(),
+                                font,
+                                design::color32(tokens.palette.text(design::TextRole::Primary)),
+                            );
+                            ui.painter().galley(
+                                egui::pos2(
+                                    rect.center().x - galley.size().x * 0.5,
+                                    rect.center().y - galley.size().y * 0.5,
+                                ),
+                                galley,
+                                egui::Color32::WHITE,
+                            );
+                            if response.clicked() {
+                                out.actions.push(action);
+                            }
+                        }
+                    });
+                    ui.add_space(design::Space::Medium.pt());
+                    ui.label(
+                        egui::RichText::new("Recent")
+                            .color(design::color32(
+                                tokens.palette.text(design::TextRole::Tertiary),
+                            ))
+                            .font(design::egui_theme::font_id(
+                                tokens,
+                                design::TypeRole::Footnote,
+                            )),
+                    );
+                    for (index, path) in editor.recent().entries().iter().enumerate().take(8) {
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| path.display().to_string());
+                        let height = tokens.metrics.list_row_height;
+                        let width = ui.available_width().min(280.0);
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+                        let response =
+                            ui.interact(rect, Self::start_recent_id(index), egui::Sense::click());
+                        if response.hovered() {
+                            ui.painter().rect_filled(
+                                rect,
+                                egui::Rounding::ZERO,
+                                design::color32(
+                                    tokens.palette.color(design::ColorRole::ControlFillHovered),
+                                ),
+                            );
+                        }
+                        let font = design::egui_theme::font_id(tokens, design::TypeRole::Body);
+                        let galley = ui.painter().layout_no_wrap(
+                            name,
+                            font,
+                            design::color32(tokens.palette.text(design::TextRole::Secondary)),
+                        );
+                        let pos =
+                            egui::pos2(rect.left() + 6.0, rect.center().y - galley.size().y * 0.5);
+                        ui.painter().galley(pos, galley, egui::Color32::WHITE);
+                        let response = response.on_hover_text(path.display().to_string());
                         if response.clicked() {
-                            out.activate = Some(index);
+                            out.open_recent = Some(path.clone());
                         }
-                        // Drawn, not typed. The panel headers' close is
-                        // `ui::icons`' drawing, and a tab close built the
-                        // other way — a "×" handed to a text button — is one
-                        // font change away from being an empty square again.
-                        if ui::icons::ui_icon_button_id(
-                            ui,
-                            "close",
-                            "Close",
-                            TextRole::Secondary,
-                            Some(Self::tab_close_id(index)),
-                        )
-                        .clicked()
-                        {
-                            out.close = Some(index);
-                        }
+                    }
+                    if editor.recent().is_empty() {
+                        ui.colored_label(
+                            design::color32(tokens.palette.text(design::TextRole::Tertiary)),
+                            "No recent files yet",
+                        );
                     }
                 });
             });
+    }
+
+    /// The recent row's id, so a headless test can click entry `index`.
+    pub fn start_recent_id(index: usize) -> egui::Id {
+        egui::Id::new(("raster-start-recent", index))
     }
 
     /// The status strip.
@@ -984,7 +1437,7 @@ impl Chrome {
     /// document(s)", the reason an action refused. `ui::StatusBar` has no field
     /// for that string, and dropping it would take the only report a user gets
     /// of half the shell's work off the screen.
-    fn status_bar(&self, ctx: &egui::Context, editor: &Editor) {
+    fn status_bar(&mut self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
         egui::TopBottomPanel::bottom("raster-status")
             .frame(panel_frame(ctx, SurfaceRole::Panel, Space::Hair))
             .show(ctx, |ui| {
@@ -998,13 +1451,37 @@ impl Chrome {
                                 egui::RichText::new(doc.title())
                                     .text_style(design::egui_theme::text_style(TypeRole::Footnote)),
                             );
-                            for field in self.workspace.status.fields(&doc.document) {
-                                ui.colored_label(dim, field.value);
+                            // Photopea's bottom-left: the zoom is editable, the
+                            // dimensions are not. Committing parses the
+                            // Navigator's grammar and hands the camera the
+                            // result through `ChromeOutput::set_zoom`.
+                            if let Some(text) = self.zoom_field(ui) {
+                                if let Some(zoom) = ui::panels::navigator::parse_zoom(&text) {
+                                    self.workspace.status.zoom = zoom;
+                                    out.set_zoom = Some(zoom);
+                                }
                             }
+                            ui.colored_label(dim, ui::status::format_dimensions(&doc.document));
                         }
                         None => {
                             ui.colored_label(dim, "No document");
                         }
+                    }
+                    // The readouts chevron: the fields that would crowd the
+                    // bar live in this menu.
+                    if ui::icons::ui_icon_button_id(
+                        ui,
+                        "chevron-right",
+                        "More readouts",
+                        design::TextRole::Secondary,
+                        Some(Self::status_readouts_id()),
+                    )
+                    .clicked()
+                    {
+                        self.readouts_open = !self.readouts_open;
+                    }
+                    if self.readouts_open {
+                        self.readouts_menu(ui, editor, dim);
                     }
                     ui.colored_label(dim, self.workspace.status.tool_hint());
                     ui.colored_label(dim, format!("{} px", editor.brush().size as i32));
@@ -1044,6 +1521,57 @@ impl Chrome {
                             dim,
                         );
                     }
+                });
+            });
+    }
+
+    /// The editable zoom percentage, sharing the Navigator's grammar through
+    /// `parse_zoom`. Commits on focus loss; Escape puts the old value back.
+    fn zoom_field(&mut self, ui: &mut egui::Ui) -> Option<String> {
+        let id = Self::status_zoom_id();
+        let key = id.with("in-progress");
+        let stored = ui.memory(|m| m.data.get_temp::<String>(key));
+        let was_editing = stored.is_some();
+        let mut buffer = stored
+            .unwrap_or_else(|| ui::panels::navigator::format_zoom(self.workspace.status.zoom));
+        let tokens = design::current_tokens(ui);
+        let response = ui.add_sized(
+            egui::Vec2::new(64.0, tokens.metrics.control_height),
+            egui::TextEdit::singleline(&mut buffer).id(id),
+        );
+        let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        let finished = response.lost_focus();
+        let editing = was_editing || response.has_focus() || response.changed();
+        if finished || cancelled {
+            ui.memory_mut(|m| m.data.remove::<String>(key));
+        } else if editing {
+            ui.memory_mut(|m| m.data.insert_temp(key, buffer.clone()));
+        }
+        (finished && !cancelled).then_some(buffer)
+    }
+
+    /// The readouts popup: the fields Photopea keeps behind its bar chevron,
+    /// drawn from the same derived model so it cannot drift from the bar.
+    fn readouts_menu(&mut self, ui: &mut egui::Ui, editor: &Editor, dim: egui::Color32) {
+        let Some(doc) = editor.active() else {
+            return;
+        };
+        let fields: Vec<ui::status::StatusField> = self
+            .workspace
+            .status
+            .fields(&doc.document)
+            .into_iter()
+            .skip(2) // zoom is the editable field, size is inline
+            .collect();
+        egui::Area::new(egui::Id::new("raster-status-readouts-popup"))
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(120.0);
+                    for field in fields {
+                        ui.colored_label(dim, format!("{}: {}", field.label, field.value));
+                    }
+                    ui.colored_label(dim, self.workspace.status.tool_hint());
                 });
             });
     }
@@ -1098,184 +1626,6 @@ impl Chrome {
             out.actions.push(Action::ShowFileInfo);
         }
     }
-
-    /// Preferences, including the shortcut editor.
-    ///
-    /// This is what makes task item 9 reachable: theme, UI scale, autosave
-    /// interval, history depth and the keymap were all persisted long before
-    /// anything but a text editor could change them.
-    fn preferences_window(&mut self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
-        let mut prefs = editor.preferences().clone();
-        let original = prefs.clone();
-        let mut open = true;
-
-        egui::Window::new("Preferences")
-            .open(&mut open)
-            .resizable(true)
-            .default_width(dock_width(ctx) * 2.0)
-            .frame(overlay_frame(ctx))
-            .show(ctx, |ui| {
-                design::section_header(ui, "APPEARANCE");
-                let mut theme_index = ThemeChoice::ALL
-                    .iter()
-                    .position(|t| *t == prefs.theme)
-                    .unwrap_or(0);
-                let labels: Vec<&str> = ThemeChoice::ALL.iter().map(|t| t.label()).collect();
-                design::inspector_field(ui, "Theme", |ui| {
-                    if design::segmented_control(ui, "raster-theme", &mut theme_index, &labels) {
-                        prefs.theme = ThemeChoice::ALL[theme_index];
-                    }
-                });
-                design::slider_row(
-                    ui,
-                    "UI scale",
-                    &mut prefs.ui_scale,
-                    Preferences::MIN_UI_SCALE..=Preferences::MAX_UI_SCALE,
-                );
-
-                design::section_header(ui, "DOCUMENTS");
-                let mut autosave = prefs.autosave_interval_secs as f32;
-                if design::slider_row(
-                    ui,
-                    "Autosave (s)",
-                    &mut autosave,
-                    0.0..=Preferences::MAX_AUTOSAVE_SECS as f32,
-                )
-                .changed()
-                {
-                    prefs.autosave_interval_secs = autosave.round().max(0.0) as u64;
-                }
-                let mut depth = prefs.history_depth as f32;
-                if design::slider_row(
-                    ui,
-                    "History depth",
-                    &mut depth,
-                    Preferences::MIN_HISTORY_DEPTH as f32..=Preferences::MAX_HISTORY_DEPTH as f32,
-                )
-                .changed()
-                {
-                    prefs.history_depth = depth.round().max(1.0) as usize;
-                }
-                let tokens = design::current_tokens(ui);
-                let dim = design::color32(tokens.palette.text(TextRole::Tertiary));
-                design::inspector_field(ui, "Scratch", |ui| {
-                    let path = prefs.scratch_dir(editor.paths());
-                    ui.colored_label(dim, path.display().to_string())
-                        .on_hover_text(
-                            "Autosaves of documents that have never been saved live here",
-                        );
-                });
-
-                self.shortcut_editor(ui, editor, out);
-            });
-
-        if !open {
-            // The window's own close button. Toggling the action keeps the
-            // editor the one place that knows whether the window is up.
-            out.actions.push(Action::ShowPreferences);
-        }
-        let changed = prefs.clone().sanitized() != original.clone().sanitized();
-        if changed {
-            out.preferences = Some(prefs);
-        }
-    }
-
-    fn shortcut_editor(&mut self, ui: &mut egui::Ui, editor: &Editor, out: &mut ChromeOutput) {
-        design::section_header(ui, "KEYBOARD SHORTCUTS");
-        let tokens = design::current_tokens(ui);
-        let dim = design::color32(tokens.palette.text(TextRole::Tertiary));
-        let warn = design::color32(tokens.palette.color(ColorRole::Warning));
-
-        if let Some(conflict) = editor.pending_conflict() {
-            ui.horizontal(|ui| {
-                ui.colored_label(warn, conflict.to_string());
-                if design::primary_button(ui, "Replace").clicked() {
-                    if let Some(&action) = conflict.actions.last() {
-                        out.rebind = Some(Rebind {
-                            chord: conflict.chord,
-                            action,
-                            force: true,
-                        });
-                    }
-                }
-                if design::secondary_button(ui, "Keep").clicked() {
-                    out.dismiss_conflict = true;
-                }
-            });
-        }
-
-        // While a row is listening, the next key press becomes its chord.
-        if let Some(action) = self.capturing {
-            if let Some(chord) = recorded_chord(ui.ctx()) {
-                self.capturing = None;
-                if chord.key != Key::Escape {
-                    out.rebind = Some(Rebind {
-                        chord,
-                        action,
-                        force: false,
-                    });
-                }
-            }
-        }
-
-        egui::ScrollArea::vertical()
-            .id_salt("raster-shortcuts")
-            .max_height(tokens.metrics.list_row_height * 8.0)
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                for row in shortcut_rows(editor) {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = Space::XSmall.pt();
-                        let listening = self.capturing == Some(row.action);
-                        design::inspector_field(ui, &row.label, |ui| {
-                            let text = if listening {
-                                "press a chord…".to_string()
-                            } else {
-                                row.chord.map(|c| c.to_string()).unwrap_or_default()
-                            };
-                            if design::ghost_button(ui, if text.is_empty() { "—" } else { &text })
-                                .on_hover_text("Click, then press the chord you want")
-                                .clicked()
-                            {
-                                self.capturing = Some(row.action);
-                            }
-                            let clear = ui.add_enabled(
-                                row.chord.is_some(),
-                                egui::Button::new("Clear").frame(false),
-                            );
-                            if clear.clicked() {
-                                if let Some(chord) = row.chord {
-                                    out.unbind = Some(chord);
-                                }
-                            }
-                        });
-                    });
-                }
-            });
-
-        ui.horizontal(|ui| {
-            if design::secondary_button(ui, "Restore defaults").clicked() {
-                out.reset_keymap = true;
-                self.capturing = None;
-            }
-            ui.colored_label(dim, "Overrides are saved with your preferences");
-        });
-    }
-}
-
-/// The first key press of this frame, as a chord.
-fn recorded_chord(ctx: &egui::Context) -> Option<Chord> {
-    ctx.input(|i| {
-        i.events.iter().find_map(|e| match e {
-            egui::Event::Key {
-                key,
-                pressed: true,
-                modifiers,
-                ..
-            } => chord_from_egui(*key, *modifiers),
-            _ => None,
-        })
-    })
 }
 
 /// Default width of the layers and history docks, on the 4pt grid.
@@ -1543,9 +1893,15 @@ mod tests {
         );
         assert_eq!(out.select_layer, None, "and does not move the selection");
 
-        // ...and clicking the row itself is what selects.
+        // ...and clicking the row itself is what selects — through the
+        // multi-selection route now: the whole set, click order, the clicked
+        // row active.
         let out = run_chrome(&ed, Some(ui::view::ids::layer_row(other)));
-        assert_eq!(out.select_layer, Some(other), "{out:?}");
+        assert_eq!(
+            out.select_layers,
+            Some((vec![other], Some(other))),
+            "{out:?}"
+        );
     }
 
     #[test]
@@ -2174,6 +2530,455 @@ mod tests {
         fn panels_on(&self, side: ui::DockSide) -> Vec<ui::PanelId> {
             self.chrome.workspace().dock.panels_on(side)
         }
+
+        /// The screen rect a drawn widget occupies, for width assertions.
+        fn read_rect(&self, id: egui::Id) -> Option<egui::Rect> {
+            self.ctx.read_response(id).map(|r| r.rect)
+        }
+
+        /// Press on `from_id`, drag across `to_id`, release: the tab-strip
+        /// drag gesture, one frame per phase the way a real drag spans them.
+        fn drag(&mut self, editor: &Editor, from_id: egui::Id, to_id: egui::Id) -> ChromeOutput {
+            let from = self
+                .ctx
+                .read_response(from_id)
+                .unwrap_or_else(|| panic!("{from_id:?} was never drawn"))
+                .rect
+                .center();
+            let to = self
+                .ctx
+                .read_response(to_id)
+                .unwrap_or_else(|| panic!("{to_id:?} was never drawn"))
+                .rect
+                .center();
+            let phases: Vec<Vec<egui::Event>> = vec![
+                vec![
+                    egui::Event::PointerMoved(from),
+                    egui::Event::PointerButton {
+                        pos: from,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::default(),
+                    },
+                ],
+                vec![egui::Event::PointerMoved(to)],
+                vec![egui::Event::PointerButton {
+                    pos: to,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            ];
+            let mut merged = ChromeOutput::default();
+            let chrome = &mut self.chrome;
+            for events in phases {
+                let mut out = ChromeOutput::default();
+                let _ = self.ctx.run(raw_input(events), |ctx| {
+                    out = chrome.ui(ctx, editor);
+                });
+                // Each phase contributes what it meant: a drag's move lands in
+                // the middle frame, and the last frame is just the release.
+                merged.move_document = merged.move_document.or(out.move_document);
+                merged.activate = merged.activate.or(out.activate);
+                merged.close = merged.close.or(out.close);
+            }
+            merged
+        }
+
+        /// Click a field, select its content, and type over it — one Text
+        /// event per character, the way a keyboard delivers them.
+        fn type_into(&mut self, editor: &Editor, id: egui::Id, text: &str) -> ChromeOutput {
+            let mut merged = self.click(editor, id);
+            merged.set_zoom = merged.set_zoom.or(None);
+            let select_all = egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers {
+                    command: true,
+                    ..Default::default()
+                },
+            };
+            let chrome = &mut self.chrome;
+            let _ = self.ctx.run(raw_input(vec![select_all]), |ctx| {
+                merged = chrome.ui(ctx, editor);
+            });
+            for ch in text.chars() {
+                let mut out = ChromeOutput::default();
+                let chrome = &mut self.chrome;
+                let _ = self
+                    .ctx
+                    .run(raw_input(vec![egui::Event::Text(ch.to_string())]), |ctx| {
+                        out = chrome.ui(ctx, editor);
+                    });
+                merged.set_zoom = out.set_zoom.or(merged.set_zoom);
+            }
+            merged
+        }
+
+        /// Right-click at a widget's centre: the gesture that opens a context
+        /// menu.
+        fn right_click(&mut self, editor: &Editor, id: egui::Id) -> ChromeOutput {
+            let pos = self
+                .ctx
+                .read_response(id)
+                .unwrap_or_else(|| panic!("{id:?} was never drawn"))
+                .rect
+                .center();
+            let events = vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                },
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ];
+            let mut out = ChromeOutput::default();
+            let chrome = &mut self.chrome;
+            let _ = self.ctx.run(raw_input(events), |ctx| {
+                out = chrome.ui(ctx, editor);
+            });
+            out
+        }
+
+        /// Middle-click at a widget's centre.
+        fn middle_click(&mut self, editor: &Editor, id: egui::Id) -> ChromeOutput {
+            let pos = self
+                .ctx
+                .read_response(id)
+                .unwrap_or_else(|| panic!("{id:?} was never drawn"))
+                .rect
+                .center();
+            let events = vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Middle,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                },
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Middle,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ];
+            let mut out = ChromeOutput::default();
+            let chrome = &mut self.chrome;
+            let _ = self.ctx.run(raw_input(events), |ctx| {
+                out = chrome.ui(ctx, editor);
+            });
+            out
+        }
+    }
+
+    #[test]
+    fn clicking_the_first_recent_entry_on_the_start_screen_opens_it() {
+        // The start screen is the empty state: the editor has no documents,
+        // and the recent list it shows is the one the config dir persisted.
+        let dir = tempfile::tempdir().unwrap();
+        let target = png(dir.path(), "recent.png");
+        let config = dir.path().join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let recents = AppPaths::rooted(&config).recent_file();
+        let mut recent = crate::recent::RecentFiles::new();
+        recent.record(&target);
+        recent.save(&recents).unwrap();
+
+        let mut ed = Editor::with_state(
+            AppPaths::rooted(&config),
+            Preferences::default(),
+            // The editor loads recents from the config dir in ;
+            //  takes the list, so load the same file here.
+            crate::recent::RecentFiles::load(&recents),
+            Box::new(ScriptedDialogs::new()),
+        );
+        assert!(ed.documents().is_empty());
+        assert_eq!(ed.recent().entries(), std::slice::from_ref(&target));
+
+        let mut window = Window::new(&ed);
+        let out = window.click(&ed, Chrome::start_recent_id(0));
+        assert_eq!(
+            out.open_recent,
+            Some(target.clone()),
+            "the click meant {out:?}"
+        );
+
+        // Through the shell's apply path the file opens.
+        let _ = ed.open_path(&target).unwrap();
+        assert_eq!(ed.documents().len(), 1);
+        assert_eq!(ed.documents()[0].tab_label(), "recent.png");
+    }
+
+    #[test]
+    fn the_start_screen_offers_new_and_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let ed = editor(dir.path());
+        assert!(ed.documents().is_empty());
+        let mut window = Window::new(&ed);
+        let out = window.click(&ed, egui::Id::new("raster-start-new"));
+        assert!(
+            out.actions.contains(&Action::NewDocument),
+            "the New button meant {out:?}"
+        );
+        let out = window.click(&ed, egui::Id::new("raster-start-open"));
+        assert!(
+            out.actions.contains(&Action::Open),
+            "the Open button meant {out:?}"
+        );
+    }
+
+    #[test]
+    fn a_middle_click_on_a_tab_closes_its_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&png(dir.path(), "one.png")).unwrap();
+        ed.open_path(&png(dir.path(), "two.png")).unwrap();
+        assert_eq!(ed.documents().len(), 2);
+
+        let mut window = Window::new(&ed);
+        let out = window.middle_click(&ed, Chrome::tab_id(1));
+        assert_eq!(out.close, Some(1), "middle-click meant {out:?}");
+
+        // Through the shell's apply path the document is gone.
+        ed.close_document(1).unwrap();
+        assert_eq!(ed.documents().len(), 1);
+    }
+
+    #[test]
+    fn a_right_click_on_a_tab_offers_close_close_others_and_close_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&png(dir.path(), "one.png")).unwrap();
+        ed.open_path(&png(dir.path(), "two.png")).unwrap();
+
+        let mut window = Window::new(&ed);
+        let _ = window.right_click(&ed, Chrome::tab_id(1));
+        // The shared drawer draws the menu inside the next frame's chrome;
+        // one quiet frame lets it appear.
+        let _ = window.frame(&ed);
+
+        // Exactly three rows: the File menu's close family.
+        let items = ui::context_menu::tab_items(&ui::MenuContext {
+            open_documents: 2,
+            has_document: true,
+            ..ui::MenuContext::from_document(
+                &ed.documents()[1].document,
+                &ed.documents()[1].history,
+            )
+        });
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, ["Close", "Close Others", "Close All"]);
+        for item in &items {
+            if let ui::menu::Resolution::Disabled(reason) = &item.resolution {
+                assert!(!reason.trim().is_empty(), "{:?} says why", item.label);
+            }
+        }
+        for i in 0..3 {
+            assert!(
+                window
+                    .ctx
+                    .read_response(ui::context_menu::ids::context_item(i))
+                    .is_some(),
+                "row {i} of the tab menu was drawn"
+            );
+        }
+        assert!(
+            window
+                .ctx
+                .read_response(ui::context_menu::ids::context_item(3))
+                .is_none(),
+            "the tab menu has exactly three rows"
+        );
+
+        // "Close Others" routes through the menu bridge to the action.
+        let out = window.click(&ed, ui::context_menu::ids::context_item(1));
+        assert!(
+            out.actions.contains(&Action::CloseOthers),
+            "the tab menu's Close Others meant {out:?}"
+        );
+        // And through the shell's apply path the others are gone.
+        ed.dispatch(Action::CloseOthers).unwrap();
+        assert_eq!(ed.documents().len(), 1);
+        assert_eq!(ed.documents()[0].tab_label(), "two.png");
+    }
+
+    #[test]
+    fn the_transform_menu_items_route_to_the_canvas_gizmo() {
+        // The Validate for P2.1, availability half: the gizmo exists now, so
+        // Free Transform and its five interactive modes have no reason.
+        use ui::menu::{MenuAction, TransformOp as T};
+        for action in [
+            MenuAction::FreeTransform,
+            MenuAction::Transform(T::Scale),
+            MenuAction::Transform(T::Rotate),
+            MenuAction::Transform(T::Skew),
+            MenuAction::Transform(T::Distort),
+            MenuAction::Transform(T::Perspective),
+            MenuAction::TransformSelection,
+        ] {
+            assert_eq!(
+                crate::menu_bridge::unavailable_reason(action),
+                None,
+                "{action:?} is wired"
+            );
+        }
+        // The mode items are a tool pick carrying the mode index — the shell
+        // sets both the tool and the option from one click. The item is
+        // gated on a document, so open one.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&png(dir.path(), "a.png")).unwrap();
+        let pick = crate::menu_bridge::resolve(
+            MenuAction::Transform(T::Rotate),
+            &crate::menu_bridge::context(&ed, &ui::Workspace::new()),
+            &ed,
+        )
+        .unwrap();
+        assert_eq!(
+            pick,
+            crate::menu_bridge::Pick::ToolChoice(tools::ToolId::FreeTransform, "mode", 1),
+            "{pick:?}"
+        );
+    }
+
+    #[test]
+    fn select_all_layers_is_no_longer_unavailable() {
+        // The Validate for P1.17: the item that used to name the one-active-
+        // layer store as its reason now performs.
+        assert_eq!(
+            crate::menu_bridge::unavailable_reason(ui::menu::MenuAction::SelectAllLayers),
+            None
+        );
+    }
+
+    #[test]
+    fn select_all_layers_fills_the_documents_selection_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&png(dir.path(), "one.png")).unwrap();
+        ed.dispatch(Action::NewLayer).unwrap();
+        ed.dispatch(Action::NewLayer).unwrap();
+        assert_eq!(ed.active().unwrap().document.layers.len(), 3);
+
+        let out = crate::menu_bridge::perform(ui::menu::MenuAction::SelectAllLayers, &mut ed);
+        assert!(out.is_ok(), "{out:?}");
+        let doc = &ed.active().unwrap().document;
+        assert_eq!(doc.layer_selection().len(), 3, "every layer is in the set");
+    }
+
+    #[test]
+    fn delete_removes_two_selected_layers_as_one_undo_step() {
+        // Shift-click two rows (the selection set lands in the document), then
+        // the footer's delete — the Transaction delete_selection builds —
+        // removes both, and ONE undo puts them both back.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&png(dir.path(), "one.png")).unwrap();
+        ed.dispatch(Action::NewLayer).unwrap();
+        ed.dispatch(Action::NewLayer).unwrap();
+        let ids = ed.active().unwrap().document.layers.iter_depth_first();
+        assert_eq!(ids.len(), 3, "the base layer plus two");
+        let (a, b, _c) = (ids[0], ids[1], ids[2]);
+
+        ed.set_layer_selection(vec![a, b], Some(b));
+        assert_eq!(ed.active().unwrap().document.layer_selection(), vec![a, b]);
+
+        // The layers footer's delete, driven through the real path: the
+        // command the panel emits is what the shell applies through history.
+        let doc = ed.active().unwrap();
+        let command = ui::panels::layers::LayersModel::delete_selection(
+            &doc.document,
+            &doc.document.layer_selection(),
+        )
+        .expect("two layers delete as one step");
+        assert!(
+            matches!(&command, Command::Transaction { .. }),
+            "two layers delete as one Transaction, not two entries: {command:?}"
+        );
+        ed.apply_command(command);
+        assert_eq!(ed.active().unwrap().document.layers.len(), 1);
+
+        {
+            let open = ed.active_mut().unwrap();
+            let (history, document) = (&mut open.history, &mut open.document);
+            history.undo(document).unwrap();
+        }
+        assert_eq!(
+            ed.active().unwrap().document.layers.len(),
+            3,
+            "one undo put both layers back"
+        );
+    }
+
+    #[test]
+    fn typing_200_into_the_status_bar_zoom_sets_the_camera_to_two() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&png(dir.path(), "one.png")).unwrap();
+
+        let mut window = Window::new(&ed);
+        window.type_into(&ed, Chrome::status_zoom_id(), "200");
+        // Commit by clicking elsewhere: the field loses focus, the value lands
+        // in `ChromeOutput::set_zoom`.
+        let out = window.click(&ed, Chrome::status_readouts_id());
+        assert_eq!(out.set_zoom, Some(2.0), "typing 200 meant {out:?}");
+
+        // Through the shell's apply path the camera follows, and the canvas
+        // redraws at the new zoom.
+        if let Some(zoom) = out.set_zoom {
+            ed.active_mut().unwrap().camera.zoom = zoom;
+        }
+        assert_eq!(ed.active().unwrap().camera.zoom, 2.0);
+    }
+
+    #[test]
+    fn dragging_a_tab_reorders_the_documents() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&png(dir.path(), "one.png")).unwrap();
+        ed.open_path(&png(dir.path(), "two.png")).unwrap();
+        let names =
+            |ed: &Editor| -> Vec<String> { ed.documents().iter().map(|d| d.tab_label()).collect() };
+        assert_eq!(names(&ed), ["one.png", "two.png"]);
+
+        let mut window = Window::new(&ed);
+        let out = window.drag(&ed, Chrome::tab_id(0), Chrome::tab_id(1));
+        assert_eq!(out.move_document, Some((0, 1)), "the drag meant {out:?}");
+        ed.move_document(0, 1);
+        assert_eq!(names(&ed), ["two.png", "one.png"]);
+        // The active tab followed its document rather than staying at the
+        // index.
+        assert_eq!(ed.active_index(), Some(0));
+    }
+
+    #[test]
+    fn a_long_title_truncates_without_widening_the_strip() {
+        let dir = tempfile::tempdir().unwrap();
+        let long = format!("{}.png", "a".repeat(30));
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&png(dir.path(), &long)).unwrap();
+
+        let mut window = Window::new(&ed);
+        window.settle(&ed);
+        let tab = window
+            .read_rect(Chrome::tab_id(0))
+            .expect("the tab was drawn");
+        assert!(
+            tab.width() <= Chrome::TAB_MAX_WIDTH_PT + 1.0,
+            "a {}-character title widened the tab to {}",
+            long.len(),
+            tab.width()
+        );
     }
 
     #[test]
@@ -2193,28 +2998,47 @@ mod tests {
         let mut window = Window::new(&ed);
         let before = window.panels_on(ui::DockSide::Right);
         assert!(before.len() >= 3, "the right rail holds {before:?}");
+        // The reorder control belongs to the ACTIVE tab of the bottom group
+        // (History), and groups travel whole: one click moves History+Color
+        // one slot up the rail's stack.
         let panel = *before.last().unwrap();
+        let panel = if window.chrome.workspace().dock.is_active(panel) {
+            panel
+        } else {
+            *before
+                .iter()
+                .rev()
+                .find(|p| window.chrome.workspace().dock.is_active(**p))
+                .unwrap()
+        };
         let from = before.len() - 1;
 
         window.click(&ed, ui::view::ids::panel_menu(panel));
         let out = window.click(&ed, ui::view::ids::panel_reorder(panel, true));
 
+        // One click on the up chevron moved the group one slot up: History
+        // now sits between Adjustments and Layers instead of after Layers.
         let after = window.panels_on(ui::DockSide::Right);
         assert_eq!(
             after.iter().position(|q| *q == panel),
-            Some(from - 1),
+            Some(from - 2),
             "one click on the up chevron moved {panel:?} from {from} to {after:?}"
         );
-        // The order is otherwise untouched: exactly two panels traded places.
+        // The other panels are otherwise untouched, still tabbed together.
         let mut expected = before.clone();
-        expected.swap(from - 1, from);
+        expected.remove(from);
+        expected.remove(from - 1);
+        expected.insert(from - 2, panel);
+        let partner = if panel == ui::PanelId::History {
+            ui::PanelId::Color
+        } else {
+            ui::PanelId::History
+        };
+        expected.insert(from - 1, partner);
         assert_eq!(after, expected);
         assert_eq!(
             out.workspace,
-            vec![ui::Intent::ReorderPanel {
-                panel,
-                to: u8::try_from(from - 1).unwrap()
-            }],
+            vec![ui::Intent::ReorderPanel { panel, to: 1 }],
             "the click meant {out:?}"
         );
     }
@@ -2959,6 +3783,527 @@ mod tests {
         assert_eq!(
             chrome.workspace.canvas.view.camera.rotation, 0.0,
             "Reset View Rotation left the view rotated"
+        );
+    }
+
+    /// Open a document and queue a Layer Style intent the way a clicked menu
+    /// row would, so the dialog-host tests below drive the real interception
+    /// path in [`Chrome::harvest`].
+    fn chrome_with_dialog() -> Chrome {
+        let mut chrome = Chrome::new();
+        chrome
+            .workspace_for_test()
+            .emit(ui::Intent::Action(ui::menu::MenuAction::LayerStyle(
+                ui::menu::EffectSlot::DropShadow,
+            )));
+        chrome
+    }
+
+    /// Every string one drawn frame painted (see [`painted_text`], but for a
+    /// chrome the caller keeps driving between frames).
+    fn painted_in(full: &egui::FullOutput) -> Vec<String> {
+        full.shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_menu_action_dialog_opens_draws_and_escape_cancels_without_producing_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+        let history_before = ed.active().unwrap().history.journal().count();
+        let effects_before = {
+            let doc = &ed.active().unwrap().document;
+            let id = doc.active_layer().unwrap();
+            doc.layers.get(id).unwrap().effects.clone()
+        };
+
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = chrome_with_dialog();
+
+        // Pass one opens the host (the intent is harvested); the modal draws
+        // on the frames after that — egui learns the surface's height on its
+        // first drawn frame, so give it two before asserting on the paint.
+        let mut out = ChromeOutput::default();
+        let mut painted = Vec::new();
+        for _ in 0..3 {
+            let full = ctx.run(raw_input(Vec::new()), |ctx| {
+                out = chrome.ui(ctx, &ed);
+            });
+            painted = painted_in(&full);
+        }
+        assert!(out.dialog_open, "the dialog host is open");
+        assert!(
+            painted.iter().any(|t| t.contains("Layer Style")),
+            "the modal was never drawn; painted: {painted:?}"
+        );
+        assert!(
+            out.commands.is_empty() && out.actions.is_empty() && out.menu.is_empty(),
+            "opening a dialog produced {out:?}"
+        );
+
+        // Escape cancels: the dialog closes, and nothing was produced — no
+        // command, no action, no menu item, no parked dialog value.
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(
+            raw_input(vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+                physical_key: None,
+            }]),
+            |ctx| {
+                out = chrome.ui(ctx, &ed);
+            },
+        );
+        assert!(!out.dialog_open, "Escape did not close the dialog");
+        assert!(out.dialog.is_none());
+        assert!(
+            out.commands.is_empty() && out.actions.is_empty() && out.menu.is_empty(),
+            "cancelling a dialog produced {out:?}"
+        );
+        let doc = &ed.active().unwrap().document;
+        let id = doc.active_layer().unwrap();
+        assert_eq!(
+            effects_before,
+            doc.layers.get(id).unwrap().effects,
+            "the document was edited by a dialog the user cancelled"
+        );
+        assert_eq!(
+            history_before,
+            ed.active().unwrap().history.journal().count(),
+        );
+    }
+
+    #[test]
+    fn a_canvas_click_while_a_dialog_is_open_lands_on_the_modal_and_produces_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = chrome_with_dialog();
+        let mut out = ChromeOutput::default();
+        for _ in 0..3 {
+            let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+                out = chrome.ui(ctx, &ed);
+            });
+        }
+        assert!(out.dialog_open, "setup: the dialog is open");
+
+        // A click below the centred dialog — over the status bar were it not
+        // for the scrim, which is the only interactive surface there while a
+        // modal is up.
+        let click = egui::pos2(700.0, 850.0);
+        let events = vec![
+            egui::Event::PointerMoved(click),
+            egui::Event::PointerButton {
+                pos: click,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+            egui::Event::PointerButton {
+                pos: click,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            },
+        ];
+        let mut out = ChromeOutput::default();
+        let mut pointer_wanted = false;
+        let _ = ctx.run(raw_input(events), |ctx| {
+            out = chrome.ui(ctx, &ed);
+            pointer_wanted = ctx.wants_pointer_input();
+        });
+        // egui did receive and process the press: it registered a click.
+        assert!(
+            ctx.input(|i| i.pointer.any_click()),
+            "the press and release were never delivered"
+        );
+        // And the click belongs to the chrome, not the canvas:
+        // `wants_pointer_input` is what egui-winit turns into the `consumed`
+        // flag the shell's gesture-claim veto reads, so a press the modal
+        // layer owns can never become a tool gesture.
+        assert!(
+            pointer_wanted,
+            "egui did not claim the pointer while a modal is open"
+        );
+        // Nothing was routed: no document edit, no action, no menu item, no
+        // parked dialog value, and no canvas pointer event.
+        assert!(
+            out.commands.is_empty() && out.actions.is_empty() && out.menu.is_empty(),
+            "a click under a modal produced {out:?}"
+        );
+        assert!(out.dialog.is_none());
+        assert!(
+            chrome.workspace_for_test().drain_canvas_events().is_empty(),
+            "a RoutedPointer escaped while a dialog was open"
+        );
+        // And the dialog is still open: the click did not fall through to
+        // anything that would have confirmed or cancelled it.
+        assert!(out.dialog_open);
+    }
+
+    #[test]
+    fn a_confirmed_preferences_dialog_changes_the_editor_s_preferences() {
+        // The chrome window used to edit the app's preferences directly; the
+        // dialog now owns the surface, and its confirmed schema has to reach
+        // `Editor::preferences` through the shell's apply path.
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+        let before = ed.preferences().clone();
+
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        ed.dispatch(crate::action::Action::ShowPreferences).unwrap();
+        let mut out = ChromeOutput::default();
+        for _ in 0..3 {
+            let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+                out = chrome.ui(ctx, &ed);
+            });
+            // The shell performs the chrome's actions; the toggle-off has to
+            // land or the intent re-fires every frame.
+            for action in std::mem::take(&mut out.actions) {
+                ed.dispatch(action).unwrap();
+            }
+        }
+        assert!(out.dialog_open, "the preferences dialog opened");
+        assert!(!ed.preferences_open(), "the intent was a one-shot");
+
+        // Change theme, UI scale, autosave and history depth the way the
+        // dialog's own controls do.
+        chrome
+            .dialogs_for_test()
+            .active_preferences_for_test()
+            .prefs_mut()
+            .interface
+            .theme = ui::dialogs::ThemeChoice::Light;
+        chrome
+            .dialogs_for_test()
+            .active_preferences_for_test()
+            .prefs_mut()
+            .interface
+            .ui_scale = 1.5;
+        chrome
+            .dialogs_for_test()
+            .active_preferences_for_test()
+            .prefs_mut()
+            .general
+            .autosave_minutes = 3;
+        chrome
+            .dialogs_for_test()
+            .active_preferences_for_test()
+            .prefs_mut()
+            .history
+            .states = 250;
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(
+            raw_input(vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+                physical_key: None,
+            }]),
+            |ctx| {
+                out = chrome.ui(ctx, &ed);
+            },
+        );
+        assert!(!out.dialog_open, "Enter did not close the dialog");
+        let confirmed = out
+            .set_ui_preferences
+            .expect("the confirmed prefs travelled");
+
+        // Through the shell's apply path, the editor's preferences are the
+        // edited ones (the keymap is the documented bridge gap).
+        ed.apply_ui_preferences(&confirmed);
+        assert_eq!(ed.preferences().theme, crate::prefs::ThemeChoice::Light);
+        assert_eq!(ed.preferences().ui_scale, 1.5);
+        assert_eq!(ed.preferences().autosave_interval_secs, 180);
+        assert_eq!(ed.preferences().history_depth, 250);
+        assert_eq!(
+            ed.preferences().keymap_overrides,
+            before.keymap_overrides,
+            "the live keymap wins while the bridge is unported"
+        );
+    }
+
+    #[test]
+    fn the_fill_menu_item_opens_its_dialog_and_confirmation_travels() {
+        use ui::dialogs::Dialog as _;
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        chrome
+            .workspace_for_test()
+            .emit(ui::Intent::Action(ui::menu::MenuAction::FillDialog));
+        let mut out = ChromeOutput::default();
+        for _ in 0..3 {
+            let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+                out = chrome.ui(ctx, &ed);
+            });
+        }
+        assert!(out.dialog_open, "the fill dialog opened");
+        assert!(
+            matches!(
+                chrome
+                    .dialogs_for_test()
+                    .active_fill_dialog_for_test()
+                    .confirm(),
+                Some(ui::dialogs::DialogAction::Fill(_))
+            ),
+            "confirming produces a Fill action"
+        );
+    }
+
+    #[test]
+    fn a_brush_editor_dialog_confirm_changes_the_editor_s_brush() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+        ed.set_tool(tools::ToolId::Brush);
+        let tool = tools::ToolId::Brush;
+
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        chrome
+            .workspace_for_test()
+            .emit(ui::Intent::OpenBrushEditor);
+        let mut out = ChromeOutput::default();
+        for _ in 0..3 {
+            let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+                out = chrome.ui(ctx, &ed);
+            });
+        }
+        assert!(out.dialog_open, "the brush editor opened");
+
+        // Change the hardness the way the dialog's own controls do.
+        chrome
+            .dialogs_for_test()
+            .active_brush_editor_for_test()
+            .settings_mut()
+            .hardness = 0.25;
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(
+            raw_input(vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+                physical_key: None,
+            }]),
+            |ctx| {
+                out = chrome.ui(ctx, &ed);
+            },
+        );
+        assert!(!out.dialog_open, "Enter did not close the editor");
+        let applied = out.set_brush.expect("the confirmed brush travelled");
+        assert_eq!(applied.hardness, 0.25, "the hardness edit was lost");
+
+        // Through the shell's apply path, the editor's brush is the edited one.
+        ed.set_brush(applied);
+        assert_eq!(ed.brush_for(tool).hardness, 0.25);
+    }
+
+    #[test]
+    fn a_confirmed_gradient_editor_round_trips_into_the_workspace_and_the_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+        ed.set_tool(tools::ToolId::Gradient);
+
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        chrome
+            .workspace_for_test()
+            .emit(ui::Intent::OpenGradientEditor);
+        let mut out = ChromeOutput::default();
+        let mut painted = Vec::new();
+        for _ in 0..3 {
+            let full = ctx.run(raw_input(Vec::new()), |ctx| {
+                out = chrome.ui(ctx, &ed);
+            });
+            painted = painted_in(&full);
+        }
+        assert!(out.dialog_open, "the gradient editor opened");
+        assert!(
+            painted.iter().any(|t| t.contains("Gradient")),
+            "the gradient editor was never drawn"
+        );
+
+        // Edit the ramp the way the dialog's own controls do, then confirm.
+        chrome
+            .dialogs_for_test()
+            .active_gradient_editor_for_test()
+            .set_stop_color(ui::dialogs::StopKind::Color, 0, [1.0, 0.0, 0.0, 1.0]);
+        chrome
+            .dialogs_for_test()
+            .active_gradient_editor_for_test()
+            .set_stop_color(ui::dialogs::StopKind::Color, 1, [0.0, 0.0, 1.0, 1.0]);
+        // What the dialog will commit: its own normalised copy of the stops.
+        let confirmed = chrome
+            .dialogs_for_test()
+            .active_gradient_editor_for_test()
+            .gradient()
+            .clone();
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(
+            raw_input(vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+                physical_key: None,
+            }]),
+            |ctx| {
+                out = chrome.ui(ctx, &ed);
+            },
+        );
+        assert!(!out.dialog_open, "Enter did not close the editor");
+        // The ramp round-trips: the options bar reads the same stops back.
+        assert_eq!(
+            chrome.workspace().options.gradient(tools::ToolId::Gradient),
+            confirmed,
+            "the workspace did not take the confirmed ramp"
+        );
+        assert_eq!(
+            out.set_gradient_ramp,
+            Some(confirmed),
+            "the editor's stroke ramp was not read back"
+        );
+        // The edited stops really are in it (the dialog may add its own
+        // opacity ramps beside them).
+        let stops = &out.set_gradient_ramp.as_ref().unwrap().stops;
+        assert_eq!(stops[0].color, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(stops[1].color, [0.0, 0.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn a_foreground_swatch_double_click_opens_the_picker_and_its_confirm_lands_in_the_well() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+        // A known colour the test sets into the picker.
+        let known = [0.25, 0.5, 0.75, 1.0];
+
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        chrome
+            .workspace_for_test()
+            .emit(ui::Intent::OpenColorPicker(
+                ui::panels::color::ColorWell::Foreground,
+            ));
+        let mut out = ChromeOutput::default();
+        let mut painted = Vec::new();
+        for _ in 0..3 {
+            let full = ctx.run(raw_input(Vec::new()), |ctx| {
+                out = chrome.ui(ctx, &ed);
+            });
+            painted = painted_in(&full);
+        }
+        assert!(out.dialog_open, "the picker opened");
+        assert!(
+            painted.iter().any(|t| t.contains("Color Picker")),
+            "the picker was never drawn"
+        );
+
+        // Type a known colour into the picker and confirm it.
+        chrome
+            .active_color_picker_for_test()
+            .set_color(ui::dialogs::ColorValue::new(known));
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(
+            raw_input(vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+                physical_key: None,
+            }]),
+            |ctx| {
+                out = chrome.ui(ctx, &ed);
+            },
+        );
+        assert!(!out.dialog_open, "Enter did not close the picker");
+        assert_eq!(
+            out.set_foreground,
+            Some(known),
+            "the confirmed colour did not land in the foreground well"
+        );
+        assert_eq!(out.set_background, None, "the background moved too");
+    }
+
+    #[test]
+    fn cancelling_the_new_document_dialog_creates_no_document() {
+        // No document open to begin with — the point is that nothing appears.
+        let dir = tempfile::tempdir().unwrap();
+        let ed = editor(&dir.path().join("config"));
+        assert!(ed.documents().is_empty());
+
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        chrome
+            .workspace_for_test()
+            .emit(ui::Intent::Action(ui::menu::MenuAction::NewDocument));
+        let mut out = ChromeOutput::default();
+        let mut painted = Vec::new();
+        for _ in 0..3 {
+            let full = ctx.run(raw_input(Vec::new()), |ctx| {
+                out = chrome.ui(ctx, &ed);
+            });
+            painted = painted_in(&full);
+        }
+        assert!(out.dialog_open, "File ▸ New opened its dialog");
+        assert!(
+            painted.iter().any(|t| t.contains("New Document")),
+            "the New Document dialog was never drawn"
+        );
+
+        // Escape cancels: no document, no command, nothing.
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(
+            raw_input(vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+                physical_key: None,
+            }]),
+            |ctx| {
+                out = chrome.ui(ctx, &ed);
+            },
+        );
+        assert!(!out.dialog_open);
+        assert!(ed.documents().is_empty(), "cancel created a document");
+        assert!(
+            out.commands.is_empty() && out.actions.is_empty() && out.dialog.is_none(),
+            "cancelling produced {out:?}"
         );
     }
 }

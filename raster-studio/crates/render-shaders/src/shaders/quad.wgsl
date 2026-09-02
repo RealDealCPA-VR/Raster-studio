@@ -39,6 +39,9 @@ const CHECKER_CELL_PX: f32 = 8.0;
 // sRGB 0.60 and 0.75, pre-linearized for the sRGB render target.
 const CHECKER_DARK: f32 = 0.318546;
 const CHECKER_LIGHT: f32 = 0.522527;
+// The flat pasteboard outside the document: sRGB 0x3C (a neutral grey just
+// above the dark panels), pre-linearized.
+const PASTEBOARD: f32 = 0.045031;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -74,11 +77,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let inside = uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
     let src = textureSample(src_tex, src_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
 
-    // The checkerboard is the backdrop everywhere: outside the image bounds AND
-    // behind transparent pixels *inside* them.
+    // Photopea's pasteboard: a flat neutral grey OUTSIDE the document; the
+    // checkerboard shows only through transparent pixels INSIDE it.
     let checker = checker_color(in.pos.xy);
+    let backdrop = select(vec3(PASTEBOARD, PASTEBOARD, PASTEBOARD), checker, inside);
     let a = select(0.0, src.a, inside);
-    let lit = mix(checker, src.rgb, a);
+    let lit = mix(backdrop, src.rgb, a);
     let out_rgb = select(lit, linear_to_srgb(lit), camera.m1.z > 0.5);
     return vec4<f32>(out_rgb, 1.0);
 }

@@ -27,6 +27,8 @@ pub const PROJECT_EXTENSION: &str = "rstudio";
 pub trait FileDialogs {
     /// "Open…". `None` means the user cancelled.
     fn pick_open_file(&mut self) -> Option<PathBuf>;
+    /// "Place Embedded…"/"Place Linked…". `None` means the user cancelled.
+    fn pick_place_file(&mut self) -> Option<PathBuf>;
     /// "Open Project…". A separate question because a `.rstudio` package is a
     /// **directory**, and no file picker can return one — which is why File ▸
     /// Open could not open the application's own save format at all.
@@ -67,6 +69,14 @@ impl FileDialogs for NativeDialogs {
         rfd::FileDialog::new()
             .set_title("Open Project")
             .pick_folder()
+    }
+
+    fn pick_place_file(&mut self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .add_filter("Images", IMAGE_EXTENSIONS)
+            .add_filter("All files", &["*"])
+            .set_title("Place")
+            .pick_file()
     }
 
     fn pick_save_path(&mut self, suggested: &Path) -> Option<PathBuf> {
@@ -173,6 +183,8 @@ pub struct ScriptedDialogs {
     pub errors: Vec<(String, String)>,
     /// Every `suggested` path a save/export dialog was opened at.
     pub suggested: Vec<PathBuf>,
+    /// Answers for the picker behind "Place Embedded…"/"Place Linked…".
+    pub place_files: Vec<PathBuf>,
 }
 
 impl ScriptedDialogs {
@@ -182,6 +194,12 @@ impl ScriptedDialogs {
 
     pub fn opening(mut self, path: impl Into<PathBuf>) -> Self {
         self.open_files.push(path.into());
+        self
+    }
+
+    /// Answer for the "Place Embedded…/Place Linked…" picker.
+    pub fn placing(mut self, path: impl Into<PathBuf>) -> Self {
+        self.place_files.push(path.into());
         self
     }
 
@@ -223,6 +241,10 @@ impl FileDialogs for ScriptedDialogs {
 
     fn pick_open_project(&mut self) -> Option<PathBuf> {
         (!self.open_projects.is_empty()).then(|| self.open_projects.remove(0))
+    }
+
+    fn pick_place_file(&mut self) -> Option<PathBuf> {
+        (!self.place_files.is_empty()).then(|| self.place_files.remove(0))
     }
 
     fn pick_save_path(&mut self, suggested: &Path) -> Option<PathBuf> {

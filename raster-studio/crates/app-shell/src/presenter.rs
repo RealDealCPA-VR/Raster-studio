@@ -757,6 +757,8 @@ mod tests {
             width,
             height,
             rgba8,
+            color_space: color::ColorSpace::Srgb,
+            icc_profile: None,
         }
     }
 

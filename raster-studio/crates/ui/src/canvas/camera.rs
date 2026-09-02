@@ -40,6 +40,33 @@ use glam::{Mat3, Vec2};
 use super::geom::DocRect;
 use super::viewport::Viewport;
 
+/// The document-space centre after a scrollbar drag, on one axis.
+///
+/// The thumb covers the viewport's fraction of the track, so the full thumb
+/// travel spans exactly the slack between document and viewport — which makes
+/// the mapping proportional: a thumb delta of `thumb_delta_px` screen pixels
+/// along a `track_len_px` track pans the camera by
+/// `thumb_delta * doc_len / track_len` document pixels (the zoom cancels:
+/// screen-px-per-doc-px scales the document extent and the view by the same
+/// factor). The result is clamped so the viewport never leaves the document;
+/// an axis that shows the whole document stays centred.
+pub fn scroll_center(
+    center_doc: f32,
+    thumb_delta_px: f32,
+    track_len_px: f32,
+    doc_len_px: f32,
+    viewport_doc: f32,
+) -> f32 {
+    if track_len_px <= 0.0 || doc_len_px <= 0.0 {
+        return center_doc;
+    }
+    if doc_len_px <= viewport_doc {
+        return doc_len_px * 0.5;
+    }
+    let moved = center_doc + thumb_delta_px * doc_len_px / track_len_px;
+    moved.clamp(viewport_doc * 0.5, doc_len_px - viewport_doc * 0.5)
+}
+
 /// Pan, zoom, rotation and flip of the canvas view.
 ///
 /// A view change is deliberately **not** an [`editor_core::Command`]: it edits
@@ -246,6 +273,45 @@ impl CanvasCamera {
             Some(m) => m.transform_point2(pt),
             None => self.center,
         }
+    }
+
+    /// Pan by dragging a scrollbar thumb.
+    ///
+    /// `delta_pt` is the thumb's movement in screen points along the track of
+    /// `track_len_pt`; `content_pt` is the on-screen size of the viewport and
+    /// `doc_size` the document's size in pixels. Each axis pans by the
+    /// proportional document distance — see [`scroll_center`] — and is
+    /// clamped so the viewport never leaves the document.
+    pub fn pan_by_scrollbar(
+        &mut self,
+        delta_pt: Vec2,
+        track_len_pt: Vec2,
+        content_pt: Vec2,
+        doc_size: Vec2,
+    ) {
+        // Screen points per document pixel, from the content window alone: no
+        // viewport needed, because the camera and the document fix the scale.
+        let doc_wide_pt = doc_size * self.zoom; // document extent on screen
+        let scale = if doc_wide_pt.x > 0.0 {
+            doc_wide_pt.x / doc_size.x
+        } else {
+            self.zoom
+        };
+        let view_doc = content_pt / scale.max(f32::EPSILON);
+        self.center.x = scroll_center(
+            self.center.x,
+            delta_pt.x,
+            track_len_pt.x,
+            doc_size.x,
+            view_doc.x,
+        );
+        self.center.y = scroll_center(
+            self.center.y,
+            delta_pt.y,
+            track_len_pt.y,
+            doc_size.y,
+            view_doc.y,
+        );
     }
 
     /// The document point under a physical-pixel position.
@@ -500,6 +566,55 @@ mod tests {
     use super::*;
     use crate::canvas::viewport::PanelInsets;
     use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+
+    #[test]
+    fn a_scrollbar_drag_pans_by_the_proportional_document_distance() {
+        // The validate for P1.14: the thumb's share of the track maps to the
+        // view's share of the document, so a 100 px thumb drag along an 800 px
+        // track over a 2000 px document pans 250 document px.
+        let before = 1000.0;
+        let after = scroll_center(before, 100.0, 800.0, 2000.0, 500.0);
+        assert!((after - before - 250.0).abs() < 1e-3, "{before} -> {after}");
+    }
+
+    #[test]
+    fn a_scrollbar_drag_cannot_push_the_view_off_the_document() {
+        // At the left edge a further leftward drag stays clamped so the
+        // viewport never leaves the document; centring is the floor.
+        let edge = scroll_center(250.0, -400.0, 800.0, 2000.0, 500.0);
+        assert_eq!(edge, 250.0, "the viewport's half-height is the floor");
+        let top = scroll_center(250.0, 4000.0, 800.0, 2000.0, 500.0);
+        assert_eq!(top, 1750.0, "the ceiling is the document minus the view");
+    }
+
+    #[test]
+    fn an_axis_showing_the_whole_document_stays_centred() {
+        assert_eq!(scroll_center(10.0, 50.0, 800.0, 500.0, 500.0), 250.0);
+        assert_eq!(scroll_center(10.0, 50.0, 800.0, 400.0, 500.0), 200.0);
+    }
+
+    #[test]
+    fn pan_by_scrollbar_moves_the_camera_through_its_own_mapping() {
+        // End to end through the method the canvas calls: the document at 2x
+        // zoom on a 600 pt window; the horizontal thumb dragged right pans
+        // right by the proportional distance, the vertical axis untouched.
+        let mut camera = CanvasCamera::for_document(Vec2::new(2000.0, 2000.0));
+        camera.zoom = 2.0;
+        assert_eq!(camera.center, Vec2::new(1000.0, 1000.0));
+        camera.pan_by_scrollbar(
+            Vec2::new(100.0, 0.0),
+            Vec2::new(800.0, 0.0),
+            Vec2::new(600.0, 600.0),
+            Vec2::new(2000.0, 2000.0),
+        );
+        // view_doc = 600 / 2 = 300; delta = 100 * 2000 / 800 = 250.
+        assert!(
+            (camera.center.x - 1250.0).abs() < 1e-3,
+            "{:?}",
+            camera.center
+        );
+        assert_eq!(camera.center.y, 1000.0, "the untouched axis stays put");
+    }
 
     fn inset_viewport(scale: f32) -> Viewport {
         Viewport::new(

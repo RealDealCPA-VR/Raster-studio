@@ -114,6 +114,7 @@ pub mod edit;
 pub mod error;
 pub mod gradient;
 pub mod patch;
+pub mod path_select;
 pub mod pen;
 pub mod registry;
 pub mod select;

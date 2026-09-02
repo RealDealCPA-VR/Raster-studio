@@ -145,7 +145,7 @@ pub fn visuals_for(theme: Theme) -> egui::Visuals {
     };
     v.clip_rect_margin = 3.0;
     v.button_frame = true;
-    // Apple-style chrome: no boxes around headers, no ladder lines in trees,
+    // Photopea-style chrome: no boxes around headers, no ladder lines in trees,
     // no zebra striping. Hierarchy comes from spacing and weight.
     v.collapsing_header_frame = false;
     v.indent_has_left_vline = false;

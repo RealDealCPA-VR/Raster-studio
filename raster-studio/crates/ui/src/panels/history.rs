@@ -124,7 +124,13 @@ impl StepKind {
             // A crop is a canvas resize plus one translation per layer, and
             // the resize is the part the user asked for — so it reads as a
             // geometry step rather than as a layer edit.
-            Command::TransformLayer { .. } | Command::SetCanvasSize { .. } => StepKind::Transformed,
+            Command::SetSelection { .. }
+            | Command::SetMetaColorMode { .. }
+            | Command::TransformLayer { .. }
+            | Command::SetCanvasSize { .. } => StepKind::Transformed,
+            // Image ▸ Image Size resamples every layer — a geometry step on
+            // the document, not a paint on any one layer.
+            Command::ResampleImage { .. } => StepKind::Transformed,
             Command::SetGuides { .. } => StepKind::Transformed,
             Command::PaintTiles { .. } => StepKind::Painted,
             Command::FillRegion { .. } => StepKind::Filled,

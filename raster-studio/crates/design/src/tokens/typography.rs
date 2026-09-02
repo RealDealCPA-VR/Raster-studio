@@ -179,10 +179,10 @@ impl TypeScale {
 }
 
 impl Default for TypeScale {
-    /// 13pt base at a 1.15 ratio, which rounds to 10 / 11 / 13 / 15 / 20 pt —
-    /// close to the macOS system sizes.
+    /// 12pt base at a 1.125 ratio, which rounds to 9 / 11 / 12 / 14 / 17 pt
+    /// (Title skips a step) — Photopea's compact sizes, with body at 12pt.
     fn default() -> Self {
-        Self::new(13.0, 1.15)
+        Self::new(12.0, 1.125)
     }
 }
 
@@ -192,12 +192,14 @@ mod tests {
 
     #[test]
     fn default_scale_hits_the_intended_point_sizes() {
+        // Photopea's compact scale: 12pt base at 1.125 rounds to
+        // 9 / 11 / 12 / 14 / 15 pt.
         let s = TypeScale::default();
-        assert_eq!(s.size_pt(TypeRole::Caption), 10.0);
+        assert_eq!(s.size_pt(TypeRole::Caption), 9.0);
         assert_eq!(s.size_pt(TypeRole::Footnote), 11.0);
-        assert_eq!(s.size_pt(TypeRole::Body), 13.0);
-        assert_eq!(s.size_pt(TypeRole::Headline), 15.0);
-        assert_eq!(s.size_pt(TypeRole::Title), 20.0);
+        assert_eq!(s.size_pt(TypeRole::Body), 12.0);
+        assert_eq!(s.size_pt(TypeRole::Headline), 14.0);
+        assert_eq!(s.size_pt(TypeRole::Title), 17.0);
     }
 
     #[test]

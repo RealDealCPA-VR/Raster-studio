@@ -1,4 +1,5 @@
-//! The visual language of Raster Studio.
+//! The visual language of Raster Studio: Photopea’s — dark-first neutral
+//! greys, compact density, restrained chrome.
 //!
 //! Three layers, in dependency order:
 //!

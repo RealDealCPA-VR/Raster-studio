@@ -21,8 +21,6 @@ members = [
   "crates/vector",
   "crates/psd",
   "crates/text-engine",
-  "crates/licensing",
-  "crates/updater",
   "crates/telemetry",
   "tests/integration",
 ]
@@ -89,7 +87,7 @@ notify = "6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
-# Crypto (licensing / update signatures)
+# Crypto (update signatures)
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
 
@@ -113,8 +111,6 @@ selection        = { path = "crates/selection" }
 vector           = { path = "crates/vector" }
 psd              = { path = "crates/psd" }
 text-engine      = { path = "crates/text-engine" }
-licensing        = { path = "crates/licensing" }
-updater          = { path = "crates/updater" }
 telemetry        = { path = "crates/telemetry" }
 
 [profile.dev]

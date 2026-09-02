@@ -33,6 +33,7 @@ use std::time::{Duration, Instant};
 use editor_core::pixels::{PixelTarget, TileDelta};
 use editor_core::{Command, LayerPatch};
 use layer_model::{Layer, LayerId, LayerKind, MaskId};
+use raster::TILE_SIZE;
 use tools::{registry, BrushSettings, ToolId};
 
 use crate::action::Action;
@@ -107,7 +108,21 @@ fn mask_paint_to_channel(doc: &mut OpenDocument, command: Command, channel: usiz
             target,
             delta,
         ),
-        _ => command,
+        _ => {
+            // A transaction wraps whole-document edits (the filter path's
+            // write_layer); its members are exactly the commands isolation
+            // masks, so recurse — the label and ordering survive.
+            if let Command::Transaction { label, commands } = command {
+                return Command::Transaction {
+                    label,
+                    commands: commands
+                        .into_iter()
+                        .map(|c| mask_paint_to_channel(doc, c, channel))
+                        .collect(),
+                };
+            }
+            command
+        }
     }
 }
 
@@ -299,13 +314,153 @@ struct EmbeddedContents {
 }
 
 /// The application.
+/// One captured step of an Actions recording: the command as applied, the
+/// stack position of the layer it targeted (`None` when the command targets
+/// no layer), and the tile BYTES the command's delta references — hashes are
+/// keys into the recording document's own blob store, so a replay needs the
+/// bytes themselves to re-insert into the replay document's store.
+#[derive(Debug, Clone)]
+pub struct RecordedEdit {
+    pub command: Command,
+    pub layer: Option<usize>,
+    pub tiles: Vec<(raster::TileHash, Vec<u8>)>,
+}
+
+/// Every tile byte a command's pixel deltas reference, read from `doc`'s
+/// store. Transactions are walked; a hash appears once.
+fn captured_tiles(doc: &OpenDocument, command: &Command) -> Vec<(raster::TileHash, Vec<u8>)> {
+    fn hashes_of(command: &Command, out: &mut Vec<raster::TileHash>) {
+        match command {
+            Command::PaintTiles { delta, .. } | Command::FillRegion { delta, .. } => {
+                for edit in delta.edits() {
+                    if let Some(hash) = edit.hash {
+                        out.push(hash);
+                    }
+                }
+            }
+            Command::Transaction { commands, .. } => {
+                for c in commands {
+                    hashes_of(c, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut hashes = Vec::new();
+    hashes_of(command, &mut hashes);
+    hashes.sort_by_key(|h| format!("{h:?}"));
+    hashes.dedup();
+    hashes
+        .into_iter()
+        .filter_map(|h| doc.tiles.tile(h).map(|b| (h, b.to_vec())))
+        .collect()
+}
+
+/// Rebuild a delta with its hashes re-keyed through `map`. A hash the map
+/// lacks is left alone — it can only be one the replay store already had.
+fn rekey_delta(
+    delta: &editor_core::TileDelta,
+    map: &std::collections::BTreeMap<String, raster::TileHash>,
+) -> Option<editor_core::TileDelta> {
+    let edits: Vec<editor_core::pixels::TileEdit> = delta
+        .edits()
+        .iter()
+        .map(|edit| editor_core::pixels::TileEdit {
+            coord: edit.coord,
+            hash: edit.hash.map(|h| *map.get(&format!("{h:?}")).unwrap_or(&h)),
+        })
+        .collect();
+    editor_core::pixels::TileDelta::new(edits)
+        .map_err(|e| tracing::debug!("replay delta refused: {e}"))
+        .ok()
+}
+
+/// The stack position of the layer a command's pixel edits target, if any.
+///
+/// Transactions are walked (their members carry the real targets); the first
+/// layer target found wins, which is right for the commands a recording
+/// captures — an edit touches one layer.
+fn layer_position(tree: &layer_model::LayerTree, command: &Command) -> Option<usize> {
+    fn target_of(command: &Command) -> Option<LayerId> {
+        match command {
+            Command::PaintTiles { target, .. } | Command::FillRegion { target, .. } => match target
+            {
+                editor_core::pixels::PixelTarget::Layer(id) => Some(*id),
+                _ => None,
+            },
+            Command::Transaction { commands, .. } => commands.iter().find_map(target_of),
+            _ => None,
+        }
+    }
+    let id = target_of(command)?;
+    tree.iter_depth_first().iter().position(|x| *x == id)
+}
+
+/// Rewrite a command's layer targets to `target`: the replay retargeting that
+/// lets one recording serve every document with a deep enough stack. The
+/// pixel payload (delta, rect, value) is untouched — only who receives it
+/// changes.
+fn remap_layer(
+    command: Command,
+    target: LayerId,
+    map: &std::collections::BTreeMap<String, raster::TileHash>,
+) -> Command {
+    match command {
+        Command::PaintTiles { target: old, delta } => {
+            let delta = rekey_delta(&delta, map).unwrap_or(delta);
+            Command::PaintTiles {
+                target: retarget(old, target),
+                delta,
+            }
+        }
+        Command::FillRegion {
+            target: old,
+            rect,
+            value,
+            delta,
+        } => {
+            let delta = rekey_delta(&delta, map).unwrap_or(delta);
+            Command::FillRegion {
+                target: retarget(old, target),
+                rect,
+                value,
+                delta,
+            }
+        }
+        Command::Transaction { label, commands } => Command::Transaction {
+            label,
+            commands: commands
+                .into_iter()
+                .map(|c| remap_layer(c, target, map))
+                .collect(),
+        },
+        other => other,
+    }
+}
+
+fn retarget(
+    old: editor_core::pixels::PixelTarget,
+    target: LayerId,
+) -> editor_core::pixels::PixelTarget {
+    match old {
+        editor_core::pixels::PixelTarget::Layer(_) => {
+            editor_core::pixels::PixelTarget::Layer(target)
+        }
+        other => other,
+    }
+}
+
 pub struct Editor {
     paths: AppPaths,
     prefs: Preferences,
     keymap: Keymap,
     recent: RecentFiles,
+    /// Named patterns and brushes the Edit and Layer menus define and reuse.
+    presets: asset_store::presets::PresetStore,
     dialogs: Box<dyn FileDialogs>,
     app_version: String,
+    /// The GPU adapter the window actually got, for the diagnostics bundle.
+    gpu_adapter_name: Option<String>,
 
     docs: Vec<OpenDocument>,
     active: Option<usize>,
@@ -329,6 +484,11 @@ pub struct Editor {
     brushes: BTreeMap<ToolId, BrushSettings>,
     foreground: [f32; 4],
     background: [f32; 4],
+    /// The ramp the gradient tools paint with. The options bar and the
+    /// gradient dialog edit the workspace's copy; the read-back lands here so
+    /// [`crate::tool_input::ToolPointer`] can thread it into the tool's
+    /// context, the same road the foreground colour travels.
+    gradient_ramp: layer_model::Gradient,
 
     panels_visible: bool,
     preferences_open: bool,
@@ -337,6 +497,17 @@ pub struct Editor {
     /// The colour component paint/fill should write, when the Channels panel
     /// has selected one channel to edit. `None` edits all components.
     paint_channel: Option<usize>,
+    /// Quick-mask mode (Photoshop's "Edit in Quick Mask Mode", `Q`): while on,
+    /// pixel edits land in a scratch layer's mask instead of the document, and
+    /// leaving converts that painted coverage into the selection.
+    quick_mask: bool,
+    /// The scratch layer carrying the quick-mask coverage, created on enter
+    /// and deleted on leave. `None` outside quick-mask mode.
+    quick_mask_layer: Option<LayerId>,
+    /// The Actions panel's recording: when set, every command that lands
+    /// through [`Self::apply_command`] is captured with the stack position of
+    /// the layer it targets, in order.
+    recording: Option<Vec<RecordedEdit>>,
     /// A smart object whose contents are open in an embedded-document tab
     /// (S1.2 editor): which document and layer own it, and which scratch
     /// document is showing its pixels right now.
@@ -459,13 +630,16 @@ impl Editor {
     ) -> Self {
         let prefs = prefs.sanitized();
         let keymap = Keymap::with_overrides(prefs.keymap_overrides.clone());
+        let presets = asset_store::presets::PresetStore::load(&AppPaths::presets_file(&paths));
         Editor {
             paths,
             prefs,
             keymap,
             recent,
+            presets,
             dialogs,
             app_version: env!("CARGO_PKG_VERSION").to_string(),
+            gpu_adapter_name: None,
             docs: Vec::new(),
             active: None,
             next_id: 1,
@@ -475,10 +649,14 @@ impl Editor {
             brushes: BTreeMap::new(),
             foreground: DEFAULT_FOREGROUND,
             background: DEFAULT_BACKGROUND,
+            gradient_ramp: layer_model::Gradient::default(),
             panels_visible: true,
             preferences_open: false,
             file_info_open: false,
             paint_channel: None,
+            quick_mask: false,
+            quick_mask_layer: None,
+            recording: None,
             pending_conflict: None,
             temporary_hand: false,
             quit_requested: false,
@@ -513,6 +691,53 @@ impl Editor {
 
     pub fn preferences(&self) -> &Preferences {
         &self.prefs
+    }
+
+    /// The dialog-facing view of the application preferences.
+    ///
+    /// [`ui::dialogs::UiPreferences`] is the Preferences dialog's schema and
+    /// richer than what this app models, so the four settings the app owns map
+    /// onto it (minutes instead of seconds for autosave, undo states for
+    /// history depth) and the sections without an app counterpart (tools,
+    /// performance, scratch disks) stay at their defaults until their
+    /// features exist.
+    pub fn ui_preferences(&self) -> ui::dialogs::UiPreferences {
+        let prefs = self.preferences();
+        ui::dialogs::UiPreferences {
+            general: ui::dialogs::GeneralPrefs {
+                autosave_minutes: (prefs.autosave_interval_secs / 60).min(u32::MAX as u64) as u32,
+                ..Default::default()
+            },
+            interface: ui::dialogs::InterfacePrefs {
+                theme: prefs.theme.into(),
+                ui_scale: prefs.ui_scale,
+                ..Default::default()
+            },
+            history: ui::dialogs::HistoryPrefs {
+                states: prefs.history_depth.min(u32::MAX as usize) as u32,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Apply the Preferences dialog's confirmed [`ui::dialogs::UiPreferences`].
+    ///
+    /// Only the app-owned settings are taken; see [`Self::ui_preferences`].
+    /// The keymap the dialog edits is the ui crate's own command universe
+    /// (dotted ids like `tool.brush`) while the shell's keymap binds menu
+    /// [`Action`]s over per-cycle-group tool letters, so there is no faithful
+    /// conversion yet — the live keymap wins, per the echo rule in
+    /// [`Self::set_preferences`]. That bridge is tracked by the preferences
+    /// dedupe task.
+    pub fn apply_ui_preferences(&mut self, ui_prefs: &ui::dialogs::UiPreferences) {
+        let mut prefs = self.preferences().clone();
+        prefs.theme = ui_prefs.interface.theme.into();
+        prefs.ui_scale = ui_prefs.interface.ui_scale;
+        prefs.autosave_interval_secs = ui_prefs.general.autosave_minutes as u64 * 60;
+        prefs.history_depth = ui_prefs.history.states.max(1) as usize;
+        prefs.keymap_overrides = self.keymap.overrides().to_vec();
+        self.set_preferences(prefs);
     }
 
     /// Replace the preferences, re-deriving everything that depends on them.
@@ -554,7 +779,18 @@ impl Editor {
         self.prefs.keymap_overrides = self.keymap.overrides().to_vec();
         self.paths.ensure()?;
         self.prefs.save(&self.paths.preferences_file())?;
+        self.presets.save(&self.paths.presets_file())?;
         self.recent.save(&self.paths.recent_file())
+    }
+
+    /// The user preset store: named patterns and brushes.
+    pub fn presets(&self) -> &asset_store::presets::PresetStore {
+        &self.presets
+    }
+
+    /// Mutable access, for the menu items that define presets.
+    pub fn presets_mut(&mut self) -> &mut asset_store::presets::PresetStore {
+        &mut self.presets
     }
 
     pub fn keymap(&self) -> &Keymap {
@@ -653,12 +889,241 @@ impl Editor {
         self.paint_channel = channel;
     }
 
+    /// Start recording every applied command for the Actions panel.
+    ///
+    /// A recording already in progress is restarted: one recording at a time.
+    pub fn start_recording(&mut self) {
+        self.recording = Some(Vec::new());
+    }
+
+    /// Stop recording and hand back what was captured, in apply order.
+    /// `None` when nothing was being recorded.
+    pub fn stop_recording(&mut self) -> Option<Vec<RecordedEdit>> {
+        self.recording.take()
+    }
+
+    /// Whether a recording is in progress (the panel's record button state).
+    pub fn is_recording(&self) -> bool {
+        self.recording.is_some()
+    }
+
+    /// Replay a recording onto the ACTIVE document.
+    ///
+    /// Each captured command's layer target is remapped by stack position:
+    /// the layer that sat at index `i` of the recording document maps to the
+    /// layer at index `i` here — Actions semantics, where a replay means "do
+    /// the same things to my layers", not "do them to a layer with the same
+    /// random id". Commands with no layer target replay as-is; commands that
+    /// name a position the replay document does not have are skipped and
+    /// counted, so the caller can say what did not replay.
+    pub fn replay(&mut self, edits: &[RecordedEdit]) -> usize {
+        let mut applied = 0;
+        for edit in edits {
+            let Some(doc) = self.active_mut() else {
+                return applied;
+            };
+            let stack = doc.document.layers.iter_depth_first();
+            // Re-insert the captured bytes into THIS document's store: the
+            // recording's hashes are keys into another document's blob store.
+            let mut map = std::collections::BTreeMap::new();
+            for (hash, bytes) in &edit.tiles {
+                let fresh = doc.tiles.insert_bytes(bytes.clone());
+                map.insert(format!("{hash:?}"), fresh);
+            }
+            let command = match edit.layer {
+                Some(index) => match stack.get(index) {
+                    Some(&target) => remap_layer(edit.command.clone(), target, &map),
+                    None => continue, // the replay doc is shallower; skip
+                },
+                None => edit.command.clone(),
+            };
+            let before = doc.history_depth();
+            let _ = doc.apply(command);
+            if doc.history_depth() != before {
+                applied += 1;
+            }
+        }
+        self.touch();
+        applied
+    }
+
+    /// The quick-mask session state: while on, pixel tools write to the
+    /// scratch mask and the canvas may show the coverage as a red overlay.
+    pub fn quick_mask(&self) -> bool {
+        self.quick_mask
+    }
+
+    /// The scratch layer carrying the quick-mask coverage, if any.
+    pub fn quick_mask_layer(&self) -> Option<LayerId> {
+        self.quick_mask_layer
+    }
+
+    /// Toggle quick-mask mode (`MenuAction::ToggleQuickMask`, the `Q` chord).
+    ///
+    /// Entering mints a hidden scratch raster layer with an attached mask —
+    /// hidden because its only job is to carry the painted coverage, and
+    /// attaching the mask there means the tools' existing
+    /// [`tools::PaintTarget::Mask`] route works unchanged. Leaving reads the
+    /// painted coverage back as a [`editor_core::SelectionMask`] (a direct
+    /// field write, exactly like the marquee — selection edits are not undo
+    /// steps) and deletes the scratch layer.
+    /// Convert the document to a colour mode (Image ▸ Mode ▸ …).
+    ///
+    /// Tiles are always stored RGBA, so a conversion rewrites every layer's
+    /// pixels — RGB→Grayscale collapses each pixel to its Rec.601 luma
+    /// (r = g = b), Grayscale→RGB replicates the shared channel. The whole
+    /// rewrite is ONE [`Command::Transaction`] (one [`Command::PaintTiles`]
+    /// per pixel-bearing layer), so a single undo returns the colours; the
+    /// mode itself rides on the metadata next to the rewrite (a field write,
+    /// like the bit depth).
+    pub fn set_color_mode(&mut self, mode: ui::menu::ColorMode) -> Result<String, String> {
+        let target = mode as u8;
+        let Some(doc) = self.active_mut() else {
+            return Err("No document is open".into());
+        };
+        if doc.document.meta.color_mode == target {
+            return Err("The document is already in that colour mode".into());
+        }
+        let from_rgb = doc.document.meta.color_mode == 0 && target == 1;
+        let from_gray = doc.document.meta.color_mode == 1 && target == 0;
+        if !(from_rgb || from_gray) {
+            return Err("This build cannot convert between those colour modes".into());
+        }
+        let ts = TILE_SIZE as usize;
+        let mut commands = vec![Command::SetMetaColorMode {
+            from: doc.document.meta.color_mode,
+            to: target,
+        }];
+        let layer_ids: Vec<LayerId> = doc.document.layers.iter_depth_first().to_vec();
+        for layer_id in layer_ids {
+            let Some(map) = doc.document.layer_tiles(layer_id) else {
+                continue;
+            };
+            let mut edits = Vec::new();
+            for (coord, hash) in map.iter() {
+                if coord.level != 0 {
+                    continue;
+                }
+                let Some(bytes) = doc.tiles.tile(hash) else {
+                    continue;
+                };
+                if bytes.len() != ts * ts * 4 {
+                    continue;
+                }
+                let converted: Vec<u8> = bytes
+                    .chunks(4)
+                    .flat_map(|px| {
+                        if from_rgb {
+                            let luma = (0.299 * px[0] as f32
+                                + 0.587 * px[1] as f32
+                                + 0.114 * px[2] as f32)
+                                .round()
+                                .clamp(0.0, 255.0) as u8;
+                            [luma, luma, luma, px[3]]
+                        } else {
+                            // Grayscale tiles keep r = g = b; replicate any
+                            // of them (the alpha survives untouched).
+                            let g = px[0];
+                            [g, g, g, px[3]]
+                        }
+                    })
+                    .collect();
+                let new_hash = doc.tiles.insert_bytes(converted);
+                edits.push(editor_core::pixels::TileEdit::set(coord, new_hash));
+            }
+            if edits.is_empty() {
+                continue;
+            }
+            let paint = Command::paint_tiles(PixelTarget::Layer(layer_id), edits)
+                .map_err(|e: editor_core::CommandError| e.to_string())?;
+            commands.push(paint);
+        }
+        doc.apply(Command::Transaction {
+            label: format!("Change Colour Mode to {}", mode.label()),
+            commands,
+        })
+        .map_err(|e| e.to_string())?;
+        self.touch();
+        Ok(format!("Changed colour mode to {}", mode.label()))
+    }
+
+    pub fn toggle_quick_mask(&mut self) -> Result<String, String> {
+        if !self.quick_mask {
+            let mask_id = MaskId::new();
+            let mut layer = Layer::raster("Quick Mask");
+            layer.visible = false;
+            layer.set_mask(layer_model::LayerMask::new(mask_id));
+            let layer_id = layer.id;
+            self.apply_command(Command::create_layer(layer));
+            self.quick_mask = true;
+            self.quick_mask_layer = Some(layer_id);
+            return Ok("Entered quick mask".into());
+        }
+        self.quick_mask = false;
+        let Some(layer_id) = self.quick_mask_layer.take() else {
+            return Ok("Left quick mask".into());
+        };
+        let doc = self.active_mut().ok_or("No document is open")?;
+        // Read the painted coverage back: mask tiles are 8-bit samples, one
+        // byte per pixel, keyed by the scratch mask.
+        let (w, h) = (doc.document.width(), doc.document.height());
+        let mut coverage = vec![0u8; (w as usize) * (h as usize)];
+        let ts = TILE_SIZE as usize;
+        if let Some(mask_id) = doc.document.layers.get(layer_id).and_then(|l| l.mask_id()) {
+            if let Some(map) = doc
+                .document
+                .pixels
+                .tiles(editor_core::PixelKey::Mask(mask_id))
+            {
+                for (coord, hash) in map.iter() {
+                    if coord.level != 0 {
+                        continue;
+                    }
+                    let Some(bytes) = doc.tiles.tile(hash) else {
+                        continue;
+                    };
+                    let (ox, oy) = coord.pixel_origin();
+                    for row in 0..ts {
+                        let y = oy + row as i64;
+                        if y < 0 || y >= h as i64 {
+                            continue;
+                        }
+                        for col in 0..ts {
+                            let x = ox + col as i64;
+                            if x < 0 || x >= w as i64 {
+                                continue;
+                            }
+                            let byte = bytes[row * ts + col];
+                            if byte > 0 {
+                                coverage[y as usize * w as usize + x as usize] = byte;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let selection = editor_core::SelectionMask::new(glam::IVec2::ZERO, w, h, coverage)
+            .map(editor_core::Selection::Mask)
+            .unwrap_or(editor_core::Selection::None);
+        doc.document.selection = selection;
+        let delete = Command::DeleteLayer { layer_id };
+        let _ = doc.apply(delete);
+        self.touch();
+        Ok("Left quick mask".into())
+    }
+
+    /// The folder picker behind every export that writes more than one file
+    /// (Export As, Export Layers). `None` means the user cancelled.
+    pub fn pick_export_folder(&mut self) -> Option<PathBuf> {
+        self.dialogs.pick_export_folder()
+    }
+
     /// File ▸ Export Layers…: write each layer as its own PNG into a chosen
     /// directory. A layer is composited *alone* (every other layer hidden) over
     /// transparent, through the real compositor — the same isolation the merge
     /// path uses — so effects and blends are honoured per layer.
     pub fn export_layers(&mut self) -> Result<String, String> {
-        let Some(dir) = self.dialogs.pick_export_folder() else {
+        let Some(dir) = self.pick_export_folder() else {
             return Err("Export Layers: no destination chosen".to_string());
         };
         let doc = self
@@ -713,6 +1178,44 @@ impl Editor {
     /// a `.pdf` suggestion. This is the S1.8 Print route: the OS printing/spool
     /// surface is hereby reached as "Print as PDF" (a standard dialogless
     /// print destination) backed by a pure, tested PDF encoder.
+    /// Help ▸ Export Diagnostics…: write a [`DiagnosticBundle`] — app version,
+    /// OS, the GPU adapter the window actually got, and the panic/log lines —
+    /// wherever the user picks. `upload_consented` is always `false`: an
+    /// export is a file the user sends if and only if they choose to.
+    pub fn export_diagnostics(&mut self) -> Result<String, String> {
+        let suggested = self.paths.root().join("raster-studio-diagnostics.json");
+        let Some(target) = self.dialogs.pick_save_path(&suggested) else {
+            return Err("Export Diagnostics: no destination chosen".into());
+        };
+        let mut bundle = telemetry::DiagnosticBundle::new(&self.app_version);
+        bundle.gpu_adapter = self
+            .gpu_adapter_name
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let file = telemetry::panic_bundle(
+            &self.paths.root().join("scratch"),
+            &self.app_version,
+            "exported diagnostics",
+        );
+        // The scratch bundle carries whatever a previous panic recorded; fold
+        // its log lines into the export so a crash report travels with the
+        // diagnostics the user chose to send.
+        if let Ok(prior) = std::fs::read_to_string(&file) {
+            if let Ok(parsed) = serde_json::from_str::<telemetry::DiagnosticBundle>(&prior) {
+                bundle.recent_log_lines.extend(parsed.recent_log_lines);
+            }
+        }
+        std::fs::write(&target, bundle.to_json()).map_err(|e| e.to_string())?;
+        self.status = Some(format!("Diagnostics written to {}", target.display()));
+        Ok("Diagnostics exported".into())
+    }
+
+    /// The GPU adapter the window actually got — set once at window creation,
+    /// straight from the live wgpu adapter.
+    pub fn set_gpu_adapter_name(&mut self, name: String) {
+        self.gpu_adapter_name = Some(name);
+    }
+
     pub fn print_pdf(&mut self) -> Result<String, String> {
         let suggested = self
             .active()
@@ -876,6 +1379,168 @@ impl Editor {
     /// The compositor renders a smart object from its stored pixels (an
     /// embedded-document cache), so the result draws exactly what the source
     /// drew before conversion.
+    /// File ▸ Place Embedded… / Place Linked…: ask for an image, then place it.
+    /// The dialog answer is `None` when the user cancelled, which is a
+    /// cancelled action, not a failure.
+    pub fn place_from_dialog(&mut self, linked: bool) -> Result<String, String> {
+        let Some(path) = self.dialogs.pick_place_file() else {
+            return Err("Place was cancelled".to_string());
+        };
+        self.place_path(&path, linked)
+    }
+
+    /// Place an image file into the active document as a smart object whose
+    /// pixels are the source rendered at its own size, clipped to the canvas.
+    ///
+    /// An embedded place carries the file's bytes in the document's asset
+    /// table; a linked one carries the path, and [`Editor::refresh_linked_sources`]
+    /// re-reads it when the file changes. The pixels land as one undoable
+    /// Transaction, so undo removes the placed object entirely.
+    pub fn place_path(&mut self, path: &Path, linked: bool) -> Result<String, String> {
+        let image = crate::import::DecodedImage::decode_path(path).map_err(|e| e.to_string())?;
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Placed".to_string());
+        let asset = layer_model::AssetId::new();
+        let origin = if linked {
+            layer_model::AssetOrigin::Linked {
+                path: path.to_path_buf(),
+            }
+        } else {
+            layer_model::AssetOrigin::Embedded {
+                name: name.clone(),
+                bytes: std::fs::read(path).map_err(|e| e.to_string())?,
+            }
+        };
+
+        let command = {
+            let doc = self.active_mut().ok_or("No document is open")?;
+            let (cw, ch) = (doc.document.width(), doc.document.height());
+            // Placed at its own size from the canvas origin, clipped to the
+            // canvas: a 4096-wide source into a 64-wide canvas places its
+            // top-left 64 columns, which is what a composer can show.
+            let w = image.width.min(cw);
+            let h = image.height.min(ch);
+            // Crop the decoded buffer to the clip rect, row-major RGBA8.
+            let mut clipped_rgba = Vec::with_capacity((w * h * 4) as usize);
+            for y in 0..h {
+                let row = (y * image.width * 4) as usize;
+                clipped_rgba.extend_from_slice(&image.rgba8[row..row + (w * 4) as usize]);
+            }
+            let layer = layer_model::Layer::with_kind(
+                name.clone(),
+                layer_model::LayerKind::SmartObject(layer_model::SmartObjectLayer {
+                    asset,
+                    linked,
+                }),
+            );
+            let new_id = layer.id;
+            let mut commands = vec![Command::create_layer(layer)];
+            let clipped =
+                raster::TileGrid::from_rgba8(w, h, &clipped_rgba).map_err(|e| e.to_string())?;
+            let mut edits = Vec::new();
+            for (coord, tile) in clipped.iter() {
+                let hash = doc.tiles.insert_bytes(tile.data().to_vec());
+                edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+            }
+            commands.push(
+                Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(new_id), edits)
+                    .map_err(|e| e.to_string())?,
+            );
+            Command::Transaction {
+                label: format!("Place {name}"),
+                commands,
+            }
+        };
+        // The asset table is a field, like the selection: registration is not
+        // an undoable edit, and the pixels that use it are.
+        if let Some(doc) = self.active_mut() {
+            doc.document
+                .set_asset_origin(layer_model::AssetRecord { id: asset, origin });
+            if let Ok(stamp) = std::fs::metadata(path).and_then(|m| m.modified()) {
+                doc.asset_stamps.insert(asset, stamp);
+            }
+        }
+        self.apply_command(command);
+        self.touch();
+        self.status = Some(format!(
+            "Placed {}{}",
+            name,
+            if linked { " (linked)" } else { "" }
+        ));
+        Ok(format!("Placed {name}"))
+    }
+
+    /// Re-read every linked asset source whose file changed on disk, replacing
+    /// the smart object layer's pixels as one undoable step per changed
+    /// source. Embedded sources are the user's own bytes and never re-read.
+    pub fn refresh_linked_sources(&mut self) -> Result<String, String> {
+        let mut changed = 0usize;
+        let ids: Vec<(DocumentId, LayerId, layer_model::AssetId)> = {
+            let mut out = Vec::new();
+            for open in &self.docs {
+                for id in open.document.layers.iter_depth_first() {
+                    if let Some(layer_model::LayerKind::SmartObject(so)) =
+                        open.document.layers.get(id).map(|l| &l.kind)
+                    {
+                        out.push((open.id(), id, so.asset));
+                    }
+                }
+            }
+            out
+        };
+        for (doc_id, layer_id, asset) in ids {
+            let (w, h, rgba) = {
+                let Some(open) = self.docs.iter_mut().find(|d| d.id() == doc_id) else {
+                    continue;
+                };
+                let Some(layer_model::AssetOrigin::Linked { path }) =
+                    open.document.asset_origin(asset).cloned()
+                else {
+                    continue;
+                };
+                let Ok(current) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
+                    continue;
+                };
+                if open.asset_stamps.get(&asset) == Some(&current) {
+                    continue;
+                }
+                let image =
+                    crate::import::DecodedImage::decode_path(&path).map_err(|e| e.to_string())?;
+                open.asset_stamps.insert(asset, current);
+                (image.width, image.height, image.rgba8)
+            };
+            let Some(open) = self.docs.iter_mut().find(|d| d.id() == doc_id) else {
+                continue;
+            };
+            let (cw, ch) = (open.document.width(), open.document.height());
+            let (w, h) = (w.min(cw), h.min(ch));
+            let mut clipped_rgba = Vec::with_capacity((w * h * 4) as usize);
+            for y in 0..h {
+                let row = (y * w * 4) as usize;
+                clipped_rgba.extend_from_slice(&rgba[row..row + (w * 4) as usize]);
+            }
+            let grid =
+                raster::TileGrid::from_rgba8(w, h, &clipped_rgba).map_err(|e| e.to_string())?;
+            let mut edits = Vec::new();
+            for (coord, tile) in grid.iter() {
+                let hash = open.tiles.insert_bytes(tile.data().to_vec());
+                edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+            }
+            let command =
+                Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(layer_id), edits)
+                    .map_err(|e| e.to_string())?;
+            open.apply(command).map_err(|e| e.to_string())?;
+            changed += 1;
+        }
+        if changed == 0 {
+            return Ok("No linked source has changed".to_string());
+        }
+        self.touch();
+        Ok(format!("Updated {changed} linked source(s)"))
+    }
+
     pub fn convert_to_smart_object(&mut self) -> Result<String, String> {
         let Some(open) = self.active() else {
             return Err("No document is open".to_string());
@@ -957,6 +1622,26 @@ impl Editor {
     /// File ▸ Close All: close every open document, answering the unsaved-
     /// changes prompt once per document (walking from the back so indexes stay
     /// valid). Backing out of one prompt cancels the whole close-all.
+    /// Close every document except the active one, asking about unsaved work
+    /// first. Stops at the first cancellation, leaving the rest open.
+    pub fn close_other_documents(&mut self) -> Result<String, String> {
+        let Some(active) = self.active else {
+            return Err("No document is open".to_string());
+        };
+        let keep = self.docs[active].id();
+        for index in (0..self.docs.len()).rev() {
+            if self.docs[index].id() == keep {
+                continue;
+            }
+            self.close_document(index).map_err(|e| match e {
+                ActionError::Cancelled(_) => "Close Others cancelled".to_string(),
+                ActionError::Unavailable { reason, .. } => reason,
+                ActionError::Failed { reason, .. } => reason,
+            })?;
+        }
+        Ok("Closed the other documents".to_string())
+    }
+
     pub fn close_all_documents(&mut self) -> Result<String, String> {
         for index in (0..self.docs.len()).rev() {
             self.close_document(index).map_err(|e| match e {
@@ -1283,6 +1968,134 @@ impl Editor {
         Ok("Added solid color fill layer".to_string())
     }
 
+    /// Layer ▸ New Fill Layer ▸ Pattern: add a raster layer tiled with the
+    /// most recently defined user pattern. Like the Solid Color layer, the
+    /// pattern is *baked* into the layer's pixels at creation rather than a
+    /// live generator — a one-step undoable fill, honest about being a raster.
+    pub fn new_pattern_fill_layer(&mut self) -> Result<String, String> {
+        let (w, h) = self
+            .active()
+            .map(|d| (d.document.width(), d.document.height()))
+            .ok_or_else(|| "No document is open".to_string())?;
+        let pattern = self
+            .presets
+            .latest_pattern()
+            .ok_or_else(|| "No pattern is defined yet; use Define Pattern first".to_string())?
+            .clone();
+        let mut pixels = Vec::with_capacity(w as usize * h as usize * 4);
+        for y in 0..i64::from(h) {
+            for x in 0..i64::from(w) {
+                pixels.extend_from_slice(&pattern.pixel(x, y));
+            }
+        }
+        let command = {
+            let doc = self.active_mut().ok_or("No document is open")?;
+            let layer = layer_model::Layer::raster("Pattern Fill");
+            let new_id = layer.id;
+            let grid = raster::TileGrid::from_rgba8(w, h, &pixels).map_err(|e| e.to_string())?;
+            let mut edits = Vec::new();
+            for (coord, tile) in grid.iter() {
+                let hash = doc.tiles.insert_bytes(tile.data().to_vec());
+                edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+            }
+            Command::Transaction {
+                label: "New Fill Layer".to_string(),
+                commands: vec![
+                    Command::create_layer(layer),
+                    Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(new_id), edits)
+                        .map_err(|e| e.to_string())?,
+                ],
+            }
+        };
+        self.apply_command(command);
+        Ok(format!(
+            "Added pattern fill layer tiled with “{}”",
+            pattern.name
+        ))
+    }
+
+    /// Edit ▸ Define Pattern: snapshot the active layer's pixels inside the
+    /// selection (the whole layer with no selection) as a named pattern.
+    ///
+    /// Photoshop defines from the merged composite; this build's compositing
+    /// is tiled and streaming, so the definition reads the *active layer* and
+    /// the status line says so. The name is counter-suffixed because the menu
+    /// item opens no dialog to ask; re-defining the same name updates it.
+    pub fn define_pattern_from_selection(&mut self) -> Result<String, String> {
+        let layer = self
+            .active()
+            .and_then(|d| d.document.active_layer())
+            .ok_or_else(|| "No document is open".to_string())?;
+        let (w, h) = self
+            .active()
+            .map(|d| (d.document.width(), d.document.height()))
+            .ok_or_else(|| "No document is open".to_string())?;
+        let (rect, has_selection) = {
+            let doc = self.active().ok_or("No document is open")?;
+            let sel = &doc.document.selection;
+            match sel.bounds() {
+                Some((lo, hi)) => (
+                    (
+                        lo.x.max(0) as u32,
+                        lo.y.max(0) as u32,
+                        (hi.x as u32).min(w),
+                        (hi.y as u32).min(h),
+                    ),
+                    true,
+                ),
+                None => ((0, 0, w, h), false),
+            }
+        };
+        let (x0, y0, x1, y1) = rect;
+        if x1 <= x0 || y1 <= y0 {
+            return Err("The selection is empty".to_string());
+        }
+        let before = {
+            let doc = self.active().ok_or("No document is open")?;
+            crate::menu_bridge::pixels::read_layer(doc, layer)
+        };
+        let pw = (x1 - x0) as usize;
+        let ph = (y1 - y0) as usize;
+        let mut rgba8 = Vec::with_capacity(pw * ph * 4);
+        for y in y0 as usize..y1 as usize {
+            for x in x0 as usize..x1 as usize {
+                let i = (y * w as usize + x) * 4;
+                rgba8.extend_from_slice(&before[i..i + 4]);
+            }
+        }
+        let n = self.presets.patterns().len() + 1;
+        let name = format!("Pattern {n}");
+        self.presets
+            .define_pattern(asset_store::presets::PatternPreset {
+                name: name.clone(),
+                width: pw as u32,
+                height: ph as u32,
+                rgba8,
+            });
+        Ok(format!(
+            "Defined pattern “{name}” from {} {} — the active layer's pixels{}",
+            pw,
+            ph,
+            if has_selection {
+                " inside the selection"
+            } else {
+                ""
+            }
+        ))
+    }
+
+    /// Edit ▸ Define Brush Preset: store the active tool's brush settings
+    /// under a counter-suffixed name (the menu item opens no dialog).
+    pub fn define_brush_preset(&mut self) -> Result<String, String> {
+        let tool = self.effective_tool();
+        let settings = self.brush_for(tool);
+        let json = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
+        let n = self.presets.brushes().len() + 1;
+        let name = format!("Brush {n}");
+        self.presets.define_brush(&name, json);
+        Ok(format!("Defined brush preset “{name}”"))
+    }
+
     /// Layer ▸ New Fill Layer ▸ Gradient: add a raster layer holding a linear
     /// gradient from the current foreground (left) to the background (right)
     /// across the whole canvas. Like the Solid Color layer, the gradient is
@@ -1355,6 +2168,28 @@ impl Editor {
     /// This is how the UI edits: it emits intent, the editor applies it, undo
     /// and redo stay uniform. A refusal is reported rather than swallowed.
     pub fn apply_command(&mut self, command: Command) {
+        // The Actions panel records here: `apply_command` is the single choke
+        // point every edit flows through, so a recording captures exactly
+        // what the user did, in order — with the stack position of the layer
+        // each command targets, so a replay can retarget it.
+        if self.recording.is_some() {
+            let captured = self
+                .active()
+                .map(|d| {
+                    (
+                        layer_position(&d.document.layers, &command),
+                        captured_tiles(d, &command),
+                    )
+                })
+                .unwrap_or((None, Vec::new()));
+            if let Some(recording) = &mut self.recording {
+                recording.push(RecordedEdit {
+                    command: command.clone(),
+                    layer: captured.0,
+                    tiles: captured.1,
+                });
+            }
+        }
         // Deliberately does *not* clear `kind_gesture`. Another command landing
         // on the stack is exactly the case `tops_out_with_kind_edit` is there
         // to catch, and clearing here as well would make that guard unreachable
@@ -1512,6 +2347,27 @@ impl Editor {
         }
     }
 
+    /// Photopea's multi-selection: the whole set lands in the document, the
+    /// active layer moves only when the click named one. Not a command and not
+    /// history: selecting layers is not an undoable edit — the DELETE that
+    /// consumes the set is the undo step.
+    pub fn set_layer_selection(&mut self, layers: Vec<LayerId>, active: Option<LayerId>) {
+        let Some(doc) = self.active_mut() else {
+            return;
+        };
+        if let Err(e) = doc.document.set_layer_selection(layers) {
+            tracing::debug!("cannot select those layers: {e}");
+            return;
+        }
+        if let Some(layer) = active {
+            if let Err(e) = doc.document.set_active_layer(Some(layer)) {
+                tracing::debug!("cannot select that layer: {e}");
+                return;
+            }
+        }
+        self.touch();
+    }
+
     /// Show the user a failure through the platform's dialog.
     pub fn report_error(&mut self, title: &str, message: &str) {
         self.dialogs.report_error(title, message);
@@ -1547,6 +2403,28 @@ impl Editor {
             self.touch();
         }
         Ok(())
+    }
+
+    /// Reorder the document tabs: move the tab at `from` to `to`, shifting
+    /// the ones between. The active tab follows its document.
+    ///
+    /// Returns `false` for a no-op (same index, or either end out of range)
+    /// rather than panicking: a stale drag's destination is user data.
+    pub fn move_document(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.docs.len() || to >= self.docs.len() || from == to {
+            return false;
+        }
+        let doc = self.docs.remove(from);
+        self.docs.insert(to, doc);
+        // The active tab follows its document; the tabs between shift by one.
+        self.active = match self.active {
+            Some(a) if a == from => Some(to),
+            Some(a) if from < a && a <= to => Some(a - 1),
+            Some(a) if to <= a && a < from => Some(a + 1),
+            other => other,
+        };
+        self.touch();
+        true
     }
 
     pub fn tool(&self) -> ToolId {
@@ -1617,6 +2495,18 @@ impl Editor {
     pub fn set_foreground(&mut self, rgba: [f32; 4]) {
         self.foreground = rgba;
         self.touch();
+    }
+
+    /// Replace the ramp the gradient tools paint with — the read-back of the
+    /// options bar's and the gradient dialog's edits.
+    pub fn set_gradient_ramp(&mut self, gradient: layer_model::Gradient) {
+        self.gradient_ramp = gradient;
+        self.touch();
+    }
+
+    /// The ramp the gradient tools paint with.
+    pub fn gradient_ramp(&self) -> &layer_model::Gradient {
+        &self.gradient_ramp
     }
 
     pub fn set_background(&mut self, rgba: [f32; 4]) {
@@ -2088,6 +2978,7 @@ impl Editor {
             Action::SaveAs
             | Action::Export
             | Action::CloseDocument
+            | Action::CloseOthers
             | Action::ZoomIn
             | Action::ZoomOut
             | Action::ZoomFit
@@ -2170,6 +3061,14 @@ impl Editor {
             Action::CloseDocument => {
                 let index = self.active.expect("`can` required a document");
                 self.close_document(index)?;
+                Ok(Effect::DocumentSet)
+            }
+            Action::CloseOthers => {
+                self.close_other_documents()
+                    .map_err(|reason| ActionError::Failed {
+                        action: Action::CloseOthers,
+                        reason,
+                    })?;
                 Ok(Effect::DocumentSet)
             }
             Action::Quit => self.act_quit(),
@@ -2264,10 +3163,32 @@ impl Editor {
         } else {
             format!("Untitled {}", self.untitled_count)
         };
-        let id = self.mint_id();
         let (w, h) = NEW_DOCUMENT_SIZE;
-        let doc = OpenDocument::blank(id, w, h, &title, self.prefs.history_depth)
-            .map_err(|e| ActionError::failed(Action::NewDocument, e))?;
+        self.new_document_with(w, h, &title, crate::import::BlankBackground::Transparent)
+    }
+
+    /// Create a document at the given size with the given background — the
+    /// New Document dialog's confirmed answer.
+    ///
+    /// The title is used as-is (the dialog refuses an empty one); the
+    /// background is the document's *initial* state, not an undo step.
+    pub fn new_document_with(
+        &mut self,
+        width: u32,
+        height: u32,
+        title: &str,
+        background: crate::import::BlankBackground,
+    ) -> Result<Effect, ActionError> {
+        let id = self.mint_id();
+        let doc = OpenDocument::blank_with_background(
+            id,
+            width,
+            height,
+            title,
+            self.prefs.history_depth,
+            background,
+        )
+        .map_err(|e| ActionError::failed(Action::NewDocument, e))?;
         self.docs.push(doc);
         self.active = Some(self.docs.len() - 1);
         self.touch();

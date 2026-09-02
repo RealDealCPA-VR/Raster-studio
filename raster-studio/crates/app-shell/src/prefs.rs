@@ -53,6 +53,11 @@ impl AppPaths {
         self.root.join("preferences.json")
     }
 
+    /// The user preset store's file (named patterns and brushes).
+    pub fn presets_file(&self) -> PathBuf {
+        self.root.join("presets.json")
+    }
+
     pub fn recent_file(&self) -> PathBuf {
         self.root.join("recent.json")
     }
@@ -90,14 +95,19 @@ impl AppPaths {
     }
 }
 
-/// The user's theme choice. `System` is a real third state, not a synonym for
-/// one of the other two: it has to follow the OS while the app is running.
+/// The user's theme choice.
+///
+/// Photopea's dark grey is the shipped default: a fresh profile launches dark
+/// on any host. `System` is the opt-in "follow the OS" mode, and stays a real
+/// third state rather than a synonym for one of the other two — it has to
+/// track the OS while the app is running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeChoice {
     Light,
-    Dark,
     #[default]
+    Dark,
+    /// Opt-in: follow the operating system's light/dark setting.
     System,
 }
 
@@ -119,6 +129,26 @@ impl ThemeChoice {
             ThemeChoice::Light => "Light",
             ThemeChoice::Dark => "Dark",
             ThemeChoice::System => "System",
+        }
+    }
+}
+
+impl From<ThemeChoice> for ui::dialogs::ThemeChoice {
+    fn from(t: ThemeChoice) -> Self {
+        match t {
+            ThemeChoice::Light => Self::Light,
+            ThemeChoice::Dark => Self::Dark,
+            ThemeChoice::System => Self::System,
+        }
+    }
+}
+
+impl From<ui::dialogs::ThemeChoice> for ThemeChoice {
+    fn from(t: ui::dialogs::ThemeChoice) -> Self {
+        match t {
+            ui::dialogs::ThemeChoice::Light => Self::Light,
+            ui::dialogs::ThemeChoice::Dark => Self::Dark,
+            ui::dialogs::ThemeChoice::System => Self::System,
         }
     }
 }

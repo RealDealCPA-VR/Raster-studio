@@ -77,6 +77,12 @@ pub struct Layer {
     #[serde(default)]
     pub mask: Option<LayerMask>,
     pub clipping: ClippingMode,
+    /// Photopea's link chain: the layers whose transforms move together.
+    /// Carried and patched as real state (it round-trips and undoes) — the
+    /// transform tools are what consume it, and reading it there is future
+    /// work; the flag alone changes nothing about a transform.
+    #[serde(default)]
+    pub linked: bool,
     /// Layer styles. Empty by default, and the key is omitted entirely from
     /// serialized output while the block is untouched — see
     /// [`LayerEffects::is_default`].
@@ -123,6 +129,7 @@ impl Layer {
             transform: Affine2::IDENTITY,
             mask: None,
             clipping: ClippingMode::None,
+            linked: false,
             effects: LayerEffects::default(),
             kind,
         }
@@ -572,6 +579,32 @@ impl ShapeLayer {
 pub struct SmartObjectLayer {
     pub asset: AssetId,
     pub linked: bool,
+}
+
+/// Where a smart object's pixels come from — the nested-source model. The
+/// layer names an [`AssetId`]; the document's asset table answers with one of
+/// these. An embedded source carries its bytes, so the file the PNG came from
+/// can move or vanish without breaking the object. A linked source carries a
+/// path, and re-reading it is what "the linked source updated" means.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AssetOrigin {
+    Embedded {
+        /// The file name the object was placed from, for tooltips and the
+        /// contents tab's title.
+        name: String,
+        /// The source file's own bytes (PNG, PSD — whatever the decoder takes).
+        bytes: Vec<u8>,
+    },
+    Linked {
+        path: std::path::PathBuf,
+    },
+}
+
+/// One row of the document's asset table.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetRecord {
+    pub id: AssetId,
+    pub origin: AssetOrigin,
 }
 
 /// A generator layer whose pixels are produced by an AI operation. Carries a

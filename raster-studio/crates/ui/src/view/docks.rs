@@ -8,7 +8,7 @@
 use design::{
     color32, current_tokens, egui_theme::rounding, ColorRole, Radius, Space, TextRole, TypeRole,
 };
-use editor_core::{Document, History};
+use editor_core::{Command, Document, History, LayerPatch};
 use egui::{Align, Layout, Sense, Ui, Vec2};
 use layer_model::{BlendMode, LayerId};
 
@@ -44,6 +44,9 @@ fn rail(w: &mut Workspace, ctx: &egui::Context, doc: &Document, history: &Histor
         return;
     }
     let t = design::current_theme(ctx).tokens();
+    if w.dock.side_is_collapsed(side) {
+        return icon_rail(w, ctx, side);
+    }
     let id = match side {
         DockSide::Left => "raster-dock-left",
         DockSide::Right => "raster-dock-right",
@@ -62,8 +65,8 @@ fn rail(w: &mut Workspace, ctx: &egui::Context, doc: &Document, history: &Histor
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    for panel in w.dock.panels_on(side) {
-                        panel_section(w, ui, doc, history, panel);
+                    for (_, members) in w.dock.groups_on(side) {
+                        panel_group(w, ui, doc, history, &members);
                     }
                 });
         });
@@ -86,6 +89,64 @@ fn commit_measure(w: &mut Workspace, ctx: &egui::Context, side: DockSide, measur
     w.set_rail_measure(side, measured);
 }
 
+/// The collapsed dock: one column of panel icons at [`RAIL_WIDTH_PT`].
+/// Clicking an icon unfolds the side and brings that panel forward — the
+/// round trip is `DockState::set_side_collapsed(false)` plus a raise, so
+/// unfolding restores exactly the arrangement that was folded.
+fn icon_rail(w: &mut Workspace, ctx: &egui::Context, side: DockSide) {
+    let t = design::current_theme(ctx).tokens();
+    let id = match side {
+        DockSide::Left => "raster-dock-left-rail",
+        _ => "raster-dock-right-rail",
+    };
+    let builder = match side {
+        DockSide::Left => egui::SidePanel::left(id),
+        _ => egui::SidePanel::right(id),
+    };
+    let _response = builder
+        .resizable(false)
+        .exact_width(crate::dock::RAIL_WIDTH_PT)
+        .frame(egui::Frame::none().fill(color32(t.palette.color(ColorRole::SurfacePanel))))
+        .show(ctx, |ui| {
+            ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                ui.spacing_mut().item_spacing.y = Space::Hair.pt();
+                for panel in w.dock.panels_on(side).iter().copied() {
+                    if !w.dock.is_open(panel) {
+                        continue;
+                    }
+                    if icon_toggle_id(
+                        ui,
+                        "overflow",
+                        false,
+                        panel.title(),
+                        Some(super::ids::rail_icon(panel)),
+                    )
+                    .clicked()
+                    {
+                        w.dock.set_side_collapsed(side, false);
+                        w.dock.raise(panel);
+                    }
+                }
+                ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+                    if icon_toggle_id(
+                        ui,
+                        "chevron-right",
+                        false,
+                        "Expand the dock",
+                        Some(super::ids::rail_expand(side)),
+                    )
+                    .clicked()
+                    {
+                        w.dock.set_side_collapsed(side, false);
+                    }
+                });
+            });
+        });
+    // The canvas reads the rail's measure to lay itself out; the collapsed
+    // rail commits its fixed width the same way the open dock commits a drag.
+    commit_measure(w, ctx, side, crate::dock::RAIL_WIDTH_PT);
+}
+
 fn bottom_rail(w: &mut Workspace, ctx: &egui::Context, doc: &Document, history: &History) {
     if w.dock.side_is_empty(DockSide::Bottom) {
         return;
@@ -99,74 +160,116 @@ fn bottom_rail(w: &mut Workspace, ctx: &egui::Context, doc: &Document, history: 
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    for panel in w.dock.panels_on(DockSide::Bottom) {
-                        panel_section(w, ui, doc, history, panel);
+                    for (_, members) in w.dock.groups_on(DockSide::Bottom) {
+                        panel_group(w, ui, doc, history, &members);
                     }
                 });
         });
     commit_measure(w, ctx, DockSide::Bottom, response.response.rect.height());
 }
 
-/// One panel: header, then body if it is not collapsed.
-fn panel_section(
+/// One tabbed group: a strip of tabs, then the active panel's body.
+fn panel_group(
     w: &mut Workspace,
     ui: &mut Ui,
     doc: &Document,
     history: &History,
-    panel: PanelId,
+    members: &[PanelId],
 ) {
-    let collapsed = w.dock.is_collapsed(panel);
-    header(w, ui, panel, collapsed);
-    if w.panel_menu == Some(panel) {
-        move_controls(w, ui, panel);
+    let active = members
+        .iter()
+        .copied()
+        .find(|p| w.dock.is_active(*p))
+        .or(members.first().copied());
+    let Some(active) = active else {
+        return;
+    };
+    tab_strip(w, ui, members, active);
+    if w.panel_menu == Some(active) {
+        move_controls(w, ui, active);
     }
-    if !collapsed {
-        panel_frame(ui).show(ui, |ui| {
-            ui.push_id(panel.key(), |ui| {
-                body_of(w, ui, doc, history, panel);
-            });
+    panel_frame(ui).show(ui, |ui| {
+        ui.push_id(active.key(), |ui| {
+            body_of(w, ui, doc, history, active);
         });
-    }
+    });
     hairline(ui);
 }
 
-fn header(w: &mut Workspace, ui: &mut Ui, panel: PanelId, collapsed: bool) {
+/// The tab strip above one group's body: one tab per member, the active one
+/// highlighted, plus the overflow menu for the active panel.
+fn tab_strip(w: &mut Workspace, ui: &mut Ui, members: &[PanelId], active: PanelId) {
     let height = crate::dock::DockState::header_height();
     ui.allocate_ui_with_layout(
         Vec2::new(ui.available_width(), height),
         Layout::left_to_right(Align::Center),
         |ui| {
             ui.add_space(Space::Small.pt());
-            let chevron = if collapsed {
-                "chevron-right"
-            } else {
-                "chevron-down"
-            };
-            if icon_toggle(ui, chevron, true, "").clicked() {
-                w.dock.toggle_collapsed(panel);
+            for panel in members {
+                let is_active = *panel == active;
+                let t = current_tokens(ui);
+                // Drawn by hand with a stable id (`ids::panel_tab`), so a
+                // right-click on a header can be named by a test — egui's
+                // `Button` derives ids that shift with panel order.
+                let font = design::egui_theme::font_id(t, TypeRole::Footnote);
+                let galley = ui.painter().layout_no_wrap(
+                    panel.title().to_string(),
+                    font,
+                    color32(t.palette.text(if is_active {
+                        TextRole::Primary
+                    } else {
+                        TextRole::Secondary
+                    })),
+                );
+                let tab_w = galley.size().x + 14.0;
+                let (rect, _) =
+                    ui.allocate_exact_size(Vec2::new(tab_w, height - 2.0), Sense::hover());
+                let response = ui.interact(rect, super::ids::panel_tab(*panel), Sense::click());
+                if is_active {
+                    ui.painter().rect_filled(
+                        rect,
+                        rounding(Radius::Small.resolve(&t.radii, height)),
+                        color32(t.palette.color(ColorRole::SurfaceElevated)),
+                    );
+                }
+                let pos = egui::pos2(rect.left() + 7.0, rect.center().y - galley.size().y * 0.5);
+                // The galley carries its role colour; egui's fallback tint is
+                // the same colour, so nothing is multiplied away.
+                ui.painter().galley(
+                    pos,
+                    galley,
+                    color32(t.palette.text(if is_active {
+                        TextRole::Primary
+                    } else {
+                        TextRole::Secondary
+                    })),
+                );
+                if response.clicked() {
+                    w.dock.raise(*panel);
+                }
+                if response.secondary_clicked() {
+                    w.panel_menu = Some(*panel);
+                }
             }
-            ui.label(text(
-                ui,
-                panel.title(),
-                TextRole::Secondary,
-                TypeRole::Footnote,
-            ));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add_space(Space::XSmall.pt());
                 if icon_toggle(ui, "close", false, "Close panel").clicked() {
-                    w.emit(Intent::SetPanelOpen { panel, open: false });
+                    w.emit(Intent::SetPanelOpen {
+                        panel: active,
+                        open: false,
+                    });
                 }
-                let open = w.panel_menu == Some(panel);
+                let open = w.panel_menu == Some(active);
                 if icon_toggle_id(
                     ui,
                     "overflow",
                     open,
                     "Move this panel",
-                    Some(super::ids::panel_menu(panel)),
+                    Some(super::ids::panel_menu(active)),
                 )
                 .clicked()
                 {
-                    w.panel_menu = if open { None } else { Some(panel) };
+                    w.panel_menu = if open { None } else { Some(active) };
                 }
             });
         },
@@ -271,6 +374,7 @@ fn body_of(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &History, pa
         PanelId::Info => info_body(w, ui, doc),
         PanelId::Channels => channels_body(w, ui, doc),
         PanelId::Paths => paths_body(w, ui, doc),
+        PanelId::Actions => actions_body(w, ui),
     }
 }
 
@@ -304,6 +408,15 @@ fn layers_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             let response = layer_row(w, ui, row, &rows);
             if let Some(position) = row_drag_position(w, ui, doc, row, &response) {
                 hovered = Some(position);
+            }
+            if response.secondary_clicked() {
+                crate::context_menu::open(
+                    w,
+                    crate::context_menu::ContextTarget::LayerRow,
+                    response
+                        .interact_pointer_pos()
+                        .unwrap_or_else(|| response.rect.center()),
+                );
             }
         }
         if released {
@@ -398,7 +511,8 @@ fn lock_row(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<Layer
 
 fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) -> egui::Response {
     let t = current_tokens(ui);
-    let height = t.metrics.list_row_height;
+    // The thumbnail-size control scales the whole row, not just the well.
+    let height = t.metrics.list_row_height * w.layers.thumb_scale.height();
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     // An explicit id rather than the one egui derives from call order: it keeps
@@ -528,7 +642,7 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
 /// textures there.
 fn thumbnail(ui: &mut Ui, w: &Workspace, row: &LayerRow) {
     let t = current_tokens(ui);
-    let height = t.metrics.list_row_height - Space::XSmall.pt();
+    let height = (t.metrics.list_row_height * w.layers.thumb_scale.height()) - Space::XSmall.pt();
     let size = Vec2::new(height * 4.0 / 3.0, height);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     if !ui.is_rect_visible(rect) {
@@ -633,8 +747,132 @@ fn row_drag_position(
 }
 
 fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<LayerId>) {
+    // The kind filter and the thumbnail size, the two controls Photopea puts
+    // above the footer row.
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = Space::Hair.pt();
+        if icon_toggle_id(
+            ui,
+            "overflow",
+            w.layers.filter.is_none(),
+            "Show every layer",
+            Some(super::ids::layer_filter_all()),
+        )
+        .clicked()
+        {
+            w.layers.filter = None;
+        }
+        for class in crate::menu::LayerClass::ALL {
+            let on = w.layers.filter == Some(class);
+            if icon_toggle_id(
+                ui,
+                class_icon(class),
+                on,
+                &filter_tip(class),
+                Some(super::ids::layer_filter(class)),
+            )
+            .clicked()
+            {
+                w.layers.filter = if on { None } else { Some(class) };
+            }
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if icon_toggle_id(
+                ui,
+                "plus",
+                false,
+                "Thumbnail size",
+                Some(super::ids::layer_thumb_size()),
+            )
+            .clicked()
+            {
+                w.layers.thumb_scale = w.layers.thumb_scale.cycled();
+            }
+        });
+    });
+
+    // Photopea's footer row: link, fx, mask, adjustment, group, new, delete.
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = Space::Hair.pt();
+        let has_layer = active.is_some();
+        let selection: Vec<LayerId> = if w.layers.selection().is_empty() {
+            active.into_iter().collect()
+        } else {
+            w.layers.selection().to_vec()
+        };
+
+        // Link: every selected layer carries the chain, as one patch per
+        // layer. Linking wins if any selected layer is unlinked, so one click
+        // on a mixed selection links them all.
+        let link_on = selection
+            .iter()
+            .any(|id| doc.layers.get(*id).is_some_and(|l| l.linked));
+        if icon_toggle_id(
+            ui,
+            "link",
+            link_on,
+            "Link selected layers",
+            Some(super::ids::layer_link()),
+        )
+        .clicked()
+        {
+            for id in &selection {
+                if doc.layers.get(*id).is_some() {
+                    w.emit(Intent::Document(Command::SetLayerProperties {
+                        layer_id: *id,
+                        patch: LayerPatch {
+                            linked: Some(!link_on),
+                            ..LayerPatch::default()
+                        },
+                    }));
+                }
+            }
+        }
+
+        // Adjustment: the grid lives in its own panel.
+        if icon_toggle_id(
+            ui,
+            "adjustment",
+            false,
+            "Open the Adjustments panel",
+            Some(super::ids::layer_adjustment()),
+        )
+        .clicked()
+        {
+            w.emit(Intent::SetPanelOpen {
+                panel: PanelId::Adjustments,
+                open: true,
+            });
+        }
+
+        // fx: the layer-style editor, which is the Properties panel.
+        let fx = super::labelled_button(ui, "fx", has_layer, super::ids::layer_fx());
+        let fx = if has_layer {
+            fx.on_hover_text("Blending options")
+        } else {
+            fx.on_disabled_hover_text("Select a layer first")
+        };
+        if fx.clicked() {
+            w.emit(Intent::Action(crate::menu::MenuAction::BlendingOptions));
+        }
+
+        // Mask: add one to the active layer.
+        let has_mask = active
+            .and_then(|id| doc.layers.get(id))
+            .is_some_and(|l| l.mask.is_some());
+        let mask = icon_toggle_id(
+            ui,
+            "mask",
+            false,
+            "Add a layer mask",
+            Some(super::ids::layer_mask()),
+        );
+        if has_layer && !has_mask && mask.clicked() {
+            if let Some(id) = active {
+                w.emit(Intent::Document(LayersModel::add_mask(id)));
+            }
+        }
+
         if icon_toggle_id(ui, "plus", true, "New layer", Some(super::ids::new_layer())).clicked() {
             w.emit(Intent::Document(LayersModel::new_layer(doc)));
         }
@@ -650,70 +888,16 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
             w.emit(Intent::Document(LayersModel::new_group()));
         }
 
-        let has_layer = active.is_some();
-        let has_mask = active
-            .and_then(|id| doc.layers.get(id))
-            .is_some_and(|l| l.mask.is_some());
-        let mask_response = ui.add_enabled(
-            has_layer && !has_mask,
-            egui::Button::new(body(ui, "Mask")).frame(false),
-        );
-        let mask_response = if !has_layer {
-            mask_response.on_disabled_hover_text("Select a layer first")
-        } else if has_mask {
-            mask_response.on_disabled_hover_text("The layer already has a mask")
-        } else {
-            mask_response
-        };
-        if mask_response.clicked() {
-            if let Some(id) = active {
-                w.emit(Intent::Document(LayersModel::add_mask(id)));
-            }
-        }
-
-        let fx = ui.add_enabled(has_layer, egui::Button::new(body(ui, "fx")).frame(false));
-        let fx = if has_layer {
-            fx
-        } else {
-            fx.on_disabled_hover_text("Select a layer first")
-        };
-        if fx.clicked() {
-            w.emit(Intent::Action(crate::menu::MenuAction::BlendingOptions));
-        }
-
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let selection: Vec<LayerId> = if w.layers.selection().is_empty() {
-                active.into_iter().collect()
-            } else {
-                w.layers.selection().to_vec()
-            };
             let can_delete = !selection.is_empty();
-            // An empty button for the framing and the disabled-hover text egui
-            // only offers on a disabled widget, with the drawing painted into
-            // the rect it reports — the same split `icons::icon_button` uses.
-            let side = current_tokens(ui).metrics.min_hit_target;
-            let delete = ui.add_enabled(
-                can_delete,
-                egui::Button::new("")
-                    .frame(false)
-                    .min_size(Vec2::splat(side)),
-            );
-            super::paint_icon(
+            let delete = icon_toggle_id(
                 ui,
-                delete.rect,
                 "trash",
-                if can_delete {
-                    TextRole::Primary
-                } else {
-                    TextRole::Disabled
-                },
+                false,
+                "Delete selected layers",
+                Some(super::ids::layer_delete()),
             );
-            let delete = if can_delete {
-                delete.on_hover_text("Delete selected layers")
-            } else {
-                delete.on_disabled_hover_text("Select a layer first")
-            };
-            if delete.clicked() {
+            if can_delete && delete.clicked() {
                 if let Some(command) = LayersModel::delete_selection(doc, &selection) {
                     w.emit(Intent::Document(command));
                     w.layers.clear_selection();
@@ -721,6 +905,24 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
             }
         });
     });
+}
+
+/// The tooltip a filter button shows.
+fn filter_tip(class: crate::menu::LayerClass) -> String {
+    format!("Show only {} layers", class.label().to_lowercase())
+}
+
+/// The icon key a layer class draws with, for the filter row.
+fn class_icon(class: crate::menu::LayerClass) -> &'static str {
+    match class {
+        crate::menu::LayerClass::Raster => "layer-raster",
+        crate::menu::LayerClass::Group => "layer-group",
+        crate::menu::LayerClass::Adjustment => "layer-adjustment",
+        crate::menu::LayerClass::Text => "layer-text",
+        crate::menu::LayerClass::Shape => "layer-shape",
+        crate::menu::LayerClass::SmartObject => "layer-smart-object",
+        crate::menu::LayerClass::Generator => "layer-generator",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1121,6 +1323,12 @@ fn adjustment_properties(
 // ---------------------------------------------------------------------------
 
 fn color_body(w: &mut Workspace, ui: &mut Ui) {
+    // The layout test for P1.19 asserts the numeric fields sit inside this
+    // panel; the rect is recorded under a stable id for it.
+    ui.ctx().memory_mut(|m| {
+        m.data
+            .insert_temp(egui::Id::new("raster-color-panel-rect"), ui.max_rect())
+    });
     super::toolbar::color_wells(w, ui);
     ui.add_space(Space::XSmall.pt());
     spectrum(w, ui);
@@ -1434,6 +1642,9 @@ fn brushes_body(w: &mut Workspace, ui: &mut Ui) {
 
     ui.add_space(Space::XSmall.pt());
     hairline(ui);
+    if design::secondary_button(ui, "Edit brush…").clicked() {
+        w.emit(Intent::OpenBrushEditor);
+    }
     if design::secondary_button(ui, "Save current brush").clicked() {
         let name = format!("Brush {}", w.brushes.len() + 1);
         w.brushes.capture(&name, &w.options, tool);
@@ -1795,6 +2006,39 @@ fn paths_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             active: Some(layer),
         });
     }
+}
+
+/// The Actions panel: record, stop, and replay a command sequence.
+///
+/// The recording itself lives on the [`crate::Editor`](super) — the shell
+/// owns it; the panel only speaks. Three buttons, always enabled: the shell
+/// refuses what makes no sense (starting a second recording restarts it;
+/// replaying with nothing captured reports it in the status bar) and says so
+/// through the same channel every other panel answer uses.
+fn actions_body(w: &mut Workspace, ui: &mut Ui) {
+    ui.add_space(Space::XSmall.pt());
+    ui.horizontal(|ui| {
+        if super::labelled_button(ui, "Record", true, egui::Id::new("raster-actions-record"))
+            .clicked()
+        {
+            w.emit(Intent::StartRecording);
+        }
+        if super::labelled_button(ui, "Stop", true, egui::Id::new("raster-actions-stop")).clicked()
+        {
+            w.emit(Intent::StopRecording);
+        }
+        if super::labelled_button(ui, "Replay", true, egui::Id::new("raster-actions-replay"))
+            .clicked()
+        {
+            w.emit(Intent::ReplayRecording);
+        }
+    });
+    ui.add_space(Space::XSmall.pt());
+    empty_state(
+        ui,
+        "Record an edit, then replay the whole sequence on any \
+         document with at least as many layers.",
+    );
 }
 
 #[cfg(test)]

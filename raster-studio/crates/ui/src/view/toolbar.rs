@@ -9,9 +9,7 @@ use tools::{OptionKind, OptionSpec, ToolId};
 use crate::icons::icon_for;
 use crate::intent::Intent;
 use crate::palette::{group_label, tooltip, PaletteModel};
-use crate::tool_options::{
-    normalise_gradient, schema_for, wants_gradient_stops, OptionValue, BLEND_MODE_KEY,
-};
+use crate::tool_options::{schema_for, wants_gradient_stops, OptionValue, BLEND_MODE_KEY};
 use crate::Workspace;
 
 use super::{body, hint, overlay_frame, rgba_to_color32, swatch, text};
@@ -33,8 +31,14 @@ pub fn tool_palette(w: &mut Workspace, ctx: &egui::Context) {
                 )),
         )
         .show(ctx, |ui| {
+            // The footer follows the palette in the flow: egui's ScrollArea
+            // expands past a max_height when auto_shrink is false, which put
+            // every pinned-footer attempt below the window. Shrinking
+            // vertically keeps the footer on screen where its clicks work.
+            let footer_h = 52.0;
             egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
+                .auto_shrink([false, true])
+                .max_height(ui.available_height() - footer_h)
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = Space::Hair.pt();
                     // One divider per group run, so the palette reads as the
@@ -48,8 +52,118 @@ pub fn tool_palette(w: &mut Workspace, ctx: &egui::Context) {
                         ui.add_space(Space::XSmall.pt());
                     }
                 });
+            // The footer follows the palette in the flow: egui's ScrollArea
+            // expands past a max_height when auto_shrink is false, which put
+            // every pinned-footer attempt below the window. Shrinking
+            // vertically keeps the footer on screen where its clicks work.
+            footer(w, ui);
         });
     flyout(w, ctx, &model);
+}
+
+/// Photopea's bottom-of-column controls: the foreground/background swatch
+/// pair, with swap (X) and reset (D) beneath it.
+///
+/// Everything is placed at absolute offsets inside the footer area rather
+/// than through egui's layout: the footer must be exactly the column wide and
+/// a known height, and fighting the cursor for that cost three attempts.
+/// Quick-mask (Q) and screen-mode (F) are deferred, not deferred-and-drawn: a
+/// 40pt column cannot hold four more controls, and the features behind them
+/// (a mask editing mode; the full-screen chrome) do not exist yet — when they
+/// do, this footer is where they land.
+fn footer(w: &mut Workspace, ui: &mut Ui) {
+    let tokens = design::current_theme(ui.ctx()).tokens();
+    // The caller laid out the flow so this rect is exactly the footer's: the
+    // scroll above was capped to leave this much room.
+    let area = ui.max_rect();
+    ui.painter().rect_filled(
+        area,
+        egui::Rounding::ZERO,
+        color32(tokens.palette.color(ColorRole::SurfacePanel)),
+    );
+
+    let fg = w.color.well(crate::panels::color::ColorWell::Foreground);
+    let bg = w.color.well(crate::panels::color::ColorWell::Background);
+    let edge = egui::Stroke::new(
+        tokens
+            .borders
+            .hairline_for_scale(ui.ctx().pixels_per_point()),
+        color32(tokens.palette.text(design::TextRole::Tertiary)),
+    );
+    let rounding = design::egui_theme::rounding(design::Radius::Small.resolve(&tokens.radii, 18.0));
+    let well_color = |c: [f32; 4]| -> egui::Color32 {
+        let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        egui::Color32::from_rgba_unmultiplied(to8(c[0]), to8(c[1]), to8(c[2]), to8(c[3]))
+    };
+
+    // Row 1: the swatch pair overlaps the way Photopea draws it — background
+    // behind and offset up-right, foreground in front.
+    let bg_rect = egui::Rect::from_min_size(
+        egui::pos2(area.left() + 12.0, area.top() + 3.0),
+        egui::vec2(18.0, 18.0),
+    );
+    let fg_rect = egui::Rect::from_min_size(
+        egui::pos2(area.left() + 2.0, area.top() + 7.0),
+        egui::vec2(18.0, 18.0),
+    );
+    ui.painter().rect_filled(bg_rect, rounding, well_color(bg));
+    ui.painter()
+        .rect_stroke(bg_rect, egui::Rounding::ZERO, edge);
+    ui.painter().rect_filled(fg_rect, rounding, well_color(fg));
+    ui.painter()
+        .rect_stroke(fg_rect, egui::Rounding::ZERO, edge);
+
+    // A small square icon control at an absolute offset, with hover fill.
+    // Placed by hand, because `icon_button_id` allocates through the layout
+    // this footer deliberately avoids.
+    let icon_control =
+        |ui: &mut Ui, left: f32, top: f32, id: egui::Id, key: &str, tooltip: &str| {
+            let rect = egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(18.0, 18.0));
+            let response = ui.interact(rect, id, egui::Sense::click());
+            if response.hovered() {
+                ui.painter().rect_filled(
+                    rect,
+                    design::egui_theme::rounding(
+                        design::Radius::Small.resolve(&tokens.radii, 18.0),
+                    ),
+                    color32(tokens.palette.color(ColorRole::ControlFillHovered)),
+                );
+            }
+            super::paint_icon(ui, rect.shrink(3.0), key, design::TextRole::Secondary);
+            response.on_hover_text(tooltip)
+        };
+
+    // Row 2: swap (X) then reset (D), centred as a pair.
+    let pair_w = 18.0 * 2.0 + 4.0;
+    let row2_left = area.left() + (area.width() - pair_w) * 0.5;
+    let swap = icon_control(
+        ui,
+        row2_left,
+        area.top() + 27.0,
+        super::ids::color_swap(),
+        "swap",
+        "Swap foreground and background (X)",
+    );
+    if swap.clicked() {
+        w.emit(Intent::SetForeground(bg));
+        w.emit(Intent::SetBackground(fg));
+    }
+    let reset = icon_control(
+        ui,
+        row2_left + 22.0,
+        area.top() + 27.0,
+        super::ids::color_reset(),
+        "reset-colors",
+        "Default colours (D)",
+    );
+    if reset.clicked() {
+        let (black, white) = (
+            crate::panels::color::DEFAULT_FOREGROUND,
+            crate::panels::color::DEFAULT_BACKGROUND,
+        );
+        w.emit(Intent::SetForeground(black));
+        w.emit(Intent::SetBackground(white));
+    }
 }
 
 fn slot_button(w: &mut Workspace, ui: &mut Ui, model: &PaletteModel, slot: usize) {
@@ -88,8 +202,30 @@ fn slot_button(w: &mut Workspace, ui: &mut Ui, model: &PaletteModel, slot: usize
         if let crate::palette::SlotClick::Selected(tool) = w.palette.click_slot(model, slot) {
             w.emit(Intent::SelectTool(tool));
         }
+        w.palette.hold = None;
     } else if has_variants && (response.secondary_clicked() || response.long_touched()) {
         w.palette.toggle_flyout(slot);
+    } else if has_variants {
+        // Photopea's press-and-hold: a variant tool's slot held past a beat
+        // opens the fly-out without a click. Armed by the pointer being down
+        // on the slot (a hold has no movement, so drag_started never fires).
+        let now = ui.ctx().input(|i| i.time);
+        let down_on_slot = response.is_pointer_button_down_on();
+        match (w.palette.hold, down_on_slot) {
+            (None, true) => w.palette.hold = Some((slot, now)),
+            (Some((held, start)), true) if held == slot => {
+                if now - start >= crate::palette::HOLD_SECONDS {
+                    w.palette.hold = None;
+                    if w.palette.open_flyout != Some(slot) {
+                        w.palette.toggle_flyout(slot);
+                    }
+                }
+            }
+            (_, false) if w.palette.hold.map(|(held, _)| held) == Some(slot) => {
+                w.palette.hold = None
+            }
+            _ => {}
+        }
     }
 }
 
@@ -104,12 +240,19 @@ fn icon_button(
 ) -> Response {
     let t = current_tokens(ui);
     let side = t.metrics.toolbar_button;
-    let (rect, auto) = ui.allocate_exact_size(Vec2::splat(side), Sense::click());
+    // Variant slots also sense drags: the press-and-hold that opens their
+    // fly-out is a drag-shaped gesture.
+    let sense = if has_variants {
+        Sense::click_and_drag()
+    } else {
+        Sense::click()
+    };
+    let (rect, auto) = ui.allocate_exact_size(Vec2::splat(side), sense);
     // The palette's own buttons carry a stable id so a headless test can find
     // and click one; the copies inside a fly-out take egui's derived id, since
     // two controls for one tool must not share an id.
     let response = match id {
-        Some(id) => ui.interact(rect, id, Sense::click()),
+        Some(id) => ui.interact(rect, id, sense),
         None => auto,
     };
     if ui.is_rect_visible(rect) {
@@ -148,7 +291,7 @@ fn icon_button(
             painter,
             rect.shrink(Space::Small.pt()),
             glyph_color,
-            t.borders.hairline * 1.5,
+            crate::icons::icon_stroke_width(t),
         );
         if has_variants {
             let corner = rect.right_bottom() - Vec2::splat(Space::XSmall.pt());
@@ -508,102 +651,10 @@ fn gradient_control(w: &mut Workspace, ui: &mut Ui, tool: ToolId) {
             ),
         );
     }
-    let response = response.on_hover_text("Edit gradient stops");
-
-    let popup = egui::Id::new(("raster-gradient-stops", tool));
+    let response = response.on_hover_text("Edit gradient stops — click to open the editor");
     if response.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(popup));
+        w.emit(Intent::OpenGradientEditor);
     }
-    egui::popup_below_widget(
-        ui,
-        popup,
-        &response,
-        egui::PopupCloseBehavior::CloseOnClickOutside,
-        |ui| {
-            ui.set_min_width(current_tokens(ui).metrics.inspector_label_width * 3.0);
-            let mut edited = gradient.clone();
-            let mut changed = false;
-            let mut remove: Option<usize> = None;
-            // Gated on how many stops would be *left*, not on the stop's own
-            // index: with four stops the index test made the first two
-            // permanently un-removable while the tooltip claimed a ramp needs
-            // two stops — a disabled reason that was not the real reason.
-            let can_remove = crate::tool_options::can_remove_gradient_stop(edited.stops.len());
-            for (i, stop) in edited.stops.iter_mut().enumerate() {
-                ui.horizontal(|ui| {
-                    let mut color = rgba_to_color32(stop.color);
-                    if ui.color_edit_button_srgba(&mut color).changed() {
-                        let c = color.to_srgba_unmultiplied();
-                        stop.color = [
-                            f32::from(c[0]) / 255.0,
-                            f32::from(c[1]) / 255.0,
-                            f32::from(c[2]) / 255.0,
-                            f32::from(c[3]) / 255.0,
-                        ];
-                        changed = true;
-                    }
-                    if ui
-                        .add(egui::Slider::new(&mut stop.position, 0.0..=1.0).show_value(false))
-                        .changed()
-                    {
-                        changed = true;
-                    }
-                    ui.label(hint(ui, format!("{:.0}%", stop.position * 100.0)));
-                    // An empty button for the framing and the disabled-hover
-                    // text, with the drawing painted into the rect it reports.
-                    let side = current_tokens(ui).metrics.min_hit_target;
-                    let response = ui.add_enabled(
-                        can_remove,
-                        egui::Button::new("").min_size(Vec2::splat(side)),
-                    );
-                    super::paint_icon(
-                        ui,
-                        response.rect,
-                        "minus",
-                        if can_remove {
-                            TextRole::Primary
-                        } else {
-                            TextRole::Disabled
-                        },
-                    );
-                    if response
-                        .on_disabled_hover_text("A ramp needs at least two stops")
-                        .clicked()
-                    {
-                        remove = Some(i);
-                    }
-                });
-            }
-            if let Some(i) = remove {
-                edited.stops.remove(i);
-                changed = true;
-            }
-            if super::labelled_button(ui, "Add stop", true, super::ids::gradient_add_stop(tool))
-                .on_hover_text("Add a stop in the middle of the ramp")
-                .clicked()
-            {
-                let mid = layer_model::GradientStop {
-                    position: 0.5,
-                    color: sample_ramp(&edited, 0.5),
-                    midpoint: 0.5,
-                };
-                edited.stops.push(mid);
-                changed = true;
-            }
-            if changed {
-                let ramp = normalise_gradient(edited);
-                if w.options.set_gradient(tool, ramp.clone()) {
-                    // A ramp is not an `OptionValue`, so it has an intent of
-                    // its own rather than being written into the workspace and
-                    // nowhere else.
-                    w.emit(Intent::SetToolGradient {
-                        tool,
-                        gradient: Box::new(ramp),
-                    });
-                }
-            }
-        },
-    );
 }
 
 /// Linear interpolation along a ramp, used only to preview it.
@@ -645,16 +696,32 @@ pub(crate) fn color_wells(w: &mut Workspace, ui: &mut Ui) {
     let side = t.metrics.toolbar_button;
     ui.horizontal(|ui| {
         if swatch(ui, w.color.foreground(), side, Sense::click())
-            .on_hover_text("Foreground")
+            .on_hover_text("Foreground — double-click for the picker")
             .clicked()
         {
             w.color.editing = crate::panels::color::ColorWell::Foreground;
         }
+        if swatch(ui, w.color.foreground(), side, Sense::click())
+            .on_hover_text("Foreground — double-click for the picker")
+            .double_clicked()
+        {
+            w.emit(Intent::OpenColorPicker(
+                crate::panels::color::ColorWell::Foreground,
+            ));
+        }
         if swatch(ui, w.color.background(), side, Sense::click())
-            .on_hover_text("Background")
+            .on_hover_text("Background — double-click for the picker")
             .clicked()
         {
             w.color.editing = crate::panels::color::ColorWell::Background;
+        }
+        if swatch(ui, w.color.background(), side, Sense::click())
+            .on_hover_text("Background — double-click for the picker")
+            .double_clicked()
+        {
+            w.emit(Intent::OpenColorPicker(
+                crate::panels::color::ColorWell::Background,
+            ));
         }
         if super::icon_toggle(ui, "swap", false, "Swap colours  (X)").clicked() {
             w.color.swap();

@@ -19,6 +19,10 @@ use egui::Color32;
 pub struct CanvasStyle {
     /// The area around the image.
     pub backdrop: Color32,
+    /// Photopea's 1px border on the document boundary.
+    pub doc_border: Color32,
+    /// The subtle shadow the document casts onto the pasteboard.
+    pub doc_shadow: Color32,
     /// The ruler gutter's fill.
     pub ruler_fill: Color32,
     /// The ruler gutter's fill while the rulers cannot read anything — the view
@@ -72,6 +76,11 @@ pub struct CanvasStyle {
     pub brush_ring_base: Color32,
     pub brush_ring_over: Color32,
 
+    /// The scrollbar track and thumb (Photopea's are pale grey on any theme).
+    pub scroll_track: Color32,
+    pub scroll_thumb: Color32,
+    pub scroll_thumb_rounding: egui::Rounding,
+
     /// One physical pixel, in points.
     pub hairline_pt: f32,
     /// The emphasised stroke width, in points.
@@ -115,6 +124,10 @@ impl CanvasStyle {
 
         Self {
             backdrop: c(ColorRole::BackgroundCanvas),
+            // Photopea's 1px border on the document boundary.
+            doc_border: c(ColorRole::SeparatorStrong),
+            // The subtle shadow the document casts onto the pasteboard.
+            doc_shadow: Color32::from_black_alpha(70),
             ruler_fill: c(ColorRole::SurfacePanel),
             ruler_disabled: c(ColorRole::ControlFillDisabled),
             ruler_text: c(ColorRole::TextTertiary),
@@ -154,6 +167,10 @@ impl CanvasStyle {
 
             brush_ring_base: ants_base,
             brush_ring_over: ants_dash,
+
+            scroll_track: faded(ColorRole::SeparatorHairline, theme, 90),
+            scroll_thumb: faded(ColorRole::SeparatorStrong, theme, 200),
+            scroll_thumb_rounding: design::egui_theme::rounding(tokens.radii.small),
 
             hairline_pt: tokens.borders.hairline_for_scale(pixels_per_point),
             thick_pt: tokens.borders.thick,

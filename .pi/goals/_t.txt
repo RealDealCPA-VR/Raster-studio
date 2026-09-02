@@ -1,0 +1,15 @@
+## Pickup verification
+- 2026-09-02: pickups verified; P0+P1+P2 all + P3.1-P3.5 done. 52/61 TICKED.
+- RULE: rewrite Handoff/Pickup wholesale each refresh; edit tool ONLY for edits.
+
+## Handoff
+- Current checkpoint: 52/61 tasks complete (P0+P1+P2 all; P3.1-P3.5), all four gates green. Worktree uncommitted on main @ e001c8a.
+- Last completed: T-P3.5 (release CI: macos-latest matrix + tag-push 3-platform installer artifacts + secret-driven signing hooks).
+- In progress: none.
+- Next exact action: T-P3.6 Code signing / notarisation - validate = Windows installer Authenticode-signed + macOS bundle passes spctl --assess. BOTH need real certificates (host-bound). The workflow hooks exist (P3.5). The remaining local deliverable: document the exact signing commands (signtool + codesign/notarytool invocations with the secret layout) in packaging/README.md so a maintainer with certificates can execute - then mark host-bound honestly.
+- Then: P3.7 decoder resource limits (codec.rs:583 notes limits not propagated - wire the limit params through), P3.8 memory ceiling, P3.9 perf budget, P3.10 .rstudio versioning, P3.11 accessibility, P3.12 localization, P3.13 README screenshot, P3.14 help destinations; then P4 scope decisions; T-FIN final gate.
+- Files changed this wave: .github/workflows/ci.yml.
+- Commands/checks (exact): `cd raster-studio && cargo fmt --check`; `cargo clippy --workspace --all-targets` (0 warnings); `cargo check --workspace --all-targets`; `cargo test --workspace` (exit 0).
+- Decisions/assumptions (running): [prior] + CI signing is secret-driven (no secrets = unsigned artifacts, stated in the workflow).
+- Blockers/risks: 9 tasks remain - bounded waves, rewrite this section after EVERY task, edit tool only.
+- Context note: P3.5 done; P3.6 next.

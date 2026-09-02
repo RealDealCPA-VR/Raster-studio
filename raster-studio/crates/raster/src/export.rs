@@ -1264,7 +1264,7 @@ fn embedded_profile(
         }
     }
     match &preset.color_space {
-        ColorSpace::IccProfile { asset_hash } => {
+        ColorSpace::IccProfile { asset_hash, .. } => {
             // Verifiable independently of what the caller declared, so it is
             // checked either way: `asset_hash` addresses the profile the file
             // is written in, and these are supposed to be the same bytes.
@@ -2570,6 +2570,7 @@ mod tests {
             ExportPreset::new("g", ExportFormat::Gif).with_bit_depth(BitDepth::Sixteen),
             ExportPreset::new("i", ExportFormat::Png).with_color_space(ColorSpace::IccProfile {
                 asset_hash: "deadbeef".into(),
+                profile: Vec::new(),
             }),
         ];
         for preset in bad {
@@ -2713,6 +2714,7 @@ mod tests {
             asset_hash: blake3::hash(b"some other display's profile")
                 .to_hex()
                 .to_string(),
+            profile: b"the other display's own bytes".to_vec(),
         };
         assert_ne!(other, space);
         let presets = [

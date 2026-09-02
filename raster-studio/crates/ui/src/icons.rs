@@ -70,6 +70,11 @@ pub enum Prim {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Icon(pub &'static [Prim]);
 
+/// Distance between two unit-square points.
+fn dist(a: &[f32; 2], b: &[f32; 2]) -> f32 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+}
+
 impl Icon {
     /// The fallback: a hollow square, used for a key nothing recognises.
     pub const UNKNOWN: Icon = Icon(&[Prim::Poly(
@@ -80,6 +85,59 @@ impl Icon {
     /// `true` when this is the fallback rather than a real drawing.
     pub fn is_unknown(self) -> bool {
         std::ptr::eq(self.0.as_ptr(), Self::UNKNOWN.0.as_ptr())
+    }
+
+    /// The ink this drawing lays down, in square points, painted into a
+    /// `side_pt` square at `width` points of stroke.
+    ///
+    /// Geometric, not rasterised: strokes count as length times width with a
+    /// small cap allowance, dots as discs, fills by the shoelace formula. It
+    /// is the number the weight-pass gate asserts on — a drawing whose ink
+    /// under-shoots the floor renders as a pale smudge at tool size.
+    pub fn ink_area(self, side_pt: f32, width: f32) -> f32 {
+        let side = side_pt.max(1.0);
+        self.0
+            .iter()
+            .map(|prim| match prim {
+                Prim::Line(a, b) => {
+                    let d = dist(a, b) * side;
+                    d * width + width * width
+                }
+                Prim::Poly(points, closed) => {
+                    let mut total = 0.0;
+                    let n = points.len();
+                    if n < 2 {
+                        return 0.0;
+                    }
+                    for i in 0..n - 1 {
+                        total += dist(&points[i], &points[i + 1]) * side * width;
+                    }
+                    if *closed {
+                        total += dist(&points[n - 1], &points[0]) * side * width;
+                    }
+                    // Joints: each vertex doubles up roughly half a stroke.
+                    total + n as f32 * 0.5 * width * width
+                }
+                Prim::Fill(points) => {
+                    // The shoelace formula, in unit-square terms scaled up.
+                    let n = points.len();
+                    if n < 3 {
+                        return 0.0;
+                    }
+                    let mut twice = 0.0;
+                    for i in 0..n {
+                        let j = (i + 1) % n;
+                        twice += points[i][0] * points[j][1] - points[j][0] * points[i][1];
+                    }
+                    (twice.abs() * 0.5) * side * side
+                }
+                Prim::Circle(_, r) => {
+                    // The circumference times the stroke, plus the joint allowance.
+                    2.0 * std::f32::consts::PI * r * side * width + width * width
+                }
+                Prim::Dot(_, r) => std::f32::consts::PI * (r * side).powi(2),
+            })
+            .sum()
     }
 
     /// Paint into `rect`, insetting so strokes stay inside it.
@@ -632,6 +690,8 @@ pub fn icon_for(key: &str) -> Icon {
     Icon(match key {
         "move" => CROSS_ARROWS,
         "pen" => PEN,
+        "anchor-block" => ANCHOR_BLOCK,
+        "path-select" => LAYER_SHAPE,
         "type" => TYPE,
         "marquee-rect" => MARQUEE_RECT,
         "marquee-ellipse" => MARQUEE_ELLIPSE,
@@ -729,9 +789,9 @@ const CLOSE: &[Prim] = &[
 ];
 
 const OVERFLOW: &[Prim] = &[
-    Prim::Dot([0.22, 0.5], 0.07),
-    Prim::Dot([0.5, 0.5], 0.07),
-    Prim::Dot([0.78, 0.5], 0.07),
+    Prim::Dot([0.22, 0.5], 0.095),
+    Prim::Dot([0.5, 0.5], 0.095),
+    Prim::Dot([0.78, 0.5], 0.095),
 ];
 
 const CHECK: &[Prim] = &[Prim::Poly(
@@ -1162,7 +1222,37 @@ const STEP_BATCH: &[Prim] = &[
     Prim::Line([0.16, 0.72], [0.84, 0.72]),
 ];
 
-const STEP_UNKNOWN: &[Prim] = &[Prim::Dot([0.5, 0.5], 0.10)];
+const STEP_UNKNOWN: &[Prim] = &[Prim::Dot([0.5, 0.5], 0.16)];
+
+/// Photopea's footer chain link: two rings joined by a bar.
+const LINK: &[Prim] = &[
+    Prim::Circle([0.26, 0.38], 0.14),
+    Prim::Circle([0.74, 0.62], 0.14),
+    Prim::Line([0.38, 0.47], [0.62, 0.53]),
+];
+
+/// The adjustment footer button: a half-moon — a circle whose right half is
+/// filled (the arc approximated by a short chord).
+const ADJUSTMENT: &[Prim] = &[
+    Prim::Circle([0.5, 0.5], 0.34),
+    Prim::Fill(&[
+        [0.5, 0.16],
+        [0.63, 0.185],
+        [0.74, 0.26],
+        [0.815, 0.37],
+        [0.84, 0.5],
+        [0.815, 0.63],
+        [0.74, 0.74],
+        [0.63, 0.815],
+        [0.5, 0.84],
+    ]),
+];
+
+/// Photopea's footer mask button: a rectangle with a dot, the mask-on-shape.
+const MASK: &[Prim] = &[
+    Prim::Poly(&[[0.18, 0.3], [0.82, 0.3], [0.82, 0.7], [0.18, 0.7]], true),
+    Prim::Dot([0.5, 0.5], 0.11),
+];
 
 /// The drawing for a chrome icon key.
 ///
@@ -1189,6 +1279,9 @@ pub fn ui_icon(key: &str) -> Icon {
         "colors-default" => COLORS_DEFAULT,
         "clipping" => CLIPPING,
         "new-group" => NEW_GROUP,
+        "link" => LINK,
+        "adjustment" => ADJUSTMENT,
+        "mask" => MASK,
         // layer classes
         "layer-raster" => LAYER_RASTER,
         "layer-group" => LAYER_GROUP,
@@ -1258,6 +1351,9 @@ pub const CHROME_ICON_KEYS: &[&str] = &[
     "colors-default",
     "clipping",
     "new-group",
+    "link",
+    "adjustment",
+    "mask",
 ];
 
 /// Draw the chrome icon `key` centred in `rect`, in the palette's colour for
@@ -1268,6 +1364,13 @@ pub const CHROME_ICON_KEYS: &[&str] = &[
 /// A key with no drawing is painted in the danger colour rather than left
 /// blank, for the same reason [`icon_button`] does it: a control that ships
 /// without a drawing should look wrong, not look disabled.
+/// The stroke every icon is painted at: Photopea's glyphs read at 16 pt, which
+/// the hairline does not and the thick outline overshoots, so they have their
+/// own rung on the width scale.
+pub fn icon_stroke_width(t: &design::Tokens) -> f32 {
+    t.borders.icon
+}
+
 pub fn paint_ui_icon(ui: &egui::Ui, rect: Rect, key: &str, role: design::TextRole) {
     let t = design::current_tokens(ui);
     let icon = ui_icon(key);
@@ -1280,7 +1383,7 @@ pub fn paint_ui_icon(ui: &egui::Ui, rect: Rect, key: &str, role: design::TextRol
         &ui.painter_at(rect),
         rect.shrink(design::Space::XSmall.pt()),
         color,
-        t.borders.hairline * 1.5,
+        icon_stroke_width(t),
     );
 }
 
@@ -1776,6 +1879,77 @@ mod tests {
         assert_ne!(
             text_long, text_short,
             "the text button was expected to scale with its label"
+        );
+    }
+
+    /// The weight-pass gate (P1.15): every icon carries a minimum share of
+    /// ink at the tool-button size, where thin strokes read as nothing. The
+    /// floor sits under the thinnest drawings in the set — the two-segment
+    /// chevrons at about 0.245, shape-line at about 0.30 of their squares —
+    /// and above anything a weight regression produces.
+    #[test]
+    fn every_icon_carries_enough_ink_at_the_tool_button_size() {
+        let tokens = design::Theme::Dark.tokens();
+        let side = tokens.metrics.toolbar_button - design::Space::Small.pt() * 2.0;
+        let width = icon_stroke_width(tokens);
+        // Stroked glyphs must lay down a real share of their square to read at
+        // 16 pt. The thinnest legitimate marks set the floor: the one-segment
+        // minus at about 0.18, the two-segment chevrons at about 0.245 — a
+        // regression to the old hairline-weight strokes lands near 0.05 and
+        // fails by miles. Solid marks (a filled square, dots) cover less area
+        // but are denser where they sit, so they carry their own, lower floor.
+        const STROKE_FLOOR: f32 = 0.17;
+        const SOLID_FLOOR: f32 = 0.08;
+
+        let floor_for = |icon: Icon| -> f32 {
+            let solid_only = icon
+                .0
+                .iter()
+                .all(|p| matches!(p, Prim::Fill(_) | Prim::Dot(_, _)));
+            if solid_only {
+                SOLID_FLOOR
+            } else {
+                STROKE_FLOOR
+            }
+        };
+
+        for info in tools::registry::all() {
+            let icon = icon_for(info.icon);
+            let coverage = icon.ink_area(side, width) / (side * side);
+            assert!(
+                coverage >= floor_for(icon),
+                "{:?} ({}) covers only {coverage:.4} of its {}pt square at {}pt stroke",
+                info.name,
+                info.icon,
+                side,
+                width
+            );
+        }
+
+        for key in all_chrome_keys() {
+            let icon = ui_icon(key);
+            let coverage = icon.ink_area(side, width) / (side * side);
+            assert!(
+                coverage >= floor_for(icon),
+                "chrome icon {key:?} covers only {coverage:.4} of its square"
+            );
+        }
+    }
+
+    /// The weight pass means something: the dedicated icon width is heavier
+    /// than the hairline the icons used to borrow, and lighter than the
+    /// emphasised outline.
+    #[test]
+    fn the_icon_stroke_weight_sits_between_the_hairline_and_the_thick_outline() {
+        let tokens = design::Theme::Dark.tokens();
+        let w = icon_stroke_width(tokens);
+        assert!(
+            w > tokens.borders.hairline,
+            "icons must out-weigh {w}pt chrome borders"
+        );
+        assert!(
+            w < tokens.borders.thick,
+            "icons must stay under {w}pt emphasised outlines"
         );
     }
 }

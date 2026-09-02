@@ -74,6 +74,55 @@ impl TryFrom<RampStops> for GradientRamp {
 }
 
 impl GradientRamp {
+    /// Build a ramp from the UI's gradient model: each stop's sRGB colour is
+    /// converted to linear light (the ramp interpolates in linear), and the
+    /// opacity ramp comes from the model's alpha stops, falling back to each
+    /// stop's own alpha when no separate alpha ramp is given. Midpoints are
+    /// not carried — a midpoint biases one span, and a two-channel ramp has no
+    /// place to put it; a span needing a bias is expressed as an extra stop.
+    pub fn from_ui_gradient(gradient: &layer_model::Gradient) -> Result<Self, ToolError> {
+        let mut colors: Vec<ColorStop> = gradient
+            .stops
+            .iter()
+            .map(|stop| ColorStop {
+                position: stop.position,
+                color: srgb_to_linear3([stop.color[0], stop.color[1], stop.color[2]]),
+            })
+            .collect();
+        let opacities: Vec<OpacityStop> = if gradient.alpha_stops.is_empty() {
+            gradient
+                .stops
+                .iter()
+                .map(|stop| OpacityStop {
+                    position: stop.position,
+                    opacity: stop.color[3],
+                })
+                .collect()
+        } else {
+            gradient
+                .alpha_stops
+                .iter()
+                .map(|stop| OpacityStop {
+                    position: stop.position,
+                    opacity: stop.color[3],
+                })
+                .collect()
+        };
+        if colors.is_empty() {
+            colors = vec![
+                ColorStop {
+                    position: 0.0,
+                    color: [0.0; 3],
+                },
+                ColorStop {
+                    position: 1.0,
+                    color: [1.0; 3],
+                },
+            ];
+        }
+        Self::new(colors, opacities)
+    }
+
     /// Build a ramp, sorting both stop lists and refusing an empty one or a
     /// non-finite position.
     pub fn new(
@@ -126,6 +175,11 @@ impl GradientRamp {
                 },
             ],
         }
+    }
+
+    /// The default ramp: black to white, fully opaque.
+    pub fn black_to_white() -> Self {
+        Self::two([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
     }
 
     /// Foreground to fully transparent.
@@ -514,7 +568,11 @@ impl Tool for GradientTool {
         let delta = match ctx.paint_target {
             PaintTarget::Layer => {
                 let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
-                render_gradient(&mut patch, rect, start, end, &self.settings, &ctx.selection);
+                let settings = GradientSettings {
+                    ramp: ctx.ramp.clone(),
+                    ..self.settings.clone()
+                };
+                render_gradient(&mut patch, rect, start, end, &settings, &ctx.selection);
                 patch.commit(ctx.tiles, key)?
             }
             PaintTarget::Mask => {
@@ -524,7 +582,10 @@ impl Tool for GradientTool {
                     rect,
                     start,
                     end,
-                    &self.settings,
+                    &GradientSettings {
+                        ramp: ctx.ramp.clone(),
+                        ..self.settings.clone()
+                    },
                     &ctx.selection,
                 );
                 patch.commit(ctx.tiles, key)?

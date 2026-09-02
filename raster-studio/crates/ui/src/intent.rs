@@ -112,6 +112,13 @@ pub enum Intent {
     /// Set the foreground / background colour, straight-alpha sRGB.
     SetForeground([f32; 4]),
     SetBackground([f32; 4]),
+    /// Open the colour picker dialog for one of the colour wells — the
+    /// swatches' double-click.
+    OpenColorPicker(crate::panels::color::ColorWell),
+    /// Open the gradient editor dialog for the effective tool's ramp.
+    OpenGradientEditor,
+    /// Open the brush editor dialog over the effective tool's brush.
+    OpenBrushEditor,
     /// Set the zoom's centre, in document pixels — the Navigator's pan.
     SetViewCenter((f32, f32)),
     /// Show or hide one colour channel, or the whole composite.
@@ -125,6 +132,13 @@ pub enum Intent {
     },
     /// Make one channel the editing target.
     SelectChannel(ChannelKind),
+    /// The Actions panel: start recording every applied command.
+    StartRecording,
+    /// The Actions panel: stop recording, keeping what was captured.
+    StopRecording,
+    /// The Actions panel: replay the last stopped recording on the active
+    /// document.
+    ReplayRecording,
     /// Show or hide a dock panel.
     SetPanelOpen {
         panel: PanelId,

@@ -95,6 +95,7 @@
 
 pub mod action;
 pub mod chrome;
+pub mod dialog_host;
 pub mod dialogs;
 pub mod dirty;
 pub mod doc;

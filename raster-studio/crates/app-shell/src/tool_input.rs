@@ -478,6 +478,10 @@ impl ToolPointer {
         };
         let foreground = editor.foreground();
         let background = editor.background();
+        let ramp = tools::gradient::GradientRamp::from_ui_gradient(editor.gradient_ramp())
+            .unwrap_or_else(|_| tools::gradient::GradientRamp::black_to_white());
+        let quick_mask = editor.quick_mask();
+        let quick_mask_layer = editor.quick_mask_layer();
         let Some(doc) = editor.active_mut() else {
             return (Ok(()), Vec::new(), Vec::new());
         };
@@ -488,14 +492,40 @@ impl ToolPointer {
             .and_then(|layer| layer.mask_id());
         let selection = doc.document.selection.clone();
         let layer_stack = doc.document.layers.iter_depth_first();
+        let shape_paths: Vec<(layer_model::LayerId, layer_model::ShapeLayer)> = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter_map(|id| {
+                let layer = doc.document.layers.get(id)?;
+                let layer_model::LayerKind::Shape(shape) = &layer.kind else {
+                    return None;
+                };
+                Some((id, shape.clone()))
+            })
+            .collect();
         let mut access = DocumentTiles::new(&doc.document.pixels, &mut doc.tiles);
         let mut ctx = ToolContext::new(&mut access, canvas);
+        ctx.shape_paths = shape_paths;
         ctx.active_layer = active_layer;
         ctx.active_mask = active_mask;
-        ctx.paint_target = PaintTarget::Layer;
+        // Quick-mask mode reroutes pixel edits to the scratch layer's mask —
+        // the tools' existing PaintTarget::Mask route, unchanged.
+        if quick_mask {
+            if let Some(sid) = quick_mask_layer {
+                let smask = doc.document.layers.get(sid).and_then(|l| l.mask_id());
+                ctx.active_layer = Some(sid);
+                ctx.active_mask = smask;
+                ctx.paint_target = PaintTarget::Mask;
+            }
+        } else {
+            ctx.paint_target = PaintTarget::Layer;
+        }
         ctx.selection = selection;
         ctx.foreground = foreground;
         ctx.background = background;
+        ctx.ramp = ramp;
         ctx.layer_stack = layer_stack;
         let result = action(tool.as_mut(), &mut ctx);
         let drained = (result, ctx.drain(), ctx.drain_requests());
@@ -607,6 +637,12 @@ impl ToolPointer {
                     ));
                     out.slices = slices;
                 }
+                ToolRequest::SelectLayer(id) => {
+                    // Path Select clicked a shape layer's path: the layer
+                    // becomes the document's selection (a field write, like
+                    // every other selection change).
+                    editor.set_layer_selection(vec![id], Some(id));
+                }
             }
         }
 
@@ -647,12 +683,15 @@ impl ToolPointer {
         editor: &mut Editor,
         input: PointerInput,
         over_panel: bool,
+        choices: &[(String, usize)],
     ) -> PointerOutcome {
         let mut out = PointerOutcome::default();
         if over_panel && !self.router.is_gesture_active() {
             out.refused = Some(Refusal::OverPanel);
             return out;
         }
+        let quick_mask = editor.quick_mask();
+        let quick_mask_layer = editor.quick_mask_layer();
         let Some(active_id) = editor.active().map(|doc| doc.id()) else {
             // The last tab closed under a held button, perhaps. Nothing to aim
             // at, and no gesture may outlive the document it was aimed at —
@@ -704,6 +743,10 @@ impl ToolPointer {
             Dispatch::ToTool(routed) => routed,
         };
         out.route = Some(routed.route);
+        eprintln!(
+            "ROUTED in_gesture={} route={:?}",
+            routed.in_gesture, routed.route
+        );
         if !routed.in_gesture {
             // A hover. See the module docs: nothing here consumes one yet.
             return out;
@@ -734,6 +777,11 @@ impl ToolPointer {
         let tool = self.tool(id);
         if let Some(brush) = brush {
             tool.set_brush(brush);
+            // The named mode rides the same seed: the options bar's choice is
+            // what the tool is, for tools that have more than one shape.
+            for (key, index) in choices {
+                tool.set_choice(key, *index);
+            }
         }
 
         let (result, commands, selection_edits, requests, picked, canvas_rect) = {
@@ -747,15 +795,39 @@ impl ToolPointer {
             // Top-most first, which is the order `LayerTree` keeps its roots in
             // — what the move tool's auto-select walks.
             let layer_stack = doc.document.layers.iter_depth_first();
+            let shape_paths: Vec<(layer_model::LayerId, layer_model::ShapeLayer)> = doc
+                .document
+                .layers
+                .iter_depth_first()
+                .into_iter()
+                .filter_map(|id| {
+                    let layer = doc.document.layers.get(id)?;
+                    let layer_model::LayerKind::Shape(shape) = &layer.kind else {
+                        return None;
+                    };
+                    Some((id, shape.clone()))
+                })
+                .collect();
             let view = canvas_camera_of(&doc.camera).to_view_state(&viewport);
 
             let mut access = DocumentTiles::new(&doc.document.pixels, &mut doc.tiles);
             let mut ctx = ToolContext::new(&mut access, canvas);
+            ctx.shape_paths = shape_paths;
             ctx.active_layer = active_layer;
             ctx.active_mask = active_mask;
             // Nothing in this shell selects a mask for editing yet, so a pixel
-            // tool writes to the layer. Stated rather than defaulted into.
-            ctx.paint_target = PaintTarget::Layer;
+            // tool writes to the layer — except in quick-mask mode, where the
+            // scratch layer's mask is exactly where edits belong.
+            if quick_mask {
+                if let Some(sid) = quick_mask_layer {
+                    let smask = doc.document.layers.get(sid).and_then(|l| l.mask_id());
+                    ctx.active_layer = Some(sid);
+                    ctx.active_mask = smask;
+                    ctx.paint_target = PaintTarget::Mask;
+                }
+            } else {
+                ctx.paint_target = PaintTarget::Layer;
+            }
             ctx.selection = selection;
             ctx.foreground = foreground;
             ctx.background = background;
@@ -829,16 +901,28 @@ impl ToolPointer {
         }
 
         if !requests.is_empty() {
-            // Unreachable as things stand: the crop and slice tools publish
-            // only from `Tool::commit`, which is [`ToolPointer::commit`]'s
-            // path, not this one. A request that arrived here and was dropped
-            // in silence would be a gesture that looked like it worked, so it
-            // is said rather than swallowed.
-            tracing::warn!(
-                "{} tool request(s) arrived from a pointer sample rather than a commit",
-                requests.len()
-            );
-            editor.set_status("Press Enter to apply the crop or the slices");
+            // Crop and slice publish only from `Tool::commit`, which is
+            // [`ToolPointer::commit`]'s path, not this one — a request that
+            // arrived here and was dropped in silence would be a gesture that
+            // looked like it worked, so it is said rather than swallowed.
+            // Path Select is the exception: its whole job is a click, so its
+            // layer selection is performed right here.
+            let mut deferred = 0;
+            for request in requests {
+                match request {
+                    ToolRequest::SelectLayer(id) => {
+                        editor.set_layer_selection(vec![id], Some(id));
+                    }
+                    ToolRequest::Crop(_) | ToolRequest::Slices(_) => deferred += 1,
+                }
+            }
+            if deferred > 0 {
+                tracing::warn!(
+                    "{} tool request(s) arrived from a pointer sample rather than a commit",
+                    deferred
+                );
+                editor.set_status("Press Enter to apply the crop or the slices");
+            }
         }
 
         out
@@ -956,10 +1040,10 @@ mod tests {
             } else {
                 PointerPhase::Move
             };
-            out.push(pointer.handle(editor, sample(phase, screen(*x, *y)), false));
+            out.push(pointer.handle(editor, sample(phase, screen(*x, *y)), false, &[]));
         }
         let (x, y) = *points.last().unwrap();
-        out.push(pointer.handle(editor, sample(PointerPhase::Up, screen(x, y)), false));
+        out.push(pointer.handle(editor, sample(PointerPhase::Up, screen(x, y)), false, &[]));
         out
     }
 
@@ -1102,6 +1186,7 @@ mod tests {
                 &mut editor,
                 sample(PointerPhase::Down, screen(32.0, 32.0)),
                 true,
+                &[],
             );
             assert_eq!(down.refused, Some(Refusal::OverPanel), "{tool:?}");
             assert!(!down.reached_tool);
@@ -1114,12 +1199,14 @@ mod tests {
                     &mut editor,
                     sample(PointerPhase::Move, screen(at.0, at.1)),
                     false,
+                    &[],
                 );
             }
             pointer.handle(
                 &mut editor,
                 sample(PointerPhase::Up, screen(44.0, 32.0)),
                 false,
+                &[],
             );
 
             assert_eq!(editor.active().unwrap().history_depth(), 0, "{tool:?}");
@@ -1211,11 +1298,13 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Down, screen(20.0, 20.0)),
             false,
+            &[],
         );
         pointer.handle(
             &mut editor,
             sample(PointerPhase::Move, screen(40.0, 40.0)),
             false,
+            &[],
         );
         assert!(pointer.is_tool_active(), "the stroke never started");
 
@@ -1228,6 +1317,7 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Up, screen(40.0, 40.0)),
             false,
+            &[],
         );
         assert_eq!(up.refused, Some(Refusal::Router(Rejected::NotOurGesture)));
         assert_eq!(editor.active().unwrap().history_depth(), 0);
@@ -1429,18 +1519,21 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Down, screen(32.0, 32.0)),
             false,
+            &[],
         );
         assert!(down.reached_tool);
         let moved = pointer.handle(
             &mut editor,
             sample(PointerPhase::Move, screen(44.0, 32.0)),
             true,
+            &[],
         );
         assert!(moved.reached_tool, "the drag died over a panel");
         let up = pointer.handle(
             &mut editor,
             sample(PointerPhase::Up, screen(44.0, 32.0)),
             true,
+            &[],
         );
         assert_eq!(up.steps, 1);
     }
@@ -1458,11 +1551,13 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Down, screen(32.0, 32.0)).with_button(PointerButton::Middle),
             false,
+            &[],
         );
         let moved = pointer.handle(
             &mut editor,
             sample(PointerPhase::Move, screen(44.0, 32.0)).with_button(PointerButton::Middle),
             false,
+            &[],
         );
         assert_eq!(moved.route, Some(Route::Pan));
         assert!(!moved.reached_tool);
@@ -1470,6 +1565,7 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Up, screen(44.0, 32.0)).with_button(PointerButton::Middle),
             false,
+            &[],
         );
         assert_ne!(editor.active().unwrap().camera.center, center);
         assert_eq!(composite(&mut editor), before);
@@ -1487,11 +1583,13 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Down, screen(32.0, 32.0)),
             false,
+            &[],
         );
         let up = pointer.handle(
             &mut editor,
             sample(PointerPhase::Up, screen(32.0, 32.0)),
             false,
+            &[],
         );
         assert!(up.view_changed, "a zoom click did not move the view");
         assert!(editor.active().unwrap().camera.zoom > zoom);
@@ -1502,11 +1600,13 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Down, screen(32.0, 32.0)),
             false,
+            &[],
         );
         pointer.handle(
             &mut editor,
             sample(PointerPhase::Up, screen(32.0, 32.0)).with_modifiers(Modifiers::alt()),
             false,
+            &[],
         );
         assert!((editor.active().unwrap().camera.zoom - zoom).abs() < 1e-4);
     }
@@ -1523,6 +1623,7 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Down, screen(20.0, 20.0)),
             false,
+            &[],
         );
         assert_eq!(pointer.live_tool(), Some(ToolId::Brush));
 
@@ -1531,6 +1632,7 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Move, screen(30.0, 30.0)),
             false,
+            &[],
         );
         assert_eq!(
             pointer.live_tool(),
@@ -1541,6 +1643,7 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Up, screen(30.0, 30.0)),
             false,
+            &[],
         );
         assert_eq!(up.steps, 1, "the stroke did not finish as a brush stroke");
         assert_eq!(editor.active().unwrap().document.selection, Selection::None);
@@ -1565,6 +1668,7 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Down, Vec2::new(200.0, 150.0)),
             false,
+            &[],
         );
         assert_eq!(out.refused, Some(Refusal::NoDocument));
         assert!(!pointer.is_gesture_active());
@@ -1670,6 +1774,7 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Down, screen(20.0, 20.0)),
             false,
+            &[],
         );
         assert!(down.reached_tool, "the press never reached the brush");
         assert_eq!(
@@ -1686,16 +1791,19 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Move, screen(30.0, 30.0)),
             false,
+            &[],
         );
         let drifted = pointer.handle(
             &mut editor,
             sample(PointerPhase::Move, screen(40.0, 40.0)),
             false,
+            &[],
         );
         let up = pointer.handle(
             &mut editor,
             sample(PointerPhase::Up, screen(40.0, 40.0)),
             false,
+            &[],
         );
 
         // The headline, asserted before anything about *how* it was achieved:
@@ -1762,6 +1870,7 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Down, screen(20.0, 20.0)),
             false,
+            &[],
         );
         editor.close_document(0).unwrap();
         assert!(
@@ -1773,6 +1882,7 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Up, screen(40.0, 40.0)),
             false,
+            &[],
         );
         assert_eq!(
             editor.documents()[0].history_depth(),
@@ -1803,6 +1913,7 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Down, screen(20.0, 20.0)),
             false,
+            &[],
         );
         assert!(down.reached_tool, "the press never reached the brush");
         assert_eq!(down.steps, 0);
@@ -1823,6 +1934,7 @@ mod tests {
                 &mut editor,
                 sample(PointerPhase::Move, screen(at.0, at.1)),
                 false,
+                &[],
             );
             let mid = composite(&mut editor);
             let live = changed_pixels(&before, &mid);
@@ -1842,6 +1954,7 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Up, screen(36.0, 36.0)),
             false,
+            &[],
         );
         assert_eq!(up.steps, 1);
         assert!(up.needs_repaint());
@@ -2080,6 +2193,449 @@ mod tests {
 
         assert!(editor.active_mut().unwrap().undo().unwrap());
         assert_eq!(composite(&mut editor), painted);
+    }
+
+    /// Scaling a selection through the gizmo rewrites the selection mask as
+    /// one undoable SetSelection step, and undo puts the original mask back.
+    #[test]
+    fn scaling_a_selection_changes_its_mask_and_undo_restores_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        // A rectangle selection to transform.
+        editor.set_tool(ToolId::RectMarquee);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(16.0, 16.0), (48.0, 48.0)]);
+        let before = editor.active().unwrap().document.selection.clone();
+        let coverage = |sel: &editor_core::Selection| -> f32 {
+            match &sel {
+                editor_core::Selection::Mask(m) => {
+                    m.coverage().iter().map(|&v| v as u32).sum::<u32>() as f32
+                }
+                _ => 0.0,
+            }
+        };
+        assert!(coverage(&before) > 0.0, "the marquee produced a mask");
+
+        // The gizmo wearing its Selection target: the menu route sets the
+        // choice, the press begins over the selection's bounds, and a corner
+        // drag scales the mask.
+        let mut pointer = ToolPointer::new();
+        editor.set_tool(ToolId::FreeTransform);
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Down, screen(16.0, 16.0)),
+            false,
+            &[("target".to_string(), 1)],
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Move, screen(8.0, 8.0)),
+            false,
+            &[("target".to_string(), 1)],
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Up, screen(8.0, 8.0)),
+            false,
+            &[("target".to_string(), 1)],
+        );
+
+        let outcome = pointer.commit(&mut editor);
+        assert!(outcome.had_pending, "{outcome:?}");
+        assert_eq!(outcome.failed, None, "{outcome:?}");
+        assert_eq!(outcome.steps, 1, "one SetSelection step: {outcome:?}");
+
+        let after = editor.active().unwrap().document.selection.clone();
+        assert_ne!(after, before, "the mask moved");
+        assert!(
+            editor.active_mut().unwrap().undo().unwrap(),
+            "the transform is undoable"
+        );
+        let restored = editor.active().unwrap().document.selection.clone();
+        assert_eq!(restored, before, "undo restored the original mask");
+        assert!((coverage(&restored) - coverage(&before)).abs() < 1e-3);
+    }
+
+    /// Per-channel editing (P2.7): with a colour component as the edit target,
+    /// only that component's bytes move, and undo restores everything.
+    #[test]
+    fn a_colour_mode_conversion_rewrites_every_layer_as_one_undo_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Pencil);
+        editor.set_foreground([0.9, 0.2, 0.3, 1.0]);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(8.0, 8.0), (56.0, 56.0)]);
+        let rgb = composite(&mut editor);
+
+        // RGB -> Grayscale: every pixel collapses to its luma.
+        editor
+            .set_color_mode(ui::menu::ColorMode::Grayscale)
+            .unwrap();
+        let gray = composite(&mut editor);
+        for px in gray.chunks(4) {
+            assert_eq!(px[0], px[1], "r == g in grayscale");
+            assert_eq!(px[1], px[2], "g == b in grayscale");
+        }
+        let luma = |px: [u8; 4]| -> u8 {
+            (0.299 * px[0] as f32 + 0.587 * px[1] as f32 + 0.114 * px[2] as f32).round() as u8
+        };
+        let rgb_px: Vec<[u8; 4]> = rgb.chunks(4).map(|p| [p[0], p[1], p[2], p[3]]).collect();
+        assert!(
+            rgb_px.iter().any(|p| luma(*p) != p[0]),
+            "the stroke carried colour worth converting"
+        );
+        for (src, dst) in rgb_px.iter().zip(gray.chunks(4)) {
+            assert_eq!(dst[0], luma(*src), "grayscale byte is the luma");
+        }
+        assert_eq!(
+            editor.active().unwrap().document.meta.color_mode,
+            1,
+            "the document now reads as grayscale"
+        );
+
+        // One undo returns the colours.
+        assert!(editor.active_mut().unwrap().undo().unwrap());
+        assert_eq!(composite(&mut editor), rgb, "one undo restores RGB");
+
+        // Grayscale -> RGB is also one step, and one undo lands back on gray.
+        editor
+            .set_color_mode(ui::menu::ColorMode::Grayscale)
+            .unwrap();
+        editor.set_color_mode(ui::menu::ColorMode::Rgb).unwrap();
+        assert_eq!(
+            editor.active().unwrap().document.meta.color_mode,
+            0,
+            "back to RGB"
+        );
+        assert!(editor.active_mut().unwrap().undo().unwrap());
+        for px in composite(&mut editor).chunks(4) {
+            assert_eq!(px[0], px[1], "one undo from RGB lands back on gray");
+            assert_eq!(px[1], px[2], "g == b");
+        }
+    }
+
+    #[test]
+    fn recording_three_edits_replays_onto_a_second_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        // A second identically-structured document: same 64x64 white base.
+        let png2 = dir.path().join("second.png");
+        std::fs::write(
+            &png2,
+            raster::encode(
+                raster::ExportFormat::Png,
+                W,
+                H,
+                &[255u8; (W * H * 4) as usize],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        editor.open_path(&png2).unwrap();
+        // The same camera the first document was given: 100%, centred —
+        // `screen()` routes against it.
+        let doc = editor.active_mut().unwrap();
+        doc.set_viewport(VIEWPORT);
+        doc.camera.zoom = 1.0;
+        doc.camera.center = Vec2::new(W as f32 / 2.0, H as f32 / 2.0);
+        // Record on the FIRST document; replay onto the second.
+        editor.activate(0).unwrap();
+
+        // Record three edits on the active document (B, the newest).
+        editor.set_tool(ToolId::Pencil);
+        editor.set_foreground([0.9, 0.2, 0.3, 1.0]);
+        editor.start_recording();
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(8.0, 8.0), (56.0, 56.0)]);
+        editor.set_tool(ToolId::Eraser);
+        stroke(&mut pointer, &mut editor, &[(40.0, 8.0), (44.0, 12.0)]);
+        editor.set_paint_channel(None);
+        crate::menu_bridge::fill_selection_with(
+            &mut editor,
+            &ui::dialogs::FillSpec {
+                contents: ui::dialogs::FillContents::Foreground,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let recording = editor.stop_recording().unwrap();
+        assert_eq!(recording.len(), 3, "three edits captured");
+        let reference = composite(&mut editor);
+
+        // Replay on the OTHER document: activate tab 1 and replay.
+        editor.activate(1).unwrap();
+        let before = composite(&mut editor);
+        assert_ne!(before, reference, "the documents start different");
+        let applied = editor.replay(&recording);
+        assert_eq!(applied, 3, "every captured edit replayed");
+        assert_eq!(
+            composite(&mut editor),
+            reference,
+            "the replay reproduces the recording's composite byte for byte"
+        );
+    }
+
+    #[test]
+    fn path_select_and_direct_selection_work_a_shape_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        // A shape layer carrying a triangle path.
+        let shape = layer_model::Layer::with_kind(
+            "Triangle",
+            layer_model::LayerKind::Shape(layer_model::ShapeLayer::from_svg("M8 8 L40 8 L40 40 Z")),
+        );
+        let shape_id = shape.id;
+        editor.apply_command(editor_core::Command::create_layer(shape));
+
+        // Path Select: clicking the path selects the layer that owns it.
+        editor.set_tool(ToolId::PathSelect);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(24.0, 8.0)]);
+        let doc = editor.active().unwrap();
+        assert_eq!(
+            doc.document.layer_selection(),
+            vec![shape_id],
+            "the click on the path selected its layer"
+        );
+
+        // A click off the path leaves the selection alone: the tool only
+        // speaks when a path is hit (clearing on a miss is Photopea parity
+        // this build has not taken on).
+        stroke(&mut pointer, &mut editor, &[(80.0, 80.0)]);
+        let doc = editor.active().unwrap();
+        assert_eq!(
+            doc.document.layer_selection(),
+            vec![shape_id],
+            "a miss does not disturb the selection"
+        );
+
+        // Direct Selection: dragging the first anchor moves it as ONE undo
+        // step that rewrites the layer's path.
+        editor.set_tool(ToolId::DirectSelection);
+        stroke(&mut pointer, &mut editor, &[(8.0, 8.0), (20.0, 20.0)]);
+        let doc = editor.active().unwrap();
+        let layer_model::LayerKind::Shape(shape) = &doc.document.layers.get(shape_id).unwrap().kind
+        else {
+            panic!("the layer is still a shape");
+        };
+        let path = vector::svg::parse(&shape.path_svg).unwrap();
+        assert_eq!(
+            path.elements().first(),
+            Some(&vector::PathEl::MoveTo(vector::Point::new(20.0, 20.0))),
+            "the dragged anchor moved"
+        );
+        assert!(
+            !shape.path_svg.contains("8 8"),
+            "the old anchor position is gone: {}",
+            shape.path_svg
+        );
+
+        // One undo returns the old path.
+        assert!(editor.active_mut().unwrap().undo().unwrap());
+        let doc = editor.active().unwrap();
+        let layer_model::LayerKind::Shape(shape) = &doc.document.layers.get(shape_id).unwrap().kind
+        else {
+            panic!("the layer is still a shape after undo");
+        };
+        assert_eq!(shape.path_svg, "M8 8 L40 8 L40 40 Z", "undo restored");
+    }
+
+    #[test]
+    fn quick_mask_painting_becomes_the_selection_on_leaving() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Pencil);
+        editor.set_foreground([1.0, 1.0, 1.0, 1.0]);
+        editor.toggle_quick_mask().unwrap();
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(20.0, 20.0), (28.0, 28.0)]);
+        editor.toggle_quick_mask().unwrap();
+
+        // The painted coverage IS the selection, and the scratch layer is
+        // gone: the document is back to one layer, holding a mask selection
+        // that covers the stroke and nothing else.
+        let doc = editor.active().unwrap();
+        assert_eq!(doc.document.layers.len(), 1, "scratch layer removed");
+        match &doc.document.selection {
+            editor_core::Selection::Mask(mask) => {
+                assert_eq!(mask.width(), doc.document.width());
+                assert_eq!(mask.height(), doc.document.height());
+                let w = doc.document.width() as usize;
+                let cov = mask.coverage();
+                assert!(cov[20 * w + 20] > 0, "the stroked pixel is selected");
+                assert!(cov[24 * w + 24] > 0, "mid-stroke is selected");
+                assert!(cov[60 * w + 60] == 0, "an unpainted pixel is not");
+                let painted = cov.iter().filter(|b| **b > 0).count();
+                assert!(painted > 2, "more than the probe pixels carry coverage");
+                assert!(painted < w * w / 2, "coverage stays near the stroke");
+            }
+            other => panic!("expected a mask selection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_eraser_through_the_red_channel_clears_only_red() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Pencil);
+        editor.set_foreground([0.8, 0.1, 0.2, 1.0]);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(20.0, 20.0), (28.0, 28.0)]);
+        let before = composite(&mut editor);
+
+        // Aim the edit at the red component and erase part of the mark.
+        editor.set_paint_channel(Some(0));
+        editor.set_tool(ToolId::Eraser);
+        stroke(&mut pointer, &mut editor, &[(20.0, 20.0), (24.0, 24.0)]);
+        let after = composite(&mut editor);
+
+        // Every pixel: red moved or stayed; green and blue are byte-exact.
+        let red_moved = before
+            .chunks(4)
+            .zip(after.chunks(4))
+            .any(|(b, a)| b[0] != a[0]);
+        assert!(red_moved, "the eraser moved red");
+        for (b, a) in before.chunks(4).zip(after.chunks(4)) {
+            assert_eq!(b[1], a[1], "green untouched: {b:?} -> {a:?}");
+            assert_eq!(b[2], a[2], "blue untouched: {b:?} -> {a:?}");
+            assert_eq!(b[3], a[3], "alpha untouched: {b:?} -> {a:?}");
+        }
+
+        // Whole undo: every byte comes back.
+        assert!(editor.active_mut().unwrap().undo().unwrap());
+        assert_eq!(composite(&mut editor), before, "undo restored all channels");
+    }
+
+    #[test]
+    fn gaussian_blur_through_the_red_channel_blurs_only_red() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Pencil);
+        editor.set_foreground([0.9, 0.2, 0.3, 1.0]);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(8.0, 8.0), (56.0, 56.0)]);
+        let before = composite(&mut editor);
+
+        editor.set_paint_channel(Some(0));
+        let spec = ui::dialogs::filter_by_id(ui::menu::FilterId::GaussianBlur).unwrap();
+        let invocation = ui::dialogs::FilterInvocation {
+            filter: spec,
+            params: ui::dialogs::FilterParams::defaults(spec.params),
+        };
+        crate::menu_bridge::run_filter_invocation(&mut editor, &invocation).unwrap();
+        let after = composite(&mut editor);
+
+        // Red blurred: it moved, and only it. The other channels are isolated
+        // at the TILE level (mask_delta keeps their prior bytes byte-exact);
+        // the composite can still show them off by one, because the
+        // premultiplied store round-trips through straight on read and the
+        // masked red bytes shift the values the rounding sees. A
+        // whole-channel shift would be a defect; a one-level rounding wobble
+        // is the storage's own quantisation.
+        assert!(
+            before
+                .chunks(4)
+                .zip(after.chunks(4))
+                .any(|(b, a)| b[0] != a[0]),
+            "the blur moved red"
+        );
+        for (b, a) in before.chunks(4).zip(after.chunks(4)) {
+            assert!(
+                (b[1] as i32 - a[1] as i32).abs() <= 1,
+                "green wobbled more than rounding: {b:?} -> {a:?}"
+            );
+            assert!(
+                (b[2] as i32 - a[2] as i32).abs() <= 1,
+                "blue wobbled more than rounding: {b:?} -> {a:?}"
+            );
+            assert_eq!(b[3], a[3], "alpha untouched: {b:?} -> {a:?}");
+        }
+
+        // Whole undo: the blurred red comes back exactly.
+        assert!(editor.active_mut().unwrap().undo().unwrap());
+        assert_eq!(composite(&mut editor), before, "undo restored all channels");
+    }
+
+    /// A warp control-point drag bends the layer and is one undo step: the
+    /// mesh gizmo was already in tools::transform, so this drives the menu
+    /// route (mode = Warp) through a mesh point and commits.
+    #[test]
+    fn a_warp_control_point_drag_bends_the_layer_as_one_undo_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Pencil);
+        editor.set_foreground([0.0, 0.0, 0.0, 1.0]);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(20.0, 20.0), (28.0, 28.0)]);
+        let painted = composite(&mut editor);
+
+        editor.set_tool(ToolId::FreeTransform);
+        let mut warp = ToolPointer::new();
+        // The session opens over the canvas; in Warp mode the handles are the
+        // 4x4 mesh, laid on the source rect: point (1,1) sits at (16,16).
+        warp.handle(
+            &mut editor,
+            sample(PointerPhase::Down, screen(16.0, 16.0)),
+            false,
+            &[("mode".to_string(), 5)],
+        );
+        warp.handle(
+            &mut editor,
+            sample(PointerPhase::Move, screen(26.0, 26.0)),
+            false,
+            &[("mode".to_string(), 5)],
+        );
+        warp.handle(
+            &mut editor,
+            sample(PointerPhase::Up, screen(26.0, 26.0)),
+            false,
+            &[("mode".to_string(), 5)],
+        );
+        assert!(warp.has_pending_commit(), "the warp session stayed live");
+
+        let outcome = warp.commit(&mut editor);
+        assert!(outcome.had_pending, "{outcome:?}");
+        assert_eq!(outcome.failed, None, "{outcome:?}");
+        assert_eq!(outcome.steps, 1, "one undoable step: {outcome:?}");
+        assert_ne!(composite(&mut editor), painted, "the mesh bent the layer");
+
+        assert!(editor.active_mut().unwrap().undo().unwrap());
+        assert_eq!(composite(&mut editor), painted, "undo restored the pixels");
+    }
+
+    /// A drag that collapses the quad has no inverse: the commit refuses, says
+    /// so, and the history gains nothing.
+    #[test]
+    fn a_singular_transform_is_refused_not_applied() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Pencil);
+        editor.set_foreground([0.0, 0.0, 0.0, 1.0]);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(20.0, 20.0), (28.0, 28.0)]);
+        let depth_before = editor.active().unwrap().history_depth();
+
+        editor.set_tool(ToolId::FreeTransform);
+        // The session begins over the whole canvas, corners at its four
+        // corners. Drag each one onto the canvas centre, collapsing the quad
+        // to a point: four coincident corners have no inverse.
+        stroke(&mut pointer, &mut editor, &[(0.0, 0.0), (32.0, 32.0)]);
+        stroke(&mut pointer, &mut editor, &[(64.0, 0.0), (32.0, 32.0)]);
+        stroke(&mut pointer, &mut editor, &[(64.0, 64.0), (32.0, 32.0)]);
+        stroke(&mut pointer, &mut editor, &[(0.0, 64.0), (32.0, 32.0)]);
+
+        let outcome = pointer.commit(&mut editor);
+        assert!(outcome.had_pending, "the session was live: {outcome:?}");
+        assert!(
+            outcome.failed.is_some(),
+            "a collapsed quad must be refused: {outcome:?}"
+        );
+        assert_eq!(
+            editor.active().unwrap().history_depth(),
+            depth_before,
+            "a refused transform leaves no step behind"
+        );
     }
 
     /// Slices reach the caller and the status bar, and go no further — this

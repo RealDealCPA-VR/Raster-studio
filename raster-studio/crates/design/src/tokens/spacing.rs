@@ -81,16 +81,19 @@ pub struct Metrics {
 }
 
 impl Default for Metrics {
+    /// Photopea's compact density: roughly half the previous row heights.
+    /// Control height 20 px, list rows 20 px, toolbar buttons 24 px in a 28 px
+    /// bar, panel padding 4 px — the values the density token test pins.
     fn default() -> Self {
         Self {
-            control_height: grid(6.0),         // 24
-            toolbar_button: grid(7.0),         // 28
-            toolbar_height: grid(11.0),        // 44
-            list_row_height: grid(7.0),        // 28
-            panel_padding: grid(3.0),          // 12
-            inspector_label_width: grid(23.0), // 92
-            numeric_field_width: grid(14.0),   // 56
-            min_hit_target: grid(6.0),         // 24
+            control_height: 20.0,
+            toolbar_button: 24.0,
+            toolbar_height: 28.0,
+            list_row_height: 20.0,
+            panel_padding: 4.0,
+            inspector_label_width: 72.0,
+            numeric_field_width: 48.0,
+            min_hit_target: 16.0,
         }
     }
 }

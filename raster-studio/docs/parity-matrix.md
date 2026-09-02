@@ -63,9 +63,10 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Marquee (rect / ellipse / row / column) | ✅ | anti-aliased |
 | Lasso (free / polygonal / magnetic) | ✅ | |
 | Magic wand / quick select / colour range | ✅ | tolerance, contiguous flag, anti-aliasing |
+| Select Subject | 🚫 | decided Tier C: no segmentation model ships, and the menu carries no item for it (P2.12) |
 | Modify: feather, expand, contract, smooth, border | ✅ | true morphology on fractional coverage |
 | Invert, grow, similar, transform selection | ✅ | |
-| Quick mask, save/load selection | 🔶 | selection itself (outline, marching ants, save/load) is reachable; quick-mask composition remains partial |
+| Quick mask, save/load selection | ✅ | quick mask composes (`Q` / Select ▸ Edit in Quick Mask Mode: edits land in a scratch mask, leaving converts the painted coverage into the selection); selection itself (outline, marching ants, save/load) is reachable |
 
 ### Tools
 | Capability | Status | Notes |
@@ -101,7 +102,7 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Keyboard shortcuts | ✅ | full customisable keymap with conflict detection |
 | Panels | ✅ | Layers, History, Adjustments, Properties, Colour, Swatches, Brushes, Channels, Paths, Navigator, Info |
 | Tool options bar | ✅ | generated from each tool's options schema |
-| Apple-style visual design | 🔶 | one token system, light and dark, WCAG AA asserted by test; the fit and finish is not yet at the standard the name implies |
+| Photopea visual design | 🔶 | one token system, light and dark, WCAG AA asserted by test; the fit and finish is converging on Photopea’s density and neutral greys (P1 wave) |
 | Preferences | ✅ | persisted, including the keymap editor |
 
 ---
@@ -138,6 +139,7 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Camera RAW | Per-sensor demosaic and profiles; belongs behind a finished colour pipeline. |
 | Liquify, Vanishing Point, Puppet Warp | Deep mesh-warp tooling, beyond the transform mesh that exists. |
 | Content-aware fill / Select Subject | Requires ML inference we deliberately do not bundle. |
+| Licensing and auto-update crates | Dropped from the workspace (P3.2): both were complete and tested with zero dependents — entitlement checks and update feeds are release-engineering for a shipped product, not this build. |
 | Video and animation timeline | Out of scope for a raster editor v1. |
 | Collaboration, cloud, mobile | Explicit non-goals: this is a local-first desktop app. |
 | Perfect PSD round-tripping | We target correct reopen in Photoshop and Photopea, not byte fidelity. |
@@ -186,8 +188,10 @@ Kept here rather than buried, because a ✅ with a footnote is still a claim:
   the masked command reaches history and the journal). ClearRegion (the
   eraser) and per-channel *filter* application are not yet masked to a
   component.
-- **Quick mask composition is partial** (Tier C, deferred): the selection
-  itself, its outline, marching ants and save/load are all reachable.
+- **Quick mask composes** (Tier C, landed): `Q` toggles it, pixel edits land
+  in a scratch mask, and leaving turns the painted coverage into the
+  selection; the selection itself, its outline, marching ants and save/load
+  are all reachable.
 ## Release gate
 
 1. Every Tier A row is ✅ or has its gap named above.

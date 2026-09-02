@@ -106,6 +106,8 @@ pub struct LayerPatch {
     pub blend_mode: Option<BlendMode>,
     pub locked: Option<LockState>,
     pub clipping: Option<ClippingMode>,
+    /// Photopea's link chain. Absolute per layer, like `visible`.
+    pub linked: Option<bool>,
     /// The layer's whole layer-to-document transform, as the 6 affine
     /// components. Absolute, not a delta — [`Command::TransformLayer`] is the
     /// relative operation. Must be finite.
@@ -185,6 +187,7 @@ impl LayerPatch {
             blend_mode,
             locked: _,
             clipping,
+            linked,
             transform,
             mask,
             effects,
@@ -195,6 +198,7 @@ impl LayerPatch {
             || fill_opacity.is_some()
             || blend_mode.is_some()
             || clipping.is_some()
+            || linked.is_some()
             || transform.is_some()
             || !mask.is_keep()
             || effects.is_some()
@@ -293,6 +297,17 @@ pub enum Command {
         layer_id: LayerId,
         patch: LayerPatch,
     },
+    /// Replace the document's pixel selection wholesale. The inverse carries
+    /// the selection that was there, so scaling or moving a selection — which
+    /// is a direct field write everywhere else — becomes one undoable step
+    /// when a gizmo commits it.
+    SetSelection {
+        selection: crate::selection::Selection,
+    },
+    /// Flip the document's colour mode (Image ▸ Mode ▸ …). The inverse
+    /// carries the mode that was there, so the mode rides the same undo step
+    /// as the pixel rewrite it accompanies instead of drifting after an undo.
+    SetMetaColorMode { from: u8, to: u8 },
     TransformLayer {
         layer_id: LayerId,
         /// **Pre**-multiplied onto the layer's current transform:
@@ -416,6 +431,35 @@ pub enum Command {
     /// build wrote is one of the older variants and still deserializes, so
     /// [`crate::DOCUMENT_FORMAT_VERSION`] is unchanged.
     SetCanvasSize { size: glam::UVec2 },
+    /// Image ▸ Image Size: resample every pixel target and resize the canvas
+    /// as **one** undoable step.
+    ///
+    /// The pixel work cannot live in `editor-core` — the tile *bytes* live in
+    /// the application's store, and this crate only ever sees hashes — so the
+    /// caller rasterizes and supplies, per target, the **complete** new tile
+    /// map: a [`TileDelta`] with a [`TileEdit`] for every coordinate the new
+    /// canvas covers (a `None` hash removes a tile, which is how a shrink
+    /// drops the tiles past the new edge).
+    ///
+    /// Apply replaces each target's map, moves [`crate::DocumentMeta::size`],
+    /// and returns the inverse: a [`Command::Transaction`] that puts every old
+    /// map back and restores the old size — byte-exact, because the inverse
+    /// carries the old hashes and the store still holds their bytes. Locked
+    /// layers are resampled like any other: a pixel lock guards a layer
+    /// against *edits*, and a document-level resize is not an edit.
+    ///
+    /// A size this build cannot serve is refused
+    /// ([`CommandError::CanvasTooLarge`]) before anything is written, and a
+    /// target that no longer exists is refused rather than skipped, so a
+    /// stale caller cannot half-resample a document.
+    ///
+    /// # Wire format
+    ///
+    /// Purely additive, like [`Command::SetCanvasSize`].
+    ResampleImage {
+        size: glam::UVec2,
+        changes: Vec<(PixelTarget, TileDelta)>,
+    },
     /// Replace the whole document guide set (add, move, remove, or flip the
     /// group visibility/lock all land here as one undoable step per gesture).
     /// The inverse captures the previous set, so undo restores it exactly.
@@ -642,6 +686,23 @@ impl Command {
                 Ok(Command::DeleteLayer { layer_id: id })
             }
 
+            Command::SetSelection { selection } => {
+                let previous = doc.selection.clone();
+                // A selection that names no pixel is a state, not an error.
+                doc.selection = selection.clone();
+                Ok(Command::SetSelection {
+                    selection: previous,
+                })
+            }
+
+            Command::SetMetaColorMode { from, to } => {
+                doc.meta.color_mode = *to;
+                Ok(Command::SetMetaColorMode {
+                    from: *to,
+                    to: *from,
+                })
+            }
+
             Command::DeleteLayer { layer_id } => {
                 // The blanket lock covers deletion. Checked across the whole
                 // subtree, before anything is removed: deleting a group takes
@@ -770,6 +831,10 @@ impl Command {
                 if let Some(v) = patch.clipping {
                     inverse.clipping = Some(layer.clipping);
                     layer.clipping = v;
+                }
+                if let Some(v) = patch.linked {
+                    inverse.linked = Some(layer.linked);
+                    layer.linked = v;
                 }
                 if let Some(v) = patch.transform {
                     inverse.transform = Some(restorable_transform(layer.transform));
@@ -922,6 +987,38 @@ impl Command {
                 Ok(Command::SetCanvasSize { size: previous })
             }
 
+            Command::ResampleImage { size, changes } => {
+                if !crate::canvas_size_is_supported(size.x, size.y) {
+                    return Err(CommandError::CanvasTooLarge {
+                        width: size.x,
+                        height: size.y,
+                    });
+                }
+                let mut inverses = Vec::with_capacity(changes.len());
+                for (target, delta) in changes {
+                    let key = resolve_pixel_key(doc, *target)?;
+                    let previous = doc.pixels.apply(key, delta);
+                    inverses.push((*target, previous));
+                }
+                let previous_size = doc.meta.size;
+                doc.meta.size = *size;
+                // Undo restores the pixels first and the size last; the two
+                // are independent, but restoring pixels then re-resizing keeps
+                // the inverse's own inverse (the redo entry) in the same
+                // shape as this command.
+                let mut commands: Vec<Command> = inverses
+                    .into_iter()
+                    .map(|(target, delta)| Command::PaintTiles { target, delta })
+                    .collect();
+                commands.push(Command::SetCanvasSize {
+                    size: previous_size,
+                });
+                Ok(Command::Transaction {
+                    label: "Image Size".to_string(),
+                    commands,
+                })
+            }
+
             Command::SetGuides { guides } => {
                 let previous = std::mem::replace(&mut doc.guides, guides.clone());
                 Ok(Command::SetGuides { guides: previous })
@@ -982,6 +1079,8 @@ impl Command {
                 label
             }
             Command::TransformLayer { .. } => "Transform Layer".into(),
+            Command::SetSelection { .. } => "Transform Selection".into(),
+            Command::SetMetaColorMode { .. } => "Change Colour Mode".into(),
             Command::PaintTiles { target, .. } => match target {
                 PixelTarget::Layer(_) => "Paint".into(),
                 PixelTarget::Mask(_) => "Paint Mask".into(),
@@ -992,6 +1091,7 @@ impl Command {
             },
             Command::ClearRegion { .. } => "Clear".into(),
             Command::SetCanvasSize { .. } => "Resize Canvas".into(),
+            Command::ResampleImage { .. } => "Image Size".into(),
             Command::SetGuides { .. } => "Edit Guides".into(),
             Command::Transaction { label, .. } => label.clone(),
         }
@@ -1055,6 +1155,32 @@ fn kind_owning_pixels(kind: &LayerKind) -> Result<(), &'static str> {
         LayerKind::Adjustment(_) => Err("adjustment"),
         LayerKind::Text(_) => Err("text"),
         LayerKind::Shape(_) => Err("shape"),
+    }
+}
+
+/// Resolve a pixel target the way [`resolve_target`] does, but without the
+/// lock check: a document-level rewrite (Image ▸ Image Size) moves every
+/// layer's pixels, including the locked ones — a pixel lock guards a layer
+/// against *edits*, not against the document changing size under it.
+pub fn resolve_pixel_key(doc: &Document, target: PixelTarget) -> Result<PixelKey, CommandError> {
+    match target {
+        PixelTarget::Layer(id) => {
+            let layer = doc.layers.get(id).ok_or(CommandError::LayerNotFound(id))?;
+            if let Err(kind) = kind_owning_pixels(&layer.kind) {
+                return Err(CommandError::NotPaintable { layer: id, kind });
+            }
+            Ok(PixelKey::Layer(id))
+        }
+        PixelTarget::Mask(id) => {
+            // Existence still matters (a mask deleted between the caller's
+            // rasterization and this apply must not leave an orphan tile map);
+            // only the lock check is dropped.
+            let layer = doc.layers.get(id).ok_or(CommandError::LayerNotFound(id))?;
+            layer
+                .mask_id()
+                .map(PixelKey::Mask)
+                .ok_or(CommandError::NoMask(id))
+        }
     }
 }
 
@@ -1416,6 +1542,7 @@ mod tests {
                 ..Default::default()
             }),
             clipping: Some(ClippingMode::ClipToBelow),
+            linked: Some(true),
             transform: Some([2.0, 0.0, 0.0, 2.0, 5.0, 6.0]),
             mask: Patch::Set(new_mask.clone()),
             effects: Some(Box::new(styled.clone())),
@@ -1440,6 +1567,7 @@ mod tests {
             transform,
             mask,
             clipping,
+            linked,
             effects,
             kind,
         } = doc.layers.get(id).unwrap().clone();
@@ -1459,6 +1587,7 @@ mod tests {
         assert_eq!(transform.to_cols_array(), [2.0, 0.0, 0.0, 2.0, 5.0, 6.0]);
         assert_eq!(mask, Some(new_mask));
         assert_eq!(clipping, ClippingMode::ClipToBelow);
+        assert!(linked, "the link chain is patchable state");
         assert_eq!(effects, styled, "layer styles must be editable by command");
         // The two out of scope, unchanged:
         assert_eq!(layer_id, id, "identity is not patchable");

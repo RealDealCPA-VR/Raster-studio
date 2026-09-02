@@ -94,6 +94,40 @@ pub fn backdrop_bands(
     }
 }
 
+/// Draw Photopea's document frame: a soft shadow and a 1px border on the
+/// document rectangle. Nothing to draw when no document is on screen.
+///
+/// Returns whether anything was drawn — the unit test reads this instead of
+/// scraping the painter's shape list.
+pub fn document_frame(
+    painter: &egui::Painter,
+    camera: &CanvasCamera,
+    viewport: &Viewport,
+    doc_size: Vec2,
+    style: &CanvasStyle,
+) -> bool {
+    let Some(image) = document_bounds_pt(camera, viewport, doc_size) else {
+        return false;
+    };
+    if image.width() <= 0.0 || image.height() <= 0.0 {
+        return false;
+    }
+    // One shape carries both: the border is the rect's stroke, and egui's
+    // edge blur draws a soft shadow around the transparent fill.
+    let stroke = style.hairline(style.doc_border);
+    let rect = egui::Rect::from_min_max(to_pos2(image.min), to_pos2(image.max));
+    painter.add(egui::Shape::Rect(egui::epaint::RectShape {
+        rect,
+        rounding: egui::Rounding::ZERO,
+        fill: egui::Color32::TRANSPARENT,
+        stroke,
+        blur_width: 4.0,
+        fill_texture_id: Default::default(),
+        uv: egui::Rect::ZERO,
+    }));
+    true
+}
+
 /// Fill the area around the image, and never over it.
 pub fn backdrop(
     painter: &egui::Painter,
@@ -565,6 +599,72 @@ mod tests {
             zoom: 2.0,
             ..CanvasCamera::default()
         }
+    }
+
+    #[test]
+    fn the_document_frame_is_emitted_on_the_document_boundary() {
+        // The Validate for the document border: a border shape sits exactly on
+        // the projected document rectangle at several zoom levels, and nothing
+        // is emitted when no document is open.
+        for zoom in [0.5f32, 1.0, 4.0] {
+            let ctx = egui::Context::default();
+            design::apply_theme(&ctx, Theme::Dark);
+            let style = CanvasStyle::new(Theme::Dark, 2.0);
+            let v = viewport();
+            let cam = CanvasCamera {
+                center: Vec2::new(200.0, 150.0),
+                zoom,
+                ..CanvasCamera::default()
+            };
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                let painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Middle,
+                    egui::Id::new("frame-test"),
+                ));
+                let drawn = document_frame(&painter, &cam, &v, Vec2::new(400.0, 300.0), &style);
+                assert!(drawn, "zoom {zoom}: the frame was not drawn");
+            });
+            let rects: Vec<egui::Rect> = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Rect(rect) => Some(rect.rect),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(rects.len(), 1, "zoom {zoom}: one border shape");
+            let expected = document_bounds_pt(&cam, &v, Vec2::new(400.0, 300.0))
+                .expect("a document is on screen");
+            let border = rects[0];
+            assert!(
+                (border.min.x - to_pos2(expected.min).x).abs() < 1.0
+                    && (border.max.y - to_pos2(expected.max).y).abs() < 1.0,
+                "zoom {zoom}: the border is not on the document boundary: {border:?} vs {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_document_draws_no_document_frame() {
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, Theme::Dark);
+        let style = CanvasStyle::new(Theme::Dark, 2.0);
+        let v = viewport();
+        let cam = camera();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Middle,
+                egui::Id::new("frame-test-none"),
+            ));
+            // A zero document size is "no document".
+            assert!(!document_frame(&painter, &cam, &v, Vec2::ZERO, &style));
+        });
+        let rects = output
+            .shapes
+            .iter()
+            .filter(|clipped| matches!(clipped.shape, egui::Shape::Rect(_)))
+            .count();
+        assert_eq!(rects, 0, "a frame was emitted anyway");
     }
 
     /// Every overlay has to survive being drawn, in both appearances, without

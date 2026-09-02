@@ -140,6 +140,134 @@ pub use workspace::CanvasHost;
 /// Borrowed rather than owned: the caller already has all of it, and copying a
 /// selection outline every frame would be the most expensive thing the canvas
 /// does.
+/// The two scrollbars of the canvas viewport, computed once per frame and
+/// painted after the document. `None` on an axis where the whole document is
+/// already visible, and while the view is rotated — a rotated view's bars
+/// would lie about the mapping.
+pub struct Scrollbars {
+    pub horizontal: Option<ScrollBarGeom>,
+    pub vertical: Option<ScrollBarGeom>,
+}
+
+/// One bar's geometry: the thumb rectangle to interact with, the track length
+/// along the bar's axis, and the viewport's on-screen size (what
+/// `CanvasCamera::pan_by_scrollbar` needs to convert the drag).
+pub struct ScrollBarGeom {
+    pub id: egui::Id,
+    /// The thumb: what the pointer drags.
+    pub thumb: egui::Rect,
+    /// The track's extent along the bar's axis, in points.
+    pub track_len: egui::Vec2,
+    /// The viewport's size in points.
+    pub content_size: egui::Vec2,
+    axis: usize,
+}
+
+impl ScrollBarGeom {
+    fn paint(&self, painter: &egui::Painter, style: &CanvasStyle) {
+        let track = if self.axis == 0 {
+            egui::Rect::from_min_max(
+                egui::pos2(self.thumb.left() - self.thumb.width(), self.thumb.top()),
+                egui::pos2(self.thumb.right() + self.thumb.width(), self.thumb.bottom()),
+            )
+        } else {
+            egui::Rect::from_min_max(
+                egui::pos2(self.thumb.left(), self.thumb.top() - self.thumb.height()),
+                egui::pos2(
+                    self.thumb.right(),
+                    self.thumb.bottom() + self.thumb.height(),
+                ),
+            )
+        };
+        painter.rect_filled(track, egui::Rounding::ZERO, style.scroll_track);
+        painter.rect_filled(self.thumb, style.scroll_thumb_rounding, style.scroll_thumb);
+    }
+}
+
+impl Scrollbars {
+    /// The bars for this frame: derived from where the document lands on
+    /// screen against the content rectangle.
+    pub fn for_view(
+        camera: &CanvasCamera,
+        viewport: &Viewport,
+        doc_size: Vec2,
+        content: egui::Rect,
+    ) -> Self {
+        const THICKNESS: f32 = 12.0;
+        const MIN_THUMB: f32 = 24.0;
+        let none = Self {
+            horizontal: None,
+            vertical: None,
+        };
+        if camera.rotation != 0.0 {
+            return none;
+        }
+        let doc_min = camera.screen_pt_of(viewport, Vec2::ZERO);
+        let doc_max = camera.screen_pt_of(viewport, doc_size);
+        let doc_len = (doc_max - doc_min).abs();
+
+        let horizontal = if doc_len.x > content.width() + 1.0 {
+            let track = egui::Rect::from_min_max(
+                egui::pos2(content.left() + THICKNESS, content.bottom() - THICKNESS),
+                egui::pos2(content.right(), content.bottom()),
+            );
+            let track_len = track.width();
+            let thumb_len = (track_len * content.width() / doc_len.x).clamp(MIN_THUMB, track_len);
+            let slack = track_len - thumb_len;
+            let off = ((content.left() - doc_min.x) / doc_len.x * track_len).clamp(0.0, slack);
+            Some(ScrollBarGeom {
+                id: egui::Id::new("raster-scrollbar-h"),
+                thumb: egui::Rect::from_min_size(
+                    egui::pos2(track.left() + off, track.top()),
+                    egui::vec2(thumb_len, THICKNESS),
+                ),
+                track_len: egui::vec2(track_len, 0.0),
+                content_size: egui::vec2(content.width(), 0.0),
+                axis: 0,
+            })
+        } else {
+            None
+        };
+
+        let vertical = if doc_len.y > content.height() + 1.0 {
+            let track = egui::Rect::from_min_max(
+                egui::pos2(content.right() - THICKNESS, content.top() + THICKNESS),
+                egui::pos2(content.right(), content.bottom()),
+            );
+            let track_len = track.height();
+            let thumb_len = (track_len * content.height() / doc_len.y).clamp(MIN_THUMB, track_len);
+            let slack = track_len - thumb_len;
+            let off = ((content.top() - doc_min.y) / doc_len.y * track_len).clamp(0.0, slack);
+            Some(ScrollBarGeom {
+                id: egui::Id::new("raster-scrollbar-v"),
+                thumb: egui::Rect::from_min_size(
+                    egui::pos2(track.left(), track.top() + off),
+                    egui::vec2(THICKNESS, thumb_len),
+                ),
+                track_len: egui::vec2(0.0, track_len),
+                content_size: egui::vec2(0.0, content.height()),
+                axis: 1,
+            })
+        } else {
+            None
+        };
+
+        Self {
+            horizontal,
+            vertical,
+        }
+    }
+
+    fn paint(&self, painter: &egui::Painter, style: &CanvasStyle) {
+        if let Some(bar) = &self.horizontal {
+            bar.paint(painter, style);
+        }
+        if let Some(bar) = &self.vertical {
+            bar.paint(painter, style);
+        }
+    }
+}
+
 pub struct CanvasContent<'a> {
     /// The document's size in pixels; the canvas rectangle is `0..size`.
     pub doc_size: Vec2,
@@ -218,6 +346,8 @@ pub struct CanvasOutput {
     pub path_hit: Option<PathHit>,
     /// A guide is being dragged, so the shell can show its position.
     pub guide_drag: Option<GuideDrag>,
+    /// A right-click on the canvas asks for its context menu, at the click.
+    pub context_menu: Option<egui::Pos2>,
 }
 
 /// The canvas: view state, the input router, and one `show` per frame.
@@ -650,9 +780,15 @@ impl CanvasView {
 
         let response = ui.interact(
             rect,
-            ui.id().with("raster-canvas"),
+            // Deterministic, so tests can name the surface.
+            egui::Id::new("raster-canvas"),
             egui::Sense::click_and_drag(),
         );
+        let context_menu = if response.secondary_clicked() {
+            response.interact_pointer_pos()
+        } else {
+            None
+        };
 
         // ---- input ----
         // The space bar is the temporary hand tool only while nothing is
@@ -666,7 +802,10 @@ impl CanvasView {
         self.alt_held = ctx.input(|i| i.modifiers.alt);
 
         let frame = ctx.input(|i| self.pointer.frame(i, self.pen_pressure));
-        let mut out = CanvasOutput::default();
+        let mut out = CanvasOutput {
+            context_menu,
+            ..CanvasOutput::default()
+        };
 
         for sample in frame.samples {
             // Whether a press belongs to the canvas is not a rectangle test.
@@ -792,6 +931,28 @@ impl CanvasView {
             .map(|p| self.camera.doc_of_screen_pt(&self.viewport, p));
         out.pointer_doc = self.pointer_doc;
 
+        // ---- scrollbars ----
+        // Photopea's bars live on the bottom and right of the viewport when
+        // the document is bigger than the window on that axis. The thumb
+        // covers the viewport's fraction of the document, and dragging it
+        // pans the camera by the proportional document distance — the math
+        // lives in `camera::scroll_center`, unit-tested without a window.
+        let mut bars = Scrollbars::for_view(&self.camera, &self.viewport, content.doc_size, rect);
+        for bar in [&mut bars.horizontal, &mut bars.vertical] {
+            let Some(geom) = bar else { continue };
+            let response = ui.interact(geom.thumb, geom.id, egui::Sense::drag());
+            let delta = response.drag_delta();
+            if delta != egui::Vec2::ZERO {
+                self.camera.pan_by_scrollbar(
+                    geom::from_egui_vec2(delta),
+                    geom::from_egui_vec2(geom.track_len),
+                    geom::from_egui_vec2(geom.content_size),
+                    content.doc_size,
+                );
+                out.view_changed = true;
+            }
+        }
+
         // ---- paint ----
         let painter = ui.painter_at(rect);
         paint::backdrop(
@@ -801,6 +962,15 @@ impl CanvasView {
             content.doc_size,
             &style,
         );
+        // Photopea frames the document with a soft shadow and a 1px border.
+        paint::document_frame(
+            &painter,
+            &self.camera,
+            &self.viewport,
+            content.doc_size,
+            &style,
+        );
+        bars.paint(&painter, &style);
         out.grid_suppressed = paint::grid(
             &painter,
             &self.camera,
@@ -1758,19 +1928,28 @@ mod tests {
         let mut before = view.camera;
         // egui hit-tests against the layers it knew at the start of the pass,
         // and a window's area is only measured once it has been laid out, so
-        // the first two frames are the window settling and the third is the
-        // one that presses into it.
-        const PRESS_FRAME: usize = 2;
+        // the first frame settles the window and the second presses into it.
+        // The window's own reported rect decides where the press lands — the
+        // window sizes to its content, not to the rectangle the test wanted.
+        let mut window_rect: Option<egui::Rect> = None;
+        const PRESS_FRAME: usize = 1;
         for frame in 0..=PRESS_FRAME {
             let rect = window_at(&view);
+            if frame == PRESS_FRAME {
+                before = view.camera;
+            }
             let events = if frame < PRESS_FRAME {
                 Vec::new()
             } else {
-                before = view.camera;
-                vec![
-                    press_at(geom::from_pos2(rect.center())),
-                    move_to(geom::from_pos2(rect.center()) + Vec2::new(20.0, 10.0)),
-                ]
+                // A settled window from the previous frame; the first pass
+                // always runs without events, so this is `Some` here.
+                match window_rect {
+                    Some(rect) => vec![
+                        press_at(geom::from_pos2(rect.center())),
+                        move_to(geom::from_pos2(rect.center()) + Vec2::new(20.0, 10.0)),
+                    ],
+                    None => Vec::new(),
+                }
             };
             let full = ctx.run(
                 egui::RawInput {
@@ -1786,18 +1965,24 @@ mod tests {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         out = view.show(ui, &content);
                     });
-                    egui::Window::new("Levels")
+                    let win = egui::Window::new("Levels")
                         .fixed_pos(rect.min)
                         .fixed_size(rect.size())
                         .show(ctx, |ui| {
                             ui.label("a dialog over the image");
                         });
+                    if let Some(win) = &win {
+                        window_rect = Some(win.response.rect);
+                    }
                     // The test proves nothing unless the window really is over
-                    // the point that is about to be pressed.
+                    // the canvas: it must intersect the canvas rectangle, so a
+                    // press inside it is a press the canvas *wants* and must
+                    // be swallowed by the dialog instead.
                     if frame == PRESS_FRAME {
+                        let pressed = window_rect.expect("the window settled last frame").center();
                         assert!(
-                            egui_owns_point(ctx, geom::from_pos2(rect.center())),
-                            "the dialog is not over the canvas centre"
+                            egui_owns_point(ctx, geom::from_pos2(pressed)),
+                            "the dialog is not over the point about to be pressed"
                         );
                     }
                 },

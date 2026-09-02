@@ -115,6 +115,10 @@ pub fn touched_by(command: &Command) -> DirtyTiles {
         // Guides are alignment state, not pixels: changing them never dirties
         // a tile of the composite.
         Command::SetGuides { .. } => DirtyTiles::none(),
+        // The selection is an overlay, not pixels: nothing repainted. A colour
+        // mode flip is metadata on its own, but it always travels inside a
+        // Transaction with the tile rewrite, which carries the dirtiness.
+        Command::SetSelection { .. } | Command::SetMetaColorMode { .. } => DirtyTiles::none(),
         Command::Transaction { commands, .. } => {
             let mut out = DirtyTiles::none();
             for c in commands {
@@ -144,6 +148,9 @@ pub fn touched_by(command: &Command) -> DirtyTiles {
         // change anyway; saying `all` here is what keeps a resize that happens
         // to leave the size alone (an undo of a no-op crop) honest.
         | Command::SetCanvasSize { .. }
+        // Image Size rewrites every layer's tile map, so every tile of the
+        // new canvas is new for the same reason a crop's is.
+        | Command::ResampleImage { .. }
         | Command::TransformLayer { .. } => DirtyTiles::all(),
     }
 }

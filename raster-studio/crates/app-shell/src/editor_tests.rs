@@ -15,6 +15,452 @@ fn write_png(dir: &Path, name: &str, w: u32, h: u32, value: u8) -> PathBuf {
     path
 }
 
+fn a_placed_document(dir: &Path, source: &Path, linked: bool) -> (Editor, PathBuf) {
+    // A canvas to place into, then the menu item with the picker primed.
+    let canvas = write_png(dir, "canvas.png", 64, 64, 0);
+    let mut ed = bare(dir, ScriptedDialogs::new().placing(source.to_path_buf()));
+    ed.open_path(&canvas).unwrap();
+    use ui::menu::MenuAction;
+    let out = crate::menu_bridge::perform(
+        if linked {
+            MenuAction::PlaceLinked
+        } else {
+            MenuAction::PlaceEmbedded
+        },
+        &mut ed,
+    );
+    assert!(out.is_ok(), "{out:?}");
+    (ed, canvas)
+}
+
+#[test]
+fn placing_a_png_creates_a_smart_object_layer_that_renders_it() {
+    let dir = tempfile::tempdir().unwrap();
+    // A source that is not the canvas colour, so its pixels show.
+    let source = write_png(dir.path(), "placed.png", 32, 32, 200);
+    let (mut ed, _canvas) = a_placed_document(dir.path(), &source, false);
+
+    let open = ed.active().unwrap();
+    let smart = open
+        .document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|id| {
+            matches!(
+                open.document.layers.get(*id).map(|l| &l.kind),
+                Some(layer_model::LayerKind::SmartObject(_))
+            )
+        })
+        .expect("placing created a smart-object layer");
+
+    // It renders the source: non-empty pixel content where the canvas was
+    // empty before the place.
+    let content = {
+        let open = ed.active_mut().unwrap();
+        open.composite(open.canvas_rect()).unwrap()
+    };
+    let open = ed.active().unwrap();
+    assert!(
+        content
+            .chunks(4)
+            .any(|px| px[0] != 0 || px[1] != 0 || px[2] != 0 || px[3] != 0),
+        "the placed object renders"
+    );
+    // And the asset table names the source.
+    let asset = match &open.document.layers.get(smart).unwrap().kind {
+        layer_model::LayerKind::SmartObject(so) => so.asset,
+        _ => unreachable!(),
+    };
+    assert!(matches!(
+        open.document.asset_origin(asset),
+        Some(layer_model::AssetOrigin::Embedded { .. })
+    ));
+}
+
+#[test]
+fn a_placed_smart_object_round_trips_through_edit_contents() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_png(dir.path(), "placed.png", 32, 32, 200);
+    let (mut ed, _canvas) = a_placed_document(dir.path(), &source, false);
+
+    // Edit Contents… opens the scratch tab; committing it back keeps the
+    // object's pixels and lands as one step on the parent.
+    ed.edit_smart_object_contents().unwrap();
+    let edited = ed.commit_smart_object_contents().unwrap();
+    assert!(!edited.is_empty(), "{edited:?}");
+    let open = ed.active().unwrap();
+    assert!(
+        open.document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .any(|id| matches!(
+                open.document.layers.get(id).map(|l| &l.kind),
+                Some(layer_model::LayerKind::SmartObject(_))
+            )),
+        "the smart object survived the round trip"
+    );
+}
+
+#[test]
+fn a_linked_source_re_read_updates_the_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_png(dir.path(), "linked.png", 32, 32, 200);
+    let (mut ed, _canvas) = a_placed_document(dir.path(), &source, true);
+    let before = {
+        let open = ed.active_mut().unwrap();
+        open.composite(open.canvas_rect()).unwrap()
+    };
+
+    // The linked file changes on disk.
+    std::fs::write(
+        &source,
+        raster::encode(raster::ExportFormat::Png, 32, 32, &[250u8; 32 * 32 * 4]).unwrap(),
+    )
+    .unwrap();
+
+    let out = ed.refresh_linked_sources().unwrap();
+    assert!(out.contains("1"), "{out:?}");
+    let after = {
+        let open = ed.active_mut().unwrap();
+        open.composite(open.canvas_rect()).unwrap()
+    };
+    assert_ne!(after, before, "the re-read updated the parent's pixels");
+    // And it was one undoable step.
+    assert!(ed.active_mut().unwrap().undo().unwrap());
+    let restored = {
+        let open = ed.active_mut().unwrap();
+        open.composite(open.canvas_rect()).unwrap()
+    };
+    assert_eq!(restored, before, "undo restored the pre-refresh pixels");
+
+    // A refresh with nothing changed says so.
+    assert!(ed
+        .refresh_linked_sources()
+        .unwrap()
+        .contains("No linked source"));
+}
+
+#[test]
+fn a_16bit_gradient_survives_ten_adjustment_layers_without_banding() {
+    // The histogram half of P2.5's validate. Adjustment layers are live
+    // parameters evaluated in f32 at composite time, so stacking ten hair-of-
+    // brightness layers over a deep gradient composites the SAME as the one
+    // equivalent adjustment: nothing re-quantizes the base per edit. A
+    // pipeline that re-rounded the composite to 8 bits after every edit would
+    // drift several levels away from the equivalent by accumulation.
+    let dir = tempfile::tempdir().unwrap();
+    // A horizontal ramp spanning the full 16-bit range: column x carries
+    // x * 65535/63 in every channel.
+    let grad16: Vec<u16> = (0..64 * 64)
+        .flat_map(|p| {
+            let v = ((p % 64) as u32 * 65535 / 63) as u16;
+            [v, v, v, u16::MAX]
+        })
+        .collect();
+    let source = dir.path().join("deep.png");
+    raster::encode_to_path(
+        &source,
+        raster::ExportFormat::Png,
+        64,
+        64,
+        raster::EncodedPixels::Rgba16(&grad16),
+        &raster::EncodeOptions::default(),
+    )
+    .unwrap();
+
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&source).unwrap();
+
+    // Ten stacked hair-of-brightness adjustment layers.
+    for i in 0..10 {
+        let layer = layer_model::Layer::with_kind(
+            format!("Adj {i}"),
+            layer_model::LayerKind::Adjustment(layer_model::AdjustmentLayer {
+                kind: layer_model::AdjustmentKind::Exposure { stops: 0.005 },
+            }),
+        );
+        ed.apply_command(editor_core::Command::CreateLayer {
+            layer: std::boxed::Box::new(layer),
+        });
+    }
+    let stacked = {
+        let open = ed.active_mut().unwrap();
+        open.composite(open.canvas_rect()).unwrap()
+    };
+
+    // The single equivalent: exposure composes EXACTLY — stops add, because a
+    // stop is a doubling of linear light and multiplications associate.
+    let equivalent_stops = 0.05;
+    // Collect the stack's ids ONCE: a find per delete would name the same
+    // layer ten times and the transaction would refuse as a whole.
+    let stack_ids: Vec<layer_model::LayerId> = {
+        let open = ed.active().unwrap();
+        open.document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter(|id| {
+                matches!(
+                    open.document.layers.get(*id).map(|l| &l.kind),
+                    Some(layer_model::LayerKind::Adjustment(_))
+                )
+            })
+            .collect()
+    };
+    assert_eq!(stack_ids.len(), 10, "the stack is ten layers");
+    ed.apply_command(editor_core::Command::Transaction {
+        label: "swap the stack for the equivalent".to_string(),
+        commands: stack_ids
+            .into_iter()
+            .map(|layer_id| editor_core::Command::DeleteLayer { layer_id })
+            .collect(),
+    });
+    ed.apply_command(editor_core::Command::CreateLayer {
+        layer: std::boxed::Box::new(layer_model::Layer::with_kind(
+            "Equivalent",
+            layer_model::LayerKind::Adjustment(layer_model::AdjustmentLayer {
+                kind: layer_model::AdjustmentKind::Exposure {
+                    stops: equivalent_stops,
+                },
+            }),
+        )),
+    });
+    let equivalent_composite = {
+        let open = ed.active_mut().unwrap();
+        open.composite(open.canvas_rect()).unwrap()
+    };
+
+    let worst = stacked
+        .iter()
+        .zip(equivalent_composite.iter())
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        worst <= 1,
+        "the stack drifted {worst} levels from the equivalent adjustment:          something re-quantized per edit"
+    );
+}
+
+/// A minimal, valid ICC matrix-shaper profile whose red and green primaries
+/// are SWAPPED relative to sRGB — chromatically rotated, so compositing
+/// through it measurably differs from reading the same numbers as sRGB. The
+/// column sum is untouched, so the profile's white stays near D50 and
+/// `MatrixShaper::parse` accepts it.
+fn icc_profile_bytes() -> Vec<u8> {
+    fn xyz(x: f64, y: f64, z: f64) -> Vec<u8> {
+        let mut t = b"XYZ ".to_vec();
+        t.extend_from_slice(&[0, 0, 0, 0]);
+        for v in [x, y, z] {
+            t.extend_from_slice(&((v * 65536.0).round() as i32).to_be_bytes());
+        }
+        t
+    }
+    fn curv_identity() -> Vec<u8> {
+        let mut t = b"curv".to_vec();
+        t.extend_from_slice(&[0, 0, 0, 0]);
+        t.extend_from_slice(&[0, 0, 0, 0]); // count 0 = identity curve
+        t
+    }
+    // sRGB's D50-adapted primaries.
+    let sr = (0.4360, 0.2225, 0.0139);
+    let sg = (0.3851, 0.7169, 0.0971);
+    let sb = (0.1431, 0.0606, 0.7141);
+
+    let mut out = vec![0u8; 128];
+    out[4..8].copy_from_slice(b"acsp");
+    out[12..16].copy_from_slice(b"mntr");
+    out[16..20].copy_from_slice(b"RGB ");
+    out[20..24].copy_from_slice(b"XYZ ");
+    // Tag count placeholder first grows the vec, then the tag table is
+    // spliced in at 128 and the count written over its first four bytes.
+    out.extend_from_slice(&[0, 0, 0, 0]);
+    let tags: [(&[u8], Vec<u8>); 6] = [
+        (b"rXYZ", xyz(sg.0, sg.1, sg.2)), // red <- green
+        (b"gXYZ", xyz(sr.0, sr.1, sr.2)), // green <- red
+        (b"bXYZ", xyz(sb.0, sb.1, sb.2)),
+        (b"rTRC", curv_identity()),
+        (b"gTRC", curv_identity()),
+        (b"bTRC", curv_identity()),
+    ];
+    let mut offset: u32 = 128 + 4 + 6 * 12;
+    let mut table = Vec::new();
+    for (sig, body) in tags {
+        table.extend_from_slice(sig);
+        table.extend_from_slice(&offset.to_be_bytes());
+        table.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        out.extend_from_slice(&body);
+        offset += body.len() as u32;
+    }
+    out.splice(128..128, table);
+    out[128..132].copy_from_slice(&6u32.to_be_bytes());
+    out
+}
+
+/// The composite half works through the per-pixel `to_linear` fallback
+/// (decode_rgb → icc_transform → the parsed shaper): a lone layer in its own
+/// space round-trips identically under any profile, so the test observes the
+/// profile through an exposure adjustment, which converts. The round trip is
+/// also why a tagged document must re-tag on export — the numbers only make
+/// sense in the space they were tagged in.
+#[test]
+fn a_tagged_image_composites_through_its_profile_and_retags_on_export() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile = icc_profile_bytes();
+    // The same COLOURED pixels, with and without the profile: only the
+    // interpretation differs. A neutral grey would look the same under both —
+    // a matrix whose columns sum identically maps grey to grey — so the test
+    // needs a colour the swapped primaries actually move.
+    let pixels: Vec<u8> = [200u8, 30, 40, 255]
+        .iter()
+        .copied()
+        .cycle()
+        .take(32 * 32 * 4)
+        .collect();
+    let tagged = dir.path().join("tagged.png");
+    raster::encode_to_path(
+        &tagged,
+        raster::ExportFormat::Png,
+        32,
+        32,
+        raster::EncodedPixels::Rgba8(&pixels),
+        &raster::EncodeOptions::with_icc(profile.clone()),
+    )
+    .unwrap();
+    let plain = dir.path().join("plain.png");
+    raster::encode_to_path(
+        &plain,
+        raster::ExportFormat::Png,
+        32,
+        32,
+        raster::EncodedPixels::Rgba8(&pixels),
+        &raster::EncodeOptions::default(),
+    )
+    .unwrap();
+
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&tagged).unwrap();
+    let space = ed.active().unwrap().document.meta.color_space.clone();
+    assert!(
+        matches!(space, color::ColorSpace::IccProfile { .. }),
+        "the tagged file opens as tagged: {space:?}"
+    );
+
+    // A lone layer in its own space composites back to its own numbers under
+    // ANY profile — decode and encode are inverses — so the profile only
+    // becomes observable through a component that CONVERTS: an adjustment
+    // reads the layer in linear light, and the two interpretations of the
+    // same numbers are different linear colours.
+    ed.apply_command(editor_core::Command::CreateLayer {
+        layer: std::boxed::Box::new(layer_model::Layer::with_kind(
+            "Exposure",
+            layer_model::LayerKind::Adjustment(layer_model::AdjustmentLayer {
+                kind: layer_model::AdjustmentKind::Exposure { stops: 0.5 },
+            }),
+        )),
+    });
+    let through_profile = {
+        let open = ed.active_mut().unwrap();
+        open.composite(open.canvas_rect()).unwrap()
+    };
+
+    let mut plain_ed = bare(dir.path(), ScriptedDialogs::new());
+    plain_ed.open_path(&plain).unwrap();
+    plain_ed.apply_command(editor_core::Command::CreateLayer {
+        layer: std::boxed::Box::new(layer_model::Layer::with_kind(
+            "Exposure",
+            layer_model::LayerKind::Adjustment(layer_model::AdjustmentLayer {
+                kind: layer_model::AdjustmentKind::Exposure { stops: 0.5 },
+            }),
+        )),
+    });
+    let as_srgb = {
+        let open = plain_ed.active_mut().unwrap();
+        open.composite(open.canvas_rect()).unwrap()
+    };
+    assert_ne!(
+        through_profile, as_srgb,
+        "the tagged file composites through its profile, not as sRGB"
+    );
+
+    // Export re-tags: the written file carries the same profile bytes.
+    let out = dir.path().join("retagged.png");
+    ed.active_mut().unwrap().export_to(&out).unwrap();
+    let redecoded = raster::decode_surface_path(&out, raster::ImportLimits::default()).unwrap();
+    assert_eq!(
+        redecoded.icc_profile.as_deref(),
+        Some(profile.as_slice()),
+        "the export re-tagged the file"
+    );
+
+    // And the package round trip pins the composite: save, reopen, composite
+    // again — the tagged interpretation is stable.
+    let project = dir.path().join("tagged.rstudio");
+    ed.active_mut().unwrap().save_to(&project, "test").unwrap();
+    let mut reopened = bare(dir.path(), ScriptedDialogs::new());
+    reopened.open_path(&project).unwrap();
+    assert!(matches!(
+        reopened.active().unwrap().document.meta.color_space,
+        color::ColorSpace::IccProfile { .. }
+    ));
+    let pinned = {
+        let open = reopened.active_mut().unwrap();
+        open.composite(open.canvas_rect()).unwrap()
+    };
+    assert_eq!(pinned, through_profile, "the tagged composite round trips");
+}
+
+#[test]
+fn a_rstudio_package_round_trips_the_bit_depth() {
+    let dir = tempfile::tempdir().unwrap();
+    // A 16-bit source: a smooth ramp at 16 bits per channel.
+    // A horizontal ramp spanning the full 16-bit range: column x carries
+    // x * 65535/63 in every channel.
+    let grad16: Vec<u16> = (0..64 * 64)
+        .flat_map(|p| {
+            let v = ((p % 64) as u32 * 65535 / 63) as u16;
+            [v, v, v, u16::MAX]
+        })
+        .collect();
+    let source = dir.path().join("deep.png");
+    raster::encode_to_path(
+        &source,
+        raster::ExportFormat::Png,
+        64,
+        64,
+        raster::EncodedPixels::Rgba16(&grad16),
+        &raster::EncodeOptions::default(),
+    )
+    .unwrap();
+
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&source).unwrap();
+    assert_eq!(
+        ed.active().unwrap().document.meta.bit_depth,
+        16,
+        "a 16-bit source opens as a 16-bit document"
+    );
+
+    // The package carries the depth, so a reopen is still a 16-bit document.
+    let project = dir.path().join("deep.rstudio");
+    ed.active_mut().unwrap().save_to(&project, "test").unwrap();
+    let mut reopened = bare(dir.path(), ScriptedDialogs::new());
+    reopened.open_path(&project).unwrap();
+    assert_eq!(
+        reopened.active().unwrap().document.meta.bit_depth,
+        16,
+        "the .rstudio round trip preserved the depth"
+    );
+
+    // An 8-bit source stays 8, old packages default to 8.
+    let shallow = write_png(dir.path(), "shallow.png", 8, 8, 9);
+    let mut ed8 = bare(dir.path(), ScriptedDialogs::new());
+    ed8.open_path(&shallow).unwrap();
+    assert_eq!(ed8.active().unwrap().document.meta.bit_depth, 8);
+}
+
 fn bare(dir: &Path, dialogs: ScriptedDialogs) -> Editor {
     Editor::with_state(
         AppPaths::rooted(dir.join("config")),
@@ -83,6 +529,7 @@ fn expected_effect(action: Action) -> Effect {
         | Action::Open
         | Action::OpenProject
         | Action::CloseDocument
+        | Action::CloseOthers
         | Action::NextDocument
         | Action::PreviousDocument => Effect::DocumentSet,
         Action::Save | Action::SaveAs => Effect::Saved,
@@ -1131,7 +1578,7 @@ fn the_shortcut_editor_binds_reports_conflicts_and_resets() {
 }
 
 #[test]
-fn the_preferences_window_is_a_real_toggle() {
+fn the_preferences_intent_is_a_real_toggle() {
     let dir = tempfile::tempdir().unwrap();
     let mut ed = bare(dir.path(), ScriptedDialogs::new());
     assert!(!ed.preferences_open());

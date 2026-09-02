@@ -67,6 +67,8 @@ pub struct LayerRow {
     pub selected: bool,
     /// `true` when this row is the document's active layer.
     pub active: bool,
+    /// Photopea's link chain, as the layer carries it.
+    pub linked: bool,
 }
 
 impl LayerRow {
@@ -96,6 +98,49 @@ pub struct LayersState {
     expanded: HashMap<LayerId, bool>,
     /// The row an in-flight drag started on.
     dragging: Option<LayerId>,
+    /// The layer-kind filter, `None` meaning every row shows.
+    pub filter: Option<crate::menu::LayerClass>,
+    /// The thumbnail size the rows draw at.
+    pub thumb_scale: ThumbScale,
+}
+
+/// Photopea's thumbnail sizes. The multiplier applies to the row height, so a
+/// larger setting grows the whole row — thumbnail, name, badges — together.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ThumbScale {
+    Small,
+    #[default]
+    Regular,
+    Large,
+}
+
+impl ThumbScale {
+    /// The row-height multiplier.
+    pub fn height(self) -> f32 {
+        match self {
+            ThumbScale::Small => 0.85,
+            ThumbScale::Regular => 1.0,
+            ThumbScale::Large => 1.3,
+        }
+    }
+
+    /// The next size in the cycle, for the one-button control.
+    pub fn cycled(self) -> Self {
+        match self {
+            ThumbScale::Small => ThumbScale::Regular,
+            ThumbScale::Regular => ThumbScale::Large,
+            ThumbScale::Large => ThumbScale::Small,
+        }
+    }
+
+    /// The label the cycle button shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            ThumbScale::Small => "S",
+            ThumbScale::Regular => "M",
+            ThumbScale::Large => "L",
+        }
+    }
 }
 
 impl LayersState {
@@ -262,6 +307,14 @@ impl LayersModel {
             let Some(layer) = doc.layers.get(id) else {
                 continue;
             };
+            // The kind filter hides non-matching rows; their children are
+            // still walked, so a text layer inside a group shows when the
+            // filter is on text.
+            if let Some(class) = state.filter {
+                if LayerClass::of(&layer.kind) != class {
+                    continue;
+                }
+            }
             let expanded = state.is_expanded(&doc.layers, id);
             let children = layer.children();
             rows.push(LayerRow {
@@ -286,6 +339,7 @@ impl LayersModel {
                 child_count: children.len(),
                 parent: doc.layers.parent_of(id),
                 index_in_parent: doc.layers.index_in_parent(id).unwrap_or(0),
+                linked: layer.linked,
                 selected: state.is_selected(id),
                 active: active == Some(id),
             });

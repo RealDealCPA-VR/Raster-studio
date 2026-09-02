@@ -687,11 +687,13 @@ impl ColorMode {
 
     /// Whether this build can convert a document into the mode.
     ///
-    /// The unsupported ones are listed and *disabled with a reason* rather than
-    /// hidden, so the menu tells the truth about what the product does and does
-    /// not do yet.
+    /// Tiles are stored RGBA, so only the two modes the pixel rewrite can
+    /// produce are supported: RGB and Grayscale (Rec.601 luma / replicate).
+    /// The unsupported ones are listed and *disabled with a reason* rather
+    /// than hidden, so the menu tells the truth about what the product does
+    /// and does not do yet.
     pub const fn is_supported(self) -> bool {
-        matches!(self, ColorMode::Rgb | ColorMode::Grayscale | ColorMode::Lab)
+        matches!(self, ColorMode::Rgb | ColorMode::Grayscale)
     }
 }
 
@@ -877,6 +879,7 @@ pub enum MenuAction {
     OpenRecent(usize),
     CloseDocument,
     CloseAll,
+    CloseOthers,
     Save,
     SaveAs,
     Export(ExportFormat),
@@ -965,12 +968,20 @@ pub enum MenuAction {
     DeselectLayers,
     ColorRange,
     SelectSubject,
+    // ^ Emitted by no menu: subject selection needs a segmentation model this
+    // build deliberately does not bundle, so the Select menu carries no item
+    // for it (a permanently disabled item would promise a capability the
+    // project has decided not to ship). Tier C in the parity matrix.
     Modify(ModifySelection),
     GrowSelection,
     SimilarSelection,
     TransformSelection,
     SaveSelection,
     LoadSelection,
+    /// Photoshop's "Edit in Quick Mask Mode": while on, pixel edits land in a
+    /// scratch mask instead of the layer, and leaving converts that painted
+    /// coverage into the document selection. `Q`.
+    ToggleQuickMask,
 
     // ---- Filter --------------------------------------------------------
     LastFilter,
@@ -995,6 +1006,9 @@ pub enum MenuAction {
     // ---- Help ----------------------------------------------------------
     Help,
     ReleaseNotes,
+    /// Help ▸ Export Diagnostics…: write a local diagnostic bundle (app
+    /// version, OS, the live GPU adapter, any panic lines).
+    ExportDiagnostics,
     ReportIssue,
     About,
 }
@@ -1235,6 +1249,13 @@ impl MenuContext {
             layer_count: doc.layers.len(),
             selected_layers: usize::from(active.is_some()),
             active,
+            // The Image ▸ Mode items read the document's own mode: the current
+            // mode's item is disabled as a no-op, and the meta's u8 maps onto
+            // the ui enum's discriminants (0 = RGB, 1 = Grayscale).
+            color_mode: match doc.meta.color_mode {
+                1 => ColorMode::Grayscale,
+                _ => ColorMode::Rgb,
+            },
             ..Self::default()
         }
     }
@@ -1345,7 +1366,11 @@ impl MenuAction {
             MenuAction::Open,
         ];
         out.extend((0..MAX_RECENT_FILES).map(MenuAction::OpenRecent));
-        out.extend([MenuAction::CloseDocument, MenuAction::CloseAll]);
+        out.extend([
+            MenuAction::CloseDocument,
+            MenuAction::CloseOthers,
+            MenuAction::CloseAll,
+        ]);
         out.extend([MenuAction::Save, MenuAction::SaveAs]);
         out.extend(ExportFormat::ALL.iter().copied().map(MenuAction::Export));
         out.extend([
@@ -1466,6 +1491,7 @@ impl MenuAction {
             MenuAction::TransformSelection,
             MenuAction::SaveSelection,
             MenuAction::LoadSelection,
+            MenuAction::ToggleQuickMask,
             // ---- Filter ----
             MenuAction::LastFilter,
             MenuAction::FilterGallery,
@@ -1489,6 +1515,7 @@ impl MenuAction {
         out.extend([
             MenuAction::Help,
             MenuAction::ReleaseNotes,
+            MenuAction::ExportDiagnostics,
             MenuAction::ReportIssue,
             MenuAction::About,
         ]);
@@ -1503,6 +1530,7 @@ impl MenuAction {
             MenuAction::OpenRecent(i) => format!("Recent {}", i + 1),
             MenuAction::CloseDocument => "Close".into(),
             MenuAction::CloseAll => "Close All".into(),
+            MenuAction::CloseOthers => "Close Others".into(),
             MenuAction::Save => "Save".into(),
             MenuAction::SaveAs => "Save As…".into(),
             MenuAction::Export(f) => format!("{}…", f.extension().to_uppercase()),
@@ -1584,6 +1612,7 @@ impl MenuAction {
             MenuAction::TransformSelection => "Transform Selection".into(),
             MenuAction::SaveSelection => "Save Selection…".into(),
             MenuAction::LoadSelection => "Load Selection…".into(),
+            MenuAction::ToggleQuickMask => "Edit in Quick Mask Mode".into(),
 
             MenuAction::LastFilter => "Last Filter".into(),
             MenuAction::FilterGallery => "Filter Gallery…".into(),
@@ -1600,6 +1629,7 @@ impl MenuAction {
 
             MenuAction::Help => "Raster Studio Help".into(),
             MenuAction::ReleaseNotes => "Release Notes".into(),
+            MenuAction::ExportDiagnostics => "Export Diagnostics…".into(),
             MenuAction::ReportIssue => "Report an Issue".into(),
             MenuAction::About => "About Raster Studio".into(),
         }
@@ -1675,6 +1705,7 @@ impl MenuAction {
             MenuAction::InverseSelection => Shortcut::ctrl_shift('i'),
             MenuAction::SelectAllLayers => Shortcut::ctrl_alt('a'),
             MenuAction::Modify(ModifySelection::Feather) => Shortcut::shift('6'),
+            MenuAction::ToggleQuickMask => Shortcut::bare(Key::character('q')),
 
             MenuAction::LastFilter => Shortcut::ctrl('f'),
 
@@ -1736,6 +1767,10 @@ impl MenuAction {
                 (ctx.open_documents == 0).then_some("No document is open"),
                 act(self),
             ),
+            MenuAction::CloseOthers => gate(
+                (ctx.open_documents < 2).then_some("No other document is open"),
+                act(self),
+            ),
             MenuAction::Export(_) => gate(ctx.need_document(), act(self)),
 
             // ---- Edit ------------------------------------------------------
@@ -1776,7 +1811,9 @@ impl MenuAction {
                     .map(|_| "Define Pattern needs a rectangular selection"),
                 act(self),
             ),
-            MenuAction::DefineBrush => gate(ctx.need_selection(), act(self)),
+            // Defining a brush preset needs only a document: it captures the
+            // live brush, which exists with no selection at all.
+            MenuAction::DefineBrush => gate(ctx.need_document(), act(self)),
             MenuAction::KeyboardShortcuts | MenuAction::Preferences => act(self),
 
             // ---- Image -----------------------------------------------------
@@ -1976,6 +2013,7 @@ impl MenuAction {
                     .or((ctx.saved_selections == 0).then_some("No selection has been saved")),
                 act(self),
             ),
+            MenuAction::ToggleQuickMask => gate(ctx.need_document(), act(self)),
             MenuAction::SelectAllLayers => gate(
                 ctx.need_document()
                     .or((ctx.layer_count == 0).then_some("The document has no layers")),
@@ -2052,6 +2090,7 @@ impl MenuAction {
             // ---- Help ------------------------------------------------------
             MenuAction::Help
             | MenuAction::ReleaseNotes
+            | MenuAction::ExportDiagnostics
             | MenuAction::ReportIssue
             | MenuAction::About => act(self),
         }
@@ -2230,6 +2269,7 @@ fn file_menu(recent_files: usize) -> Menu {
             ),
             Entry::Separator,
             item(MenuAction::CloseDocument),
+            item(MenuAction::CloseOthers),
             item(MenuAction::CloseAll),
             Entry::Separator,
             item(MenuAction::Save),
@@ -2388,7 +2428,10 @@ fn select_menu() -> Menu {
             item(MenuAction::DeselectLayers),
             Entry::Separator,
             item(MenuAction::ColorRange),
-            item(MenuAction::SelectSubject),
+            // Select Subject deliberately has no menu item: this build ships
+            // no segmentation model, and an item permanently disabled for a
+            // capability the project has decided not to ship would lie about
+            // the product. The capability stays on the deferred list.
             Entry::Separator,
             Entry::submenu("Modify", items(ModifySelection::ALL, MenuAction::Modify)),
             item(MenuAction::GrowSelection),
@@ -2398,6 +2441,7 @@ fn select_menu() -> Menu {
             Entry::Separator,
             item(MenuAction::SaveSelection),
             item(MenuAction::LoadSelection),
+            item(MenuAction::ToggleQuickMask),
         ],
     }
 }
@@ -2469,6 +2513,7 @@ fn help_menu() -> Menu {
             item(MenuAction::KeyboardShortcuts),
             Entry::Separator,
             item(MenuAction::ReleaseNotes),
+            item(MenuAction::ExportDiagnostics),
             item(MenuAction::ReportIssue),
             Entry::Separator,
             item(MenuAction::About),

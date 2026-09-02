@@ -55,6 +55,7 @@
 
 mod disk;
 mod hex;
+pub mod presets;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;

@@ -27,6 +27,14 @@ fn main() -> Result<()> {
     telemetry::init_tracing();
     tracing::info!("Raster Studio {}", env!("CARGO_PKG_VERSION"));
 
+    // A panic writes a crash bundle into the scratch dir (next to whatever
+    // the periodic autosave already saved) before the process dies, so the
+    // next launch's recovery scan finds both the work and the why.
+    telemetry::install_panic_hook(
+        app_shell::AppPaths::discover().default_scratch_dir(),
+        env!("CARGO_PKG_VERSION"),
+    );
+
     // `--shot <path>` captures a literal GUI screenshot of the first frame to a
     // PNG and then exits (S2.3); everything else is a file to open.
     let args: Vec<_> = std::env::args_os().skip(1).collect();

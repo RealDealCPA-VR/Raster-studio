@@ -29,6 +29,51 @@ pub fn effect_gradient(kind: EffectKind) -> Id {
     Id::new((ROOT, "effect-gradient", kind))
 }
 
+/// The Fill dialog's contents combo.
+pub fn fill_contents() -> Id {
+    Id::new((ROOT, "fill-contents"))
+}
+
+/// The Fill dialog's colour swatch, which opens the picker.
+pub fn fill_color() -> Id {
+    Id::new((ROOT, "fill-color"))
+}
+
+/// The Fill dialog's pattern combo.
+pub fn fill_pattern() -> Id {
+    Id::new((ROOT, "fill-pattern"))
+}
+
+/// The Fill dialog's blend-mode combo.
+pub fn fill_blend() -> Id {
+    Id::new((ROOT, "fill-blend"))
+}
+
+/// The Fill dialog's opacity field.
+pub fn fill_opacity() -> Id {
+    Id::new((ROOT, "fill-opacity"))
+}
+
+/// The Stroke dialog's width field.
+pub fn stroke_width() -> Id {
+    Id::new((ROOT, "stroke-width"))
+}
+
+/// The Stroke dialog's location combo.
+pub fn stroke_location() -> Id {
+    Id::new((ROOT, "stroke-location"))
+}
+
+/// The Stroke dialog's blend-mode combo.
+pub fn stroke_blend() -> Id {
+    Id::new((ROOT, "stroke-blend"))
+}
+
+/// The Stroke dialog's opacity field.
+pub fn stroke_opacity() -> Id {
+    Id::new((ROOT, "stroke-opacity"))
+}
+
 /// One draggable stop handle on the gradient ramp.
 ///
 /// Keyed by the stop's [`StopKey`] and never by its index. Dragging a stop past

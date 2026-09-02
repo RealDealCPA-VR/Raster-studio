@@ -57,13 +57,16 @@
 
 pub mod action;
 pub mod brush_editor;
+pub mod canvas_rotation;
 pub mod canvas_size;
 pub mod chrome;
 pub mod color_edit;
 pub mod color_picker;
 pub mod controls;
 pub mod export_as;
+pub mod fill_stroke;
 pub mod filter_dialog;
+pub mod filter_gallery;
 pub mod gradient_editor;
 pub mod ids;
 pub mod image_size;
@@ -75,6 +78,7 @@ pub mod units;
 
 pub use action::DialogAction;
 pub use brush_editor::BrushEditorDialog;
+pub use canvas_rotation::ArbitraryRotationDialog;
 pub use canvas_size::{Anchor, CanvasSizeDialog, CanvasSizeSpec, Change, EdgeChange, Side};
 pub use chrome::{
     action_row, action_row_with_extras, resolve, Dialog, DialogButton, DialogKeys, DialogOutcome,
@@ -83,9 +87,13 @@ pub use chrome::{
 pub use color_edit::ColorEdit;
 pub use color_picker::{ColorPickerDialog, ColorValue, Eyedropper, RecentColors, ScreenSampler};
 pub use export_as::{ExportAsDialog, ExportEntry, ExportJob, PreviewSource};
+pub use fill_stroke::{
+    FillContents, FillContentsKind, FillDialog, FillSpec, StrokeDialog, StrokeLocation, StrokeSpec,
+};
 pub use filter_dialog::{
     filter_by_id, FilterDialog, FilterGroup, FilterInvocation, FilterParams, FilterSpec, ParamValue,
 };
+pub use filter_gallery::FilterGalleryDialog;
 pub use gradient_editor::{GradientEditorDialog, StopKind, StopRef};
 pub use image_size::{ImageSizeDialog, ImageSizeSpec};
 pub use layer_style::{shadow_offset, EffectKind, LayerStyleDialog};
@@ -93,7 +101,8 @@ pub use new_document::{
     BackgroundContents, ColorMode, DocumentPreset, NewDocumentDialog, NewDocumentSpec, PresetGroup,
 };
 pub use preferences::{
-    Keymap, KeymapError, PreferencesDialog, PrefsSection, Shortcut, ThemeChoice, UiPreferences,
+    GeneralPrefs, HistoryPrefs, InterfacePrefs, Keymap, KeymapError, PreferencesDialog,
+    PrefsSection, Shortcut, ThemeChoice, UiPreferences,
 };
 pub use units::{format_bytes, ResolutionUnit, Unit};
 
@@ -112,6 +121,10 @@ pub(crate) mod tests_support {
             Box::new(NewDocumentDialog::default()),
             Box::new(ImageSizeDialog::new(1920, 1080, 72.0)),
             Box::new(CanvasSizeDialog::new(1920, 1080, 72.0)),
+            Box::new(ArbitraryRotationDialog::default()),
+            Box::new(FilterGalleryDialog::new(
+                filters::FilterBuffer::transparent(16, 16).unwrap(),
+            )),
             Box::new(ExportAsDialog::new(
                 800,
                 600,
@@ -127,6 +140,8 @@ pub(crate) mod tests_support {
                 layer_model::LayerEffects::default(),
             )),
             Box::new(PreferencesDialog::default()),
+            Box::new(FillDialog::new(FillSpec::default(), Vec::new())),
+            Box::new(StrokeDialog::new(StrokeSpec::default())),
         ];
         for filter in filter_dialog::FILTERS {
             dialogs.push(Box::new(FilterDialog::with_placeholder(filter)));
@@ -145,6 +160,7 @@ pub(crate) mod tests_support {
             DialogAction::NewDocument(Box::new(NewDocumentDialog::default().spec())),
             DialogAction::ResizeImage(ImageSizeDialog::new(64, 64, 72.0).spec()),
             DialogAction::ResizeCanvas(CanvasSizeDialog::new(64, 64, 72.0).spec()),
+            DialogAction::RotateCanvas(37.5),
             DialogAction::Export(Box::new(export.job())),
             DialogAction::SetColor(ColorValue::WHITE),
             DialogAction::SetBrush {
@@ -156,6 +172,8 @@ pub(crate) mod tests_support {
             DialogAction::RunFilter(Box::new(
                 FilterDialog::with_placeholder(&filter_dialog::FILTERS[0]).invocation(),
             )),
+            DialogAction::Fill(Box::<FillSpec>::default()),
+            DialogAction::Stroke(Box::<StrokeSpec>::default()),
         ]
     }
 }

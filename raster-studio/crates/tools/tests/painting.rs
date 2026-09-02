@@ -434,6 +434,7 @@ fn a_gradient_produces_a_monotone_ramp() {
     let canvas = fx.canvas();
     let cmds = {
         let mut ctx = ToolContext::new(&mut fx.tiles, canvas).with_layer(layer);
+        ctx.ramp = GradientRamp::two([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
         tool.on_pointer_down(&mut ctx, PointerEvent::at(0.0, 4.0))
             .unwrap();
         tool.on_pointer_move(&mut ctx, PointerEvent::at(30.0, 4.0))
@@ -475,6 +476,9 @@ fn dithering_breaks_up_the_bands_a_shallow_gradient_would_otherwise_show() {
         let canvas = fx.canvas();
         let cmds = {
             let mut ctx = ToolContext::new(&mut fx.tiles, canvas).with_layer(layer);
+            // The ramp is the *context's* now: the application threads the
+            // dialog's confirmed ramp in per gesture, so the test does too.
+            ctx.ramp = GradientRamp::two(stop_from_srgb8([0, 0, 0]), stop_from_srgb8([4, 4, 4]));
             tool.on_pointer_down(&mut ctx, PointerEvent::at(0.0, 8.0))
                 .unwrap();
             tool.on_pointer_up(&mut ctx, PointerEvent::at(256.0, 8.0))

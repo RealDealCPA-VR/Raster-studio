@@ -148,6 +148,22 @@ pub struct DocumentMeta {
     /// Working color space of the document.
     pub color_space: ColorSpace,
     pub title: String,
+    /// The bit depth the document works at: 8 or 16. Set from the source the
+    /// document was opened from (a 16-bit PNG stays 16-bit through saves) and
+    /// carried in the serialized form so a `.rstudio` round trip preserves it.
+    /// Old packages default to 8.
+    #[serde(default = "default_bit_depth")]
+    pub bit_depth: u8,
+    /// The colour mode the document presents as: 0 = RGB, 1 = Grayscale (the
+    /// [`ui::menu::ColorMode`] discriminant order). Tiles are always stored
+    /// RGBA; the mode is how the pixels are read and what conversions target.
+    /// Set by Image ▸ Mode conversions; old packages default to RGB.
+    #[serde(default)]
+    pub color_mode: u8,
+}
+
+fn default_bit_depth() -> u8 {
+    8
 }
 
 impl DocumentMeta {
@@ -157,6 +173,8 @@ impl DocumentMeta {
             size: UVec2::new(width, height),
             color_space: ColorSpace::Srgb,
             title: title.into(),
+            bit_depth: default_bit_depth(),
+            color_mode: 0,
         }
     }
 }
@@ -179,6 +197,10 @@ struct DocumentRepr {
     saved_selections: Vec<(String, Selection)>,
     #[serde(default)]
     active_layer: Option<LayerId>,
+    #[serde(default)]
+    layer_selection: Vec<LayerId>,
+    #[serde(default)]
+    assets: Vec<layer_model::AssetRecord>,
     #[serde(default)]
     guides: Guides,
 }
@@ -213,7 +235,13 @@ impl TryFrom<DocumentRepr> for Document {
         // not content, and refusing the file over it would cost the user the
         // whole document.
         let active_layer = r.active_layer.filter(|id| r.layers.contains(*id));
+        let layer_selection: Vec<LayerId> = r
+            .layer_selection
+            .into_iter()
+            .filter(|id| r.layers.contains(*id))
+            .collect();
         Ok(Document {
+            assets: r.assets,
             meta: r.meta,
             layers: r.layers,
             selection: r.selection,
@@ -221,6 +249,7 @@ impl TryFrom<DocumentRepr> for Document {
             stored_selection: r.stored_selection,
             saved_selections: r.saved_selections,
             active_layer,
+            layer_selection,
             guides: r.guides,
             dirty: false,
             path: None,
@@ -286,6 +315,16 @@ pub struct Document {
     /// go through that same accessor — see the type's "One view of the active
     /// layer" note.
     active_layer: Option<LayerId>,
+    /// The document's asset table: what every smart object's `asset` id names.
+    /// An embedded source carries its own bytes; a linked one names a path on
+    /// disk. Persisted but omitted while empty.
+    assets: Vec<layer_model::AssetRecord>,
+    /// Photopea's multi-layer selection, in click order. Stale ids are
+    /// filtered on every read, exactly like the active cursor. Persisted but
+    /// omitted while empty; selection edits are direct field writes, not
+    /// commands — selecting layers is not an undoable edit in Photoshop
+    /// either, and the DELETE that uses this set is the undo step.
+    layer_selection: Vec<LayerId>,
     /// Unsaved-changes flag. Session state, not document content: never
     /// serialized, and a freshly loaded document is clean.
     dirty: bool,
@@ -328,12 +367,17 @@ impl Serialize for Document {
         let active_layer = self.active_layer();
         let stored = self.stored_selection.as_ref();
         let saved = (!self.saved_selections.is_empty()).then_some(&self.saved_selections);
+        let layer_selection =
+            (!self.layer_selection().is_empty()).then_some(self.layer_selection());
+        let assets = (!self.assets.is_empty()).then_some(&self.assets);
         let fields = 3
             + usize::from(selection.is_some())
             + usize::from(pixels.is_some())
             + usize::from(active_layer.is_some())
             + usize::from(stored.is_some())
-            + usize::from(saved.is_some());
+            + usize::from(saved.is_some())
+            + usize::from(layer_selection.is_some())
+            + usize::from(assets.is_some());
         let mut s = serializer.serialize_struct("Document", fields)?;
         s.serialize_field("meta", &self.meta)?;
         s.serialize_field("layers", &self.layers)?;
@@ -353,6 +397,12 @@ impl Serialize for Document {
         if let Some(active_layer) = active_layer {
             s.serialize_field("active_layer", &active_layer)?;
         }
+        if let Some(layer_selection) = layer_selection {
+            s.serialize_field("layer_selection", &layer_selection)?;
+        }
+        if let Some(assets) = assets {
+            s.serialize_field("assets", assets)?;
+        }
         s.end()
     }
 }
@@ -365,6 +415,8 @@ impl PartialEq for Document {
             || self.guides != other.guides
             || self.stored_selection != other.stored_selection
             || self.saved_selections != other.saved_selections
+            || self.layer_selection() != other.layer_selection()
+            || self.assets != other.assets
             // Through the accessor, not the field: a cursor left pointing at a
             // deleted layer reads as "no active layer" everywhere else, so it
             // must here too.
@@ -393,6 +445,8 @@ impl Document {
             selection: Selection::None,
             pixels: PixelStore::default(),
             active_layer: None,
+            assets: Vec::new(),
+            layer_selection: Vec::new(),
             stored_selection: None,
             saved_selections: Vec::new(),
             guides: Guides::default(),
@@ -422,6 +476,50 @@ impl Document {
     ///
     /// Refuses an id that is not in the tree — silently accepting one would
     /// hand every tool a target that does not exist.
+    /// The asset table: what smart objects' `asset` ids name.
+    pub fn assets(&self) -> &[layer_model::AssetRecord] {
+        &self.assets
+    }
+
+    /// Register a source, or replace the one this id already names.
+    pub fn set_asset_origin(&mut self, record: layer_model::AssetRecord) {
+        if let Some(row) = self.assets.iter_mut().find(|a| a.id == record.id) {
+            row.origin = record.origin;
+        } else {
+            self.assets.push(record);
+        }
+    }
+
+    /// The origin an asset id names, if the table knows it.
+    pub fn asset_origin(&self, id: layer_model::AssetId) -> Option<&layer_model::AssetOrigin> {
+        self.assets.iter().find(|a| a.id == id).map(|a| &a.origin)
+    }
+
+    /// The multi-layer selection, stale ids filtered, in click order.
+    pub fn layer_selection(&self) -> Vec<LayerId> {
+        self.layer_selection
+            .iter()
+            .copied()
+            .filter(|id| self.layers.contains(*id))
+            .collect()
+    }
+
+    /// Replace the multi-layer selection. Refuses an id that is not in the
+    /// tree, for the same reason [`Document::set_active_layer`] does; the
+    /// active cursor is untouched — the caller decides what clicking means
+    /// for it.
+    pub fn set_layer_selection(&mut self, layers: Vec<LayerId>) -> Result<(), DocumentError> {
+        for id in &layers {
+            if !self.layers.contains(*id) {
+                return Err(DocumentError::LayerNotFound(*id));
+            }
+        }
+        // Click order without duplicates.
+        let mut seen = std::collections::HashSet::new();
+        self.layer_selection = layers.into_iter().filter(|id| seen.insert(*id)).collect();
+        Ok(())
+    }
+
     pub fn set_active_layer(&mut self, id: Option<LayerId>) -> Result<(), DocumentError> {
         if let Some(id) = id {
             if !self.layers.contains(id) {

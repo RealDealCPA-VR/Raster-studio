@@ -187,8 +187,10 @@ mod tests {
             [v[0], v[1], v[2]]
         }
         fn icc() -> ColorSpace {
+            // Empty bytes: the identity fallback the probes document.
             ColorSpace::IccProfile {
                 asset_hash: "probe".to_string(),
+                profile: Vec::new(),
             }
         }
         vec![
@@ -495,6 +497,7 @@ mod tests {
                 to_linear(
                     &ColorSpace::IccProfile {
                         asset_hash: "probe".to_string(),
+                        profile: Vec::new(),
                     },
                     v,
                 )

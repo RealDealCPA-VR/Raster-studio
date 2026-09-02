@@ -41,6 +41,12 @@ pub struct DecodedImage {
     pub height: u32,
     /// Row-major RGBA8, straight alpha.
     pub rgba8: Vec<u8>,
+    /// The colour space the pixels are encoded in — `IccProfile` when the
+    /// file carried a profile. Dropped at the app-shell boundary until this
+    /// wave, which is why tagged files composited as sRGB.
+    pub color_space: color::ColorSpace,
+    /// The raw embedded ICC profile, if the file had one.
+    pub icc_profile: Option<Vec<u8>>,
 }
 
 impl DecodedImage {
@@ -51,6 +57,8 @@ impl DecodedImage {
             width: decoded.width,
             height: decoded.height,
             rgba8: decoded.rgba8,
+            color_space: decoded.color_space,
+            icc_profile: decoded.icc_profile,
         })
     }
 
@@ -174,6 +182,9 @@ pub fn document_from_image(
     let (command, layer) = import_command(image, title, &mut tiles)?;
 
     let mut document = Document::new(image.width, image.height, title);
+    // A tagged file's colour space travels with it: the compositor applies
+    // it (see `OpenDocument::icc_profile`) and the export path re-tags.
+    document.meta.color_space = image.color_space.clone();
     let mut history = History::with_limit(history_depth);
     history.apply(&mut document, command)?;
     document
@@ -194,12 +205,19 @@ pub fn document_from_image(
     })
 }
 
-/// An empty document with one transparent raster layer — File ▸ New.
+/// An empty document with one raster layer — File ▸ New.
+///
+/// `background` decides what the layer starts with: nothing at all (the
+/// transparency checkerboard) or a solid colour across the whole canvas at the
+/// document's bit depth. The background is part of the document's *initial*
+/// state, not its first undo step — the history is cleared either way, exactly
+/// like an opened file.
 pub fn blank_document(
     width: u32,
     height: u32,
     title: &str,
     history_depth: usize,
+    background: BlankBackground,
 ) -> Result<ImportedDocument, ImportError> {
     if width == 0 || height == 0 {
         return Err(ImportError::EmptyImage { width, height });
@@ -208,7 +226,18 @@ pub fn blank_document(
     let mut history = History::with_limit(history_depth);
     let layer = Layer::raster("Layer 1");
     let layer_id = layer.id;
-    history.apply(&mut document, Command::create_layer(layer))?;
+    let mut tiles = MemoryTileSource::new();
+    let command = match background {
+        BlankBackground::Transparent => Command::create_layer(layer),
+        BlankBackground::Solid { rgba8, depth } => Command::Transaction {
+            label: format!("New {title}"),
+            commands: vec![
+                Command::create_layer(layer),
+                solid_background_command(layer_id, width, height, rgba8, depth, &mut tiles)?,
+            ],
+        },
+    };
+    history.apply(&mut document, command)?;
     document
         .set_active_layer(Some(layer_id))
         .expect("the layer was just created in this document");
@@ -217,8 +246,78 @@ pub fn blank_document(
     Ok(ImportedDocument {
         document,
         history,
-        tiles: MemoryTileSource::new(),
+        tiles,
         layer: layer_id,
+    })
+}
+
+/// What a newly created document's base layer starts with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlankBackground {
+    /// No pixels: the layer has no tiles, so every pixel composites as fully
+    /// transparent and the canvas shows the transparency checkerboard.
+    Transparent,
+    /// One solid colour across the whole canvas, at the document's bit depth.
+    Solid {
+        /// Straight-alpha RGBA8; widened per channel for 16-bit.
+        rgba8: [u8; 4],
+        depth: raster::BitDepth,
+    },
+}
+
+/// Fill a new layer with one solid colour, edge tiles included.
+///
+/// Every tile the canvas covers gets a full `TILE_SIZE` square of the colour
+/// with the outside-the-canvas part zeroed, so an 8×8 document and a
+/// 16000×16000 one cost the same code path and never materialise more than
+/// one tile of pixels at a time.
+fn solid_background_command(
+    layer: LayerId,
+    width: u32,
+    height: u32,
+    rgba8: [u8; 4],
+    depth: raster::BitDepth,
+    tiles: &mut MemoryTileSource,
+) -> Result<Command, ImportError> {
+    let (format, bytes_per_component) = match depth {
+        raster::BitDepth::Eight => (PixelFormat::Rgba8, 1usize),
+        raster::BitDepth::Sixteen => (PixelFormat::Rgba16, 2usize),
+    };
+    // 16-bit widens each 8-bit channel the same way every other 8→16
+    // conversion in the workspace does: by bit repetition, 255 → 65535.
+    let pixel: Vec<u8> = match depth {
+        raster::BitDepth::Eight => rgba8.to_vec(),
+        raster::BitDepth::Sixteen => rgba8
+            .iter()
+            .flat_map(|c| (u16::from(*c) * 257).to_ne_bytes())
+            .collect(),
+    };
+    let ts = TILE_SIZE as usize;
+    let tile_bytes = ts * ts * bytes_per_component * 4;
+    let mut edits = Vec::new();
+    let rect = raster::PixelRect::new(0, 0, width, height);
+    for (coord, _coverage) in
+        editor_core::pixels::tiles_covering(rect).map_err(|e| ImportError::Command(e.into()))?
+    {
+        // Pixels past the canvas edge stay transparent inside their tile.
+        let visible_w = (width as i64 - i64::from(coord.x) * TILE_SIZE as i64).max(0) as usize;
+        let visible_h = (height as i64 - i64::from(coord.y) * TILE_SIZE as i64).max(0) as usize;
+        let mut data = vec![0u8; tile_bytes];
+        let row_bytes = ts * bytes_per_component * 4;
+        let visible_row_bytes = visible_w.min(ts) * bytes_per_component * 4;
+        for ty in 0..visible_h.min(ts) {
+            let start = ty * row_bytes;
+            for chunk in data[start..start + visible_row_bytes].chunks_exact_mut(pixel.len()) {
+                chunk.copy_from_slice(&pixel);
+            }
+        }
+        let tile = raster::Tile::from_bytes(format, data).map_err(raster::GridError::from)?;
+        let hash = tiles.insert_tile(&tile);
+        edits.push(TileEdit::set(coord, hash));
+    }
+    Ok(Command::PaintTiles {
+        target: PixelTarget::Layer(layer),
+        delta: TileDelta::new(edits).map_err(editor_core::CommandError::from)?,
     })
 }
 
@@ -1345,6 +1444,8 @@ mod tests {
             width,
             height,
             rgba8,
+            color_space: color::ColorSpace::Srgb,
+            icc_profile: None,
         }
     }
 
@@ -1475,6 +1576,8 @@ mod tests {
             width: TILE_SIZE * 2,
             height: TILE_SIZE * 2,
             rgba8: vec![200u8; (TILE_SIZE as usize * 2) * (TILE_SIZE as usize * 2) * 4],
+            color_space: color::ColorSpace::Srgb,
+            icc_profile: None,
         };
         let imported = document_from_image(&image, "flat.png", 10).unwrap();
         assert_eq!(
@@ -1516,6 +1619,8 @@ mod tests {
             width: 0,
             height: 10,
             rgba8: Vec::new(),
+            color_space: color::ColorSpace::Srgb,
+            icc_profile: None,
         };
         let err = import_command(&empty, "x", &mut tiles).unwrap_err();
         assert!(err.to_string().contains("non-zero"), "{err}");
@@ -1524,6 +1629,8 @@ mod tests {
             width: 4,
             height: 4,
             rgba8: vec![0; 4],
+            color_space: color::ColorSpace::Srgb,
+            icc_profile: None,
         };
         let err = import_command(&short, "x", &mut tiles).unwrap_err();
         assert!(err.to_string().contains("RGBA8"), "{err}");
@@ -1532,12 +1639,12 @@ mod tests {
 
     #[test]
     fn a_blank_document_starts_with_one_empty_raster_layer() {
-        let d = blank_document(800, 600, "Untitled", 50).unwrap();
+        let d = blank_document(800, 600, "Untitled", 50, BlankBackground::Transparent).unwrap();
         assert_eq!(d.document.layers.len(), 1);
         assert_eq!(d.document.active_layer(), Some(d.layer));
         assert!(d.document.layer_tiles(d.layer).is_none(), "no pixels yet");
         assert!(!d.document.is_dirty());
-        assert!(blank_document(0, 10, "x", 1).is_err());
+        assert!(blank_document(0, 10, "x", 1, BlankBackground::Transparent).is_err());
     }
 
     #[test]

@@ -251,3 +251,44 @@ fn the_contrast_gate_actually_catches_a_bad_palette() {
     let ratio = bad.text_contrast(TextRole::Primary, SurfaceRole::Elevated);
     assert!(ratio < 4.5, "sabotaged palette still scored {ratio:.2}:1");
 }
+
+#[test]
+fn the_density_tokens_cannot_drift_back() {
+    // Photopea's compact density, pinned: a row is 20px, a control 20px, the
+    // options bar 28px, panel padding 4px, and body type 12pt. The whole P1
+    // wave's fit depends on these; a regression here is visible everywhere.
+    for theme in Theme::ALL {
+        let m = theme.tokens().metrics;
+        assert_eq!(m.control_height, 20.0, "{theme:?}");
+        assert_eq!(m.list_row_height, 20.0, "{theme:?}");
+        assert_eq!(m.toolbar_button, 24.0, "{theme:?}");
+        assert_eq!(m.toolbar_height, 28.0, "{theme:?}");
+        assert_eq!(m.panel_padding, 4.0, "{theme:?}");
+        let body = theme
+            .tokens()
+            .type_scale
+            .size_pt(design::tokens::typography::TypeRole::Body);
+        assert_eq!(body, 12.0, "{theme:?}");
+    }
+}
+
+#[test]
+fn a_900px_tall_layers_panel_fits_at_least_twelve_rows() {
+    // The density pass's user-visible claim: on a 1440x900 window the Layers
+    // panel has room for twelve rows after the chrome above and below it.
+    // The chrome's heights are the tokens themselves, so this is arithmetic
+    // the tokens cannot quietly break.
+    let m = Theme::Dark.tokens().metrics;
+    let rows = m.list_row_height;
+    // 900px window: menu bar + options bar + document tabs + status bar.
+    let chrome = m.toolbar_height * 3.0 + rows;
+    // One section header and the panel's own padding.
+    let overhead = m.panel_padding * 2.0 + rows;
+    let available = 900.0 - chrome - overhead;
+    assert!(
+        available / rows >= 12.0,
+        "only {} rows of {} fit in the 900px panel (available {available})",
+        (available / rows) as u32,
+        rows
+    );
+}

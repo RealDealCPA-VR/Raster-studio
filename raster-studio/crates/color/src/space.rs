@@ -23,21 +23,34 @@ pub enum ColorSpace {
     LinearSrgb,
     /// Display P3: DCI-P3 primaries, D65 white, sRGB transfer function.
     DisplayP3,
-    /// An ICC profile referenced by content hash in the asset store.
+    /// An ICC profile referenced by content hash, **carrying its own bytes**.
     ///
-    /// **Not implemented.** No ICC engine is linked, so no correct transform
-    /// exists for this variant; see [`ColorSpace::is_transform_supported`].
-    IccProfile { asset_hash: String },
+    /// The bytes are the profile itself, so the transform engine —
+    /// [`crate::icc::MatrixShaper::parse`] — can run wherever the space goes
+    /// without a store lookup. Only matrix-shaper (RGB + matrix + tone
+    /// curves) profiles transform; anything else fails the parse and the
+    /// infallible entry points fall back to identity, exactly as before this
+    /// carried bytes.
+    IccProfile {
+        asset_hash: String,
+        profile: Vec<u8>,
+    },
 }
 
 impl ColorSpace {
     /// Whether [`to_linear`]/[`from_linear`] can transform this space correctly.
     ///
-    /// `false` only for [`ColorSpace::IccProfile`], for which the infallible
-    /// entry points fall back to identity. Call [`try_to_linear`] /
+    /// `false` only for an [`ColorSpace::IccProfile`] whose bytes are absent
+    /// or do not parse as a matrix-shaper profile — the infallible entry
+    /// points fall back to identity there. Call [`try_to_linear`] /
     /// [`try_from_linear`] to turn that fallback into an error instead.
     pub fn is_transform_supported(&self) -> bool {
-        !matches!(self, ColorSpace::IccProfile { .. })
+        match self {
+            ColorSpace::IccProfile { profile, .. } => {
+                crate::icc::MatrixShaper::parse(profile).is_ok()
+            }
+            _ => true,
+        }
     }
 
     /// Short stable identifier, useful in logs and UI.
@@ -61,10 +74,9 @@ pub struct UnsupportedColorSpace {
 impl std::fmt::Display for UnsupportedColorSpace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.space {
-            ColorSpace::IccProfile { asset_hash } => write!(
-                f,
-                "no ICC engine is linked; cannot transform profile {asset_hash}"
-            ),
+            ColorSpace::IccProfile { asset_hash, .. } => {
+                write!(f, "cannot transform profile {asset_hash}")
+            }
             other => write!(f, "unsupported color space: {}", other.name()),
         }
     }
@@ -154,29 +166,33 @@ pub fn xyz_to_linear_srgb(xyz: [f32; 3]) -> [f32; 3] {
 
 /// Decodes an encoded triple in `space` into the linear sRGB working space.
 ///
-/// For [`ColorSpace::IccProfile`] this returns the input unchanged, because no
-/// ICC engine is linked and inventing a transform would silently corrupt
-/// colour. Use [`try_to_linear`] when the caller must know that happened.
+/// For a tagged [`ColorSpace::IccProfile`] this applies the profile's own
+/// matrix-shaper transform (with Bradford adaptation to the D50 PCS the
+/// profile's matrix targets). A profile that fails to parse falls back to
+/// identity — the same documented behaviour the variant had before it carried
+/// bytes. Use [`try_to_linear`] when the caller must know that happened.
 pub fn to_linear(space: &ColorSpace, rgb: [f32; 3]) -> [f32; 3] {
     match space {
         ColorSpace::Srgb => srgb_to_linear3(rgb),
         ColorSpace::LinearSrgb => rgb,
         ColorSpace::DisplayP3 => mat3_mul_vec3(&DISPLAY_P3_TO_LINEAR_SRGB, srgb_to_linear3(rgb)),
-        // Identity, not a guess. Documented above.
-        ColorSpace::IccProfile { .. } => rgb,
+        ColorSpace::IccProfile { profile, .. } => {
+            icc_transform(profile, rgb, IccDirection::ToLinear)
+        }
     }
 }
 
 /// Encodes a linear sRGB working-space triple into `space`.
 ///
-/// Exact inverse of [`to_linear`] for every supported space; identity for
-/// [`ColorSpace::IccProfile`].
+/// Exact inverse of [`to_linear`] for every supported space.
 pub fn from_linear(space: &ColorSpace, rgb: [f32; 3]) -> [f32; 3] {
     match space {
         ColorSpace::Srgb => linear_to_srgb3(rgb),
         ColorSpace::LinearSrgb => rgb,
         ColorSpace::DisplayP3 => linear_to_srgb3(mat3_mul_vec3(&LINEAR_SRGB_TO_DISPLAY_P3, rgb)),
-        ColorSpace::IccProfile { .. } => rgb,
+        ColorSpace::IccProfile { profile, .. } => {
+            icc_transform(profile, rgb, IccDirection::FromLinear)
+        }
     }
 }
 
@@ -423,8 +439,11 @@ mod tests {
 
     #[test]
     fn icc_profile_is_an_explicit_unsupported_identity() {
+        // Bytes that do not parse as a matrix-shaper profile: the transform
+        // is unsupported and the infallible entry points stay identity.
         let icc = ColorSpace::IccProfile {
             asset_hash: "deadbeef".to_string(),
+            profile: vec![0xFF; 16],
         };
         assert!(!icc.is_transform_supported());
         let v = [0.25, 0.5, 0.75];
@@ -480,5 +499,26 @@ mod tests {
     #[test]
     fn default_space_is_srgb() {
         assert_eq!(ColorSpace::default(), ColorSpace::Srgb);
+    }
+}
+
+/// Which way an ICC matrix-shaper transform runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IccDirection {
+    ToLinear,
+    FromLinear,
+}
+
+/// Apply a tagged space's own profile to one triple, falling back to identity
+/// when the bytes do not parse as a matrix-shaper profile — the same
+/// documented fallback the variant has always had, now reached only when the
+/// profile is genuinely unusable.
+fn icc_transform(profile: &[u8], rgb: [f32; 3], direction: IccDirection) -> [f32; 3] {
+    match crate::icc::MatrixShaper::parse(profile) {
+        Ok(shaper) => match direction {
+            IccDirection::ToLinear => shaper.to_linear_srgb(rgb),
+            IccDirection::FromLinear => shaper.from_linear_srgb(rgb),
+        },
+        Err(_) => rgb,
     }
 }

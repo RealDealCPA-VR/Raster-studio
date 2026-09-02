@@ -20,7 +20,7 @@ use editor_core::{Command, CommandError, Document, History};
 use project_format::{
     CommandJournal, DocumentDigest, ProjectError, SaveOptions, TileBytes, JOURNAL_FILE,
 };
-use raster::{PixelRect, TileHash};
+use raster::{PixelRect, TileHash, TILE_SIZE};
 use render::Camera;
 
 use crate::dirty::DirtyTiles;
@@ -73,6 +73,12 @@ pub enum DocumentError {
     Mip(#[from] raster::mipmap::MipError),
     #[error("`{0}` is not a file format Raster Studio can export to")]
     UnknownExportFormat(String),
+    #[error(transparent)]
+    Export(#[from] raster::ExportError),
+    #[error(transparent)]
+    Grid(#[from] raster::GridError),
+    #[error(transparent)]
+    Pixel(#[from] editor_core::PixelError),
     #[error("writing print output failed: {0}")]
     Io(String),
     #[error("this document has never been saved, so it has no location to save to")]
@@ -170,6 +176,9 @@ pub struct OpenDocument {
     pub camera: Camera,
     /// Where the `.rstudio` package lives, once it has one.
     project_path: Option<PathBuf>,
+    /// The modification times linked asset sources were read at, by asset id:
+    /// what "the linked source changed" is measured against.
+    pub asset_stamps: std::collections::HashMap<layer_model::AssetId, std::time::SystemTime>,
     /// The image this document was imported from, if any. Only used to suggest
     /// an export name.
     source_path: Option<PathBuf>,
@@ -215,6 +224,84 @@ impl std::fmt::Debug for OpenDocument {
     }
 }
 
+/// Bilinear resample of one 8-bit channel — mask coverage.
+///
+/// Coverage is not colour: putting it through the linear-light pipeline would
+/// gamma-correct a value that means "how much of this pixel is selected", so
+/// it gets its own plain-space resampler. Edges clamp, so the outermost
+/// half-pixel is a smooth ramp rather than a fade to nothing.
+fn resample_coverage(src: &[u8], w: u32, h: u32, dw: u32, dh: u32) -> Vec<u8> {
+    if (w, h) == (dw, dh) {
+        return src.to_vec();
+    }
+    let (w, h, dw, dh) = (w as usize, h as usize, dw as usize, dh as usize);
+    let at = |x: i64, y: i64| -> f32 {
+        let x = x.clamp(0, w as i64 - 1) as usize;
+        let y = y.clamp(0, h as i64 - 1) as usize;
+        f32::from(src[y * w + x])
+    };
+    let mut out = vec![0u8; dw * dh];
+    let (fx, fy) = (w as f64 / dw as f64, h as f64 / dh as f64);
+    for dy in 0..dh {
+        let sy = (dy as f64 + 0.5) * fy - 0.5;
+        let y0 = sy.floor() as i64;
+        let ty = (sy - y0 as f64) as f32;
+        for dx in 0..dw {
+            let sx = (dx as f64 + 0.5) * fx - 0.5;
+            let x0 = sx.floor() as i64;
+            let tx = (sx - x0 as f64) as f32;
+            let top = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;
+            let bottom = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
+            let v = top * (1.0 - ty) + bottom * ty;
+            out[dy * dw + dx] = (v + 0.5) as u8;
+        }
+    }
+    out
+}
+
+/// Bilinear sample of a straight-RGBA8 buffer, premultiplied on the way in and
+/// un-premultiplied on the way out.
+///
+/// Interpolating straight alpha averages colours without weighing them by
+/// coverage, which is how a rotated photograph grows dark halos. Outside the
+/// buffer reads as transparent, so the rotated corners stay empty.
+fn sample_bilinear_premultiplied(rgba: &[u8], w: usize, h: usize, x: f64, y: f64) -> [u8; 4] {
+    let x0 = x.floor() as i64;
+    let y0 = y.floor() as i64;
+    let fx = (x - x0 as f64) as f32;
+    let fy = (y - y0 as f64) as f32;
+    let at = |xx: i64, yy: i64| -> [f32; 4] {
+        if xx < 0 || yy < 0 || xx >= w as i64 || yy >= h as i64 {
+            return [0.0; 4];
+        }
+        let i = (yy as usize * w + xx as usize) * 4;
+        let a = rgba[i + 3] as f32 / 255.0;
+        [
+            rgba[i] as f32 / 255.0 * a,
+            rgba[i + 1] as f32 / 255.0 * a,
+            rgba[i + 2] as f32 / 255.0 * a,
+            a,
+        ]
+    };
+    let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+    let mut top = [0.0f32; 4];
+    let mut bottom = [0.0f32; 4];
+    for c in 0..4 {
+        top[c] = lerp(at(x0, y0)[c], at(x0 + 1, y0)[c], fx);
+        bottom[c] = lerp(at(x0, y0 + 1)[c], at(x0 + 1, y0 + 1)[c], fx);
+    }
+    let mut px = [0.0f32; 4];
+    for c in 0..4 {
+        px[c] = lerp(top[c], bottom[c], fy);
+    }
+    let a = px[3];
+    let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    if a <= 0.0 {
+        return [0, 0, 0, 0];
+    }
+    [to8(px[0] / a), to8(px[1] / a), to8(px[2] / a), to8(a)]
+}
+
 impl OpenDocument {
     /// Wrap an imported document, with a camera waiting to be fitted.
     ///
@@ -234,6 +321,7 @@ impl OpenDocument {
             tiles: imported.tiles,
             camera: Camera::new(size, size),
             project_path: None,
+            asset_stamps: std::collections::HashMap::new(),
             source_path: None,
             compositor: TileCompositor::new(),
             // Nothing has been presented yet, so everything is outstanding.
@@ -269,6 +357,9 @@ impl OpenDocument {
         // below can choose to honor it.
         let surface = raster::decode_surface_path(path, raster::ImportLimits::default())?;
         open.source_sixteen_bit = surface.format() == raster::PixelFormat::Rgba16;
+        // The document's own record of its working depth, carried in the
+        // serialized form: a 16-bit source reopens as a 16-bit document.
+        open.document.meta.bit_depth = if open.source_sixteen_bit { 16 } else { 8 };
         Ok(open)
     }
 
@@ -309,6 +400,7 @@ impl OpenDocument {
             tiles,
             camera: Camera::new(size, size),
             project_path: Some(path.to_path_buf()),
+            asset_stamps: std::collections::HashMap::new(),
             source_path: None,
             compositor: TileCompositor::new(),
             dirty: DirtyTiles::all(),
@@ -319,7 +411,7 @@ impl OpenDocument {
         })
     }
 
-    /// A blank document — File ▸ New.
+    /// A blank document — File ▸ New, with the transparency checkerboard.
     pub fn blank(
         id: DocumentId,
         width: u32,
@@ -327,9 +419,29 @@ impl OpenDocument {
         title: &str,
         history_depth: usize,
     ) -> Result<Self, DocumentError> {
+        OpenDocument::blank_with_background(
+            id,
+            width,
+            height,
+            title,
+            history_depth,
+            crate::import::BlankBackground::Transparent,
+        )
+    }
+
+    /// A blank document whose base layer starts filled — the New Document
+    /// dialog's background choice.
+    pub fn blank_with_background(
+        id: DocumentId,
+        width: u32,
+        height: u32,
+        title: &str,
+        history_depth: usize,
+        background: crate::import::BlankBackground,
+    ) -> Result<Self, DocumentError> {
         Ok(OpenDocument::from_import(
             id,
-            crate::import::blank_document(width, height, title, history_depth)?,
+            crate::import::blank_document(width, height, title, history_depth, background)?,
         ))
     }
 
@@ -403,6 +515,7 @@ impl OpenDocument {
             tiles: self.tiles.clone(),
             camera: Camera::new(size, size),
             project_path: None,
+            asset_stamps: std::collections::HashMap::new(),
             source_path: None,
             compositor: TileCompositor::new(),
             dirty: DirtyTiles::all(),
@@ -806,6 +919,193 @@ impl OpenDocument {
         })
     }
 
+    /// Image ▸ Rotation ▸ Arbitrary: rotate the canvas and every layer by
+    /// `degrees` (positive clockwise) as one undoable step.
+    ///
+    /// Only the **non-orthogonal** angles come through here: the shell routes
+    /// exact right angles to the same fixed commands the menu's 90/180 items
+    /// use, so a 90° asked for through this dialog produces byte-identical
+    /// pixels to the fixed one. Everything else resamples: the canvas grows to
+    /// the rotated bounding box, each layer's pixels are inverse-mapped with a
+    /// premultiplied-alpha bilinear sampler, and empty corners stay
+    /// transparent.
+    pub fn rotate_canvas_arbitrary(&mut self, degrees: f64) -> Result<Command, DocumentError> {
+        let rad = degrees.to_radians();
+        let (sin, cos) = rad.sin_cos();
+        let (w, h) = (self.document.width(), self.document.height());
+        let new_w = ((w as f64 * cos.abs() + h as f64 * sin.abs()).ceil() as u32).max(1);
+        let new_h = ((w as f64 * sin.abs() + h as f64 * cos.abs()).ceil() as u32).max(1);
+        let mut commands = vec![Command::SetCanvasSize {
+            size: glam::UVec2::new(new_w, new_h),
+        }];
+        let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+        let (ncx, ncy) = (new_w as f64 / 2.0, new_h as f64 / 2.0);
+        for id in self.document.layers.iter_depth_first() {
+            let rgba = self.layer_pixels(id)?;
+            let mut out = vec![0u8; new_w as usize * new_h as usize * 4];
+            for y in 0..new_h {
+                for x in 0..new_w {
+                    // Inverse map: where in the old image did this new pixel
+                    // come from? Rotating the offset back by −θ about the
+                    // centres. Half-pixel centres keep the rotation symmetric.
+                    let dx = x as f64 + 0.5 - ncx;
+                    let dy = y as f64 + 0.5 - ncy;
+                    let sx = cos * dx + sin * dy + cx;
+                    let sy = -sin * dx + cos * dy + cy;
+                    let px = sample_bilinear_premultiplied(
+                        &rgba,
+                        w as usize,
+                        h as usize,
+                        sx - 0.5,
+                        sy - 0.5,
+                    );
+                    let di = (y as usize * new_w as usize + x as usize) * 4;
+                    out[di..di + 4].copy_from_slice(&px);
+                }
+            }
+            let grid = raster::TileGrid::from_rgba8(new_w, new_h, &out)?;
+            let mut edits = Vec::new();
+            for (coord, tile) in grid.iter() {
+                let hash = self.tiles.insert_bytes(tile.data().to_vec());
+                edits.push(editor_core::TileEdit::set(coord, hash));
+            }
+            commands.push(Command::paint_tiles(
+                editor_core::PixelTarget::Layer(id),
+                edits,
+            )?);
+        }
+        Ok(Command::Transaction {
+            label: "Rotate Canvas".to_string(),
+            commands,
+        })
+    }
+
+    /// Build the Image ▸ Reveal All command: grow the canvas so every layer's
+    /// content fits, as one undoable step.
+    ///
+    /// The union of the pixel layers' content bounds — each tile map's extent
+    /// pushed through the layer's own transform — is compared against the
+    /// canvas. Growth never moves the origin: content at negative coordinates
+    /// brings a translation of every root layer along, the same way a crop's
+    /// inverse would. Nothing is filled; the exposed area stays transparent —
+    /// Reveal All changes the frame, not the picture.
+    ///
+    /// Measured with each layer's own transform only: a layer inside a
+    /// *transformed group* is measured in the group's frame, which can
+    /// under-measure it. That is a named limitation, not a silent one — the
+    /// common cases (a layer dragged partly off the canvas, an oversized
+    /// paste) are measured exactly.
+    pub fn reveal_all_command(&mut self) -> Result<Command, DocumentError> {
+        let (w, h) = (self.document.width(), self.document.height());
+        let (mut min_x, mut min_y) = (i64::MAX, i64::MAX);
+        let (mut max_x, mut max_y) = (i64::MIN, i64::MIN);
+        for id in self.document.layers.iter_depth_first() {
+            let Some(layer) = self.document.layers.get(id) else {
+                continue;
+            };
+            // Only kinds that own a tile map have measurable pixel bounds;
+            // text and shape bounds live in their own parametric geometry.
+            if !matches!(
+                layer.kind,
+                layer_model::LayerKind::Raster(_) | layer_model::LayerKind::Generator(_)
+            ) {
+                continue;
+            }
+            let Some(map) = self.document.pixels.tiles(editor_core::PixelKey::Layer(id)) else {
+                continue;
+            };
+            // Content bounds, not tile bounds: a tile's extent is tile-
+            // aligned, so an 8×8 image on tile (0,0) would measure as 256×256
+            // and Reveal All would quadruple the canvas. Scanning each tile's
+            // alpha for the non-transparent rect is exact and bounded by the
+            // tile size.
+            let mut x0 = i64::MAX;
+            let mut y0 = i64::MAX;
+            let mut x1 = i64::MIN;
+            let mut y1 = i64::MIN;
+            let ts = TILE_SIZE as usize;
+            for (coord, hash) in map.iter() {
+                let Some(bytes) = self.tiles.tile(hash) else {
+                    continue;
+                };
+                let (ox, oy) = coord.pixel_origin();
+                let (mut lx0, mut ly0) = (ts, ts);
+                let (mut lx1, mut ly1) = (0usize, 0usize);
+                let mut any = false;
+                for ty in 0..ts {
+                    let row = ty * ts;
+                    for tx in 0..ts {
+                        if bytes[(row + tx) * 4 + 3] != 0 {
+                            any = true;
+                            lx0 = lx0.min(tx);
+                            ly0 = ly0.min(ty);
+                            lx1 = lx1.max(tx + 1);
+                            ly1 = ly1.max(ty + 1);
+                        }
+                    }
+                }
+                if !any {
+                    continue;
+                }
+                x0 = x0.min(ox + lx0 as i64);
+                y0 = y0.min(oy + ly0 as i64);
+                x1 = x1.max(ox + lx1 as i64);
+                y1 = y1.max(oy + ly1 as i64);
+            }
+            if x0 > x1 {
+                continue;
+            }
+            // Push the pixel-space rect through the layer's transform: the
+            // four corners mapped, then the bounding box of those.
+            let t = layer.transform;
+            let corners = [
+                glam::Vec2::new(x0 as f32, y0 as f32),
+                glam::Vec2::new(x1 as f32, y0 as f32),
+                glam::Vec2::new(x0 as f32, y1 as f32),
+                glam::Vec2::new(x1 as f32, y1 as f32),
+            ];
+            for c in corners {
+                let d = t.transform_point2(c);
+                min_x = min_x.min(d.x.floor() as i64);
+                min_y = min_y.min(d.y.floor() as i64);
+                max_x = max_x.max(d.x.ceil() as i64);
+                max_y = max_y.max(d.y.ceil() as i64);
+            }
+        }
+        // Nothing measured (or nothing outside): Reveal All is a no-op —
+        // an empty transaction, which history records as nothing at all.
+        if min_x > max_x
+            || (min_x >= 0 && max_x <= i64::from(w) && min_y >= 0 && max_y <= i64::from(h))
+        {
+            return Ok(Command::Transaction {
+                label: "Reveal All".to_string(),
+                commands: Vec::new(),
+            });
+        }
+        // Content at negative coordinates moves the origin: translate every
+        // root layer so the union starts at (0, 0), then grow to fit.
+        let shift_x = (-min_x).max(0);
+        let shift_y = (-min_y).max(0);
+        let new_w = (max_x + shift_x).max(i64::from(w)) as u32;
+        let new_h = (max_y + shift_y).max(i64::from(h)) as u32;
+        let mut commands = vec![Command::SetCanvasSize {
+            size: glam::UVec2::new(new_w, new_h),
+        }];
+        if shift_x > 0 || shift_y > 0 {
+            let delta = glam::Vec2::new(shift_x as f32, shift_y as f32);
+            for id in self.document.layers.root() {
+                commands.push(Command::TransformLayer {
+                    layer_id: *id,
+                    matrix: tools::edit::translation_matrix(delta),
+                });
+            }
+        }
+        Ok(Command::Transaction {
+            label: "Reveal All".to_string(),
+            commands,
+        })
+    }
+
     /// Hit/miss counters of this document's tile cache — how the "an edit
     /// recomposites only what changed" claim is checked.
     pub fn cache_stats(&self) -> compositor::CacheStats {
@@ -927,6 +1227,15 @@ impl OpenDocument {
         // out. The composite is `f32` either way; the depth only changes how it
         // is quantized into the file.
         let rect = self.canvas_rect();
+        // A tagged document re-tags: the profile it opened with rides back
+        // into the file (the codec writes the iCCP chunk for the formats
+        // that carry one).
+        let encode_options = match &self.document.meta.color_space {
+            color::ColorSpace::IccProfile { profile, .. } if !profile.is_empty() => {
+                raster::EncodeOptions::with_icc(profile.clone())
+            }
+            _ => raster::EncodeOptions::default(),
+        };
         if self.source_sixteen_bit && format.supports_16_bit() {
             let rgba16 = self.composite_rgba16(rect)?;
             raster::encode_to_path(
@@ -935,7 +1244,7 @@ impl OpenDocument {
                 self.document.width(),
                 self.document.height(),
                 raster::EncodedPixels::Rgba16(&rgba16),
-                &raster::EncodeOptions::default(),
+                &encode_options,
             )?
         } else {
             let rgba8 = self.composite(rect)?;
@@ -945,10 +1254,433 @@ impl OpenDocument {
                 self.document.width(),
                 self.document.height(),
                 raster::EncodedPixels::Rgba8(&rgba8),
-                &raster::EncodeOptions::default(),
+                &encode_options,
             )?
         };
         Ok(())
+    }
+
+    /// Build the Image ▸ Image Size command for this document: one
+    /// [`Command::ResampleImage`] carrying the complete new tile map of every
+    /// pixel target — layers through the colour-managed resampler, raster
+    /// masks through a bilinear coverage pass.
+    ///
+    /// `None` resample in the spec means the user unlocked the pixel
+    /// dimensions to change print metadata only; nothing here stores a ppi,
+    /// so the shell treats that as a no-op rather than a silent rewrite.
+    pub fn resample_command(
+        &mut self,
+        spec: &ui::dialogs::ImageSizeSpec,
+    ) -> Result<Command, DocumentError> {
+        let Some(filter) = spec.resample else {
+            return Ok(Command::Transaction {
+                label: "Image Size".to_string(),
+                commands: Vec::new(),
+            });
+        };
+        let (w, h) = (self.document.width(), self.document.height());
+        let (dw, dh) = (spec.width, spec.height);
+        let rect = PixelRect::new(0, 0, w, h);
+        let new_rect = PixelRect::new(0, 0, dw, dh);
+        let mut changes = Vec::new();
+        // Walk the layer tree, not the pixel store: the store's mask keys name
+        // the mask, while `PixelTarget::Mask` names the layer that owns it.
+        for id in self.document.layers.iter_depth_first() {
+            let Some(layer) = self.document.layers.get(id) else {
+                continue;
+            };
+            let mut targets = vec![editor_core::PixelTarget::Layer(id)];
+            if layer.mask_id().is_some() {
+                targets.push(editor_core::PixelTarget::Mask(id));
+            }
+            for target in targets {
+                let key = match target {
+                    editor_core::PixelTarget::Layer(id) => editor_core::PixelKey::Layer(id),
+                    editor_core::PixelTarget::Mask(id) => {
+                        match self.document.layers.get(id).and_then(|l| l.mask_id()) {
+                            Some(mask) => editor_core::PixelKey::Mask(mask),
+                            None => continue,
+                        }
+                    }
+                };
+                let Some(map) = self.document.pixels.tiles(key) else {
+                    continue;
+                };
+                let mut edits: Vec<editor_core::TileEdit> = Vec::new();
+                match key {
+                    editor_core::PixelKey::Layer(_) => {
+                        let rgba = self.materialize_rgba(map, rect)?;
+                        let image = raster::export::linear_from_rgba8(
+                            w,
+                            h,
+                            &rgba,
+                            &self.document.meta.color_space,
+                        )?;
+                        let scaled = raster::export::resample(&image, dw, dh, filter)?;
+                        let out = raster::export::rgba8_from_linear(
+                            &scaled,
+                            &self.document.meta.color_space,
+                        )?;
+                        let grid = raster::TileGrid::from_rgba8(dw, dh, &out)
+                            .map_err(DocumentError::Grid)?;
+                        for (coord, tile) in grid.iter() {
+                            let hash = self.tiles.insert_tile(tile);
+                            edits.push(editor_core::TileEdit::set(coord, hash));
+                        }
+                    }
+                    editor_core::PixelKey::Mask(_) => {
+                        let coverage = self.materialize_coverage(map, rect)?;
+                        let out = resample_coverage(&coverage, w, h, dw, dh);
+                        // Coverage tiles: a tile that is all zero is exactly what
+                        // an absent tile means, so it is removed rather than
+                        // stored (see `import.rs`'s mask writer).
+                        let ts = TILE_SIZE as i64;
+                        let cx = (i64::from(new_rect.width) + ts - 1) / ts;
+                        let cy = (i64::from(new_rect.height) + ts - 1) / ts;
+                        for ty in 0..cy {
+                            for tx in 0..cx {
+                                let coord = raster::TileCoord::new(tx as i32, ty as i32, 0);
+                                let (ox, oy) = coord.pixel_origin();
+                                let mut data = vec![0u8; editor_core::MASK_TILE_BYTES];
+                                let stride = TILE_SIZE as usize;
+                                let vw = (i64::from(new_rect.width) - ox).clamp(0, ts) as usize;
+                                let vh = (i64::from(new_rect.height) - oy).clamp(0, ts) as usize;
+                                for y in 0..vh {
+                                    let src = ((oy as usize + y) * dw as usize) + ox as usize;
+                                    let dst = y * stride;
+                                    data[dst..dst + vw].copy_from_slice(&out[src..src + vw]);
+                                }
+                                if data.iter().all(|&b| b == 0) {
+                                    edits.push(editor_core::TileEdit { coord, hash: None });
+                                } else {
+                                    let hash = self.tiles.insert_bytes(data);
+                                    edits.push(editor_core::TileEdit::set(coord, hash));
+                                }
+                            }
+                        }
+                    }
+                }
+                // Tiles the new canvas no longer covers are removed, not left
+                // dangling past the document edge.
+                let ts = TILE_SIZE as i64;
+                let nx = (i64::from(new_rect.width) + ts - 1) / ts;
+                let ny = (i64::from(new_rect.height) + ts - 1) / ts;
+                for (coord, _) in map.iter() {
+                    let beyond = i64::from(coord.x) >= nx || i64::from(coord.y) >= ny;
+                    if beyond {
+                        edits.push(editor_core::TileEdit { coord, hash: None });
+                    }
+                }
+                changes.push((target, editor_core::TileDelta::new(edits)?));
+            }
+        }
+        Ok(Command::ResampleImage {
+            size: glam::UVec2::new(dw, dh),
+            changes,
+        })
+    }
+
+    /// One target's pixels as a straight-RGBA8 buffer the size of the canvas.
+    fn materialize_rgba(
+        &self,
+        map: &editor_core::TileMap,
+        rect: PixelRect,
+    ) -> Result<Vec<u8>, DocumentError> {
+        let mut out = vec![0u8; (rect.width as usize) * (rect.height as usize) * 4];
+        let ts = TILE_SIZE as i64;
+        for (coord, hash) in map.iter() {
+            let Some(bytes) = self.tiles.tile(hash) else {
+                continue;
+            };
+            let (ox, oy) = coord.pixel_origin();
+            let (x0, y0) = (rect.x.max(ox), rect.y.max(oy));
+            let (x1, y1) = (rect.right().min(ox + ts), rect.bottom().min(oy + ts));
+            for y in y0..y1 {
+                let src = (((y - oy) as usize) * TILE_SIZE as usize + ((x0 - ox) as usize)) * 4;
+                let dst =
+                    ((y - rect.y) as usize * rect.width as usize + (x0 - rect.x) as usize) * 4;
+                let n = ((x1 - x0) as usize) * 4;
+                out[dst..dst + n].copy_from_slice(&bytes[src..src + n]);
+            }
+        }
+        Ok(out)
+    }
+
+    /// One target's mask coverage as a one-byte-per-pixel canvas buffer.
+    fn materialize_coverage(
+        &self,
+        map: &editor_core::TileMap,
+        rect: PixelRect,
+    ) -> Result<Vec<u8>, DocumentError> {
+        let mut out = vec![0u8; (rect.width as usize) * (rect.height as usize)];
+        let ts = TILE_SIZE as i64;
+        for (coord, hash) in map.iter() {
+            let Some(bytes) = self.tiles.tile(hash) else {
+                continue;
+            };
+            let (ox, oy) = coord.pixel_origin();
+            let (x0, y0) = (rect.x.max(ox), rect.y.max(oy));
+            let (x1, y1) = (rect.right().min(ox + ts), rect.bottom().min(oy + ts));
+            for y in y0..y1 {
+                let src = ((y - oy) as usize) * TILE_SIZE as usize + (x0 - ox) as usize;
+                let dst = (y - rect.y) as usize * rect.width as usize + (x0 - rect.x) as usize;
+                let n = (x1 - x0) as usize;
+                out[dst..dst + n].copy_from_slice(&bytes[src..src + n]);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Build the Image ▸ Canvas Size command: re-frame the document without
+    /// resampling — [`Command::SetCanvasSize`] plus one translation per root
+    /// layer so the existing content lands where the dialog's anchor put it,
+    /// and, when the dialog asked for a fill colour, [`Command::fill_region`]
+    /// on the bottom-most raster layer over the area the old canvas did not
+    /// cover. The whole thing is one undoable step, the same shape a crop is.
+    ///
+    /// The fill targets the bottom raster layer because that is what the
+    /// canvas-extension colour means in a layered document: the backdrop
+    /// behind every layer. With no raster layer at the bottom (groups and
+    /// adjustments only) there is nothing to fill and the exposed area stays
+    /// transparent, whatever the dialog said — a colour needs a layer to land
+    /// on, and inventing one would be a bigger decision than this dialog
+    /// makes.
+    pub fn canvas_size_command(
+        &mut self,
+        spec: &ui::dialogs::CanvasSizeSpec,
+    ) -> Result<Command, DocumentError> {
+        let (w, h) = (self.document.width(), self.document.height());
+        let (new_w, new_h) = (spec.width, spec.height);
+        let (ox, oy) = spec.offset;
+        let mut commands = vec![Command::SetCanvasSize {
+            size: glam::UVec2::new(new_w, new_h),
+        }];
+        if ox != 0 || oy != 0 {
+            // Content lands *at* the offset: every root layer moves by it as
+            // one unit (children ride with their parents).
+            let delta = glam::Vec2::new(ox as f32, oy as f32);
+            for id in self.document.layers.root() {
+                commands.push(Command::TransformLayer {
+                    layer_id: *id,
+                    matrix: tools::edit::translation_matrix(delta),
+                });
+            }
+        }
+        let fill = match spec.background {
+            ui::dialogs::BackgroundContents::Transparent => None,
+            ui::dialogs::BackgroundContents::White => Some([255u8, 255, 255, 255]),
+            ui::dialogs::BackgroundContents::Black => Some([0u8, 0, 0, 255]),
+            ui::dialogs::BackgroundContents::Custom(rgba) => {
+                Some(crate::menu_bridge::rgba8_of(rgba))
+            }
+        };
+        if let Some(color) = fill {
+            // The bottom-most layer that owns pixels is the backdrop.
+            let bottom = self
+                .document
+                .layers
+                .root()
+                .iter()
+                .rev()
+                .copied()
+                .find(|id| {
+                    self.document
+                        .layers
+                        .get(*id)
+                        .is_some_and(|l| matches!(l.kind, layer_model::LayerKind::Raster(_)))
+                });
+            if let Some(bottom) = bottom {
+                let key = editor_core::PixelKey::Layer(bottom);
+                // `FillRegion`'s rect is in the *layer's* pixel space, and this
+                // transaction also translates the layer by the anchor offset —
+                // so a strip at document position E is layer pixels at E -
+                // offset.
+                // Strips share tiles (a 100→200 enlarge writes tile (0,0)
+                // twice), and each fill's edge tile must preserve what the
+                // tile holds *at the moment that fill applies* — so the edge
+                // bytes are accumulated here, in lockstep with the commands,
+                // instead of every fill reading the pre-transaction store and
+                // clobbering the one before it.
+                let mut working: std::collections::BTreeMap<raster::TileCoord, Vec<u8>> =
+                    std::collections::BTreeMap::new();
+                for rect in Self::exposed_rects((w, h), (new_w, new_h), (ox, oy)) {
+                    let rect = PixelRect::new(rect.x - ox, rect.y - oy, rect.width, rect.height);
+                    let mut edges = Vec::new();
+                    let ts = TILE_SIZE as i64;
+                    let x0 = rect.x.div_euclid(ts);
+                    let x1 = (rect.right() - 1).div_euclid(ts);
+                    let y0 = rect.y.div_euclid(ts);
+                    let y1 = (rect.bottom() - 1).div_euclid(ts);
+                    for ty in y0..=y1 {
+                        for tx in x0..=x1 {
+                            let coord = raster::TileCoord::new(tx as i32, ty as i32, 0);
+                            // Keep whatever the tile already holds outside the
+                            // rect — the store's bytes, or what an earlier
+                            // strip's fill already wrote to this tile.
+                            let mut data = match working.get(&coord) {
+                                Some(bytes) => bytes.clone(),
+                                None => match self
+                                    .document
+                                    .pixels
+                                    .tiles(key)
+                                    .and_then(|map| map.get(coord))
+                                    .and_then(|hash| self.tiles.tile(hash))
+                                {
+                                    Some(bytes) => bytes.to_vec(),
+                                    None => vec![
+                                        0u8;
+                                        raster::Tile::byte_len(raster::PixelFormat::Rgba8)
+                                    ],
+                                },
+                            };
+                            let (tox, toy) = coord.pixel_origin();
+                            let cx0 = (rect.x.max(tox) - tox) as usize;
+                            let cy0 = (rect.y.max(toy) - toy) as usize;
+                            let cx1 = (rect.right().min(tox + ts) - tox) as usize;
+                            let cy1 = (rect.bottom().min(toy + ts) - toy) as usize;
+                            for y in cy0..cy1 {
+                                let row = y * TILE_SIZE as usize;
+                                for x in cx0..cx1 {
+                                    data[(row + x) * 4..(row + x) * 4 + 4].copy_from_slice(&color);
+                                }
+                            }
+                            let hash = self.tiles.insert_bytes(data.clone());
+                            working.insert(coord, data);
+                            edges.push(editor_core::TileEdit::set(coord, hash));
+                        }
+                    }
+                    commands.push(Command::fill_region(
+                        editor_core::PixelTarget::Layer(bottom),
+                        rect,
+                        editor_core::FillColor(color),
+                        edges,
+                    )?);
+                }
+            }
+        }
+        Ok(Command::Transaction {
+            label: "Canvas Size".to_string(),
+            commands,
+        })
+    }
+
+    /// The parts of the new canvas the old canvas did not cover, as up to
+    /// four rectangles, clamped to the new canvas and never empty.
+    fn exposed_rects(old: (u32, u32), new: (u32, u32), offset: (i64, i64)) -> Vec<PixelRect> {
+        let (ox, oy) = offset;
+        let canvas = PixelRect::new(0, 0, new.0, new.1);
+        // The old content's rectangle in new-canvas coordinates.
+        let content = PixelRect::new(ox, oy, old.0, old.1);
+        let mut out = Vec::new();
+        let strip = |y: i64, x: i64, height: u32, width: u32| -> Option<PixelRect> {
+            if width == 0 || height == 0 {
+                return None;
+            }
+            let r = PixelRect::new(x, y, width, height);
+            // Clamp to the canvas: a crop can push a strip partly or wholly
+            // outside it.
+            let x0 = r.x.max(canvas.x);
+            let y0 = r.y.max(canvas.y);
+            let x1 = r.right().min(canvas.right());
+            let y1 = r.bottom().min(canvas.bottom());
+            if x1 > x0 && y1 > y0 {
+                Some(PixelRect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
+            } else {
+                None
+            }
+        };
+        // Above the content, below it, and the two sides between them.
+        if let Some(r) = strip(0, 0, oy.max(0) as u32, new.0) {
+            out.push(r);
+        }
+        if let Some(r) = strip(
+            content.bottom().max(0),
+            0,
+            new.1.saturating_sub(content.bottom().max(0) as u32),
+            new.0,
+        ) {
+            out.push(r);
+        }
+        if let Some(r) = strip(
+            content.y.max(0),
+            0,
+            content.height.min(new.1),
+            ox.max(0) as u32,
+        ) {
+            out.push(r);
+        }
+        if let Some(r) = strip(
+            content.y.max(0),
+            content.right(),
+            content.height.min(new.1),
+            new.0.saturating_sub(content.right().max(0) as u32),
+        ) {
+            out.push(r);
+        }
+        out
+    }
+
+    /// Run an Export As job: every enabled entry, written to `dir`.
+    ///
+    /// One composite feeds the whole batch; `raster`'s batch exporter groups
+    /// presets by target size so exactly one scaled image is alive at a time,
+    /// and every file is written atomically. Each file is named
+    /// `{base_name}{suffix}.{ext}` — the preset's own name is replaced,
+    /// because the dialog's rows all start life named "export".
+    pub fn export_job(
+        &mut self,
+        job: &ui::dialogs::ExportJob,
+        dir: &std::path::Path,
+    ) -> Result<Vec<PathBuf>, DocumentError> {
+        let rect = self.canvas_rect();
+        let rgba = self.composite(rect)?;
+        let (w, h) = (self.document.width(), self.document.height());
+        // The composite is straight RGBA8 in the document's own space; the
+        // exporter's linear working buffer is what every preset resamples and
+        // converts from.
+        let image =
+            raster::export::linear_from_rgba8(w, h, &rgba, &self.document.meta.color_space)?;
+        let presets: Vec<raster::ExportPreset> = job
+            .entries
+            .iter()
+            .filter(|entry| entry.enabled)
+            .map(|entry| {
+                let mut preset = entry.preset.clone();
+                preset.name = format!("{}{}", job.base_name, entry.suffix);
+                preset
+            })
+            .collect();
+        let metadata = raster::export::ExportMetadata {
+            icc_profile: None,
+            icc_profile_space: None,
+        };
+        let paths = raster::export::export_batch_to_dir(dir, &image, &presets, &metadata)?;
+        Ok(paths)
+    }
+
+    /// A downscaled straight-RGBA8 composite of the whole document, for the
+    /// Export As dialog's live preview — at most `max_edge` on a side.
+    ///
+    /// `&self` via the free compositor (the same road
+    /// [`OpenDocument::layer_thumbnail`] takes), so the chrome can refresh the
+    /// dialog's proxy from a frame that only borrows the editor.
+    pub fn export_preview(
+        &self,
+        max_edge: u32,
+    ) -> Result<ui::dialogs::PreviewSource, DocumentError> {
+        let rect = self.canvas_rect();
+        let canvas = compositor::composite_region(
+            &self.document,
+            &self.tiles,
+            rect,
+            0,
+            CompositeOptions::default(),
+        )?;
+        let rgba = canvas.to_rgba8(&self.document.meta.color_space);
+        let (w, h) = (self.document.width(), self.document.height());
+        let (dw, dh, down) = Self::box_downscale(&rgba, w, h, max_edge);
+        ui::dialogs::PreviewSource::new(dw, dh, down)
+            .ok_or_else(|| DocumentError::Io("preview buffer did not match its size".into()))
     }
 
     /// Write the whole composite as a print-ready single-page PDF (the S1.8
@@ -984,6 +1716,28 @@ mod tests {
             width,
             height,
             rgba8: vec![value; (width as usize) * (height as usize) * 4],
+            color_space: color::ColorSpace::Srgb,
+            icc_profile: None,
+        }
+    }
+
+    /// A deterministic pseudo-random RGBA8 buffer — flat pixels compress
+    /// identically at every JPEG quality, so the quality test needs noise.
+    fn noise_image(width: u32, height: u32) -> DecodedImage {
+        let mut state = 0x1234_5678u32;
+        let mut rgba8 = Vec::with_capacity((width * height * 4) as usize);
+        for _ in 0..width * height {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let (r, g) = ((state >> 16) as u8, (state >> 8) as u8);
+            let b = state as u8;
+            rgba8.extend_from_slice(&[r, g, b, 255]);
+        }
+        DecodedImage {
+            width,
+            height,
+            rgba8,
+            color_space: color::ColorSpace::Srgb,
+            icc_profile: None,
         }
     }
 
@@ -1030,6 +1784,385 @@ mod tests {
             "media box matches the composite"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_job_writes_every_entry_and_honours_quality_and_scale() {
+        let imported =
+            crate::import::document_from_image(&noise_image(64, 64), "noise.png", 100).unwrap();
+        let mut d = OpenDocument::from_import(DocumentId(1), imported);
+        let dir = tempfile::tempdir().unwrap();
+        let job = ui::dialogs::ExportJob {
+            base_name: "noise".to_string(),
+            entries: vec![
+                ui::dialogs::ExportEntry::new("-q30", raster::ExportFormat::Jpeg(30), 1.0),
+                ui::dialogs::ExportEntry::new("-q95", raster::ExportFormat::Jpeg(95), 1.0),
+                ui::dialogs::ExportEntry::new("-half", raster::ExportFormat::Png, 0.5),
+            ],
+        };
+        let paths = d.export_job(&job, dir.path()).unwrap();
+        assert_eq!(paths.len(), 3, "one file per entry: {paths:?}");
+        let q30 = std::fs::read(dir.path().join("noise-q30.jpg")).unwrap();
+        let q95 = std::fs::read(dir.path().join("noise-q95.jpg")).unwrap();
+        assert!(
+            q30.len() < q95.len(),
+            "JPEG quality 30 ({} bytes) must be smaller than quality 95 ({} bytes)",
+            q30.len(),
+            q95.len()
+        );
+        let half = raster::decode_path(&dir.path().join("noise-half.png")).unwrap();
+        assert_eq!(
+            (half.width, half.height),
+            (32, 32),
+            "scale 0.5 halves both axes"
+        );
+    }
+
+    #[test]
+    fn export_preview_is_the_whole_composite_at_most_the_proxy_cap() {
+        let d = doc_of(600, 400);
+        let proxy = d
+            .export_preview(ui::dialogs::export_as::MAX_PROXY_SIDE)
+            .unwrap();
+        assert_eq!(proxy.width(), 512);
+        assert_eq!(proxy.height(), 341, "aspect preserved: 600x400 at cap 512");
+        // A small document is never upscaled.
+        let small = doc_of(8, 8);
+        let proxy = small.export_preview(64).unwrap();
+        assert_eq!((proxy.width(), proxy.height()), (8, 8));
+    }
+
+    #[test]
+    fn resample_image_size_resizes_and_undoes_byte_for_byte() {
+        let imported =
+            crate::import::document_from_image(&noise_image(800, 600), "big.png", 100).unwrap();
+        let mut d = OpenDocument::from_import(DocumentId(1), imported);
+        let before_map = d
+            .document
+            .layer_tiles(d.document.active_layer().unwrap())
+            .unwrap()
+            .iter()
+            .collect::<Vec<_>>();
+        let before_composite = d.composite(d.canvas_rect()).unwrap();
+
+        let spec = ui::dialogs::ImageSizeSpec {
+            width: 400,
+            height: 300,
+            resolution_ppi: 72.0,
+            resample: Some(raster::ResampleFilter::Lanczos3),
+        };
+        let command = d.resample_command(&spec).unwrap();
+        d.history
+            .apply(&mut d.document, command)
+            .expect("the resample applies");
+        assert_eq!((d.document.width(), d.document.height()), (400, 300));
+        // The layer's tiles now fit the new canvas exactly: nothing dangles
+        // past the edge.
+        let map = d
+            .document
+            .layer_tiles(d.document.active_layer().unwrap())
+            .unwrap();
+        let ts = TILE_SIZE as i64;
+        for (coord, _) in map.iter() {
+            assert!(i64::from(coord.x) * ts < 400 && i64::from(coord.y) * ts < 300);
+        }
+
+        d.history.undo(&mut d.document).unwrap();
+        assert_eq!((d.document.width(), d.document.height()), (800, 600));
+        let after_map = d
+            .document
+            .layer_tiles(d.document.active_layer().unwrap())
+            .unwrap()
+            .iter()
+            .collect::<Vec<_>>();
+        assert_eq!(before_map, after_map, "undo restored the exact tile map");
+        let after_composite = d.composite(d.canvas_rect()).unwrap();
+        assert_eq!(
+            before_composite, after_composite,
+            "undo restored the original pixels byte-for-byte"
+        );
+
+        // Redo resamples again to the same result.
+        d.history.redo(&mut d.document).unwrap();
+        assert_eq!((d.document.width(), d.document.height()), (400, 300));
+    }
+
+    #[test]
+    fn resample_image_size_scales_a_raster_mask_with_the_layer() {
+        let imported =
+            crate::import::document_from_image(&noise_image(64, 64), "m.png", 100).unwrap();
+        let mut d = OpenDocument::from_import(DocumentId(1), imported);
+        // Add a mask, then reveal only the left half of it.
+        let layer = d.document.active_layer().unwrap();
+        let attach = Command::SetLayerProperties {
+            layer_id: layer,
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Set(layer_model::LayerMask::new(
+                    layer_model::MaskId::new(),
+                )),
+                ..Default::default()
+            },
+        };
+        d.history.apply(&mut d.document, attach).unwrap();
+        let mask_id = d
+            .document
+            .layers
+            .get(layer)
+            .unwrap()
+            .mask_id()
+            .expect("the layer has a mask now");
+        // Reveal the whole mask. The canvas is 64×64, inside one 256×256
+        // coverage tile, so the fill's rect is a *partial* tile: its interior
+        // derivation is empty by design, and the caller — which owns the bytes
+        // — rasterizes the edge tile itself.
+        let rect = raster::PixelRect::new(0, 0, 64, 64);
+        let ts = TILE_SIZE as usize;
+        let mut data = vec![0u8; editor_core::MASK_TILE_BYTES];
+        for y in 0..64 {
+            data[y * ts..y * ts + 64].fill(editor_core::MaskCoverage::REVEALED.0);
+        }
+        let revealed = d.tiles.insert_bytes(data);
+        let fill = Command::fill_region(
+            editor_core::PixelTarget::Mask(layer),
+            rect,
+            editor_core::MaskCoverage::REVEALED,
+            [editor_core::TileEdit::set(
+                raster::TileCoord::new(0, 0, 0),
+                revealed,
+            )],
+        )
+        .unwrap();
+        d.history.apply(&mut d.document, fill).unwrap();
+        assert!(
+            d.document
+                .pixels
+                .tiles(editor_core::PixelKey::Mask(mask_id))
+                .is_some(),
+            "the mask has coverage tiles"
+        );
+
+        let spec = ui::dialogs::ImageSizeSpec {
+            width: 32,
+            height: 32,
+            resolution_ppi: 72.0,
+            resample: Some(raster::ResampleFilter::Triangle),
+        };
+        let command = d.resample_command(&spec).unwrap();
+        d.history.apply(&mut d.document, command).unwrap();
+        assert_eq!((d.document.width(), d.document.height()), (32, 32));
+        let map = d
+            .document
+            .pixels
+            .tiles(editor_core::PixelKey::Mask(mask_id))
+            .unwrap();
+        let ts = TILE_SIZE as i64;
+        for (coord, _) in map.iter() {
+            assert!(
+                i64::from(coord.x) * ts < 32 && i64::from(coord.y) * ts < 32,
+                "mask tiles fit the new canvas"
+            );
+        }
+        d.history.undo(&mut d.document).unwrap();
+        assert_eq!((d.document.width(), d.document.height()), (64, 64));
+    }
+
+    #[test]
+    fn canvas_size_anchored_top_left_keeps_the_pixels_and_undoes() {
+        let imported =
+            crate::import::document_from_image(&noise_image(100, 100), "sq.png", 100).unwrap();
+        let mut d = OpenDocument::from_import(DocumentId(1), imported);
+        let before = d.composite(d.canvas_rect()).unwrap();
+
+        let spec = ui::dialogs::CanvasSizeSpec {
+            width: 200,
+            height: 200,
+            offset: ui::dialogs::Anchor::TopLeft.offset((100, 100), (200, 200)),
+            anchor: ui::dialogs::Anchor::TopLeft,
+            background: ui::dialogs::BackgroundContents::Transparent,
+        };
+        let command = d.canvas_size_command(&spec).unwrap();
+        d.history.apply(&mut d.document, command).unwrap();
+        assert_eq!((d.document.width(), d.document.height()), (200, 200));
+        // The original pixels did not move: the top-left 100×100 of the new
+        // composite is exactly the old one.
+        assert_eq!(d.composite(PixelRect::new(0, 0, 100, 100)).unwrap(), before);
+        // The exposed area composites fully transparent.
+        assert!(
+            d.composite(PixelRect::new(150, 150, 50, 50))
+                .unwrap()
+                .iter()
+                .all(|&b| b == 0),
+            "the exposed area was not transparent"
+        );
+        d.history.undo(&mut d.document).unwrap();
+        assert_eq!((d.document.width(), d.document.height()), (100, 100));
+        assert_eq!(d.composite(d.canvas_rect()).unwrap(), before);
+    }
+
+    #[test]
+    fn canvas_size_anchored_centre_offsets_the_content() {
+        let imported =
+            crate::import::document_from_image(&noise_image(100, 100), "sq.png", 100).unwrap();
+        let mut d = OpenDocument::from_import(DocumentId(1), imported);
+        let before = d.composite(d.canvas_rect()).unwrap();
+
+        let spec = ui::dialogs::CanvasSizeSpec {
+            width: 200,
+            height: 200,
+            offset: ui::dialogs::Anchor::Center.offset((100, 100), (200, 200)),
+            anchor: ui::dialogs::Anchor::Center,
+            background: ui::dialogs::BackgroundContents::Transparent,
+        };
+        let command = d.canvas_size_command(&spec).unwrap();
+        d.history.apply(&mut d.document, command).unwrap();
+        // The content landed centred: (50, 50).
+        assert_eq!(
+            d.composite(PixelRect::new(50, 50, 100, 100)).unwrap(),
+            before
+        );
+        assert!(
+            d.composite(PixelRect::new(0, 0, 50, 50))
+                .unwrap()
+                .iter()
+                .all(|&b| b == 0),
+            "the corner the content moved away from was not empty"
+        );
+        d.history.undo(&mut d.document).unwrap();
+        assert_eq!(d.composite(d.canvas_rect()).unwrap(), before);
+    }
+
+    #[test]
+    fn canvas_size_fill_colours_the_exposed_area_on_the_backdrop() {
+        let imported =
+            crate::import::document_from_image(&noise_image(100, 100), "sq.png", 100).unwrap();
+        let mut d = OpenDocument::from_import(DocumentId(1), imported);
+
+        let spec = ui::dialogs::CanvasSizeSpec {
+            width: 200,
+            height: 200,
+            offset: ui::dialogs::Anchor::TopLeft.offset((100, 100), (200, 200)),
+            anchor: ui::dialogs::Anchor::TopLeft,
+            background: ui::dialogs::BackgroundContents::White,
+        };
+        let command = d.canvas_size_command(&spec).unwrap();
+        d.history.apply(&mut d.document, command).unwrap();
+        let exposed = d.composite(PixelRect::new(150, 150, 50, 50)).unwrap();
+        assert!(
+            exposed.chunks_exact(4).all(|p| p == [255, 255, 255, 255]),
+            "the exposed area was not filled white"
+        );
+        // The original pixels survived beside the fill.
+        let kept = d.composite(PixelRect::new(0, 0, 100, 100)).unwrap();
+        assert!(!kept.iter().all(|&b| b == 255), "the fill ate the content");
+        d.history.undo(&mut d.document).unwrap();
+        assert_eq!((d.document.width(), d.document.height()), (100, 100));
+        assert_eq!(
+            d.composite(d.canvas_rect()).unwrap(),
+            d.composite(d.canvas_rect()).unwrap(),
+        );
+        // The fill was one undoable step together with the resize: the undo
+        // above removed the whole transaction, so redo brings both back.
+        d.history.redo(&mut d.document).unwrap();
+        assert_eq!((d.document.width(), d.document.height()), (200, 200));
+    }
+
+    #[test]
+    fn an_arbitrary_rotation_grows_resamples_and_undoes_exactly() {
+        let imported =
+            crate::import::document_from_image(&noise_image(64, 64), "r.png", 100).unwrap();
+        let mut d = OpenDocument::from_import(DocumentId(1), imported);
+        let before_composite = d.composite(d.canvas_rect()).unwrap();
+
+        let command = d.rotate_canvas_arbitrary(37.0).unwrap();
+        d.history.apply(&mut d.document, command).unwrap();
+        let (w, h) = (d.document.width(), d.document.height());
+        assert!(w > 64 && h > 64, "the canvas grew: {w}x{h}");
+        assert_ne!(d.composite(d.canvas_rect()).unwrap(), before_composite);
+
+        d.history.undo(&mut d.document).unwrap();
+        assert_eq!((d.document.width(), d.document.height()), (64, 64));
+        assert_eq!(
+            d.composite(d.canvas_rect()).unwrap(),
+            before_composite,
+            "undo did not restore the pixels byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn reveal_all_grows_the_canvas_to_the_layer_content_and_undoes() {
+        let imported =
+            crate::import::document_from_image(&noise_image(32, 32), "bit.png", 100).unwrap();
+        let mut d = OpenDocument::from_import(DocumentId(1), imported);
+        let layer = d.document.active_layer().unwrap();
+        let content = d.composite(PixelRect::new(0, 0, 32, 32)).unwrap();
+
+        // Drag the layer 48 pixels past the right edge of the 64-wide canvas.
+        let nudge = Command::TransformLayer {
+            layer_id: layer,
+            matrix: tools::edit::translation_matrix(glam::Vec2::new(48.0, 0.0)),
+        };
+        d.history.apply(&mut d.document, nudge).unwrap();
+
+        let command = d.reveal_all_command().unwrap();
+        d.history.apply(&mut d.document, command).unwrap();
+        // The content's right edge is 48 + 32 = 80: the canvas grew to 80×32
+        // and the content is exactly where the user dragged it.
+        assert_eq!((d.document.width(), d.document.height()), (80, 32));
+        assert_eq!(
+            d.composite(PixelRect::new(48, 0, 32, 32)).unwrap(),
+            content,
+            "the dragged content moved when the canvas revealed it"
+        );
+        d.history.undo(&mut d.document).unwrap();
+        assert_eq!((d.document.width(), d.document.height()), (32, 32));
+    }
+
+    #[test]
+    fn reveal_all_pulls_negative_content_back_inside_and_undoes() {
+        let imported =
+            crate::import::document_from_image(&noise_image(32, 32), "bit.png", 100).unwrap();
+        let mut d = OpenDocument::from_import(DocumentId(1), imported);
+        let layer = d.document.active_layer().unwrap();
+        let content = d.composite(PixelRect::new(0, 0, 32, 32)).unwrap();
+
+        // Drag the layer 20 pixels off the left edge: its pixels sit at
+        // negative document coordinates, which a grow alone cannot contain.
+        let nudge = Command::TransformLayer {
+            layer_id: layer,
+            matrix: tools::edit::translation_matrix(glam::Vec2::new(-20.0, 0.0)),
+        };
+        d.history.apply(&mut d.document, nudge).unwrap();
+
+        let command = d.reveal_all_command().unwrap();
+        d.history.apply(&mut d.document, command).unwrap();
+        // The union (−20..12) shifts to (0..32): the canvas need not grow,
+        // but every root layer moves +20 so nothing sits outside the origin.
+        assert_eq!((d.document.width(), d.document.height()), (32, 32));
+        assert_eq!(
+            d.composite(PixelRect::new(0, 0, 32, 32)).unwrap(),
+            content,
+            "the off-canvas content did not come back inside"
+        );
+        d.history.undo(&mut d.document).unwrap();
+        // Undo put the layer back at −20 and the canvas back at 32×32.
+        assert_eq!((d.document.width(), d.document.height()), (32, 32));
+    }
+
+    #[test]
+    fn reveal_all_on_a_contained_canvas_reveals_nothing() {
+        let imported =
+            crate::import::document_from_image(&noise_image(8, 8), "bit.png", 100).unwrap();
+        let mut d = OpenDocument::from_import(DocumentId(1), imported);
+        let before = d.composite(d.canvas_rect()).unwrap();
+        // The image fills its own canvas exactly: nothing to reveal, so the
+        // command is the empty transaction the performer skips recording.
+        let command = d.reveal_all_command().unwrap();
+        assert!(
+            matches!(&command, Command::Transaction { commands, .. } if commands.is_empty()),
+            "a contained canvas grew a reveal command"
+        );
+        assert_eq!(d.composite(d.canvas_rect()).unwrap(), before);
+        assert_eq!(d.history.undo_depth(), 0);
     }
 
     #[test]

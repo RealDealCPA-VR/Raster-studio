@@ -79,6 +79,7 @@ use winit::keyboard::{ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
 use render::{Camera, Canvas, GpuContext, Overlay, MAX_ZOOM, MIN_ZOOM};
+use ui::dialogs::DialogAction;
 
 use crate::action::Action;
 use crate::chrome::Chrome;
@@ -390,6 +391,9 @@ pub struct Shell {
     /// belongs to. winit reports the button on press and release but not on the
     /// moves in between.
     held: Option<PointerButton>,
+    /// The Actions panel's last stopped recording, held between Stop and
+    /// Replay so the capture survives the recording flag's reset.
+    last_recording: Option<Vec<crate::editor::RecordedEdit>>,
     /// Pointer input, routed to the active tool or to the camera.
     pointer: ToolPointer,
     modifiers: ModifiersState,
@@ -437,6 +441,7 @@ impl Shell {
             startup_files,
             cursor: Vec2::ZERO,
             held: None,
+            last_recording: None,
             pointer: ToolPointer::new(),
             modifiers: ModifiersState::empty(),
             pen_pressure: 1.0,
@@ -553,6 +558,15 @@ impl Shell {
     /// Perform an action, turning a refusal into a status message (or a dialog
     /// when something actually failed).
     fn perform(&mut self, action: Action) {
+        // File ▸ New is a question, not an edit: the dialog asks for size and
+        // background before anything is created. The chrome's dialog host owns
+        // the question, so the shell opens it and the confirmed spec comes
+        // back through [`ChromeOutput::dialog`].
+        if matches!(action, Action::NewDocument) {
+            self.chrome.open_new_document_dialog();
+            self.repaint_at = Some(Instant::now());
+            return;
+        }
         match self.editor.dispatch(action) {
             Ok(_) => {}
             Err(ActionError::Cancelled(_)) => {}
@@ -583,6 +597,9 @@ impl Shell {
         let surface = instance.create_surface(window.clone())?;
         let gpu = pollster::block_on(GpuContext::for_surface(instance, &surface))
             .map_err(ShellError::Gpu)?;
+        // The diagnostics bundle names the adapter the window ACTUALLY got.
+        self.editor
+            .set_gpu_adapter_name(gpu.adapter.get_info().name);
 
         let size = window.inner_size();
         let caps = surface.get_capabilities(&gpu.adapter);
@@ -969,7 +986,9 @@ impl Shell {
     /// immediately point the cursor back at the previously active one; see
     /// `a_new_layer_stays_active_when_the_menu_creates_it`.
     fn apply_chrome(&mut self, output: crate::chrome::ChromeOutput) {
-        if let Some(id) = output.select_layer {
+        if let Some((layers, active)) = output.select_layers {
+            self.editor.set_layer_selection(layers, active);
+        } else if let Some(id) = output.select_layer {
             self.editor.set_active_layer(id);
         }
         if let Some(depth) = output.history_jump {
@@ -981,6 +1000,31 @@ impl Shell {
         }
         for action in output.actions {
             self.perform(action);
+        }
+        for transport in output.actions_transport {
+            match transport {
+                crate::chrome::ActionsTransport::StartRecording => {
+                    self.editor.start_recording();
+                    self.last_recording = None;
+                    self.editor.set_status("Recording actions");
+                }
+                crate::chrome::ActionsTransport::StopRecording => {
+                    self.last_recording = self.editor.stop_recording();
+                    self.editor.set_status("Stopped recording");
+                }
+                crate::chrome::ActionsTransport::ReplayRecording => {
+                    // The capture the panel replay button uses: the last
+                    // stopped recording, held by the shell between stop and
+                    // replay.
+                    if let Some(recording) = &self.last_recording {
+                        let applied = self.editor.replay(recording);
+                        self.editor
+                            .set_status(format!("Replayed {applied} step(s)"));
+                    } else {
+                        self.editor.set_status("Nothing to replay: record first");
+                    }
+                }
+            }
         }
         self.editor.set_paint_channel(output.paint_channel);
         if let Some(index) = output.activate {
@@ -1013,6 +1057,172 @@ impl Shell {
         for edit in output.layer_kind {
             self.editor.apply_kind_edit(edit);
         }
+        // A modal dialog confirmed with a value no existing channel carries.
+        // Each variant is applied by the piece that owns its effect; a
+        // variant with no application path yet says so rather than
+        // disappearing — each remaining one is consumed by its own P0 task as
+        // its dialog gets wired.
+        if let Some(action) = output.dialog {
+            match action {
+                DialogAction::NewDocument(spec) => {
+                    let background = match spec.background {
+                        ui::dialogs::BackgroundContents::Transparent => {
+                            crate::import::BlankBackground::Transparent
+                        }
+                        ui::dialogs::BackgroundContents::White => {
+                            crate::import::BlankBackground::Solid {
+                                rgba8: [255, 255, 255, 255],
+                                depth: spec.bit_depth,
+                            }
+                        }
+                        ui::dialogs::BackgroundContents::Black => {
+                            crate::import::BlankBackground::Solid {
+                                rgba8: [0, 0, 0, 255],
+                                depth: spec.bit_depth,
+                            }
+                        }
+                        ui::dialogs::BackgroundContents::Custom(rgba) => {
+                            crate::import::BlankBackground::Solid {
+                                rgba8: crate::menu_bridge::rgba8_of(rgba),
+                                depth: spec.bit_depth,
+                            }
+                        }
+                    };
+                    if let Err(e) = self.editor.new_document_with(
+                        spec.width,
+                        spec.height,
+                        &spec.title,
+                        background,
+                    ) {
+                        self.editor.set_status(e.to_string());
+                    }
+                }
+                DialogAction::Export(job) => {
+                    // Photopea writes downloads straight away; this is the
+                    // desktop equivalent — the folder picker asks once, then
+                    // every enabled entry lands in it.
+                    if let Some(dir) = self.editor.pick_export_folder() {
+                        match self
+                            .editor
+                            .active_mut()
+                            .expect("the export dialog only opens with a document")
+                            .export_job(&job, &dir)
+                        {
+                            Ok(paths) => {
+                                let last = paths.last().map(|p| p.display().to_string());
+                                self.editor.set_status(format!(
+                                    "Exported {} file(s) to {}",
+                                    paths.len(),
+                                    last.unwrap_or_default()
+                                ));
+                            }
+                            Err(e) => {
+                                tracing::warn!("export failed: {e}");
+                                self.editor.set_status(format!("Export failed: {e}"));
+                            }
+                        }
+                    }
+                    // Cancelled at the folder picker: nothing written, nothing
+                    // to report.
+                }
+                DialogAction::ResizeImage(spec) => {
+                    // A spec with `resample: None` changes print metadata
+                    // only, and nothing here stores a ppi — say so rather
+                    // than silently doing nothing.
+                    match (spec.resample, self.editor.active_mut()) {
+                        (None, _) => {
+                            self.editor.set_status(
+                                "Print resolution is not stored yet — the pixels were left unchanged",
+                            );
+                        }
+                        (Some(_), Some(doc)) => match doc.resample_command(&spec) {
+                            Ok(command) => self.editor.apply_command(command),
+                            Err(e) => {
+                                tracing::warn!("image size failed: {e}");
+                                self.editor.set_status(format!("Image Size failed: {e}"));
+                            }
+                        },
+                        (Some(_), None) => {}
+                    }
+                }
+                DialogAction::ResizeCanvas(spec) => {
+                    if let Some(doc) = self.editor.active_mut() {
+                        match doc.canvas_size_command(&spec) {
+                            Ok(command) => self.editor.apply_command(command),
+                            Err(e) => {
+                                tracing::warn!("canvas size failed: {e}");
+                                self.editor.set_status(format!("Canvas Size failed: {e}"));
+                            }
+                        }
+                    }
+                }
+                DialogAction::Fill(spec) => {
+                    if let Err(reason) =
+                        crate::menu_bridge::fill_selection_with(&mut self.editor, &spec)
+                    {
+                        self.editor.set_status(reason);
+                    }
+                }
+                DialogAction::Stroke(spec) => {
+                    if let Err(reason) =
+                        crate::menu_bridge::stroke_selection_with(&mut self.editor, &spec)
+                    {
+                        self.editor.set_status(reason);
+                    }
+                }
+                DialogAction::RotateCanvas(degrees) => {
+                    // Right angles take the exact index-copy path the fixed
+                    // menu items use, so a 90° through the dialog is
+                    // byte-identical to Image ▸ Rotation ▸ 90° Clockwise.
+                    let turns = degrees.rem_euclid(360.0);
+                    let orthogonal = [
+                        (90.0, Some(ui::menu::CanvasRotation::Deg90Cw)),
+                        (180.0, Some(ui::menu::CanvasRotation::Deg180)),
+                        (270.0, Some(ui::menu::CanvasRotation::Deg90Ccw)),
+                    ]
+                    .into_iter()
+                    .find(|(angle, _)| (turns - angle).abs() < 1e-9);
+                    match orthogonal {
+                        Some((_, fixed)) => {
+                            if let Err(reason) = crate::menu_bridge::perform(
+                                ui::menu::MenuAction::RotateCanvas(fixed.unwrap()),
+                                &mut self.editor,
+                            ) {
+                                tracing::warn!("rotate failed: {reason}");
+                            }
+                        }
+                        None => {
+                            if (turns).abs() < 1e-9 {
+                                self.editor.set_status("The canvas is already at 0°");
+                            } else if let Some(doc) = self.editor.active_mut() {
+                                match doc.rotate_canvas_arbitrary(degrees) {
+                                    Ok(command) => self.editor.apply_command(command),
+                                    Err(e) => {
+                                        tracing::warn!("rotate failed: {e}");
+                                        self.editor.set_status(format!("Rotate failed: {e}"));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                DialogAction::RunFilter(invocation) => {
+                    match crate::menu_bridge::run_filter_invocation(&mut self.editor, &invocation) {
+                        Ok(message) => self.editor.set_status(message),
+                        Err(reason) => {
+                            tracing::warn!("filter failed: {reason}");
+                            self.editor.set_status(reason);
+                        }
+                    }
+                }
+                other => {
+                    let label = other.label();
+                    tracing::warn!("dialog confirmed but not applied yet: {label}");
+                    self.editor
+                        .set_status(format!("{label} — applying it is not wired yet"));
+                }
+            }
+        }
         // A control the bridge could not answer says so. Silence here is what
         // hid an entire inert Properties panel through a whole review: an
         // intent that reached nobody left no trace at all.
@@ -1023,6 +1233,9 @@ impl Shell {
         }
         if let Some(rgba) = output.set_foreground {
             self.editor.set_foreground(rgba);
+        }
+        if let Some(gradient) = output.set_gradient_ramp {
+            self.editor.set_gradient_ramp(gradient);
         }
         if let Some(rgba) = output.set_background {
             self.editor.set_background(rgba);
@@ -1055,6 +1268,12 @@ impl Shell {
         if let Some(prefs) = output.preferences {
             self.editor.set_preferences(prefs);
         }
+        // The Preferences dialog's confirmed schema maps onto the app's own
+        // preferences; the keymap bridge is the preferences dedupe task's
+        // documented gap, so the live keymap wins for now.
+        if let Some(prefs) = output.set_ui_preferences {
+            self.editor.apply_ui_preferences(&prefs);
+        }
         if output.reset_keymap {
             self.editor.reset_keymap();
         }
@@ -1082,6 +1301,9 @@ impl Shell {
                 self.editor.report_error(&title, &reason);
             }
         }
+        if let Some((from, to)) = output.move_document {
+            self.editor.move_document(from, to);
+        }
         self.sync_marker();
     }
 
@@ -1095,7 +1317,7 @@ impl Shell {
             // The guard `Chrome::capturing` was written for, and which nothing
             // ever called: while a chord is being recorded the shell must not
             // *also* perform it.
-            recording_shortcut: self.chrome.capturing().is_some(),
+            recording_shortcut: self.chrome.is_recording(),
         }
     }
 
@@ -1141,6 +1363,13 @@ impl Shell {
         state: ElementState,
         repeat: bool,
     ) {
+        // A modal dialog owns the keyboard while it is open: Escape and Enter
+        // are the dialog's, delivered through egui, and the keymap must not
+        // act beside them — a chord fired under a modal would edit a document
+        // the user cannot see.
+        if self.chrome.dialog_open() {
+            return;
+        }
         // A Type-tool run open on the canvas owns the keyboard, the way a
         // focused egui field does. Without this the Type tool could create a
         // layer and never put a character in it: every letter would be a tool
@@ -1219,6 +1448,11 @@ impl Shell {
     }
 
     fn on_pointer(&mut self, phase: PointerPhase, button: PointerButton, over_panel: bool) {
+        // A modal dialog owns the whole pointer while it is open: a press that
+        // means "dismiss this modal" must never claim a canvas gesture. The
+        // scrim already makes egui consume the click; this veto is the second
+        // half, for a press that arrives before the next frame is drawn.
+        let over_panel = over_panel || self.chrome.dialog_open();
         let input = PointerInput {
             phase,
             button,
@@ -1234,7 +1468,10 @@ impl Shell {
             PointerPhase::Up => self.held = None,
             PointerPhase::Move => {}
         }
-        let outcome = self.pointer.handle(&mut self.editor, input, over_panel);
+        let choices = self.chrome.tool_choices(self.editor.effective_tool());
+        let outcome = self
+            .pointer
+            .handle(&mut self.editor, input, over_panel, &choices);
         if outcome.needs_repaint() {
             self.repaint_at = Some(Instant::now());
         }
@@ -2327,7 +2564,23 @@ mod tests {
         // is known, so the shell is where the fit happens.
         let dir = tempfile::tempdir().unwrap();
         let mut shell = shell_with_one_image(dir.path());
-        shell.perform(Action::NewDocument);
+        // File ▸ New is the dialog now; what this test exercises is what
+        // happens when its confirmed answer becomes a document, so the spec
+        // travels the same road the dialog's confirm sends it.
+        let spec = ui::dialogs::NewDocumentSpec {
+            title: "Untitled".to_string(),
+            width: crate::editor::NEW_DOCUMENT_SIZE.0,
+            height: crate::editor::NEW_DOCUMENT_SIZE.1,
+            resolution_ppi: 72.0,
+            color_mode: ui::dialogs::ColorMode::Rgb,
+            color_space: color::ColorSpace::Srgb,
+            bit_depth: raster::BitDepth::Eight,
+            background: ui::dialogs::BackgroundContents::Transparent,
+        };
+        shell.apply_chrome(ChromeOutput {
+            dialog: Some(ui::dialogs::DialogAction::NewDocument(Box::new(spec))),
+            ..Default::default()
+        });
         let (w, h) = crate::editor::NEW_DOCUMENT_SIZE;
         assert!(
             shell.editor().documents().iter().all(|d| d.awaiting_fit()),
@@ -2564,5 +2817,505 @@ mod tests {
         assert!(err.to_string().contains("Rgba16Float"), "{err}");
         let err = choose_surface_format(&[]).unwrap_err();
         assert!(matches!(err, ShellError::UnsupportedSurfaceFormat { .. }));
+    }
+
+    /// A confirmed New Document dialog builds exactly the document it
+    /// confirmed — the size and the background the user chose, not a hardcoded
+    /// default.
+    #[test]
+    fn a_confirmed_export_dialog_writes_through_the_folder_picker() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let png = dir.path().join("noise.png");
+        // Noise, so the JPEG quality assertions in the doc-level test carry
+        // over: this one pins the *wiring* — confirm → folder picker → files.
+        let mut state = 0x9e37_79b9u32;
+        let mut px = Vec::with_capacity(16 * 16 * 4);
+        for _ in 0..16 * 16 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            px.extend_from_slice(&[(state >> 16) as u8, (state >> 8) as u8, state as u8, 255]);
+        }
+        std::fs::write(
+            &png,
+            raster::encode(raster::ExportFormat::Png, 16, 16, &px).unwrap(),
+        )
+        .unwrap();
+
+        let dialogs = ScriptedDialogs {
+            export_folders: vec![out.path().to_path_buf()],
+            ..Default::default()
+        };
+        let mut editor = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(dialogs),
+        );
+        editor.open_path(&png).unwrap();
+        let mut shell = Shell::new(editor, Vec::new());
+
+        let job = ui::dialogs::ExportJob {
+            base_name: "shot".to_string(),
+            entries: vec![ui::dialogs::ExportEntry::new(
+                "",
+                raster::ExportFormat::Png,
+                1.0,
+            )],
+        };
+        shell.apply_chrome(ChromeOutput {
+            dialog: Some(DialogAction::Export(Box::new(job))),
+            ..Default::default()
+        });
+
+        let written = out.path().join("shot.png");
+        assert!(
+            written.exists(),
+            "the confirmed job was not written: {out:?}"
+        );
+        assert!(
+            shell
+                .editor()
+                .status()
+                .is_some_and(|s| s.starts_with("Exported 1 file")),
+            "the status bar did not report the export"
+        );
+    }
+
+    #[test]
+    fn a_ninety_degree_rotation_through_the_arbitrary_dialog_matches_the_fixed_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("in.png");
+        let mut state = 0x51ed_270bu32;
+        let mut px = Vec::with_capacity(40 * 30 * 4);
+        for _ in 0..40 * 30 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            px.extend_from_slice(&[(state >> 16) as u8, (state >> 8) as u8, state as u8, 255]);
+        }
+        std::fs::write(
+            &png,
+            raster::encode(raster::ExportFormat::Png, 40, 30, &px).unwrap(),
+        )
+        .unwrap();
+
+        // Doc A: through the dialog's confirmed answer.
+        let mut a = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("a")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        a.open_path(&png).unwrap();
+        let mut shell = Shell::new(a, Vec::new());
+        shell.apply_chrome(ChromeOutput {
+            dialog: Some(DialogAction::RotateCanvas(90.0)),
+            ..Default::default()
+        });
+
+        // Doc B: the fixed menu item.
+        let mut b = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("b")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        b.open_path(&png).unwrap();
+        crate::menu_bridge::perform(
+            ui::menu::MenuAction::RotateCanvas(ui::menu::CanvasRotation::Deg90Cw),
+            &mut b,
+        )
+        .unwrap();
+
+        let ca = shell.editor().active().unwrap();
+        let cb = b.active().unwrap();
+        assert_eq!((ca.document.width(), ca.document.height()), (30, 40));
+        assert_eq!(
+            ca.export_preview(512).unwrap(),
+            cb.export_preview(512).unwrap(),
+            "90° through the dialog differed from the fixed 90°"
+        );
+    }
+
+    #[test]
+    fn an_arbitrary_angle_grows_the_canvas_resamples_and_undoes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        let before = shell
+            .editor()
+            .active()
+            .unwrap()
+            .export_preview(512)
+            .unwrap();
+
+        shell.apply_chrome(ChromeOutput {
+            dialog: Some(DialogAction::RotateCanvas(37.0)),
+            ..Default::default()
+        });
+        let doc = shell.editor().active().unwrap();
+        let (w, h) = (doc.document.width(), doc.document.height());
+        assert!(
+            w > 16 && h > 16,
+            "the canvas grew to the rotated bbox: {w}x{h}"
+        );
+        assert_ne!(
+            doc.export_preview(512).unwrap(),
+            before,
+            "rotating 37° changed no pixel"
+        );
+    }
+
+    #[test]
+    fn applying_from_the_filter_gallery_matches_the_menu_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("noise.png");
+        let mut state = 0x2f6a_88c1u32;
+        let mut px = Vec::with_capacity(16 * 16 * 4);
+        for _ in 0..16 * 16 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            px.extend_from_slice(&[(state >> 16) as u8, (state >> 8) as u8, state as u8, 255]);
+        }
+        std::fs::write(
+            &png,
+            raster::encode(raster::ExportFormat::Png, 16, 16, &px).unwrap(),
+        )
+        .unwrap();
+
+        // Doc A: confirm the gallery with its default selection (the first
+        // catalogue entry at its default parameters).
+        let mut a = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("a")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        a.open_path(&png).unwrap();
+        let mut shell = Shell::new(a, Vec::new());
+        let gallery_spec = {
+            let source = crate::menu_bridge::filter_source(shell.editor()).unwrap();
+            ui::dialogs::FilterGalleryDialog::new(source)
+        };
+        let confirmed = ui::dialogs::Dialog::confirm(&gallery_spec).unwrap();
+        shell.apply_chrome(ChromeOutput {
+            dialog: Some(confirmed),
+            ..Default::default()
+        });
+
+        // Doc B: the menu item for the same filter, at its defaults.
+        let mut b = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("b")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        b.open_path(&png).unwrap();
+        crate::menu_bridge::perform(
+            ui::menu::MenuAction::Filter(gallery_spec.selected_filter().id),
+            &mut b,
+        )
+        .unwrap();
+
+        let ca = shell.editor().active().unwrap();
+        let cb = b.active().unwrap();
+        assert_eq!(
+            ca.export_preview(512).unwrap(),
+            cb.export_preview(512).unwrap(),
+            "the gallery and the menu item disagreed about the pixels"
+        );
+    }
+
+    #[test]
+    fn a_drop_shadow_set_through_the_layer_style_dialog_is_one_undoable_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.png");
+        // An opaque block on a transparent canvas: a shadow behind a fully
+        // opaque, edge-to-edge layer would never be visible.
+        let mut state = 0x7f4a_c921u32;
+        let mut px = Vec::with_capacity(32 * 32 * 4);
+        for y in 0..32u32 {
+            for x in 0..32u32 {
+                let inside = (8..24).contains(&x) && (8..24).contains(&y);
+                if inside {
+                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    px.extend_from_slice(&[
+                        (state >> 16) as u8,
+                        (state >> 8) as u8,
+                        state as u8,
+                        255,
+                    ]);
+                } else {
+                    px.extend_from_slice(&[0, 0, 0, 0]);
+                }
+            }
+        }
+        std::fs::write(
+            &p,
+            raster::encode(raster::ExportFormat::Png, 32, 32, &px).unwrap(),
+        )
+        .unwrap();
+        let mut ed = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        ed.open_path(&p).unwrap();
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let composite_before = ed.active().unwrap().export_preview(512).unwrap();
+        let history_before = ed.active().unwrap().history.journal().count();
+
+        // The dialog the menu row opens, with Drop Shadow switched on: the
+        // same state mutation the dialog's effect list performs.
+        let effects = ed
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .get(layer)
+            .unwrap()
+            .effects
+            .clone();
+        let mut dialog = ui::dialogs::LayerStyleDialog::new(layer, "a.png", effects);
+        dialog.set_enabled(ui::dialogs::EffectKind::DropShadow, true);
+        let action =
+            ui::dialogs::Dialog::confirm(&dialog).expect("a dialog with an effect on can confirm");
+
+        // Through the shell: the confirmed command is one history entry, the
+        // composite changes, and undo takes the shadow off again.
+        let mut shell = Shell::new(ed, Vec::new());
+        shell.apply_chrome(ChromeOutput {
+            commands: match action {
+                ui::dialogs::DialogAction::Command(command) => vec![*command],
+                other => panic!("the layer style dialog confirmed to {other:?}"),
+            },
+            ..Default::default()
+        });
+        let open = shell.editor().active().unwrap();
+        assert_eq!(
+            open.history.journal().count(),
+            history_before + 1,
+            "the shadow was not exactly one history entry"
+        );
+        assert_ne!(
+            open.export_preview(512).unwrap(),
+            composite_before,
+            "the shadow changed no pixel"
+        );
+
+        // Undo — driven through the shell's own action channel, the same road
+        // Ctrl+Z takes — removes the shadow entirely.
+        shell.apply_chrome(ChromeOutput {
+            actions: vec![Action::Undo],
+            ..Default::default()
+        });
+        let open = shell.editor().active().unwrap();
+        assert_eq!(
+            open.history.journal().count(),
+            history_before,
+            "undo did not remove the history entry"
+        );
+        assert_eq!(
+            open.export_preview(512).unwrap(),
+            composite_before,
+            "undo did not restore the pixels"
+        );
+    }
+
+    #[test]
+    fn a_confirmed_filter_dialog_runs_at_radius_zero_and_eight() {
+        let dir = tempfile::tempdir().unwrap();
+        // Noise, not a flat fill: a uniform image blurred is still uniform.
+        let png = dir.path().join("noise.png");
+        let mut state = 0x68e3_1a0fu32;
+        let mut px = Vec::with_capacity(16 * 16 * 4);
+        for _ in 0..16 * 16 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            px.extend_from_slice(&[(state >> 16) as u8, (state >> 8) as u8, state as u8, 255]);
+        }
+        std::fs::write(
+            &png,
+            raster::encode(raster::ExportFormat::Png, 16, 16, &px).unwrap(),
+        )
+        .unwrap();
+        let mut editor = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        editor.open_path(&png).unwrap();
+        let mut shell = Shell::new(editor, Vec::new());
+        let spec = ui::dialogs::filter_by_id(ui::menu::FilterId::GaussianBlur).unwrap();
+
+        // Radius 0 is the identity: the pixels do not change, and the shell
+        // says so instead of recording an undo step that does nothing.
+        let mut identity = ui::dialogs::FilterParams::defaults(spec.params);
+        identity.set("radius", ui::dialogs::ParamValue::Float(0.0));
+        let before = shell
+            .editor()
+            .active()
+            .unwrap()
+            .export_preview(512)
+            .unwrap();
+        let undo_before = shell.editor().active().unwrap().history.undo_depth();
+        shell.apply_chrome(ChromeOutput {
+            dialog: Some(DialogAction::RunFilter(Box::new(
+                ui::dialogs::FilterInvocation {
+                    filter: spec,
+                    params: identity,
+                },
+            ))),
+            ..Default::default()
+        });
+        let open = shell.editor().active().unwrap();
+        assert_eq!(
+            open.export_preview(512).unwrap(),
+            before,
+            "radius 0 changed the pixels"
+        );
+        assert_eq!(
+            open.history.undo_depth(),
+            undo_before,
+            "radius 0 recorded an undo step"
+        );
+
+        // Radius 8 blurs, as exactly one undoable step.
+        let mut blurred = ui::dialogs::FilterParams::defaults(spec.params);
+        blurred.set("radius", ui::dialogs::ParamValue::Float(8.0));
+        shell.apply_chrome(ChromeOutput {
+            dialog: Some(DialogAction::RunFilter(Box::new(
+                ui::dialogs::FilterInvocation {
+                    filter: spec,
+                    params: blurred,
+                },
+            ))),
+            ..Default::default()
+        });
+        let open = shell.editor().active().unwrap();
+        assert_ne!(
+            open.export_preview(512).unwrap(),
+            before,
+            "radius 8 changed nothing"
+        );
+        assert_eq!(
+            open.history.undo_depth(),
+            undo_before + 1,
+            "the blur was not exactly one undo step"
+        );
+    }
+
+    #[test]
+    fn a_confirmed_canvas_size_dialog_reframes_through_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+
+        let spec = ui::dialogs::CanvasSizeSpec {
+            width: 32,
+            height: 32,
+            offset: ui::dialogs::Anchor::TopLeft.offset((16, 16), (32, 32)),
+            anchor: ui::dialogs::Anchor::TopLeft,
+            background: ui::dialogs::BackgroundContents::Transparent,
+        };
+        shell.apply_chrome(ChromeOutput {
+            dialog: Some(ui::dialogs::DialogAction::ResizeCanvas(spec)),
+            ..Default::default()
+        });
+        let doc = shell.editor().active().unwrap();
+        assert_eq!((doc.document.width(), doc.document.height()), (32, 32));
+        assert!(
+            doc.history.undo_depth() > 0,
+            "the re-frame is one undoable step"
+        );
+    }
+
+    #[test]
+    fn a_confirmed_image_size_dialog_resamples_through_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        assert_eq!(shell.editor().active().unwrap().document.width(), 16);
+
+        let spec = ui::dialogs::ImageSizeSpec {
+            width: 8,
+            height: 8,
+            resolution_ppi: 72.0,
+            resample: Some(raster::ResampleFilter::Triangle),
+        };
+        shell.apply_chrome(ChromeOutput {
+            dialog: Some(ui::dialogs::DialogAction::ResizeImage(spec)),
+            ..Default::default()
+        });
+        let doc = shell.editor().active().unwrap();
+        assert_eq!((doc.document.width(), doc.document.height()), (8, 8));
+        assert!(
+            doc.history.undo_depth() > 0,
+            "the resample is one undoable step"
+        );
+    }
+
+    #[test]
+    fn a_confirmed_new_document_dialog_creates_the_document_it_confirmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        let before = shell.editor().documents().len();
+
+        let spec = ui::dialogs::NewDocumentSpec {
+            title: "Poster".to_string(),
+            width: 1920,
+            height: 1080,
+            resolution_ppi: 72.0,
+            color_mode: ui::dialogs::ColorMode::Rgb,
+            color_space: color::ColorSpace::Srgb,
+            bit_depth: raster::BitDepth::Eight,
+            background: ui::dialogs::BackgroundContents::Transparent,
+        };
+        shell.apply_chrome(ChromeOutput {
+            dialog: Some(ui::dialogs::DialogAction::NewDocument(Box::new(spec))),
+            ..Default::default()
+        });
+
+        let open = shell
+            .editor()
+            .active()
+            .expect("the confirmed document is open");
+        assert_eq!(open.document.width(), 1920);
+        assert_eq!(open.document.height(), 1080);
+        assert_eq!(shell.editor().documents().len(), before + 1);
+        // A transparent background is *no* background: the base layer holds no
+        // tiles, so every pixel composites fully transparent.
+        let layer = open.document.active_layer().unwrap();
+        // The thumbnail preserves the document's aspect ratio (16:9 here).
+        let (_, _, rgba) = open.layer_thumbnail(layer, 32).unwrap();
+        assert!(
+            rgba.iter().all(|&b| b == 0),
+            "the base layer was not transparent"
+        );
+    }
+
+    #[test]
+    fn a_confirmed_new_document_dialog_honours_a_solid_background() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+
+        let spec = ui::dialogs::NewDocumentSpec {
+            title: "White".to_string(),
+            width: 300,
+            height: 300,
+            resolution_ppi: 72.0,
+            color_mode: ui::dialogs::ColorMode::Rgb,
+            color_space: color::ColorSpace::Srgb,
+            bit_depth: raster::BitDepth::Eight,
+            background: ui::dialogs::BackgroundContents::White,
+        };
+        shell.apply_chrome(ChromeOutput {
+            dialog: Some(ui::dialogs::DialogAction::NewDocument(Box::new(spec))),
+            ..Default::default()
+        });
+
+        let open = shell.editor().active().unwrap();
+        let layer = open.document.active_layer().unwrap();
+        // 300×300 crosses one tile boundary, so the edge-tile zeroing ran too.
+        let (_, _, rgba) = open.layer_thumbnail(layer, 32).unwrap();
+        assert!(
+            rgba.chunks_exact(4).all(|p| p == [255, 255, 255, 255]),
+            "the white background did not composite as white"
+        );
     }
 }

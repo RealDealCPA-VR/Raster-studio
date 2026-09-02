@@ -222,12 +222,12 @@ impl Palette {
         }
     }
 
-    /// The Apple-style light palette.
+    /// The light palette (the opt-in system-follow alternative).
     pub fn light() -> Self {
         Self::from_pairs(false, LIGHT_ROLES)
     }
 
-    /// The Apple-style dark palette.
+    /// The dark palette — the shipped default, tuned to Photopea’s neutral greys.
     pub fn dark() -> Self {
         Self::from_pairs(true, DARK_ROLES)
     }
@@ -321,18 +321,23 @@ pub const LIGHT_ROLES: &[(ColorRole, Srgba)] = &[
 /// Dark appearance. Near-black rather than black, so the image is the
 /// brightest thing on screen and panels recede.
 pub const DARK_ROLES: &[(ColorRole, Srgba)] = &[
-    (ColorRole::SurfaceSunken, Srgba::hex(0x101012)),
-    (ColorRole::BackgroundCanvas, Srgba::hex(0x1A1A1D)),
-    (ColorRole::SurfacePanel, Srgba::hex(0x232326)),
-    (ColorRole::SurfaceElevated, Srgba::hex(0x2B2B2F)),
-    (ColorRole::SurfaceOverlay, Srgba::hex(0x323236)),
+    // The ramp is Photopea's: neutral greys (R = G = B — the previous ramp
+    // carried a faint blue cast). The accent and the text floors pin how light
+    // the surfaces may go: the accent needs 3:1 on Panel while white needs
+    // 4.5:1 on the accent, which together cap Panel near #282828 — so the
+    // chrome sits there and the hero canvas area sits darker than it.
+    (ColorRole::SurfaceSunken, Srgba::hex(0x1C1C1C)),
+    (ColorRole::BackgroundCanvas, Srgba::hex(0x202020)),
+    (ColorRole::SurfacePanel, Srgba::hex(0x282828)),
+    (ColorRole::SurfaceElevated, Srgba::hex(0x303030)),
+    (ColorRole::SurfaceOverlay, Srgba::hex(0x383838)),
     (ColorRole::SeparatorHairline, Srgba::hexa(0xFFFFFF1F)),
-    (ColorRole::SeparatorStrong, Srgba::hex(0x3C3C42)),
-    (ColorRole::TextPrimary, Srgba::hex(0xF2F2F5)),
-    (ColorRole::TextSecondary, Srgba::hex(0xB6B6BE)),
+    (ColorRole::SeparatorStrong, Srgba::hex(0x3F3F3F)),
+    (ColorRole::TextPrimary, Srgba::hex(0xF2F2F2)),
+    (ColorRole::TextSecondary, Srgba::hex(0xC0C0C0)),
     // Light enough to clear 4.5:1 on Overlay, the highest surface it lands on.
-    (ColorRole::TextTertiary, Srgba::hex(0xA2A2AB)),
-    (ColorRole::TextDisabled, Srgba::hex(0x5C5C64)),
+    (ColorRole::TextTertiary, Srgba::hex(0xB4B4B4)),
+    (ColorRole::TextDisabled, Srgba::hex(0x606060)),
     (ColorRole::TextOnAccent, Srgba::hex(0xFFFFFF)),
     (ColorRole::TextLink, Srgba::hex(0x6FB2FF)),
     // The accent deepens on hover and press in *both* appearances rather than
@@ -349,10 +354,10 @@ pub const DARK_ROLES: &[(ColorRole, Srgba)] = &[
     (ColorRole::WarningSubtle, Srgba::hexa(0xD08A0033)),
     (ColorRole::Danger, Srgba::hex(0xE5544B)),
     (ColorRole::DangerSubtle, Srgba::hexa(0xE5544B33)),
-    (ColorRole::ControlFill, Srgba::hex(0x35353A)),
-    (ColorRole::ControlFillHovered, Srgba::hex(0x3F3F45)),
-    (ColorRole::ControlFillActive, Srgba::hex(0x4A4A51)),
-    (ColorRole::ControlFillDisabled, Srgba::hex(0x2A2A2E)),
+    (ColorRole::ControlFill, Srgba::hex(0x474747)),
+    (ColorRole::ControlFillHovered, Srgba::hex(0x515151)),
+    (ColorRole::ControlFillActive, Srgba::hex(0x5B5B5B)),
+    (ColorRole::ControlFillDisabled, Srgba::hex(0x3A3A3A)),
     (ColorRole::ControlStroke, Srgba::hexa(0xFFFFFF1F)),
     (ColorRole::ControlStrokeStrong, Srgba::hexa(0xFFFFFF3D)),
     (ColorRole::SelectionFill, Srgba::hexa(0x2A6FD466)),

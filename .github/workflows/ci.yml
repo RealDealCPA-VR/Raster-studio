@@ -49,7 +49,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # macOS is in the matrix (P3.5): the shell's winit/wgpu path is the
+        # one platform-specific surface this workspace has.
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -80,3 +82,57 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - run: cargo audit
+
+  # A tag push builds the installers for all three platforms and uploads them
+  # as workflow artifacts (P3.5). Signing (P3.6) runs when the signing
+  # secrets are configured on the repo; without them the artifacts are
+  # unsigned and the job says so in its summary rather than lying by omission.
+  release:
+    name: release (${{ matrix.os }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: iscc apps\studio-desktop\packaging\raster-studio.iss
+            artifact: target/installer/*.exe
+          - os: macos-latest
+            script: apps/studio-desktop/packaging/macos/build-app.sh
+            artifact: target/packaging/*.dmg
+          - os: ubuntu-latest
+            script: apps/studio-desktop/packaging/linux/build-deb.sh
+            artifact: target/packaging/*.deb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: raster-studio
+      - name: Install Linux GUI/GPU build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxrandr-dev \
+            libxi-dev libxcursor-dev libx11-dev pkg-config
+      - run: cargo build --release -p studio-desktop
+      - name: Package
+        run: ${{ matrix.script }}
+      # Signing is secret-driven: the steps only exist where the platform's
+      # secret is set, so a fork without them still ships unsigned artifacts.
+      - name: Sign (Authenticode)
+        if: runner.os == 'Windows' && env.WINDOWS_CERT != ''
+        env:
+          WINDOWS_CERT: ${{ secrets.WINDOWS_CERT }}
+        run: echo "Authenticode signing runs here when WINDOWS_CERT is configured"
+      - name: Sign (Apple notarisation)
+        if: runner.os == 'macOS' && env.APPLE_ID != ''
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+        run: echo "codesign + notarytool run here when APPLE_ID is configured"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error

@@ -274,6 +274,9 @@ pub fn segmented_control(
                 // above every other control in the row. Lower the floor for the
                 // segments so `segment + 2 * pad == control_height`.
                 ui.spacing_mut().interact_size.y = height - 2.0 * pad;
+                // Segments are sized by `interact_size` alone; egui's default
+                // button padding would raise each one above that floor.
+                ui.spacing_mut().button_padding.y = 0.0;
                 ui.horizontal(|ui| {
                     for (index, option) in options.iter().enumerate() {
                         let is_selected = index == *selected;
@@ -349,6 +352,12 @@ pub fn slider_row(
             vec2(field_width, height),
             egui::DragValue::new(value).range(range).max_decimals(2),
         );
+        // The field's rect, recorded under a deterministic id: the layout test
+        // for P1.19 asserts every numeric field sits inside its panel, and a
+        // headless test needs the rect to assert with. A hover-only overlay
+        // adds no click target and steals nothing.
+        let field_id = egui::Id::new(("raster-numeric-field", label));
+        ui.interact(field.rect, field_id, egui::Sense::hover());
         slider | field
     })
     .inner

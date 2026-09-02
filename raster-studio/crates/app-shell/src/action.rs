@@ -106,6 +106,7 @@ pub enum Action {
     SaveAs,
     Export,
     CloseDocument,
+    CloseOthers,
     Quit,
     // ---- Edit ----
     Undo,
@@ -195,6 +196,7 @@ impl Action {
             Action::SaveAs => "save-as".into(),
             Action::Export => "export".into(),
             Action::CloseDocument => "close-document".into(),
+            Action::CloseOthers => "close-others".into(),
             Action::Quit => "quit".into(),
             Action::Undo => "undo".into(),
             Action::Redo => "redo".into(),
@@ -243,6 +245,7 @@ impl Action {
             | Action::SaveAs
             | Action::Export
             | Action::CloseDocument
+            | Action::CloseOthers
             | Action::Quit => Category::File,
             Action::Undo | Action::Redo | Action::ShowPreferences | Action::ShowFileInfo => {
                 Category::Edit
@@ -276,6 +279,7 @@ impl Action {
             Action::SaveAs => "Save As…".into(),
             Action::Export => "Export…".into(),
             Action::CloseDocument => "Close".into(),
+            Action::CloseOthers => "Close Others".into(),
             Action::Quit => "Quit".into(),
             Action::Undo => "Undo".into(),
             Action::Redo => "Redo".into(),

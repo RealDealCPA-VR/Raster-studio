@@ -266,6 +266,19 @@ impl std::fmt::Debug for ExportAsDialog {
 }
 
 impl ExportAsDialog {
+    /// Replace the live-preview proxy.
+    ///
+    /// A host that cannot composite while opening the dialog (it holds only a
+    /// shared borrow) starts from the placeholder and swaps the real one in on
+    /// a later frame; the cached render is dropped so the next frame re-encodes
+    /// against the new pixels.
+    pub fn set_proxy(&mut self, proxy: PreviewSource) {
+        self.proxy = proxy;
+        self.texture = None;
+        self.cached_for = None;
+        self.cached = None;
+    }
+
     /// Open on a `width` x `height` document called `base_name`.
     pub fn new(
         width: u32,

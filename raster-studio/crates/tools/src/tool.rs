@@ -19,6 +19,7 @@ use selection::{BooleanOp, Rect};
 
 use crate::brush::BrushSettings;
 use crate::error::ToolError;
+use crate::gradient::GradientRamp;
 use crate::tiles::TileAccess;
 
 /// Stable identifier for a tool — the key the UI binds shortcuts and icons to,
@@ -61,6 +62,11 @@ pub enum ToolId {
     Sponge,
     /// Author a path one click at a time. See [`crate::pen::PenTool`].
     Pen,
+    /// Click a path to select the shape layer that owns it. See
+    /// [`crate::path_select::PathSelectTool`].
+    PathSelect,
+    /// Drag a path's anchors. See [`crate::path_select::DirectSelectionTool`].
+    DirectSelection,
     /// Click to place a text layer and type into it. See
     /// [`crate::text::TypeTool`].
     Type,
@@ -119,6 +125,8 @@ impl ToolId {
         ToolId::Burn,
         ToolId::Sponge,
         ToolId::Pen,
+        ToolId::PathSelect,
+        ToolId::DirectSelection,
         ToolId::Type,
         ToolId::Rectangle,
         ToolId::RoundedRectangle,
@@ -481,6 +489,10 @@ pub enum TextEdit<'a> {
 pub enum ToolRequest {
     Crop(CropRequest),
     Slices(Vec<Slice>),
+    /// Make this layer the document's selection: Path Select clicked a shape
+    /// layer's path. Consumed by the shell, not by the tool's own command
+    /// stream — selection is a field write, not history.
+    SelectLayer(LayerId),
 }
 
 /// Everything a tool may read, plus the outboxes for everything it wants
@@ -502,6 +514,11 @@ pub struct ToolContext<'a> {
     pub foreground: [f32; 4],
     /// Background colour, straight-alpha **linear** RGBA.
     pub background: [f32; 4],
+    /// The ramp the gradient tools paint with, converted from the UI's
+    /// gradient model. The options bar and the dialog edit the workspace's
+    /// copy; the application threads it here per gesture, the same way the
+    /// foreground and background travel.
+    pub ramp: GradientRamp,
     /// The active pattern, for the pattern-driven tools.
     pub pattern: Option<Pattern>,
     /// Where a "sample all layers" read comes from — typically the cached
@@ -511,6 +528,12 @@ pub struct ToolContext<'a> {
     pub view: ViewState,
     /// The layers under the pointer, topmost first — what auto-select walks.
     pub layer_stack: Vec<LayerId>,
+    /// Every shape layer, as `(layer, its whole shape definition)` pairs,
+    /// top-most first — the same order [`Self::layer_stack`] walks. Path
+    /// Select hit-tests the paths; Direct Selection edits the active layer's
+    /// anchors and rebuilds its kind from these. Filled by the shell; empty
+    /// by default.
+    pub shape_paths: Vec<(LayerId, layer_model::ShapeLayer)>,
     /// Pixel bytes.
     pub tiles: &'a mut dyn TileAccess,
 
@@ -531,10 +554,12 @@ impl<'a> ToolContext<'a> {
             selection: Selection::None,
             foreground: [0.0, 0.0, 0.0, 1.0],
             background: [1.0, 1.0, 1.0, 1.0],
+            ramp: GradientRamp::black_to_white(),
             pattern: None,
             sample_from: None,
             view: ViewState::default(),
             layer_stack: Vec::new(),
+            shape_paths: Vec::new(),
             tiles,
             commands: Vec::new(),
             selection_edits: Vec::new(),
@@ -765,6 +790,14 @@ pub trait Tool {
     /// free to refuse a change that would disagree with a gesture already in
     /// progress.
     fn set_brush(&mut self, _brush: BrushSettings) {}
+
+    /// Adopt the application's choice for a named option — the transform
+    /// tool's `mode` (Scale/Rotate/Skew/…) and `target` (Layer/Selection).
+    /// `key` is the spec's key; `index` is the choice's position, which the
+    /// registry's spec and the tool's own ordering must agree on.
+    ///
+    /// Defaulted to a no-op: most tools have no choice options.
+    fn set_choice(&mut self, _key: &str, _index: usize) {}
 
     /// The brush this tool stamps with, when it has one.
     ///

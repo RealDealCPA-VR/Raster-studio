@@ -54,6 +54,10 @@ pub const CHECKER_LIGHT_SRGB_U8: u8 = 191;
 /// (sRGB 0.60).
 pub const CHECKER_DARK_SRGB_U8: u8 = 153;
 
+/// The flat pasteboard outside the document, as it appears in an 8-bit sRGB
+/// framebuffer (sRGB 0x3C — a neutral grey just above the dark panels).
+pub const PASTEBOARD_SRGB_U8: u8 = 60;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,6 +76,10 @@ mod tests {
         assert!(
             QUAD_WGSL.contains("const CHECKER_CELL_PX: f32 = 8.0;"),
             "quad.wgsl cell size no longer matches CHECKER_CELL_PX = {CHECKER_CELL_PX}"
+        );
+        assert!(
+            QUAD_WGSL.contains("const PASTEBOARD: f32 = 0.045031;"),
+            "quad.wgsl pasteboard grey no longer matches PASTEBOARD_SRGB_U8 = {PASTEBOARD_SRGB_U8}"
         );
         // sRGB 0.60 and 0.75 pre-linearized; see the sRGB EOTF.
         assert!(

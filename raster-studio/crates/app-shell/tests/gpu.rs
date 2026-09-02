@@ -55,6 +55,8 @@ fn probe(width: u32, height: u32) -> DecodedImage {
         width,
         height,
         rgba8,
+        color_space: color::ColorSpace::Srgb,
+        icc_profile: None,
     }
 }
 
@@ -328,6 +330,8 @@ fn two_tone(width: u32, height: u32) -> DecodedImage {
         width,
         height,
         rgba8,
+        color_space: color::ColorSpace::Srgb,
+        icc_profile: None,
     }
 }
 
@@ -537,4 +541,25 @@ fn a_downscaled_edit_lands_where_the_whole_document_path_would_put_it() {
         0,
         "the per-tile downscale and the whole-document downscale disagree"
     );
+}
+
+/// P3.3: the diagnostics bundle carries the adapter the live wgpu context
+/// actually got, and never consents to upload.
+#[test]
+fn the_diagnostics_bundle_names_the_live_adapter_and_never_consents() {
+    let gpu = gpu_or_skip!();
+    let name = gpu.adapter.get_info().name;
+    assert!(!name.is_empty(), "the adapter reports a name");
+    let mut bundle = telemetry::DiagnosticBundle::new(env!("CARGO_PKG_VERSION"));
+    bundle.gpu_adapter = name.clone();
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("diagnostics.json");
+    std::fs::write(&target, bundle.to_json()).unwrap();
+    let written = std::fs::read_to_string(&target).unwrap();
+    assert!(
+        written.contains(&name),
+        "the exported JSON names the real adapter"
+    );
+    let parsed: telemetry::DiagnosticBundle = serde_json::from_str(&written).unwrap();
+    assert!(!parsed.upload_consented, "export never consents to upload");
 }

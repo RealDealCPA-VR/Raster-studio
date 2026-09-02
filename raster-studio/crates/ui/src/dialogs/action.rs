@@ -38,6 +38,10 @@ pub enum DialogAction {
     ResizeImage(ImageSizeSpec),
     /// Re-frame the document without resampling.
     ResizeCanvas(CanvasSizeSpec),
+    /// Rotate the canvas and every layer by this many degrees, positive
+    /// clockwise. Right angles take the exact path the fixed rotations use;
+    /// anything else resamples.
+    RotateCanvas(f64),
     /// Write one or more files.
     Export(Box<ExportJob>),
     /// Set the active colour.
@@ -57,6 +61,10 @@ pub enum DialogAction {
     SetPreferences(Box<UiPreferences>),
     /// Run a filter with the given parameters.
     RunFilter(Box<FilterInvocation>),
+    /// Fill the active selection.
+    Fill(Box<super::fill_stroke::FillSpec>),
+    /// Stroke the active selection's border.
+    Stroke(Box<super::fill_stroke::StrokeSpec>),
 }
 
 impl DialogAction {
@@ -72,6 +80,7 @@ impl DialogAction {
             Self::NewDocument(spec) => spec.is_valid(),
             Self::ResizeImage(spec) => spec.is_valid(),
             Self::ResizeCanvas(spec) => spec.is_valid(),
+            Self::RotateCanvas(degrees) => degrees.is_finite(),
             Self::Export(job) => job.is_valid(),
             Self::SetColor(color) => color.rgba.iter().all(|c| (0.0..=1.0).contains(c)),
             Self::SetBrush { name, settings } => {
@@ -82,6 +91,8 @@ impl DialogAction {
             }
             Self::SetPreferences(prefs) => prefs.is_sane() && prefs.keymap.conflicts().is_empty(),
             Self::RunFilter(invocation) => invocation.is_valid(),
+            Self::Fill(spec) => spec.is_valid(),
+            Self::Stroke(spec) => spec.is_valid(),
         }
     }
 
@@ -92,11 +103,14 @@ impl DialogAction {
             Self::NewDocument(spec) => format!("New {} x {}", spec.width, spec.height),
             Self::ResizeImage(spec) => format!("Image Size {} x {}", spec.width, spec.height),
             Self::ResizeCanvas(spec) => format!("Canvas Size {} x {}", spec.width, spec.height),
+            Self::RotateCanvas(degrees) => format!("Rotate Canvas {degrees}°"),
             Self::Export(job) => format!("Export {} file(s)", job.entries.len()),
             Self::SetColor(color) => format!("Color #{}", color.to_hex(false)),
             Self::SetBrush { name, .. } => format!("Brush \"{name}\""),
             Self::SetGradient(_) => "Gradient".to_string(),
             Self::SetPreferences(_) => "Preferences".to_string(),
+            Self::Fill(_) => "Fill".to_string(),
+            Self::Stroke(_) => "Stroke".to_string(),
             Self::RunFilter(invocation) => invocation.filter.name().to_string(),
         }
     }

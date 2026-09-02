@@ -49,9 +49,9 @@ pub use effects::{
 };
 pub use ids::{AssetId, LayerId, MaskId};
 pub use layer::{
-    AdjustmentKind, AdjustmentLayer, AutoAdjustment, ClippingMode, GeneratorLayer, GroupBlending,
-    GroupLayer, Layer, LayerKind, LockState, RasterLayer, ShapeCap, ShapeFillRule, ShapeJoin,
-    ShapeLayer, ShapeStroke, SmartObjectLayer, TextLayer,
+    AdjustmentKind, AdjustmentLayer, AssetOrigin, AssetRecord, AutoAdjustment, ClippingMode,
+    GeneratorLayer, GroupBlending, GroupLayer, Layer, LayerKind, LockState, RasterLayer, ShapeCap,
+    ShapeFillRule, ShapeJoin, ShapeLayer, ShapeStroke, SmartObjectLayer, TextLayer,
 };
 pub use mask::{LayerMask, MaskError, MaskKind};
 pub use tree::{ClippingGroup, DetachedSubtree, LayerTree, TreeError};

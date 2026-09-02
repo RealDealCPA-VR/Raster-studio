@@ -911,8 +911,8 @@ fn the_scan_reaches_every_crate_and_drops_only_the_test_files() {
     // text, and a name from inside `mod tests` must not.
     let scanned = shipping_source(&chrome);
     assert!(
-        scanned.contains("No document open"),
-        "the empty-state message is inside chrome.rs but not inside what the \
+        scanned.contains("raster-start-screen"),
+        "the start screen is inside chrome.rs but not inside what the \
          scan reads — `shipping_source` is truncating the file again"
     );
     assert!(

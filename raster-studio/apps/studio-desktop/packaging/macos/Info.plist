@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Raster Studio — macOS application bundle metadata.
+
+  Assembled into RasterStudio.app/Contents/Info.plist by build-app.sh. The
+  bundle identifier is the reverse-DNS form of the project name; the version
+  is substituted by the build script so it stays in step with Cargo.
+-->
+<plist version="1.0">
+  <dict>
+    <key>CFBundleName</key>
+    <string>Raster Studio</string>
+    <key>CFBundleDisplayName</key>
+    <string>Raster Studio</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.rasterstudio.RasterStudio</string>
+    <key>CFBundleExecutable</key>
+    <string>studio-desktop</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${APP_VERSION}</string>
+    <key>CFBundleVersion</key>
+    <string>${APP_VERSION}</string>
+    <key>CFBundleIconFile</key>
+    <string>raster-studio</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+  </dict>
+</plist>

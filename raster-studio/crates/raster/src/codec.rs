@@ -698,6 +698,7 @@ fn color_space_for(profile: Option<&Vec<u8>>) -> ColorSpace {
     match profile {
         Some(bytes) => ColorSpace::IccProfile {
             asset_hash: blake3::hash(bytes).to_hex().to_string(),
+            profile: bytes.clone(),
         },
         None => ColorSpace::Srgb,
     }
@@ -1837,7 +1838,8 @@ mod tests {
             assert_eq!(
                 decoded.color_space,
                 ColorSpace::IccProfile {
-                    asset_hash: expected_hash
+                    asset_hash: expected_hash,
+                    profile: profile.clone(),
                 },
                 "{format:?} did not record the profile in the colour space"
             );

@@ -209,6 +209,58 @@ fn transparent_pixels_inside_the_image_show_the_checkerboard() {
     assert_eq!(img.pixel(2, 2)[3], 255, "canvas output must be opaque");
 }
 
+/// Photopea's pasteboard: OUTSIDE the document the backdrop is a flat neutral
+/// grey, and the checkerboard shows only through transparent pixels INSIDE it.
+#[test]
+fn the_pasteboard_is_flat_outside_the_document_and_checkered_inside() {
+    let gpu = gpu_or_skip!();
+    let pixels = vec![0u8; 8 * 8 * 4]; // fully transparent document
+    let source = GpuTexture::from_rgba8(&gpu, 8, 8, &pixels, "pasteboard-src").expect("texture");
+    // Fit, then zoom out around the viewport centre: the 8px image now
+    // occupies the middle half, leaving flat pasteboard bands either side.
+    let mut camera = fitted_camera(8, 64);
+    camera.zoom_at(Vec2::splat(32.0), 0.5);
+    let img = render_canvas(&gpu, &source, &camera, 64).expect("render");
+
+    let pasteboard = render_shaders::PASTEBOARD_SRGB_U8;
+    let light = render_shaders::CHECKER_LIGHT_SRGB_U8;
+    let dark = render_shaders::CHECKER_DARK_SRGB_U8;
+    let cell = render_shaders::CHECKER_CELL_PX;
+
+    // Far left, well outside the document: flat pasteboard, no checker.
+    assert_near("pasteboard far left", img.pixel(1, 32), [pasteboard; 3], 2);
+    assert_near(
+        "pasteboard far right",
+        img.pixel(62, 32),
+        [pasteboard; 3],
+        2,
+    );
+    // Inside the document (spanning 16..48 at half zoom): the checkerboard,
+    // unchanged — cell (2,2) is light, (3,2) dark.
+    assert_near("checker inside (0,0)", img.pixel(18, 18), [light; 3], 2);
+    assert_near(
+        "checker inside (1,0)",
+        img.pixel(cell + 18, 18),
+        [dark; 3],
+        2,
+    );
+    // The seam: the pixel just outside the document edge is pasteboard, the
+    // one just inside is a checker cell — not two shades of the same thing.
+    // Half zoom: the image spans 16..48 in the 64px viewport.
+    assert_near(
+        "just outside the left edge",
+        img.pixel(14, 32),
+        [pasteboard; 3],
+        2,
+    );
+    assert_near(
+        "just inside the left edge",
+        img.pixel(18, 32),
+        [light; 3],
+        12,
+    );
+}
+
 /// The checker is measured in framebuffer pixels, so its cell size must not
 /// change with the viewport size or the camera zoom.
 #[test]

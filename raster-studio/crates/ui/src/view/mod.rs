@@ -73,6 +73,16 @@ pub mod ids {
         egui::Id::new(("raster-tool-reset", tool))
     }
 
+    /// The tool-column footer's swap swatch control.
+    pub fn color_swap() -> egui::Id {
+        egui::Id::new("raster-color-swap")
+    }
+
+    /// The tool-column footer's reset control.
+    pub fn color_reset() -> egui::Id {
+        egui::Id::new("raster-color-reset")
+    }
+
     /// The gradient ramp swatch that opens the stop editor.
     pub fn gradient_swatch(tool: tools::ToolId) -> egui::Id {
         egui::Id::new(("raster-gradient-swatch", tool))
@@ -84,6 +94,10 @@ pub mod ids {
     }
 
     /// A panel header's overflow disclosure, which reveals the move controls.
+    pub fn panel_tab(panel: crate::dock::PanelId) -> egui::Id {
+        egui::Id::new(("raster-panel-tab", panel))
+    }
+
     pub fn panel_menu(panel: crate::dock::PanelId) -> egui::Id {
         egui::Id::new(("raster-panel-menu", panel))
     }
@@ -202,6 +216,53 @@ pub mod ids {
     /// The Layers panel footer's "new group" button.
     pub fn new_group() -> egui::Id {
         egui::Id::new("raster-new-group")
+    }
+
+    /// The Layers panel footer's remaining buttons, each with the stable id a
+    /// click test needs: link, fx, mask, adjustment, delete.
+    pub fn layer_link() -> egui::Id {
+        egui::Id::new("raster-layer-link")
+    }
+
+    pub fn layer_fx() -> egui::Id {
+        egui::Id::new("raster-layer-fx")
+    }
+
+    pub fn layer_mask() -> egui::Id {
+        egui::Id::new("raster-layer-mask")
+    }
+
+    pub fn layer_adjustment() -> egui::Id {
+        egui::Id::new("raster-layer-adjustment")
+    }
+
+    pub fn layer_delete() -> egui::Id {
+        egui::Id::new("raster-layer-delete")
+    }
+
+    /// The layer-kind filter row: one button per class.
+    pub fn layer_filter(class: crate::menu::LayerClass) -> egui::Id {
+        egui::Id::new(("raster-layer-filter", class))
+    }
+
+    /// The filter row's "every kind" button.
+    pub fn layer_filter_all() -> egui::Id {
+        egui::Id::new("raster-layer-filter-all")
+    }
+
+    /// The thumbnail-size cycle button.
+    pub fn layer_thumb_size() -> egui::Id {
+        egui::Id::new("raster-layer-thumb-size")
+    }
+
+    /// A collapsed dock's panel icon.
+    pub fn rail_icon(panel: crate::dock::PanelId) -> egui::Id {
+        egui::Id::new(("raster-rail-icon", panel))
+    }
+
+    /// A collapsed dock's expand chevron.
+    pub fn rail_expand(side: crate::dock::DockSide) -> egui::Id {
+        egui::Id::new(("raster-rail-expand", side))
     }
 
     /// One tile of the Adjustments panel.

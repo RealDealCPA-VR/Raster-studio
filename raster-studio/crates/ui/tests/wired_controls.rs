@@ -26,7 +26,7 @@
 //! against.
 
 use editor_core::{Document, History};
-use layer_model::{AdjustmentLayer, Layer, LayerKind};
+use layer_model::{AdjustmentLayer, Layer, LayerKind, TextLayer};
 use ui::dock::{DockSide, LayoutId, PanelId};
 use ui::panels::channels::ChannelKind;
 use ui::view::ids;
@@ -72,9 +72,31 @@ impl Harness {
     }
 
     fn frame(&mut self, events: Vec<egui::Event>) -> Vec<Intent> {
+        self.frame_at(0.0, events)
+    }
+
+    /// One frame with the given modifier keys held, for shift- and ctrl-clicks.
+    /// egui reads the held modifiers from the input state, not from the pointer
+    /// event's field.
+    fn frame_mods(&mut self, mods: egui::Modifiers, events: Vec<egui::Event>) -> Vec<Intent> {
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.screen)),
             events,
+            modifiers: mods,
+            ..Default::default()
+        };
+        let _ = self.ctx.run(input, |ctx| {
+            self.workspace.ui(ctx, &self.doc, &self.history);
+        });
+        self.workspace.drain_intents()
+    }
+
+    /// One frame at an absolute egui time, for gestures that measure a hold.
+    fn frame_at(&mut self, time: f64, events: Vec<egui::Event>) -> Vec<Intent> {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.screen)),
+            events,
+            time: Some(time),
             ..Default::default()
         };
         let _ = self.ctx.run(input, |ctx| {
@@ -136,6 +158,33 @@ impl Harness {
     fn click(&mut self, id: egui::Id) -> Vec<Intent> {
         let at = self.rect(id).center();
         self.click_at(at)
+    }
+
+    /// Right-click the control with `id`: the gesture that opens a context
+    /// menu.
+    fn right_click(&mut self, id: egui::Id) -> Vec<Intent> {
+        let at = self.rect(id).center();
+        let mut out = self.frame(vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Secondary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+        ]);
+        out.extend(self.frame(vec![egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Secondary,
+            pressed: false,
+            modifiers: egui::Modifiers::default(),
+        }]));
+        out
+    }
+
+    /// Click a context-menu row by index.
+    fn click_context_item(&mut self, index: usize) -> Vec<Intent> {
+        self.click(ui::context_menu::ids::context_item(index))
     }
 
     /// Press at `from`, walk the pointer to `to` over several frames, release.
@@ -422,24 +471,554 @@ fn a_panel_moved_to_the_bottom_is_drawn_on_the_bottom_rail() {
     assert!(h.is_drawn(ids::panel_menu(PanelId::History)));
 }
 
+/// Every entry of a context menu either carries an intent or says why it
+/// cannot — the same gate the menu bar applies, restated for each menu.
+fn assert_every_entry_resolves(items: &[ui::context_menu::MenuItem]) {
+    for item in items {
+        if let ui::menu::Resolution::Disabled(reason) = &item.resolution {
+            assert!(
+                !reason.trim().is_empty(),
+                "{:?}: a disabled entry must say why",
+                item.label
+            );
+        }
+    }
+}
+
+#[test]
+fn every_color_numeric_field_fits_its_panel_at_every_dock_width() {
+    // The Validate for P1.19, at the three widths that matter: the minimum,
+    // the default and the maximum dock width. The H/S/B (and R/G/B, L/a/b and
+    // Alpha) rows share one layout, so asserting their fields' rects covers
+    // the family.
+    for width in [
+        ui::dock::MIN_DOCK_WIDTH,
+        300.0, // the Essentials default
+        ui::dock::MAX_DOCK_WIDTH,
+    ] {
+        for notation in [
+            ui::panels::color::ColorNotation::Hsb,
+            ui::panels::color::ColorNotation::Rgb,
+            ui::panels::color::ColorNotation::Lab,
+        ] {
+            // One harness per width, every notation swept through it.
+            let mut h = Harness::new();
+            h.only(PanelId::Color);
+            h.workspace.dock.set_side_width(DockSide::Right, width);
+            h.workspace.color.notation = notation;
+            h.settle();
+
+            // The panel body's rect, recorded by the panel itself.
+            let panel = h
+                .ctx
+                .memory(|m| {
+                    m.data
+                        .get_temp::<egui::Rect>(egui::Id::new("raster-color-panel-rect"))
+                })
+                .unwrap_or_else(|| panic!("the color panel recorded its rect at {width}"));
+
+            for label in ["H", "S", "B", "R", "G", "B", "L", "a", "b", "Alpha"] {
+                let id = egui::Id::new(("raster-numeric-field", label));
+                let Some(field) = h.ctx.read_response(id) else {
+                    continue; // the notation switch shows only one family at a time
+                };
+                assert!(
+                    panel.contains_rect(field.rect),
+                    "{label} at dock width {width}: field {:?} escapes the panel {:?}",
+                    field.rect,
+                    panel
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn shift_clicking_two_rows_selects_both() {
+    // The UI half of P1.17: the rows already multi-select in the panel's own
+    // state, and the intent now carries the whole set for the document.
+    let mut doc = Document::new(320, 240, "Test");
+    let a = doc.layers.push_root(Layer::raster("A")).unwrap();
+    let b = doc.layers.push_root(Layer::raster("B")).unwrap();
+    doc.set_active_layer(Some(a)).unwrap();
+    let mut h = Harness::with_document(doc);
+    h.settle();
+
+    h.click(ui::view::ids::layer_row(a));
+    h.settle();
+    // Shift-click the second row: a range over the rows as drawn.
+    let at = h.rect(ui::view::ids::layer_row(b)).center();
+    let intents = h.frame_mods(
+        egui::Modifiers::SHIFT,
+        vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::SHIFT,
+            },
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::SHIFT,
+            },
+        ],
+    );
+    eprintln!(
+        "DEBUG selection={:?} intents={:?}",
+        h.workspace.layers.selection(),
+        intents
+    );
+    let both = h
+        .workspace
+        .layers
+        .selection()
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        both,
+        std::iter::once(a).chain(std::iter::once(b)).collect(),
+        "two rows are in the panel's selection (got {both:?})"
+    );
+    assert!(
+        intents.iter().any(|i| matches!(
+            i,
+            Intent::SelectLayers { layers, .. }
+                if layers.len() == 2 && layers.contains(&a) && layers.contains(&b)
+        )),
+        "the intent carries the whole set: {intents:?}"
+    );
+}
+
+#[test]
+fn every_layers_footer_button_emits_its_command() {
+    // The Validate for the footer: one stable id and one asserted emission
+    // per button. A document with one raster layer arms the gated buttons.
+    let mut doc = Document::new(320, 240, "Test");
+    let id = doc.layers.push_root(Layer::raster("Base")).unwrap();
+    doc.set_active_layer(Some(id)).unwrap();
+    let mut h = Harness::with_document(doc);
+    h.settle();
+
+    // Link chains the selected layer.
+    let intents = h.click(ui::view::ids::layer_link());
+    assert!(
+        intents.iter().any(|i| matches!(
+            i,
+            Intent::Document(editor_core::Command::SetLayerProperties { layer_id, patch })
+                if *layer_id == id && patch.linked == Some(true)
+        )),
+        "link meant {intents:?}"
+    );
+
+    // fx opens the blending editor (the Properties panel).
+    let intents = h.click(ui::view::ids::layer_fx());
+    assert!(
+        intents
+            .iter()
+            .any(|i| matches!(i, Intent::Action(ui::menu::MenuAction::BlendingOptions))),
+        "fx meant {intents:?}"
+    );
+
+    // Adjustment opens the Adjustments panel.
+    let intents = h.click(ui::view::ids::layer_adjustment());
+    assert!(
+        intents.iter().any(|i| matches!(
+            i,
+            Intent::SetPanelOpen {
+                panel: PanelId::Adjustments,
+                open: true
+            }
+        )),
+        "adjustment meant {intents:?}"
+    );
+
+    // Mask attaches one to the active layer.
+    let intents = h.click(ui::view::ids::layer_mask());
+    assert!(
+        intents.iter().any(|i| matches!(
+            i,
+            Intent::Document(editor_core::Command::SetLayerProperties { patch, .. })
+                if matches!(&patch.mask, editor_core::Patch::Set(_))
+        )),
+        "mask meant {intents:?}"
+    );
+
+    // New layer, new group.
+    let intents = h.click(ui::view::ids::new_layer());
+    assert!(
+        intents.iter().any(|i| matches!(
+            i,
+            Intent::Document(editor_core::Command::CreateLayer { .. })
+        )),
+        "new layer meant {intents:?}"
+    );
+    let intents = h.click(ui::view::ids::new_group());
+    assert!(
+        intents.iter().any(|i| matches!(
+            i,
+            Intent::Document(editor_core::Command::CreateLayer { .. })
+        )),
+        "new group meant {intents:?}"
+    );
+
+    // Delete removes the selected layer.
+    let intents = h.click(ui::view::ids::layer_delete());
+    assert!(
+        intents.iter().any(|i| matches!(
+            i,
+            Intent::Document(editor_core::Command::DeleteLayer { layer_id }) if *layer_id == id
+        )),
+        "delete meant {intents:?}"
+    );
+}
+
+#[test]
+fn the_layer_kind_filter_hides_non_matching_rows_in_the_model() {
+    // The model half of the Validate: with a filter on, the rows that do not
+    // match are not in the model at all.
+    let mut doc = Document::new(320, 240, "Test");
+    let pixels = doc.layers.push_root(Layer::raster("Pixels")).unwrap();
+    doc.layers
+        .push_root(Layer::with_kind(
+            "Words",
+            LayerKind::Text(TextLayer::default()),
+        ))
+        .unwrap();
+    let mut state = ui::panels::layers::LayersState::new();
+    let all = ui::panels::layers::LayersModel::build(&doc, &state);
+    assert_eq!(all.rows().len(), 2);
+
+    state.filter = Some(ui::menu::LayerClass::Text);
+    let filtered = ui::panels::layers::LayersModel::build(&doc, &state);
+    assert_eq!(
+        filtered.rows().len(),
+        1,
+        "only the text row survives the filter"
+    );
+    assert_eq!(filtered.rows()[0].name, "Words");
+
+    // The UI half: the filter row's button sets the filter the model reads.
+    let mut h = Harness::with_document(doc);
+    h.settle();
+    h.click(ui::view::ids::layer_filter(ui::menu::LayerClass::Text));
+    assert_eq!(
+        h.workspace.layers.filter,
+        Some(ui::menu::LayerClass::Text),
+        "the filter button armed the filter"
+    );
+    h.settle();
+    assert!(
+        !h.is_drawn(ui::view::ids::layer_row(pixels)),
+        "the raster row is hidden while the filter is on text"
+    );
+}
+
+#[test]
+fn the_thumbnail_size_button_cycles_the_row_scale() {
+    let mut h = Harness::new();
+    h.settle();
+    let before = h.workspace.layers.thumb_scale;
+    h.click(ui::view::ids::layer_thumb_size());
+    assert_eq!(
+        h.workspace.layers.thumb_scale,
+        before.cycled(),
+        "one click moves to the next size"
+    );
+}
+
+#[test]
+fn the_canvas_context_menu_offers_fill_stroke_transform_and_selection_ops() {
+    // A document with a pixel layer, so the fill row is enabled to click.
+    let mut doc = Document::new(320, 240, "Test");
+    let id = doc.layers.push_root(Layer::raster("Base")).unwrap();
+    doc.set_active_layer(Some(id)).unwrap();
+    let mut h = Harness::with_document(doc);
+    h.settle();
+    h.right_click(egui::Id::new("raster-canvas"));
+    h.settle();
+    assert_eq!(
+        h.workspace.context_menu.map(|(t, _)| t),
+        Some(ui::context_menu::ContextTarget::Canvas),
+        "a right-click on the canvas arms its context menu"
+    );
+
+    let history = editor_core::History::new();
+    let ctx = h.workspace.menu_context(&h.doc, &history);
+    let items = ui::context_menu::canvas_items(&ctx);
+    assert!(
+        items[0].resolution.is_enabled(),
+        "fill is enabled on an unlocked pixel layer"
+    );
+    assert_every_entry_resolves(&items);
+    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        vec![
+            "Fill…",
+            "Stroke…",
+            "Free Transform",
+            "Transform Selection",
+            "All",
+            "Deselect",
+            "Inverse",
+        ],
+        "the canvas menu's item set"
+    );
+
+    // And the menu works: its first row asks for the Fill dialog.
+    let intents = h.click_context_item(0);
+    assert!(
+        intents
+            .iter()
+            .any(|i| matches!(i, Intent::Action(ui::menu::MenuAction::FillDialog))),
+        "clicking the menu's fill row opens the Fill dialog: {intents:?}"
+    );
+    assert!(
+        h.workspace.context_menu.is_none(),
+        "a click puts the menu away"
+    );
+}
+
+#[test]
+fn the_layer_row_context_menu_offers_the_layer_operations() {
+    let mut doc = Document::new(320, 240, "Test");
+    let id = doc.layers.push_root(Layer::raster("Base")).unwrap();
+    doc.set_active_layer(Some(id)).unwrap();
+    let mut h = Harness::with_document(doc);
+    h.settle();
+    h.right_click(ui::view::ids::layer_row(id));
+    h.settle();
+    assert_eq!(
+        h.workspace.context_menu.map(|(t, _)| t),
+        Some(ui::context_menu::ContextTarget::LayerRow),
+        "a right-click on a layer row arms the row menu"
+    );
+
+    let history = editor_core::History::new();
+    let ctx = h.workspace.menu_context(&h.doc, &history);
+    let items = ui::context_menu::layer_items(&ctx);
+    assert_every_entry_resolves(&items);
+    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        vec![
+            "Duplicate Layer…",
+            "Delete Layer",
+            "Blending Options…",
+            "Layer",
+            "Merge Down",
+            "Create Clipping Mask",
+        ],
+        "the layer row menu's item set"
+    );
+
+    // Duplicate is enabled with one raster layer; clicking it duplicates.
+    assert!(items[0].resolution.is_enabled());
+    let intents = h.click_context_item(0);
+    assert!(
+        intents
+            .iter()
+            .any(|i| matches!(i, Intent::Action(ui::menu::MenuAction::DuplicateLayer))),
+        "clicking the row menu's duplicate row asks to duplicate: {intents:?}"
+    );
+}
+
+#[test]
+fn right_clicking_a_panel_header_opens_its_panel_menu() {
+    let mut h = Harness::new();
+    h.only(PanelId::History);
+    h.settle();
+    let panel_tab = ui::view::ids::panel_tab(PanelId::History);
+    h.right_click(panel_tab);
+    h.settle();
+    assert_eq!(
+        h.workspace.panel_menu,
+        Some(PanelId::History),
+        "a right-click on a panel header opens its panel menu"
+    );
+    // The menu the header's own button opens: move-to-dock controls.
+    for side in ui::dock::DockSide::ALL {
+        assert!(
+            h.is_drawn(ui::view::ids::panel_dock(PanelId::History, *side)),
+            "the panel menu offers docking to {side:?}"
+        );
+    }
+}
+
+#[test]
+fn every_keyed_tool_tooltip_ends_with_its_key_in_parentheses() {
+    // The Validate for P1.11's tooltip half: Photopea's shape, "Brush Tool
+    // (B)". Tools the registry gave no key show their name alone.
+    for info in tools::registry::all() {
+        match info.shortcut {
+            Some(key) => {
+                let tip = ui::palette::tooltip(info);
+                let want = format!("({})", key.to_ascii_uppercase());
+                assert!(
+                    tip.ends_with(&want),
+                    "{}: tooltip {:?} does not end with {:?}",
+                    info.name,
+                    tip,
+                    want
+                );
+                assert!(
+                    !tip.contains("  "),
+                    "{:?}: double space in {tip:?}",
+                    info.name
+                );
+            }
+            None => assert_eq!(
+                ui::palette::tooltip(info),
+                info.name,
+                "an unkeyed tool's tooltip is its name"
+            ),
+        }
+    }
+}
+
+#[test]
+fn press_and_hold_opens_a_variant_tool_flyout() {
+    // The Validate's gesture half: press on a variant tool's slot and hold
+    // past the beat — the fly-out opens without a click.
+    let mut h = Harness::new();
+    let model = ui::PaletteModel::build();
+    h.workspace.palette.activate(&model, tools::ToolId::Brush);
+    let slot = model
+        .slots()
+        .iter()
+        .position(|s| s.has_variants())
+        .expect("the brush group has variants");
+
+    // Press and hold: egui's clock is fed through RawInput::time, so the
+    // harness runs the hold with a frame past the beat.
+    let at = h.rect(ui::view::ids::tool_slot(slot)).center();
+    h.frame_at(
+        0.0,
+        vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+        ],
+    );
+    h.frame_at(0.1, vec![]);
+    h.frame_at(0.2, vec![]);
+    assert_ne!(
+        h.workspace.palette.open_flyout,
+        Some(slot),
+        "0.2s is under the beat: the fly-out must not be open yet"
+    );
+    h.frame_at(ui::HOLD_SECONDS + 0.1, vec![]);
+    assert_eq!(
+        h.workspace.palette.open_flyout,
+        Some(slot),
+        "holding past the beat opens the fly-out"
+    );
+}
+
+#[test]
+fn the_tool_column_footer_swap_exchanges_the_two_wells() {
+    // The Validate for the footer: clicking swap exchanges the colours, via
+    // the same two absolute intents the colour panel emits.
+    let mut h = Harness::new();
+    h.workspace.color.set_well(
+        ui::panels::color::ColorWell::Foreground,
+        [1.0, 0.0, 0.0, 1.0],
+    );
+    h.workspace.color.set_well(
+        ui::panels::color::ColorWell::Background,
+        [0.0, 0.0, 1.0, 1.0],
+    );
+
+    println!(
+        "DEBUG swap rect = {:?}",
+        h.rect(ui::view::ids::color_swap())
+    );
+    let intents = h.click(ui::view::ids::color_swap());
+    println!("DEBUG swap intents = {intents:?}");
+    assert!(
+        intents.contains(&Intent::SetForeground([0.0, 0.0, 1.0, 1.0]))
+            && intents.contains(&Intent::SetBackground([1.0, 0.0, 0.0, 1.0])),
+        "swap emitted {intents:?}"
+    );
+    for intent in &intents {
+        h.workspace.absorb(intent);
+    }
+    assert_eq!(
+        h.workspace
+            .color
+            .well(ui::panels::color::ColorWell::Foreground),
+        [0.0, 0.0, 1.0, 1.0]
+    );
+    assert_eq!(
+        h.workspace
+            .color
+            .well(ui::panels::color::ColorWell::Background),
+        [1.0, 0.0, 0.0, 1.0]
+    );
+}
+
+#[test]
+fn the_tool_column_footer_reset_restores_the_defaults() {
+    let mut h = Harness::new();
+    h.workspace.color.set_well(
+        ui::panels::color::ColorWell::Foreground,
+        [1.0, 0.0, 0.0, 1.0],
+    );
+    let intents = h.click(ui::view::ids::color_reset());
+    assert!(
+        intents.contains(&Intent::SetForeground(
+            ui::panels::color::DEFAULT_FOREGROUND
+        )),
+        "reset emitted {intents:?}"
+    );
+}
+
 #[test]
 fn reordering_a_panel_within_its_side_through_the_header_control() {
     let mut h = Harness::new();
     let before = h.workspace.dock.panels_on(DockSide::Right);
     assert!(before.len() >= 2);
+    // The reorder control belongs to the ACTIVE tab of the bottom group
+    // (History); groups travel whole, so one click moves History+Color one
+    // slot up the rail's stack.
     let last = *before.last().unwrap();
+    let panel = if h.workspace.dock.is_active(last) {
+        last
+    } else {
+        *before
+            .iter()
+            .rev()
+            .find(|p| h.workspace.dock.is_active(**p))
+            .unwrap()
+    };
 
-    h.click(ids::panel_menu(last));
-    let intents = h.click(ids::panel_reorder(last, true));
-    let to = u8::try_from(before.len() - 2).unwrap();
+    h.click(ids::panel_menu(panel));
+    let intents = h.click(ids::panel_reorder(panel, true));
+    // The intent carries the group's new stack index — absolute, idempotent.
     assert!(
-        intents.contains(&Intent::ReorderPanel { panel: last, to }),
+        intents.contains(&Intent::ReorderPanel { panel, to: 1 }),
         "reordering emitted {intents:?}"
     );
     let after = h.workspace.dock.panels_on(DockSide::Right);
     assert_ne!(after, before);
     assert_eq!(after.len(), before.len());
-    assert_eq!(after[after.len() - 2], last);
+    assert_eq!(after[2], panel);
+    assert_eq!(
+        after[3],
+        if panel == PanelId::History {
+            PanelId::Color
+        } else {
+            PanelId::History
+        }
+    );
 }
 
 #[test]
@@ -493,7 +1072,7 @@ fn a_reset_intent_is_absorbed_back_into_the_workspace() {
 }
 
 #[test]
-fn editing_the_gradient_ramp_emits_the_whole_ramp() {
+fn editing_the_gradient_ramp_opens_the_dialog_and_the_ramp_intent_round_trips() {
     let mut h = Harness::new();
     let model = ui::PaletteModel::build();
     h.workspace
@@ -501,31 +1080,26 @@ fn editing_the_gradient_ramp_emits_the_whole_ramp() {
         .activate(&model, tools::ToolId::Gradient);
     let tool = tools::ToolId::Gradient;
 
-    // The stop editor is behind the ramp swatch.
-    assert!(!h.is_drawn(ids::gradient_add_stop(tool)));
-    h.click(ids::gradient_swatch(tool));
-    assert!(h.is_drawn(ids::gradient_add_stop(tool)));
+    // The ramp swatch opens the gradient editor dialog (the popup stop
+    // editor it used to toggle grew into a real dialog).
+    let intents = h.click(ids::gradient_swatch(tool));
+    assert!(
+        intents.contains(&Intent::OpenGradientEditor),
+        "the swatch click emitted {intents:?}"
+    );
 
-    let before = h.workspace.options.gradient(tool).stops.len();
-    let intents = h.click(ids::gradient_add_stop(tool));
-    let ramp = intents
-        .iter()
-        .find_map(|i| match i {
-            Intent::SetToolGradient { tool: t, gradient } if *t == tool => Some(gradient.clone()),
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("adding a stop emitted {intents:?}"));
-    assert_eq!(ramp.stops.len(), before + 1);
-    assert_eq!(h.workspace.options.gradient(tool), *ramp);
-
-    // ...and the intent round-trips into another workspace, which is what
-    // makes it worth emitting.
+    // ...and the ramp intent round-trips into another workspace, which is
+    // what makes it worth emitting.
+    let ramp = h.workspace.options.gradient(tool).clone();
     let mut other = Workspace::new();
     assert!(other.absorb(&Intent::SetToolGradient {
         tool,
-        gradient: ramp.clone(),
+        gradient: Box::new(ramp.clone()),
     }));
-    assert_eq!(other.options.gradient(tool), *ramp);
+    assert_eq!(
+        other.options.gradient(tool),
+        h.workspace.options.gradient(tool)
+    );
 }
 
 // ---------------------------------------------------------------------------

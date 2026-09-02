@@ -101,6 +101,11 @@ pub enum Pick {
         layer: LayerId,
         kind: Box<layer_model::LayerKind>,
     },
+    /// The Actions panel's transport. Performed on the editor immediately:
+    /// start/stop toggle the recording, replay re-runs the last capture.
+    StartRecording,
+    StopRecording,
+    ReplayRecording,
     /// Open one of the recent files.
     OpenRecent(PathBuf),
     /// A settings change — the Window ▸ Appearance items.
@@ -123,6 +128,13 @@ pub enum Pick {
     Tool(ToolId),
     /// Move the selection in the layers panel.
     SelectLayer(LayerId),
+    /// Photopea's multi-selection: the whole set, in click order, plus the
+    /// active layer the click landed on.
+    SelectLayers(Vec<LayerId>, Option<LayerId>),
+    /// Activate a tool AND a named choice it wears — the transform menu's
+    /// Scale/Rotate/Skew/Distort/Perspective (`mode`) and Transform Selection
+    /// (`target`), as one pick.
+    ToolChoice(tools::ToolId, &'static str, usize),
     /// Stand on this many applied commands — [`Editor::jump_history`]'s
     /// absolute depth, converted here from the panel's relative step count.
     History(usize),
@@ -132,6 +144,14 @@ pub enum Pick {
     ViewCenter((f32, f32)),
     Foreground([f32; 4]),
     Background([f32; 4]),
+    /// Open the colour picker dialog for one of the colour wells — the
+    /// swatches' double-click. The chrome opens the dialog and remembers the
+    /// target, so the confirmed colour lands in the right well.
+    OpenColorPicker(ui::panels::color::ColorWell),
+    /// Open the gradient editor dialog for the effective tool's ramp.
+    OpenGradientEditor,
+    /// Open the brush editor dialog over the effective tool's brush.
+    OpenBrushEditor,
 }
 
 /// The nine menus, exactly as the `ui` crate publishes them.
@@ -215,7 +235,9 @@ pub fn pick(intent: &Intent, editor: &Editor) -> Option<Pick> {
         // item sat greyed out with the generic refusal. Clearing the cursor is
         // a document edit, so it goes down the same road every other one does.
         Intent::SelectLayers { active: None, .. } => Some(Pick::Menu(MenuAction::DeselectLayers)),
-        Intent::SelectLayers { active, .. } => active.map(Pick::SelectLayer),
+        Intent::SelectLayers { layers, active } => {
+            Some(Pick::SelectLayers(layers.clone(), *active))
+        }
         Intent::HistoryJump(jump) => {
             // The panel counts *steps* from where the document stands; the
             // editor walks to an absolute depth. Converting here keeps the one
@@ -229,6 +251,9 @@ pub fn pick(intent: &Intent, editor: &Editor) -> Option<Pick> {
         Intent::SetViewCenter(center) => Some(Pick::ViewCenter(*center)),
         Intent::SetForeground(rgba) => Some(Pick::Foreground(*rgba)),
         Intent::SetBackground(rgba) => Some(Pick::Background(*rgba)),
+        Intent::OpenColorPicker(target) => Some(Pick::OpenColorPicker(*target)),
+        Intent::OpenGradientEditor => Some(Pick::OpenGradientEditor),
+        Intent::OpenBrushEditor => Some(Pick::OpenBrushEditor),
         // Everything whose whole effect is on the workspace's own state. Listed
         // rather than caught by a wildcard: a new intent variant must be an
         // explicit decision here, which is what the wildcard used to hide.
@@ -251,6 +276,11 @@ pub fn pick(intent: &Intent, editor: &Editor) -> Option<Pick> {
             layer: *layer,
             kind: kind.clone(),
         }),
+        // The Actions panel's transport: the recording lives on the editor,
+        // so the shell harvests these into `ChromeOutput::actions`.
+        Intent::StartRecording => Some(Pick::StartRecording),
+        Intent::StopRecording => Some(Pick::StopRecording),
+        Intent::ReplayRecording => Some(Pick::ReplayRecording),
     }
 }
 
@@ -317,7 +347,27 @@ pub fn is_workspace_camera_action(action: MenuAction) -> bool {
 
 /// The [`Action`] a named menu action maps onto, if this build has one.
 fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
+    use ui::menu::TransformOp as T;
     use ui::menu::ZoomCommand as Z;
+    // The five interactive modes are the transform tool wearing its mode
+    // choice: the pick carries the index so the shell sets both the tool and
+    // the option in one click. The order is TransformMode::ALL's, which the
+    // registry's choice spec and the options bar both speak.
+    if let Some((key, index)) = match action {
+        MenuAction::Transform(T::Scale) => Some(("mode", 0)),
+        MenuAction::Transform(T::Rotate) => Some(("mode", 1)),
+        MenuAction::Transform(T::Skew) => Some(("mode", 2)),
+        MenuAction::Transform(T::Distort) => Some(("mode", 3)),
+        MenuAction::Transform(T::Perspective) => Some(("mode", 4)),
+        // Warp is the gizmo's mesh mode (P2.3).
+        MenuAction::Transform(T::Warp) => Some(("mode", 5)),
+        // Transform Selection is the gizmo wearing its Selection target: the
+        // drag resamples the selection mask and commits as one undoable step.
+        MenuAction::TransformSelection => Some(("target", 1)),
+        _ => None,
+    } {
+        return Some(Pick::ToolChoice(tools::ToolId::FreeTransform, key, index));
+    }
     if is_workspace_camera_action(action) {
         return Some(Pick::Workspace(Box::new(Intent::Action(action))));
     }
@@ -360,6 +410,7 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
         MenuAction::Save => Action::Save,
         MenuAction::SaveAs => Action::SaveAs,
         MenuAction::CloseDocument => Action::CloseDocument,
+        MenuAction::CloseOthers => Action::CloseOthers,
         MenuAction::Quit => Action::Quit,
         // `ui` names a format per item; the shell's export dialog is where the
         // format is finally chosen, so every one routes to the same action.
@@ -401,7 +452,6 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
 /// Every reason names the *specific* missing piece. "This build cannot do that
 /// yet" is not a reason; it is the absence of one, and 126 items wore it.
 pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
-    use ui::menu::TransformOp as T;
     Some(match action {
         // ---- File ----------------------------------------------------------
         // Everything that resizes the canvas rectangle is disabled below.
@@ -415,25 +465,13 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
         }
 
         // ---- Edit ----------------------------------------------------------
-        // Free Transform and the six interactive transforms need a handle
-        // overlay on the canvas. The five fixed ones do not, and are wired.
-        MenuAction::FreeTransform
-        | MenuAction::Transform(T::Scale)
-        | MenuAction::Transform(T::Rotate)
-        | MenuAction::Transform(T::Skew)
-        | MenuAction::Transform(T::Distort)
-        | MenuAction::Transform(T::Perspective) => {
-            "An interactive transform needs a handle overlay on the canvas, and \
-             the shell draws no gizmo; the fixed rotations and flips below work"
-        }
-        MenuAction::Transform(T::Warp) => {
-            "Warp needs a mesh gizmo and a mesh deformer; neither exists in this \
-             workspace"
-        }
-        MenuAction::DefinePattern | MenuAction::DefineBrush => {
-            "There is no pattern or brush library to define one into: \
-             asset-store holds no user presets yet"
-        }
+        // Free Transform and five of the six interactive transforms route to
+        // the canvas gizmo now (P2.1): the item activates the transform tool
+        // and the drag ends as one undoable command. The five fixed
+        // rotations and flips never needed it.
+        // Warp routes too (P2.3): the mesh gizmo and the mesh deformer were
+        // already in tools::transform — WarpMesh, the mesh handles, and the
+        // commit-time resample that bends the interior.
 
         // ---- Image ---------------------------------------------------------
         // An adjustment whose stored starting parameters are the identity has
@@ -459,39 +497,23 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
             "Changing colour mode would rewrite every tile, and editor_core has \
              no command that can carry that as one undoable step"
         }
-        // Everything that changes the canvas *rectangle*. `editor_core`'s
-        // command set has no variant that carries a resize — `DocumentMeta` is
-        // a plain field with no undo behind it — so performing one of these
-        // would be an edit the user could not take back. The 180° turn and the
-        // two flips keep the rectangle and are wired.
-        MenuAction::ImageSize
-        | MenuAction::CanvasSize
-        | MenuAction::RevealAll
-        | MenuAction::RotateCanvas(ui::menu::CanvasRotation::Arbitrary) => {
-            "This resizes the canvas; the shell hosts no dialog for Image/Canvas \
-             Size dimensions, no live source beyond the canvas for Reveal All, \
-             and no angle dialog for an arbitrary rotation"
-        }
+        // Everything that changes the canvas *rectangle* is hosted now:
+        // `ImageSize`, `CanvasSize` and `RotateCanvas(Arbitrary)` open real
+        // dialogs whose confirmed specs land as one undoable step each (right-
+        // angle rotations take the exact fixed path), and Reveal All performs
+        // directly in [`perform`] — it asks nothing.
 
         // ---- Layer ---------------------------------------------------------
-        MenuAction::NewFillLayer(ui::menu::FillLayerKind::Pattern) => {
-            "A pattern fill layer is layer_model::LayerKind::Generator, and \
-             the compositor has no generator rasteriser"
-        }
-
+        // Select ▸ All Layers performs now — the document keeps a real
+        // multi-selection set (see `perform`), so it has no reason here.
         // ---- Select --------------------------------------------------------
-        MenuAction::SelectAllLayers => {
-            "editor_core::Document stores one active layer, not a set, so there \
-             is no multi-layer selection to fill"
-        }
         MenuAction::SelectSubject => {
             "Selecting the subject needs a segmentation model, and none ships \
              with this build"
         }
-        MenuAction::TransformSelection => {
-            "Transforming a selection needs the same canvas gizmo Free Transform \
-             does; selection::transform_selection is ready for it"
-        }
+        // Transform Selection routes to the gizmo wearing its Selection
+        // target now (P2.2): the drag resamples the selection mask and
+        // commits as one undoable SetSelection step. It has no reason here.
         // Reselect, Save Selection and Load Selection all need somewhere to
         // *keep* a selection between operations, and no such store exists —
         // Select ▸ Reselect/Save/Load Selection are wired (the store lives on
@@ -499,21 +521,10 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
         // entry here.
 
         // ---- Filter --------------------------------------------------------
-        // Two of the forty-one are the identity at their schema defaults, so
-        // running them without the dialog would be a menu item that visibly
-        // does nothing. Every other filter has a default that is a real effect.
-        MenuAction::Filter(ui::menu::FilterId::Custom) => {
-            "Custom's default convolution kernel is the identity, and the shell \
-             hosts no dialog to edit the weights in"
-        }
-        MenuAction::Filter(ui::menu::FilterId::Offset) => {
-            "Offset's default displacement is zero, and the shell hosts no \
-             dialog to ask how far to shift the layer"
-        }
-        MenuAction::FilterGallery => {
-            "The gallery is a browser over every filter's live preview, and the \
-             shell hosts no dialog surface to draw it in"
-        }
+        // Every filter opens its parameter dialog now, including the two whose
+        // schema defaults are the identity (Custom's convolution kernel,
+        // Offset's zero displacement) — a dialog is exactly what they were
+        // waiting for. The gallery is hosted too, for the same reason.
 
         // ---- Help ----------------------------------------------------------
         // Nothing: all four are wired.
@@ -525,6 +536,15 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
 pub fn record(pick: Pick, out: &mut ChromeOutput) {
     match pick {
         Pick::Action(action) => out.actions.push(action),
+        Pick::StartRecording => out
+            .actions_transport
+            .push(crate::chrome::ActionsTransport::StartRecording),
+        Pick::StopRecording => out
+            .actions_transport
+            .push(crate::chrome::ActionsTransport::StopRecording),
+        Pick::ReplayRecording => out
+            .actions_transport
+            .push(crate::chrome::ActionsTransport::ReplayRecording),
         Pick::Command(command) => out.commands.push(command),
         Pick::Menu(action) => out.menu.push(action),
         // `gesture` is filled in by `Chrome::harvest`, which is the only place
@@ -538,12 +558,20 @@ pub fn record(pick: Pick, out: &mut ChromeOutput) {
         Pick::Preferences(prefs) => out.preferences = Some(*prefs),
         Pick::Workspace(intent) => out.workspace.push(*intent),
         Pick::Tool(tool) => out.select_tool = Some(tool),
+        Pick::ToolChoice(tool, key, index) => {
+            out.select_tool = Some(tool);
+            out.tool_choice = Some((tool, key.to_string(), index));
+        }
         Pick::SelectLayer(layer) => out.select_layer = Some(layer),
+        Pick::SelectLayers(layers, active) => out.select_layers = Some((layers, active)),
         Pick::History(depth) => out.history_jump = Some(depth),
         Pick::Zoom(zoom) => out.set_zoom = Some(zoom),
         Pick::ViewCenter(center) => out.set_view_center = Some(center),
         Pick::Foreground(rgba) => out.set_foreground = Some(rgba),
         Pick::Background(rgba) => out.set_background = Some(rgba),
+        Pick::OpenColorPicker(target) => out.color_picker = Some(target),
+        Pick::OpenGradientEditor => out.gradient_editor = true,
+        Pick::OpenBrushEditor => out.brush_editor = true,
     }
 }
 
@@ -687,7 +715,7 @@ fn item(
 /// both `filters` and `adjustments` are defined on — the operation runs, and
 /// the result goes back as tiles referenced by one undoable
 /// [`Command::PaintTiles`].
-mod pixels {
+pub(crate) mod pixels {
     use std::collections::HashSet;
 
     use editor_core::pixels::{PixelTarget, TileEdit};
@@ -839,15 +867,22 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
             Ok("File Info…".to_string())
         }
         MenuAction::ExportLayers => editor.export_layers(),
+        MenuAction::PlaceEmbedded => editor.place_from_dialog(false),
+        MenuAction::PlaceLinked => editor.place_from_dialog(true),
         MenuAction::Print => editor.print_pdf(),
         MenuAction::Rasterize(ui::menu::RasterizeTarget::Text)
         | MenuAction::Rasterize(ui::menu::RasterizeTarget::Shape)
         | MenuAction::Rasterize(ui::menu::RasterizeTarget::LayerStyle)
         | MenuAction::Rasterize(ui::menu::RasterizeTarget::Layer)
         | MenuAction::Rasterize(ui::menu::RasterizeTarget::SmartObject) => editor.rasterize_layer(),
+        MenuAction::DefinePattern => editor.define_pattern_from_selection(),
+        MenuAction::DefineBrush => editor.define_brush_preset(),
         MenuAction::Rasterize(ui::menu::RasterizeTarget::AllLayers) => editor.flatten_all_layers(),
         MenuAction::NewFillLayer(ui::menu::FillLayerKind::SolidColor) => {
             editor.new_solid_fill_layer()
+        }
+        MenuAction::NewFillLayer(ui::menu::FillLayerKind::Pattern) => {
+            editor.new_pattern_fill_layer()
         }
         MenuAction::NewFillLayer(ui::menu::FillLayerKind::Gradient) => {
             editor.new_gradient_fill_layer()
@@ -891,10 +926,44 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::RotateCanvas(CR::FlipVertical) => {
             remap_all_layers(editor, "Flip Canvas Vertical", |x, y, _, h| (x, h - 1 - y))
         }
+        // Free Transform and its five modes route to the gizmo tool: the
+        // session begins on the next canvas press, the options bar's mode
+        // choice (fed to the tool at every press) names the shape of the
+        // drag, Enter commits one undoable step, Escape cancels. The mode
+        // itself is set by the workspace option, which the Transform items
+        // also arrive as a pick for (see resolve).
+        MenuAction::FreeTransform => {
+            editor.set_tool(tools::ToolId::FreeTransform);
+            Ok("Free Transform: drag a handle, Enter to commit, Escape to cancel".to_string())
+        }
+        MenuAction::Transform(T::Scale)
+        | MenuAction::Transform(T::Rotate)
+        | MenuAction::Transform(T::Skew)
+        | MenuAction::Transform(T::Distort)
+        | MenuAction::Transform(T::Perspective) => {
+            editor.set_tool(tools::ToolId::FreeTransform);
+            Ok("Transform: drag a handle, Enter to commit, Escape to cancel".to_string())
+        }
         MenuAction::CropToSelection => editor.crop_to_selection(),
         MenuAction::Trim => editor.trim_canvas(),
         MenuAction::RotateCanvas(CR::Deg90Cw) => editor.rotate_canvas_90(true),
         MenuAction::RotateCanvas(CR::Deg90Ccw) => editor.rotate_canvas_90(false),
+        MenuAction::RevealAll => {
+            let command = {
+                let doc = editor
+                    .active_mut()
+                    .ok_or_else(|| "No document is open".to_string())?;
+                doc.reveal_all_command().map_err(|e| e.to_string())?
+            };
+            // A canvas that already contains every layer answers with an
+            // empty transaction; recording that as an undo step would make
+            // Ctrl+Z feel broken ("nothing happened, but I can undo it").
+            if matches!(&command, Command::Transaction { commands, .. } if commands.is_empty()) {
+                return Ok("Every layer already fits the canvas".to_string());
+            }
+            editor.apply_command(command);
+            Ok("Revealed all layer content".to_string())
+        }
 
         // ---- Edit ▸ Transform (the fixed ones) -----------------------------
         MenuAction::Transform(T::Rotate180) => {
@@ -962,6 +1031,8 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::SaveSelection => save_selection(editor),
         MenuAction::LoadSelection => load_selection(editor),
         MenuAction::Reselect => reselect(editor),
+        MenuAction::ToggleQuickMask => editor.toggle_quick_mask(),
+        MenuAction::SetColorMode(mode) => editor.set_color_mode(mode),
 
         // ---- Layer ---------------------------------------------------------
         MenuAction::LayerViaCopy => layer_via(editor, false),
@@ -974,7 +1045,29 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::Mask(MaskOp::Toggle) => toggle_mask(editor, false),
         MenuAction::Mask(MaskOp::ToggleLink) => toggle_mask(editor, true),
         MenuAction::Mask(MaskOp::Apply) => apply_mask(editor),
-        MenuAction::LayerStyle(slot) => toggle_effect(editor, slot),
+        // `LayerStyle(_)` never reaches here: the chrome's dialog host opens
+        // the real dialog for it (`DialogHost::open_for_menu_action`) and the
+        // confirmed style arrives as the command the dialog emits. Reaching
+        // this catch-all anyway means the host and this match disagree.
+        MenuAction::SelectAllLayers => {
+            let doc = editor
+                .active_mut()
+                .ok_or_else(|| "No document is open".to_string())?;
+            let all = doc.document.layers.iter_depth_first();
+            if all.is_empty() {
+                return Err("The document has no layers".to_string());
+            }
+            doc.document
+                .set_layer_selection(all.clone())
+                .map_err(|e| e.to_string())?;
+            // A cursor that named a layer keeps it; an empty cursor takes the
+            // top of the depth-first walk, which is what a fresh click on the
+            // top row would name.
+            if doc.document.active_layer().is_none() {
+                let _ = doc.document.set_active_layer(all.first().copied());
+            }
+            Ok(format!("Selected {} layers", all.len()))
+        }
         MenuAction::DeselectLayers => match editor.active_mut() {
             None => Err("No document is open".to_string()),
             Some(doc) if doc.document.active_layer().is_none() => {
@@ -993,6 +1086,7 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
              this build; every menu item explains itself on hover",
             env!("CARGO_PKG_VERSION")
         )),
+        MenuAction::ExportDiagnostics => editor.export_diagnostics(),
         MenuAction::ReleaseNotes => Ok(format!(
             "Raster Studio {}: this release wired the Filter, Select, Image > \
              Adjustments and Layer menus to the engine behind them",
@@ -1032,7 +1126,7 @@ fn canvas_rect(w: u32, h: u32) -> selection::Rect {
 /// here: [`crate::editor::color_hex`] turns the same `[f32; 4]` into `#RRGGBB`
 /// by multiplying by 255, so these components are already the display-referred
 /// codes the tile store holds.
-fn rgba8_of(rgba: [f32; 4]) -> [u8; 4] {
+pub(crate) fn rgba8_of(rgba: [f32; 4]) -> [u8; 4] {
     let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     [c(rgba[0]), c(rgba[1]), c(rgba[2]), c(rgba[3])]
 }
@@ -1107,17 +1201,41 @@ fn run_filter(editor: &mut Editor, id: ui::menu::FilterId) -> Result<String, Str
     let spec = ui::dialogs::filter_by_id(id)
         .ok_or("ui::dialogs has no parameter schema for this filter")?;
     let params = ui::dialogs::FilterParams::defaults(spec.params);
+    let invocation = ui::dialogs::FilterInvocation {
+        filter: spec,
+        params,
+    };
+    run_filter_invocation(editor, &invocation)
+}
+
+/// The active layer's pixels as a [`filters::FilterBuffer`] — the source the
+/// Filter dialog previews against. Read-only: opening the dialog never
+/// touches the document.
+pub(crate) fn filter_source(editor: &Editor) -> Option<filters::FilterBuffer> {
+    let doc = editor.active()?;
+    let layer = doc.document.active_layer()?;
+    let (w, h) = (doc.document.width(), doc.document.height());
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let before = pixels::read_layer(doc, layer);
+    filters::FilterBuffer::from_rgba8(w, h, &before).ok()
+}
+
+/// Run one filter invocation — the dialog's confirmed answer — against the
+/// active layer's pixels as one undoable step.
+pub(crate) fn run_filter_invocation(
+    editor: &mut Editor,
+    invocation: &ui::dialogs::FilterInvocation,
+) -> Result<String, String> {
+    let spec = invocation.filter;
     let label = spec.name();
     edit_active_pixels(editor, label, |buffer, _| {
-        let filtered = (spec.apply)(buffer, &params);
+        let filtered = invocation.run(buffer);
         *buffer = filtered;
         Ok(())
     })?;
-    Ok(if spec.params.is_empty() {
-        format!("{label} applied")
-    } else {
-        format!("{label} applied with its default settings — this build has no parameter dialog")
-    })
+    Ok(format!("{label} applied"))
 }
 
 fn run_adjustment(
@@ -1261,21 +1379,114 @@ fn clear_selection(editor: &mut Editor) -> Result<String, String> {
 }
 
 fn fill_selection(editor: &mut Editor) -> Result<String, String> {
+    fill_selection_with(
+        editor,
+        &ui::dialogs::FillSpec {
+            contents: ui::dialogs::FillContents::Foreground,
+            ..Default::default()
+        },
+    )
+}
+
+/// Fill the selection with the Fill dialog's confirmed contents.
+///
+/// The paint is source-over with the chosen [`layer_model::BlendMode`] at the
+/// chosen opacity, in sRGB space like the rest of this build's per-pixel
+/// edits. "Preserve transparency" scales the paint's own alpha by the
+/// destination's coverage, so a fill can never paint where the layer was
+/// empty.
+pub(crate) fn fill_selection_with(
+    editor: &mut Editor,
+    spec: &ui::dialogs::FillSpec,
+) -> Result<String, String> {
+    let rgba = match &spec.contents {
+        ui::dialogs::FillContents::Foreground => editor.foreground(),
+        ui::dialogs::FillContents::Background => editor.background(),
+        ui::dialogs::FillContents::Color(c) => *c,
+        ui::dialogs::FillContents::Pattern(name) => {
+            let preset = editor
+                .presets()
+                .pattern(name)
+                .ok_or_else(|| format!("No pattern named “{name}” is defined yet"))?
+                .clone();
+            // Tile the pattern across the canvas; the selection mask still
+            // scopes the paint below.
+            return fill_selection_painting(editor, spec, &move |x, y| {
+                let [r, g, b, a] = preset.pixel(x, y);
+                [
+                    f32::from(r) / 255.0,
+                    f32::from(g) / 255.0,
+                    f32::from(b) / 255.0,
+                    f32::from(a) / 255.0,
+                ]
+            });
+        }
+        ui::dialogs::FillContents::Gray50 => [0.5, 0.5, 0.5, 1.0],
+    };
+    let hex = crate::editor::color_hex(rgba);
+    // The wells and the dialog's Colour payload are normalized floats.
+    let src = [rgba[0], rgba[1], rgba[2]];
+    let src_a = rgba[3].clamp(0.0, 1.0) * spec.opacity.clamp(0.0, 1.0);
+    fill_selection_painting(editor, spec, &|_, _| [src[0], src[1], src[2], src_a])?;
+    Ok(format!(
+        "Filled with {hex} at {}% opacity, {} mode",
+        (spec.opacity * 100.0).round() as u32,
+        spec.blend.label()
+    ))
+}
+
+/// The shared fill painter: `source` answers the paint colour (normalized
+/// RGBA) for each canvas pixel, so the solid colours and the tiled pattern go
+/// through the same source-over-with-blend loop and the same selection mask.
+pub(crate) fn fill_selection_painting(
+    editor: &mut Editor,
+    spec: &ui::dialogs::FillSpec,
+    source: &dyn Fn(i64, i64) -> [f32; 4],
+) -> Result<String, String> {
     let layer = pixel_layer(editor)?;
     let (w, h) = canvas_of(editor)?;
-    let rgba = editor.foreground();
-    let hex = crate::editor::color_hex(rgba);
-    let solid = rgba8_of(rgba);
     let command = {
         let doc = editor.active_mut().ok_or("No document is open")?;
         let before = pixels::read_layer(doc, layer);
         let selection = doc.document.selection.clone();
-        let mut after: Vec<u8> = solid
-            .iter()
-            .copied()
-            .cycle()
-            .take(before.len())
-            .collect::<Vec<u8>>();
+        let mut after = before.clone();
+        for py in 0..i64::from(h) {
+            for px in 0..i64::from(w) {
+                let i = (py as usize * w as usize + px as usize) * 4;
+                let paint = source(px, py);
+                let src = [paint[0], paint[1], paint[2]];
+                let src_a = paint[3].clamp(0.0, 1.0);
+                let dst_a = f32::from(before[i + 3]) / 255.0;
+                if spec.preserve_transparency && dst_a <= 0.0 {
+                    continue;
+                }
+                let paint_a = if spec.preserve_transparency {
+                    src_a * dst_a
+                } else {
+                    src_a
+                };
+                let base = [
+                    f32::from(before[i]) / 255.0,
+                    f32::from(before[i + 1]) / 255.0,
+                    f32::from(before[i + 2]) / 255.0,
+                ];
+                let blended = spec.blend.blend_rgb(base, src);
+                let out_a = paint_a + dst_a * (1.0 - paint_a);
+                let out_rgb = if out_a <= 0.0 {
+                    [0.0; 3]
+                } else {
+                    [
+                        (blended[0] * paint_a + base[0] * dst_a * (1.0 - paint_a)) / out_a,
+                        (blended[1] * paint_a + base[1] * dst_a * (1.0 - paint_a)) / out_a,
+                        (blended[2] * paint_a + base[2] * dst_a * (1.0 - paint_a)) / out_a,
+                    ]
+                };
+                after[i] = (out_rgb[0] * 255.0).round().clamp(0.0, 255.0) as u8;
+                after[i + 1] = (out_rgb[1] * 255.0).round().clamp(0.0, 255.0) as u8;
+                after[i + 2] = (out_rgb[2] * 255.0).round().clamp(0.0, 255.0) as u8;
+                after[i + 3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
+            }
+        }
         pixels::mask_by_selection(&before, &mut after, &selection, w, h);
         if after == before {
             return Err("The fill would change nothing".to_string());
@@ -1284,7 +1495,14 @@ fn fill_selection(editor: &mut Editor) -> Result<String, String> {
     };
     editor.apply_command(command);
     Ok(format!(
-        "Filled with the foreground colour {hex} — this build has no fill dialog"
+        "Filled with {} at {}% opacity, {} mode",
+        if matches!(spec.contents, ui::dialogs::FillContents::Pattern(_)) {
+            "the pattern"
+        } else {
+            "the chosen colour"
+        },
+        (spec.opacity * 100.0).round() as u32,
+        spec.blend.label()
     ))
 }
 
@@ -1297,10 +1515,29 @@ const STROKE_WIDTH: u32 = 1;
 /// read-modify-write each fill uses. Honest about running at its default width
 /// because the shell hosts no stroke dialog.
 fn stroke_selection(editor: &mut Editor) -> Result<String, String> {
+    stroke_selection_with(
+        editor,
+        &ui::dialogs::StrokeSpec {
+            width: STROKE_WIDTH,
+            ..Default::default()
+        },
+    )
+}
+
+/// Stroke the selection's border with the Stroke dialog's confirmed spec.
+///
+/// The band comes from the selection's own morphology: *inside* is the mask
+/// minus its erosion, *outside* the dilation minus the mask, and *centre* the
+/// straddling band [`selection::border`] already computes. Painting is the
+/// same source-over-with-blend the fill uses.
+pub(crate) fn stroke_selection_with(
+    editor: &mut Editor,
+    spec: &ui::dialogs::StrokeSpec,
+) -> Result<String, String> {
     let layer = pixel_layer(editor)?;
     let (w, h) = canvas_of(editor)?;
     let rgba = editor.foreground();
-    let solid = rgba8_of(rgba);
+    let hex = crate::editor::color_hex(rgba);
     let command = {
         let doc = editor.active_mut().ok_or("No document is open")?;
         let selection = doc.document.selection.clone();
@@ -1309,16 +1546,69 @@ fn stroke_selection(editor: &mut Editor) -> Result<String, String> {
         if mask.is_empty() {
             return Err("There is no selection to stroke".to_string());
         }
-        let border = selection::border(&mask, STROKE_WIDTH).map_err(|e| e.to_string())?;
+        let band = match spec.location {
+            ui::dialogs::StrokeLocation::Inside => selection::combine(
+                &mask,
+                &selection::contract(&mask, spec.width).map_err(|e| e.to_string())?,
+                selection::BooleanOp::Subtract,
+            )
+            .map_err(|e| e.to_string())?,
+            ui::dialogs::StrokeLocation::Outside => selection::combine(
+                &selection::expand(&mask, spec.width).map_err(|e| e.to_string())?,
+                &mask,
+                selection::BooleanOp::Subtract,
+            )
+            .map_err(|e| e.to_string())?,
+            ui::dialogs::StrokeLocation::Center => {
+                selection::border(&mask, spec.width).map_err(|e| e.to_string())?
+            }
+        };
         let before = pixels::read_layer(doc, layer);
         let mut after = before.clone();
-        if let Some((lo, hi)) = border.bounds() {
+        // The wells are normalized floats.
+        let src = [rgba[0], rgba[1], rgba[2]];
+        let src_a = rgba[3].clamp(0.0, 1.0) * spec.opacity.clamp(0.0, 1.0);
+        if let Some((lo, hi)) = band.bounds() {
             for py in lo.y.max(0)..hi.y.min(h as i32) {
                 for px in lo.x.max(0)..hi.x.min(w as i32) {
-                    if border.coverage_at(glam::IVec2::new(px, py)) > 0 {
-                        let i = (py as usize * w as usize + px as usize) * 4;
-                        after[i..i + 4].copy_from_slice(&solid);
+                    let coverage = band.coverage_at(glam::IVec2::new(px, py));
+                    if coverage == 0 {
+                        continue;
                     }
+                    let i = (py as usize * w as usize + px as usize) * 4;
+                    let dst_a = f32::from(before[i + 3]) / 255.0;
+                    if spec.preserve_transparency && dst_a <= 0.0 {
+                        continue;
+                    }
+                    // The band's own anti-aliased coverage joins the paint's
+                    // alpha, so a soft edge strokes softly.
+                    let paint_a = src_a
+                        * (f32::from(coverage) / 255.0)
+                        * if spec.preserve_transparency {
+                            dst_a
+                        } else {
+                            1.0
+                        };
+                    let base = [
+                        f32::from(before[i]) / 255.0,
+                        f32::from(before[i + 1]) / 255.0,
+                        f32::from(before[i + 2]) / 255.0,
+                    ];
+                    let blended = spec.blend.blend_rgb(base, src);
+                    let out_a = paint_a + dst_a * (1.0 - paint_a);
+                    let out_rgb = if out_a <= 0.0 {
+                        [0.0; 3]
+                    } else {
+                        [
+                            (blended[0] * paint_a + base[0] * dst_a * (1.0 - paint_a)) / out_a,
+                            (blended[1] * paint_a + base[1] * dst_a * (1.0 - paint_a)) / out_a,
+                            (blended[2] * paint_a + base[2] * dst_a * (1.0 - paint_a)) / out_a,
+                        ]
+                    };
+                    after[i] = (out_rgb[0] * 255.0).round().clamp(0.0, 255.0) as u8;
+                    after[i + 1] = (out_rgb[1] * 255.0).round().clamp(0.0, 255.0) as u8;
+                    after[i + 2] = (out_rgb[2] * 255.0).round().clamp(0.0, 255.0) as u8;
+                    after[i + 3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
                 }
             }
         }
@@ -1329,8 +1619,11 @@ fn stroke_selection(editor: &mut Editor) -> Result<String, String> {
     };
     editor.apply_command(command);
     Ok(format!(
-        "Stroked the selection outline at {}px — this build has no stroke dialog",
-        STROKE_WIDTH
+        "Stroked {} px {} with {hex} at {}% opacity, {} mode",
+        spec.width,
+        spec.location.label(),
+        (spec.opacity * 100.0).round() as u32,
+        spec.blend.label()
     ))
 }
 
@@ -1875,71 +2168,6 @@ fn merge(editor: &mut Editor, scope: MergeScope) -> Result<String, String> {
     };
     editor.apply_command(command);
     Ok(format!("{label} applied"))
-}
-
-/// Layer ▸ Layer Style ▸ … — add the effect at its defaults, or take it off
-/// again.
-///
-/// # Why a toggle and not a dialog
-///
-/// `ui::dialogs::LayerStyleDialog` is written and the shell hosts no dialog
-/// surface to draw it in, so the choice was between ten permanently greyed-out
-/// rows and ten that put a real, undoable, default-valued effect on the layer —
-/// which the Properties panel can then edit, because
-/// [`Command::SetLayerProperties`] is the same command it emits. Toggling is
-/// what makes the second option honest: an item that only ever *added* would do
-/// nothing the second time it was clicked, and nothing is what this wave is
-/// about ending. The status line says which way it went.
-fn toggle_effect(editor: &mut Editor, slot: ui::menu::EffectSlot) -> Result<String, String> {
-    let (command, added) = {
-        let doc = editor.active().ok_or("No document is open")?;
-        let id = doc.document.active_layer().ok_or("Select a layer first")?;
-        let layer = doc
-            .document
-            .layers
-            .get(id)
-            .ok_or("The active layer is not in the document")?;
-        let mut effects = layer.effects.clone();
-        let added = !slot.is_set(&effects);
-        set_effect(&mut effects, slot, added);
-        (
-            Command::SetLayerProperties {
-                layer_id: id,
-                patch: editor_core::LayerPatch {
-                    effects: Some(Box::new(effects)),
-                    ..Default::default()
-                },
-            },
-            added,
-        )
-    };
-    editor.apply_command(command);
-    let name = slot.label().trim_end_matches('…');
-    Ok(if added {
-        format!("{name} added at its default settings — pick it again to remove it")
-    } else {
-        format!("{name} removed")
-    })
-}
-
-/// Fill or clear one slot of a layer's effect block.
-///
-/// Exhaustive with no wildcard, so a new [`ui::menu::EffectSlot`] does not
-/// compile until it is wired here.
-fn set_effect(effects: &mut layer_model::LayerEffects, slot: ui::menu::EffectSlot, on: bool) {
-    use ui::menu::EffectSlot as S;
-    match slot {
-        S::DropShadow => effects.drop_shadow = on.then(Default::default),
-        S::InnerShadow => effects.inner_shadow = on.then(Default::default),
-        S::OuterGlow => effects.outer_glow = on.then(Default::default),
-        S::InnerGlow => effects.inner_glow = on.then(Default::default),
-        S::BevelEmboss => effects.bevel_emboss = on.then(Default::default),
-        S::Satin => effects.satin = on.then(Default::default),
-        S::ColorOverlay => effects.color_overlay = on.then(Default::default),
-        S::GradientOverlay => effects.gradient_overlay = on.then(Default::default),
-        S::PatternOverlay => effects.pattern_overlay = on.then(Default::default),
-        S::Stroke => effects.stroke = on.then(Default::default),
-    }
 }
 
 fn toggle_mask(editor: &mut Editor, link: bool) -> Result<String, String> {
@@ -2634,10 +2862,12 @@ mod tests {
         };
         let mut s = format!("{clip:?} ");
         s += &format!(
-            "{} {:?} {:?} {}x{} stored={} saved={}",
+            "{} {:?} {:?} sel={:?} tool={:?} {}x{} stored={} saved={}",
             d.history_depth(),
             d.document.selection,
             d.document.active_layer(),
+            d.document.layer_selection(),
+            ed.effective_tool(),
             d.document.width(),
             d.document.height(),
             d.document.stored_selection.is_some(),
@@ -2743,6 +2973,14 @@ mod tests {
             // live item; it is greyed out with its reason, and
             // `no_menu_item_falls_back_to_the_generic_refusal` covers that.
             if unavailable_reason(MenuAction::Filter(*id)).is_some() {
+                continue;
+            }
+            // Custom and Offset are the identity at their schema defaults, so
+            // a defaults run changes nothing by design. They are hosted now —
+            // their rows open the parameter dialog, and
+            // `a_confirmed_filter_dialog_runs_at_radius_zero_and_eight`
+            // drives the dialog path end to end.
+            if matches!(id, ui::menu::FilterId::Custom | ui::menu::FilterId::Offset) {
                 continue;
             }
             let mut ed = opened(dir.path());
@@ -3065,11 +3303,26 @@ mod tests {
             // no-op, so it does not have to change the document digest.
             if action == MenuAction::ExportLayers
                 || action == MenuAction::Print
+                // Export Diagnostics writes a file (or refuses when the dialog
+                // is declined) — loud either way, and the digest cannot move.
+                || action == MenuAction::ExportDiagnostics
                 || action == MenuAction::CommitSmartObjectContents
                 || action == MenuAction::CloseAll
                 || action == MenuAction::Trim
                 || action == MenuAction::CropToSelection
                 || action == MenuAction::StrokeDialog
+                // Define Brush Preset stores a *brush*, not pixels — the
+                // digest cannot move; `defining_a_brush_preset_offers_it_
+                // again_after_a_restart` pins the persistence instead.
+                || action == MenuAction::DefineBrush
+                // New ▸ Fill Layer ▸ Pattern needs a user-defined pattern;
+                // `a_new_pattern_fill_layer_tiles_the_latest_pattern` drives
+                // the define-then-fill sequence this fixture has no time for.
+                || action == MenuAction::NewFillLayer(ui::menu::FillLayerKind::Pattern)
+                // Reveal All is a no-op when every layer already fits — its
+                // answer is the status line, and `reveal_all_on_a_contained_
+                // canvas_reveals_nothing` pins the grow case.
+                || action == MenuAction::RevealAll
             {
                 match perform(action, &mut ed) {
                     Ok(_) | Err(_) => checked += 1,
@@ -3099,6 +3352,15 @@ mod tests {
                 );
                 continue;
             }
+            // The Layer Style rows are hosted by the chrome's dialog host:
+            // the click opens the real dialog and the confirmed style arrives
+            // as the command it emits, one or more frames later. Driven here
+            // the way [`crate::chrome::Chrome::harvest`] drives it — the host
+            // must answer, and answering must leave the document alone.
+            if crate::dialog_host::DialogHost::default().open_for_menu_action(&action, &ed) {
+                checked += 1;
+                continue;
+            }
             match invoke(&mut ed, action) {
                 Ok(true) => checked += 1,
                 Ok(false) => dead.push(format!("{action:?}: changed nothing")),
@@ -3114,6 +3376,309 @@ mod tests {
             checked > 60,
             "only {checked} items were exercised; the walk stopped finding them"
         );
+    }
+
+    #[test]
+    fn a_three_pixel_inside_stroke_differs_from_an_outside_one() {
+        // The Validate for the stroke dialog: same selection, same width, and
+        // the location choice alone moves the band — inside strokes the
+        // selection's own edge pixels, outside paints beside them.
+        let paint = |location: ui::dialogs::StrokeLocation| -> (Vec<u8>, Vec<u8>, usize) {
+            let dir = tempfile::tempdir().unwrap();
+            let mut ed = opened(dir.path());
+            let layer = ed.active().unwrap().document.active_layer().unwrap();
+            let before = pixels::read_layer(ed.active().unwrap(), layer);
+            select_rect(&mut ed, (8, 8), (24, 24));
+            let spec = ui::dialogs::StrokeSpec {
+                width: 3,
+                location,
+                ..Default::default()
+            };
+            stroke_selection_with(&mut ed, &spec).unwrap();
+            let after = pixels::read_layer(ed.active().unwrap(), layer);
+            let steps = ed.active().unwrap().history.undo_depth();
+            (before, after, steps)
+        };
+        let (before, inside, inside_steps) = paint(ui::dialogs::StrokeLocation::Inside);
+        let (_, outside, outside_steps) = paint(ui::dialogs::StrokeLocation::Outside);
+        assert_ne!(
+            inside, outside,
+            "3 px inside and 3 px outside stroked identical pixels"
+        );
+        assert_eq!(
+            inside_steps, 1,
+            "the inside stroke is exactly one undo step"
+        );
+        assert_eq!(
+            outside_steps, 1,
+            "the outside stroke is exactly one undo step"
+        );
+        // And the geometric claim itself: the inside band repaints the
+        // selection's first pixel, the outside band leaves it alone. (The
+        // probe is a noisy image, so "untouched" means equal to `before`, not
+        // equal to white.)
+        let w = 48usize;
+        let idx = |x: usize, y: usize| (y * w + x) * 4;
+        assert_ne!(
+            &inside[idx(8, 8)..idx(8, 8) + 4],
+            &before[idx(8, 8)..idx(8, 8) + 4]
+        );
+        assert_eq!(
+            &outside[idx(8, 8)..idx(8, 8) + 4],
+            &before[idx(8, 8)..idx(8, 8) + 4]
+        );
+    }
+
+    #[test]
+    fn fill_honours_opacity_preserve_transparency_and_blend() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        select_rect(&mut ed, (0, 0), (16, 16));
+
+        // Half-strength black over transparent lands at half alpha — fully
+        // deterministic, unlike blending against the probe's noise.
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let before = pixels::read_layer(ed.active().unwrap(), layer);
+        assert!(invoke(&mut ed, MenuAction::ClearPixels).unwrap());
+        let spec = ui::dialogs::FillSpec {
+            contents: ui::dialogs::FillContents::Color([0.0, 0.0, 0.0, 1.0]),
+            opacity: 0.5,
+            ..Default::default()
+        };
+        fill_selection_with(&mut ed, &spec).unwrap();
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        assert_eq!(
+            &after[0..4],
+            &[0, 0, 0, 128],
+            "50% black over transparent is black at half alpha, was {:?}",
+            &before[0..4]
+        );
+        assert_eq!(
+            ed.active().unwrap().history.undo_depth(),
+            2,
+            "clear plus fill is two undo steps — the fill alone is one"
+        );
+
+        // Preserve transparency keeps an untouched (transparent) region
+        // transparent; the same fill without it paints there.
+        let mut ed = opened(dir.path());
+        let spec = ui::dialogs::FillSpec {
+            contents: ui::dialogs::FillContents::Color([1.0, 0.0, 0.0, 1.0]),
+            preserve_transparency: true,
+            ..Default::default()
+        };
+        // A new layer starts transparent; the probe may hold pixels, so paint
+        // on a fresh transparent layer instead.
+        ed.dispatch(crate::action::Action::NewLayer).unwrap();
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        select_rect(&mut ed, (0, 0), (8, 8));
+        // On a fully transparent selection there is nothing to preserve, so
+        // the engine refuses rather than silently painting.
+        assert_eq!(
+            fill_selection_with(&mut ed, &spec).unwrap_err(),
+            "The fill would change nothing"
+        );
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        assert_eq!(after[3], 0, "preserve transparency painted nothing");
+        let spec = ui::dialogs::FillSpec {
+            contents: ui::dialogs::FillContents::Color([1.0, 0.0, 0.0, 1.0]),
+            ..Default::default()
+        };
+        fill_selection_with(&mut ed, &spec).unwrap();
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        assert_eq!(after[3], 255, "without it the fill paints");
+
+        // Multiply: black ink over the red fill stays black; white ink is a
+        // no-op, which is the mode's whole point.
+        let spec = ui::dialogs::FillSpec {
+            contents: ui::dialogs::FillContents::Color([0.0, 0.0, 0.0, 1.0]),
+            blend: layer_model::BlendMode::Multiply,
+            ..Default::default()
+        };
+        fill_selection_with(&mut ed, &spec).unwrap();
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        assert_eq!(&after[0..3], &[0, 0, 0], "multiply by black is black");
+    }
+
+    #[test]
+    fn the_fill_and_stroke_menu_items_open_their_dialogs() {
+        let dir = tempfile::tempdir().unwrap();
+        let ed = opened(dir.path());
+        let mut host = crate::dialog_host::DialogHost::default();
+        assert!(host.open_for_menu_action(&MenuAction::FillDialog, &ed));
+        assert!(host.is_open(), "Fill opened the dialog");
+        host.close();
+        assert!(host.open_for_menu_action(&MenuAction::StrokeDialog, &ed));
+        assert!(host.is_open(), "Stroke opened the dialog");
+        // A stroke dialog opened at Photopea's defaults: 3 px inside.
+        assert_eq!(host.active_stroke_dialog_for_test().spec().width, 3);
+        assert_eq!(
+            host.active_stroke_dialog_for_test().spec().location,
+            ui::dialogs::StrokeLocation::Inside
+        );
+    }
+
+    #[test]
+    fn defining_a_pattern_offers_it_again_after_a_restart() {
+        // The Validate for the preset store: define through the menu item,
+        // persist, reopen the editor over the same config directory, and the
+        // pattern is offered again — to the Fill dialog and to the engine.
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let mut ed = opened(&config);
+        select_rect(&mut ed, (4, 4), (6, 6));
+        invoke(&mut ed, MenuAction::DefinePattern).unwrap();
+        assert_eq!(ed.presets().pattern_names(), vec!["Pattern 1"]);
+        ed.persist().unwrap();
+        drop(ed);
+
+        let mut reopened = opened(&config);
+        assert_eq!(
+            reopened.presets().pattern_names(),
+            vec!["Pattern 1"],
+            "the defined pattern survived the restart"
+        );
+
+        // The Fill dialog offers it; the engine paints it tiled.
+        let mut host = crate::dialog_host::DialogHost::default();
+        assert!(host.open_for_menu_action(&MenuAction::FillDialog, &reopened));
+        use ui::dialogs::Dialog as _;
+        let confirmed = match host.active_fill_dialog_for_test().confirm() {
+            Some(ui::dialogs::DialogAction::Fill(spec)) => spec,
+            other => panic!("confirm produced {other:?}"),
+        };
+        assert!(
+            matches!(confirmed.contents, ui::dialogs::FillContents::Foreground),
+            "the dialog opens on the foreground, not a pattern"
+        );
+
+        let spec = ui::dialogs::FillSpec {
+            contents: ui::dialogs::FillContents::Pattern("Pattern 1".to_string()),
+            ..Default::default()
+        };
+        select_rect(&mut reopened, (0, 0), (4, 4));
+        fill_selection_with(&mut reopened, &spec).unwrap();
+        let layer = reopened.active().unwrap().document.active_layer().unwrap();
+        let after = pixels::read_layer(reopened.active().unwrap(), layer);
+        // The pattern is the 2x2 snapshot of the probe at (4,4), tiled: the
+        // fill at (0,0) equals the snapshot's (0,0), i.e. the probe at (4,4).
+        let before_probe = pixels::read_layer(reopened.active().unwrap(), layer);
+        let _ = before_probe;
+        assert_eq!(
+            after[0..4],
+            after[(2 * 48 + 2) * 4..(2 * 48 + 2) * 4 + 4],
+            "the pattern tiles"
+        );
+    }
+
+    #[test]
+    fn defining_a_brush_preset_offers_it_again_after_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let mut ed = opened(&config);
+        ed.set_brush(tools::BrushSettings {
+            size: 33.0,
+            ..Default::default()
+        });
+        invoke(&mut ed, MenuAction::DefineBrush).unwrap();
+        ed.persist().unwrap();
+        drop(ed);
+
+        let reopened = opened(&config);
+        let brushes = reopened.presets().brushes();
+        assert_eq!(brushes.len(), 1, "the preset survived the restart");
+        let settings: tools::BrushSettings = serde_json::from_str(&brushes[0].1).unwrap();
+        assert_eq!(settings.size, 33.0, "the settings round-trip");
+    }
+
+    #[test]
+    fn a_new_pattern_fill_layer_tiles_the_latest_pattern() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer_before = ed.active().unwrap().document.active_layer().unwrap();
+        select_rect(&mut ed, (2, 2), (4, 4));
+        invoke(&mut ed, MenuAction::DefinePattern).unwrap();
+        invoke(
+            &mut ed,
+            MenuAction::NewFillLayer(ui::menu::FillLayerKind::Pattern),
+        )
+        .unwrap();
+
+        // The fill layer is a NEW layer (the old one still holds its pixels);
+        // find it by elimination and read that.
+        let doc = ed.active().unwrap();
+        let layer = (doc.document.layers.root())
+            .iter()
+            .copied()
+            .find(|id| *id != layer_before)
+            .expect("the fill layer was added");
+        let after = pixels::read_layer(doc, layer);
+        // The new layer is tiled with the 2x2 pattern everywhere: pixel (0,0)
+        // repeats at (2,0) and (0,2).
+        assert_eq!(after[0..4], after[(2 * 48) * 4..(2 * 48) * 4 + 4]);
+        assert_eq!(after[0..4], after[(2 * 48 + 2) * 4..(2 * 48 + 2) * 4 + 4]);
+        assert_eq!(after[3], 255, "the pattern fill layer holds pixels");
+        assert_eq!(doc.history.undo_depth(), 1, "one undoable step");
+    }
+
+    #[test]
+    fn canvas_size_is_enabled_and_hosted_now() {
+        assert_eq!(unavailable_reason(MenuAction::CanvasSize), None);
+        let dir = tempfile::tempdir().unwrap();
+        let ed = with_two_layers(dir.path());
+        let mut host = crate::dialog_host::DialogHost::default();
+        assert!(host.open_for_menu_action(&MenuAction::CanvasSize, &ed));
+    }
+
+    #[test]
+    fn arbitrary_rotation_is_enabled_and_hosted_now() {
+        assert_eq!(
+            unavailable_reason(MenuAction::RotateCanvas(
+                ui::menu::CanvasRotation::Arbitrary
+            )),
+            None
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let ed = with_two_layers(dir.path());
+        let mut host = crate::dialog_host::DialogHost::default();
+        assert!(host.open_for_menu_action(
+            &MenuAction::RotateCanvas(ui::menu::CanvasRotation::Arbitrary),
+            &ed
+        ));
+    }
+
+    #[test]
+    fn filter_parameter_dialogs_are_enabled_and_hosted() {
+        // The two identity-at-defaults filters were the reason this dialog
+        // surface was missing; both are hosted now.
+        assert_eq!(
+            unavailable_reason(MenuAction::Filter(ui::menu::FilterId::Custom)),
+            None
+        );
+        assert_eq!(
+            unavailable_reason(MenuAction::Filter(ui::menu::FilterId::Offset)),
+            None
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let ed = with_two_layers(dir.path());
+        let mut host = crate::dialog_host::DialogHost::default();
+        assert!(
+            host.open_for_menu_action(&MenuAction::Filter(ui::menu::FilterId::GaussianBlur), &ed,),
+            "the filter opened its dialog"
+        );
+    }
+
+    #[test]
+    fn image_size_is_enabled_and_hosted_now() {
+        // The dialog host opens the real dialog and the confirmed spec lands
+        // as one undoable `ResampleImage` — the reason this row wore is gone.
+        assert_eq!(unavailable_reason(MenuAction::ImageSize), None);
+        let dir = tempfile::tempdir().unwrap();
+        let ed = with_two_layers(dir.path());
+        let mut host = crate::dialog_host::DialogHost::default();
+        assert!(host.open_for_menu_action(&MenuAction::ImageSize, &ed));
     }
 
     #[test]
@@ -3198,10 +3763,13 @@ mod tests {
         let w = ed.active().unwrap().document.width() as usize;
         let border = (4 * w + 4) * 4; // a corner of the selection border
         let interior = (7 * w + 8) * 4; // well inside the selection
-        assert_eq!(
+                                        // The band is anti-aliased (the erosion it is built from is soft), so
+                                        // the rim reads as blue-tinted rather than pure blue at the corner.
+        assert!(
+            after[border + 2] > before[border + 2] && after[border] < before[border],
+            "the border was stroked toward the foreground colour, got {:?} from {:?}",
             &after[border..border + 4],
-            &[0, 0, 255, 255],
-            "the border was stroked with the foreground colour"
+            &before[border..border + 4]
         );
         assert_eq!(
             &after[interior..interior + 4],

@@ -70,6 +70,10 @@ pub struct BorderWidths {
     pub hairline: f32,
     /// Emphasised outline, e.g. the active tool.
     pub thick: f32,
+    /// Icon strokes. Tool glyphs live between the hairline and the thick
+    /// outline: heavier than chrome borders (icons must read at 16 pt), lighter
+    /// than the emphasised control outline.
+    pub icon: f32,
     /// Keyboard focus ring.
     pub focus_ring: f32,
 }
@@ -79,6 +83,7 @@ impl Default for BorderWidths {
         Self {
             hairline: 1.0,
             thick: 2.0,
+            icon: 1.75,
             focus_ring: 2.5,
         }
     }
