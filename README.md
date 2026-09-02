@@ -15,6 +15,10 @@ cd raster-studio
 cargo run -p studio-desktop -- path/to/image.png
 ```
 
+![Raster Studio's main window: a document on the flat pasteboard, the tool
+column with its footer wells, tabbed dock panels and the status
+bar](raster-studio/docs/main-window.png)
+
 ## The idea: one engine, no drift
 
 Most image editors are either a web app you rent or a native app written in

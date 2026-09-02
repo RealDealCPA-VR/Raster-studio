@@ -94,7 +94,7 @@ Source of truth: `raster-studio/docs/PRODUCTION-TODO.md` (untracked in git). Wor
 - [x] T-P3.10: .rstudio format versioning - DONE 2026-09-02: the migration path EXISTED (migrate.rs: the pre-decode version gate + the gapless STEPS chain 1->2 no-op + 2->3 repair that strips pixels/selection no real v1 build could write); the missing piece was the CHECKED-IN FIXTURE. Generated a genuine v1 package (a doc stamped format_version=1 with one painted tile, saved through build_package which serialises as-is) and CHECKED IT IN at tests/integration/fixtures/old-format-v1.rstudio/ (267K: manifest + document.msgpack + journal + preview + one content-addressed tile). VALIDATE test: `a_v1_fixture_opens_through_the_migration_path` (project_format::open_project on the fixture -> version stamped 3, the 2->3 repair cleared pixels/selection, geometry survives). project_format::document_version exported for the probe. Gates all green.
 - [ ] T-P3.11: Accessibility | Verify: Tab order + focus ring; AccessKit labelled nodes
 - [ ] T-P3.12: Localization scaffolding | Verify: catalogue keyed by locale; no user-facing literals in ui/src/view or dialogs
-- [ ] T-P3.13: README screenshot | Verify: README embeds committed --shot PNG
+- [x] T-P3.13: README screenshot - DONE 2026-09-02: took a REAL --shot of the current build (cargo run --release -p studio-desktop -- --shot; 1440x900, 45KB) on this host, checked it in at raster-studio/docs/main-window.png, and embedded it in the repo-root README.md right after the run command with a caption naming the visible chrome. VALIDATE HOLDS: README.md embeds a committed --shot PNG of the current build. Gates green (no Rust changes).
 - [x] T-P3.14: Help destinations - DONE 2026-09-02: workspace.package.repository SET (https://github.com/RealDealCPA-VR/Raster-studio - the actual remote this repo pushes to); Help / Release Notes / Report Issue now OPEN real URLs through the webbrowser crate (wiki / releases / issues/new) instead of printing prose, with the status line reporting "Opened <url>" (or "lives at" when no browser opened - e.g. headless). webbrowser 1 added to the workspace deps. VALIDATE: each opens a reachable URL (the URLs are the real repo's pages - reachable by construction on GitHub) + repository is set. Gates all green.
 ### P4 — Scope decisions
 - [ ] T-P4: Confirm Tier C deferrals in parity-matrix; no menu promises deferred items | Verify: parity Tier C lists each with reason
@@ -110,17 +110,17 @@ Source of truth: `raster-studio/docs/PRODUCTION-TODO.md` (untracked in git). Wor
 - INCIDENT (resolved) 2026-09-01T01:00Z: a python marker-cut script used to remove a scratch probe module truncated chrome.rs at the probe marker, deleting the entire `mod tests` (~1650 lines, 35 tests) because the probe had been inserted BEFORE the tests module. Detected via dead_code warning on test helpers with zero call sites. Recovered by extracting `mod tests` from `git show HEAD:...chrome.rs` and re-appending the 2 new dialog tests + helpers. Final file 3254 lines, 37 chrome tests. LESSON: never cut files by string markers with python; use the edit tool or verify module boundaries. All 35 original tests restored and passing.
 
 ## Pickup verification
-- 2026-09-02: pickups verified; P0+P1+P2 all + P3.1-P3.10 + P3.14 done. 58/61 TICKED. PUSHED through e7ce306; push each landing.
+- 2026-09-02: pickups verified; P0+P1+P2 all + P3.1-P3.10 + P3.13 + P3.14 done. 59/61 TICKED. PUSHED through dceaad0; push each landing.
 - RULE: rewrite Handoff/Pickup wholesale each refresh; edit tool ONLY for edits.
 
 ## Handoff
-- Current checkpoint: 58/61 tasks complete (P0+P1+P2 all; P3.1-P3.10 + P3.14), all four gates green.
-- Last completed: T-P3.14 (Help destinations: real URLs + repository set).
+- Current checkpoint: 59/61 tasks complete (P0+P1+P2 all; P3 done except P3.11/P3.12), all four gates green.
+- Last completed: T-P3.13 (README embeds the committed --shot).
 - In progress: none.
-- Next exact action: T-P3.13 README screenshot - validate: README.md embeds a COMMITTED --shot PNG of the current build. Take it: `cargo run -p studio-desktop -- --shot <path>` on this host (a GPU exists - the gpu tests pass), move the PNG into raster-studio/docs/ (or assets/), embed with ![...](path) in README.md (repo-root README), commit.
-- Then: P3.12 localization scaffolding (catalogue keyed by locale + a no-user-facing-literal lint for crates/ui/src/view + dialogs - LARGE: every literal in those modules must move to the catalogue; budget a full wave or scope honestly), P3.11 accessibility (designed, a full wave - AccessKit feature + Tab order + focus rings), P4 scope decisions, T-FIN final gate.
-- Files changed this wave: Cargo.toml, crates/app-shell/{Cargo.toml,src/menu_bridge.rs}.
+- Next exact action: T-P3.12 Localization scaffolding - validate: strings resolve through a catalogue keyed by locale + a test asserting no user-facing literal remains in crates/ui/src/view or crates/ui/src/dialogs. THIS IS A FULL WAVE (every literal in those two modules moves to a catalogue). The honest bounded path: build the catalogue (a design::strings module: `pub fn tr(key: &str, locale: Locale) -> &str` over a static table, Locale from preferences), migrate a REPRESENTATIVE slice, and add the no-literal lint as a test with the CURRENT inventory documented - OR mark the task honestly as scoped-but-not-landed if the inventory is hundreds of literals. Survey first: count string literals in crates/ui/src/view + dialogs.
+- Then: P3.11 accessibility (designed, a full wave), P4 scope decisions, T-FIN final gate.
+- Files changed this wave: README.md, raster-studio/docs/main-window.png.
 - Commands/checks (exact): `cd raster-studio && cargo fmt --check`; `cargo clippy --workspace --all-targets` (0 warnings); `cargo check --workspace --all-targets`; `cargo test --workspace` (exit 0).
-- Decisions/assumptions (running): [prior] + Help destinations open real GitHub pages; no-browser falls back to the status line.
-- Blockers/risks: 3 tasks remain + P3.11/P3.12 are waves - rewrite this section after EVERY task, edit tool only. PUSH after each landing.
-- Context note: P3.14 done; P3.13 next (cheap), then P3.12/P3.11/P4/T-FIN.
+- Decisions/assumptions (running): [prior] + the --shot ran on this host (a real GPU) - no host-bound caveat needed.
+- Blockers/risks: 2 tasks remain (P3.11/P3.12 are waves) + P4 + T-FIN - rewrite this section after EVERY task, edit tool only. PUSH after each landing.
+- Context note: P3.13 done; P3.12 next.

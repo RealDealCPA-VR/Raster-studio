@@ -1,15 +1,15 @@
 ## Pickup verification
-- 2026-09-02: pickups verified; P0+P1+P2 all + P3.1-P3.10 + P3.14 done. 58/61 TICKED. PUSHED through e7ce306; push each landing.
+- 2026-09-02: pickups verified; P0+P1+P2 all + P3.1-P3.10 + P3.13 + P3.14 done. 59/61 TICKED. PUSHED through dceaad0; push each landing.
 - RULE: rewrite Handoff/Pickup wholesale each refresh; edit tool ONLY for edits.
 
 ## Handoff
-- Current checkpoint: 58/61 tasks complete (P0+P1+P2 all; P3.1-P3.10 + P3.14), all four gates green.
-- Last completed: T-P3.14 (Help destinations: real URLs + repository set).
+- Current checkpoint: 59/61 tasks complete (P0+P1+P2 all; P3 done except P3.11/P3.12), all four gates green.
+- Last completed: T-P3.13 (README embeds the committed --shot).
 - In progress: none.
-- Next exact action: T-P3.13 README screenshot - validate: README.md embeds a COMMITTED --shot PNG of the current build. Take it: `cargo run -p studio-desktop -- --shot <path>` on this host (a GPU exists - the gpu tests pass), move the PNG into raster-studio/docs/ (or assets/), embed with ![...](path) in README.md (repo-root README), commit.
-- Then: P3.12 localization scaffolding (catalogue keyed by locale + a no-user-facing-literal lint for crates/ui/src/view + dialogs - LARGE: every literal in those modules must move to the catalogue; budget a full wave or scope honestly), P3.11 accessibility (designed, a full wave - AccessKit feature + Tab order + focus rings), P4 scope decisions, T-FIN final gate.
-- Files changed this wave: Cargo.toml, crates/app-shell/{Cargo.toml,src/menu_bridge.rs}.
+- Next exact action: T-P3.12 Localization scaffolding - validate: strings resolve through a catalogue keyed by locale + a test asserting no user-facing literal remains in crates/ui/src/view or crates/ui/src/dialogs. THIS IS A FULL WAVE (every literal in those two modules moves to a catalogue). The honest bounded path: build the catalogue (a design::strings module: `pub fn tr(key: &str, locale: Locale) -> &str` over a static table, Locale from preferences), migrate a REPRESENTATIVE slice, and add the no-literal lint as a test with the CURRENT inventory documented - OR mark the task honestly as scoped-but-not-landed if the inventory is hundreds of literals. Survey first: count string literals in crates/ui/src/view + dialogs.
+- Then: P3.11 accessibility (designed, a full wave), P4 scope decisions, T-FIN final gate.
+- Files changed this wave: README.md, raster-studio/docs/main-window.png.
 - Commands/checks (exact): `cd raster-studio && cargo fmt --check`; `cargo clippy --workspace --all-targets` (0 warnings); `cargo check --workspace --all-targets`; `cargo test --workspace` (exit 0).
-- Decisions/assumptions (running): [prior] + Help destinations open real GitHub pages; no-browser falls back to the status line.
-- Blockers/risks: 3 tasks remain + P3.11/P3.12 are waves - rewrite this section after EVERY task, edit tool only. PUSH after each landing.
-- Context note: P3.14 done; P3.13 next (cheap), then P3.12/P3.11/P4/T-FIN.
+- Decisions/assumptions (running): [prior] + the --shot ran on this host (a real GPU) - no host-bound caveat needed.
+- Blockers/risks: 2 tasks remain (P3.11/P3.12 are waves) + P4 + T-FIN - rewrite this section after EVERY task, edit tool only. PUSH after each landing.
+- Context note: P3.13 done; P3.12 next.
