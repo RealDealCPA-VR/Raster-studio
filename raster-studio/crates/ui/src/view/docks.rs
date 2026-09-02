@@ -132,7 +132,7 @@ fn icon_rail(w: &mut Workspace, ctx: &egui::Context, side: DockSide) {
                         ui,
                         "chevron-right",
                         false,
-                        "Expand the dock",
+                        crate::strings::tr("ui.docks.expand.the.dock"),
                         Some(super::ids::rail_expand(side)),
                     )
                     .clicked()
@@ -253,7 +253,14 @@ fn tab_strip(w: &mut Workspace, ui: &mut Ui, members: &[PanelId], active: PanelI
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add_space(Space::XSmall.pt());
-                if icon_toggle(ui, "close", false, "Close panel").clicked() {
+                if icon_toggle(
+                    ui,
+                    "close",
+                    false,
+                    crate::strings::tr("ui.docks.close.panel"),
+                )
+                .clicked()
+                {
                     w.emit(Intent::SetPanelOpen {
                         panel: active,
                         open: false,
@@ -264,7 +271,7 @@ fn tab_strip(w: &mut Workspace, ui: &mut Ui, members: &[PanelId], active: PanelI
                     ui,
                     "overflow",
                     open,
-                    "Move this panel",
+                    crate::strings::tr("ui.docks.move.this.panel"),
                     Some(super::ids::panel_menu(active)),
                 )
                 .clicked()
@@ -291,7 +298,7 @@ fn move_controls(w: &mut Workspace, ui: &mut Ui, panel: PanelId) {
     let mut reorder: Option<bool> = None;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = Space::Hair.pt();
-        ui.label(hint(ui, "Move to"));
+        ui.label(hint(ui, crate::strings::tr("ui.docks.move.to")));
         for side in DockSide::ALL {
             let here = placement.side == *side;
             let response = super::labelled_button(
@@ -301,9 +308,9 @@ fn move_controls(w: &mut Workspace, ui: &mut Ui, panel: PanelId) {
                 super::ids::panel_dock(panel, *side),
             )
             .on_hover_text(if here {
-                "The panel is already on this side"
+                crate::strings::tr("ui.docks.the.panel.is.already.on.this")
             } else {
-                "Dock this panel here"
+                crate::strings::tr("ui.docks.dock.this.panel.here")
             });
             if response.clicked() {
                 dock_to = Some(*side);
@@ -318,11 +325,11 @@ fn move_controls(w: &mut Workspace, ui: &mut Ui, panel: PanelId) {
             let response =
                 super::icon_button_id(ui, key, can, super::ids::panel_reorder(panel, up))
                     .on_hover_text(if can {
-                        "Move this panel within its dock"
+                        crate::strings::tr("ui.docks.move.this.panel.within.its.dock")
                     } else if up {
-                        "This panel is already at the top of its dock"
+                        crate::strings::tr("ui.docks.this.panel.is.already.at.the")
                     } else {
-                        "This panel is already at the bottom of its dock"
+                        crate::strings::tr("ui.docks.this.panel.is.already.at.the.2")
                     });
             if response.clicked() {
                 reorder = Some(up);
@@ -425,7 +432,8 @@ fn layers_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
                     match LayersModel::resolve_drop(doc, dragged, position) {
                         Ok(command) => w.emit(Intent::Document(command)),
                         Err(DropRejection::NoChange) => {}
-                        Err(_) => { /* the row already showed a "no drop" cue */ }
+                        Err(_) => { /* the row already showed a crate::strings::tr("ui.docks.no.drop") cue */
+                        }
                     }
                 }
             }
@@ -606,7 +614,15 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
             badge(ui, "fx", true);
         }
         if row.shows_mask_badge() {
-            badge(ui, if row.mask_enabled { "mask" } else { "mask off" }, true);
+            badge(
+                ui,
+                if row.mask_enabled {
+                    "mask"
+                } else {
+                    crate::strings::tr("ui.docks.mask.off")
+                },
+                true,
+            );
         }
     });
 
@@ -755,7 +771,7 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
             ui,
             "overflow",
             w.layers.filter.is_none(),
-            "Show every layer",
+            crate::strings::tr("ui.docks.show.every.layer"),
             Some(super::ids::layer_filter_all()),
         )
         .clicked()
@@ -781,7 +797,7 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
                 ui,
                 "plus",
                 false,
-                "Thumbnail size",
+                crate::strings::tr("ui.docks.thumbnail.size"),
                 Some(super::ids::layer_thumb_size()),
             )
             .clicked()
@@ -811,7 +827,7 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
             ui,
             "link",
             link_on,
-            "Link selected layers",
+            crate::strings::tr("ui.docks.link.selected.layers"),
             Some(super::ids::layer_link()),
         )
         .clicked()
@@ -834,7 +850,7 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
             ui,
             "adjustment",
             false,
-            "Open the Adjustments panel",
+            crate::strings::tr("ui.docks.open.the.adjustments.panel"),
             Some(super::ids::layer_adjustment()),
         )
         .clicked()
@@ -848,9 +864,9 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
         // fx: the layer-style editor, which is the Properties panel.
         let fx = super::labelled_button(ui, "fx", has_layer, super::ids::layer_fx());
         let fx = if has_layer {
-            fx.on_hover_text("Blending options")
+            fx.on_hover_text(crate::strings::tr("ui.docks.blending.options"))
         } else {
-            fx.on_disabled_hover_text("Select a layer first")
+            fx.on_disabled_hover_text(crate::strings::tr("ui.docks.select.a.layer.first"))
         };
         if fx.clicked() {
             w.emit(Intent::Action(crate::menu::MenuAction::BlendingOptions));
@@ -864,7 +880,7 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
             ui,
             "mask",
             false,
-            "Add a layer mask",
+            crate::strings::tr("ui.docks.add.a.layer.mask"),
             Some(super::ids::layer_mask()),
         );
         if has_layer && !has_mask && mask.clicked() {
@@ -873,14 +889,22 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
             }
         }
 
-        if icon_toggle_id(ui, "plus", true, "New layer", Some(super::ids::new_layer())).clicked() {
+        if icon_toggle_id(
+            ui,
+            "plus",
+            true,
+            crate::strings::tr("ui.docks.new.layer"),
+            Some(super::ids::new_layer()),
+        )
+        .clicked()
+        {
             w.emit(Intent::Document(LayersModel::new_layer(doc)));
         }
         if icon_toggle_id(
             ui,
             "new-group",
             true,
-            "New group",
+            crate::strings::tr("ui.docks.new.group"),
             Some(super::ids::new_group()),
         )
         .clicked()
@@ -894,7 +918,7 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
                 ui,
                 "trash",
                 false,
-                "Delete selected layers",
+                crate::strings::tr("ui.docks.delete.selected.layers"),
                 Some(super::ids::layer_delete()),
             );
             if can_delete && delete.clicked() {
@@ -994,7 +1018,7 @@ fn history_body(w: &mut Workspace, ui: &mut Ui, history: &History) {
     hairline(ui);
     ui.horizontal(|ui| {
         if design::ghost_button(ui, "Snapshot")
-            .on_hover_text("Mark this state so you can come back to it")
+            .on_hover_text(crate::strings::tr("ui.docks.mark.this.state.so.you.can"))
             .clicked()
         {
             let index = model.current();
@@ -1016,7 +1040,9 @@ fn history_body(w: &mut Workspace, ui: &mut Ui, history: &History) {
             let response =
                 super::labelled_button(ui, &snapshot.name, !stale, super::ids::history_snapshot(i));
             let response = if stale {
-                response.on_hover_text("The steps this snapshot named have been discarded")
+                response.on_hover_text(crate::strings::tr(
+                    "ui.docks.the.steps.this.snapshot.named.have",
+                ))
             } else {
                 response
             };
@@ -1036,7 +1062,10 @@ fn history_body(w: &mut Workspace, ui: &mut Ui, history: &History) {
 // ---------------------------------------------------------------------------
 
 fn adjustments_body(w: &mut Workspace, ui: &mut Ui) {
-    ui.label(hint(ui, "Add an adjustment layer"));
+    ui.label(hint(
+        ui,
+        crate::strings::tr("ui.docks.add.an.adjustment.layer"),
+    ));
     ui.add_space(Space::XSmall.pt());
     let t = current_tokens(ui);
     let cell = t.metrics.toolbar_button;
@@ -1081,7 +1110,7 @@ fn properties_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
 
     match subject {
         PropertiesSubject::Nothing => {
-            empty_state(ui, "Select a layer to see its properties");
+            empty_state(ui, crate::strings::tr("ui.docks.select.a.layer.to.see.its"));
         }
         PropertiesSubject::Layer(id) => layer_properties(w, ui, doc, id),
         PropertiesSubject::Mask(id) => mask_properties(w, ui, doc, id),
@@ -1091,12 +1120,18 @@ fn properties_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
         PropertiesSubject::Text(id) => {
             layer_properties(w, ui, doc, id);
             ui.add_space(Space::XSmall.pt());
-            ui.label(hint(ui, "Type is edited in Character and Paragraph"));
+            ui.label(hint(
+                ui,
+                crate::strings::tr("ui.docks.type.is.edited.in.character.and"),
+            ));
         }
         PropertiesSubject::Shape(id) => {
             layer_properties(w, ui, doc, id);
             ui.add_space(Space::XSmall.pt());
-            ui.label(hint(ui, "Path editing lives in the Paths panel"));
+            ui.label(hint(
+                ui,
+                crate::strings::tr("ui.docks.path.editing.lives.in.the.paths"),
+            ));
         }
     }
 
@@ -1137,7 +1172,10 @@ fn layer_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId)
     let mut clipping = layer.is_clipping();
     design::inspector_field(ui, "Clipping", |ui| {
         if ui
-            .checkbox(&mut clipping, hint(ui, "Clip to layer below"))
+            .checkbox(
+                &mut clipping,
+                hint(ui, crate::strings::tr("ui.docks.clip.to.layer.below")),
+            )
             .changed()
         {
             w.emit(Intent::Document(LayersModel::set_clipping(id, clipping)));
@@ -1163,7 +1201,7 @@ fn layer_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId)
 
 fn mask_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) {
     let Some(mask) = MaskProperties::of(doc, id) else {
-        empty_state(ui, "This layer has no mask");
+        empty_state(ui, crate::strings::tr("ui.docks.this.layer.has.no.mask"));
         return;
     };
     let (mut density, mut feather) = (mask.density() * 100.0, mask.feather_px());
@@ -1181,7 +1219,10 @@ fn mask_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) 
     }
     design::inspector_field(ui, "Invert", |ui| {
         if ui
-            .checkbox(&mut inverted, hint(ui, "Invert coverage"))
+            .checkbox(
+                &mut inverted,
+                hint(ui, crate::strings::tr("ui.docks.invert.coverage")),
+            )
             .changed()
         {
             if let Some(c) = MaskProperties::set_inverted(doc, id, inverted) {
@@ -1191,7 +1232,10 @@ fn mask_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) 
     });
     design::inspector_field(ui, "Enabled", |ui| {
         if ui
-            .checkbox(&mut enabled, hint(ui, "Apply this mask"))
+            .checkbox(
+                &mut enabled,
+                hint(ui, crate::strings::tr("ui.docks.apply.this.mask")),
+            )
             .changed()
         {
             if let Some(c) = MaskProperties::set_enabled(doc, id, enabled) {
@@ -1201,7 +1245,10 @@ fn mask_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) 
     });
     design::inspector_field(ui, "Linked", |ui| {
         if ui
-            .checkbox(&mut linked, hint(ui, "Move with the layer"))
+            .checkbox(
+                &mut linked,
+                hint(ui, crate::strings::tr("ui.docks.move.with.the.layer")),
+            )
             .changed()
         {
             if let Some(c) = MaskProperties::set_linked(doc, id, linked) {
@@ -1234,7 +1281,10 @@ fn adjustment_properties(
     id: Option<AdjustmentId>,
 ) {
     let Some(id) = id else {
-        ui.label(hint(ui, "This adjustment has no panel controls"));
+        ui.label(hint(
+            ui,
+            crate::strings::tr("ui.docks.this.adjustment.has.no.panel.controls"),
+        ));
         return;
     };
     ui.label(body(ui, id.label()));
@@ -1296,15 +1346,23 @@ fn adjustment_properties(
             changed |= design::slider_row(ui, "Level", level, 0.0..=1.0).changed();
         }
         K::Invert => {
-            ui.label(hint(ui, "Invert has no parameters"));
+            ui.label(hint(
+                ui,
+                crate::strings::tr("ui.docks.invert.has.no.parameters"),
+            ));
         }
         _ => {
             // Every remaining adjustment has a parameter set too large for a
             // dock — curves, channel mixers, selective colour. They open in
             // their own dialog rather than being half-editable here.
-            if super::labelled_button(ui, "Open editor…", true, super::ids::adjustment_editor())
-                .on_hover_text(format!("Edit this {} layer", id.label()))
-                .clicked()
+            if super::labelled_button(
+                ui,
+                crate::strings::tr("ui.docks.open.editor"),
+                true,
+                super::ids::adjustment_editor(),
+            )
+            .on_hover_text(format!("Edit this {} layer", id.label()))
+            .clicked()
             {
                 w.emit(Intent::Action(OPEN_ADJUSTMENT_EDITOR));
             }
@@ -1420,7 +1478,7 @@ fn color_body(w: &mut Workspace, ui: &mut Ui) {
             ui,
             "target",
             w.color.eyedropper_armed,
-            "Sample a colour from the canvas",
+            crate::strings::tr("ui.docks.sample.a.colour.from.the.canvas"),
         )
         .clicked()
         {
@@ -1430,7 +1488,7 @@ fn color_body(w: &mut Workspace, ui: &mut Ui) {
             }
         }
         if w.color.is_out_of_gamut() {
-            ui.label(hint(ui, "Out of gamut"));
+            ui.label(hint(ui, crate::strings::tr("ui.docks.out.of.gamut")));
         }
     });
 }
@@ -1572,12 +1630,15 @@ fn swatches_body(w: &mut Workspace, ui: &mut Ui) {
         w.swatches.remove(i);
     }
     ui.add_space(Space::XSmall.pt());
-    if design::secondary_button(ui, "Add current colour").clicked() {
+    if design::secondary_button(ui, crate::strings::tr("ui.docks.add.current.colour")).clicked() {
         let rgba = w.color.current();
         let name = crate::panels::color::format_hex(rgba);
         w.swatches.add(name, rgba);
     }
-    ui.label(hint(ui, "Right-click a swatch to remove it"));
+    ui.label(hint(
+        ui,
+        crate::strings::tr("ui.docks.right.click.a.swatch.to.remove"),
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -1642,10 +1703,10 @@ fn brushes_body(w: &mut Workspace, ui: &mut Ui) {
 
     ui.add_space(Space::XSmall.pt());
     hairline(ui);
-    if design::secondary_button(ui, "Edit brush…").clicked() {
+    if design::secondary_button(ui, crate::strings::tr("ui.docks.edit.brush")).clicked() {
         w.emit(Intent::OpenBrushEditor);
     }
-    if design::secondary_button(ui, "Save current brush").clicked() {
+    if design::secondary_button(ui, crate::strings::tr("ui.docks.save.current.brush")).clicked() {
         let name = format!("Brush {}", w.brushes.len() + 1);
         w.brushes.capture(&name, &w.options, tool);
     }
@@ -1757,7 +1818,7 @@ fn paragraph_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     if design::slider_row(ui, "Leading", &mut leading, 1.0..=400.0).changed() {
         changed |= text_panel::Paragraph::set_leading_px(&mut run, leading);
     }
-    if design::ghost_button(ui, "Auto leading").clicked() {
+    if design::ghost_button(ui, crate::strings::tr("ui.docks.auto.leading")).clicked() {
         changed |= text_panel::Paragraph::set_leading_auto(&mut run, 1.2);
     }
 
@@ -1844,19 +1905,19 @@ fn navigator_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
 
     ui.add_space(Space::XSmall.pt());
     ui.horizontal(|ui| {
-        if icon_toggle(ui, "minus", true, "Zoom out").clicked() {
+        if icon_toggle(ui, "minus", true, crate::strings::tr("ui.docks.zoom.out")).clicked() {
             w.emit(Intent::SetZoom(crate::panels::navigator::zoom_out(
                 w.status.zoom,
             )));
         }
         ui.label(body(ui, format_zoom(w.status.zoom)));
-        if icon_toggle(ui, "plus", true, "Zoom in").clicked() {
+        if icon_toggle(ui, "plus", true, crate::strings::tr("ui.docks.zoom.in")).clicked() {
             w.emit(Intent::SetZoom(crate::panels::navigator::zoom_in(
                 w.status.zoom,
             )));
         }
         if super::labelled_button(ui, "Fit", true, super::ids::navigator_fit())
-            .on_hover_text("Fit the whole image in the window")
+            .on_hover_text(crate::strings::tr("ui.docks.fit.the.whole.image.in.the"))
             .clicked()
         {
             // `w.viewport` is the canvas rectangle the last drawn frame
