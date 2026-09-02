@@ -148,7 +148,7 @@ pub use assets::{AssetInput, AssetReport, MAX_ASSET_DATA_BYTES};
 pub use error::ProjectError;
 pub use journal::{CommandJournal, DocumentDigest, JournalRecovery, SaveMark};
 pub use manifest::{FileDigest, Manifest, MANIFEST_VERSION, MIN_SUPPORTED_MANIFEST_VERSION};
-pub use migrate::{migrate, MAX_DOCUMENT_VERSION, MIN_DOCUMENT_VERSION};
+pub use migrate::{document_version, migrate, MAX_DOCUMENT_VERSION, MIN_DOCUMENT_VERSION};
 pub use package::{
     load_project, open_project, save_project, save_project_with, LoadedProject, SaveOptions,
     SaveReport, AI_DIR, DOCUMENT_FILE, JOURNAL_FILE, MANIFEST_FILE, UNKNOWN_APP_VERSION,

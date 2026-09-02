@@ -632,3 +632,31 @@ fn a_paint_made_after_the_last_save_recovers_its_reference_but_not_its_bytes() {
          tile store now persists them, invert this assertion"
     );
 }
+
+/// P3.10: the checked-in v1 fixture opens through the real migration path.
+///
+/// The fixture was written by a build stamped `format_version = 1` (see the
+/// generator's history in git); loading it runs the gate, the 1→2 no-op step,
+/// and the 2→3 repair — which strips the pixel store and selection no real v1
+/// build could have written — and stamps the result as the current format.
+#[test]
+fn a_v1_fixture_opens_through_the_migration_path() {
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/old-format-v1.rstudio");
+    let loaded = project_format::open_project(&fixture).unwrap();
+    assert_eq!(loaded.document.meta.format_version, 3, "stamped to current");
+    assert_eq!(
+        loaded.document.pixels.tile_count(),
+        0,
+        "the 2->3 repair stripped the pixel store a v1 file cannot justify"
+    );
+    assert_eq!(
+        loaded.document.selection,
+        editor_core::Selection::None,
+        "the repair cleared the selection too"
+    );
+    assert!(
+        loaded.document.width() == 64 && loaded.document.height() == 64,
+        "the geometry survived the migration"
+    );
+}

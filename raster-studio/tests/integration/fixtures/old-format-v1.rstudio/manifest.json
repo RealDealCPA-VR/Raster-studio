@@ -1,0 +1,17 @@
+{
+  "manifest_version": 2,
+  "app_version": "unknown",
+  "document_path": "document.msgpack",
+  "assets_collected": true,
+  "contents": {
+    "document.msgpack": {
+      "size": 838,
+      "blake3": "fe65d24a9e1b25cebf011bae019a8f74eb8f0d2e1c17b44a966e5efd051e6517"
+    },
+    "previews/preview.png": {
+      "size": 330,
+      "blake3": "fed731dea893cbad8b58d5be049c33069d11b7ab2f7368f98ef688984b38915b"
+    }
+  },
+  "integrity": "c21378d2146dd3453f863a39cea2f2f7d134722d65781fe66f8a6c9b7a10ccf9"
+}
