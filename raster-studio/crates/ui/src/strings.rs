@@ -69,6 +69,16 @@ fn active() -> Locale {
 /// translations. A locale missing from a row falls back to English at lookup.
 const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("actions.record", &[(Locale::En, "Record")]),
+    ("ui.brush_editor.custom.brush", &[(Locale::En, "Custom Brush")]),
+    ("ui.brush_editor.the.preview.runs.the.real.brush", &[(Locale::En, "The preview runs the real brush engine.")]),
+    ("ui.brush_editor.aliased.pencil", &[(Locale::En, "Aliased (pencil)")]),
+    ("ui.brush_editor.pressure.controls.size", &[(Locale::En, "Pressure controls size")]),
+    ("ui.brush_editor.pressure.controls.flow", &[(Locale::En, "Pressure controls flow")]),
+    ("ui.brush_editor.min.size", &[(Locale::En, "Min size")]),
+    ("ui.brush_editor.minimum.size.only.applies.when.pressure", &[(Locale::En, "Minimum size only applies when pressure controls size.")]),
+    ("ui.brush_editor.brush.editor", &[(Locale::En, "Brush Editor")]),
+    ("ui.brush_editor.save.brush", &[(Locale::En, "Save Brush")]),
+    ("ui.brush_editor.give.the.brush.a.name", &[(Locale::En, "Give the brush a name")]),
     ("ui.gradient_editor.spectrum", &[(Locale::En, "Spectrum")]),
     ("ui.gradient_editor.sunset", &[(Locale::En, "Sunset")]),
     ("ui.gradient_editor.copper", &[(Locale::En, "Copper")]),

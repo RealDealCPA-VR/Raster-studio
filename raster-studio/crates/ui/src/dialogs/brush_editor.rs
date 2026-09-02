@@ -60,7 +60,7 @@ impl BrushEditorDialog {
     pub fn new(settings: BrushSettings) -> Self {
         Self {
             settings,
-            name: "Custom Brush".to_string(),
+            name: crate::strings::tr("ui.brush_editor.custom.brush").to_string(),
             texture: None,
             cached_for: None,
         }
@@ -145,7 +145,9 @@ impl BrushEditorDialog {
             ctx,
             "brush-editor",
             self.title(),
-            Some("The preview runs the real brush engine."),
+            Some(crate::strings::tr(
+                "ui.brush_editor.the.preview.runs.the.real.brush",
+            )),
             DialogWidth::Standard,
             |ui| self.body(ui),
         );
@@ -224,27 +226,55 @@ impl BrushEditorDialog {
             *self.settings_mut() = edited;
         }
         let mut aliased = self.settings.aliased;
-        if checkbox_row(ui, "Aliased (pencil)", &mut aliased).changed() {
+        if checkbox_row(
+            ui,
+            crate::strings::tr("ui.brush_editor.aliased.pencil"),
+            &mut aliased,
+        )
+        .changed()
+        {
             self.settings_mut().aliased = aliased;
         }
 
         design::section_header(ui, "Pressure");
         let mut size_pressure = self.settings.size_pressure;
-        if checkbox_row(ui, "Pressure controls size", &mut size_pressure).changed() {
+        if checkbox_row(
+            ui,
+            crate::strings::tr("ui.brush_editor.pressure.controls.size"),
+            &mut size_pressure,
+        )
+        .changed()
+        {
             self.settings_mut().size_pressure = size_pressure;
         }
         let mut flow_pressure = self.settings.flow_pressure;
-        if checkbox_row(ui, "Pressure controls flow", &mut flow_pressure).changed() {
+        if checkbox_row(
+            ui,
+            crate::strings::tr("ui.brush_editor.pressure.controls.flow"),
+            &mut flow_pressure,
+        )
+        .changed()
+        {
             self.settings_mut().flow_pressure = flow_pressure;
         }
         ui.add_enabled_ui(size_pressure, |ui| {
             let mut value = self.settings.min_size_ratio;
-            if design::slider_row(ui, "Min size", &mut value, 0.0..=1.0).changed() {
+            if design::slider_row(
+                ui,
+                crate::strings::tr("ui.brush_editor.min.size"),
+                &mut value,
+                0.0..=1.0,
+            )
+            .changed()
+            {
                 self.settings_mut().min_size_ratio = value;
             }
         });
         if !size_pressure {
-            caption(ui, "Minimum size only applies when pressure controls size.");
+            caption(
+                ui,
+                crate::strings::tr("ui.brush_editor.minimum.size.only.applies.when.pressure"),
+            );
         }
 
         if let Some(reason) = self.blocked_reason() {
@@ -318,11 +348,11 @@ pub fn preview_dabs(settings: &BrushSettings, width: u32, height: u32) -> Option
 
 impl Dialog for BrushEditorDialog {
     fn title(&self) -> &'static str {
-        "Brush Editor"
+        crate::strings::tr("ui.brush_editor.brush.editor")
     }
 
     fn confirm_label(&self) -> &'static str {
-        "Save Brush"
+        crate::strings::tr("ui.brush_editor.save.brush")
     }
 
     fn confirm(&self) -> Option<DialogAction> {
@@ -339,7 +369,7 @@ impl Dialog for BrushEditorDialog {
 
     fn blocked_reason(&self) -> Option<String> {
         if self.name.trim().is_empty() {
-            return Some("Give the brush a name".to_string());
+            return Some(crate::strings::tr("ui.brush_editor.give.the.brush.a.name").to_string());
         }
         self.validated().err().map(|e| e.to_string())
     }
