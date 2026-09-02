@@ -35,7 +35,6 @@ use super::chrome::{
 use super::controls::{checkbox_row, combo, numeric, readout};
 use super::new_document::{MAX_DIMENSION, MAX_PIXELS};
 use super::units::{format_bytes, ResolutionUnit, Unit, MAX_PPI};
-use crate::strings::tr;
 
 /// Bytes one pixel of a flattened 8-bit RGBA document occupies.
 pub const BYTES_PER_PIXEL: u64 = 4;
