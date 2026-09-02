@@ -1,4 +1,8 @@
+import json
 import re
+
+MASK_PREFIX = "MASK"
+MASK_SUFFIX = "/"
 
 def slug(text):
     words = re.sub(r"[^A-Za-z0-9 ]", " ", text.lower()).split()
@@ -19,10 +23,32 @@ manifest = [
 
 rows = []
 used = set()
+existing = open('crates/ui/src/strings.rs', encoding='utf-8').read()
+manifest += [
+    ('crates/ui/src/dialogs/image_size.rs', 'image_size', json.load(open('/tmp/i18n_b2.json'))['image_size']),
+    ('crates/ui/src/dialogs/gradient_editor.rs', 'gradient_editor', json.load(open('/tmp/i18n_b2.json'))['gradient_editor']),
+    ('crates/ui/src/dialogs/canvas_size.rs', 'canvas_size', json.load(open('/tmp/i18n_b2.json'))['canvas_size']),
+    ('crates/ui/src/view/mod.rs', 'mod', json.load(open('/tmp/i18n_b2.json'))['mod']),
+    ('crates/ui/src/dialogs/brush_editor.rs', 'brush_editor', json.load(open('/tmp/i18n_b2.json'))['brush_editor']),
+    ('crates/ui/src/dialogs/export_as.rs', 'export_as', json.load(open('/tmp/i18n_b2.json'))['export_as']),
+    ('crates/ui/src/dialogs/layer_style.rs', 'layer_style', json.load(open('/tmp/i18n_b2.json'))['layer_style']),
+    ('crates/ui/src/dialogs/new_document.rs', 'new_document', json.load(open('/tmp/i18n_b2.json'))['new_document']),
+    ('crates/ui/src/dialogs/preferences.rs', 'preferences', json.load(open('/tmp/i18n_b2.json'))['preferences']),
+    ]
+
+manifest = [m for m in manifest if all(
+    ('("%s"' % ('ui.' + m[1] + '.' + slug(l))) not in existing for l in m[2]
+)]
 for path, mod, lits in manifest:
     src = open(path, encoding='utf-8').read()
     cut = src.find('#[cfg(test)]')
     code, tests = (src[:cut], src[cut:]) if cut >= 0 else (src, '')
+    # Mask the constructs a fn call cannot live in: const initialisers and
+    # write!-macro format strings. Their literals stay for a hand edit.
+    masked = []
+    for pat in [r'(const\s+\w+\s*:\s*&?['"]?str\s*=\s*)("(?:[^"\]|\.)*")',
+                r'(write!\(\s*f,\s*)("(?:[^"\]|\.)*")']:
+        code = re.sub(pat, lambda m: m.group(1) + MASK_PREFIX + m.group(2) + MASK_SUFFIX, code)
     for lit in lits:
         key = 'ui.' + mod + '.' + slug(lit)
         base, n = key, 2
@@ -32,6 +58,7 @@ for path, mod, lits in manifest:
         used.add(key)
         rows.append((key, lit, path))
         code = code.replace('"%s"' % lit, 'crate::strings::tr("%s")' % key)
+    code = code.replace(MASK_PREFIX, '').replace(MASK_SUFFIX, '')
     if 'crate::strings::tr(' in code and 'use crate::strings::tr;' not in code:
         m = list(re.finditer(r'^use [^\n]+;$', code, flags=re.M))
         if m:
@@ -45,3 +72,4 @@ new = '\n'.join('    ("%s", &[(Locale::En, "%s")]),' % (k, esc(l)) for k, l, _ i
 t = t.replace(anchor, anchor + '\n' + new, 1)
 open('crates/ui/src/strings.rs', 'w', encoding='utf-8', newline='').write(t)
 print('migrated', len(rows), 'literals across', len(manifest), 'files')
+
