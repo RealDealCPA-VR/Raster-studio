@@ -1,15 +1,15 @@
 ## Pickup verification
-- 2026-09-02: pickups verified; P0+P1+P2 all + P3.1-P3.8 done. 55/61 TICKED. PUSHED: 741761a + 854a79a on origin/main; push each landing.
+- 2026-09-02: pickups verified; P0+P1+P2 all + P3.1-P3.9 done. 56/61 TICKED. PUSHED: 741761a, 854a79a, 589ac1c on origin/main; push each landing.
 - RULE: rewrite Handoff/Pickup wholesale each refresh; edit tool ONLY for edits.
 
 ## Handoff
-- Current checkpoint: 55/61 tasks complete (P0+P1+P2 all; P3.1-P3.8), all four gates green.
-- Last completed: T-P3.8 (tile-cache ceiling enforced: store keeps the newest capacity of an overflowing batch; huge-doc test in performance.rs).
+- Current checkpoint: 56/61 tasks complete (P0+P1+P2 all; P3.1-P3.9), all four gates green.
+- Last completed: T-P3.9 (wall-clock budget: 500 ms ceiling on the partial recomposite of an 8000x6000 doc).
 - In progress: none.
-- Next exact action: T-P3.9 Wall-clock performance budget - validate: a budget test asserts a partial recomposite of an 8000x6000 document completes under a STATED MILLISECOND CEILING on CI hardware (the file's header says ratios-not-thresholds - the ceiling must be generous enough for CI hardware and stated as the budget; check the TODO wording at PRODUCTION-TODO.md ~446 first).
-- Then: P3.10 .rstudio versioning (checked-in older-version fixture opens through a migration path), P3.11 accessibility (Tab order + focus rings + AccessKit labels - possibly large), P3.12 localization scaffolding, P3.13 README screenshot, P3.14 help destinations; then P4 scope decisions; T-FIN final gate.
-- Files changed this wave: crates/compositor/src/cache.rs, tests/integration/tests/performance.rs.
+- Next exact action: T-P3.10 .rstudio format versioning - validate: a fixture written by an OLDER format version opens through a MIGRATION path, asserted by a CHECKED-IN FIXTURE test. Survey: project-format crate - DOCUMENT_FORMAT_VERSION (editor-core document.rs), Manifest::contents, the .rstudio reader; how are older versions handled today (refused? migrated?); write a small older-version fixture file into tests/integration/fixtures (or wherever fixtures live - project-fixtures/ dir exists at repo root) + a test that opens it.
+- Then: P3.11 accessibility (Tab order + focus rings + AccessKit labels - possibly the largest remaining), P3.12 localization scaffolding, P3.13 README screenshot, P3.14 help destinations; then P4 scope decisions; T-FIN final gate.
+- Files changed this wave: tests/integration/tests/performance.rs.
 - Commands/checks (exact): `cd raster-studio && cargo fmt --check`; `cargo clippy --workspace --all-targets` (0 warnings); `cargo check --workspace --all-targets`; `cargo test --workspace` (exit 0).
-- Decisions/assumptions (running): [prior] + the cache ceiling is a hard ceiling (newest-wins on overflow), not a working-set hint.
-- Blockers/risks: 6 tasks remain - bounded waves, rewrite this section after EVERY task, edit tool only. PUSH after each landing.
-- Context note: P3.8 done; P3.9 next.
+- Decisions/assumptions (running): [prior] + the budget is a regression gate set an order of magnitude above desktop measurements.
+- Blockers/risks: 5 tasks remain - bounded waves, rewrite this section after EVERY task, edit tool only. PUSH after each landing.
+- Context note: P3.9 done; P3.10 next.

@@ -397,3 +397,71 @@ fn a_huge_multilayer_document_stays_under_the_cache_ceiling_and_stays_editable()
         "the edited tile recomposited after the edit"
     );
 }
+
+/// P3.9: the wall-clock budget. Unlike the ratio above this IS a threshold —
+/// the task asks for a stated millisecond ceiling on CI hardware — so it is
+/// set an order of magnitude above what a desktop measures, which keeps it a
+/// regression gate rather than a hardware benchmark: the partial recomposite
+/// this budget guards is a handful of tiles, and even a heavily contended
+/// shared runner blends a handful of tiles in single-digit milliseconds.
+///
+/// An 8000 x 6000 ten-layer document, one small edit, one partial frame.
+#[test]
+fn a_partial_recomposite_of_an_8000x6000_document_meets_the_wall_clock_budget() {
+    const W: u32 = 8000;
+    const H: u32 = 6000;
+    /// The stated budget for ONE partial frame after one small edit. Fifty
+    /// times what a desktop measures, so the gate fails only when the
+    /// partial-recomposite property itself is broken, never because the
+    /// runner was slow.
+    const BUDGET: Duration = Duration::from_millis(500);
+
+    let mut doc = app::blank(W, H, "Budget");
+    for n in 0..LAYERS {
+        let layer = doc.add_layer(Layer::raster(format!("Budget {}", n + 1)));
+        doc.paint_layer(layer, &[TileCoord::new(0, 0, 0)], &move |_, _, _| {
+            [40 + n as u8, 180, 140, 170]
+        });
+    }
+
+    let mut tc = TileCompositor::new();
+    // The first frame: a viewport's worth of tiles through a cold cache. This
+    // is the full cost the budget does NOT gate — it warms the cache.
+    let side = (2048 / TILE_SIZE) as i32;
+    let warm: Vec<TileCoord> = (0..side)
+        .flat_map(|y| (0..side).map(move |x| TileCoord::new(x, y, 0)))
+        .collect();
+    for coord in &warm {
+        tc.composite_tile(
+            &doc.document,
+            &doc.tiles,
+            *coord,
+            CompositeOptions::default(),
+        )
+        .unwrap();
+    }
+
+    // One small edit, then one partial frame over the warm cache.
+    let top = doc.document.layers.root()[0];
+    let edit_tile = TileCoord::new(4, 4, 0);
+    doc.paint_layer(top, &[edit_tile], &move |_, x, y| {
+        [240, 60, ((x + y) % 251) as u8, 210]
+    });
+    tc.invalidate_tile(edit_tile);
+    let started = Instant::now();
+    for coord in &warm {
+        tc.composite_tile(
+            &doc.document,
+            &doc.tiles,
+            *coord,
+            CompositeOptions::default(),
+        )
+        .unwrap();
+    }
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < BUDGET,
+        "the partial recomposite took {elapsed:?}, over the {:?} budget",
+        BUDGET
+    );
+}
