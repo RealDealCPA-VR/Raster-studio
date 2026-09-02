@@ -64,6 +64,7 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Lasso (free / polygonal / magnetic) | ✅ | |
 | Magic wand / quick select / colour range | ✅ | tolerance, contiguous flag, anti-aliasing |
 | Select Subject | 🚫 | decided Tier C: no segmentation model ships, and the menu carries no item for it (P2.12) |
+| Accessibility (screen readers / AccessKit) | ✅ (wired) | egui's `accesskit` feature is on: the adapter is initialised at window build, its action requests route through a typed user event, and egui publishes a labelled node per widget; keyboard focus follows egui's Tab navigation with its focused-widget visuals. The on-device screen-reader walk needs assistive tooling on the host. |
 | Modify: feather, expand, contract, smooth, border | ✅ | true morphology on fractional coverage |
 | Invert, grow, similar, transform selection | ✅ | |
 | Quick mask, save/load selection | ✅ | quick mask composes (`Q` / Select ▸ Edit in Quick Mask Mode: edits land in a scratch mask, leaving converts the painted coverage into the selection); selection itself (outline, marching ants, save/load) is reachable |

@@ -19,6 +19,7 @@ editor-core.workspace = true
 layer-model.workspace = true
 telemetry.workspace = true
 webbrowser.workspace = true
+accesskit_winit.workspace = true
 compositor.workspace = true
 project-format.workspace = true
 raster.workspace = true

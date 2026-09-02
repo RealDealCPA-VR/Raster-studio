@@ -31,6 +31,8 @@ pub enum ShellError {
     Surface(#[from] wgpu::CreateSurfaceError),
     #[error("no usable graphics adapter: {0}")]
     Gpu(#[source] anyhow::Error),
+    #[error("{0}")]
+    Other(String),
     #[error(
         "this graphics adapter offers no 8-bit surface format the canvas can draw to \
          (it reported: {formats})"
@@ -50,6 +52,7 @@ impl ShellError {
             | ShellError::UnsupportedSurfaceFormat { .. } => {
                 "Raster Studio cannot start the graphics system"
             }
+            ShellError::Other(_) => "Raster Studio failed to start",
         }
     }
 
@@ -74,6 +77,10 @@ impl ShellError {
             ShellError::UnsupportedSurfaceFormat { .. } => {
                 "This usually means a software or remote-display adapter is in use. Update \
                  your graphics driver, or run on the machine's own display."
+            }
+            ShellError::Other(_) => {
+                "Start-up failed for a reason the log records in full. Re-run with \
+                 RUST_LOG=debug to capture it."
             }
         };
         format!("{self}\n\n{advice}")

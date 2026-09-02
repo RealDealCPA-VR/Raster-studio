@@ -379,6 +379,20 @@ struct WindowState {
 }
 
 /// The application: an [`Editor`] plus the window it is shown in.
+/// The event loop's user event: how AccessKit's adapter (screen readers,
+/// assistive tooling) reaches the shell. `accesskit_winit::Event` is the only
+/// variant today; more sources would widen the enum, not change the route.
+#[derive(Debug)]
+pub enum AppEvent {
+    AccessKit(accesskit_winit::Event),
+}
+
+impl From<accesskit_winit::Event> for AppEvent {
+    fn from(event: accesskit_winit::Event) -> Self {
+        Self::AccessKit(event)
+    }
+}
+
 pub struct Shell {
     editor: Editor,
     chrome: Chrome,
@@ -394,6 +408,9 @@ pub struct Shell {
     /// The Actions panel's last stopped recording, held between Stop and
     /// Replay so the capture survives the recording flag's reset.
     last_recording: Option<Vec<crate::editor::RecordedEdit>>,
+    /// The proxy AccessKit's adapter sends its events through, created once
+    /// the loop exists and handed to `init_accesskit` at window build.
+    accesskit_proxy: Option<winit::event_loop::EventLoopProxy<crate::shell::AppEvent>>,
     /// Pointer input, routed to the active tool or to the camera.
     pointer: ToolPointer,
     modifiers: ModifiersState,
@@ -442,6 +459,7 @@ impl Shell {
             cursor: Vec2::ZERO,
             held: None,
             last_recording: None,
+            accesskit_proxy: None,
             pointer: ToolPointer::new(),
             modifiers: ModifiersState::empty(),
             pen_pressure: 1.0,
@@ -464,13 +482,17 @@ impl Shell {
     /// this is what makes the process exit non-zero for whoever launched it
     /// from a terminal or a script.
     pub fn run(mut self) -> Result<(), ShellError> {
-        let event_loop = match EventLoop::new() {
+        // A typed user event so AccessKit's adapter can reach us (P3.11):
+        // `EventLoop::new` is `EventLoop<()>`, and `()` cannot carry an
+        // `accesskit_winit::Event`.
+        let event_loop = match EventLoop::<crate::shell::AppEvent>::with_user_event().build() {
             Ok(event_loop) => event_loop,
             // The headless case: no display, an SSH session, a container.
             // Returned *and* shown — `ShellError::EventLoop`'s advice is
             // written for this user, and before this it reached nobody.
             Err(e) => return Err(self.report_startup_failure(ShellError::EventLoop(e))),
         };
+        self.accesskit_proxy = Some(event_loop.create_proxy());
         let ran = event_loop.run_app(&mut self);
         self.finish(ran)
     }
@@ -637,7 +659,7 @@ impl Shell {
         let egui_ctx = egui::Context::default();
         crate::chrome::install_theme(&egui_ctx, theme);
         egui_ctx.set_zoom_factor(self.editor.preferences().ui_scale);
-        let egui_state = egui_winit::State::new(
+        let mut egui_state = egui_winit::State::new(
             egui_ctx.clone(),
             egui::ViewportId::ROOT,
             &*window,
@@ -645,6 +667,12 @@ impl Shell {
             window.theme(),
             Some(gpu.adapter.limits().max_texture_dimension_2d as usize),
         );
+        // AccessKit (P3.11): screen readers and assistive tooling get a labelled
+        // node per egui widget. egui-winit publishes the tree; the event side
+        // arrives as `AppEvent::AccessKit` and is routed in `user_event`.
+        if let Some(proxy) = self.accesskit_proxy.as_ref() {
+            egui_state.init_accesskit(&window, proxy.clone());
+        }
         let egui_renderer = egui_wgpu::Renderer::new(
             &gpu.device,
             format,
@@ -1560,7 +1588,7 @@ fn create_depth_view(gpu: &GpuContext, width: u32, height: u32) -> wgpu::Texture
     texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
-impl ApplicationHandler for Shell {
+impl ApplicationHandler<crate::shell::AppEvent> for Shell {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
             return;
@@ -1584,6 +1612,18 @@ impl ApplicationHandler for Shell {
                 // window exit 0.
                 self.start_up_failed(e);
                 event_loop.exit();
+            }
+        }
+    }
+
+    /// AccessKit's adapter talks back through the event-loop proxy: action
+    /// requests (a screen reader clicked a node) route into egui-winit, which
+    /// turns them into the widget responses the focused control would give.
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: crate::shell::AppEvent) {
+        let crate::shell::AppEvent::AccessKit(event) = event;
+        if let accesskit_winit::WindowEvent::ActionRequested(request) = event.window_event {
+            if let Some(state) = &mut self.state {
+                state.egui_state.on_accesskit_action_request(request);
             }
         }
     }
