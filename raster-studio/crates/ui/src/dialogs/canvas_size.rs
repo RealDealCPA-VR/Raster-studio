@@ -81,17 +81,17 @@ impl Anchor {
     }
 
     /// Human name, for the accessible label and the tooltip.
-    pub const fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::TopLeft => "Top left",
+            Self::TopLeft => crate::strings::tr("ui.canvas_size.top.left"),
             Self::Top => "Top",
-            Self::TopRight => "Top right",
+            Self::TopRight => crate::strings::tr("ui.canvas_size.top.right"),
             Self::Left => "Left",
             Self::Center => "Center",
             Self::Right => "Right",
-            Self::BottomLeft => "Bottom left",
+            Self::BottomLeft => crate::strings::tr("ui.canvas_size.bottom.left"),
             Self::Bottom => "Bottom",
-            Self::BottomRight => "Bottom right",
+            Self::BottomRight => crate::strings::tr("ui.canvas_size.bottom.right"),
         }
     }
 
@@ -437,7 +437,9 @@ impl CanvasSizeDialog {
             ctx,
             "canvas-size",
             self.title(),
-            Some("Add or remove room around the image. Pixels are not resampled."),
+            Some(crate::strings::tr(
+                "ui.canvas_size.add.or.remove.room.around.the",
+            )),
             DialogWidth::Narrow,
             |ui| self.body(ui),
         );
@@ -475,7 +477,7 @@ impl CanvasSizeDialog {
         );
         hairline(ui);
 
-        design::section_header(ui, "New size");
+        design::section_header(ui, crate::strings::tr("ui.canvas_size.new.size"));
         let mut relative = self.relative;
         if checkbox_row(ui, "Relative", &mut relative).changed() {
             self.set_relative(relative);
@@ -528,7 +530,7 @@ impl CanvasSizeDialog {
         let new = self.new_size();
         anchor_grid(ui, &mut self.anchor, old, new);
 
-        design::section_header(ui, "Canvas extension");
+        design::section_header(ui, crate::strings::tr("ui.canvas_size.canvas.extension"));
         let mut open_picker = false;
         design::inspector_field(ui, "Fill", |ui| {
             let entries = BackgroundContents::MENU;
@@ -689,11 +691,11 @@ pub fn anchor_grid(
 
 impl Dialog for CanvasSizeDialog {
     fn title(&self) -> &'static str {
-        "Canvas Size"
+        crate::strings::tr("ui.canvas_size.canvas.size")
     }
 
     fn confirm_label(&self) -> &'static str {
-        "Resize Canvas"
+        crate::strings::tr("ui.canvas_size.resize.canvas")
     }
 
     fn confirm(&self) -> Option<DialogAction> {
@@ -704,7 +706,9 @@ impl Dialog for CanvasSizeDialog {
     fn blocked_reason(&self) -> Option<String> {
         let spec = self.spec();
         if spec.width < 1 || spec.height < 1 {
-            return Some("The canvas must be at least 1 x 1 pixel".to_string());
+            return Some(
+                crate::strings::tr("ui.canvas_size.the.canvas.must.be.at.least").to_string(),
+            );
         }
         if spec.width > MAX_DIMENSION || spec.height > MAX_DIMENSION {
             return Some(format!("No side may exceed {MAX_DIMENSION} pixels"));

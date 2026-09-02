@@ -69,6 +69,16 @@ fn active() -> Locale {
 /// translations. A locale missing from a row falls back to English at lookup.
 const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("actions.record", &[(Locale::En, "Record")]),
+    ("ui.canvas_size.top.left", &[(Locale::En, "Top left")]),
+    ("ui.canvas_size.top.right", &[(Locale::En, "Top right")]),
+    ("ui.canvas_size.bottom.left", &[(Locale::En, "Bottom left")]),
+    ("ui.canvas_size.bottom.right", &[(Locale::En, "Bottom right")]),
+    ("ui.canvas_size.add.or.remove.room.around.the", &[(Locale::En, "Add or remove room around the image. Pixels are not resampled.")]),
+    ("ui.canvas_size.new.size", &[(Locale::En, "New size")]),
+    ("ui.canvas_size.canvas.extension", &[(Locale::En, "Canvas extension")]),
+    ("ui.canvas_size.canvas.size", &[(Locale::En, "Canvas Size")]),
+    ("ui.canvas_size.resize.canvas", &[(Locale::En, "Resize Canvas")]),
+    ("ui.canvas_size.the.canvas.must.be.at.least", &[(Locale::En, "The canvas must be at least 1 x 1 pixel")]),
     ("ui.mod.lock.transparent.pixels", &[(Locale::En, "Lock transparent pixels")]),
     ("ui.mod.lock.pixels", &[(Locale::En, "Lock pixels")]),
     ("ui.mod.lock.position", &[(Locale::En, "Lock position")]),
