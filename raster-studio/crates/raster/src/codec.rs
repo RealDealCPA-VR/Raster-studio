@@ -2723,6 +2723,65 @@ mod tests {
     /// for `iCCP`, this test fails — which is the signal to tighten the field
     /// and rewrite its documentation.
     #[test]
+    fn a_crafted_canvas_is_refused_by_name_before_any_allocation() {
+        // A few dozen bytes on the wire declaring a canvas that would need
+        // exabytes. The IHDR is written by hand (the encoder clamps to sane
+        // sizes); the IDAT is one empty stored block, enough to satisfy the
+        // container walk — the decode must refuse at the header check, long
+        // before any pixel buffer exists.
+        let sig: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&1_000_000_000u32.to_be_bytes());
+        ihdr.extend_from_slice(&1_000_000_000u32.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]); // 8-bit RGBA, no interlace
+        let idat = {
+            let mut z = Vec::new();
+            z.extend_from_slice(&[0x78, 0x01]);
+            z.extend_from_slice(&[1, 0, 0xff, 0xff, 0, 0]); // empty stored block
+            z.extend_from_slice(&[1, 0, 0, 0, 0xff]); // adler32 of empty
+            z
+        };
+        fn chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+            let mut body = Vec::with_capacity(4 + data.len());
+            body.extend_from_slice(kind);
+            body.extend_from_slice(data);
+            let mut out = Vec::with_capacity(12 + data.len());
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            out.extend_from_slice(&body);
+            out.extend_from_slice(&crc32(&body).to_be_bytes());
+            out
+        }
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = 0xffff_ffffu32;
+            for &b in bytes {
+                crc ^= u32::from(b);
+                for _ in 0..8 {
+                    crc = if crc & 1 != 0 {
+                        (crc >> 1) ^ 0xedb8_8320
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            !crc
+        }
+        let png: Vec<u8> = sig
+            .iter()
+            .chain(chunk(b"IHDR", &ihdr).iter())
+            .chain(chunk(b"IDAT", &idat).iter())
+            .chain(chunk(b"IEND", &[]).iter())
+            .copied()
+            .collect();
+
+        let err = decode_surface_bytes(&png, ImportLimits::default())
+            .expect_err("a billion-pixel-per-side header must be refused");
+        assert!(
+            err.to_string().contains("limit"),
+            "the refusal is a named limit, not an abort: {err}"
+        );
+    }
+
+    #[test]
     fn an_oversized_icc_profile_is_dropped_but_was_already_allocated() {
         const PROFILE_BYTES: usize = 1 << 20;
         let mut profile = tiny_icc();

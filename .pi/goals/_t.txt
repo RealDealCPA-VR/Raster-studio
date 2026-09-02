@@ -1,15 +1,15 @@
 ## Pickup verification
-- 2026-09-02: pickups verified; P0+P1+P2 all + P3.1-P3.5 done. 52/61 TICKED.
+- 2026-09-02: pickups verified; P0+P1+P2 all + P3.1-P3.7 done. 54/61 TICKED. PUSHED: 741761a on origin/main; push each landing.
 - RULE: rewrite Handoff/Pickup wholesale each refresh; edit tool ONLY for edits.
 
 ## Handoff
-- Current checkpoint: 52/61 tasks complete (P0+P1+P2 all; P3.1-P3.5), all four gates green. Worktree uncommitted on main @ e001c8a.
-- Last completed: T-P3.5 (release CI: macos-latest matrix + tag-push 3-platform installer artifacts + secret-driven signing hooks).
+- Current checkpoint: 54/61 tasks complete (P0+P1+P2 all; P3.1-P3.7), all four gates green.
+- Last completed: T-P3.7 (crafted-canvas refusal test + threat-model row).
 - In progress: none.
-- Next exact action: T-P3.6 Code signing / notarisation - validate = Windows installer Authenticode-signed + macOS bundle passes spctl --assess. BOTH need real certificates (host-bound). The workflow hooks exist (P3.5). The remaining local deliverable: document the exact signing commands (signtool + codesign/notarytool invocations with the secret layout) in packaging/README.md so a maintainer with certificates can execute - then mark host-bound honestly.
-- Then: P3.7 decoder resource limits (codec.rs:583 notes limits not propagated - wire the limit params through), P3.8 memory ceiling, P3.9 perf budget, P3.10 .rstudio versioning, P3.11 accessibility, P3.12 localization, P3.13 README screenshot, P3.14 help destinations; then P4 scope decisions; T-FIN final gate.
-- Files changed this wave: .github/workflows/ci.yml.
+- Next exact action: T-P3.8 Memory ceiling for very large documents - validate: a DOCUMENTED tile-cache ceiling is enforced and a 16000x16000 x 10-layer document stays under it while remaining editable; asserted in tests/integration/tests/performance.rs. Find the tile-cache ceiling (compositor cache? DocumentTiles?) - if none exists, add a documented byte budget to the tile store with LRU eviction of non-visible tiles.
+- Then: P3.9 perf budget, P3.10 .rstudio versioning, P3.11 accessibility, P3.12 localization, P3.13 README screenshot, P3.14 help destinations; then P4 scope decisions; T-FIN final gate.
+- Files changed this wave: crates/raster/src/codec.rs, docs/threat-model.md.
 - Commands/checks (exact): `cd raster-studio && cargo fmt --check`; `cargo clippy --workspace --all-targets` (0 warnings); `cargo check --workspace --all-targets`; `cargo test --workspace` (exit 0).
-- Decisions/assumptions (running): [prior] + CI signing is secret-driven (no secrets = unsigned artifacts, stated in the workflow).
-- Blockers/risks: 9 tasks remain - bounded waves, rewrite this section after EVERY task, edit tool only.
-- Context note: P3.5 done; P3.6 next.
+- Decisions/assumptions (running): [prior] + the header check was already the defence; the test + threat-model row are the product.
+- Blockers/risks: 7 tasks remain - bounded waves, rewrite this section after EVERY task, edit tool only. PUSH after each landing.
+- Context note: P3.7 done; P3.8 next.
