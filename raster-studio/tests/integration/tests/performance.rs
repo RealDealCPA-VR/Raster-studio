@@ -335,3 +335,65 @@ fn the_large_document_really_carries_ten_painted_layers() {
         "hiding the top layer changed nothing, so it was never composited"
     );
 }
+
+/// P3.8: a 16000 x 16000 ten-layer document composites against the tile cache
+/// without the cache growing past its documented ceiling, and the document
+/// stays editable after the walk — the ceiling is enforced, not advisory.
+///
+/// The canvas is DECLARED 16000 square but only sparsely populated (ten layers,
+/// one tile each), so the fixture is megabytes while the coordinates the walk
+/// requests — more than `DEFAULT_CACHE_TILES` of them — are what would blow
+/// through the ceiling if `store` let a large batch park everything it made.
+#[test]
+fn a_huge_multilayer_document_stays_under_the_cache_ceiling_and_stays_editable() {
+    const HUGE: u32 = 16_000;
+    let mut doc = app::blank(HUGE, HUGE, "Huge");
+    for n in 0..LAYERS {
+        let layer = doc.add_layer(Layer::raster(format!("Huge {}", n + 1)));
+        doc.paint_layer(layer, &[TileCoord::new(0, 0, 0)], &move |_, _, _| {
+            [30 + n as u8, 200, 120, 160]
+        });
+    }
+
+    // More distinct coordinates than the ceiling, across the huge canvas.
+    let per_side = (HUGE / TILE_SIZE) as i32;
+    let coords: Vec<TileCoord> = (0..per_side)
+        .flat_map(|y| (0..per_side).map(move |x| TileCoord::new(x, y, 0)))
+        .take(compositor::DEFAULT_CACHE_TILES * 3)
+        .collect();
+
+    let mut tc = TileCompositor::new();
+    for coord in &coords {
+        tc.composite_tile(
+            &doc.document,
+            &doc.tiles,
+            *coord,
+            CompositeOptions::default(),
+        )
+        .unwrap();
+    }
+    assert!(
+        tc.cached_tiles() <= compositor::DEFAULT_CACHE_TILES,
+        "the cache holds {} tiles after walking {} — the ceiling leaked",
+        tc.cached_tiles(),
+        coords.len()
+    );
+
+    // Still editable: a stroke on one layer invalidates that tile and the next
+    // composite of it recomputes (a miss) with the new bytes.
+    let top = doc.document.layers.root()[0];
+    doc.paint_layer(top, &[coords[0]], &move |_, x, _y| [250, 40, x as u8, 220]);
+    tc.invalidate_tile(coords[0]);
+    let before = tc.stats().misses;
+    tc.composite_tile(
+        &doc.document,
+        &doc.tiles,
+        coords[0],
+        CompositeOptions::default(),
+    )
+    .unwrap();
+    assert!(
+        tc.stats().misses > before,
+        "the edited tile recomposited after the edit"
+    );
+}

@@ -160,9 +160,21 @@ impl TileCompositor {
             self.cache.insert(*coord, Entry { key, canvas });
         }
         if self.cache.len() > self.capacity {
-            let keep: HashSet<TileCoord> = coords.iter().copied().collect();
+            // The ceiling is a ceiling, not a suggestion: keep the NEWEST
+            // `capacity` coordinates of the batch that overflowed. A batch
+            // larger than the cache (a whole-canvas composite of a huge
+            // document) would otherwise park every tile it produced and
+            // quietly turn the cache into an unbounded allocation.
+            let keep: std::collections::HashSet<TileCoord> =
+                coords.iter().rev().take(self.capacity).copied().collect();
             self.cache.retain(|c, _| keep.contains(c));
         }
+    }
+
+    /// How many composited tiles the cache currently holds — the ceiling
+    /// check's read-out (`capacity`, never more).
+    pub fn cached_tiles(&self) -> usize {
+        self.cache.len()
     }
 
     /// Drop one cached tile. Returns whether anything was cached there.
@@ -587,9 +599,10 @@ mod tests {
             CompositeOptions::default(),
         )
         .unwrap();
-        // Four tiles were produced but only the request's own set is kept, and
-        // the request *is* the working set, so all four survive this round.
-        assert_eq!(tc.len(), 4);
+        // Four tiles were produced but the ceiling is a ceiling: with
+        // capacity 2 only the batch's newest two survive — a batch larger
+        // than the cache must not park everything it made (P3.8).
+        assert_eq!(tc.len(), 2);
 
         // A smaller follow-up request trims to itself.
         tc.composite_region(

@@ -1,15 +1,15 @@
 ## Pickup verification
-- 2026-09-02: pickups verified; P0+P1+P2 all + P3.1-P3.7 done. 54/61 TICKED. PUSHED: 741761a on origin/main; push each landing.
+- 2026-09-02: pickups verified; P0+P1+P2 all + P3.1-P3.8 done. 55/61 TICKED. PUSHED: 741761a + 854a79a on origin/main; push each landing.
 - RULE: rewrite Handoff/Pickup wholesale each refresh; edit tool ONLY for edits.
 
 ## Handoff
-- Current checkpoint: 54/61 tasks complete (P0+P1+P2 all; P3.1-P3.7), all four gates green.
-- Last completed: T-P3.7 (crafted-canvas refusal test + threat-model row).
+- Current checkpoint: 55/61 tasks complete (P0+P1+P2 all; P3.1-P3.8), all four gates green.
+- Last completed: T-P3.8 (tile-cache ceiling enforced: store keeps the newest capacity of an overflowing batch; huge-doc test in performance.rs).
 - In progress: none.
-- Next exact action: T-P3.8 Memory ceiling for very large documents - validate: a DOCUMENTED tile-cache ceiling is enforced and a 16000x16000 x 10-layer document stays under it while remaining editable; asserted in tests/integration/tests/performance.rs. Find the tile-cache ceiling (compositor cache? DocumentTiles?) - if none exists, add a documented byte budget to the tile store with LRU eviction of non-visible tiles.
-- Then: P3.9 perf budget, P3.10 .rstudio versioning, P3.11 accessibility, P3.12 localization, P3.13 README screenshot, P3.14 help destinations; then P4 scope decisions; T-FIN final gate.
-- Files changed this wave: crates/raster/src/codec.rs, docs/threat-model.md.
+- Next exact action: T-P3.9 Wall-clock performance budget - validate: a budget test asserts a partial recomposite of an 8000x6000 document completes under a STATED MILLISECOND CEILING on CI hardware (the file's header says ratios-not-thresholds - the ceiling must be generous enough for CI hardware and stated as the budget; check the TODO wording at PRODUCTION-TODO.md ~446 first).
+- Then: P3.10 .rstudio versioning (checked-in older-version fixture opens through a migration path), P3.11 accessibility (Tab order + focus rings + AccessKit labels - possibly large), P3.12 localization scaffolding, P3.13 README screenshot, P3.14 help destinations; then P4 scope decisions; T-FIN final gate.
+- Files changed this wave: crates/compositor/src/cache.rs, tests/integration/tests/performance.rs.
 - Commands/checks (exact): `cd raster-studio && cargo fmt --check`; `cargo clippy --workspace --all-targets` (0 warnings); `cargo check --workspace --all-targets`; `cargo test --workspace` (exit 0).
-- Decisions/assumptions (running): [prior] + the header check was already the defence; the test + threat-model row are the product.
-- Blockers/risks: 7 tasks remain - bounded waves, rewrite this section after EVERY task, edit tool only. PUSH after each landing.
-- Context note: P3.7 done; P3.8 next.
+- Decisions/assumptions (running): [prior] + the cache ceiling is a hard ceiling (newest-wins on overflow), not a working-set hint.
+- Blockers/risks: 6 tasks remain - bounded waves, rewrite this section after EVERY task, edit tool only. PUSH after each landing.
+- Context note: P3.8 done; P3.9 next.
