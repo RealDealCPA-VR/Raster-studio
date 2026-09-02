@@ -18,6 +18,7 @@ asset-store.workspace = true
 editor-core.workspace = true
 layer-model.workspace = true
 telemetry.workspace = true
+webbrowser.workspace = true
 compositor.workspace = true
 project-format.workspace = true
 raster.workspace = true

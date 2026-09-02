@@ -1081,19 +1081,34 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         },
 
         // ---- Help ----------------------------------------------------------
-        MenuAction::Help => Ok(format!(
-            "Raster Studio {} — the Help menu's articles are not bundled with \
-             this build; every menu item explains itself on hover",
-            env!("CARGO_PKG_VERSION")
-        )),
+        MenuAction::Help => {
+            let url = "https://github.com/RealDealCPA-VR/Raster-studio/wiki";
+            let opened = webbrowser::open(url).is_ok();
+            Ok(format!(
+                "{}{url}",
+                if opened { "Opened " } else { "Help lives at " }
+            ))
+        }
         MenuAction::ExportDiagnostics => editor.export_diagnostics(),
-        MenuAction::ReleaseNotes => Ok(format!(
-            "Raster Studio {}: this release wired the Filter, Select, Image > \
-             Adjustments and Layer menus to the engine behind them",
-            env!("CARGO_PKG_VERSION")
-        )),
+        MenuAction::ReleaseNotes => {
+            let url = "https://github.com/RealDealCPA-VR/Raster-studio/releases";
+            let opened = webbrowser::open(url).is_ok();
+            Ok(format!(
+                "{}{url}",
+                if opened {
+                    "Opened "
+                } else {
+                    "Release notes live at "
+                }
+            ))
+        }
         MenuAction::ReportIssue => {
-            Ok("Report an issue at github.com/raster-studio/raster-studio/issues".to_string())
+            let url = "https://github.com/RealDealCPA-VR/Raster-studio/issues/new";
+            let opened = webbrowser::open(url).is_ok();
+            Ok(format!(
+                "{}{url}",
+                if opened { "Opened " } else { "File issues at " }
+            ))
         }
         MenuAction::About => Ok(format!(
             "Raster Studio {} — a layered raster editor",
