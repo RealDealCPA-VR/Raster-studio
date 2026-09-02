@@ -38,9 +38,14 @@ manifest += [
 
 import sys
 ONLY = sys.argv[1:] if len(sys.argv) > 1 else None
-manifest = [m for m in manifest if (ONLY is None or m[1] in ONLY) and all(
-    ('("%s"' % ('ui.' + m[1] + '.' + slug(l))) not in existing for l in m[2]
-)]
+import os
+FORCE = os.environ.get('FORCE') == '1'
+def not_yet(m):
+    if FORCE:
+        return True
+    return all(('("%s"' % ('ui.' + m[1] + '.' + slug(l))) not in existing for l in m[2])
+
+manifest = [m for m in manifest if (ONLY is None or m[1] in ONLY) and not_yet(m)]
 for path, mod, lits in manifest:
     src = open(path, encoding='utf-8').read()
     cut = src.find('#[cfg(test)]')

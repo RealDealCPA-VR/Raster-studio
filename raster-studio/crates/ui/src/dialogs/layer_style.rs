@@ -68,17 +68,17 @@ impl EffectKind {
     ];
 
     /// List label.
-    pub const fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::DropShadow => "Drop Shadow",
-            Self::InnerShadow => "Inner Shadow",
-            Self::OuterGlow => "Outer Glow",
-            Self::InnerGlow => "Inner Glow",
+            Self::DropShadow => crate::strings::tr("ui.layer_style.drop.shadow"),
+            Self::InnerShadow => crate::strings::tr("ui.layer_style.inner.shadow"),
+            Self::OuterGlow => crate::strings::tr("ui.layer_style.outer.glow"),
+            Self::InnerGlow => crate::strings::tr("ui.layer_style.inner.glow"),
             Self::BevelEmboss => "Bevel & Emboss",
             Self::Satin => "Satin",
-            Self::ColorOverlay => "Color Overlay",
-            Self::GradientOverlay => "Gradient Overlay",
-            Self::PatternOverlay => "Pattern Overlay",
+            Self::ColorOverlay => crate::strings::tr("ui.layer_style.color.overlay"),
+            Self::GradientOverlay => crate::strings::tr("ui.layer_style.gradient.overlay"),
+            Self::PatternOverlay => crate::strings::tr("ui.layer_style.pattern.overlay"),
             Self::Stroke => "Stroke",
         }
     }
@@ -464,7 +464,9 @@ impl LayerStyleDialog {
             ctx,
             "layer-style",
             self.title(),
-            Some("Effects apply to the whole layer and undo as one step."),
+            Some(crate::strings::tr(
+                "ui.layer_style.effects.apply.to.the.whole.layer",
+            )),
             DialogWidth::Split,
             |ui| self.body(ui),
         );
@@ -530,14 +532,20 @@ impl LayerStyleDialog {
             ui,
             self.confirm_label(),
             self.blocked_reason().as_deref(),
-            &["Clear All"],
+            &[crate::strings::tr("ui.layer_style.clear.all")],
         )
     }
 
     fn effect_list(&mut self, ui: &mut egui::Ui) {
         design::section_header(ui, "Effects");
         let mut master = self.effects.enabled;
-        if checkbox_row(ui, "Styles enabled", &mut master).changed() {
+        if checkbox_row(
+            ui,
+            crate::strings::tr("ui.layer_style.styles.enabled"),
+            &mut master,
+        )
+        .changed()
+        {
             self.effects.enabled = master;
         }
         ui.add_space(Space::XSmall.pt());
@@ -554,7 +562,14 @@ impl LayerStyleDialog {
         }
         ui.add_space(Space::Small.pt());
         let mut angle = self.global_light_angle;
-        if design::slider_row(ui, "Global light", &mut angle, 0.0..=360.0).changed() {
+        if design::slider_row(
+            ui,
+            crate::strings::tr("ui.layer_style.global.light"),
+            &mut angle,
+            0.0..=360.0,
+        )
+        .changed()
+        {
             self.set_global_light_angle(angle);
         }
     }
@@ -563,7 +578,10 @@ impl LayerStyleDialog {
         let kind = self.selected;
         design::section_header(ui, kind.label());
         if !self.is_enabled(kind) {
-            caption(ui, "This effect is off. Tick it in the list to edit it.");
+            caption(
+                ui,
+                crate::strings::tr("ui.layer_style.this.effect.is.off.tick.it"),
+            );
             return;
         }
         let light = self.global_light_angle;
@@ -619,7 +637,11 @@ impl LayerStyleDialog {
                     design::slider_row(ui, "Angle", &mut overlay.angle_deg, 0.0..=360.0);
                     design::slider_row(ui, "Scale", &mut overlay.scale, 0.1..=10.0);
                     checkbox_row(ui, "Reverse", &mut overlay.reverse);
-                    checkbox_row(ui, "Align with layer", &mut overlay.align_with_layer);
+                    checkbox_row(
+                        ui,
+                        crate::strings::tr("ui.layer_style.align.with.layer"),
+                        &mut overlay.align_with_layer,
+                    );
                     checkbox_row(ui, "Dither", &mut overlay.dither);
                     design::inspector_field(ui, "Gradient", |ui| {
                         open_gradient |= gradient_swatch(
@@ -628,10 +650,13 @@ impl LayerStyleDialog {
                             &overlay.gradient,
                             sizes::swatch(),
                         )
-                        .on_hover_text("Edit this ramp")
+                        .on_hover_text(crate::strings::tr("ui.layer_style.edit.this.ramp"))
                         .clicked();
                     });
-                    caption(ui, "Click the ramp to edit its stops.");
+                    caption(
+                        ui,
+                        crate::strings::tr("ui.layer_style.click.the.ramp.to.edit.its"),
+                    );
                 }
             }
             EffectKind::PatternOverlay => {
@@ -639,7 +664,11 @@ impl LayerStyleDialog {
                     design::slider_row(ui, "Opacity", &mut overlay.opacity, 0.0..=1.0);
                     design::slider_row(ui, "Scale", &mut overlay.pattern.scale, 0.1..=10.0);
                     design::slider_row(ui, "Angle", &mut overlay.pattern.angle_deg, 0.0..=360.0);
-                    checkbox_row(ui, "Link with layer", &mut overlay.pattern.link_with_layer);
+                    checkbox_row(
+                        ui,
+                        crate::strings::tr("ui.layer_style.link.with.layer"),
+                        &mut overlay.pattern.link_with_layer,
+                    );
                     if overlay.pattern.asset.is_none() {
                         caption(ui, "No pattern chosen — the overlay paints nothing.");
                     }
@@ -761,7 +790,7 @@ impl LayerStyleDialog {
         }
         caption(
             ui,
-            "Approximate. The composited result is what the canvas shows.",
+            crate::strings::tr("ui.layer_style.approximate.the.composited.result.is.what"),
         );
     }
 }
@@ -779,7 +808,13 @@ fn shadow_params(
         clicked = swatch(ui, swatch_id, shadow.color, sizes::swatch()).clicked();
     });
     let mut use_global = shadow.use_global_light;
-    if checkbox_row(ui, "Use global light", &mut use_global).changed() {
+    if checkbox_row(
+        ui,
+        crate::strings::tr("ui.layer_style.use.global.light"),
+        &mut use_global,
+    )
+    .changed()
+    {
         shadow.use_global_light = use_global;
         if use_global {
             shadow.angle_deg = global_light;
@@ -792,7 +827,11 @@ fn shadow_params(
     design::slider_row(ui, "Spread", &mut shadow.spread, 0.0..=1.0);
     design::slider_row(ui, "Size", &mut shadow.size_px, 0.0..=250.0);
     design::slider_row(ui, "Noise", &mut shadow.noise, 0.0..=1.0);
-    checkbox_row(ui, "Layer knocks out drop shadow", &mut shadow.knockout);
+    checkbox_row(
+        ui,
+        crate::strings::tr("ui.layer_style.layer.knocks.out.drop.shadow"),
+        &mut shadow.knockout,
+    );
     let (dx, dy) = shadow_offset(shadow.angle_deg, shadow.distance_px);
     caption(ui, format!("Offset {dx:.1}, {dy:.1} px"));
     clicked
@@ -820,7 +859,13 @@ fn bevel_params(ui: &mut egui::Ui, bevel: &mut BevelEffect, global_light: f32) {
     design::slider_row(ui, "Size", &mut bevel.size_px, 0.0..=250.0);
     design::slider_row(ui, "Soften", &mut bevel.soften_px, 0.0..=16.0);
     let mut use_global = bevel.use_global_light;
-    if checkbox_row(ui, "Use global light", &mut use_global).changed() {
+    if checkbox_row(
+        ui,
+        crate::strings::tr("ui.layer_style.use.global.light"),
+        &mut use_global,
+    )
+    .changed()
+    {
         bevel.use_global_light = use_global;
         if use_global {
             bevel.angle_deg = global_light;
@@ -887,11 +932,11 @@ fn with_alpha(color: Rgba, opacity: f32) -> egui::Color32 {
 
 impl Dialog for LayerStyleDialog {
     fn title(&self) -> &'static str {
-        "Layer Style"
+        crate::strings::tr("ui.layer_style.layer.style")
     }
 
     fn confirm_label(&self) -> &'static str {
-        "Apply Style"
+        crate::strings::tr("ui.layer_style.apply.style")
     }
 
     fn confirm(&self) -> Option<DialogAction> {
