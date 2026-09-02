@@ -198,8 +198,18 @@ fn slot_button(w: &mut Workspace, ui: &mut Ui, model: &PaletteModel, slot: usize
     let response = if hover.is_empty() {
         response
     } else {
-        response.on_hover_text(hover)
+        response.on_hover_text(hover.clone())
     };
+    // The slot is painted by hand (an icon, no widget text), so without this
+    // the accessibility tree carries an unnamed node where a screen reader
+    // should say "Brush Tool (B)" (C14). The label is the tooltip's first
+    // line — the name and its key; the multi-line hint is hover-only.
+    if !hover.is_empty() {
+        let name = hover.lines().next().unwrap_or_default().to_string();
+        response.widget_info(move || {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.clone())
+        });
+    }
 
     if response.clicked() {
         // The whole decision — select, open the variants, or put them away —

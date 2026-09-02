@@ -462,6 +462,48 @@ the validate asks for.
 (AccessKit) are ticked with the honest caveat that a Windows host could not
 finish them. Configs and commands exist; nothing has been built, signed or heard.
 
+**Verified 2026-09-02, as far as one Windows host allows — with two real
+defects found and fixed.** The screen-reader half is no longer a claim about
+wiring: the running app was queried live through UI Automation (the API NVDA
+consumes on Windows). The first probe saw **0 elements** — the AT client
+received nothing but the bare window. Root causes, both fixed:
+
+1. `egui-winit 0.29` never calls `Context::enable_accesskit()` when the
+   adapter requests the initial tree, so egui kept emitting an empty tree
+   update. `shell.rs` now enables it on `InitialTreeRequested`.
+2. Enabling only flips a flag — the tree rides the next egui pass, and an
+   idle document window never repaints on its own. The handler now
+   `request_redraw()`s.
+
+With those fixed (plus explicit `WidgetInfo::labeled` on the hand-painted
+controls — tool slots, layer rows, start-screen buttons), the live walk sees
+**71 UIA elements / 43 names** on the start screen and **149 elements / 52
+names** with a document: every tool slot by name ("Brush Tool (B); Click
+again, or right-click, for more tools", "Rectangular Marquee (M)", …), the
+nine menus, the Layers panel's controls (Lock, Mask, Clip to layer below,
+Blend, Opacity, Kind, Snapshot…), the layer row itself, the tab title and the
+document dimensions. A screen reader now has real text to read where before
+it had a skeleton of unnamed nodes.
+
+Still requiring machines this host does not have (the box therefore stays
+unticked):
+
+- Building the `.deb`/`.app` bundles **and launching them** needs those
+  native OSes. The scripts pass `bash -n`; the only WSL distro here is
+  docker-desktop's minimal VM (no toolchain), and cross-compiling the Linux
+  binary needs a cross-linker the host lacks.
+- Authenticode signing with a real certificate, and `spctl --assess` on the
+  macOS bundle, need the signing identities. The CI release job carries the
+  hooks behind `WINDOWS_CERT`/`APPLE_ID` and says in its summary when they
+  are absent. This host could not even validate the pipeline locally:
+  `signtool.exe` is present, but the machine's certificate-store tooling is
+  broken (`Import-Module Microsoft.PowerShell.Security` fails with
+  `FormatXmlUpdateException`, the `Cert:` drive does not exist), so not even
+  a self-signed certificate can be created here.
+- A human listening to NVDA/VoiceOver/Orca read the palette and Layers panel
+  aloud. The UIA walk above is the machine-verifiable part of that claim:
+  the names a screen reader would speak are now present and enumerated.
+
 **Validate.** A `.dmg`/`.app` and a `.deb` or AppImage are built and launch on a
 clean machine; the Windows installer is Authenticode-signed and the macOS bundle
 passes `spctl --assess`; one screen reader (NVDA, VoiceOver or Orca) reads the
@@ -490,15 +532,18 @@ tool palette and the Layers panel aloud, recorded in the ledger.
 
 C14 **remains open by design**: its Validate needs machines this host does not
 have (a clean macOS/Linux box for the bundles, a code-signing certificate,
-an operating screen reader). What this host could verify was verified
-2026-09-02: both packaging shell scripts pass `bash -n`; the CI release job
-carries the signing hooks behind `WINDOWS_CERT`/`APPLE_ID` secrets and states
-in its summary when they are absent (so the unsigned-artifact behaviour is the
-documented one); the AccessKit event path is wired end-to-end
-(`AppEvent::AccessKit(accesskit_winit::Event)` reaches the shell) and a
-`--shot` run initializes it without an a11y error. A machine with a screen
-reader must still hear the tool palette and the Layers panel read aloud, and
-a clean mac/Linux box must still launch the built bundles — until then this
+an operating screen reader). But the host-limited gap is now much smaller:
+the screen-reader half was verified **live on this host** — a UI Automation
+walk of the running app (2026-09-02) exposed every tool slot, the nine menus,
+the Layers panel's controls and the layer row by name (71/43 elements/names
+on the start screen; 149/52 with a document). Getting there found and fixed
+two real defects: egui-winit 0.29 never calls `Context::enable_accesskit`
+(the tree stayed empty), and nothing repainted after enabling so an idle
+window never shipped the tree; the hand-painted controls gained explicit
+`WidgetInfo::labeled` names. What still needs other machines: building and
+launching the `.deb`/`.app` bundles, Authenticode/spctl signing with real
+identities (this host's certificate-store tooling is broken — the `Cert:`
+drive does not load), and a human listening to the reader. Until then this
 box stays honestly unticked.
 
 **Release gate for this file:** every box ticked with its Validate line passing,

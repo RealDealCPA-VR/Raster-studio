@@ -1336,6 +1336,11 @@ impl Chrome {
                             );
                             let response =
                                 ui.interact(rect, egui::Id::new(id), egui::Sense::click());
+                            // Painted by hand, so the label has to be stated
+                            // for the accessibility tree (C14).
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label)
+                            });
                             if response.hovered() {
                                 ui.painter().rect_filled(
                                     rect,
@@ -1387,8 +1392,14 @@ impl Chrome {
                         let width = ui.available_width().min(280.0);
                         let (rect, _) =
                             ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
-                        let response =
-                            ui.interact(rect, Self::start_recent_id(index), egui::Sense::click());
+                        let response = ui
+                            .interact(rect, Self::start_recent_id(index), egui::Sense::click())
+                            .on_hover_text(path.display().to_string());
+                        // Painted by hand; the row's accessible name is the
+                        // file's name (C14).
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.clone())
+                        });
                         if response.hovered() {
                             ui.painter().rect_filled(
                                 rect,
@@ -1407,7 +1418,6 @@ impl Chrome {
                         let pos =
                             egui::pos2(rect.left() + 6.0, rect.center().y - galley.size().y * 0.5);
                         ui.painter().galley(pos, galley, egui::Color32::WHITE);
-                        let response = response.on_hover_text(path.display().to_string());
                         if response.clicked() {
                             out.open_recent = Some(path.clone());
                         }

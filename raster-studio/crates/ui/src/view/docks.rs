@@ -528,6 +528,12 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
     // tied to the *layer* rather than to its position, so reordering does not
     // hand one row another's interaction state.
     let response = ui.interact(rect, super::ids::layer_row(row.id), Sense::click_and_drag());
+    // The row paints its own thumbnail and name, so the accessibility tree
+    // needs the layer's name stated explicitly — this is what a screen
+    // reader says when the rows list is read (C14).
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, row.name.clone())
+    });
 
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();

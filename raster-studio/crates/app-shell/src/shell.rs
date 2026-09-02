@@ -1645,9 +1645,24 @@ impl ApplicationHandler<crate::shell::AppEvent> for Shell {
     /// turns them into the widget responses the focused control would give.
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: crate::shell::AppEvent) {
         let crate::shell::AppEvent::AccessKit(event) = event;
-        if let accesskit_winit::WindowEvent::ActionRequested(request) = event.window_event {
-            if let Some(state) = &mut self.state {
-                state.egui_state.on_accesskit_action_request(request);
+        if let Some(state) = &mut self.state {
+            match event.window_event {
+                // C14: a screen reader asked for the tree. egui-winit 0.29
+                // never calls `enable_accesskit` itself, so without this the
+                // context keeps emitting an empty tree update and the AT
+                // client sees nothing but the bare window.
+                accesskit_winit::WindowEvent::InitialTreeRequested => {
+                    state.egui_ctx.enable_accesskit();
+                    // Enabling only flips a flag; the tree rides the next
+                    // egui pass, and an idle document window would never
+                    // repaint on its own. (C14: without this the screen
+                    // reader's first poke is answered with silence.)
+                    state.window.request_redraw();
+                }
+                accesskit_winit::WindowEvent::ActionRequested(request) => {
+                    state.egui_state.on_accesskit_action_request(request);
+                }
+                _ => {}
             }
         }
     }
