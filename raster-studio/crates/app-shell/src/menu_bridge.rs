@@ -860,6 +860,22 @@ pub(crate) mod pixels {
 pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String> {
     use ui::menu::{CanvasRotation as CR, MaskOp, TransformOp as T};
 
+    /// The Help destinations (P3.14): open the URL in the user's browser and
+    /// report it. **Under test the browser never opens** — the digest gate
+    /// invokes these arms on every `cargo test` run, and a test that opens
+    /// three tabs is a test that deserves to be closed. The URL is still
+    /// reported, which is what the gate's message-length check wants; the
+    /// shipped app performs the real open.
+    fn open_help_url(url: &str, fallback_prefix: &str) -> Result<String, String> {
+        if cfg!(test) {
+            return Ok(format!("{fallback_prefix} {url}"));
+        }
+        match webbrowser::open(url) {
+            Ok(()) => Ok(format!("Opened {url}")),
+            Err(_) => Ok(format!("{fallback_prefix} {url}")),
+        }
+    }
+
     let outcome = match action {
         // ---- File ----------------------------------------------------------
         MenuAction::FileInfo => {
@@ -1081,35 +1097,19 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         },
 
         // ---- Help ----------------------------------------------------------
-        MenuAction::Help => {
-            let url = "https://github.com/RealDealCPA-VR/Raster-studio/wiki";
-            let opened = webbrowser::open(url).is_ok();
-            Ok(format!(
-                "{}{url}",
-                if opened { "Opened " } else { "Help lives at " }
-            ))
-        }
+        MenuAction::Help => open_help_url(
+            "https://github.com/RealDealCPA-VR/Raster-studio/wiki",
+            "Help lives at",
+        ),
         MenuAction::ExportDiagnostics => editor.export_diagnostics(),
-        MenuAction::ReleaseNotes => {
-            let url = "https://github.com/RealDealCPA-VR/Raster-studio/releases";
-            let opened = webbrowser::open(url).is_ok();
-            Ok(format!(
-                "{}{url}",
-                if opened {
-                    "Opened "
-                } else {
-                    "Release notes live at "
-                }
-            ))
-        }
-        MenuAction::ReportIssue => {
-            let url = "https://github.com/RealDealCPA-VR/Raster-studio/issues/new";
-            let opened = webbrowser::open(url).is_ok();
-            Ok(format!(
-                "{}{url}",
-                if opened { "Opened " } else { "File issues at " }
-            ))
-        }
+        MenuAction::ReleaseNotes => open_help_url(
+            "https://github.com/RealDealCPA-VR/Raster-studio/releases",
+            "Release notes live at",
+        ),
+        MenuAction::ReportIssue => open_help_url(
+            "https://github.com/RealDealCPA-VR/Raster-studio/issues/new",
+            "File issues at",
+        ),
         MenuAction::About => Ok(format!(
             "Raster Studio {} — a layered raster editor",
             env!("CARGO_PKG_VERSION")
