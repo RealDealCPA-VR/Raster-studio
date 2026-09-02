@@ -581,10 +581,7 @@ impl CanvasSizeDialog {
             ),
         );
         if spec.is_valid() && spec.crops(self.current()) {
-            warning(
-                ui,
-                "The new canvas is smaller — content outside it will be clipped.",
-            );
+            warning(ui, crate::strings::tr("ui.canvas_size.smaller.clips"));
         }
         if let Some(reason) = self.blocked_reason() {
             warning(ui, reason);

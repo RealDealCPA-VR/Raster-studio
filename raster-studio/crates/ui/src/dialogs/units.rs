@@ -209,7 +209,7 @@ pub fn format_bytes(bytes: u64) -> String {
             return format!("{value:.decimals$} {suffix}");
         }
     }
-    "0 bytes".to_string()
+    crate::strings::tr("ui.units.0.bytes").to_string()
 }
 
 #[cfg(test)]

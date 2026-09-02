@@ -535,9 +535,7 @@ pub fn filter_label(filter: ResampleFilter) -> &'static str {
 /// One line saying what a resampling method is *for*.
 pub fn filter_hint(filter: ResampleFilter) -> &'static str {
     match filter {
-        ResampleFilter::Nearest => {
-            "Hard edges, no blending. Pixel art only — it aliases on downscale."
-        }
+        ResampleFilter::Nearest => crate::strings::tr("ui.image_size.hard.edges"),
         ResampleFilter::Triangle => crate::strings::tr("ui.image_size.soft.and.cheap.good.for.a"),
         ResampleFilter::Mitchell => {
             crate::strings::tr("ui.image_size.the.balanced.default.for.photographs")

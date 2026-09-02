@@ -41,7 +41,6 @@ use super::color_edit::ColorEdit;
 use super::color_picker::{ColorValue, ScreenSampler};
 use super::controls::{color_of, numeric, swatch};
 use super::{ids, sizes};
-use crate::strings::tr;
 
 /// The fewest stops a ramp may have.
 pub const MIN_STOPS: usize = 2;
@@ -588,7 +587,10 @@ impl GradientEditorDialog {
                         .collect();
                     paint_ramp(ui, rect, &ramp, selected);
                 }
-                if response.on_hover_text(tr(preset.name_key)).clicked() {
+                if response
+                    .on_hover_text(crate::strings::tr(preset.name_key))
+                    .clicked()
+                {
                     self.apply_preset(index);
                 }
             }

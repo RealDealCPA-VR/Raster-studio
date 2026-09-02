@@ -819,8 +819,8 @@ impl ExportAsDialog {
                 &mut depth,
                 &[BitDepth::Eight, BitDepth::Sixteen],
                 |d| match d {
-                    BitDepth::Eight => "8 bit".to_string(),
-                    BitDepth::Sixteen => "16 bit".to_string(),
+                    BitDepth::Eight => crate::strings::tr("ui.export_as.8.bit").to_string(),
+                    BitDepth::Sixteen => crate::strings::tr("ui.export_as.16.bit").to_string(),
                 },
                 |d| {
                     (d == BitDepth::Sixteen && !supports_16).then_some(crate::strings::tr(
@@ -865,7 +865,7 @@ impl ExportAsDialog {
             )
         })
         .inner
-        .on_disabled_hover_text("EXIF and XMP writing is not implemented — only ICC is embedded");
+        .on_disabled_hover_text(crate::strings::tr("ui.export_as.exif.not.implemented"));
 
         if let Some((w, h)) = self.target_size(index) {
             caption(

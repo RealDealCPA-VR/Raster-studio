@@ -654,7 +654,7 @@ fn gradient_control(w: &mut Workspace, ui: &mut Ui, tool: ToolId) {
             ),
         );
     }
-    let response = response.on_hover_text("Edit gradient stops — click to open the editor");
+    let response = response.on_hover_text(crate::strings::tr("ui.toolbar.gradient.stops"));
     if response.clicked() {
         w.emit(Intent::OpenGradientEditor);
     }
@@ -699,13 +699,13 @@ pub(crate) fn color_wells(w: &mut Workspace, ui: &mut Ui) {
     let side = t.metrics.toolbar_button;
     ui.horizontal(|ui| {
         if swatch(ui, w.color.foreground(), side, Sense::click())
-            .on_hover_text("Foreground — double-click for the picker")
+            .on_hover_text(crate::strings::tr("ui.toolbar.foreground.picker"))
             .clicked()
         {
             w.color.editing = crate::panels::color::ColorWell::Foreground;
         }
         if swatch(ui, w.color.foreground(), side, Sense::click())
-            .on_hover_text("Foreground — double-click for the picker")
+            .on_hover_text(crate::strings::tr("ui.toolbar.foreground.picker"))
             .double_clicked()
         {
             w.emit(Intent::OpenColorPicker(
@@ -713,13 +713,13 @@ pub(crate) fn color_wells(w: &mut Workspace, ui: &mut Ui) {
             ));
         }
         if swatch(ui, w.color.background(), side, Sense::click())
-            .on_hover_text("Background — double-click for the picker")
+            .on_hover_text(crate::strings::tr("ui.toolbar.background.picker"))
             .clicked()
         {
             w.color.editing = crate::panels::color::ColorWell::Background;
         }
         if swatch(ui, w.color.background(), side, Sense::click())
-            .on_hover_text("Background — double-click for the picker")
+            .on_hover_text(crate::strings::tr("ui.toolbar.background.picker"))
             .double_clicked()
         {
             w.emit(Intent::OpenColorPicker(

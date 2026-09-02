@@ -73,7 +73,7 @@ impl FilterGalleryDialog {
             ctx,
             "filter-gallery",
             self.title(),
-            Some("Pick a filter; it applies at its default settings."),
+            Some(crate::strings::tr("ui.filter_gallery.pick.a.filter")),
             DialogWidth::Wide,
             |ui| {
                 egui::ScrollArea::vertical()

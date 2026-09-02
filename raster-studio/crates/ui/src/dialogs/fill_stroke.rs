@@ -63,7 +63,7 @@ impl FillContentsKind {
             Self::Background => "Background",
             Self::Color => "Colour",
             Self::Pattern => "Pattern",
-            Self::Gray50 => "50% Grey",
+            Self::Gray50 => crate::strings::tr("ui.fill_stroke.50.grey"),
         }
     }
 }
@@ -263,7 +263,7 @@ impl Dialog for FillDialog {
 
     fn blocked_reason(&self) -> Option<String> {
         if !self.spec.is_valid() {
-            return Some("Opacity must be between 0% and 100%".to_string());
+            return Some(crate::strings::tr("ui.fill_stroke.opacity.range").to_string());
         }
         if self.spec.contents.kind() == FillContentsKind::Pattern && self.pattern_names.is_empty() {
             return Some(
@@ -319,7 +319,7 @@ impl Dialog for StrokeDialog {
             );
         }
         if !self.spec.is_valid() {
-            return Some("Opacity must be between 0% and 100%".to_string());
+            return Some(crate::strings::tr("ui.fill_stroke.opacity.range").to_string());
         }
         None
     }

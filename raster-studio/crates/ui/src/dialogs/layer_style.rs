@@ -74,7 +74,7 @@ impl EffectKind {
             Self::InnerShadow => crate::strings::tr("ui.layer_style.inner.shadow"),
             Self::OuterGlow => crate::strings::tr("ui.layer_style.outer.glow"),
             Self::InnerGlow => crate::strings::tr("ui.layer_style.inner.glow"),
-            Self::BevelEmboss => "Bevel & Emboss",
+            Self::BevelEmboss => crate::strings::tr("ui.layer_style.bevel.emboss"),
             Self::Satin => "Satin",
             Self::ColorOverlay => crate::strings::tr("ui.layer_style.color.overlay"),
             Self::GradientOverlay => crate::strings::tr("ui.layer_style.gradient.overlay"),
@@ -670,7 +670,7 @@ impl LayerStyleDialog {
                         &mut overlay.pattern.link_with_layer,
                     );
                     if overlay.pattern.asset.is_none() {
-                        caption(ui, "No pattern chosen — the overlay paints nothing.");
+                        caption(ui, crate::strings::tr("ui.layer_style.no.pattern"));
                     }
                 }
             }

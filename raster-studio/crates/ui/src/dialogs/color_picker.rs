@@ -621,7 +621,7 @@ impl ColorPickerDialog {
                 self.color().rgba,
                 sizes::swatch_compare(),
             );
-            caption(ui, "before / after");
+            caption(ui, crate::strings::tr("ui.color_picker.before.after"));
         });
 
         let mut web_safe = self.web_safe_only;

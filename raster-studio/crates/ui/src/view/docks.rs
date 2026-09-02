@@ -399,7 +399,7 @@ fn layers_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     hairline(ui);
 
     if model.is_empty() {
-        empty_state(ui, "No layers yet. Add one with the + button below.");
+        empty_state(ui, crate::strings::tr("ui.docks.no.layers.yet"));
     } else {
         let rows = model.rows().to_vec();
         // The drop is decided by the drag *as a whole*, not by any one row's
@@ -586,7 +586,7 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
         &mut content,
         "eye",
         row.visible,
-        "Show / hide layer",
+        crate::strings::tr("ui.docks.show.hide.layer"),
         Some(super::ids::layer_eye(row.id)),
     )
     .clicked()
@@ -1449,7 +1449,7 @@ fn color_body(w: &mut Workspace, ui: &mut Ui) {
                 }
             }
             if show_hint {
-                ui.label(hint(ui, "Enter a colour like #3366CC"));
+                ui.label(hint(ui, crate::strings::tr("ui.docks.enter.a.colour")));
             }
         }
         ColorNotation::Lab => {
@@ -1952,7 +1952,7 @@ fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
                 ui,
                 "eye",
                 row.visible,
-                "Show / hide this channel",
+                crate::strings::tr("ui.docks.show.hide.channel"),
                 Some(super::ids::channel_eye(index)),
             )
             .clicked()
@@ -2032,7 +2032,14 @@ fn paths_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
         let response = row_layout(ui, |ui| {
             // A path is drawn by its shape layer, so the eye here *is* that
             // layer's visibility rather than a second, parallel switch.
-            if icon_toggle(ui, "eye", row.visible, "Show / hide this path").clicked() {
+            if icon_toggle(
+                ui,
+                "eye",
+                row.visible,
+                crate::strings::tr("ui.docks.show.hide.path"),
+            )
+            .clicked()
+            {
                 toggle = Some((row.layer, !row.visible));
             }
             ui.label(body(ui, row.name.clone()));
@@ -2095,11 +2102,7 @@ fn actions_body(w: &mut Workspace, ui: &mut Ui) {
         }
     });
     ui.add_space(Space::XSmall.pt());
-    empty_state(
-        ui,
-        "Record an edit, then replay the whole sequence on any \
-         document with at least as many layers.",
-    );
+    empty_state(ui, crate::strings::tr("actions.hint"));
 }
 
 #[cfg(test)]

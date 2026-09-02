@@ -40,10 +40,7 @@ impl ArbitraryRotationDialog {
             ctx,
             "arbitrary-rotation",
             self.title(),
-            Some(
-                "Rotates the canvas and every layer. Right angles are \
-                 pixel-exact; other angles resample.",
-            ),
+            Some(crate::strings::tr("ui.canvas_rotation.rotates.everything")),
             super::chrome::DialogWidth::Narrow,
             |ui| {
                 ui.horizontal(|ui| {
