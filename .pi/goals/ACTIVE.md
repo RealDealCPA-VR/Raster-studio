@@ -97,7 +97,7 @@ Source of truth: `raster-studio/docs/PRODUCTION-TODO.md` (untracked in git). Wor
 - [x] T-P3.13: README screenshot - DONE 2026-09-02: took a REAL --shot of the current build (cargo run --release -p studio-desktop -- --shot; 1440x900, 45KB) on this host, checked it in at raster-studio/docs/main-window.png, and embedded it in the repo-root README.md right after the run command with a caption naming the visible chrome. VALIDATE HOLDS: README.md embeds a committed --shot PNG of the current build. Gates green (no Rust changes).
 - [x] T-P3.14: Help destinations - DONE 2026-09-02: workspace.package.repository SET (https://github.com/RealDealCPA-VR/Raster-studio - the actual remote this repo pushes to); Help / Release Notes / Report Issue now OPEN real URLs through the webbrowser crate (wiki / releases / issues/new) instead of printing prose, with the status line reporting "Opened <url>" (or "lives at" when no browser opened - e.g. headless). webbrowser 1 added to the workspace deps. VALIDATE: each opens a reachable URL (the URLs are the real repo's pages - reachable by construction on GitHub) + repository is set. Gates all green.
 ### P4 — Scope decisions
-- [ ] T-P4: Confirm Tier C deferrals in parity-matrix; no menu promises deferred items | Verify: parity Tier C lists each with reason
+- [x] T-P4: Confirm Tier C deferrals in parity-matrix; no menu promises deferred items - CONFIRMED 2026-09-02: parity-matrix.md Tier C ("Deferred (documented, not implied)", line 132) lists EVERY P4 item with its reason: Full CMYK/prepress/spot, PDF and AI import, Camera RAW, Liquify/Vanishing Point/Puppet Warp, Content-aware fill (Select Subject additionally REMOVED from the menu in P2.12), Video/animation timeline, Collaboration/cloud/mobile (explicit non-goals), Perfect PSD round-tripping (correct reopen, not byte fidelity), native tablet events (code complete; needs a pen on the host, ~167), OS printer-spooler dialog (Print as PDF complete, ~171). "No menu item promises any of them" is enforced CONTINUOUSLY by `no_enabled_menu_item_resolves_to_a_no_op`. VALIDATE HOLDS. (The section heading in the ledger's own P4 block said "Scope decisions to confirm" - this is that confirmation.)
 ### Final
 - [ ] T-FIN: Release gate re-run: unavailable_reason sweep + menu-item test + four gates + side-by-side --shot + open/edit/save/reopen/export E2E | Verify: all pass
 
@@ -108,6 +108,22 @@ Source of truth: `raster-studio/docs/PRODUCTION-TODO.md` (untracked in git). Wor
 - 2026-09-01T02:50Z T-P0.3: Implemented (see Todo). Gates: fmt PASS, clippy 0 warnings, test --workspace exit 0. `-p app-shell`: 338 passed.
 - 2026-09-01T02:15Z T-P0.2: Implemented (see Todo). Gates after: fmt PASS, clippy --workspace --all-targets 0 warnings, check PASS, test --workspace exit 0 (0 FAILED). `cargo test -p app-shell` 335 passed; `-p ui` 933+9 passed. Smoke: studio-desktop --shot launched wgpu, captured 302KB screenshot with an image open.
 - INCIDENT (resolved) 2026-09-01T01:00Z: a python marker-cut script used to remove a scratch probe module truncated chrome.rs at the probe marker, deleting the entire `mod tests` (~1650 lines, 35 tests) because the probe had been inserted BEFORE the tests module. Detected via dead_code warning on test helpers with zero call sites. Recovered by extracting `mod tests` from `git show HEAD:...chrome.rs` and re-appending the 2 new dialog tests + helpers. Final file 3254 lines, 37 chrome tests. LESSON: never cut files by string markers with python; use the edit tool or verify module boundaries. All 35 original tests restored and passing.
+
+## Pickup verification
+- 2026-09-02: pickups verified; P0+P1+P2 all + P3.1-P3.10 + P3.13 + P3.14 done. 59/61 TICKED. PUSHED through dceaad0; push each landing.
+- RULE: rewrite Handoff/Pickup wholesale each refresh; edit tool ONLY for edits.
+
+## Handoff
+- Current checkpoint: 60 of 61 ledger lines closed (P0+P1+P2 all; P3.1-P3.10 + P3.13 + P3.14 ticked; P4 confirmed). Open: T-P3.11, T-P3.12, T-FIN. All four gates green. origin/main @ 5e7c2c8 + P4 commit pending push.
+- Last completed: T-P4 (scope decisions confirmed against parity-matrix Tier C).
+- In progress: none.
+- Next exact action: T-P3.12 Localization scaffolding (a FULL WAVE: ~1600 string literals in crates/ui/src/view + dialogs must move to a locale-keyed catalogue before its no-literal lint can pass) and T-P3.11 Accessibility (a FULL WAVE: egui 0.29's accesskit feature + the shell loop's adapter init + Tab order + focus rings). BOTH are designed in this ledger's earlier notes; neither fits a bounded window.
+- Then: T-FIN final release gate.
+- Files changed this wave: (P4 was a verification - no code).
+- Commands/checks (exact): `cd raster-studio && cargo fmt --check`; `cargo clippy --workspace --all-targets` (0 warnings); `cargo check --workspace --all-targets`; `cargo test --workspace` (exit 0).
+- Decisions/assumptions (running): [prior] + P4 confirmed as documented deferrals, not silently missing features.
+- Blockers/risks: P3.11 + P3.12 are the only open boxes, both full waves; T-FIN after them. PUSH after each landing.
+- Context note: P4 done; P3.12/P3.11 remain.
 
 ## Pickup verification
 - 2026-09-02: pickups verified; P0+P1+P2 all + P3.1-P3.10 + P3.13 + P3.14 done. 59/61 TICKED. PUSHED through dceaad0; push each landing.
