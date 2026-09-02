@@ -62,6 +62,7 @@ pub mod palette;
 pub mod panels;
 pub mod shortcut;
 pub mod status;
+pub mod strings;
 pub mod tool_options;
 pub mod view;
 
