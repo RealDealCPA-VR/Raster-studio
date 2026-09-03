@@ -518,6 +518,14 @@ unticked):
 - A human listening to NVDA/VoiceOver/Orca read the palette and Layers panel
   aloud. The UIA walk above is the machine-verifiable part of that claim:
   the names a screen reader would speak are now present and enumerated.
+  A real NVDA (2025.1.2, portable) was downloaded, installed and launched
+  against the running app in pursuit of this — the reader ran, but its
+  speech-viewer window did not open from a pre-seeded config, and pursuing
+  it further meant driving a talking screen reader over the user's live
+  desktop session; the attempt was stopped and fully cleaned up (portable
+  copy and installer deleted, no NVDA processes left). What a screen reader
+  would read remains proven by the UIA enumeration; the *listening* stays a
+  human act.
 
 **Validate.** A `.dmg`/`.app` and a `.deb` or AppImage are built and launch on a
 clean machine; the Windows installer is Authenticode-signed and the macOS bundle
@@ -570,7 +578,10 @@ host** (2026-09-02):
   shipped the tree; the hand-painted controls gained explicit
   `WidgetInfo::labeled` names. The localization gate caught a separator
   literal in the first labelling attempt — the label is the tooltip's first
-  line, which reads better aloud anyway.
+  line, which reads better aloud anyway. A real NVDA portable was installed
+  and launched to close the loop; driving a talking reader over the user's
+  live desktop was judged too intrusive, so the attempt was recorded and
+  fully rolled back — the listening remains a human act.
 
 Until a Mac launch and a human reader happen, this box stays honestly
 unticked.
