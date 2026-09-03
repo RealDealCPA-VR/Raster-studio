@@ -10,7 +10,7 @@
 # itself.
 set -euo pipefail
 
-cd "$(dirname "$0")/../../.."
+cd "$(dirname "$0")/../../../.."
 VERSION=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys;print(json.load(sys.stdin)["packages"][0]["version"])')
 BIN=target/release/studio-desktop
 STAGE=target/packaging/deb/raster-studio

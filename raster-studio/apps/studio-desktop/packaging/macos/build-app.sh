@@ -9,7 +9,7 @@
 # a clean machine is the release gate this script cannot check by itself.
 set -euo pipefail
 
-cd "$(dirname "$0")/../../.."
+cd "$(dirname "$0")/../../../.."
 VERSION=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys;print(json.load(sys.stdin)["packages"][0]["version"])')
 BIN=target/release/studio-desktop
 APP=target/packaging/RasterStudio.app

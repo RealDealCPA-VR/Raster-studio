@@ -488,18 +488,33 @@ it had a skeleton of unnamed nodes.
 Still requiring machines this host does not have (the box therefore stays
 unticked):
 
-- Building the `.deb`/`.app` bundles **and launching them** needs those
-  native OSes. The scripts pass `bash -n`; the only WSL distro here is
-  docker-desktop's minimal VM (no toolchain), and cross-compiling the Linux
-  binary needs a cross-linker the host lacks.
-- Authenticode signing with a real certificate, and `spctl --assess` on the
-  macOS bundle, need the signing identities. The CI release job carries the
-  hooks behind `WINDOWS_CERT`/`APPLE_ID` and says in its summary when they
-  are absent. This host could not even validate the pipeline locally:
-  `signtool.exe` is present, but the machine's certificate-store tooling is
-  broken (`Import-Module Microsoft.PowerShell.Security` fails with
-  `FormatXmlUpdateException`, the `Cert:` drive does not exist), so not even
-  a self-signed certificate can be created here.
+- **The `.deb` chain is now verified end-to-end on clean Debian** —
+  2026-09-02, in a `rust:1-bookworm` container (the cleanest Linux this host
+  can produce): a fresh `cargo build --release -p studio-desktop` compiled,
+  `build-deb.sh` packaged `raster-studio_0.1.0_amd64.deb`, `dpkg -i`
+  installed it to `/usr/bin/raster-studio`, and the **installed** binary (not
+  the build-tree one) launched under Xvfb + lavapipe and wrote a
+  `--shot` — `docs/linux-shot.png` — whose pixels match the Windows shots
+  (20/20 tool-column bands, the start screen present). **The verification
+  caught a real release-blocking bug**: both packaging scripts
+  `cd "$(dirname "$0")/../../.."`, which lands in `apps/` — one level short
+  of the workspace root — so the scripts had never been executable as
+  written (only `bash -n`-checked). Fixed to four levels up in both
+  scripts; the Linux script now runs to completion.
+- A `.dmg`/`.app` build and `spctl --assess` need macOS tooling
+  (`hdiutil`/`codesign`); the bundle script's path bug was fixed alongside
+  the `.deb` one, but executing it still needs a Mac.
+- Authenticode signing with a **trusted** certificate and `spctl --assess`
+  need the signing identities. The CI release job carries the hooks behind
+  `WINDOWS_CERT`/`APPLE_ID` and says in its summary when they are absent.
+  This host additionally could not produce even a self-signed check under
+  Windows PowerShell 5.1 (its certificate-store tooling is broken — the
+  `Cert:` drive does not load), but **PowerShell 7 on the same machine
+  worked**: a self-signed CodeSigning certificate was created, `signtool
+  sign` signed the release binary (`Number of files successfully Signed: 1`,
+  0 errors), and `Get-AuthenticodeSignature` read the signature back with
+  the expected signer subject. The pipeline itself is proven; only the
+  trusted identity is missing.
 - A human listening to NVDA/VoiceOver/Orca read the palette and Layers panel
   aloud. The UIA walk above is the machine-verifiable part of that claim:
   the names a screen reader would speak are now present and enumerated.
@@ -530,21 +545,35 @@ tool palette and the Layers panel aloud, recorded in the ledger.
 | [x] C13 | Localization coverage | E | no |
 | [ ] C14 | Hardware verification | E | yes |
 
-C14 **remains open by design**: its Validate needs machines this host does not
-have (a clean macOS/Linux box for the bundles, a code-signing certificate,
-an operating screen reader). But the host-limited gap is now much smaller:
-the screen-reader half was verified **live on this host** — a UI Automation
-walk of the running app (2026-09-02) exposed every tool slot, the nine menus,
-the Layers panel's controls and the layer row by name (71/43 elements/names
-on the start screen; 149/52 with a document). Getting there found and fixed
-two real defects: egui-winit 0.29 never calls `Context::enable_accesskit`
-(the tree stayed empty), and nothing repainted after enabling so an idle
-window never shipped the tree; the hand-painted controls gained explicit
-`WidgetInfo::labeled` names. What still needs other machines: building and
-launching the `.deb`/`.app` bundles, Authenticode/spctl signing with real
-identities (this host's certificate-store tooling is broken — the `Cert:`
-drive does not load), and a human listening to the reader. Until then this
-box stays honestly unticked.
+C14 **remains open on one narrow point** — launching the macOS bundle on a
+Mac (`hdiutil`/`codesign`/`spctl`), signing with a trusted identity, and a
+human listening to the reader. Everything else was verified **live on this
+host** (2026-09-02):
+
+- **Linux, end-to-end on clean Debian** (rust:1-bookworm container): fresh
+  release build → `build-deb.sh` → `dpkg -i` → the installed
+  `/usr/bin/raster-studio` launched under Xvfb + lavapipe and rendered a
+  `--shot` (`docs/linux-shot.png`) pixel-matching the Windows shots. The
+  verification **caught a real release-blocking bug**: both packaging scripts
+  `cd` one level short of the workspace root and had never been executable
+  as written — fixed in both (Linux verified by running it; macOS fixed,
+  execution awaits a Mac).
+- **Authenticode pipeline**: PowerShell 7 created a self-signed CodeSigning
+  cert, `signtool sign` signed the release binary (1 file, 0 errors), and
+  `Get-AuthenticodeSignature` read the signature back. Only the trusted CA
+  identity remains (CI secrets).
+- **Screen-reader surface**: UIA walk — 72/44 elements/names on the start
+  screen, 149/52 with a document; every keyed tool by name, the nine menus,
+  the Layers panel controls and layer rows. Got there by fixing two real
+  defects: egui-winit 0.29 never calls `Context::enable_accesskit` (the tree
+  stayed empty) and nothing repainted after enabling so an idle window never
+  shipped the tree; the hand-painted controls gained explicit
+  `WidgetInfo::labeled` names. The localization gate caught a separator
+  literal in the first labelling attempt — the label is the tooltip's first
+  line, which reads better aloud anyway.
+
+Until a Mac launch and a human reader happen, this box stays honestly
+unticked.
 
 **Release gate for this file:** every box ticked with its Validate line passing,
 all five gates green on Linux, Windows and macOS in CI, and a fresh `--shot`
