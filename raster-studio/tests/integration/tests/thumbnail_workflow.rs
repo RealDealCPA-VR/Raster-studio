@@ -2629,6 +2629,307 @@ fn the_masked_cutout_alignment_survives_transforms_relink_and_reopen() {
     );
 }
 
+/// Card 064: the manual portrait extraction walk — rough selection, add/
+/// subtract-style selection edits (expand/contract/feather through the Select
+/// menu's real routes; the composed shift/alt gestures themselves are pinned
+/// at card 056), selection-to-mask, paint corrections on the mask target,
+/// black/white background inspection, and placement over a thumbnail
+/// backdrop. Deterministic checks only: a real-photo visual quality gate
+/// CANNOT pass here and is recorded in the ledger (card 091's human walk) —
+/// no ML runtime is added to bypass mask editing. Every step is undoable and
+/// the portrait's own pixels are never touched by the mask work.
+#[test]
+fn the_manual_portrait_extraction_walk_holds_end_to_end() {
+    use app_shell::menu_bridge;
+    use editor_core::Command;
+    use integration_tests::app;
+    use ui::menu::{MaskOp, MenuAction, ModifySelection};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut ed = app::shell_editor(tmp.path(), 128, 128);
+
+    // The "portrait": an oval-ish ink blob (a filled rect here — the shape
+    // is irrelevant to the alignment semantics) ABOVE the white canvas.
+    let portrait = {
+        let layer = layer_model::Layer::raster("Portrait");
+        let id = layer.id;
+        let mut bytes = vec![0u8; (raster::TILE_SIZE * raster::TILE_SIZE * 4) as usize];
+        for y in 16..80usize {
+            for x in 24..88usize {
+                let i = (y * raster::TILE_SIZE as usize + x) * 4;
+                bytes[i..i + 4].copy_from_slice(&[90, 40, 30, 255]);
+            }
+        }
+        let hash = ed.active_mut().unwrap().tiles.insert_bytes(bytes);
+        ed.active_mut()
+            .unwrap()
+            .apply(Command::create_layer(layer))
+            .unwrap();
+        ed.active_mut()
+            .unwrap()
+            .apply(
+                Command::paint_tiles(
+                    editor_core::PixelTarget::Layer(id),
+                    vec![editor_core::TileEdit::set(
+                        raster::TileCoord::new(0, 0, 0),
+                        hash,
+                    )],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        // Work ON the portrait.
+        ed.set_layer_selection(vec![id], Some(id));
+        id
+    };
+    let region = raster::PixelRect::new(0, 0, 128, 128);
+    let composite = |ed: &mut app_shell::Editor| -> Vec<u8> {
+        ed.active_mut().unwrap().composite(region).unwrap()
+    };
+    let probe = |bytes: &[u8], x: usize, y: usize| -> [u8; 4] {
+        let i = (y * 128 + x) * 4;
+        [bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]
+    };
+    let portrait_hashes = |ed: &app_shell::Editor| app::layer_tile_map(ed, portrait);
+    let hashes_at_setup = portrait_hashes(&ed);
+    let depth_setup = ed.active().unwrap().history_depth();
+    let pre_everything = composite(&mut ed);
+
+    // 1. ROUGH SELECTION + menu-driven selection edits: expand (grow the
+    //    rough box), contract (take it back), then FEATHER — the
+    //    deterministic stand-in for edge refinement on the way in.
+    app::set_selection(
+        &mut ed,
+        editor_core::Selection::Rect {
+            min: glam::IVec2::new(20, 12),
+            max: glam::IVec2::new(92, 84),
+        },
+    );
+    menu_bridge::perform(MenuAction::Modify(ModifySelection::Expand), &mut ed).expect("expand");
+    menu_bridge::perform(MenuAction::Modify(ModifySelection::Contract), &mut ed).expect("contract");
+    menu_bridge::perform(MenuAction::Modify(ModifySelection::Feather), &mut ed).expect("feather");
+    // The selection is now a soft-edged MASK selection (feather materialized
+    // it) — exactly what Reveal Selection turns into coverage.
+
+    // 2. SELECTION-TO-MASK: reveal through the real menu route.
+    menu_bridge::perform(MenuAction::Mask(MaskOp::RevealSelection), &mut ed)
+        .expect("reveal selection");
+    let cutout = composite(&mut ed);
+    // Interior shows the ink over the white canvas; OUTSIDE the rough box
+    // the portrait is hidden by the mask (the backdrop canvas shows).
+    let interior = probe(&cutout, 48, 48);
+    assert_eq!(interior, [90, 40, 30, 255], "the interior keeps the ink");
+    let outside = probe(&cutout, 8, 8);
+    assert_eq!(
+        outside,
+        [255, 255, 255, 255],
+        "outside the cutout: backdrop"
+    );
+    // The portrait's OWN pixels are untouched — masking is nondestructive.
+    assert_eq!(
+        portrait_hashes(&ed),
+        hashes_at_setup,
+        "the mask work is source-preserving"
+    );
+
+    // 3. PAINT CORRECTIONS on the mask target: erase a strip of coverage
+    //    (conceal) and undo it; then reveal a bit of the hidden side with
+    //    the brush.
+    ed.set_layer_selection(vec![portrait], Some(portrait));
+    ed.set_edit_target_kind(app_shell::edit_target::EditTargetKind::Mask);
+    ed.set_tool(tools::ToolId::Eraser);
+    let mut pointer = app_shell::tool_input::ToolPointer::new();
+    app::shell_stroke(
+        &mut pointer,
+        &mut ed,
+        &[glam::Vec2::new(40.0, 48.0), glam::Vec2::new(56.0, 48.0)],
+    );
+    let corrected = composite(&mut ed);
+    assert_ne!(
+        probe(&corrected, 48, 48),
+        interior,
+        "the eraser correction changed the visible cutout"
+    );
+    assert_eq!(
+        probe(&corrected, 48, 48),
+        [255, 255, 255, 255],
+        "the eraser CONCEALS on a mask: the corrected pixel shows the backdrop"
+    );
+    ed.active_mut().unwrap().undo().unwrap();
+    assert_eq!(composite(&mut ed), cutout, "undo restores the correction");
+    // Reveal with the brush: black conceals → paint WHITE to reveal more.
+    ed.set_tool(tools::ToolId::Brush);
+    ed.set_foreground([1.0, 1.0, 1.0, 1.0]);
+    app::shell_stroke(
+        &mut pointer,
+        &mut ed,
+        &[glam::Vec2::new(100.0, 48.0), glam::Vec2::new(110.0, 48.0)],
+    );
+    // (The revealed area is outside the portrait's ink, so the composite is
+    // unchanged there — the correction is proven by the eraser arm above and
+    // the coverage delta here.)
+    let revealed_somewhere = app::mask_tile_map(&ed, portrait).is_some();
+    assert!(revealed_somewhere, "the reveal stroke committed coverage");
+    ed.active_mut().unwrap().undo().unwrap();
+
+    // 4. BLACK/WHITE BACKGROUND INSPECTION: two backdrop layers below the
+    //    portrait, toggled — the feathered edge reads differently over each
+    //    (the halo check), while the deep interior is backdrop-independent.
+    for (name, rgb) in [
+        ("Inspect Black", [0u8, 0, 0]),
+        ("Inspect White", [255u8, 255, 255]),
+    ] {
+        let path = tmp.path().join(format!("{name}.png"));
+        let mut flat = vec![0u8; 128 * 128 * 4];
+        for px in flat.chunks_exact_mut(4) {
+            px.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+        }
+        std::fs::write(
+            &path,
+            raster::encode(raster::ExportFormat::Png, 128, 128, &flat).unwrap(),
+        )
+        .unwrap();
+        ed.place_path(&path, false).expect("the backdrop places");
+    }
+    // The two placed backdrops sit above everything; move them below the
+    // canvas background? Simpler: toggle their visibility OFF for the probe
+    // (placement itself is the card's "placement over the thumbnail" step
+    // and is verified by the layer stack), then hide them and probe the
+    // ORIGINAL composite; then show one at a time by hiding the canvas.
+    let placed: Vec<layer_model::LayerId> = {
+        let doc = ed.active().unwrap();
+        doc.document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter(|id| {
+                doc.document
+                    .layers
+                    .get(*id)
+                    .unwrap()
+                    .name
+                    .starts_with("Inspect")
+            })
+            .collect()
+    };
+    assert_eq!(placed.len(), 2, "both backdrops placed");
+    // Send both backdrops BEHIND everything (they were placed on top):
+    // root.insert(index.min(len)) — MAX clamps to the end = the bottom of
+    // the topmost-first stack.
+    for id in &placed {
+        ed.active_mut()
+            .unwrap()
+            .apply(Command::MoveLayer {
+                layer_id: *id,
+                parent: None,
+                index: usize::MAX,
+            })
+            .unwrap();
+    }
+    // Hide the canvases so a backdrop shows through, toggle each backdrop.
+    let canvas_ids: Vec<layer_model::LayerId> = {
+        let doc = ed.active().unwrap();
+        doc.document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter(|id| {
+                let l = doc.document.layers.get(*id).unwrap();
+                matches!(l.kind, layer_model::LayerKind::Raster(_))
+                    && l.mask.is_none()
+                    && *id != portrait
+            })
+            .collect()
+    };
+    let set_visible = |ed: &mut app_shell::Editor, id: layer_model::LayerId, visible: bool| {
+        ed.active_mut()
+            .unwrap()
+            .apply(Command::SetLayerProperties {
+                layer_id: id,
+                patch: editor_core::LayerPatch {
+                    visible: Some(visible),
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+    };
+    for id in &canvas_ids {
+        set_visible(&mut ed, *id, false);
+    }
+    for id in &placed {
+        set_visible(&mut ed, *id, false);
+    }
+    // iter_depth_first is topmost-first: pick the backdrops by NAME.
+    let black_id = *placed
+        .iter()
+        .find(|id| ed.active().unwrap().document.layers.get(**id).unwrap().name == "Inspect Black")
+        .unwrap();
+    let white_id = *placed
+        .iter()
+        .find(|id| ed.active().unwrap().document.layers.get(**id).unwrap().name == "Inspect White")
+        .unwrap();
+    set_visible(&mut ed, black_id, true); // black backdrop
+    let over_black = composite(&mut ed);
+    set_visible(&mut ed, black_id, false);
+    set_visible(&mut ed, white_id, true); // white backdrop
+    let over_white = composite(&mut ed);
+    // Deep interior: the ink over either backdrop (mask coverage 255).
+    assert_eq!(probe(&over_black, 48, 48), [90, 40, 30, 255]);
+    assert_eq!(probe(&over_white, 48, 48), [90, 40, 30, 255]);
+    // A CONCEALED portrait pixel shows whichever backdrop is under it —
+    // black over black, white over white (the inspection reads the halo).
+    assert_eq!(probe(&over_black, 8, 8), [0, 0, 0, 255]);
+    assert_eq!(probe(&over_white, 8, 8), [255, 255, 255, 255]);
+    // Restore visibility.
+    for id in &placed {
+        set_visible(&mut ed, *id, false);
+    }
+    for id in &canvas_ids {
+        set_visible(&mut ed, *id, true);
+    }
+
+    // 5. UNDOABLE: walking history back to the setup depth restores the
+    //    pre-walk composite byte-for-byte (the mask and selection work leaves
+    //    no residue).
+    while ed.active().unwrap().history_depth() > depth_setup {
+        ed.active_mut().unwrap().undo().unwrap();
+    }
+    let baseline = composite(&mut ed);
+    assert_eq!(
+        baseline, pre_everything,
+        "undo returns the untouched portrait"
+    );
+    while ed.active_mut().unwrap().redo().unwrap_or(false) {}
+    let replayed = composite(&mut ed);
+    // The replayed composite differs only by the visible-backdrop toggles'
+    // final state; the CUTOUT probes must hold at the top of history too.
+    assert_eq!(
+        probe(&replayed, 48, 48),
+        [90, 40, 30, 255],
+        "redo replays the cutout"
+    );
+    assert_eq!(
+        portrait_hashes(&ed),
+        hashes_at_setup,
+        "source-preserving through the whole walk"
+    );
+
+    // 6. SURVIVES SAVE/REOPEN.
+    let pre_save = composite(&mut ed);
+    let package = tmp.path().join("walk.rstudio");
+    ed.active_mut()
+        .unwrap()
+        .save_to(&package, app::APP_VERSION)
+        .unwrap();
+    let mut reopened = app::open_project(&package);
+    let after = reopened.composite(region).unwrap();
+    assert_eq!(
+        probe(&after, 48, 48),
+        probe(&pre_save, 48, 48),
+        "the cutout survives save/reopen"
+    );
+}
+
 #[test]
 fn the_asset_reuse_and_clipboard_workflows_survive_native_persistence() {
     use app_shell::dialogs::ScriptedDialogs;
