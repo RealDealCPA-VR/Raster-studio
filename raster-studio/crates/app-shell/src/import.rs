@@ -2251,4 +2251,55 @@ mod tests {
         std::fs::write(&stub, b"8BP").unwrap();
         assert!(!looks_like_psd(&stub));
     }
+    /// Card 072's honesty gate: the fidelity matrix
+    /// (`docs/PSD-THUMBNAIL-SUPPORT.md`) must name every fallback note the
+    /// import actually emits, the editable-preservation claims, and the
+    /// failure-policy statement — a doc that drifts from `Tally::record`
+    /// fails here instead of lying to the user.
+    #[test]
+    fn the_psd_support_matrix_names_every_fallback_the_import_emits() {
+        let doc = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/PSD-THUMBNAIL-SUPPORT.md"
+        ))
+        .expect("the PSD support matrix exists");
+        // Every Tally fallback note's FULL template text (unique strings, so
+        // deleting any single note fails the gate rather than surviving via a
+        // shared fragment).
+        for phrase in [
+            "the colour label on {names} is not shown by this layers panel and was not kept",
+            "adjustment layer(s) this build cannot evaluate ({names}) were kept as empty              layers; their effect is in the flattened image but not editable",
+            "type layer(s) ({names}) were imported as pixels; the text is no longer editable",
+            "layer effect(s) on {names} were not imported",
+            "{names} carried a second, vector-derived mask that was not imported",
+            "{names} extend past the canvas; the part outside it was not kept",
+            "{names} carry a transform a .psd cannot express; their pixels were written              where they are stored",
+            "{names} are a kind a .psd has no home for and were written as empty layers",
+            "the mask density or feather on {names} was not written",
+            "the vector mask on {names} was written as its rasterised coverage",
+            "the blanket lock on {names} has no .psd equivalent and was not written",
+            "{names} pass through *and* carry a blend mode; a .psd stores only the              pass-through",
+        ] {
+            // Rust's `\`-continuation collapses newline+indent into the
+            // string, so compare with whitespace normalized on both sides.
+            let flat = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(
+                doc.contains(&flat(phrase)),
+                "the matrix no longer names the fallback {:?}",
+                flat(phrase)
+            );
+        }
+        // The editable-preservation claims, the failure policy, and the
+        // ICC-drop note the matrix quotes (a false claim here failed review).
+        for phrase in [
+            "ClipToBelow",
+            "Invert",
+            "A correct merged preview is explicitly insufficient",
+            "Original PSD bytes are never modified on import",
+            "Nothing silent",
+            "the colour profile — are not part of this document model",
+        ] {
+            assert!(doc.contains(phrase), "the matrix lost the claim {phrase:?}");
+        }
+    }
 }
