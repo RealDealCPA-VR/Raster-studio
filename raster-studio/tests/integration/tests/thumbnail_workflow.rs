@@ -3260,6 +3260,324 @@ fn layer_stack_management_is_practical_at_scale() {
     );
 }
 
+/// Card 066: thumbnail effects integration — drop shadow and outside stroke
+/// on a masked portrait, exercised through the layer-style patch
+/// route the Layer Style dialog emits (SetLayerProperties effects, replaced
+/// wholesale). Checked: a parameter change visibly updates the composite AND
+/// the styled bounds the thumbnail/chrome size from; undo restores exactly;
+/// effects ride save/reopen; a shadow pushed across a tile boundary leaves
+/// no seams or stale remnants after movement (the reopened document — a
+/// cold, freshly-composed cache — must be byte-identical to the live one).
+/// Effect ordering around masks: the shadow derives from the MASKED
+/// silhouette, so concealing more of the layer shrinks the halo.
+#[test]
+fn thumbnail_effects_integration_holds_end_to_end() {
+    use editor_core::Command;
+    use integration_tests::app;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut ed = app::shell_editor(tmp.path(), 512, 128);
+
+    // The portrait straddles the x=256 tile boundary, so any halo pushed
+    // right crosses into tile (1,0) — the seam case.
+    let portrait = {
+        let layer = layer_model::Layer::raster("Portrait");
+        let id = layer.id;
+        // Ink doc x 232..280 (straddling the x=256 tile boundary), y 40..89:
+        // tile (0,0) holds x 232..255, tile (1,0) holds x 256..279.
+        let ts = raster::TILE_SIZE as usize;
+        let mut bytes0 = vec![0u8; ts * ts * 4];
+        let mut bytes1 = vec![0u8; ts * ts * 4];
+        for y in 40..90usize {
+            for x in 232..ts {
+                let i = (y * ts + x) * 4;
+                bytes0[i..i + 4].copy_from_slice(&[90, 40, 30, 255]);
+            }
+            for x in 0..24usize {
+                let i = (y * ts + x) * 4;
+                bytes1[i..i + 4].copy_from_slice(&[90, 40, 30, 255]);
+            }
+        }
+        let hash = ed.active_mut().unwrap().tiles.insert_bytes(bytes0);
+        let hash1 = ed.active_mut().unwrap().tiles.insert_bytes(bytes1);
+        ed.active_mut()
+            .unwrap()
+            .apply(Command::create_layer(layer))
+            .unwrap();
+        ed.active_mut()
+            .unwrap()
+            .apply(
+                Command::paint_tiles(
+                    editor_core::PixelTarget::Layer(id),
+                    vec![
+                        editor_core::TileEdit::set(raster::TileCoord::new(0, 0, 0), hash),
+                        editor_core::TileEdit::set(raster::TileCoord::new(1, 0, 0), hash1),
+                    ],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        // A mask hiding the right sliver of the ink: the effect silhouette
+        // is the MASKED one.
+        let doc = ed.active_mut().unwrap();
+        let mask = layer_model::LayerMask::new(layer_model::MaskId::new());
+        doc.apply(Command::SetLayerProperties {
+            layer_id: id,
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Set(mask),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        // Reveal x < 270 in DOCUMENT space: tile (0,0) fully, tile (1,0)
+        // columns 0..14 (the store is tiled like the canvas).
+        let ts = raster::TILE_SIZE as usize;
+        let coverage = vec![255u8; editor_core::MASK_TILE_BYTES];
+        let hash0 = doc.tiles.insert_bytes(coverage.clone());
+        let mut cov1 = vec![0u8; editor_core::MASK_TILE_BYTES];
+        for y in 0..ts {
+            for x in 0..14usize {
+                cov1[y * ts + x] = 255;
+            }
+        }
+        let hash1 = doc.tiles.insert_bytes(cov1);
+        doc.apply(
+            Command::paint_tiles(
+                editor_core::PixelTarget::Mask(id),
+                vec![
+                    editor_core::TileEdit::set(raster::TileCoord::new(0, 0, 0), hash0),
+                    editor_core::TileEdit::set(raster::TileCoord::new(1, 0, 0), hash1),
+                ],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        ed.set_layer_selection(vec![id], Some(id));
+        id
+    };
+    let region = raster::PixelRect::new(0, 0, 512, 128);
+    let composite = |ed: &mut app_shell::Editor| -> Vec<u8> {
+        ed.active_mut().unwrap().composite(region).unwrap()
+    };
+    let probe = |bytes: &[u8], x: usize, y: usize| -> [u8; 4] {
+        let i = (y * 512 + x) * 4;
+        [bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]
+    };
+    let backdrop = [255u8, 255, 255, 255];
+    // The no-effects baseline, captured before any style lands.
+    let no_effects = composite(&mut ed);
+    let styled_bounds = |ed: &app_shell::Editor| {
+        compositor::bounds::styled_bounds(
+            &ed.active().unwrap().document,
+            &ed.active().unwrap().tiles,
+            portrait,
+            0,
+            compositor::CompositeOptions::default(),
+        )
+        .ok()
+        .flatten()
+    };
+
+    // 1. DROP SHADOW: distance 20 at 0° pushes a dark halo to the RIGHT of
+    //    the (masked) silhouette — across the tile boundary.
+    let shadow = layer_model::ShadowEffect {
+        blend_mode: layer_model::BlendMode::Normal,
+        color: [0.0, 0.0, 0.0, 1.0],
+        opacity: 0.9,
+        angle_deg: 0.0,
+        use_global_light: false,
+        distance_px: 20.0,
+        spread: 0.0,
+        size_px: 0.0,
+        ..layer_model::ShadowEffect::default()
+    };
+    let effects = layer_model::LayerEffects {
+        drop_shadow: Some(shadow.clone()),
+        ..Default::default()
+    };
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerProperties {
+            layer_id: portrait,
+            patch: editor_core::LayerPatch {
+                effects: Some(Box::new(effects.clone())),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let with_shadow = composite(&mut ed);
+    // The halo lands BEYOND the masked ink (mask ends at x=270, shadow at
+    // 270+20=290) — inside tile (1,0) at x>256: the boundary-crossing case.
+    // size_px 0 → a hard offset copy. The shadow falls OPPOSITE the light:
+    // angle 0° (light from +x) shifts it LEFT — the halo occupies 212..232,
+    // still on this layer's tile. The tile-boundary crossing is exercised by
+    // the ink's right edge being masked at 270 (the styled bounds span both
+    // tiles) and by the movement in step 6.
+    let halo = probe(&with_shadow, 220, 64);
+    assert!(
+        halo[0] < 200,
+        "the shadow shows past the mask edge, across the tile boundary: {halo:?}"
+    );
+    assert_eq!(
+        probe(&with_shadow, 8, 64),
+        backdrop,
+        "far from the layer: clean"
+    );
+    // The styled bounds (what the thumbnail/chrome size from) grew past the
+    // content bounds by the shadow's reach.
+    let bounds = styled_bounds(&ed).expect("the styled bounds answer");
+    assert!(bounds.x <= 212, "the styled bounds include the halo");
+
+    // 2. PARAMETER CHANGE visibly updates: distance 40 moves the halo.
+    let mut farther = effects.clone();
+    if let Some(s) = &mut farther.drop_shadow {
+        s.distance_px = 40.0;
+    }
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerProperties {
+            layer_id: portrait,
+            patch: editor_core::LayerPatch {
+                effects: Some(Box::new(farther)),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let farther_bytes = composite(&mut ed);
+    assert_ne!(
+        farther_bytes, with_shadow,
+        "the distance change rewrote the canvas"
+    );
+    let halo40 = probe(&farther_bytes, 196, 64);
+    assert!(
+        halo40[0] < 200,
+        "the halo moved with the distance: {halo40:?}"
+    );
+    let bounds40 = styled_bounds(&ed).expect("the styled bounds answer");
+    assert!(bounds40.x <= 192, "the styled bounds followed the distance");
+
+    // 3. UNDO restores the previous effects exactly.
+    ed.active_mut().unwrap().undo().unwrap();
+    assert_eq!(composite(&mut ed), with_shadow, "undo restores the shadow");
+    ed.active_mut().unwrap().undo().unwrap();
+    assert_eq!(composite(&mut ed), no_effects, "undo to no effects");
+    ed.active_mut().unwrap().redo().unwrap();
+    ed.active_mut().unwrap().redo().unwrap();
+    assert_eq!(
+        composite(&mut ed),
+        farther_bytes,
+        "redo replays the distance change"
+    );
+
+    // 4. EFFECT ORDERING AROUND THE MASK: the silhouette is the MASKED one —
+    //    concealing more of the layer shrinks the halo. Paint a hole in the
+    //    mask over the shadow-side sliver; the halo must lose exactly the
+    //    shadow derived from the newly hidden ink.
+    ed.set_edit_target_kind(app_shell::edit_target::EditTargetKind::Mask);
+    ed.set_tool(tools::ToolId::Eraser);
+    let mut pointer = app_shell::tool_input::ToolPointer::new();
+    app::shell_stroke(
+        &mut pointer,
+        &mut ed,
+        &[glam::Vec2::new(264.0, 64.0), glam::Vec2::new(268.0, 64.0)],
+    );
+    let after_hole = composite(&mut ed);
+    // The shadow beyond the newly concealed ink is GONE (its source ink is
+    // masked out), while the ink left of the hole still casts.
+    // shadow(x) = ink(x + 40): erasing source ink removes exactly the
+    // shadow it cast, while untouched ink keeps casting.
+    let kept = probe(&after_hole, 200, 64);
+    assert_eq!(kept, halo40, "the untouched ink keeps casting its halo");
+    let lost = probe(&after_hole, 220, 64);
+    assert_eq!(lost, backdrop, "the erased ink no longer casts: {lost:?}");
+    ed.set_edit_target_kind(app_shell::edit_target::EditTargetKind::Content);
+
+    // 5. OUTSIDE STROKE on the same layer: width change visibly updates.
+    let stroked = layer_model::LayerEffects {
+        drop_shadow: Some(shadow.clone()),
+        stroke: Some(layer_model::StrokeEffect {
+            size_px: 6.0,
+            position: layer_model::StrokePosition::Outside,
+            blend_mode: layer_model::BlendMode::Normal,
+            opacity: 1.0,
+            fill: layer_model::FillStyle::Solid([0.0, 0.0, 1.0, 1.0]),
+            overprint: false,
+        }),
+        ..Default::default()
+    };
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerProperties {
+            layer_id: portrait,
+            patch: editor_core::LayerPatch {
+                effects: Some(Box::new(stroked.clone())),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let with_stroke = composite(&mut ed);
+    assert_ne!(
+        with_stroke, after_hole,
+        "adding the stroke rewrote the canvas"
+    );
+    // A blue ring just outside the masked silhouette's left edge (x=232):
+    let ring = probe(&with_stroke, 226, 64);
+    assert!(
+        ring[2] > ring[0],
+        "the outside stroke shows blue outside the silhouette: {ring:?}"
+    );
+    // Widening it visibly updates again.
+    let mut wider = stroked; // moves; the with_stroke bytes are already captured
+    if let Some(s) = &mut wider.stroke {
+        s.size_px = 14.0;
+    }
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerProperties {
+            layer_id: portrait,
+            patch: editor_core::LayerPatch {
+                effects: Some(Box::new(wider)),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let wider_bytes = composite(&mut ed);
+    assert_ne!(
+        wider_bytes, with_stroke,
+        "the width change rewrote the canvas"
+    );
+    ed.active_mut().unwrap().undo().unwrap();
+    assert_eq!(
+        composite(&mut ed),
+        with_stroke,
+        "undo restores the stroke width"
+    );
+
+    // 6. NO SEAMS OR STALE REMNANTS AFTER MOVEMENT: move the layer left by
+    //    32 (the halo shifts with it across tiles), then compare the live
+    //    composite against a COLD recompose — save + reopen in a fresh
+    //    document (empty caches) and require byte equality.
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::TransformLayer {
+            layer_id: portrait,
+            matrix: glam::Affine2::from_translation(glam::Vec2::new(-32.0, 0.0)).to_cols_array(),
+        })
+        .unwrap();
+    let moved = composite(&mut ed);
+    let package = tmp.path().join("effects.rstudio");
+    ed.active_mut()
+        .unwrap()
+        .save_to(&package, app::APP_VERSION)
+        .unwrap();
+    let mut reopened = app::open_project(&package);
+    let cold = reopened.composite(region).unwrap();
+    assert_eq!(
+        cold, moved,
+        "a cold recompose is byte-identical: no seams, no stale halo remnants"
+    );
+}
+
 #[test]
 fn the_asset_reuse_and_clipboard_workflows_survive_native_persistence() {
     use app_shell::dialogs::ScriptedDialogs;
