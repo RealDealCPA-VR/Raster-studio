@@ -501,6 +501,23 @@ const SMUDGE: &[Prim] = &[
     Prim::Dot([0.86, 0.20], 0.07),
 ];
 
+/// Card 061: the boundary-refine brush — a hard step crossed by a smoothed
+/// band (the regraded edge between two plateaus).
+const REFINE_BOUNDARY: &[Prim] = &[
+    Prim::Line([0.18, 0.30], [0.18, 0.78]),
+    Prim::Line([0.82, 0.14], [0.82, 0.62]),
+    Prim::Poly(
+        &[
+            [0.18, 0.42],
+            [0.38, 0.42],
+            [0.46, 0.54],
+            [0.58, 0.46],
+            [0.82, 0.46],
+        ],
+        false,
+    ),
+];
+
 const DODGE: &[Prim] = &[
     Prim::Circle([0.42, 0.42], 0.22),
     Prim::Line([0.60, 0.62], [0.86, 0.88]),
@@ -723,6 +740,7 @@ pub fn icon_for(key: &str) -> Icon {
         "blur" => BLUR,
         "sharpen" => SHARPEN,
         "smudge" => SMUDGE,
+        "refine-boundary" => REFINE_BOUNDARY,
         "dodge" => DODGE,
         "burn" => BURN,
         "sponge" => SPONGE,

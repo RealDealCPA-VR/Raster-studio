@@ -38,7 +38,13 @@ use crate::selection::Selection;
 ///   inverse was a `Transaction` of variants that all still exist and still
 ///   behave identically). The bump is one-way — a version-3 journal is not
 ///   readable by version-1 code.
-pub const DOCUMENT_FORMAT_VERSION: u32 = 3;
+///
+/// Version 4 carries the persisted rich-text schema (plan card 018): a text
+/// layer may carry styled spans, paragraph settings, a frame and kerning.
+/// Older documents (versions 1 through 3) load unchanged; the schema's serde
+/// defaults are the migration, and they reproduce exactly what the
+/// pre-rich-text renderer produced.
+pub const DOCUMENT_FORMAT_VERSION: u32 = 4;
 
 /// Oldest format this build can still read. Everything from here up to
 /// [`DOCUMENT_FORMAT_VERSION`] loads without a migration step.
@@ -303,9 +309,11 @@ pub struct Document {
     /// so a vector-only document costs nothing for it.
     pub pixels: PixelStore,
     /// A copy of a selection set aside for Reselect, and the named selections
-    /// kept for Save/Load Selection. Persisted like [`Document::selection`];
-    /// selection edits (including these) are direct field writes, not commands,
-    /// matching how the marquee and Select ▸ Inverse behave.
+    /// kept for Save/Load Selection. Persisted like [`Document::selection`].
+    /// These store fields are written directly (bookkeeping, not user edits);
+    /// the selection changes themselves ride `Command::SetSelection` since
+    /// card 056 — which is also why undoing a Load does not restore this
+    /// store: `saved_selections` keeps the entry recoverable.
     pub stored_selection: Option<Selection>,
     pub saved_selections: Vec<(String, Selection)>,
     /// The document's guides. Persisted and undoable through [`Command::SetGuides`].
@@ -485,8 +493,26 @@ impl Document {
     pub fn set_asset_origin(&mut self, record: layer_model::AssetRecord) {
         if let Some(row) = self.assets.iter_mut().find(|a| a.id == record.id) {
             row.origin = record.origin;
+            row.source_size = record.source_size;
         } else {
             self.assets.push(record);
+        }
+    }
+
+    /// Card 050: the placed source's recorded dimensions, for a linked
+    /// refresh's renormalization.
+    pub fn asset_source_size(&self, id: layer_model::AssetId) -> Option<(u32, u32)> {
+        self.assets
+            .iter()
+            .find(|a| a.id == id)
+            .and_then(|a| a.source_size)
+    }
+
+    /// Card 050: record the source dimensions a refresh just stored. `None`
+    /// clears the record (the inverse of a first recording).
+    pub fn set_asset_source_size(&mut self, id: layer_model::AssetId, size: Option<(u32, u32)>) {
+        if let Some(row) = self.assets.iter_mut().find(|a| a.id == id) {
+            row.source_size = size;
         }
     }
 

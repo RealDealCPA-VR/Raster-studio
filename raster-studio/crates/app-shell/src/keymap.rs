@@ -354,6 +354,11 @@ impl Keymap {
         add(Chord::ctrl(Key::character('z')), Undo);
         add(Chord::ctrl_shift(Key::character('z')), Redo);
         add(Chord::ctrl(Key::character('y')), Redo);
+        // Card 052: the image clipboard is keyboard-reachable outside a text
+        // session (a live text session consumes these chords first, card 028).
+        add(Chord::ctrl(Key::character('c')), Copy);
+        add(Chord::ctrl(Key::character('x')), Cut);
+        add(Chord::ctrl(Key::character('v')), Paste);
         add(Chord::ctrl(Key::character('k')), ShowPreferences);
         add(Chord::ctrl_shift(Key::character('i')), ShowFileInfo);
         // Layer

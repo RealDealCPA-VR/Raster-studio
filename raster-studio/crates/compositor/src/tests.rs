@@ -978,8 +978,10 @@ fn an_adjustments_linked_mask_moves_with_its_transform() {
         "the mask moved with the layer",
     );
 
-    // An *unlinked* mask stays in document space, so the same document with the
-    // link cut brightens the other half.
+    // An *unlinked* mask stays in document space. Unlink FIRST (the visible
+    // pose freezes where the mask sits), then move the content through the
+    // real command so the mask's own transform compensates: the brightening
+    // holds the mask's painted spot while the layer's transform moves.
     let mut t2 = TestDoc::linear(512, 8);
     solid_layer(&mut t2, "Grey", [64, 64, 64, 255]);
     let adj2 = t2.push_adjustment("Brighten", AdjustmentKind::Exposure { stops: 1.0 });
@@ -987,9 +989,14 @@ fn an_adjustments_linked_mask_moves_with_its_transform() {
     t2.paint_mask_tile(mask2, TileCoord::new(0, 0, 0), 255);
     {
         let l = t2.doc.layers.get_mut(adj2).unwrap();
-        l.transform = Affine2::from_translation(Vec2::new(TILE_SIZE as f32, 0.0));
         l.mask.as_mut().unwrap().linked = false;
     }
+    editor_core::command::Command::TransformLayer {
+        layer_id: adj2,
+        matrix: [1.0, 0.0, 0.0, 1.0, TILE_SIZE as f32, 0.0],
+    }
+    .apply(&mut t2.doc)
+    .unwrap();
     let (doc2, src2) = t2.finish();
     let out2 = full(&doc2, &src2);
     assert_px(
@@ -2117,6 +2124,7 @@ fn text_layer(text: &str, size_px: f32) -> Layer {
             text: text.into(),
             font_family: crate::testkit::text_fixture_family().into(),
             size_px,
+            ..Default::default()
         }),
     )
 }
@@ -2877,5 +2885,97 @@ fn a_styled_layer_composites_the_same_tile_by_tile_as_it_does_in_one_pass() {
         for x in window.x..window.right() {
             assert_eq!(part.get(x, y), one_pass.get(x, y), "at ({x}, {y})");
         }
+    }
+}
+
+#[test]
+fn an_unlinked_raster_mask_stays_put_while_the_content_moves() {
+    // Card 043's done-check: the content moves one tile right through
+    // the real command; the unlinked mask's document pose is invariant.
+    // The mask painted over the layer's RIGHT tile keeps covering
+    // document x 256..512 — the moved ink shows through it. A mask that
+    // rode the layer transform would have left for x 512..768 and the
+    // spot would read backdrop.
+    let mut t = TestDoc::linear(512, 8);
+    solid_layer(&mut t, "Ink", [10, 10, 10, 255]);
+    let id = t
+        .doc
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .next()
+        .expect("the pushed layer");
+    let mask = t.attach_mask(id);
+    // Coverage only over the layer's second tile (layer x 256..512).
+    t.paint_mask_with(mask, TileCoord::new(1, 0, 0), |_, _| 255);
+    {
+        let l = t.doc.layers.get_mut(id).unwrap();
+        l.mask.as_mut().unwrap().linked = false;
+    }
+    editor_core::command::Command::TransformLayer {
+        layer_id: id,
+        matrix: [1.0, 0.0, 0.0, 1.0, TILE_SIZE as f32, 0.0],
+    }
+    .apply(&mut t.doc)
+    .unwrap();
+    let (doc, src) = t.finish();
+    let out = full(&doc, &src);
+    assert_px(
+        out.get(300, 4),
+        [10.0 / 255.0, 10.0 / 255.0, 10.0 / 255.0, 1.0],
+        1e-5,
+        "the unlinked mask stayed put — the moved ink shows through it",
+    );
+    assert_px(
+        out.get(100, 4),
+        [0.0, 0.0, 0.0, 0.0],
+        1e-6,
+        "nothing returned to the left half",
+    );
+}
+
+#[test]
+fn relinking_does_not_jump_the_visible_mask() {
+    // Card 043's done-check: the mask accumulated a counter-transform while
+    // unlinked; flipping the flag back preserves it, so the composite is
+    // pixel-identical across the relink.
+    let build = |relink: bool| {
+        let mut t = TestDoc::linear(512, 8);
+        solid_layer(&mut t, "Ink", [10, 10, 10, 255]);
+        let id = t
+            .doc
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .next()
+            .expect("the pushed layer");
+        let mask = t.attach_mask(id);
+        t.paint_mask_with(mask, TileCoord::new(1, 0, 0), |_, _| 255);
+        {
+            let l = t.doc.layers.get_mut(id).unwrap();
+            l.mask.as_mut().unwrap().linked = false;
+        }
+        editor_core::command::Command::TransformLayer {
+            layer_id: id,
+            matrix: [1.0, 0.0, 0.0, 1.0, TILE_SIZE as f32, 0.0],
+        }
+        .apply(&mut t.doc)
+        .unwrap();
+        if relink {
+            let mut m = t.doc.layers.get_mut(id).unwrap().mask.clone().unwrap();
+            m.linked = true;
+            t.doc.layers.get_mut(id).unwrap().set_mask(m);
+        }
+        let (doc, src) = t.finish();
+        full(&doc, &src)
+    };
+    let unlinked = build(false);
+    let relinked = build(true);
+    for (x, y) in [(300i64, 4i64), (100, 4), (500, 4)] {
+        assert_eq!(
+            relinked.get(x, y),
+            unlinked.get(x, y),
+            "the relink did not move the visible mask at ({x}, {y})"
+        );
     }
 }

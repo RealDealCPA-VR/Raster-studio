@@ -59,10 +59,43 @@ pub enum ToolError {
     #[error("this tool has no gesture in progress")]
     NotStarted,
 
+    /// A settings value arrived for an option this tool does not have. Loud
+    /// in dev checks: a silently ignored setting is an options-bar control
+    /// that does nothing while looking like it does.
+    #[error("this tool has no option named \"{key}\"")]
+    UnknownOption { key: String },
+
+    /// The option exists but the value's kind does not fit its spec — a Bool
+    /// handed where the registry declares a Float, say.
+    #[error("option \"{key}\" does not take that kind of value")]
+    OptionKindMismatch { key: String },
+
     /// A seed point (flood fill, wand, clone source) lies outside the region
     /// being read.
     #[error("point ({x}, {y}) lies outside the region being sampled")]
     PointOutside { x: i32, y: i32 },
+
+    /// A paste would push the text layer past its size cap (card 028).
+    /// Refused before the session mutates, so the canvas and the draft can
+    /// never diverge on size.
+    #[error("paste of {bytes} bytes would exceed the {max}-byte text cap")]
+    PasteTooLarge { bytes: usize, max: usize },
+
+    /// A transform asks a whole-locked layer to move (card 036). The choice
+    /// is all-or-nothing: a mixed locked/unlocked selection refuses the
+    /// entire session rather than half-committing.
+    #[error("a locked layer is part of the selection — unlock it to transform the set")]
+    LayerLocked,
+
+    /// A non-affine whole-layer transform (perspective/distort/warp) on a
+    /// PARAMETRIC layer (card 044). Those modes only exist as a pixel-patch
+    /// resample; committing one over text/shape/smart-object geometry would
+    /// silently rasterize it. The affine modes stay editable for every
+    /// layer kind.
+    #[error(
+        "perspective/distort/warp needs raster pixels — this layer keeps its editable geometry"
+    )]
+    NonAffineParametric,
 
     /// The command the tool built was refused by the document.
     #[error(transparent)]

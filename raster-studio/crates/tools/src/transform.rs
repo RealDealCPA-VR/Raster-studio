@@ -32,12 +32,13 @@
 use editor_core::Command;
 use filters::{EdgeMode, FilterBuffer};
 use glam::{IVec2, Vec2};
+use layer_model::LayerId;
 use raster::PixelRect;
 use selection::transform_selection;
 
 use crate::error::ToolError;
 use crate::patch::{ColorPatch, CoveragePatch};
-use crate::tool::{PaintTarget, PointerEvent, Tool, ToolContext, ToolId};
+use crate::tool::{PaintTarget, PointerEvent, SessionGeometry, Tool, ToolContext, ToolId};
 
 /// Which kind of edit a handle drag performs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -329,11 +330,26 @@ impl TransformState {
     /// first, then the rotate band that surrounds each corner, then the
     /// interior. Without the band, rotating would require a modifier; with it
     /// placed before the corners, scaling would be impossible.
+    /// Handle hit regions in **screen** pixels (card 039): the radii are
+    /// constant on screen, so `zoom` divides them into document space — at
+    /// low zoom the handles stay grabbable, at high zoom they don't sprawl.
     pub fn hit_test(&self, p: Vec2, mode: TransformMode) -> Option<Handle> {
+        self.hit_test_zoomed(p, mode, 1.0)
+    }
+
+    /// [`Self::hit_test`] at an explicit view zoom.
+    pub fn hit_test_zoomed(&self, p: Vec2, mode: TransformMode, zoom: f32) -> Option<Handle> {
+        let zoom = if zoom.is_finite() && zoom > 0.0 {
+            zoom
+        } else {
+            1.0
+        };
+        let handle_radius = HANDLE_RADIUS / zoom;
+        let rotate_band = ROTATE_BAND / zoom;
         let mut best: Option<(f32, Handle)> = None;
         for (h, pos) in self.handles(mode) {
             let d = (p - pos).length();
-            if d <= HANDLE_RADIUS && best.as_ref().is_none_or(|(bd, _)| d < *bd) {
+            if d <= handle_radius && best.as_ref().is_none_or(|(bd, _)| d < *bd) {
                 best = Some((d, h));
             }
         }
@@ -343,7 +359,7 @@ impl TransformState {
         if mode != TransformMode::Warp {
             for (i, c) in self.corners.iter().enumerate() {
                 let d = (p - *c).length();
-                if d > HANDLE_RADIUS && d <= HANDLE_RADIUS + ROTATE_BAND {
+                if d > handle_radius && d <= handle_radius + rotate_band {
                     return Some(Handle::Rotate(i));
                 }
             }
@@ -359,6 +375,21 @@ impl TransformState {
     /// `from` and `to` are the previous and current pointer positions, so a
     /// drag is expressed as a delta and repeated calls compose.
     pub fn drag(&mut self, mode: TransformMode, handle: Handle, from: Vec2, to: Vec2) {
+        self.drag_with(mode, handle, from, to, false, false)
+    }
+
+    /// Card 041: the same gesture with the keyboard modifiers applied —
+    /// `preserve_aspect` (default corner scaling) and `around_center`
+    /// (Alt). Shift flips the aspect constraint; Alt re-pivots the scale.
+    pub fn drag_with(
+        &mut self,
+        mode: TransformMode,
+        handle: Handle,
+        from: Vec2,
+        to: Vec2,
+        preserve_aspect: bool,
+        around_center: bool,
+    ) {
         if !to.x.is_finite() || !to.y.is_finite() || !from.x.is_finite() || !from.y.is_finite() {
             return;
         }
@@ -408,7 +439,7 @@ impl TransformState {
                     self.corners[i] += delta;
                     self.corners[other] -= delta;
                 }
-                _ => self.scale_corner(i, to),
+                _ => self.scale_corner(i, to, preserve_aspect, around_center),
             },
             Handle::Edge(i) => match mode {
                 TransformMode::Skew => {
@@ -462,7 +493,47 @@ impl TransformState {
 
     /// Move corner `i` while keeping the quad a parallelogram anchored at the
     /// opposite corner — what "scale" means once the box has been rotated.
-    fn scale_corner(&mut self, i: usize, to: Vec2) {
+    fn scale_corner(&mut self, i: usize, to: Vec2, preserve_aspect: bool, around_center: bool) {
+        // Card 041: Alt scales around the quad's center — every corner moves
+        // symmetrically, the center stays put.
+        if around_center {
+            let center =
+                (self.corners[0] + self.corners[1] + self.corners[2] + self.corners[3]) * 0.25;
+            let rel_i = self.corners[i] - center;
+            let rel_to = to - center;
+            let (fx, fy) = if preserve_aspect {
+                let fx = if rel_i.x.abs() > 1e-6 {
+                    rel_to.x / rel_i.x
+                } else {
+                    1.0
+                };
+                let fy = if rel_i.y.abs() > 1e-6 {
+                    rel_to.y / rel_i.y
+                } else {
+                    1.0
+                };
+                let uniform = if fx.abs() > fy.abs() { fx } else { fy };
+                (uniform, uniform)
+            } else {
+                (
+                    if rel_i.x.abs() > 1e-6 {
+                        rel_to.x / rel_i.x
+                    } else {
+                        1.0
+                    },
+                    if rel_i.y.abs() > 1e-6 {
+                        rel_to.y / rel_i.y
+                    } else {
+                        1.0
+                    },
+                )
+            };
+            for corner in self.corners.iter_mut() {
+                let rel = *corner - center;
+                *corner = center + Vec2::new(rel.x * fx, rel.y * fy);
+            }
+            return;
+        }
         let opp = (i + 2) % 4;
         let o = self.corners[opp];
         let a = self.corners[(i + 1) % 4];
@@ -477,9 +548,42 @@ impl TransformState {
         let v = to - o;
         let sa = (v.x * eb.y - v.y * eb.x) / det;
         let sb = (ea.x * v.y - ea.y * v.x) / det;
+        // Card 041: default corner scaling preserves aspect — the two axis
+        // factors collapse to one (the larger magnitude), so the quad scales
+        // uniformly. Shift (preserve_aspect = false) keeps the free skew.
+        let (sa, sb) = if preserve_aspect {
+            let uniform = if sa.abs() > sb.abs() { sa } else { sb };
+            (uniform, uniform)
+        } else {
+            (sa, sb)
+        };
         self.corners[i] = o + ea * sa + eb * sb;
         self.corners[(i + 1) % 4] = o + ea * sa;
         self.corners[(i + 3) % 4] = o + eb * sb;
+    }
+
+    /// Card 041: the numeric-fields draft model — X/Y/W/H set the quad
+    /// absolutely, the same draft dragging mutates. Non-finite and
+    /// non-positive sizes are REFUSED (the caller keeps its previous
+    /// values); no invalid matrix is ever committed from numbers.
+    pub fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) -> Result<(), ToolError> {
+        if !x.is_finite() || !y.is_finite() || !w.is_finite() || !h.is_finite() {
+            return Err(ToolError::NotFinite {
+                what: "rect",
+                value: if x.is_finite() { w } else { x },
+            });
+        }
+        if w <= 0.0 || h <= 0.0 {
+            return Err(ToolError::Degenerate);
+        }
+        self.corners = [
+            Vec2::new(x, y),
+            Vec2::new(x + w, y),
+            Vec2::new(x + w, y + h),
+            Vec2::new(x, y + h),
+        ];
+        self.pivot = Vec2::new(x + w * 0.5, y + h * 0.5);
+        Ok(())
     }
 
     /// Bounding rect of the destination, clipped to `canvas`.
@@ -493,7 +597,28 @@ impl TransformState {
     /// the commit would silently clip the user's scale to it. The mesh's
     /// control points bound the Bézier patch (a Bézier surface stays inside its
     /// control hull), so in warp mode they are the right point set.
+    /// The destination bounds WITHOUT the canvas clamp (card 044). The
+    /// clamped variant is the canvas-facing answer used for overlays.
+    pub fn dest_bounds_unclipped(&self, mode: TransformMode) -> Option<PixelRect> {
+        self.dest_bounds_raw(mode)
+    }
+
+    /// The destination bounds clamped to `canvas` — the historical answer,
+    /// kept for the pinned tests and future canvas-facing callers.
     pub fn dest_bounds(&self, canvas: PixelRect, mode: TransformMode) -> Option<PixelRect> {
+        let raw = self.dest_bounds_raw(mode)?;
+        let x0 = raw.x.max(canvas.x);
+        let y0 = raw.y.max(canvas.y);
+        let x1 = raw.right().min(canvas.right());
+        let y1 = raw.bottom().min(canvas.bottom());
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        Some(PixelRect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
+    }
+
+    /// The true bounds of the transformed quad, wherever they land.
+    fn dest_bounds_raw(&self, mode: TransformMode) -> Option<PixelRect> {
         let mut lo = Vec2::splat(f32::INFINITY);
         let mut hi = Vec2::splat(f32::NEG_INFINITY);
         let pts: Vec<Vec2> = match self.mesh.filter(|_| mode == TransformMode::Warp) {
@@ -515,10 +640,10 @@ impl TransformState {
             lo = lo.min(p);
             hi = hi.max(p);
         }
-        let x0 = (lo.x.floor() as i64).max(canvas.x);
-        let y0 = (lo.y.floor() as i64).max(canvas.y);
-        let x1 = (hi.x.ceil() as i64 + 1).min(canvas.right());
-        let y1 = (hi.y.ceil() as i64 + 1).min(canvas.bottom());
+        let x0 = lo.x.floor() as i64;
+        let y0 = lo.y.floor() as i64;
+        let x1 = hi.x.ceil() as i64 + 1;
+        let y1 = hi.y.ceil() as i64 + 1;
         if x1 <= x0 || y1 <= y0 {
             return None;
         }
@@ -715,7 +840,10 @@ pub fn resample(
 /// The affine that maps three source points onto three destination points —
 /// the parallelogram a Scale-mode gizmo produces. `None` when either triangle
 /// is degenerate, which a collapsed destination always is.
-fn quad_affine(src: [Vec2; 4], dst: [Vec2; 4]) -> Option<glam::Affine2> {
+/// The affine that carries `src`'s corners onto `dst`'s (plan card 013): the
+/// transform a live preview renders with, straight from the handle state.
+/// `None` for a degenerate quad.
+pub fn quad_affine(src: [Vec2; 4], dst: [Vec2; 4]) -> Option<glam::Affine2> {
     let (s0, s1, s3) = (src[0], src[1], src[3]);
     let (c0, c1, c3) = (dst[0], dst[1], dst[3]);
     let a = s1 - s0;
@@ -745,6 +873,17 @@ pub struct TransformTool {
     /// Transform the active SELECTION's mask instead of the layer's pixels —
     /// the `target` option's second choice.
     pub selection_only: bool,
+    /// The layer the session is transforming, captured at pointer-down so the
+    /// preview (card 013) and the commit aim at the same layer even if the
+    /// selection changes mid-gesture.
+    pub layer: Option<LayerId>,
+    /// Card 036: every selected participant (ancestor-normalized), recorded
+    /// once at session start. One element = the plain single-layer path.
+    targets: Vec<LayerId>,
+    /// Card 035: the layer's parent chain, recorded once at session start —
+    /// the baseline record the commit conjugates through, immune to an
+    /// active-layer switch mid-session.
+    parent: Option<glam::Affine2>,
     grabbed: Option<Handle>,
     last: Vec2,
 }
@@ -755,6 +894,9 @@ impl Default for TransformTool {
             mode: TransformMode::Scale,
             state: None,
             selection_only: false,
+            parent: None,
+            targets: Vec::new(),
+            layer: None,
             grabbed: None,
             last: Vec2::ZERO,
         }
@@ -832,13 +974,129 @@ impl TransformTool {
                 }
             }
         }
+        // Card 044: a quad collapsed to a line or a point has no inverse.
+        // The canvas-clamped destination bounds used to catch this
+        // incidentally; the unclamped bounds no longer do, so the guard is
+        // explicit — the quad's own signed area, independent of the canvas.
+        let area = quad_signed_area(state.corners);
+        if !area.is_finite() || area.abs() < 1e-4 {
+            self.state = None;
+            self.grabbed = None;
+            return Err(ToolError::not_invertible());
+        }
 
+        // Card 035: whole-layer move/scale/rotate/flip/skew commits as a
+        // LAYER TRANSFORM, never a resample — the raster tiles keep their
+        // hashes and Text/Shape/SmartObject kinds stay exactly what they
+        // are. The gizmo's corner delta is a document-space affine; it
+        // conjugates through the recorded parent chain onto the layer's own
+        // transform (pre-multiplied, TransformLayer's contract). Warp and
+        // the projective modes are not affine — they keep the resample path.
+        if !self.selection_only
+            && ctx.paint_target == PaintTarget::Layer
+            && matches!(
+                self.mode,
+                TransformMode::Scale | TransformMode::Rotate | TransformMode::Skew
+            )
+        {
+            // The session's captured layer, falling back to the context's
+            // active layer for sessions begun directly (tests, future menu
+            // bootstrap) — identity comes from wherever the session started.
+            let layer = self
+                .layer
+                .or(ctx.active_layer)
+                .ok_or(ToolError::NoActiveLayer)?;
+            let delta_doc = quad_affine(state.source_corners(), state.corners)
+                .ok_or_else(ToolError::not_invertible)?;
+            // The baseline record from session start — not the context's
+            // live value: an active-layer switch mid-session must not
+            // re-aim the conjugation at another layer's chain.
+            let parent = self.parent.unwrap_or(glam::Affine2::IDENTITY);
+            let delta_parent = parent.inverse() * delta_doc * parent;
+            // Card 036: more than one selected participant moves together —
+            // one document-space delta, the shell conjugates per participant
+            // and wraps them in ONE transaction. A participant locked after
+            // session start still refuses the whole commit (all-or-nothing).
+            // Card 043: a linked participant pulls the whole link chain in
+            // BEFORE the lock check — the transform tool's policy refuses
+            // the entire commit when any chain member is locked.
+            let mut participants: Vec<LayerId> = self.targets.clone();
+            // The active-layer fallback exists for sessions begun without a
+            // pointer-down (tests, menu bootstrap) — it must NOT re-insert a
+            // participant the ancestor normalization already dropped, or a
+            // group+child selection double-moves the child.
+            if participants.is_empty() {
+                participants.push(layer);
+            }
+            // Card 043: the link chain joins before the lock check — minus
+            // ids an already-selected ancestor shadows (a linked child of a
+            // linked selected group rides the group, once).
+            let targets = &participants;
+            let participants: Vec<LayerId> =
+                crate::with_link_chain(&participants, &ctx.linked_layers)
+                    .into_iter()
+                    .filter(|id| {
+                        let shadowed = targets.iter().any(|top| {
+                            if *top == *id {
+                                return false;
+                            }
+                            let mut parent = ctx.parent_of(*id);
+                            while let Some(p) = parent {
+                                if p == *top {
+                                    break;
+                                }
+                                parent = ctx.parent_of(p);
+                            }
+                            parent.is_some()
+                        });
+                        !shadowed
+                    })
+                    .collect();
+            for locked in participants.iter().map(|t| ctx.layer_lock(*t)) {
+                if locked == Some(true) {
+                    return Err(ToolError::LayerLocked);
+                }
+            }
+            if participants.len() > 1 {
+                ctx.emit_request(crate::tool::ToolRequest::TransformLayers {
+                    layers: participants,
+                    delta: delta_doc.to_cols_array(),
+                });
+            } else {
+                ctx.emit(Command::TransformLayer {
+                    layer_id: layer,
+                    matrix: delta_parent.to_cols_array(),
+                });
+            }
+            self.state = None;
+            self.grabbed = None;
+            return Ok(());
+        }
+        // Card 044: the non-affine modes only exist as a pixel-patch
+        // resample — on a parametric layer that would silently rasterize
+        // the editable geometry. Refused with a sentence instead; the
+        // affine modes stay editable for every kind.
+        if ctx.active_layer_parametric
+            && ctx.paint_target == PaintTarget::Layer
+            && matches!(
+                self.mode,
+                TransformMode::Distort | TransformMode::Perspective | TransformMode::Warp
+            )
+        {
+            self.state = None;
+            self.grabbed = None;
+            return Err(ToolError::NonAffineParametric);
+        }
         let target = ctx.pixel_target()?;
         let key = ctx.pixel_key()?;
+        // Card 044: neither the destination nor the union is canvas-clamped
+        // — the tile store holds off-canvas content, and clipping here would
+        // drop stored ink merely because it lies outside the picture. The
+        // patch-size cap still bounds the allocation.
         let dest = state
-            .dest_bounds(ctx.canvas, self.mode)
+            .dest_bounds_unclipped(self.mode)
             .ok_or(ToolError::Degenerate)?;
-        let rect = union_clipped(state.source, dest, ctx.canvas).ok_or(ToolError::Degenerate)?;
+        let rect = union_unclipped(state.source, dest).ok_or(ToolError::Degenerate)?;
         let delta = match ctx.paint_target {
             PaintTarget::Layer => {
                 let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
@@ -869,17 +1127,27 @@ impl TransformTool {
     }
 }
 
-fn union_clipped(a: PixelRect, b: PixelRect, canvas: PixelRect) -> Option<PixelRect> {
-    let x0 = a.x.min(b.x).max(canvas.x);
-    let y0 = a.y.min(b.y).max(canvas.y);
-    let x1 = a.right().max(b.right()).min(canvas.right());
-    let y1 = a.bottom().max(b.bottom()).min(canvas.bottom());
+/// Card 044: the quad's signed area (shoelace) — the collapse detector.
+fn quad_signed_area(corners: [Vec2; 4]) -> f32 {
+    let mut area = 0.0f32;
+    for i in 0..4 {
+        let a = corners[i];
+        let b = corners[(i + 1) % 4];
+        area += a.x * b.y - b.x * a.y;
+    }
+    area * 0.5
+}
+
+fn union_unclipped(a: PixelRect, b: PixelRect) -> Option<PixelRect> {
+    let x0 = a.x.min(b.x);
+    let y0 = a.y.min(b.y);
+    let x1 = a.right().max(b.right());
+    let y1 = a.bottom().max(b.bottom());
     if x1 <= x0 || y1 <= y0 {
         return None;
     }
     Some(PixelRect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
 }
-
 impl Tool for TransformTool {
     fn id(&self) -> ToolId {
         ToolId::FreeTransform
@@ -906,7 +1174,56 @@ impl Tool for TransformTool {
         event: PointerEvent,
     ) -> Result<(), ToolError> {
         if self.state.is_none() {
-            // No session yet: start one over the selection, or the canvas.
+            // No session yet: start one over the explicit pixel selection,
+            // else the ACTIVE LAYER'S CONTENT (card 034: a small logo's box
+            // surrounds the logo; a text layer's box surrounds the text) —
+            // the whole canvas only when the layer has no ink to surround.
+            self.layer = ctx.active_layer;
+            self.parent = ctx.active_layer_parent_transform;
+            // Card 036: the selected set, normalized — a participant whose
+            // ancestor is also selected is dropped (its transform moves with
+            // the ancestor; moving both would double it). Locked participants
+            // refuse the whole session up front: all-or-nothing, documented —
+            // a partial commit of a mixed selection is exactly the surprise
+            // this refusal exists to prevent.
+            let mut targets: Vec<LayerId> = Vec::new();
+            for candidate in ctx.selected_layers.clone() {
+                let mut ancestor = ctx.parent_of(candidate);
+                let mut shadowed = false;
+                while let Some(a) = ancestor {
+                    if ctx.selected_layers.contains(&a) {
+                        shadowed = true;
+                        break;
+                    }
+                    ancestor = ctx.parent_of(a);
+                }
+                if shadowed || targets.contains(&candidate) {
+                    continue;
+                }
+                targets.push(candidate);
+            }
+            for locked in targets.iter().map(|t| ctx.layer_lock(*t)) {
+                if locked == Some(true) {
+                    return Err(ToolError::LayerLocked);
+                }
+            }
+            // The session's representative: the active layer when it
+            // survived normalization, else the set's first participant. The
+            // gizmo (and the single-layer commit path) aims here, so the
+            // recorded parent chain must be THIS layer's — not the context's
+            // active layer's.
+            let representative = if targets.contains(&ctx.active_layer.unwrap_or_default()) {
+                ctx.active_layer
+            } else {
+                targets.first().copied()
+            };
+            self.layer = representative.or(self.layer);
+            // Empty selection (a restored project, say): keep card 035's
+            // context fallback instead of clobbering it with None.
+            self.parent = representative
+                .and_then(|l| ctx.parent_transform_of(l))
+                .or(self.parent);
+            self.targets = targets.clone();
             let src = match ctx.selection.bounds() {
                 Some((min, max)) => PixelRect::new(
                     min.x as i64,
@@ -914,7 +1231,19 @@ impl Tool for TransformTool {
                     (max.x - min.x).max(0) as u32,
                     (max.y - min.y).max(0) as u32,
                 ),
-                None => ctx.canvas,
+                // The stored extent is tile-aligned (a 64px image in one
+                // 256px tile reads as 256px) — clipping to the canvas keeps
+                // the handles on the picture.
+                None => {
+                    let inked = ctx.active_layer_content_bounds.unwrap_or(ctx.canvas);
+                    let x0 = inked.x.max(ctx.canvas.x);
+                    let y0 = inked.y.max(ctx.canvas.y);
+                    let x1 =
+                        (inked.x + inked.width as i64).min(ctx.canvas.x + ctx.canvas.width as i64);
+                    let y1 = (inked.y + inked.height as i64)
+                        .min(ctx.canvas.y + ctx.canvas.height as i64);
+                    PixelRect::new(x0, y0, (x1 - x0).max(0) as u32, (y1 - y0).max(0) as u32)
+                }
             };
             self.begin(src)?;
         }
@@ -922,7 +1251,7 @@ impl Tool for TransformTool {
         self.grabbed = self
             .state
             .as_ref()
-            .and_then(|s| s.hit_test(event.pos, mode));
+            .and_then(|s| s.hit_test_zoomed(event.pos, mode, ctx.view.zoom));
         self.last = event.pos;
         Ok(())
     }
@@ -933,7 +1262,12 @@ impl Tool for TransformTool {
         event: PointerEvent,
     ) -> Result<(), ToolError> {
         if let (Some(state), Some(handle)) = (self.state.as_mut(), self.grabbed) {
-            state.drag(self.mode, handle, self.last, event.pos);
+            // Card 041: Shift flips the default aspect preservation; Alt
+            // scales around the center.
+            let shift = event.modifiers.shift;
+            let alt = event.modifiers.alt;
+            let preserve = matches!(handle, Handle::Corner(_)) && !shift;
+            state.drag_with(self.mode, handle, self.last, event.pos, preserve, alt);
             self.last = event.pos;
         }
         Ok(())
@@ -953,6 +1287,9 @@ impl Tool for TransformTool {
     fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {
         self.state = None;
         self.grabbed = None;
+        self.layer = None;
+        self.parent = None;
+        self.targets = Vec::new();
     }
 
     fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
@@ -965,6 +1302,18 @@ impl Tool for TransformTool {
 
     fn is_active(&self) -> bool {
         self.state.is_some()
+    }
+
+    /// The live session's overlay geometry (card 012): the state exactly as
+    /// the tool holds it, the mode, and the handle being dragged.
+    fn live_geometry(&self) -> Option<SessionGeometry> {
+        let state = self.state.as_ref()?;
+        Some(SessionGeometry::Transform {
+            state: state.clone(),
+            mode: self.mode,
+            active: self.grabbed,
+            layer: self.layer,
+        })
     }
 }
 
@@ -1350,5 +1699,176 @@ mod tests {
             assert!((s - s2).abs() < 1e-3 && (t - t2).abs() < 1e-3);
         }
         assert!(inverse_bilinear(Vec2::new(-50.0, -50.0), q).is_none());
+    }
+
+    #[test]
+    fn a_transform_without_a_selection_surrounds_the_layers_ink_not_the_canvas() {
+        use crate::tiles::MemoryTiles;
+        use editor_core::Selection;
+        // Card 034: a small logo's initial box surrounds the logo. The shell
+        // publishes the active layer's content bounds; the pointer-down
+        // session uses them instead of the canvas.
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 256, 256));
+        ctx.active_layer = Some(layer_model::LayerId::new());
+        ctx.active_layer_content_bounds = Some(PixelRect::new(40, 44, 24, 18));
+        let mut tool = TransformTool::default();
+        tool.on_pointer_down(
+            &mut ctx,
+            PointerEvent {
+                pos: Vec2::new(128.0, 128.0),
+                pressure: 1.0,
+                modifiers: Default::default(),
+            },
+        )
+        .unwrap();
+        let handles = tool.handles();
+        assert!(!handles.is_empty(), "the session started on the press");
+        // Every handle sits inside the logo's rect (padded a little for the
+        // corner extension), nowhere near the canvas edges.
+        for (_, p) in handles {
+            assert!(
+                p.x >= 40.0 - 1.0 && p.x <= 64.0 + 1.0 && p.y >= 44.0 - 1.0 && p.y <= 62.0 + 1.0,
+                "handle {p:?} left the logo's bounds"
+            );
+        }
+
+        // An explicit pixel selection still wins over the layer bounds.
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 256, 256));
+        ctx.active_layer = Some(layer_model::LayerId::new());
+        ctx.active_layer_content_bounds = Some(PixelRect::new(40, 44, 24, 18));
+        ctx.selection = Selection::Rect {
+            min: glam::IVec2::new(100, 100),
+            max: glam::IVec2::new(130, 130),
+        };
+        let mut tool = TransformTool::default();
+        tool.on_pointer_down(
+            &mut ctx,
+            PointerEvent {
+                pos: Vec2::new(110.0, 110.0),
+                pressure: 1.0,
+                modifiers: Default::default(),
+            },
+        )
+        .unwrap();
+        for (_, p) in tool.handles() {
+            assert!(
+                p.x >= 99.0 && p.x <= 131.0 && p.y >= 99.0 && p.y <= 131.0,
+                "the selection's geometry is the transform's source: {p:?}"
+            );
+        }
+
+        // No ink and no selection: the canvas fallback keeps its meaning.
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64));
+        let mut tool = TransformTool::default();
+        tool.on_pointer_down(
+            &mut ctx,
+            PointerEvent {
+                pos: Vec2::new(32.0, 32.0),
+                pressure: 1.0,
+                modifiers: Default::default(),
+            },
+        )
+        .unwrap();
+        assert!(
+            matches!(tool.state.as_ref().map(|s| s.source), Some(src) if src == PixelRect::new(0, 0, 64, 64))
+        );
+    }
+
+    #[test]
+    fn handle_hit_regions_are_constant_in_screen_pixels() {
+        // Card 039: at 4× zoom a 10-document-px offset from a corner is
+        // 40 screen px — far outside the 6px handle — and outside the
+        // 24px/4 = 6-document-px rotate band, so it is an Inside grab. At
+        // zoom 1 the same 10px offset IS inside the rotate band.
+        let s = TransformState::new(PixelRect::new(0, 0, 96, 96));
+        let near_corner = Vec2::new(10.0, 10.0);
+        assert!(
+            matches!(
+                s.hit_test_zoomed(near_corner, TransformMode::Scale, 4.0),
+                Some(Handle::Inside)
+            ),
+            "the bands shrink with zoom: a 40-screen-px offset is inside the quad"
+        );
+        assert!(
+            matches!(
+                s.hit_test_zoomed(near_corner, TransformMode::Scale, 1.0),
+                Some(Handle::Rotate(0))
+            ),
+            "at zoom 1 the 10px offset sits in corner 0's rotate band"
+        );
+    }
+
+    #[test]
+    fn corner_scaling_preserves_aspect_by_default_and_shift_frees_it() {
+        // Card 041: default corner scaling is uniform; Shift allows skew.
+        let mut s = TransformState::new(PixelRect::new(0, 0, 100, 100));
+        s.drag_with(
+            TransformMode::Scale,
+            Handle::Corner(2),
+            Vec2::new(100.0, 100.0),
+            Vec2::new(150.0, 190.0),
+            true,
+            false,
+        );
+        let w = s.corners[1].x - s.corners[0].x;
+        let h = s.corners[3].y - s.corners[0].y;
+        assert!((w - h).abs() < 1e-3, "the aspect is preserved: {w}x{h}");
+
+        let mut s = TransformState::new(PixelRect::new(0, 0, 100, 100));
+        s.drag_with(
+            TransformMode::Scale,
+            Handle::Corner(2),
+            Vec2::new(100.0, 100.0),
+            Vec2::new(150.0, 190.0),
+            false,
+            false,
+        );
+        let w = s.corners[1].x - s.corners[0].x;
+        let h = s.corners[3].y - s.corners[0].y;
+        assert!(
+            (w - 150.0).abs() < 1e-3 && (h - 190.0).abs() < 1e-3,
+            "free with Shift"
+        );
+    }
+
+    #[test]
+    fn alt_scales_around_the_center_instead_of_the_opposite_corner() {
+        let mut s = TransformState::new(PixelRect::new(0, 0, 100, 100));
+        let pivot_before = s.pivot;
+        s.drag_with(
+            TransformMode::Scale,
+            Handle::Corner(2),
+            Vec2::new(100.0, 100.0),
+            Vec2::new(60.0, 60.0),
+            true,
+            true,
+        );
+        // Around-center scaling keeps the CENTER fixed (within the drag's
+        // uniform factor) — the opposite corner moved symmetrically.
+        let center = (s.corners[0] + s.corners[2]) * 0.5;
+        assert!(
+            (center - pivot_before).length() < 12.0,
+            "the center barely moves under around-center scaling: {center:?}"
+        );
+    }
+
+    #[test]
+    fn numeric_edits_share_the_drag_draft_and_refuse_invalid_sizes() {
+        let mut s = TransformState::new(PixelRect::new(10, 20, 100, 100));
+        // The numeric X/Y/W/H draft: the same corners dragging mutates.
+        s.set_rect(30.0, 40.0, 80.0, 60.0).unwrap();
+        assert_eq!(s.corners[0], Vec2::new(30.0, 40.0));
+        assert_eq!(s.corners[2], Vec2::new(110.0, 100.0));
+        assert_eq!(s.pivot, Vec2::new(70.0, 70.0), "the pivot re-centers");
+        // Non-finite and non-positive sizes are refused without mutation.
+        assert!(s.set_rect(f32::NAN, 0.0, 10.0, 10.0).is_err());
+        assert!(s.set_rect(0.0, 0.0, 0.0, 10.0).is_err());
+        assert!(s.set_rect(0.0, 0.0, -5.0, 10.0).is_err());
+        assert_eq!(
+            s.corners[0],
+            Vec2::new(30.0, 40.0),
+            "refusals keep the draft"
+        );
     }
 }

@@ -170,3 +170,18 @@ pub(crate) fn text_fixture_family() -> &'static str {
     });
     "DejaVu Sans"
 }
+
+/// Load the licensed fixture's condensed face (card 022).
+///
+/// DejaVu's condensed file declares the **same family** as the regular face —
+/// "DejaVu Sans" — with `usWidthClass` 4, so loading it gives the one family
+/// several widths, exactly the face-selection scenario the card needs.
+/// Idempotent like [`text_fixture_family`].
+pub(crate) fn text_condensed_face() -> &'static str {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        crate::text::load_font(dejavu::sans_condensed::regular().to_vec());
+    });
+    "DejaVu Sans"
+}

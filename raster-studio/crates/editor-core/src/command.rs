@@ -38,8 +38,8 @@ use glam::Affine2;
 use serde::{Deserialize, Serialize};
 
 use layer_model::{
-    BlendMode, ClippingMode, DetachedSubtree, Layer, LayerEffects, LayerId, LayerKind, LayerMask,
-    LockState,
+    AssetId, BlendMode, ClippingMode, DetachedSubtree, Layer, LayerEffects, LayerId, LayerKind,
+    LayerMask, LockState,
 };
 use raster::PixelRect;
 
@@ -464,6 +464,27 @@ pub enum Command {
     /// group visibility/lock all land here as one undoable step per gesture).
     /// The inverse captures the previous set, so undo restores it exactly.
     SetGuides { guides: Guides },
+    /// Record a placed source's dimensions in the asset table (card 050): the
+    /// anchor a linked refresh renormalizes against when the file on disk has
+    /// a different resolution. It must ride **inside** the refresh's undoable
+    /// transaction: undo then reverts the appearance *and* the anchor
+    /// together, so the next refresh computes its ratio against a size the
+    /// reverted tiles actually match. A size recorded outside the transaction
+    /// would survive undo and make that next refresh scale the restored
+    /// placement by a stale ratio.
+    ///
+    /// The inverse restores the previous recorded size — including "none",
+    /// for a pre-048 asset — which is why the variant carries an [`Option`].
+    /// Refused when the asset row does not exist: a stale caller must not
+    /// conjure a table entry the inverse could not remove.
+    ///
+    /// # Wire format
+    ///
+    /// Purely additive, like [`Command::SetCanvasSize`].
+    SetAssetSourceSize {
+        asset: AssetId,
+        size: Option<(u32, u32)>,
+    },
     /// A batch of commands applied atomically (import, AI result, flatten...).
     /// Its inverse is the reversed inverses of its members.
     Transaction {
@@ -492,6 +513,8 @@ pub fn layer_class_name(kind: &LayerKind) -> &'static str {
 pub enum CommandError {
     #[error("layer {0} not found")]
     LayerNotFound(LayerId),
+    #[error("asset {0} not found")]
+    AssetNotFound(AssetId),
     #[error("layer tree error: {0}")]
     Tree(#[from] layer_model::tree::TreeError),
     #[error("command is not invertible without pre-apply capture")]
@@ -535,6 +558,13 @@ pub enum CommandError {
     CannotClearMask(LayerId),
     #[error("fill value does not match its target's storage format")]
     FillValueMismatch,
+    /// A [`Command::SetLayerKind`] carried a payload that does not satisfy
+    /// its own schema — a text layer with non-finite numbers, a span outside
+    /// the text, or a range cutting a code point (card 017). Refused before
+    /// anything mutates.
+    #[error("the layer payload is invalid: {reason}")]
+    InvalidPayload { reason: String },
+
     /// A [`Command::SetLayerKind`] carried a payload of a different class from
     /// the one the layer already is.
     ///
@@ -877,6 +907,17 @@ impl Command {
                         to: layer_class_name(kind),
                     });
                 }
+                // A payload must mean something before it can land (card 017):
+                // a corrupt text edit is refused here, at the same gate as
+                // every other validation, so nothing half-formed reaches the
+                // tree, the journal or the shaper.
+                if let LayerKind::Text(text) = kind.as_ref() {
+                    if let Err(reason) = text.validate() {
+                        return Err(CommandError::InvalidPayload {
+                            reason: reason.to_string(),
+                        });
+                    }
+                }
                 // Everything above only read; nothing has been mutated yet, so
                 // each refusal leaves the document exactly as it was.
                 let layer = doc
@@ -914,7 +955,27 @@ impl Command {
                 if layer.locked.blocks_transform() {
                     return Err(CommandError::LayerLocked(*layer_id));
                 }
+                // Card 043: capture the PRE-update transform — the mask's
+                // compensation conjugates through it.
+                let prev = layer.transform;
                 layer.transform = Affine2::from_cols_array(matrix) * layer.transform;
+                // Card 043: an UNLINKED mask holds its document pose. The
+                // pose is L∘Mt and the content mapping grew L ← M·L, so the
+                // mask's own transform must grow by L⁻¹·M⁻¹·L (a plain M⁻¹
+                // only works when M commutes with L — any rotated/scaled
+                // layer would visibly jump its mask). A linked mask keeps
+                // identity and rides the layer as before. Relinking
+                // preserves whatever pose accumulated — no jump.
+                if let Some(mask) = layer.mask.as_mut() {
+                    if !mask.linked && prev.matrix2.determinant() != 0.0 {
+                        // A degenerate pre-update transform (finite but
+                        // singular) would poison the mask with NaNs and undo
+                        // could not restore it — skip the compensation and
+                        // leave the accumulated pose alone, mirroring the
+                        // compositor's graceful fallback.
+                        *mask.transform = prev.inverse() * inv * prev * *mask.transform;
+                    }
+                }
                 Ok(Command::TransformLayer {
                     layer_id: *layer_id,
                     matrix: inv.to_cols_array(),
@@ -1024,6 +1085,21 @@ impl Command {
                 Ok(Command::SetGuides { guides: previous })
             }
 
+            Command::SetAssetSourceSize { asset, size } => {
+                // Refused before anything is written: a missing row must not
+                // become a table entry (or a journal entry) undo could not
+                // remove.
+                if doc.asset_origin(*asset).is_none() {
+                    return Err(CommandError::AssetNotFound(*asset));
+                }
+                let previous = doc.asset_source_size(*asset);
+                doc.set_asset_source_size(*asset, *size);
+                Ok(Command::SetAssetSourceSize {
+                    asset: *asset,
+                    size: previous,
+                })
+            }
+
             Command::Transaction { label, commands } => {
                 let mut inverses: Vec<Command> = Vec::with_capacity(commands.len());
                 for c in commands {
@@ -1079,7 +1155,9 @@ impl Command {
                 label
             }
             Command::TransformLayer { .. } => "Transform Layer".into(),
-            Command::SetSelection { .. } => "Transform Selection".into(),
+            // Card 056: selection gestures are the common path now — the
+            // row says what happened.
+            Command::SetSelection { .. } => "Select".into(),
             Command::SetMetaColorMode { .. } => "Change Colour Mode".into(),
             Command::PaintTiles { target, .. } => match target {
                 PixelTarget::Layer(_) => "Paint".into(),
@@ -1093,6 +1171,7 @@ impl Command {
             Command::SetCanvasSize { .. } => "Resize Canvas".into(),
             Command::ResampleImage { .. } => "Image Size".into(),
             Command::SetGuides { .. } => "Edit Guides".into(),
+            Command::SetAssetSourceSize { .. } => "Record Source Size".into(),
             Command::Transaction { label, .. } => label.clone(),
         }
     }
@@ -1285,6 +1364,106 @@ fn current_location(doc: &Document, id: LayerId) -> Option<(Option<LayerId>, usi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Card 017: a corrupt text payload is refused at the command gate, and a
+    /// valid multilingual styled edit survives apply and undo byte for byte.
+    #[test]
+    fn a_corrupt_text_payload_is_refused_and_a_valid_styled_edit_survives() {
+        use layer_model::text::{BaseStyle, StyleOverride, StyleSpan};
+        use layer_model::{Layer, TextLayer};
+
+        let mut doc = Document::new(64, 64, "text validation");
+        let mut history = crate::History::new();
+        let apply = |history: &mut crate::History, doc: &mut Document, cmd: Command| {
+            history.apply(doc, cmd)
+        };
+        let layer = Layer::with_kind(
+            "Words",
+            LayerKind::Text(TextLayer::legacy("h\u{e9}llo", "DejaVu Sans", 24.0)),
+        );
+        let id = layer.id;
+        apply(&mut history, &mut doc, Command::create_layer(layer)).unwrap();
+
+        // A span that cuts the e-acute is refused; the layer is untouched.
+        let corrupt = LayerKind::Text(TextLayer {
+            spans: vec![StyleSpan {
+                start: 1,
+                end: 2,
+                style: StyleOverride::none(),
+            }],
+            ..TextLayer::legacy("h\u{e9}llo", "DejaVu Sans", 24.0)
+        });
+        let result = apply(
+            &mut history,
+            &mut doc,
+            Command::SetLayerKind {
+                layer_id: id,
+                kind: Box::new(corrupt),
+            },
+        );
+        assert!(
+            matches!(result, Err(CommandError::InvalidPayload { .. })),
+            "a code-point-splitting span is refused: {result:?}"
+        );
+        assert_eq!(
+            doc.layers.get(id).unwrap().name,
+            "Words",
+            "the refusal left the layer alone"
+        );
+
+        // A NaN size is refused the same way.
+        let nan = LayerKind::Text(TextLayer {
+            size_px: f32::NAN,
+            ..TextLayer::legacy("h\u{e9}llo", "DejaVu Sans", 24.0)
+        });
+        assert!(matches!(
+            apply(
+                &mut history,
+                &mut doc,
+                Command::SetLayerKind {
+                    layer_id: id,
+                    kind: Box::new(nan),
+                }
+            ),
+            Err(CommandError::InvalidPayload { .. })
+        ));
+
+        // A valid multilingual styled edit applies, and undo restores the
+        // previous kind exactly.
+        let styled = LayerKind::Text(TextLayer {
+            style: BaseStyle {
+                fill: [1.0, 1.0, 1.0, 1.0],
+                ..BaseStyle::default()
+            },
+            spans: vec![StyleSpan {
+                start: 0,
+                end: 6,
+                style: StyleOverride {
+                    weight: Some(layer_model::text::Weight(700)),
+                    ..StyleOverride::none()
+                },
+            }],
+            ..TextLayer::legacy("h\u{e9}llo \u{65e5}\u{672c}", "DejaVu Sans", 24.0)
+        });
+        apply(
+            &mut history,
+            &mut doc,
+            Command::SetLayerKind {
+                layer_id: id,
+                kind: Box::new(styled),
+            },
+        )
+        .unwrap();
+        assert!(history.undo(&mut doc).unwrap(), "the edit undoes");
+        let LayerKind::Text(restored) = &doc.layers.get(id).unwrap().kind else {
+            panic!("still a text layer");
+        };
+        assert_eq!(restored.text, "h\u{e9}llo");
+        assert!(
+            restored.validate().is_ok(),
+            "the restored payload is still valid"
+        );
+    }
     use crate::document::{Guide, GuideAxis};
     use crate::pixels::{FillColor, MaskCoverage};
     use glam::Vec2;
@@ -1753,6 +1932,63 @@ mod tests {
         assert_eq!(doc, before);
     }
 
+    /// Card 050 review follow-up (major): the linked refresh's recorded
+    /// source size is document state, so it must be an invertible command —
+    /// undo of a refresh restores the anchor the reverted tiles match.
+    #[test]
+    fn a_recorded_source_size_round_trips_and_refuses_a_missing_asset() {
+        let (mut doc, _id) = doc_with_layer();
+        let asset = layer_model::AssetId::new();
+        doc.set_asset_origin(layer_model::AssetRecord {
+            id: asset,
+            origin: layer_model::AssetOrigin::Embedded {
+                name: "portrait.png".into(),
+                bytes: vec![0; 4],
+            },
+            source_size: None,
+        });
+        let before = doc.clone();
+
+        // First recording: None -> Some. The inverse restores the None.
+        let inverse = Command::SetAssetSourceSize {
+            asset,
+            size: Some((16, 16)),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(doc.asset_source_size(asset), Some((16, 16)));
+        // A second recording captures the first as its inverse - the shape
+        // the refresh's undo relies on.
+        let inverse2 = Command::SetAssetSourceSize {
+            asset,
+            size: Some((32, 32)),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(
+            inverse2,
+            Command::SetAssetSourceSize {
+                asset,
+                size: Some((16, 16))
+            }
+        );
+        inverse2.apply(&mut doc).unwrap();
+        inverse.apply(&mut doc).unwrap();
+        assert_eq!(doc.asset_source_size(asset), None, "undo restores None");
+        assert_eq!(doc, before, "the round trip is byte-exact");
+
+        // An unknown asset is refused before anything is written.
+        let before = doc.clone();
+        let err = Command::SetAssetSourceSize {
+            asset: layer_model::AssetId::new(),
+            size: Some((9, 9)),
+        }
+        .apply(&mut doc)
+        .unwrap_err();
+        assert!(matches!(err, CommandError::AssetNotFound(_)), "{err:?}");
+        assert_eq!(doc, before, "the refusal changed nothing");
+    }
+
     #[test]
     fn an_out_of_range_opacity_is_refused_and_changes_nothing() {
         let (mut doc, id) = doc_with_layer();
@@ -1812,6 +2048,122 @@ mod tests {
         let t = doc.layers.get(id).unwrap().transform;
         let diff = (t.translation - Vec2::ZERO).length();
         assert!(diff < 1e-4, "transform did not return to identity: {t:?}");
+    }
+
+    #[test]
+    fn an_unlinked_mask_counter_transforms_and_undo_restores_it() {
+        // Card 043's done-check: moving content under an UNLINKED mask
+        // compensates the mask's own transform so its document pose stays
+        // frozen; undo restores the exact pair.
+        let (mut doc, id) = doc_with_layer();
+        let mask = layer_model::LayerMask::new(layer_model::MaskId::new());
+        doc.layers.get_mut(id).unwrap().set_mask(mask);
+        doc.layers
+            .get_mut(id)
+            .unwrap()
+            .mask
+            .as_mut()
+            .unwrap()
+            .linked = false;
+
+        let move_cmd = Command::TransformLayer {
+            layer_id: id,
+            matrix: Affine2::from_translation(Vec2::new(40.0, 0.0)).to_cols_array(),
+        };
+        let inverse = move_cmd.apply(&mut doc).unwrap();
+        {
+            let layer = doc.layers.get(id).unwrap();
+            let t = layer.transform.translation;
+            let mt = layer.mask.as_ref().unwrap().transform.translation;
+            assert_eq!(t, Vec2::new(40.0, 0.0), "the content moved");
+            assert_eq!(mt, Vec2::new(-40.0, 0.0), "the mask counter-moved");
+        }
+        inverse.apply(&mut doc).unwrap();
+        let layer = doc.layers.get(id).unwrap();
+        assert_eq!(
+            layer.transform.translation,
+            Vec2::ZERO,
+            "undo restores the content"
+        );
+        assert_eq!(
+            *layer.mask.as_ref().unwrap().transform,
+            Affine2::IDENTITY,
+            "undo restores the mask's counter-transform"
+        );
+    }
+
+    #[test]
+    fn an_unlinked_mask_holds_its_pose_on_a_rotated_layer() {
+        // Card 043, the non-commuting case: a 90°-rotated layer's mask must
+        // not jump when the content translates — the compensation conjugates
+        // through the pre-update transform, so pose = L∘Mt is invariant.
+        let (mut doc, id) = doc_with_layer();
+        doc.layers
+            .get_mut(id)
+            .unwrap()
+            .set_mask(layer_model::LayerMask::new(layer_model::MaskId::new()));
+        doc.layers.get_mut(id).unwrap().transform =
+            Affine2::from_mat2(glam::Mat2::from_angle(std::f32::consts::FRAC_PI_2));
+        doc.layers
+            .get_mut(id)
+            .unwrap()
+            .mask
+            .as_mut()
+            .unwrap()
+            .linked = false;
+        let pose_before = {
+            let layer = doc.layers.get(id).unwrap();
+            layer.transform * *layer.mask.as_ref().unwrap().transform
+        };
+
+        Command::TransformLayer {
+            layer_id: id,
+            matrix: Affine2::from_translation(Vec2::new(10.0, 0.0)).to_cols_array(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+
+        let pose_after = {
+            let layer = doc.layers.get(id).unwrap();
+            layer.transform * *layer.mask.as_ref().unwrap().transform
+        };
+        let diff = (pose_before.translation - pose_after.translation).length();
+        assert!(
+            diff < 1e-3,
+            "the mask's document pose jumped on a rotated layer: {pose_before:?} -> {pose_after:?}"
+        );
+        let m_diff = (pose_before.matrix2.x_axis - pose_after.matrix2.x_axis)
+            .abs()
+            .max_element()
+            .max(
+                (pose_before.matrix2.y_axis - pose_after.matrix2.y_axis)
+                    .abs()
+                    .max_element(),
+            );
+        assert!(m_diff < 1e-3, "the pose rotated away");
+    }
+
+    #[test]
+    fn a_linked_mask_keeps_identity_through_content_moves() {
+        // Card 043: a linked mask rides the layer transform — its own extra
+        // transform stays identity, so its pose is exactly the layer's.
+        let (mut doc, id) = doc_with_layer();
+        doc.layers
+            .get_mut(id)
+            .unwrap()
+            .set_mask(layer_model::LayerMask::new(layer_model::MaskId::new()));
+        Command::TransformLayer {
+            layer_id: id,
+            matrix: Affine2::from_translation(Vec2::new(40.0, 0.0)).to_cols_array(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let layer = doc.layers.get(id).unwrap();
+        assert_eq!(
+            *layer.mask.as_ref().unwrap().transform,
+            Affine2::IDENTITY,
+            "a linked mask never accumulates a counter-transform"
+        );
     }
 
     #[test]
@@ -3306,6 +3658,19 @@ mod tests {
         json_roundtrip(&Command::TransformLayer {
             layer_id: id,
             matrix: [1.0, 0.0, 0.0, 1.0, 10.0, -5.0],
+        });
+        // Card 056: the selection gesture's command rides the journal too.
+        json_roundtrip(&Command::SetSelection {
+            selection: crate::Selection::Rect {
+                min: glam::IVec2::new(2, 3),
+                max: glam::IVec2::new(9, 11),
+            },
+        });
+        json_roundtrip(&Command::SetSelection {
+            selection: crate::Selection::Mask(
+                crate::SelectionMask::new(glam::IVec2::new(1, 1), 2, 2, vec![255, 128, 0, 255])
+                    .unwrap(),
+            ),
         });
         json_roundtrip(
             &Command::paint_tiles(

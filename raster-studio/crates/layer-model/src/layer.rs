@@ -23,6 +23,21 @@ pub enum LayerKind {
     Generator(GeneratorLayer),
 }
 
+impl LayerKind {
+    /// Card 044: the kind keeps editable geometry that a pixel-patch
+    /// resample would silently rasterize. Text re-shapes from its runs, a
+    /// shape re-traces its path, a smart object re-reads its source; a
+    /// whole-layer perspective/distort/warp over them needs a separately
+    /// modeled non-affine transform (or an explicit rasterization choice)
+    /// before it may commit.
+    pub fn parametric(&self) -> bool {
+        matches!(
+            self,
+            LayerKind::Text(_) | LayerKind::Shape(_) | LayerKind::SmartObject(_)
+        )
+    }
+}
+
 fn one() -> f32 {
     1.0
 }
@@ -432,13 +447,10 @@ pub enum AdjustmentKind {
 
 /// Editable text layer. Postponed (Phase 3); shape reserved so the enum and
 /// serialization are forward-compatible.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct TextLayer {
-    pub text: String,
-    pub font_family: String,
-    pub size_px: f32,
-}
+// The persisted text layer is the rich schema in [`crate::text`] (card 015):
+// the legacy three fields plus the full styled vocabulary, every rich field
+// defaulted so old documents load unchanged.
+pub use crate::text::TextLayer;
 
 /// Which points a shape layer's path encloses.
 ///
@@ -605,6 +617,12 @@ pub enum AssetOrigin {
 pub struct AssetRecord {
     pub id: AssetId,
     pub origin: AssetOrigin,
+    /// Card 050: the placed source's own dimensions, recorded at placement
+    /// so a linked refresh can renormalize the layer transform across a
+    /// resolution change. None for records that predate the field or for
+    /// sources placed without known dimensions.
+    #[serde(default)]
+    pub source_size: Option<(u32, u32)>,
 }
 
 /// A generator layer whose pixels are produced by an AI operation. Carries a
@@ -616,7 +634,7 @@ pub struct GeneratorLayer {
 }
 
 /// serde adapter for `glam::Affine2` (stored as its 6 matrix components).
-mod affine2_serde {
+pub(crate) mod affine2_serde {
     use glam::Affine2;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

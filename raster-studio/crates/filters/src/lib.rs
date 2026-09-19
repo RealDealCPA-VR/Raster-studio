@@ -66,6 +66,7 @@
 
 pub mod blur;
 pub mod buffer;
+pub mod defringe;
 pub mod distort;
 pub mod noise;
 pub mod other;

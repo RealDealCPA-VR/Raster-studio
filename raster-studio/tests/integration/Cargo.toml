@@ -30,13 +30,30 @@ layer-model.workspace = true
 compositor.workspace = true
 raster.workspace = true
 tools.workspace = true
+# The deterministic composition fixtures (`fixture::thumbnail`) assemble the
+# acceptance scene's text layers and set an affine transform, so both of these
+# join the library dependencies. Both are already in the lockfile graph.
+glam.workspace = true
+dejavu = "2.37"
 color.workspace = true
+# Task 004's shell-route helpers drive the real `app_shell::Editor` through the
+# real `ui` routes (menu resolution, tool options, property focus), so `ui`
+# joins the library dependencies; `text-engine` names the `TextRun` the
+# Character panel commits through. Both are already in the lockfile graph.
+ui.workspace = true
 
 # Used only by the test targets in `tests/`, which see dev-dependencies.
 [dev-dependencies]
+# `the_character_panel_edits_reach_the_pixels_undo_and_reopen` builds the
+# swatch the Colour picker would hand the panel, in egui's own type.
+egui.workspace = true
+# The font-selection test installs the app's real UI typefaces through
+# `app_shell::chrome::install_theme` before measuring them.
+design.workspace = true
 project-format.workspace = true
 psd.workspace = true
 selection.workspace = true
 filters.workspace = true
+text-engine.workspace = true
 glam.workspace = true
 tempfile = "3"

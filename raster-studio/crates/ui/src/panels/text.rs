@@ -13,11 +13,38 @@
 //! [`crate::Intent::EditLayerKind`]. Everything else about the panels is
 //! ordinary: they are disabled with a reason when no text layer is active, and
 //! every control emits or does not emit on the same rule as the rest of the UI.
+//!
+//! # Card 021: every control reaches the persistent data
+//!
+//! Every control the panels draw names a `TextLayer` field and reaches the
+//! document through `Intent::EditLayerKind` → `Command::SetLayerKind`, so a
+//! change lands in the pixels (the compositor shapes the whole persisted run
+//! — card 019), takes part in undo, and survives save/reopen.
+//!
+//! **Range versus whole layer.** The setters here apply to the whole layer.
+//! Range editing does not exist until the canvas text sessions land (cards
+//! 025+); when it does, the same setters become the range path against a
+//! selected `StyleSpan` instead of the base style. There is no separate
+//! control to disable today — nothing on the surface promises range
+//! application yet.
+//!
+//! **Gestures.** A slider or picker drag reaches the shell as one
+//! `EditLayerKind` intent per frame; `Chrome::harvest` stamps each with the
+//! pointer gesture and `Editor::apply_kind_edit` folds one gesture into one
+//! undo step. That is the established contract — the panel does not (and
+//! cannot) know about the pointer.
+//!
+//! **Fill colour** lives in the model as linear straight RGBA (the space the
+//! compositor composites in), while egui's picker edits gamma-space RGBA8.
+//! The two conversions below are the only place that translation happens;
+//! the 8-bit quantisation is deliberate — the same value always converts to
+//! the same swatch, so a picker that closes without a change emits nothing.
 
 use editor_core::Document;
 use layer_model::{LayerId, LayerKind, TextLayer};
 use text_engine::{
-    Alignment, CharStyle, FontSlant, FontWeight, LineHeight, ParagraphStyle, TextRun,
+    Alignment, CharStyle, FontSlant, FontStretch, FontWeight, LineHeight, ParagraphStyle,
+    TextFrame, TextRun,
 };
 
 use crate::intent::Intent;
@@ -25,6 +52,14 @@ use crate::intent::Intent;
 /// Smallest and largest type size the panels offer.
 pub const MIN_SIZE_PX: f32 = 1.0;
 pub const MAX_SIZE_PX: f32 = 1638.0;
+
+/// Card 023: the wrapping box a point-text run becomes when the panel switches
+/// it to paragraph text, and the bounds the box fields accept. The height
+/// defaults to auto (`None`) — a box that grows with the text until the user
+/// fixes it deliberately.
+pub const DEFAULT_BOX_WIDTH_PX: f32 = 200.0;
+pub const MIN_BOX_SIZE_PX: f32 = 8.0;
+pub const MAX_BOX_SIZE_PX: f32 = 4096.0;
 
 /// The named weights the Character panel lists, with the numeric axis value
 /// each stands for.
@@ -72,6 +107,78 @@ pub fn weight_label(weight: FontWeight) -> &'static str {
         .min_by_key(|(_, n)| weight.0.abs_diff(*n))
         .map(|(name, _)| *name)
         .unwrap_or("Regular")
+}
+
+// -- card 022: font selection and substitution reporting -----------------
+
+/// The substitution the compositor will apply for `family`, or `None` when
+/// the request is installed, is the generic sans (empty), or no library is
+/// loaded. This is the same rule the shaper applies before shaping
+/// (`attrs_for`), so the report the panel shows and the render the user gets
+/// agree by construction. The requested name stays in the document.
+pub fn substitution(family: &str) -> Option<String> {
+    compositor::font_substitute_for(family)
+}
+
+/// Card 023: how many of the run's lines fall past a fixed box height — the
+/// overset status the Paragraph panel shows. `None` when there is no fixed
+/// height to overflow (point text, auto-height box); `Some(0)` means every
+/// line fits.
+pub fn overset_lines(run: &TextRun) -> Option<usize> {
+    compositor::text_overset_lines(run)
+}
+
+/// The picker's search: installed families whose name contains `search`
+/// case-insensitively, in the library's own (sorted) order. An empty search
+/// lists everything — the search narrows, it never reorders.
+pub fn family_candidates(search: &str, available: &[String]) -> Vec<String> {
+    let needle = search.trim().to_lowercase();
+    available
+        .iter()
+        .filter(|name| needle.is_empty() || name.to_lowercase().contains(&needle))
+        .cloned()
+        .collect()
+}
+
+/// The picker's label for one installed face, by the style parts a face
+/// carries: width, then weight, then slant; "Regular" when nothing deviates
+/// from the default design. (Taken as parts rather than a `FaceRecord` so the
+/// label needs no font handle.)
+pub fn face_label(weight: FontWeight, slant: FontSlant, stretch: FontStretch) -> String {
+    let width = match stretch {
+        FontStretch::UltraCondensed => "Ultra Condensed",
+        FontStretch::ExtraCondensed => "Extra Condensed",
+        FontStretch::Condensed => "Condensed",
+        FontStretch::SemiCondensed => "Semi Condensed",
+        FontStretch::Normal => "",
+        FontStretch::SemiExpanded => "Semi Expanded",
+        FontStretch::Expanded => "Expanded",
+        FontStretch::ExtraExpanded => "Extra Expanded",
+        FontStretch::UltraExpanded => "Ultra Expanded",
+    };
+    let slant = match slant {
+        FontSlant::Normal => "",
+        FontSlant::Italic => "Italic",
+        FontSlant::Oblique => "Oblique",
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    if !width.is_empty() {
+        parts.push(width);
+    }
+    let weight = weight_label(weight);
+    // "Regular" is only named when it is the whole label — a condensed or
+    // slanted face never carries the word.
+    let regular_is_implied = width.is_empty() && slant.is_empty();
+    if weight != "Regular" || regular_is_implied {
+        parts.push(weight);
+    }
+    if !slant.is_empty() {
+        parts.push(slant);
+    }
+    if parts.is_empty() {
+        return "Regular".to_string();
+    }
+    parts.join(" ")
 }
 
 /// The text layer the panels are editing, if any.
@@ -122,6 +229,32 @@ impl Character {
         }
         run.style.family = family.to_string();
         true
+    }
+
+    /// Card 022: adopt one installed face — weight, slant and width straight
+    /// from a face the picker listed. The family field is untouched: a face
+    /// belongs to the family already chosen.
+    pub fn set_face(
+        run: &mut TextRun,
+        weight: FontWeight,
+        slant: FontSlant,
+        stretch: FontStretch,
+    ) -> bool {
+        let weight = FontWeight(weight.0.clamp(1, 1000));
+        let mut changed = false;
+        if run.style.weight != weight {
+            run.style.weight = weight;
+            changed = true;
+        }
+        if run.style.slant != slant {
+            run.style.slant = slant;
+            changed = true;
+        }
+        if run.style.stretch != stretch {
+            run.style.stretch = stretch;
+            changed = true;
+        }
+        changed
     }
 
     pub fn set_size(run: &mut TextRun, size_px: f32) -> bool {
@@ -193,6 +326,46 @@ impl Character {
     }
 }
 
+/// The model's linear fill as an sRGB swatch for egui's picker.
+///
+/// Straight (non-premultiplied) RGBA on both sides. The quantisation to 8-bit
+/// is what makes the control stable: the same model colour always shows as the
+/// same swatch, so a picker that closes unchanged emits nothing.
+#[must_use]
+pub fn fill_to_swatch(linear: [f32; 4]) -> egui::Color32 {
+    // RGB goes through the sRGB transfer; alpha is a plain coverage fraction
+    // on both sides (the picker's alpha slider reads 0-255 literally), which
+    // is how the Color panel treats it too.
+    let ch = |c: f32| (color::linear_to_srgb(c.clamp(0.0, 1.0)) * 255.0).round() as u8;
+    let a = (linear[3].clamp(0.0, 1.0) * 255.0).round() as u8;
+    egui::Color32::from_rgba_unmultiplied(ch(linear[0]), ch(linear[1]), ch(linear[2]), a)
+}
+
+/// The swatch egui's picker produced, back into the model's linear space.
+///
+/// `Color32` stores premultiplied sRGB (egui 0.29's rule), so the readback
+/// goes through `to_srgba_unmultiplied` - the straight values the user picked.
+#[must_use]
+pub fn swatch_to_fill(srgb: egui::Color32) -> [f32; 4] {
+    let [r, g, b, a] = srgb.to_srgba_unmultiplied();
+    let ch = |c: u8| color::srgb_to_linear(f32::from(c) / 255.0);
+    [ch(r), ch(g), ch(b), f32::from(a) / 255.0]
+}
+
+#[cfg(test)]
+mod swatch_tests {
+    use super::*;
+
+    #[test]
+    fn alpha_is_a_plain_fraction_on_both_sides() {
+        assert_eq!(fill_to_swatch([0.0, 0.0, 0.0, 0.5]).a(), 128);
+        assert_eq!(
+            swatch_to_fill(fill_to_swatch([0.0, 0.0, 0.0, 0.5]))[3],
+            128.0 / 255.0
+        );
+    }
+}
+
 /// The Paragraph panel's edits.
 pub struct Paragraph;
 
@@ -248,6 +421,90 @@ impl Paragraph {
         run.paragraph.space_after = px;
         true
     }
+
+    // -- card 023: point vs paragraph geometry ----------------------------
+
+    /// Point text or a wrapping box. Switching to a box starts at
+    /// [`DEFAULT_BOX_WIDTH_PX`] with an auto height; switching back to point
+    /// keeps every character — explicit line breaks stay — and drops the box
+    /// dimensions. The type size and the layer transform are untouched either
+    /// way: the box is the paragraph's geometry, nothing else's.
+    pub fn set_boxed(run: &mut TextRun, boxed: bool) -> bool {
+        let next = if boxed {
+            match run.frame {
+                TextFrame::Box { width, height } => TextFrame::Box { width, height },
+                TextFrame::Point => TextFrame::Box {
+                    width: DEFAULT_BOX_WIDTH_PX,
+                    height: None,
+                },
+            }
+        } else {
+            TextFrame::Point
+        };
+        if run.frame == next {
+            return false;
+        }
+        run.frame = next;
+        true
+    }
+
+    /// The wrapping box's width, in layer pixels. Refuses non-finite and
+    /// out-of-range values rather than clamping them into the model. The
+    /// panel's range is **deliberately stricter** than the model's `validate`
+    /// (which accepts any finite non-negative frame): a file may legally carry
+    /// a width this panel would not emit, and the panel's rule only keeps
+    /// what it produces inside the model's rule. Reflowing never touches the
+    /// type size: that is the size-vs-box distinction the card asks for.
+    pub fn set_box_width(run: &mut TextRun, width: f32) -> bool {
+        let TextFrame::Box {
+            width: current,
+            height,
+        } = run.frame
+        else {
+            return false;
+        };
+        if !width.is_finite()
+            || width < MIN_BOX_SIZE_PX
+            || width > MAX_BOX_SIZE_PX
+            || width == current
+        {
+            return false;
+        }
+        run.frame = TextFrame::Box { width, height };
+        true
+    }
+
+    /// The wrapping box's height: `None` is auto (the box grows with the
+    /// text), `Some(px)` is a fixed height that can overflow — the engine
+    /// reports overset instead of clipping, and the panel shows it.
+    pub fn set_box_height(run: &mut TextRun, height: Option<f32>) -> bool {
+        let TextFrame::Box {
+            width,
+            height: current,
+        } = run.frame
+        else {
+            return false;
+        };
+        if let Some(px) = height {
+            if !px.is_finite() || px < MIN_BOX_SIZE_PX || px > MAX_BOX_SIZE_PX {
+                return false;
+            }
+        }
+        if current == height {
+            return false;
+        }
+        run.frame = TextFrame::Box { width, height };
+        true
+    }
+
+    /// The box geometry the panel shows: `Some((width, height))` with `None`
+    /// height meaning auto; `None` overall for point text.
+    pub fn box_size(run: &TextRun) -> Option<(f32, Option<f32>)> {
+        match run.frame {
+            TextFrame::Box { width, height } => Some((width, height)),
+            TextFrame::Point => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -265,6 +522,7 @@ mod tests {
                     text: "Hello".into(),
                     font_family: "Inter".into(),
                     size_px: 24.0,
+                    ..Default::default()
                 }),
             ))
             .unwrap();
@@ -450,5 +708,227 @@ mod tests {
         };
         assert_eq!(t.size_px, 48.0);
         assert_eq!(TextRun::from(&t).style.size_px, 48.0);
+    }
+
+    #[test]
+    fn a_fill_change_reaches_the_document_and_back() {
+        // Card 021's fill control: the linear colour the picker hands over is
+        // what the document stores, and what the panel reads back.
+        let (doc, id) = text_document();
+        let (_, mut run) = active_text(&doc, Some(id)).unwrap();
+        let green = [0.1, 0.8, 0.3, 1.0];
+        assert!(Character::set_color(&mut run, green));
+        assert_eq!(run.style.color, green);
+        let Some(Intent::EditLayerKind { layer, kind }) = commit(&doc, id, &run) else {
+            panic!("expected an edit");
+        };
+        assert_eq!(layer, id);
+        let LayerKind::Text(t) = *kind else {
+            panic!("not a text layer");
+        };
+        assert_eq!(t.style.fill, green, "the model stores the linear fill");
+        let (_, reopened) = active_text(&doc, Some(id)).unwrap();
+        assert_ne!(
+            reopened.style.color, green,
+            "the doc still holds the old fill"
+        );
+    }
+
+    #[test]
+    fn the_fill_swatch_round_trips_through_the_picker_space() {
+        // Model (linear) -> swatch (sRGB8) -> model must be the identity the
+        // quantisation promises: no oscillation between frames, and black
+        // stays black through the round trip.
+        for linear in [
+            [0.0, 0.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0, 1.0],
+            [0.1, 0.8, 0.3, 0.5],
+            [0.5, 0.5, 0.5, 1.0],
+        ] {
+            let swatch = fill_to_swatch(linear);
+            let back = swatch_to_fill(swatch);
+            for i in 0..4 {
+                // Half an 8-bit code in sRGB space converts to at most
+                // 0.5/255 x 12.92 in linear space (the darkest-end slope of
+                // the sRGB EOTF is its steepest). Anything wider and the
+                // swatch would drift further every round trip.
+                const MAX_DRIFT: f32 = 0.5 / 255.0 * 12.92;
+                assert!(
+                    (back[i] - linear[i]).abs() <= MAX_DRIFT,
+                    "channel {i}: {} vs {}",
+                    back[i],
+                    linear[i]
+                );
+            }
+            // The round trip is a fixed point: the next frame shows the same
+            // straight swatch, so a picker that closes unchanged emits
+            // nothing. (egui stores premultiplied, so compare straight bytes.)
+            assert_eq!(
+                swatch.to_srgba_unmultiplied(),
+                fill_to_swatch(back).to_srgba_unmultiplied()
+            );
+        }
+        // A clamped input never escapes the range.
+        let clamped = fill_to_swatch([2.0, -1.0, 0.5, 1.0]);
+        assert_eq!(clamped.r(), 255);
+        assert_eq!(clamped.g(), 0);
+    }
+
+    // -- card 022: font selection and substitution reporting --------------
+
+    #[test]
+    fn the_family_search_narrows_without_reordering() {
+        let available = vec![
+            "DejaVu Sans".to_string(),
+            "DejaVu Serif".to_string(),
+            "Segoe UI".to_string(),
+        ];
+        assert_eq!(family_candidates("", &available), available);
+        assert_eq!(
+            family_candidates("dejavu", &available),
+            vec!["DejaVu Sans".to_string(), "DejaVu Serif".to_string()],
+            "case-insensitive substring, library order kept"
+        );
+        assert_eq!(
+            family_candidates("  UI  ", &available),
+            vec!["Segoe UI".to_string()]
+        );
+        assert!(family_candidates("Comic Sans", &available).is_empty());
+    }
+
+    #[test]
+    fn face_labels_name_width_weight_and_slant() {
+        assert_eq!(
+            face_label(FontWeight::NORMAL, FontSlant::Normal, FontStretch::Normal),
+            "Regular"
+        );
+        assert_eq!(
+            face_label(FontWeight::BOLD, FontSlant::Normal, FontStretch::Normal),
+            "Bold"
+        );
+        assert_eq!(
+            face_label(
+                FontWeight::BOLD,
+                FontSlant::Italic,
+                FontStretch::SemiCondensed
+            ),
+            "Semi Condensed Bold Italic"
+        );
+        assert_eq!(
+            face_label(
+                FontWeight::NORMAL,
+                FontSlant::Italic,
+                FontStretch::SemiCondensed
+            ),
+            "Semi Condensed Italic"
+        );
+    }
+
+    #[test]
+    fn adopting_a_face_sets_weight_slant_and_width_but_not_the_family() {
+        let mut run = TextRun::point("Headline", "DejaVu Sans", 48.0);
+        assert!(Character::set_face(
+            &mut run,
+            FontWeight::NORMAL,
+            FontSlant::Normal,
+            FontStretch::SemiCondensed
+        ));
+        assert_eq!(run.style.stretch, FontStretch::SemiCondensed);
+        assert_eq!(run.style.weight, FontWeight::NORMAL);
+        assert_eq!(run.style.family, "DejaVu Sans", "family untouched");
+        assert!(
+            !Character::set_face(
+                &mut run,
+                FontWeight::NORMAL,
+                FontSlant::Normal,
+                FontStretch::SemiCondensed
+            ),
+            "second adopt is a no-op"
+        );
+    }
+
+    #[test]
+    fn a_missing_family_is_reported_with_an_installed_substitute() {
+        // The generic sans (empty) is not a substitution.
+        assert_eq!(substitution(""), None);
+        // The substitute rule is one policy: any missing family reports the
+        // same installed family, whatever machine the tests run on.
+        let substitute =
+            substitution("No Such Family On Any Machine").expect("a missing family is reported");
+        assert!(
+            compositor::font_families().contains(&substitute),
+            "the substitute is an installed family: {substitute:?}"
+        );
+        assert_eq!(
+            substitution("Also Not Installed Anywhere").expect("reported"),
+            substitute,
+            "every missing family substitutes the same way"
+        );
+    }
+
+    // -- card 023: point vs paragraph geometry ----------------------------
+
+    #[test]
+    fn point_and_box_geometry_stay_distinct_from_the_type_size() {
+        let mut run = TextRun::point(
+            "One
+Two",
+            "DejaVu Sans",
+            24.0,
+        );
+        // Point -> box: the text and its explicit breaks stay; the box starts
+        // at the documented default with an auto height.
+        assert!(Paragraph::set_boxed(&mut run, true));
+        assert_eq!(
+            run.text,
+            "One
+Two",
+            "explicit breaks survive the switch"
+        );
+        assert_eq!(
+            run.frame,
+            TextFrame::Box {
+                width: DEFAULT_BOX_WIDTH_PX,
+                height: None
+            }
+        );
+        assert_eq!(run.style.size_px, 24.0, "the type size is untouched");
+        // Reflowing never touches the size either.
+        assert!(Paragraph::set_box_width(&mut run, 90.0));
+        assert_eq!(run.style.size_px, 24.0);
+        assert_eq!(Paragraph::box_size(&run), Some((90.0, None)));
+        // Box -> point: the box dimensions go, the characters stay.
+        assert!(Paragraph::set_boxed(&mut run, false));
+        assert_eq!(run.frame, TextFrame::Point);
+        assert_eq!(
+            run.text,
+            "One
+Two"
+        );
+        // A point run refuses box geometry edits; refusals never clamp.
+        assert!(!Paragraph::set_box_width(&mut run, 90.0));
+        assert!(!Paragraph::set_box_height(&mut run, Some(80.0)));
+        assert!(Paragraph::set_boxed(&mut run, true));
+        assert!(!Paragraph::set_box_width(&mut run, f32::NAN));
+        assert!(!Paragraph::set_box_width(&mut run, 0.0));
+        assert!(!Paragraph::set_box_width(&mut run, MAX_BOX_SIZE_PX * 2.0));
+        assert!(!Paragraph::set_box_height(&mut run, Some(f32::NAN)));
+        assert!(!Paragraph::set_box_height(&mut run, Some(-4.0)));
+        assert!(Paragraph::set_box_height(&mut run, Some(80.0)));
+        assert!(
+            !Paragraph::set_box_height(&mut run, Some(80.0)),
+            "a no-op reports no change"
+        );
+        // The refused out-of-range width above left the re-seeded default.
+        assert_eq!(
+            Paragraph::box_size(&run),
+            Some((DEFAULT_BOX_WIDTH_PX, Some(80.0)))
+        );
+        assert!(Paragraph::set_box_height(&mut run, None));
+        assert_eq!(
+            Paragraph::box_size(&run),
+            Some((DEFAULT_BOX_WIDTH_PX, None)),
+            "auto height again, width kept"
+        );
     }
 }

@@ -154,6 +154,25 @@ pub struct CompositeOptions {
     /// Seed for `Dissolve`'s per-pixel draw. Stable across frames by default so
     /// a dissolving layer does not shimmer while the user pans.
     pub dissolve_seed: u64,
+    /// The preview generation this composite belongs to (plan card 013). Zero
+    /// is the committed document; a preview frame carries its generation, so
+    /// its tiles are cached under keys no committed frame can hit and no older
+    /// preview can serve — the generation *is* the invalidation, old bounds
+    /// included, because every key changes at once.
+    pub preview_generation: u64,
+}
+
+/// One layer's temporary stand-in parameters for a preview render (card 013).
+///
+/// The committed document is never touched by a preview: this names the layer
+/// and the transform it should render with *instead of its own* for exactly
+/// one frame. The preview generation rides [`CompositeOptions`], where it is
+/// part of every tile's cache key.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayerOverride {
+    pub layer: LayerId,
+    pub transform: glam::Affine2,
+    pub generation: u64,
 }
 
 /// Composite the whole document over `region` at `level`, tile by tile and in
@@ -169,7 +188,21 @@ pub fn composite_region<S: TileSource + ?Sized>(
     level: u8,
     opts: CompositeOptions,
 ) -> Result<Canvas, CompositeError> {
-    let ctx = Ctx::new(doc, source, level, opts)?;
+    composite_region_with(doc, source, region, level, opts, None)
+}
+
+/// [`composite_region`] with one layer's parameters temporarily overridden —
+/// the preview path (card 013). The document itself is read, never written:
+/// the override lives for this call and is the caller's to keep or drop.
+pub fn composite_region_with<S: TileSource + ?Sized>(
+    doc: &Document,
+    source: &S,
+    region: PixelRect,
+    level: u8,
+    opts: CompositeOptions,
+    over: Option<LayerOverride>,
+) -> Result<Canvas, CompositeError> {
+    let ctx = Ctx::with_override(doc, source, level, opts, over)?;
     let mut out = Canvas::transparent(region)?;
     let coords = ctx.tiles_covering(region);
     let tiles = coords
@@ -254,6 +287,8 @@ pub(crate) struct Ctx<'a, S: TileSource + ?Sized> {
     /// each channel independently. Built from [`to_linear`] itself, so it
     /// cannot disagree with the non-table path.
     decode: Option<[f32; 256]>,
+    /// One layer's preview stand-in, if this frame carries one (card 013).
+    over: Option<LayerOverride>,
 }
 
 impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
@@ -262,6 +297,16 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
         source: &'a S,
         level: u8,
         opts: CompositeOptions,
+    ) -> Result<Self, CompositeError> {
+        Self::with_override(doc, source, level, opts, None)
+    }
+
+    pub(crate) fn with_override(
+        doc: &'a Document,
+        source: &'a S,
+        level: u8,
+        opts: CompositeOptions,
+        over: Option<LayerOverride>,
     ) -> Result<Self, CompositeError> {
         let (w0, h0) = (doc.width(), doc.height());
         if level >= level_count(w0, h0) {
@@ -301,6 +346,7 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             height,
             space,
             decode,
+            over,
         })
     }
 
@@ -443,7 +489,7 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
     /// A layer kind with no pixels of its own has nothing for a style to trace,
     /// so an adjustment layer — and a smart object, which does not render at
     /// all yet — takes the plain path however it is styled.
-    fn style_reach(&self, layer: &Layer) -> Option<i64> {
+    pub(crate) fn style_reach(&self, layer: &Layer) -> Option<i64> {
         match &layer.kind {
             LayerKind::Adjustment(_) => None,
             _ => crate::effects::reach(&layer.effects, self.level),
@@ -457,7 +503,7 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
     /// region rather than failing the frame, on the same terms as the mask
     /// feather clamp — and it takes a rect already close to the coordinate
     /// ceiling to reach, which no visible layer is.
-    fn style_rect(&self, rect: PixelRect, margin: i64) -> PixelRect {
+    pub(crate) fn style_rect(&self, rect: PixelRect, margin: i64) -> PixelRect {
         expand_rect(rect, margin).unwrap_or(rect)
     }
 
@@ -483,7 +529,7 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
     /// the part of it the current region happens to see — which is what lets an
     /// `align_with_layer` gradient overlay fit to it without stepping at every
     /// tile boundary.
-    fn document_bounds(&self, layer: &Layer) -> PixelRect {
+    pub(crate) fn document_bounds(&self, layer: &Layer) -> PixelRect {
         let Some(b) = self.content_bounds(layer) else {
             return EMPTY_RECT;
         };
@@ -568,7 +614,6 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
     fn render_source(&self, layer: &Layer, rect: PixelRect) -> Result<Canvas, CompositeError> {
         let t = self.level_transform(layer);
         let has_mask = self.active_mask(layer).is_some();
-        let mask_linked = self.active_mask(layer).is_some_and(|m| m.linked);
 
         if is_identity(&t) {
             let mut c = self.render_content(layer, rect)?;
@@ -580,17 +625,16 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
 
         let bounds = self.content_bounds(layer);
         let mut out = self.render_via_transform(&t, rect, bounds, &|src_rect| {
-            let mut c = self.render_content(layer, src_rect)?;
-            if mask_linked {
-                if let Some(cov) = self.mask_coverage(layer, src_rect)? {
-                    multiply_alpha(&mut c, &cov);
-                }
-            }
-            Ok(c)
+            // Card 043: the mask is NOT folded in here — mask_coverage is
+            // pose-aware on its own and would pre-image this layer-space
+            // rect a second time. The coverage is applied in document
+            // space below, through the mask's own pose.
+            self.render_content(layer, src_rect)
         })?;
-        if has_mask && !mask_linked {
-            // An unlinked mask stays put in document space while the content
-            // moves under it.
+        if has_mask {
+            // The mask rides its own document pose (layer transform composed
+            // with the mask's extra transform): a linked mask moves with the
+            // content, an unlinked one stays put.
             if let Some(cov) = self.mask_coverage(layer, rect)? {
                 multiply_alpha(&mut out, &cov);
             }
@@ -658,7 +702,7 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
     /// adjustments, and the kinds with no rasterizer yet — bound to nothing:
     /// an adjustment rewrites pixels that are already there, and pixels are
     /// only there inside some sibling's extent.
-    fn content_bounds(&self, layer: &Layer) -> Option<PixelRect> {
+    pub(crate) fn content_bounds(&self, layer: &Layer) -> Option<PixelRect> {
         match &layer.kind {
             LayerKind::Raster(_) | LayerKind::Generator(_) | LayerKind::SmartObject(_) => {
                 Some(self.tile_map_bounds(PixelKey::Layer(layer.id)))
@@ -889,50 +933,18 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
     /// The alpha multiplier an adjustment layer's mask applies over `rect`, or
     /// `None` when no mask can change the result.
     ///
-    /// An adjustment contributes no pixels, so the only thing its transform can
-    /// move is a **linked** mask. That case is handled exactly as
-    /// [`Ctx::render_source`] handles content: the mask is read in the layer's
-    /// own space over the pre-image of `rect` and resampled forward through the
-    /// transform. Both the sampled rect and the resampler are shared with the
-    /// content path, so the tile-cache key — which hashes the pre-image for a
-    /// linked mask — describes what this actually reads.
-    ///
-    /// An unlinked mask, or an identity transform, is plain document-space
-    /// coverage. A singular transform leaves nothing to sample, so the mask
-    /// covers nothing and the adjustment does not apply.
+    /// Card 043: the general [`Ctx::mask_coverage`] read already handles the
+    /// mask's document pose (layer transform composed with the mask's own
+    /// extra transform) — linked masks ride it, unlinked masks hold it
+    /// invariant, and an identity pose is the plain 1:1 read. A singular
+    /// pose leaves nothing to sample, so the mask covers nothing and the
+    /// adjustment does not apply.
     fn adjustment_coverage(
         &self,
         layer: &Layer,
         rect: PixelRect,
     ) -> Result<Option<Vec<f32>>, CompositeError> {
-        let t = self.level_transform(layer);
-        let Some(mask) = self.active_mask(layer) else {
-            return Ok(None);
-        };
-        if !mask.linked || is_identity(&t) {
-            return self.mask_coverage(layer, rect);
-        }
-        // Carry the scalar field through the shared bilinear resampler in the
-        // alpha channel; anything outside the pre-image reads 0, which is the
-        // same "no coverage" an absent mask tile means. The extent of the
-        // mask's stored tiles, grown by the feather that reaches out of them,
-        // bounds what is worth sampling — but only when a *missing* tile really
-        // does mean no coverage. An inverted mask, or one below full density,
-        // covers everything its tiles do not, and has no bound at all.
-        let bounds = (mask.coverage(0.0) <= 0.0).then(|| {
-            self.mask_sample(mask, self.tile_map_bounds(PixelKey::Mask(mask.id)))
-                .0
-        });
-        let out = self.render_via_transform(&t, rect, bounds, &|src_rect| {
-            let mut c = Canvas::transparent(src_rect)?;
-            if let Some(cov) = self.mask_coverage(layer, src_rect)? {
-                for (px, k) in c.pixels_mut().iter_mut().zip(&cov) {
-                    *px = [0.0, 0.0, 0.0, *k];
-                }
-            }
-            Ok(c)
-        })?;
-        Ok(Some(out.pixels().iter().map(|p| p[3]).collect()))
+        self.mask_coverage(layer, rect)
     }
 
     /// Rewrite a backdrop in place. Alpha is never touched.
@@ -968,6 +980,46 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
     /// The mask's resolved alpha multiplier over `rect`, or `None` when the
     /// layer has no mask that can change the composite.
     fn mask_coverage(
+        &self,
+        layer: &Layer,
+        rect: PixelRect,
+    ) -> Result<Option<Vec<f32>>, CompositeError> {
+        let Some(mask) = self.active_mask(layer) else {
+            return Ok(None);
+        };
+        // Card 043: the mask's document pose is the layer transform composed
+        // with the mask's own extra transform. Identity pose reads 1:1 (the
+        // historical answer for both a linked mask and an unlinked one on an
+        // untransformed layer); any other pose resamples the scalar field
+        // through the pose's pre-image — the same machinery the content path
+        // uses.
+        let t = self.level_transform(layer);
+        let pose = t * *mask.transform;
+        if is_identity(&pose) {
+            return self.mask_coverage_1to1(layer, rect);
+        }
+        let coverage_is_bounded = mask.coverage(0.0) <= 0.0;
+        let bounds = coverage_is_bounded.then(|| {
+            self.mask_sample(
+                mask,
+                self.tile_map_bounds(editor_core::PixelKey::Mask(mask.id)),
+            )
+            .0
+        });
+        let out = self.render_via_transform(&pose, rect, bounds, &|src_rect| {
+            let mut c = Canvas::transparent(src_rect)?;
+            if let Some(cov) = self.mask_coverage_1to1(layer, src_rect)? {
+                for (px, k) in c.pixels_mut().iter_mut().zip(&cov) {
+                    *px = [0.0, 0.0, 0.0, *k];
+                }
+            }
+            Ok(c)
+        })?;
+        Ok(Some(out.pixels().iter().map(|p| p[3]).collect()))
+    }
+
+    /// The mask read 1:1 over `rect` (layer space = the space `rect` names).
+    fn mask_coverage_1to1(
         &self,
         layer: &Layer,
         rect: PixelRect,
@@ -1131,6 +1183,22 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
     /// non-finite component is treated as the identity — the layer renders
     /// untransformed rather than disappearing into NaN.
     fn level_transform(&self, layer: &Layer) -> Affine2 {
+        // A preview override replaces the layer's own mapping for this frame
+        // (card 013): conjugated the same way, so the level convention holds.
+        if let Some(over) = &self.over {
+            if over.layer == layer.id {
+                if !over.transform.to_cols_array().iter().all(|v| v.is_finite()) {
+                    return Affine2::IDENTITY;
+                }
+                if self.level == 0 {
+                    return over.transform;
+                }
+                let s = 2.0f32.powi(-(self.level as i32));
+                return Affine2::from_scale(Vec2::splat(s))
+                    * over.transform
+                    * Affine2::from_scale(Vec2::splat(1.0 / s));
+            }
+        }
         let m = layer.transform;
         if !m.to_cols_array().iter().all(|v| v.is_finite()) {
             return Affine2::IDENTITY;
@@ -1209,31 +1277,34 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
                 _ => {}
             }
             if let Some(mask) = layer.effective_mask() {
-                // A linked mask is read in the layer's own space, so it is the
-                // pre-image that must be hashed — for an adjustment layer too,
-                // which is why `Ctx::adjustment_coverage` samples exactly this
-                // rect. An unlinked mask never moved, so hash `rect` itself.
-                //
-                // The content path reads a linked mask over the *content*
-                // bound and the adjustment path over the *mask* bound, so the
-                // union of the two is hashed: hashing less than a path reads is
-                // how a cache goes stale.
-                let base = if identity {
+                // Card 043: the mask is read through its own document pose —
+                // the layer transform composed with the mask's extra
+                // transform — exactly what `Ctx::mask_coverage` samples. The
+                // pose's pre-image of `rect` is what must be hashed: for a
+                // linked mask the pose is the layer transform (the union with
+                // the content bound covers the adjustment path's mask bound),
+                // for an unlinked one the pose is frozen but still non-trivial
+                // once its counter-transform has accumulated. An identity pose
+                // hashes `rect` itself — the historical answer.
+                let pose = t * *mask.transform;
+                let base = if is_identity(&pose) {
                     rect
-                } else if mask.linked {
+                } else {
                     let mask_bound = (mask.coverage(0.0) <= 0.0).then(|| {
                         self.mask_sample(mask, self.tile_map_bounds(PixelKey::Mask(mask.id)))
                             .0
                     });
-                    let bounds = match (self.content_bounds(layer), mask_bound) {
-                        (Some(c), Some(m)) => Some(union_rects(c, m)),
-                        // Either path is unbounded, so neither is the hash: an
-                        // inverted mask covers everywhere its tiles are not.
-                        _ => None,
+                    let bounds = if mask.linked {
+                        match (self.content_bounds(layer), mask_bound) {
+                            (Some(c), Some(m)) => Some(union_rects(c, m)),
+                            // Either path is unbounded, so neither is the hash: an
+                            // inverted mask covers everywhere its tiles are not.
+                            _ => None,
+                        }
+                    } else {
+                        mask_bound
                     };
-                    clip_to(preimage_rect(&t, rect), bounds)
-                } else {
-                    rect
+                    clip_to(preimage_rect(&pose, rect), bounds)
                 };
                 let (mrect, _) = self.mask_sample(mask, base);
                 self.hash_tiles(PixelKey::Mask(mask.id), mrect, h);
@@ -1718,6 +1789,12 @@ fn hash_layer_props(layer: &Layer, h: &mut DefaultHasher) {
             m.inverted.hash(h);
             hash_f32(m.density(), h);
             hash_f32(m.feather_px(), h);
+            // Card 043: the mask's own transform reaches the sampling maths
+            // (pose = layer transform ∘ mask transform) — it must evict
+            // cached tiles when it changes.
+            for v in m.transform.to_cols_array() {
+                hash_f32(v, h);
+            }
         }
         None => 0u8.hash(h),
     }
@@ -1742,9 +1819,11 @@ fn hash_layer_props(layer: &Layer, h: &mut DefaultHasher) {
         }
         LayerKind::Text(t) => {
             3u8.hash(h);
-            t.text.hash(h);
-            t.font_family.hash(h);
-            hash_f32(t.size_px, h);
+            // The canonical text fingerprint (card 020): every pixel-affecting
+            // field — style, spans, paragraph, frame, kerning — in one hash.
+            // The three fields that used to stand in here missed weight/fill/
+            // stretch-only edits, which then served stale tiles forever.
+            crate::text::hash_layer(t).hash(h);
         }
         LayerKind::Shape(s) => {
             4u8.hash(h);

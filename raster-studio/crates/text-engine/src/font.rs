@@ -10,7 +10,7 @@ use std::sync::Arc;
 use cosmic_text::fontdb::{Database, Family, Query, Source, Stretch, Style as DbStyle, Weight};
 use cosmic_text::FontSystem;
 
-use crate::style::{FontSlant, FontWeight};
+use crate::style::{FontSlant, FontStretch, FontWeight};
 
 /// Stable handle to one face in the library's database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -29,6 +29,8 @@ pub struct FaceRecord {
     pub weight: FontWeight,
     /// Slant of the face as the font declares it.
     pub slant: FontSlant,
+    /// Face width as the font declares it (the `usWidthClass` step).
+    pub stretch: FontStretch,
     /// Whether the face is monospaced.
     pub monospaced: bool,
 }
@@ -114,6 +116,15 @@ const MONO_PREFERENCES: &[&str] = &[
 #[derive(Debug)]
 pub struct FontLibrary {
     system: FontSystem,
+    /// The family [`Family::SansSerif`] resolves to after
+    /// [`Self::repair_generic_families`] pinned it; empty while the database
+    /// is empty. Remembered because the database has no getter, and because
+    /// [`Self::substitute_for`] must name exactly what shaping falls back to.
+    generic_sans: String,
+    /// The family [`Family::Serif`] resolves to; empty while unused.
+    generic_serif: String,
+    /// The family [`Family::Monospace`] resolves to; empty while unused.
+    generic_mono: String,
 }
 
 impl FontLibrary {
@@ -126,6 +137,9 @@ impl FontLibrary {
     pub fn empty() -> Self {
         Self {
             system: FontSystem::new_with_locale_and_db("en-US".to_string(), Database::new()),
+            generic_sans: String::new(),
+            generic_serif: String::new(),
+            generic_mono: String::new(),
         }
     }
 
@@ -137,6 +151,9 @@ impl FontLibrary {
     pub fn with_system_fonts() -> Self {
         let mut this = Self {
             system: FontSystem::new(),
+            generic_sans: String::new(),
+            generic_serif: String::new(),
+            generic_mono: String::new(),
         };
         this.repair_generic_families();
         this
@@ -203,16 +220,45 @@ impl FontLibrary {
             .any(|info| info.families.iter().any(|(f, _)| f == name))
     }
 
+    /// The substitute shaping will use for a family that is not installed.
+    ///
+    /// Card 022's reporting contract: the answer here and the family
+    /// `attrs_for` hands the shaper agree by construction, because both go
+    /// through this rule — a missing family shapes with the library's default
+    /// sans face ([`Family::SansSerif`], pinned by
+    /// [`Self::repair_generic_families`]). `None` means there is nothing to
+    /// report: the family is installed, the request is the generic sans
+    /// (empty name), or the library has no faces at all so nothing can shape.
+    /// The requested name always stays in the document; only shaping sees the
+    /// substitute.
+    #[must_use]
+    pub fn substitute_for(&self, requested: &str) -> Option<String> {
+        if requested.is_empty() || self.has_family(requested) || self.is_empty() {
+            return None;
+        }
+        (!self.generic_sans.is_empty()).then(|| self.generic_sans.clone())
+    }
+
     /// Look up one face by handle.
     #[must_use]
     pub fn face(&self, id: FontId) -> Option<FaceRecord> {
         self.system.db().face(id.0).map(face_record)
     }
 
-    /// Match a family/weight/slant request against the database, reporting
-    /// whether the winner has to be faked up to meet the request.
+    /// Match a family/weight/stretch/slant request against the database,
+    /// reporting whether the winner has to be faked up to meet the request.
+    ///
+    /// Like the shaper, a request for a family that is not installed returns
+    /// `None` here — check [`Self::substitute_for`] for what shaping would
+    /// use instead.
     #[must_use]
-    pub fn resolve(&self, family: &str, weight: FontWeight, slant: FontSlant) -> Option<FaceMatch> {
+    pub fn resolve(
+        &self,
+        family: &str,
+        weight: FontWeight,
+        stretch: FontStretch,
+        slant: FontSlant,
+    ) -> Option<FaceMatch> {
         let named = Family::Name(family);
         let families: &[Family] = if family.is_empty() {
             &[Family::SansSerif]
@@ -222,7 +268,7 @@ impl FontLibrary {
         let query = Query {
             families,
             weight: Weight(weight.0),
-            stretch: Stretch::Normal,
+            stretch: db_stretch(stretch),
             style: db_style(slant),
         };
         let id = self.system.db().query(&query)?;
@@ -264,6 +310,9 @@ impl FontLibrary {
             .flat_map(|info| info.families.iter().map(|(f, _)| f.clone()))
             .collect();
         if available.is_empty() {
+            self.generic_sans.clear();
+            self.generic_serif.clear();
+            self.generic_mono.clear();
             return;
         }
         let fallback = available.iter().next().cloned().unwrap_or_else(String::new);
@@ -278,12 +327,17 @@ impl FontLibrary {
         let serif = pick(SERIF_PREFERENCES, &available).unwrap_or_else(|| sans.clone());
         let mono = pick(MONO_PREFERENCES, &available).unwrap_or(mono_fallback);
 
-        let db = self.system.db_mut();
-        db.set_sans_serif_family(sans.clone());
-        db.set_serif_family(serif);
-        db.set_monospace_family(mono);
-        db.set_cursive_family(sans.clone());
-        db.set_fantasy_family(sans);
+        {
+            let db = self.system.db_mut();
+            db.set_sans_serif_family(sans.clone());
+            db.set_serif_family(serif.clone());
+            db.set_monospace_family(mono.clone());
+            db.set_cursive_family(sans.clone());
+            db.set_fantasy_family(sans.clone());
+        }
+        self.generic_sans = sans;
+        self.generic_serif = serif;
+        self.generic_mono = mono;
     }
 
     /// The shaping stack's font system. Internal: layout and rasterisation
@@ -332,6 +386,7 @@ fn face_record(info: &cosmic_text::fontdb::FaceInfo) -> FaceRecord {
             DbStyle::Italic => FontSlant::Italic,
             DbStyle::Oblique => FontSlant::Oblique,
         },
+        stretch: FontStretch::from_width_class(info.stretch.to_number()),
         monospaced: info.monospaced,
     }
 }
@@ -349,5 +404,19 @@ pub(crate) const fn db_style(slant: FontSlant) -> DbStyle {
         FontSlant::Normal => DbStyle::Normal,
         FontSlant::Italic => DbStyle::Italic,
         FontSlant::Oblique => DbStyle::Oblique,
+    }
+}
+
+pub(crate) const fn db_stretch(stretch: FontStretch) -> Stretch {
+    match stretch {
+        FontStretch::UltraCondensed => Stretch::UltraCondensed,
+        FontStretch::ExtraCondensed => Stretch::ExtraCondensed,
+        FontStretch::Condensed => Stretch::Condensed,
+        FontStretch::SemiCondensed => Stretch::SemiCondensed,
+        FontStretch::Normal => Stretch::Normal,
+        FontStretch::SemiExpanded => Stretch::SemiExpanded,
+        FontStretch::Expanded => Stretch::Expanded,
+        FontStretch::ExtraExpanded => Stretch::ExtraExpanded,
+        FontStretch::UltraExpanded => Stretch::UltraExpanded,
     }
 }

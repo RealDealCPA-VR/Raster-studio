@@ -96,7 +96,10 @@ pub use marquee::{
     ellipse, ellipse_subpixel, rectangle, rectangle_subpixel, single_column, single_row,
 };
 pub use metric::{distance, tolerance_coverage, ColorCoords, ColorMetric};
-pub use modify::{border, contract, expand, feather, invert, invert_selection, smooth, MAX_RADIUS};
+pub use modify::{
+    border, contract, contrast, expand, feather, invert, invert_selection, refine_mask, smooth,
+    RefineParams, MAX_RADIUS,
+};
 pub use outline::{outline, outline_selection, Polyline};
 pub use rect::{Rect, COORD_LIMIT};
 pub use transform::{transform, transform_selection, ResampleFilter};

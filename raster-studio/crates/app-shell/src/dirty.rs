@@ -118,7 +118,12 @@ pub fn touched_by(command: &Command) -> DirtyTiles {
         // The selection is an overlay, not pixels: nothing repainted. A colour
         // mode flip is metadata on its own, but it always travels inside a
         // Transaction with the tile rewrite, which carries the dirtiness.
-        Command::SetSelection { .. } | Command::SetMetaColorMode { .. } => DirtyTiles::none(),
+        // The same holds for the asset table's recorded source size: pure
+        // bookkeeping that only ever rides inside a refresh Transaction whose
+        // other members carry the dirtiness.
+        Command::SetSelection { .. }
+        | Command::SetMetaColorMode { .. }
+        | Command::SetAssetSourceSize { .. } => DirtyTiles::none(),
         Command::Transaction { commands, .. } => {
             let mut out = DirtyTiles::none();
             for c in commands {

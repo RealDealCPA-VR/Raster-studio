@@ -104,6 +104,13 @@ pub struct Workspace {
     pub brushes: panels::brushes::BrushesState,
     pub channels: panels::channels::ChannelsState,
     pub paths: panels::channels::PathsState,
+    /// Card 059: how the ACTIVE layer's mask is presented on the canvas —
+    /// the composite as usual, the mask plane alone in grayscale, or the
+    /// composite with the concealed area tinted. Panel-owned state like
+    /// [`Workspace::channels`]: the chrome reads it every frame and the
+    /// presenter applies it on the composite's way to the GPU, so it is a
+    /// VIEW setting that can never leak into a document or an export.
+    pub mask_view: MaskViewMode,
     pub info: panels::navigator::InfoState,
     /// What the Properties panel is looking at.
     pub property_focus: panels::properties::PropertyFocus,
@@ -140,6 +147,11 @@ pub struct Workspace {
     /// when present and falls back to the kind glyph otherwise (which is also
     /// what a headless draw without an application sees).
     pub layer_thumbs: std::collections::HashMap<layer_model::LayerId, egui::TextureHandle>,
+    /// Card 059: fitted grayscale thumbnails of each layer's MASK coverage,
+    /// keyed by layer id, built by the application next to
+    /// [`Workspace::layer_thumbs`]. The mask well draws this when present and
+    /// falls back to the mask glyph (headless draws, layers without a mask).
+    pub mask_thumbs: std::collections::HashMap<layer_model::LayerId, egui::TextureHandle>,
 
     /// Pointer samples the canvas routed to the active tool this frame, in
     /// document space, waiting for [`Workspace::drain_canvas_events`].
@@ -160,6 +172,41 @@ impl Default for Workspace {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Card 059: how the ACTIVE layer's mask reaches the canvas. `Composite` is
+/// the document as it exports; the other two are VIEW-ONLY presentations
+/// applied by the presenter on the way to the GPU (never to the document),
+/// which is what keeps a mask-only view from being exported accidentally.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum MaskViewMode {
+    /// The plain composite (the default — and what exports always use).
+    #[default]
+    Composite,
+    /// The mask plane alone: coverage as grayscale, black hidden to white
+    /// revealed, opaque over the canvas.
+    Grayscale,
+    /// The composite with the mask's concealed area tinted in the theme's
+    /// accent, fading out where coverage rises.
+    Overlay,
+}
+
+impl MaskViewMode {
+    /// The control label, in menu and popup order.
+    pub const fn label(self) -> &'static str {
+        match self {
+            MaskViewMode::Composite => "Composite",
+            MaskViewMode::Grayscale => "Grayscale",
+            MaskViewMode::Overlay => "Overlay",
+        }
+    }
+
+    /// Every mode, in popup order.
+    pub const ALL: &'static [MaskViewMode] = &[
+        MaskViewMode::Composite,
+        MaskViewMode::Grayscale,
+        MaskViewMode::Overlay,
+    ];
 }
 
 /// Index of a side in [`Workspace::rail_measure`].
@@ -183,6 +230,7 @@ impl Workspace {
             brushes: panels::brushes::BrushesState::new(),
             channels: panels::channels::ChannelsState::new(),
             paths: panels::channels::PathsState::new(),
+            mask_view: MaskViewMode::Composite,
             info: panels::navigator::InfoState::default(),
             property_focus: panels::properties::PropertyFocus::default(),
             status: StatusBar::new(),
@@ -197,6 +245,7 @@ impl Workspace {
             saved_selections: 0,
             canvas: canvas::CanvasHost::default(),
             layer_thumbs: std::collections::HashMap::new(),
+            mask_thumbs: std::collections::HashMap::new(),
             canvas_events: Vec::new(),
             grid_suppressed: false,
             view_readback: (1.0, (0.0, 0.0)),
@@ -897,6 +946,7 @@ mod tests {
         let mut w = Workspace::new();
         w.clipboard = ClipboardState {
             pixels: true,
+            external_pixels: false,
             layers: false,
         };
         w.recent = vec!["one.png".into(), "two.psd".into()];

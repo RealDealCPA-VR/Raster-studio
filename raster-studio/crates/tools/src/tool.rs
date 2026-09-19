@@ -13,7 +13,7 @@
 
 use editor_core::{Command, PixelKey, PixelTarget, Selection};
 use glam::{Mat3, Vec2};
-use layer_model::{LayerId, MaskId};
+use layer_model::{LayerId, LayerKind, MaskId, TextLayer};
 use raster::PixelRect;
 use selection::{BooleanOp, Rect};
 
@@ -60,6 +60,11 @@ pub enum ToolId {
     Dodge,
     Burn,
     Sponge,
+    /// Card 061: regrade the mask coverage inside a user-marked boundary
+    /// band (local smooth + re-grade, bounded to the painted region) —
+    /// manual refinement, not automatic matting. See
+    /// [`crate::stroke::StrokeOp::RefineBoundary`].
+    RefineBoundary,
     /// Author a path one click at a time. See [`crate::pen::PenTool`].
     Pen,
     /// Click a path to select the shape layer that owns it. See
@@ -124,6 +129,7 @@ impl ToolId {
         ToolId::Dodge,
         ToolId::Burn,
         ToolId::Sponge,
+        ToolId::RefineBoundary,
         ToolId::Pen,
         ToolId::PathSelect,
         ToolId::DirectSelection,
@@ -234,6 +240,90 @@ pub enum PaintTarget {
 /// [`ToolId::Zoom`] and [`ToolId::RotateView`] are tools like any other and
 /// have to be able to change it. A view change is *not* a [`Command`]: it is
 /// not part of the document and does not belong in undo history.
+/// Card 042: one snap candidate in document space (axis + coordinate). The
+/// UI's richer candidate (with the reason) converts into this at the shell.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SnapCandidate {
+    /// The axis the coordinate lives on.
+    pub axis: SnapAxis,
+    /// The document coordinate to land on.
+    pub doc: f32,
+}
+
+/// Card 042: snap a moving rect (base + delta) against candidates — per
+/// axis, the nearest candidate within `threshold_doc` for any of the rect's
+/// min/max/center carries the shift. The geometry snaps, not a cursor dot.
+/// Card 043: the move participants with the LINK chain pulled in — a
+/// linked participant carries every OTHER linked layer with it (the current
+/// model's single chain). Dedup preserves first-seen order; the flat set
+/// traversal cannot cycle.
+pub fn with_link_chain(participants: &[LayerId], linked: &[LayerId]) -> Vec<LayerId> {
+    let mut out = participants.to_vec();
+    if participants.iter().any(|p| linked.contains(p)) {
+        for id in linked {
+            if !out.contains(id) {
+                out.push(*id);
+            }
+        }
+    }
+    out
+}
+
+pub fn snap_delta(
+    base: raster::PixelRect,
+    delta: Vec2,
+    candidates: &[SnapCandidate],
+    threshold_doc: f32,
+) -> Vec2 {
+    let mut out = delta;
+    let min = Vec2::new(base.x as f32 + delta.x, base.y as f32 + delta.y);
+    let max = Vec2::new(
+        (base.x + base.width as i64) as f32 + delta.x,
+        (base.y + base.height as i64) as f32 + delta.y,
+    );
+    let center = (min + max) * 0.5;
+    for (axis, features) in [
+        (SnapAxis::X, [min.x, max.x, center.x]),
+        (SnapAxis::Y, [min.y, max.y, center.y]),
+    ] {
+        let mut best: Option<(f32, f32)> = None;
+        for candidate in candidates {
+            if candidate.axis != axis {
+                continue;
+            }
+            for feature in features {
+                let d = (candidate.doc - feature).abs();
+                if d <= threshold_doc && best.is_none_or(|(bd, _)| d < bd) {
+                    best = Some((d, candidate.doc));
+                }
+            }
+        }
+        if let Some((_, doc_value)) = best {
+            let nearest = features
+                .iter()
+                .copied()
+                .min_by(|a, b| (doc_value - a).abs().total_cmp(&(doc_value - b).abs()))
+                .expect("three features");
+            let shift = doc_value - nearest;
+            if axis == SnapAxis::X {
+                out.x += shift;
+            } else {
+                out.y += shift;
+            }
+        }
+    }
+    out
+}
+
+/// Card 042: which axis a snap candidate constrains.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SnapAxis {
+    /// The horizontal axis.
+    X,
+    /// The vertical axis.
+    Y,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewState {
     /// Document point currently at the centre of the viewport.
@@ -375,11 +465,11 @@ impl Pattern {
 
 /// A selection change a tool wants applied.
 ///
-/// `editor-core` has no selection command yet — [`Selection`] is a plain field
-/// on the document — so this rides its own outbox rather than being smuggled
-/// through a fabricated [`Command`]. The application applies it with
-/// [`SelectionEdit::apply`] and records whatever undo entry it uses for
-/// selection state.
+/// The application folds this edit and turns the result into
+/// `editor_core::Command::SetSelection` (card 056), so a selection gesture is
+/// one undoable history step like any other edit. The edit rides its own
+/// outbox because the FOLD needs the base selection and the boolean op — the
+/// command carries only the result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectionEdit {
     /// The shape the gesture produced.
@@ -472,12 +562,53 @@ pub struct Slice {
 /// needs the glyph boxes `ui::canvas::text_overlay` computes and a click that
 /// lands inside an existing run, and neither is wired; growing this enum ahead
 /// of that would be inventing a text editor nothing drives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TextEdit<'a> {
-    /// Append this text at the caret.
+    /// Insert this text at the caret, replacing any selected range.
     Insert(&'a str),
-    /// Remove the character before the caret.
+    /// Remove the character before the caret, or the selected range.
     Backspace,
+    /// End the session, committing the draft as one history entry (card 025).
+    Confirm,
+    /// End the session without committing: an existing layer returns to its
+    /// original payload with no history entry; a layer this session created
+    /// is deleted.
+    Cancel,
+    /// Move the caret one character (`back` = towards the start); `extend`
+    /// keeps the anchor (Shift-selection). Card 027.
+    CaretStep { back: bool, extend: bool },
+    /// Move to the current paragraph's start or end (Home/End).
+    ParagraphEdge { end: bool, extend: bool },
+    /// Move one word (card 027's word movement).
+    WordStep { forward: bool, extend: bool },
+    /// Select the whole draft (Ctrl+A inside a session — card 028 routes it).
+    SelectAll,
+    /// Delete the character after the caret, or the selected range (the
+    /// forward Delete key). Card 028.
+    DeleteForward,
+    /// Replace the selection (or insert at the caret) with clipboard text.
+    /// The clipboard I/O happens in the shell; the session sees only text.
+    /// Card 028.
+    PasteText(&'a str),
+    /// Begin/replace the live IME preedit at the caret (card 029: the shell
+    /// routes winit's `Ime::Preedit` here).
+    SetComposition(&'a str),
+    /// Commit the IME composition: the preedit becomes draft text and the
+    /// committed string is inserted in its place (winit's `Ime::Commit`).
+    CommitIme(&'a str),
+    /// Withdraw the composition without committing (an empty `Ime::Preedit`
+    /// or the platform cancelling it). Card 029.
+    ClearComposition,
+    /// Resize the paragraph box to `width` (a `None` height keeps it auto).
+    /// Reflows the draft without touching the layer's affine scale (card
+    /// 032: the box is the paragraph's geometry, nothing else's). A point
+    /// run converts to a box.
+    ResizeBox {
+        /// The wrapping width, in layer pixels.
+        width: f32,
+        /// `None` keeps the auto height.
+        height: Option<f32>,
+    },
 }
 
 /// Something a tool wants that is not a [`Command`] and not a selection.
@@ -493,10 +624,52 @@ pub enum ToolRequest {
     /// layer's path. Consumed by the shell, not by the tool's own command
     /// stream — selection is a field write, not history.
     SelectLayer(LayerId),
+    /// Render this layer with this payload *outside history*: the live text
+    /// draft (card 025). Keystrokes must be visible but must not be undoable
+    /// one by one, so the draft lands on the document directly and the
+    /// session's confirm/cancel reconciles — confirm emits the one
+    /// `SetLayerKind` history entry, cancel restores the original payload the
+    /// same direct way.
+    TextDraft {
+        layer: LayerId,
+        kind: Box<LayerKind>,
+    },
+    /// Commit a finished text session atomically (card 025): the draft has
+    /// been living on the document outside history, so the shell first
+    /// restores the original payload (direct, no history) and THEN applies
+    /// `Command::SetLayerKind(draft)` — the command's inverse is captured
+    /// from the restored original, so one Ctrl+Z takes the whole session
+    /// back, and cancel-style restores stay history-free.
+    TextConfirm {
+        layer: LayerId,
+        original: Box<LayerKind>,
+        draft: Box<LayerKind>,
+    },
+    /// Card 036: commit one whole-layer affine for EVERY selected participant
+    /// as ONE undoable transaction. The tool supplies the document-space
+    /// delta and the (already lock-checked, ancestor-normalized) set; the
+    /// shell conjugates per participant through its own parent chain and
+    /// wraps the batch in a `Command::Transaction`.
+    TransformLayers {
+        /// The normalized participant set.
+        layers: Vec<LayerId>,
+        /// The gizmo's corner delta in document space (column-major).
+        delta: [f32; 6],
+    },
 }
 
 /// Everything a tool may read, plus the outboxes for everything it wants
 /// changed.
+/// Card 026: an existing text layer hit by a Type click, resolved by the
+/// shell — the layer to enter, its payload as the session's original, and the
+/// caret byte index the shaped hit test chose.
+#[derive(Debug, Clone)]
+pub struct TextHitCaret {
+    pub layer: LayerId,
+    pub original: TextLayer,
+    pub caret: usize,
+}
+
 pub struct ToolContext<'a> {
     /// The layer the tool edits.
     pub active_layer: Option<LayerId>,
@@ -528,14 +701,87 @@ pub struct ToolContext<'a> {
     pub view: ViewState,
     /// The layers under the pointer, topmost first — what auto-select walks.
     pub layer_stack: Vec<LayerId>,
+    /// Card 026: the existing text layer under this sample's click, resolved
+    /// by the shell (which owns the shaping stack) — `None` unless the tool
+    /// is the Type tool and a text layer was hit. `on_pointer_up` enters that
+    /// layer instead of creating one.
+    pub text_hit: Option<TextHitCaret>,
     /// Every shape layer, as `(layer, its whole shape definition)` pairs,
     /// top-most first — the same order [`Self::layer_stack`] walks. Path
     /// Select hit-tests the paths; Direct Selection edits the active layer's
     /// anchors and rebuilds its kind from these. Filled by the shell; empty
     /// by default.
     pub shape_paths: Vec<(LayerId, layer_model::ShapeLayer)>,
+    /// Card 035: the ACTIVE layer's parent chain as one transform (parent
+    /// space → document space), filled by the shell from the compositor's
+    /// parent convention. A whole-layer transform delta computed in document
+    /// space conjugates through this before landing on the layer's own
+    /// transform: `delta_parent = P^-1 * delta_doc * P`. `None` = identity.
+    pub active_layer_parent_transform: Option<glam::Affine2>,
+    /// Card 042: document-space snap candidates for the moving geometry
+    /// (canvas edges/center + every layer NOT in the selected set), filled
+    /// by the shell. The Move tool snaps its drag target against them.
+    pub snap_candidates: Vec<SnapCandidate>,
+    /// Card 042: the snap threshold in DOCUMENT pixels (the screen threshold
+    /// converted through the current zoom), filled by the shell.
+    pub snap_threshold_doc: f32,
+    /// Card 042: the ACTIVE layer's TIGHT ink extent in document space
+    /// (alpha scan for raster kinds, exact geometry otherwise). The Move
+    /// tool snaps against this — tile-level bounds are too coarse to
+    /// describe the visible edges.
+    pub active_layer_ink_bounds: Option<PixelRect>,
+    /// Card 043: every layer carrying the link flag (the current model's
+    /// ONE chain). The move commits pull the whole chain in when any
+    /// participant is linked.
+    pub linked_layers: Vec<LayerId>,
+    /// Card 044: the ACTIVE layer keeps editable geometry (Text, Shape,
+    /// SmartObject). The transform tool refuses the pixel-patch modes on it
+    /// rather than silently rasterizing.
+    pub active_layer_parametric: bool,
+    /// Card 040: the ACTIVE layer's document→layer-pixel mapping, filled by
+    /// the shell for paintable kinds. Paint tools route their samples
+    /// through it, so a moved/scaled layer is painted where the pointer
+    /// displays, not at raw document coordinates. `None` = identity.
+    /// Card 058: for a MASK paint target this carries the mask POSE's
+    /// inverse (layer transform ∘ mask.transform), so coverage lands where
+    /// the compositor samples it.
+    pub sample_to_layer: Option<glam::Affine2>,
+    /// Card 058: the canvas rectangle expressed in the PAINT TARGET's space
+    /// — the identity answer for content, the bounding box of the canvas
+    /// pre-imaged through the mask pose for mask painting. Stroke dabs live
+    /// in target space, so this (not `canvas`, which is document space) is
+    /// the rect that clipping and rasterization must be measured against.
+    /// `None` = same as `canvas`.
+    pub paint_space_canvas: Option<PixelRect>,
+    /// Card 037: the rendered-content pick under this sample's pointer,
+    /// computed by the shell through the bounded visible-content test. The
+    /// outer `None` means "no shell ran" (direct-begin sessions keep their
+    /// raw-sampler fallback); the inner `None` means the shell's bounded
+    /// test found NO visible content — a real answer, not an absence of one.
+    /// Other tools ignore it.
+    pub content_pick: Option<Option<LayerId>>,
+    /// Card 036: the document's selected layer set (the panel's Shift
+    /// selection), as recorded by the shell. The tool normalizes and
+    /// lock-checks it into its session target.
+    pub selected_layers: Vec<LayerId>,
+    /// Card 036: every layer's parent (child → parent or `None` for roots),
+    /// filled by the shell — the ancestry the tool normalizes against.
+    pub layer_parents: Vec<(LayerId, Option<LayerId>)>,
+    /// Card 036: every layer's whole-lock flag, filled by the shell — the
+    /// all-or-nothing refusal reads it.
+    pub layer_locks: Vec<(LayerId, bool)>,
+    /// Card 036: every layer's parent-chain transform (parent space →
+    /// document space), filled by the shell — the session's representative
+    /// layer conjugates its delta through this.
+    pub layer_parent_transforms: Vec<(LayerId, glam::Affine2)>,
     /// Pixel bytes.
     pub tiles: &'a mut dyn TileAccess,
+    /// Card 034: the ACTIVE layer's content bounds (the real stored extent
+    /// through the compositor's bounds query), filled by the shell. A
+    /// transform with no pixel selection surrounds this — the logo, the
+    /// text — instead of the whole canvas. `None` when the layer has no ink
+    /// or the shell has nothing to say; tools fall back to the canvas.
+    pub active_layer_content_bounds: Option<PixelRect>,
 
     commands: Vec<Command>,
     selection_edits: Vec<SelectionEdit>,
@@ -544,9 +790,47 @@ pub struct ToolContext<'a> {
 }
 
 impl<'a> ToolContext<'a> {
+    /// Card 036: a layer's parent, from the shell-filled map.
+    pub fn parent_of(&self, layer: LayerId) -> Option<LayerId> {
+        self.layer_parents
+            .iter()
+            .find(|(id, _)| *id == layer)
+            .and_then(|(_, parent)| *parent)
+    }
+
+    /// Card 036: whether a layer is whole-locked, from the shell-filled map.
+    pub fn layer_lock(&self, layer: LayerId) -> Option<bool> {
+        self.layer_locks
+            .iter()
+            .find(|(id, _)| *id == layer)
+            .map(|(_, locked)| *locked)
+    }
+
+    /// Card 036: a layer's parent-chain transform, from the shell-filled map.
+    pub fn parent_transform_of(&self, layer: LayerId) -> Option<glam::Affine2> {
+        self.layer_parent_transforms
+            .iter()
+            .find(|(id, _)| *id == layer)
+            .map(|(_, transform)| *transform)
+    }
+
     /// A context over `tiles` with nothing selected and no active layer.
     pub fn new(tiles: &'a mut dyn TileAccess, canvas: PixelRect) -> Self {
         Self {
+            active_layer_content_bounds: None,
+            active_layer_parent_transform: None,
+            snap_candidates: Vec::new(),
+            snap_threshold_doc: 8.0,
+            active_layer_ink_bounds: None,
+            linked_layers: Vec::new(),
+            active_layer_parametric: false,
+            sample_to_layer: None,
+            paint_space_canvas: None,
+            content_pick: None,
+            selected_layers: Vec::new(),
+            layer_parents: Vec::new(),
+            layer_locks: Vec::new(),
+            layer_parent_transforms: Vec::new(),
             active_layer: None,
             active_mask: None,
             paint_target: PaintTarget::Layer,
@@ -559,6 +843,7 @@ impl<'a> ToolContext<'a> {
             sample_from: None,
             view: ViewState::default(),
             layer_stack: Vec::new(),
+            text_hit: None,
             shape_paths: Vec::new(),
             tiles,
             commands: Vec::new(),
@@ -697,6 +982,40 @@ impl<'a> ToolContext<'a> {
     }
 }
 
+/// One typed option value a shell forwards to a tool, keyed by the option
+/// spec's key. Tools-owned on purpose: the options bar's own value type lives
+/// in the UI crate, and this is the boundary — the shell converts, the tool
+/// consumes, and no UI type crosses into tools (plan card 010).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ToolSetting {
+    Float(f32),
+    Int(i32),
+    Bool(bool),
+    /// Index into the spec's `choices`, which the tool's ordering must match.
+    Choice(usize),
+    /// Straight-alpha sRGB.
+    Color([f32; 4]),
+}
+
+/// One live tool session's overlay geometry, as the shell publishes it (plan
+/// card 012). Tools-owned: the shell converts it into the canvas sessions the
+/// overlays are drawn from. A variant exists per tool whose gesture is
+/// visible while it runs; a tool with no live session answers `None` from
+/// [`Tool::live_geometry`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionGeometry {
+    /// A free-transform session: the live state, the mode it is in, and the
+    /// handle being dragged (emphasised).
+    Transform {
+        state: crate::transform::TransformState,
+        mode: crate::transform::TransformMode,
+        active: Option<crate::transform::Handle>,
+        /// The layer being transformed, captured at pointer-down — what the
+        /// preview (card 013) overrides and what the commit will edit.
+        layer: Option<LayerId>,
+    },
+}
+
 /// The interface every interactive tool implements.
 ///
 /// Object safe on purpose: [`crate::registry`] hands the UI a
@@ -764,6 +1083,46 @@ pub trait Tool {
         false
     }
 
+    /// The layer a live text session is editing, if any (card 026): the shell
+    /// reads it to refuse text operations against a different document than
+    /// the one the run lives in.
+    fn text_session_layer(&self) -> Option<LayerId> {
+        None
+    }
+
+    /// The live text session's selected text — the OS clipboard copy source
+    /// (card 028). Tools without a live session return `None`.
+    fn text_selection_text(&self) -> Option<String> {
+        None
+    }
+
+    /// The live session's caret and anchor byte indices, in that order —
+    /// the canvas overlay's geometry source (card 030). `None` without a
+    /// session.
+    fn text_caret_anchor(&self) -> Option<(usize, usize)> {
+        None
+    }
+
+    /// Whether an IME composition is live in this tool's session (card 029):
+    /// while it is, the shell must not double-insert plain characters — the
+    /// platform delivers the text through `Ime::Preedit`/`Ime::Commit`.
+    fn text_composing(&self) -> bool {
+        false
+    }
+
+    /// Card 026: begin a text session ENTERING an existing layer (never
+    /// creating): the shell resolves the payload, caret and origin from the
+    /// document. Only the Type tool implements it.
+    fn enter_text_session(
+        &mut self,
+        _layer: LayerId,
+        _original: TextLayer,
+        _caret: usize,
+        _origin: Vec2,
+    ) -> bool {
+        false
+    }
+
     /// Feed one keystroke to a tool that is editing text.
     ///
     /// Defaulted to a refusal rather than to a no-op: a shell that routes the
@@ -799,6 +1158,29 @@ pub trait Tool {
     /// Defaulted to a no-op: most tools have no choice options.
     fn set_choice(&mut self, _key: &str, _index: usize) {}
 
+    /// Adopt one typed option value by key — the typed forwarding seam (plan
+    /// card 010). The shell converts its own option values into this
+    /// tools-owned enum at the boundary, so UI types never reach a tool.
+    ///
+    /// Default behaviour: a `Choice` routes to [`Tool::set_choice`] so the
+    /// existing choice tools keep working unchanged; every other kind (and a
+    /// Choice on a tool with no such option) is refused with
+    /// [`ToolError::UnknownOption`]. A tool that declares options in the
+    /// registry implements this and answers for exactly its spec'd keys — an
+    /// unknown or mismatched key is an error the shell can surface, never a
+    /// silent no-op.
+    fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        match setting {
+            ToolSetting::Choice(index) => {
+                self.set_choice(key, index);
+                Ok(())
+            }
+            _ => Err(ToolError::UnknownOption {
+                key: key.to_owned(),
+            }),
+        }
+    }
+
     /// The brush this tool stamps with, when it has one.
     ///
     /// The read half of [`Tool::set_brush`], and the reason it exists is that
@@ -818,6 +1200,17 @@ pub trait Tool {
 
     /// Whether a gesture is currently in progress.
     fn is_active(&self) -> bool;
+
+    /// The overlay geometry a live session wants published, or `None` when
+    /// the tool shows nothing (card 012). Read every frame by the shell —
+    /// cheap, because it borrows the tool's own state — and published into
+    /// the canvas sessions the overlays are drawn from. Cleared by returning
+    /// `None`: the same route that publishes also un-publishes, so Escape or
+    /// a committed gesture removes the handles with no second mechanism to
+    /// forget.
+    fn live_geometry(&self) -> Option<SessionGeometry> {
+        None
+    }
 }
 
 #[cfg(test)]

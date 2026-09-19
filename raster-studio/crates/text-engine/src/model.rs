@@ -11,7 +11,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::style::{CharStyle, StyleRun};
+use crate::style::{
+    CharStyle, FontSlant, FontStretch, FontWeight, ScriptPosition, StyleOverride, StyleRun,
+};
 
 /// Horizontal alignment of the lines inside a paragraph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -196,16 +198,121 @@ impl TextRun {
 }
 
 impl From<&layer_model::TextLayer> for TextRun {
+    /// The lossless direction (card 016): every persisted field reaches the
+    /// run - base style, spans, paragraph settings, frame and kerning - so an
+    /// edit that round-trips through the document cannot lose style.
     fn from(layer: &layer_model::TextLayer) -> Self {
         Self {
             text: layer.text.clone(),
             style: CharStyle {
                 family: layer.font_family.clone(),
                 size_px: layer.size_px,
-                ..CharStyle::default()
+                weight: FontWeight(layer.style.weight.0),
+                slant: match layer.style.slant {
+                    layer_model::text::Slant::Normal => FontSlant::Normal,
+                    layer_model::text::Slant::Italic => FontSlant::Italic,
+                },
+                stretch: match layer.style.stretch {
+                    layer_model::text::Stretch::UltraCondensed => FontStretch::UltraCondensed,
+                    layer_model::text::Stretch::ExtraCondensed => FontStretch::ExtraCondensed,
+                    layer_model::text::Stretch::Condensed => FontStretch::Condensed,
+                    layer_model::text::Stretch::SemiCondensed => FontStretch::SemiCondensed,
+                    layer_model::text::Stretch::Normal => FontStretch::Normal,
+                    layer_model::text::Stretch::SemiExpanded => FontStretch::SemiExpanded,
+                    layer_model::text::Stretch::Expanded => FontStretch::Expanded,
+                    layer_model::text::Stretch::ExtraExpanded => FontStretch::ExtraExpanded,
+                    layer_model::text::Stretch::UltraExpanded => FontStretch::UltraExpanded,
+                },
+                color: layer.style.fill,
+                underline: layer.style.underline,
+                strikethrough: layer.style.strikethrough,
+                script: match layer.style.script {
+                    layer_model::text::Script::Normal => ScriptPosition::Normal,
+                    layer_model::text::Script::Superscript => ScriptPosition::Superscript,
+                    layer_model::text::Script::Subscript => ScriptPosition::Subscript,
+                },
+                tracking: layer.style.tracking,
+                ligatures: layer.style.ligatures,
+                kerning: layer.style.kerning,
+                allow_synthetic_bold: layer.style.synthetic_bold,
+                allow_synthetic_italic: layer.style.synthetic_italic,
             },
-            ..Self::default()
+            runs: layer
+                .spans
+                .iter()
+                .map(|span| StyleRun {
+                    start: span.start,
+                    end: span.end,
+                    style: style_override_from_persisted(&span.style),
+                })
+                .collect(),
+            paragraph: paragraph_from_persisted(&layer.paragraph),
+            frame: match layer.frame {
+                layer_model::text::Frame::Point => TextFrame::Point,
+                layer_model::text::Frame::Box { width, height } => TextFrame::Box { width, height },
+            },
+            kerning: layer
+                .kerning
+                .iter()
+                .map(|k| KernAdjustment {
+                    index: k.index,
+                    amount: k.amount,
+                })
+                .collect(),
+            origin: [0.0, 0.0],
         }
+    }
+}
+
+/// Map a persisted sparse patch onto the shaping vocabulary.
+fn style_override_from_persisted(over: &layer_model::text::StyleOverride) -> StyleOverride {
+    StyleOverride {
+        family: over.family.clone(),
+        size_px: over.size_px,
+        weight: over.weight.map(|w| FontWeight(w.0)),
+        slant: over.slant.map(|s| match s {
+            layer_model::text::Slant::Normal => FontSlant::Normal,
+            layer_model::text::Slant::Italic => FontSlant::Italic,
+        }),
+        stretch: over.stretch.map(|s| match s {
+            layer_model::text::Stretch::UltraCondensed => FontStretch::UltraCondensed,
+            layer_model::text::Stretch::ExtraCondensed => FontStretch::ExtraCondensed,
+            layer_model::text::Stretch::Condensed => FontStretch::Condensed,
+            layer_model::text::Stretch::SemiCondensed => FontStretch::SemiCondensed,
+            layer_model::text::Stretch::Normal => FontStretch::Normal,
+            layer_model::text::Stretch::SemiExpanded => FontStretch::SemiExpanded,
+            layer_model::text::Stretch::Expanded => FontStretch::Expanded,
+            layer_model::text::Stretch::ExtraExpanded => FontStretch::ExtraExpanded,
+            layer_model::text::Stretch::UltraExpanded => FontStretch::UltraExpanded,
+        }),
+        color: over.fill,
+        underline: over.underline,
+        strikethrough: over.strikethrough,
+        script: over.script.map(|s| match s {
+            layer_model::text::Script::Normal => ScriptPosition::Normal,
+            layer_model::text::Script::Superscript => ScriptPosition::Superscript,
+            layer_model::text::Script::Subscript => ScriptPosition::Subscript,
+        }),
+        tracking: over.tracking,
+    }
+}
+
+/// Map persisted paragraph settings onto the shaping vocabulary.
+fn paragraph_from_persisted(p: &layer_model::text::Paragraph) -> ParagraphStyle {
+    ParagraphStyle {
+        alignment: match p.alignment {
+            layer_model::text::Alignment::Left => Alignment::Left,
+            layer_model::text::Alignment::Center => Alignment::Center,
+            layer_model::text::Alignment::Right => Alignment::Right,
+            layer_model::text::Alignment::Justified => Alignment::Justify,
+        },
+        line_height: match p.leading {
+            layer_model::text::Leading::Multiple(v) => LineHeight::Multiple(v),
+            layer_model::text::Leading::Absolute(v) => LineHeight::Absolute(v),
+        },
+        first_line_indent: p.first_line_indent,
+        space_before: p.space_before,
+        space_after: p.space_after,
     }
 }
 
@@ -216,21 +323,121 @@ impl From<layer_model::TextLayer> for TextRun {
 }
 
 impl From<&TextRun> for layer_model::TextLayer {
+    /// The other lossless direction: the run becomes the persisted schema with
+    /// every field intact, so a round-trip through the document cannot drop a
+    /// style (the E01 defect's root).
     fn from(run: &TextRun) -> Self {
         Self {
             text: run.text.clone(),
             font_family: run.style.family.clone(),
             size_px: run.style.size_px,
+            style: layer_model::text::BaseStyle {
+                weight: layer_model::text::Weight(run.style.weight.0),
+                slant: match run.style.slant {
+                    FontSlant::Normal | FontSlant::Oblique => layer_model::text::Slant::Normal,
+                    FontSlant::Italic => layer_model::text::Slant::Italic,
+                },
+                stretch: match run.style.stretch {
+                    FontStretch::UltraCondensed => layer_model::text::Stretch::UltraCondensed,
+                    FontStretch::ExtraCondensed => layer_model::text::Stretch::ExtraCondensed,
+                    FontStretch::Condensed => layer_model::text::Stretch::Condensed,
+                    FontStretch::SemiCondensed => layer_model::text::Stretch::SemiCondensed,
+                    FontStretch::Normal => layer_model::text::Stretch::Normal,
+                    FontStretch::SemiExpanded => layer_model::text::Stretch::SemiExpanded,
+                    FontStretch::Expanded => layer_model::text::Stretch::Expanded,
+                    FontStretch::ExtraExpanded => layer_model::text::Stretch::ExtraExpanded,
+                    FontStretch::UltraExpanded => layer_model::text::Stretch::UltraExpanded,
+                },
+                fill: run.style.color,
+                underline: run.style.underline,
+                strikethrough: run.style.strikethrough,
+                script: match run.style.script {
+                    ScriptPosition::Normal => layer_model::text::Script::Normal,
+                    ScriptPosition::Superscript => layer_model::text::Script::Superscript,
+                    ScriptPosition::Subscript => layer_model::text::Script::Subscript,
+                },
+                tracking: run.style.tracking,
+                ligatures: run.style.ligatures,
+                kerning: run.style.kerning,
+                synthetic_bold: run.style.allow_synthetic_bold,
+                synthetic_italic: run.style.allow_synthetic_italic,
+            },
+            spans: run
+                .runs
+                .iter()
+                .map(|r| layer_model::text::StyleSpan {
+                    start: r.start,
+                    end: r.end,
+                    style: layer_model::text::StyleOverride {
+                        family: r.style.family.clone(),
+                        size_px: r.style.size_px,
+                        weight: r.style.weight.map(|w| layer_model::text::Weight(w.0)),
+                        slant: r.style.slant.map(|s| match s {
+                            FontSlant::Normal | FontSlant::Oblique => {
+                                layer_model::text::Slant::Normal
+                            }
+                            FontSlant::Italic => layer_model::text::Slant::Italic,
+                        }),
+                        stretch: r.style.stretch.map(|s| match s {
+                            FontStretch::UltraCondensed => {
+                                layer_model::text::Stretch::UltraCondensed
+                            }
+                            FontStretch::ExtraCondensed => {
+                                layer_model::text::Stretch::ExtraCondensed
+                            }
+                            FontStretch::Condensed => layer_model::text::Stretch::Condensed,
+                            FontStretch::SemiCondensed => layer_model::text::Stretch::SemiCondensed,
+                            FontStretch::Normal => layer_model::text::Stretch::Normal,
+                            FontStretch::SemiExpanded => layer_model::text::Stretch::SemiExpanded,
+                            FontStretch::Expanded => layer_model::text::Stretch::Expanded,
+                            FontStretch::ExtraExpanded => layer_model::text::Stretch::ExtraExpanded,
+                            FontStretch::UltraExpanded => layer_model::text::Stretch::UltraExpanded,
+                        }),
+                        fill: r.style.color,
+                        underline: r.style.underline,
+                        strikethrough: r.style.strikethrough,
+                        script: r.style.script.map(|s| match s {
+                            ScriptPosition::Normal => layer_model::text::Script::Normal,
+                            ScriptPosition::Superscript => layer_model::text::Script::Superscript,
+                            ScriptPosition::Subscript => layer_model::text::Script::Subscript,
+                        }),
+                        tracking: r.style.tracking,
+                    },
+                })
+                .collect(),
+            paragraph: layer_model::text::Paragraph {
+                alignment: match run.paragraph.alignment {
+                    Alignment::Left => layer_model::text::Alignment::Left,
+                    Alignment::Center => layer_model::text::Alignment::Center,
+                    Alignment::Right => layer_model::text::Alignment::Right,
+                    Alignment::Justify => layer_model::text::Alignment::Justified,
+                },
+                leading: match run.paragraph.line_height {
+                    LineHeight::Multiple(v) => layer_model::text::Leading::Multiple(v),
+                    LineHeight::Absolute(v) => layer_model::text::Leading::Absolute(v),
+                },
+                first_line_indent: run.paragraph.first_line_indent,
+                space_before: run.paragraph.space_before,
+                space_after: run.paragraph.space_after,
+            },
+            frame: match run.frame {
+                TextFrame::Point => layer_model::text::Frame::Point,
+                TextFrame::Box { width, height } => layer_model::text::Frame::Box { width, height },
+            },
+            kerning: run
+                .kerning
+                .iter()
+                .map(|k| layer_model::text::Kern {
+                    index: k.index,
+                    amount: k.amount,
+                })
+                .collect(),
         }
     }
 }
 
 impl From<TextRun> for layer_model::TextLayer {
     fn from(run: TextRun) -> Self {
-        Self {
-            text: run.text,
-            font_family: run.style.family,
-            size_px: run.style.size_px,
-        }
+        Self::from(&run)
     }
 }

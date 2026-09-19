@@ -240,6 +240,12 @@ impl ToolOptions {
         Self::default()
     }
 
+    /// Cross-crate test seam: the option spec lookup, unconditionally public
+    /// (a dependency's `#[cfg(test)]` does not propagate).
+    pub fn spec_for_test(tool: ToolId, key: &str) -> Option<OptionSpec> {
+        Self::spec(tool, key)
+    }
+
     fn spec(tool: ToolId, key: &str) -> Option<OptionSpec> {
         let info = tools::registry::info(tool)?;
         if key == BLEND_MODE_KEY && wants_blend_mode(info) {
@@ -256,6 +262,26 @@ impl ToolOptions {
             Some(v) => *v,
             None => OptionValue::default_for(&spec.kind),
         })
+    }
+
+    /// The options the user has actually TOUCHED for one tool, as
+    /// `(key, value)` pairs — the forward-to-tool set. Two things are
+    /// deliberately absent:
+    ///
+    /// * untouched options (they keep their schema defaults; forwarding them
+    ///   would demand `set_setting` answers for keys no tool implements), and
+    /// * UI-supplied keys like [`BLEND_MODE_KEY`] (they persist for the
+    ///   options bar's own rendering but name no registry option a tool
+    ///   could answer — forwarding them turned the blend-mode combo into a
+    ///   per-press status-bar error on every stroke tool).
+    pub fn held(&self, tool: ToolId) -> Vec<(String, OptionValue)> {
+        self.values
+            .iter()
+            .filter(|((t, key), _)| {
+                *t == tool && !key.starts_with("ui.") && Self::spec(*t, key).is_some()
+            })
+            .map(|((_, key), value)| ((*key).to_string(), *value))
+            .collect()
     }
 
     /// Write one option.
@@ -770,5 +796,40 @@ mod tests {
         });
         assert_eq!(bare.stops.len(), MIN_GRADIENT_STOPS);
         assert!(!can_remove_gradient_stop(bare.stops.len()));
+    }
+}
+
+#[cfg(test)]
+mod held_tests {
+    use super::*;
+    use tools::ToolId;
+
+    /// Card 061 (review round 4): `held` is the forward-to-tool set —
+    /// only touched REGISTRY keys for THAT tool. Untouched options stay
+    /// absent, ui-supplied keys (the blend mode) stay absent, and another
+    /// tool's touches stay absent.
+    #[test]
+    fn held_returns_only_touched_registry_keys_for_the_tool() {
+        // A non-default strength (setting a value equal to the schema
+        // default is a deliberate no-op: nothing is "held" to forward).
+        let mut options = ToolOptions::default();
+        assert!(options.set(ToolId::RefineBoundary, "strength", OptionValue::Float(0.7)));
+        options.set(
+            ToolId::RefineBoundary,
+            BLEND_MODE_KEY,
+            OptionValue::Choice(1),
+        );
+        options.set(ToolId::Move, "auto_select", OptionValue::Bool(true));
+
+        let held = options.held(ToolId::RefineBoundary);
+        assert_eq!(
+            held,
+            vec![("strength".to_string(), OptionValue::Float(0.7))],
+            "only the touched registry key forwards for the tool"
+        );
+        assert!(
+            options.held(ToolId::Brush).is_empty(),
+            "another tool's touches do not leak"
+        );
     }
 }

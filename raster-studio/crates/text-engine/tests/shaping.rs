@@ -231,6 +231,7 @@ fn every_glyph_names_the_face_it_came_from() {
         .resolve(
             "DejaVu Sans",
             text_engine::FontWeight::NORMAL,
+            text_engine::FontStretch::Normal,
             text_engine::FontSlant::Normal,
         )
         .expect("resolves")

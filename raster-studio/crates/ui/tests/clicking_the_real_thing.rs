@@ -163,6 +163,32 @@ impl Harness {
         ])
     }
 
+    /// Press and release the SECONDARY button inside the widget with `id`.
+    fn right_click(&mut self, id: egui::Id) -> Vec<Intent> {
+        self.frame(Vec::new());
+        let rect = self
+            .ctx
+            .read_response(id)
+            .unwrap_or_else(|| panic!("{id:?} was not drawn"))
+            .rect;
+        let at = rect.center();
+        self.frame(vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Secondary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Secondary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            },
+        ])
+    }
+
     /// Press and release a key.
     ///
     /// The release matters: egui marks a second press of a key it never saw
@@ -372,6 +398,89 @@ fn clicking_a_layer_row_eye_emits_a_visibility_command_for_that_layer() {
     );
 }
 
+#[test]
+fn clicking_a_mask_thumbnail_aims_edits_at_the_mask_and_content_back_at_pixels() {
+    // Card 055: the two thumbnail wells are the edit target's controls.
+    use layer_model::{LayerMask, MaskId};
+
+    let mut doc = Document::new(320, 240, "Test");
+    let a = doc.layers.insert_at(Layer::raster("Top"), None, 0).unwrap();
+    doc.layers.get_mut(a).unwrap().mask = Some(LayerMask::new(MaskId::new()));
+    doc.set_active_layer(Some(a)).unwrap();
+    let mut h = Harness::with_document(doc);
+    h.only_layers();
+
+    // The mask thumbnail click aims at the mask.
+    let intents = h.click(ids::layer_mask_thumb(a));
+    assert!(
+        intents
+            .iter()
+            .any(|i| matches!(i, Intent::SetEditTarget { mask: true })),
+        "the mask thumbnail click aims at the mask: {intents:?}"
+    );
+    assert_eq!(
+        h.workspace.property_focus,
+        ui::panels::properties::PropertyFocus::Mask,
+        "the target border follows the click"
+    );
+
+    // The content thumbnail click aims back at pixels.
+    let intents = h.click(ids::layer_content_thumb(a));
+    assert!(
+        intents
+            .iter()
+            .any(|i| matches!(i, Intent::SetEditTarget { mask: false })),
+        "the content thumbnail click aims at pixels: {intents:?}"
+    );
+    assert_eq!(
+        h.workspace.property_focus,
+        ui::panels::properties::PropertyFocus::Layer,
+        "the target border follows the click back"
+    );
+}
+
+#[test]
+fn clicking_a_mask_thumbnail_on_a_non_active_row_selects_that_row_and_aims_at_its_mask() {
+    // Card 055's critical case: the clicked row is NOT the active one. The
+    // well click must select the row FIRST, or the target would resolve
+    // against the previously active layer while the clicked well showed the
+    // border.
+    use layer_model::{LayerMask, MaskId};
+
+    let mut doc = Document::new(320, 240, "Test");
+    let top = doc.layers.insert_at(Layer::raster("Top"), None, 0).unwrap();
+    let bottom = doc
+        .layers
+        .insert_at(Layer::raster("Bottom"), None, 1)
+        .unwrap();
+    doc.layers.get_mut(bottom).unwrap().mask = Some(LayerMask::new(MaskId::new()));
+    doc.set_active_layer(Some(top)).unwrap();
+    let mut h = Harness::with_document(doc);
+    h.only_layers();
+
+    let intents = h.click(ids::layer_mask_thumb(bottom));
+    assert!(
+        intents.iter().any(|i| matches!(
+            i,
+            Intent::SelectLayers {
+                active: Some(l),
+                ..
+            } if *l == bottom
+        )),
+        "the click selects the clicked row: {intents:?}"
+    );
+    assert!(
+        intents
+            .iter()
+            .any(|i| matches!(i, Intent::SetEditTarget { mask: true })),
+        "the click aims at the clicked row's mask: {intents:?}"
+    );
+    assert_eq!(
+        h.workspace.property_focus,
+        ui::panels::properties::PropertyFocus::Mask
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Drag to reorder, and drag to re-parent
 // ---------------------------------------------------------------------------
@@ -519,4 +628,153 @@ fn the_eye_of_one_row_does_not_move_another_rows_layer() {
         }
         other => panic!("unexpected command: {other:?}"),
     }
+}
+
+#[test]
+fn the_mask_well_popup_picks_the_view_mode() {
+    // Card 059: the mask well's right-click popup owns the canvas's mask
+    // view — a panel setting, like the Channels panel's toggles. Picking a
+    // mode updates it directly; the app never sees an intent because no
+    // document state changes.
+    use layer_model::{LayerMask, MaskId};
+
+    let mut doc = Document::new(320, 240, "Test");
+    let a = doc.layers.insert_at(Layer::raster("Top"), None, 0).unwrap();
+    doc.layers.get_mut(a).unwrap().mask = Some(LayerMask::new(MaskId::new()));
+    doc.set_active_layer(Some(a)).unwrap();
+    let mut h = Harness::with_document(doc);
+    h.only_layers();
+    assert_eq!(h.workspace.mask_view, ui::MaskViewMode::Composite);
+
+    let intents = h.right_click(ids::layer_mask_thumb(a));
+    // Opening the popup may re-select the row (the ops act on the active
+    // layer), but must touch no document state and no app action.
+    assert!(
+        intents
+            .iter()
+            .all(|i| matches!(i, Intent::SelectLayers { .. })),
+        "opening the popup only selects the row: {intents:?}"
+    );
+    // The selection restyles the row; let the layout settle so the popup's
+    // rect read and the click land on the same frame.
+    h.settle();
+
+    // The popup's Grayscale row is on screen; clicking it switches the view.
+    let intents = h.click(ids::mask_view_item(ui::MaskViewMode::Grayscale));
+    assert!(intents.is_empty());
+    assert_eq!(
+        h.workspace.mask_view,
+        ui::MaskViewMode::Grayscale,
+        "the popup picked the grayscale view"
+    );
+    // ...and picking Composite returns to the exporting appearance.
+    h.right_click(ids::layer_mask_thumb(a));
+    h.settle();
+    let intents = h.click(ids::mask_view_item(ui::MaskViewMode::Composite));
+    assert!(intents.is_empty());
+    assert_eq!(h.workspace.mask_view, ui::MaskViewMode::Composite);
+}
+
+#[test]
+fn the_mask_well_shows_the_active_target_badge_and_a_real_thumbnail() {
+    // Card 059: the well draws the mask's real coverage thumbnail when the
+    // application supplies one, and the aimed-at well carries a
+    // discoverable target badge.
+    use layer_model::{LayerMask, MaskId};
+
+    let mut doc = Document::new(320, 240, "Test");
+    let a = doc.layers.insert_at(Layer::raster("Top"), None, 0).unwrap();
+    doc.layers
+        .insert_at(Layer::raster("Bottom"), None, 1)
+        .unwrap();
+    doc.layers.get_mut(a).unwrap().mask = Some(LayerMask::new(MaskId::new()));
+    doc.set_active_layer(Some(a)).unwrap();
+    let mut h = Harness::with_document(doc);
+    h.only_layers();
+
+    // A real coverage thumbnail: the chrome builds these from the mask
+    // store; here a grey square stands in for one.
+    let img = egui::ColorImage::from_rgba_unmultiplied([8usize, 8], &[64u8; 256]);
+    let tex = h
+        .ctx
+        .load_texture("mask-thumb-a", img, egui::TextureOptions::NEAREST);
+    h.workspace.mask_thumbs.insert(a, tex);
+
+    // Aim at the mask (as the well's own click does).
+    let _ = h.click(ids::layer_mask_thumb(a));
+    h.settle();
+    // The badge exists, is discoverable by id, and sits over the well.
+    let badge = h
+        .ctx
+        .read_response(ids::mask_target_badge(a))
+        .unwrap_or_else(|| panic!("the aimed-at mask well shows no target badge"));
+    let well = h.ctx.read_response(ids::layer_mask_thumb(a)).unwrap().rect;
+    assert!(
+        well.intersects(badge.rect),
+        "the badge sits on the mask well"
+    );
+    // The badge draws only on the AIMED-AT row: probe the second row's
+    // badge id directly (it was never aimed at, so nothing was drawn).
+    let bottom = *h
+        .layers()
+        .iter()
+        .find(|id| **id != a)
+        .unwrap_or_else(|| panic!("a second row exists"));
+    assert!(
+        h.ctx
+            .read_response(ids::mask_target_badge(bottom))
+            .is_none(),
+        "a non-aimed row shows no target badge"
+    );
+}
+
+#[test]
+fn the_mask_well_popup_ops_ride_the_menu_route_on_the_right_layer() {
+    // Card 059 (review round 1): the right-click SELECTS the row first, so
+    // the popup's Enable/Disable row (which rides MaskOp::Toggle — an
+    // active-layer op) cannot hit another layer's mask.
+    use layer_model::{LayerMask, MaskId};
+
+    let mut doc = Document::new(320, 240, "Test");
+    let a = doc.layers.insert_at(Layer::raster("Top"), None, 0).unwrap();
+    doc.layers
+        .insert_at(Layer::raster("Bottom"), None, 1)
+        .unwrap();
+    // BOTH rows have masks, so both carry wells; a is active.
+    doc.layers.get_mut(a).unwrap().mask = Some(LayerMask::new(MaskId::new()));
+    let bottom = *doc
+        .layers
+        .iter_depth_first()
+        .iter()
+        .find(|id| **id != a)
+        .unwrap();
+    doc.layers.get_mut(bottom).unwrap().mask = Some(LayerMask::new(MaskId::new()));
+    doc.set_active_layer(Some(a)).unwrap();
+    let mut h = Harness::with_document(doc);
+    h.only_layers();
+
+    // Card 059 round-2: right-click the NON-ACTIVE row's well — the
+    // protective select_only must aim the op at the clicked row, not the
+    // previously active one (the round-1 wrong-layer bug path).
+    let intents = h.right_click(ids::layer_mask_thumb(bottom));
+    assert!(
+        intents.iter().any(|i| matches!(
+            i,
+            Intent::SelectLayers {
+                active: Some(active),
+                ..
+            } if *active == bottom
+        )),
+        "right-clicking a non-active well selects THAT row: {intents:?}"
+    );
+    h.settle();
+    let intents = h.click(ids::mask_toggle_item(bottom));
+    let action = intents.iter().find_map(Intent::as_action);
+    assert!(
+        matches!(
+            action,
+            Some(ui::menu::MenuAction::Mask(ui::menu::MaskOp::Toggle))
+        ),
+        "the popup's toggle row rides the menu route: {intents:?}"
+    );
 }

@@ -1382,6 +1382,7 @@ fn typing_a_font_family_into_the_character_panel_restyles_the_run() {
                 text: "Hello".into(),
                 font_family: "Inter".into(),
                 size_px: 24.0,
+                ..Default::default()
             }),
         ))
         .unwrap();

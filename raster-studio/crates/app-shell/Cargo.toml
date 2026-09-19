@@ -6,6 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# The text AND image clipboard (card 051): one stack for both, and the
+# default `image-data` feature is what makes `get_image`/`set_image`
+# available — verified against arboard 3.6.1's own feature list rather
+# than re-enabled ad hoc.
+arboard = "3.6"
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
@@ -21,6 +26,9 @@ telemetry.workspace = true
 webbrowser.workspace = true
 accesskit_winit.workspace = true
 compositor.workspace = true
+# Card 026: the shell resolves Type clicks through the shaped run
+# (`TextRun` + the compositor's hit-test facade).
+text-engine.workspace = true
 project-format.workspace = true
 raster.workspace = true
 # Photoshop documents. `psd` models a `.psd` as its own tree of planar channels

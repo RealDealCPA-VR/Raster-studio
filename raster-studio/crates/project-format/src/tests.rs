@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use editor_core::{Document, PixelKey, TileDelta, TileEdit};
+use glam::Affine2;
 use layer_model::{Layer, LayerMask, MaskId};
 use raster::{TileCoord, TileHash};
 
@@ -48,7 +49,12 @@ fn painted() -> (
     let mut doc = Document::new(512, 512, "Painted");
     let mut layer = Layer::raster("Paint");
     let mask_id = MaskId::new();
-    layer.mask = Some(LayerMask::new(mask_id));
+    let mut mask = LayerMask::new(mask_id);
+    // Card 043: persist a non-identity mask transform end-to-end — the
+    // counter-transform an unlinked mask accumulates must survive save/load.
+    mask.linked = false;
+    *mask.transform = Affine2::from_translation(glam::Vec2::new(-40.0, -30.0));
+    layer.mask = Some(mask);
     let layer_id = layer.id;
     doc.layers.push_root(layer).unwrap();
 

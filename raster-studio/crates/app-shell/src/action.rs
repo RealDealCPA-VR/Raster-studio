@@ -115,6 +115,13 @@ pub enum Action {
     ShowPreferences,
     /// Open or close the File Info… metadata window.
     ShowFileInfo,
+    /// Card 052: the image clipboard, reachable from the keyboard — the
+    /// same routes the Edit menu drives (copy lifts the selection; cut also
+    /// clears it; paste prefers the freshest payload per the ownership
+    /// policy). A text session consumes these chords first (card 028).
+    Copy,
+    Cut,
+    Paste,
     // ---- Layer ----
     NewLayer,
     DeleteLayer,
@@ -154,6 +161,9 @@ const FIXED: &[Action] = &[
     Action::Quit,
     Action::Undo,
     Action::Redo,
+    Action::Copy,
+    Action::Cut,
+    Action::Paste,
     Action::ShowPreferences,
     Action::ShowFileInfo,
     Action::DeleteLayer,
@@ -200,6 +210,9 @@ impl Action {
             Action::Quit => "quit".into(),
             Action::Undo => "undo".into(),
             Action::Redo => "redo".into(),
+            Action::Copy => "copy".into(),
+            Action::Cut => "cut".into(),
+            Action::Paste => "paste".into(),
             Action::ShowPreferences => "show-preferences".into(),
             Action::ShowFileInfo => "show-file-info".into(),
             Action::NewLayer => "new-layer".into(),
@@ -247,9 +260,13 @@ impl Action {
             | Action::CloseDocument
             | Action::CloseOthers
             | Action::Quit => Category::File,
-            Action::Undo | Action::Redo | Action::ShowPreferences | Action::ShowFileInfo => {
-                Category::Edit
-            }
+            Action::Undo
+            | Action::Redo
+            | Action::Copy
+            | Action::Cut
+            | Action::Paste
+            | Action::ShowPreferences
+            | Action::ShowFileInfo => Category::Edit,
             Action::NewLayer
             | Action::DeleteLayer
             | Action::DuplicateLayer
@@ -283,6 +300,9 @@ impl Action {
             Action::Quit => "Quit".into(),
             Action::Undo => "Undo".into(),
             Action::Redo => "Redo".into(),
+            Action::Copy => "Copy".into(),
+            Action::Cut => "Cut".into(),
+            Action::Paste => "Paste".into(),
             Action::ShowPreferences => "Preferences…".into(),
             Action::ShowFileInfo => "File Info…".into(),
             Action::NewLayer => "New Layer".into(),

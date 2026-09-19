@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use crate::brush::{BrushSettings, Dab, DabEmitter};
 use crate::error::ToolError;
 use crate::patch::{ColorPatch, CoveragePatch, MAX_PATCH_TILES};
+use crate::tool::ToolSetting;
 use crate::tool::{PaintTarget, Pattern, PointerEvent, Tool, ToolContext, ToolId};
 
 /// Which tones a dodge/burn/sponge dab acts on.
@@ -79,6 +80,17 @@ pub enum StrokeOp {
     },
     /// Remove coverage.
     Erase,
+    /// Card 061: regrade the coverage INSIDE the painted band — a local
+    /// smooth (the band's stair-steps and noise average out) followed by a
+    /// mild re-grade that keeps the edge defined. Definite coverage is
+    /// untouched by construction: a plateau is a fixed point of both stages,
+    /// so hard interior/exterior stays hard. Deterministic manual refinement
+    /// — automatic matting is explicitly out of scope.
+    RefineBoundary {
+        /// Drives both the smooth's reach (sigma) and the re-grade's gain,
+        /// 0.0..=1.0.
+        strength: f32,
+    },
     /// Replace pixels within `tolerance` of the colour first touched, keeping
     /// their luminance so texture survives.
     ColorReplacement {
@@ -144,7 +156,10 @@ impl StrokeOp {
     /// it is a filter over the coverage plane rather than a stamped dab, so it
     /// is not one of these either.
     pub fn works_on_mask(&self) -> bool {
-        matches!(self, StrokeOp::Paint { .. } | StrokeOp::Erase)
+        matches!(
+            self,
+            StrokeOp::Paint { .. } | StrokeOp::Erase | StrokeOp::RefineBoundary { .. }
+        )
     }
 }
 
@@ -417,6 +432,13 @@ fn prepare(
     };
 
     Ok(match op {
+        // Card 061: RefineBoundary is a MASK-only op — the mask commit path
+        // regrades the coverage itself (apply_refine_to_mask); reaching here
+        // means the Content target, which refuses loudly instead of doing
+        // nothing.
+        StrokeOp::RefineBoundary { .. } => {
+            return Err(ToolError::UnsupportedOnMask);
+        }
         StrokeOp::Paint { color } => Prepared {
             aux: Some(constant(*color)?),
             gate: None,
@@ -758,6 +780,201 @@ pub fn apply_smudge(
 }
 
 /// Composite a stroke onto a mask's coverage.
+/// Card 061's unit-level probe: the boundary-refine regrade on a synthetic
+/// stair-step ramp, driven through the real coverage machinery. See the
+/// shell-level tests for the route; this pins the MATH.
+#[cfg(test)]
+pub(crate) mod refine_tests {
+    use super::*;
+    use crate::patch::CoveragePatch;
+    use crate::tiles::MemoryTiles;
+    use editor_core::pixels::PixelKey;
+    use glam::IVec2;
+    use layer_model::MaskId;
+    use raster::{PixelRect, TILE_SIZE};
+
+    /// A one-tile store: the stair-step coverage tile under one mask id
+    /// (single-channel mask bytes via `MemoryTiles::put`).
+    fn stair_store() -> (MemoryTiles, PixelKey) {
+        let ts = TILE_SIZE as usize;
+        let mut tile = vec![0u8; ts * ts];
+        let steps = [0u8, 0, 64, 64, 128, 128, 192, 192];
+        for y in 0..16usize {
+            for (x, v) in steps.iter().enumerate() {
+                tile[y * ts + x] = *v;
+            }
+            // The ramp tops out at a solid 255 plateau to the row's end, so
+            // the band's top step is not sitting next to a hard zero.
+            for x in 8..16usize {
+                tile[y * ts + x] = 255;
+            }
+        }
+        let key = PixelKey::Mask(MaskId::new());
+        let mut tiles = MemoryTiles::new();
+        tiles.put(key, raster::TileCoord::new(0, 0, 0), tile);
+        (tiles, key)
+    }
+
+    #[test]
+    fn the_refine_band_smooths_stairs_and_keeps_plateaus_hard() {
+        // A stair-step ramp: 0,0,64,64,128,128,192,192,255,255 across a row.
+        let ts = TILE_SIZE as usize;
+        let mut tile = vec![0u8; ts * ts];
+        let steps = [0u8, 0, 64, 64, 128, 128, 192, 192, 255, 255];
+        for y in 0..16usize {
+            for (x, v) in steps.iter().enumerate() {
+                tile[y * ts + x] = *v;
+            }
+        }
+        let (tiles, key) = stair_store();
+        let rect = PixelRect::new(0, 0, 16, 16);
+        let mut patch = CoveragePatch::load(&tiles, key, rect).unwrap();
+
+        // The band covers the stair region only (dabs through x 1..9).
+        let dabs: Vec<Dab> = (1..9)
+            .map(|x| Dab {
+                center: Vec2::new(x as f32 + 0.5, 8.5),
+                radius: 1.0,
+                hardness: 1.0,
+                flow: 1.0,
+                angle: 0.0,
+                roundness: 1.0,
+                aliased: false,
+            })
+            .collect();
+        let buf = StrokeBuffer::rasterize(&dabs, rect).unwrap();
+        apply_refine_to_mask(&mut patch, &buf, 0.6, 1.0, &Selection::None);
+
+        // The stairs became a MONOTONE ramp (no more flat double-steps) —
+        // the smooth + re-grade turned the flat 64/64 and 192/192 pairs into
+        // a rising sequence.
+        let mut prev = patch.get(IVec2::new(1, 8));
+        let mut rose = false;
+        for x in 2..9 {
+            let v = patch.get(IVec2::new(x, 8));
+            assert!(
+                v >= prev - 0.02,
+                "the band's ramp is monotone at x={x}: {v} after {prev}"
+            );
+            rose |= v > prev + 0.02;
+            prev = v;
+        }
+        assert!(rose, "the band actually regraded the stairs");
+        // Outside the band, the coverage is byte-identical (bounded work):
+        // the plateau pixels the dabs never touched hold their 255.
+        assert_eq!(patch.get(IVec2::new(10, 8)), 1.0, "unpainted stays put");
+        assert_eq!(patch.get(IVec2::new(15, 8)), 1.0);
+
+        // The round-1 critical: a stroke whose bounding rect does NOT start
+        // at the document origin (the patch's tile box is displaced) must
+        // regrade the band, not erase it. Same stair fixture, shifted.
+        let shifted_key = PixelKey::Mask(MaskId::new());
+        let mut shifted_tiles = MemoryTiles::new();
+        let mut shifted = vec![0u8; TILE_SIZE as usize * TILE_SIZE as usize];
+        for y in 0..16usize {
+            for (x, v) in steps.iter().enumerate() {
+                shifted[(y + 4) * TILE_SIZE as usize + x] = *v;
+            }
+            for x in 8..16usize {
+                shifted[(y + 4) * TILE_SIZE as usize + x] = 255;
+            }
+        }
+        shifted_tiles.put(shifted_key, raster::TileCoord::new(1, 0, 0), shifted);
+        // The stroke rect sits at x 256..272 (tile 1) y 4..20 — displaced.
+        let rect2 = PixelRect::new(256, 4, 16, 16);
+        let mut patch2 = CoveragePatch::load(&shifted_tiles, shifted_key, rect2).unwrap();
+        let dabs2: Vec<Dab> = (1..9)
+            .map(|x| Dab {
+                center: Vec2::new((256 + x) as f32 + 0.5, (4 + 8) as f32 + 0.5),
+                radius: 1.0,
+                hardness: 1.0,
+                flow: 1.0,
+                angle: 0.0,
+                roundness: 1.0,
+                aliased: false,
+            })
+            .collect();
+        let buf2 = StrokeBuffer::rasterize(&dabs2, rect2).unwrap();
+        apply_refine_to_mask(&mut patch2, &buf2, 0.6, 1.0, &Selection::None);
+        // The band's ramp still rises (not erased to zero).
+        let mut prev2 = patch2.get(IVec2::new(257, 12));
+        let mut rose2 = false;
+        for x in 258..264 {
+            let v = patch2.get(IVec2::new(x, 12));
+            assert!(v >= prev2 - 0.02, "the displaced band is monotone at {x}");
+            rose2 |= v > prev2 + 0.02;
+            prev2 = v;
+        }
+        assert!(rose2, "the displaced stroke regraded, not erased");
+
+        // The "hard interior" clause: a CONSTANT region is a fixed point of
+        // blur + re-grade — a wide dab over a solid plateau moves nothing.
+        let mut constant = vec![128u8; TILE_SIZE as usize * TILE_SIZE as usize];
+        for y in 0..16usize {
+            for x in 0..16usize {
+                constant[y * TILE_SIZE as usize + x] = 128;
+            }
+        }
+        let key2 = PixelKey::Mask(MaskId::new());
+        let mut tiles2 = MemoryTiles::new();
+        tiles2.put(key2, raster::TileCoord::new(0, 0, 0), constant);
+        let mut patch2 = CoveragePatch::load(&tiles2, key2, rect).unwrap();
+        let dabs2: Vec<Dab> = (2..14)
+            .map(|x| Dab {
+                center: Vec2::new(x as f32 + 0.5, 8.5),
+                radius: 2.0,
+                hardness: 1.0,
+                flow: 1.0,
+                angle: 0.0,
+                roundness: 1.0,
+                aliased: false,
+            })
+            .collect();
+        let buf2 = StrokeBuffer::rasterize(&dabs2, rect).unwrap();
+        apply_refine_to_mask(&mut patch2, &buf2, 0.8, 1.0, &Selection::None);
+        for x in [2, 6, 10, 13] {
+            assert_eq!(
+                patch2.get(IVec2::new(x, 8)),
+                128.0 / 255.0,
+                "the hard interior (a constant plateau) retains its coverage at x={x}"
+            );
+        }
+    }
+
+    /// Card 061 (review round 1): the advertised Strength option reaches the
+    /// op — `set_setting` mutates the op's strength (the round-1 defect was
+    /// a silent no-op slider; the shell surfaces refusals instead).
+    #[test]
+    fn the_strength_option_reaches_the_refine_op() {
+        use crate::tool::ToolSetting;
+        let mut tool = StrokeTool::new(
+            ToolId::RefineBoundary,
+            BrushSettings::default(),
+            StrokeOp::RefineBoundary { strength: 0.5 },
+        );
+        tool.set_setting("strength", ToolSetting::Float(0.9))
+            .unwrap();
+        match &tool.op {
+            StrokeOp::RefineBoundary { strength } => {
+                assert_eq!(*strength, 0.9, "the option landed in the op");
+            }
+            other => panic!("unexpected op: {other:?}"),
+        }
+        // An unknown key is an ERROR the shell surfaces, never a no-op.
+        assert!(tool.set_setting("bogus", ToolSetting::Float(1.0)).is_err());
+        // The whole float-option family flows the same way (Blur's radius was
+        // dead the same way before this fix).
+        let mut blur = StrokeTool::new(
+            ToolId::Blur,
+            BrushSettings::default(),
+            StrokeOp::Blur { radius: 3.0 },
+        );
+        blur.set_setting("radius", ToolSetting::Float(12.0))
+            .unwrap();
+        assert!(matches!(blur.op, StrokeOp::Blur { radius: 12.0 }));
+    }
+}
+
 pub fn apply_stroke_to_mask(
     patch: &mut CoveragePatch,
     buf: &StrokeBuffer,
@@ -775,6 +992,82 @@ pub fn apply_stroke_to_mask(
                 continue;
             }
             patch.blend(p, value, a);
+        }
+    }
+}
+
+/// Card 061: the boundary-refine brush's coverage regrade.
+///
+/// The pipeline over the stroke's bounding rect, in order:
+///
+/// 1. **Smooth** — a gaussian blur of the coverage with
+///    `sigma = 0.5 + 2.5 * strength`, which averages the band's stair-steps
+///    and sensor noise into a monotone ramp. A plateau is a fixed point, so
+///    definite coverage inside the band keeps its value.
+/// 2. **Re-grade** — the blurred sample is pushed away from the
+///    byte-space midpoint 128 by `gain = 1 + strength` (the same midpoint
+///    card 060's contrast curve uses; a MILDER gain than its `1 + 3·strength`,
+///    because a brush stroke re-runs per dab pass and must stay repeatable),
+///    so the smoothed edge stays defined instead of going mushy.
+///    Saturation points (0 and 255) and the midpoint are exact fixed points;
+///    INTERMEDIATE constant values harden (200 → ~243 at strength 0.6) —
+///    that is what a contrast regrade does, the user painted there, and
+///    unpainted definite coverage never moves.
+///
+/// Only pixels the dabs actually cover move toward the regraded value (the
+/// same `dab alpha × opacity × selection` band gate the paint path
+/// uses), so the work and the effect are bounded to the painted region —
+/// unpainted coverage is byte-identical. This is manual morphology; it is
+/// deliberately NOT presented as automatic matting or hair extraction.
+pub fn apply_refine_to_mask(
+    patch: &mut CoveragePatch,
+    buf: &StrokeBuffer,
+    strength: f32,
+    opacity: f32,
+    selection: &Selection,
+) {
+    let strength = strength.clamp(0.0, 1.0);
+    let rect = buf.rect();
+    let opacity = opacity.clamp(0.0, 1.0);
+    // The working plane is the PATCH's own tile box, in PATCH-LOCAL
+    // coordinates (`CoveragePatch::get` takes ABSOLUTE document coordinates;
+    // `to_buffer` produces the matching patch-aligned plane — the round-1
+    // defect mixed the two and erased bands away from the document origin).
+    let (w, h) = (patch.width(), patch.height());
+    let Ok(src) = patch.to_buffer() else {
+        return;
+    };
+    let sigma = 0.5 + 2.5 * strength;
+    let blurred = gaussian_blur(&src, sigma, EdgeMode::Clamp);
+    let gain = 1.0 + strength;
+    for y in 0..rect.height as i64 {
+        for x in 0..rect.width as i64 {
+            let p = IVec2::new((rect.x + x) as i32, (rect.y + y) as i32);
+            let a = buf.get(p) * opacity * selection.coverage_at(p);
+            if a <= 0.0 {
+                continue;
+            }
+            let lx = rect.x + x - patch.origin().x as i64;
+            let ly = rect.y + y - patch.origin().y as i64;
+            if lx < 0 || ly < 0 || lx >= w as i64 || ly >= h as i64 {
+                // The stroke rect and the patch box are built from the same
+                // union; desync would degrade quietly, so catch it in dev.
+                debug_assert!(false, "stroke rect outside the patch box");
+                continue;
+            }
+            let blurred_v = blurred.get(lx as u32, ly as u32)[0];
+            // The re-grade: push the blurred sample away from the midpoint —
+            // the BYTE-space midpoint 128/255 (the same midpoint card 060's
+            // contrast curve uses; the GAIN is milder here — 1+strength vs
+            // 1+3·strength — because a brush stroke re-runs per dab pass and
+            // must stay repeatable), so a constant field is an exact fixed
+            // point.
+            const MID: f32 = 128.0 / 255.0;
+            let d = blurred_v - MID;
+            let graded = (MID + d * gain).clamp(0.0, 1.0);
+            let original = patch.get(p);
+            let mixed = original * (1.0 - a) + graded * a;
+            patch.set(p, mixed);
         }
     }
 }
@@ -889,7 +1182,11 @@ impl StrokeTool {
         }
         let target = ctx.pixel_target()?;
         let key = ctx.pixel_key()?;
-        let Some(rect) = StrokeBuffer::bounds_of(dabs, ctx.canvas) else {
+        // Card 058: dabs live in the PAINT TARGET's space, so the clip is
+        // the canvas expressed there — for a transformed mask, `ctx.canvas`
+        // (document space) would clip a visible strip of the mask.
+        let clip = ctx.paint_space_canvas.unwrap_or(ctx.canvas);
+        let Some(rect) = StrokeBuffer::bounds_of(dabs, clip) else {
             return Ok(());
         };
         let buf = StrokeBuffer::rasterize(dabs, rect)?;
@@ -908,18 +1205,35 @@ impl StrokeTool {
                 // The fallback refuses rather than inventing a value: it is
                 // unreachable through `works_on_mask` above, and if that gate
                 // ever widens, the new op has to decide what it means here.
-                let value = match &self.op {
-                    StrokeOp::Erase => 0.0,
-                    StrokeOp::Paint { color } => crate::patch::mask_coverage_of(*color),
-                    _ => return Err(ToolError::UnsupportedOnMask),
-                };
-                apply_stroke_to_mask(
-                    &mut patch,
-                    &buf,
-                    value,
-                    self.settings.opacity,
-                    &ctx.selection,
-                );
+                match &self.op {
+                    StrokeOp::RefineBoundary { strength } => {
+                        // Card 061: LOCAL refinement, bounded to the painted
+                        // band — the pipeline runs once over the stroke's
+                        // bounding rect, and only pixels the dabs touch move
+                        // toward the regraded value.
+                        apply_refine_to_mask(
+                            &mut patch,
+                            &buf,
+                            *strength,
+                            self.settings.opacity,
+                            &ctx.selection,
+                        );
+                    }
+                    _ => {
+                        let value = match &self.op {
+                            StrokeOp::Erase => 0.0,
+                            StrokeOp::Paint { color } => crate::patch::mask_coverage_of(*color),
+                            _ => return Err(ToolError::UnsupportedOnMask),
+                        };
+                        apply_stroke_to_mask(
+                            &mut patch,
+                            &buf,
+                            value,
+                            self.settings.opacity,
+                            &ctx.selection,
+                        );
+                    }
+                }
                 patch.commit(ctx.tiles, key)?
             }
             PaintTarget::Layer => {
@@ -984,17 +1298,25 @@ impl Tool for StrokeTool {
         ctx: &mut ToolContext<'_>,
         event: PointerEvent,
     ) -> Result<(), ToolError> {
+        // Card 040: paint tools write the ACTIVE layer's pixels in LAYER
+        // space — map every sample through the shell's document→layer
+        // mapping so a moved/scaled layer is painted where the pointer
+        // displays. Brush radius is defined in layer pixels: under a
+        // nonuniform display scale the dab stays circular in layer space.
+        // DOCUMENTED LIMITATION: the document selection's coverage is tested
+        // in the same (layer) space as the dabs — a selection drawn for an
+        // untransformed view constrains a transformed layer only where the
+        // two coincide. Full selection re-mapping rides a later card.
+        let to_layer = ctx.sample_to_layer.unwrap_or(glam::Affine2::IDENTITY);
+        let pos = to_layer.transform_point2(event.pos);
         // Alt-click on a source-reading tool sets the sample point instead of
         // starting a stroke — the gesture every clone stamp uses.
         if self.op.needs_source() && event.modifiers.alt {
-            self.clone.set_anchor(event.pos);
+            self.clone.set_anchor(pos);
             return Ok(());
         }
         if self.op.needs_source() {
-            self.offset = self
-                .clone
-                .begin_stroke(event.pos)
-                .ok_or(ToolError::Degenerate)?;
+            self.offset = self.clone.begin_stroke(pos).ok_or(ToolError::Degenerate)?;
         }
         if self.use_foreground {
             let fg = ctx.foreground;
@@ -1005,21 +1327,23 @@ impl Tool for StrokeTool {
         }
         match &self.op {
             StrokeOp::ColorReplacement { .. } | StrokeOp::BackgroundErase { .. } => {
-                self.sample_base(ctx, event.pos)
+                self.sample_base(ctx, to_layer.transform_point2(event.pos))
             }
             _ => {}
         }
-        self.emitter = Some(DabEmitter::begin(self.settings, event.pos, event.pressure)?);
+        self.emitter = Some(DabEmitter::begin(self.settings, pos, event.pressure)?);
         Ok(())
     }
 
     fn on_pointer_move(
         &mut self,
-        _ctx: &mut ToolContext<'_>,
+        ctx: &mut ToolContext<'_>,
         event: PointerEvent,
     ) -> Result<(), ToolError> {
         if let Some(e) = &mut self.emitter {
-            e.extend(event.pos, event.pressure)?;
+            // Card 040: every sample maps document → layer space.
+            let to_layer = ctx.sample_to_layer.unwrap_or(glam::Affine2::IDENTITY);
+            e.extend(to_layer.transform_point2(event.pos), event.pressure)?;
         }
         Ok(())
     }
@@ -1030,7 +1354,8 @@ impl Tool for StrokeTool {
         event: PointerEvent,
     ) -> Result<(), ToolError> {
         if let Some(e) = &mut self.emitter {
-            e.finish(event.pos, event.pressure)?;
+            let to_layer = ctx.sample_to_layer.unwrap_or(glam::Affine2::IDENTITY);
+            e.finish(to_layer.transform_point2(event.pos), event.pressure)?;
         }
         self.commit(ctx)
     }
@@ -1057,6 +1382,71 @@ impl Tool for StrokeTool {
 
     fn brush(&self) -> Option<BrushSettings> {
         Some(self.settings)
+    }
+
+    /// Card 061: the tool-specific float options reach the op — the registry
+    /// declares them, and a refused value is surfaced by the shell rather
+    /// than silently ignored (an options-bar control that did nothing was the
+    /// defect this seam exists to prevent). The brush-shared keys (size,
+    /// hardness, spacing, opacity, ...) travel through `set_brush` instead.
+    ///
+    /// RECORDED dead controls (pre-existing, Choice/Bool keys): Dodge/Burn
+    /// `range` and Sponge `mode` (Choice — the trait's default `set_choice`
+    /// accepts and drops), CloneStamp/HealingBrush `aligned` (Bool —
+    /// refused), and the selection tools' `mode`, Gradient `shape`, Type
+    /// `font_family` (Choice no-ops). Wiring them is follow-up work; the
+    /// registry contract test below keeps the float set from regrowing
+    /// silently.
+    fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        let v = match setting {
+            ToolSetting::Float(v) => v,
+            _ => {
+                return Err(ToolError::UnknownOption {
+                    key: key.to_owned(),
+                })
+            }
+        };
+        match (key, &mut self.op) {
+            ("strength", StrokeOp::RefineBoundary { strength }) => {
+                *strength = v.clamp(0.0, 1.0);
+                Ok(())
+            }
+            ("radius", StrokeOp::Blur { radius }) => {
+                *radius = v.clamp(0.1, 64.0);
+                Ok(())
+            }
+            ("amount", StrokeOp::Sharpen { amount, .. }) => {
+                *amount = v.clamp(0.0, 4.0);
+                Ok(())
+            }
+            ("tolerance", StrokeOp::ColorReplacement { tolerance, .. })
+            | ("tolerance", StrokeOp::BackgroundErase { tolerance, .. }) => {
+                *tolerance = v.clamp(0.0, 1.0);
+                Ok(())
+            }
+            ("softness", StrokeOp::Healing { softness }) => {
+                // The registry's Softness is a Gaussian sigma in PIXELS
+                // (0.5..64, default 4) — not a 0..1 strength.
+                *softness = v.clamp(0.5, 64.0);
+                Ok(())
+            }
+            ("strength", StrokeOp::Smudge { strength }) => {
+                *strength = v.clamp(0.0, 1.0);
+                Ok(())
+            }
+            ("exposure", StrokeOp::Dodge { exposure, .. })
+            | ("exposure", StrokeOp::Burn { exposure, .. }) => {
+                *exposure = v.clamp(0.0, 1.0);
+                Ok(())
+            }
+            ("amount", StrokeOp::Sponge { amount, .. }) => {
+                *amount = v.clamp(0.0, 1.0);
+                Ok(())
+            }
+            _ => Err(ToolError::UnknownOption {
+                key: key.to_owned(),
+            }),
+        }
     }
 }
 

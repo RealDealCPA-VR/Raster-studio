@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use compositor::{CompositeOptions, MemoryTileSource, TileCompositor, TileSource};
 use editor_core::{Command, CommandError, Document, History};
+use layer_model::{LayerId, LayerKind};
 use project_format::{
     CommandJournal, DocumentDigest, ProjectError, SaveOptions, TileBytes, JOURNAL_FILE,
 };
@@ -174,6 +175,12 @@ pub struct OpenDocument {
     pub history: History,
     pub tiles: MemoryTileSource,
     pub camera: Camera,
+    /// The live preview's override, if a gesture is showing one (card 013).
+    /// Never journaled, never saved, cleared when the gesture ends.
+    pub(crate) preview: Option<PreviewOverride>,
+    /// Bumped by every `set_preview`, so each preview frame's tiles are
+    /// cached under keys no earlier frame can serve.
+    pub(crate) preview_generation: u64,
     /// Where the `.rstudio` package lives, once it has one.
     project_path: Option<PathBuf>,
     /// The modification times linked asset sources were read at, by asset id:
@@ -302,6 +309,15 @@ fn sample_bilinear_premultiplied(rgba: &[u8], w: usize, h: usize, x: f64, y: f64
     [to8(px[0] / a), to8(px[1] / a), to8(px[2] / a), to8(a)]
 }
 
+/// One layer's temporary stand-in transform for the live preview (card 013).
+/// Held outside the `Document` on purpose: a preview edits nothing, writes no
+/// history, and survives no save.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PreviewOverride {
+    pub layer: LayerId,
+    pub transform: glam::Affine2,
+}
+
 impl OpenDocument {
     /// Wrap an imported document, with a camera waiting to be fitted.
     ///
@@ -320,6 +336,8 @@ impl OpenDocument {
             history: imported.history,
             tiles: imported.tiles,
             camera: Camera::new(size, size),
+            preview: None,
+            preview_generation: 0,
             project_path: None,
             asset_stamps: std::collections::HashMap::new(),
             source_path: None,
@@ -399,6 +417,8 @@ impl OpenDocument {
             history: History::with_limit(history_depth),
             tiles,
             camera: Camera::new(size, size),
+            preview: None,
+            preview_generation: 0,
             project_path: Some(path.to_path_buf()),
             asset_stamps: std::collections::HashMap::new(),
             source_path: None,
@@ -514,6 +534,8 @@ impl OpenDocument {
             history: History::default(),
             tiles: self.tiles.clone(),
             camera: Camera::new(size, size),
+            preview: None,
+            preview_generation: 0,
             project_path: None,
             asset_stamps: std::collections::HashMap::new(),
             source_path: None,
@@ -735,15 +757,103 @@ impl OpenDocument {
     }
 
     /// Composite `region`, reusing every cached tile whose inputs are unchanged.
+    /// Composite `region` as the document stands, plus any live preview
+    /// override.
+    ///
+    /// The preview generation rides [`CompositeOptions`], so preview tiles are
+    /// cached under keys no committed frame can hit and no earlier preview can
+    /// serve; the override reaches the compositor through
+    /// `composite_region_with`, which reads the committed document and writes
+    /// nothing.
     pub fn composite(&mut self, region: PixelRect) -> Result<Vec<u8>, DocumentError> {
-        let canvas = self.compositor.composite_region(
-            &self.document,
-            &self.tiles,
-            region,
-            0,
-            CompositeOptions::default(),
-        )?;
+        let opts = CompositeOptions {
+            preview_generation: self.preview_generation,
+            ..Default::default()
+        };
+        let over = self.preview.map(|p| compositor::LayerOverride {
+            layer: p.layer,
+            transform: p.transform,
+            generation: self.preview_generation,
+        });
+        let canvas = match over {
+            Some(over) => compositor::composite_region_with(
+                &self.document,
+                &self.tiles,
+                region,
+                0,
+                opts,
+                Some(over),
+            )?,
+            None => {
+                self.compositor
+                    .composite_region(&self.document, &self.tiles, region, 0, opts)?
+            }
+        };
         Ok(canvas.to_rgba8(&self.document.meta.color_space))
+    }
+
+    /// Show `layer` transformed by `transform` for this document's frames
+    /// until [`Self::clear_preview`] (card 013). No history entry, no dirty
+    /// flag, nothing journaled: a preview is a lens, not an edit.
+    pub fn set_preview(&mut self, layer: LayerId, transform: glam::Affine2) {
+        self.preview = Some(PreviewOverride { layer, transform });
+        self.preview_generation += 1;
+    }
+
+    /// End the live preview. The committed document is exactly what it was
+    /// before it started.
+    pub fn clear_preview(&mut self) {
+        self.preview = None;
+    }
+
+    /// Card 039: whether a preview lens is live on this document.
+    pub fn has_preview(&self) -> bool {
+        self.preview.is_some()
+    }
+
+    /// Apply a live text draft (card 025): the layer's kind becomes `kind`
+    /// **outside history** — no entry, nothing journaled — so the canvas
+    /// renders every keystroke while undo stays clean. The session's confirm
+    /// lands the one `SetLayerKind` history entry (the document already shows
+    /// the draft, so the command is the reconciliation), and its cancel
+    /// applies the original payload through this same route. Refused when the
+    /// layer is gone or the payload fails its own validation.
+    pub fn apply_text_draft(
+        &mut self,
+        layer: LayerId,
+        kind: LayerKind,
+    ) -> Result<(), DocumentError> {
+        let Some(l) = self.document.layers.get_mut(layer) else {
+            return Err(DocumentError::Command(CommandError::InvalidPayload {
+                reason: "the layer is gone".to_string(),
+            }));
+        };
+        // The same blanket lock `SetLayerKind` enforces: a locked layer must
+        // not be mutated even by a live draft, or confirm would fail later
+        // and strand the draft (card 025).
+        if l.locked.all {
+            return Err(DocumentError::Command(CommandError::LayerLocked(layer)));
+        }
+        // The same-class guard `SetLayerKind` enforces: a draft may retype a
+        // text layer, never convert a raster/group/adjustment one in place.
+        if std::mem::discriminant(&l.kind) != std::mem::discriminant(&kind) {
+            return Err(DocumentError::Command(CommandError::InvalidPayload {
+                reason: "a text draft cannot change the layer's class".to_string(),
+            }));
+        }
+        let LayerKind::Text(text) = &kind else {
+            return Err(DocumentError::Command(CommandError::InvalidPayload {
+                reason: "a text draft must be a text layer".to_string(),
+            }));
+        };
+        text.validate().map_err(|e| {
+            DocumentError::Command(CommandError::InvalidPayload {
+                reason: e.to_string(),
+            })
+        })?;
+        l.kind = kind;
+        self.dirty.mark_all();
+        Ok(())
     }
 
     /// Composite `region` as straight-alpha 16-bit RGBA in the document's
@@ -791,6 +901,37 @@ impl OpenDocument {
         let rgba8 = canvas.to_rgba8(&self.document.meta.color_space);
         let (w, h) = (self.document.width(), self.document.height());
         Ok(Self::box_downscale(&rgba8, w, h, max_edge))
+    }
+
+    /// Card 059: the layer's MASK coverage as a grayscale thumbnail — the
+    /// pose-sampled store read (card 058's read_mask_coverage), black hidden
+    /// to white revealed, opaque, downscaled like
+    /// [`OpenDocument::layer_thumbnail`] takes.
+    pub fn mask_thumbnail(
+        &self,
+        layer_id: layer_model::LayerId,
+        max_edge: u32,
+    ) -> Result<(u32, u32, Vec<u8>), DocumentError> {
+        let (w, h) = (self.document.width(), self.document.height());
+        let mut coverage = crate::menu_bridge::read_mask_coverage(self, layer_id, w, h);
+        // Card 059 (review round 1): the compositor applies the mask's
+        // INVERTED flag on top of the store — the thumbnail must present the
+        // same field the composite is masked with, not the raw store.
+        if self
+            .document
+            .layers
+            .get(layer_id)
+            .and_then(|l| l.mask.as_ref())
+            .is_some_and(|m| m.inverted)
+        {
+            coverage.iter_mut().for_each(|v| *v = 255 - *v);
+        }
+        // Grayscale, fully opaque: the mask plane as an image.
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for &v in &coverage {
+            rgba.extend_from_slice(&[v, v, v, 255]);
+        }
+        Ok(Self::box_downscale(&rgba, w, h, max_edge))
     }
 
     /// The pixels of one layer composited *alone* (every other layer hidden)
@@ -1708,6 +1849,194 @@ impl OpenDocument {
 mod tests {
     use super::*;
     use editor_core::pixels::{PixelTarget, TileDelta, TileEdit};
+
+    /// Card 025: the live text draft lands on the document outside history,
+    /// and restoring the original through the same route returns the layer
+    /// byte-for-byte — no entry, nothing journaled, locks honoured.
+    #[test]
+    fn a_text_draft_reconciles_outside_history() {
+        let mut doc = OpenDocument::blank(DocumentId(9101), 64, 64, "draft", 32).unwrap();
+        let original = layer_model::TextLayer {
+            text: "Headline".to_string(),
+            font_family: "DejaVu Sans".to_string(),
+            size_px: 32.0,
+            style: layer_model::text::BaseStyle {
+                weight: layer_model::text::Weight::BOLD,
+                ..layer_model::text::BaseStyle::default()
+            },
+            ..layer_model::TextLayer::default()
+        };
+        let id = {
+            let layer = Layer::with_kind("Type", layer_model::LayerKind::Text(original.clone()));
+            let id = layer.id;
+            doc.apply(Command::create_layer(layer)).unwrap();
+            id
+        };
+        let depth = doc.history_depth();
+
+        // The draft: applied directly, no history entry.
+        let draft = layer_model::TextLayer {
+            text: "Edited".to_string(),
+            ..original.clone()
+        };
+        doc.apply_text_draft(id, layer_model::LayerKind::Text(draft.clone()))
+            .unwrap();
+        assert_eq!(doc.history_depth(), depth, "the draft is not history");
+        let layer_model::LayerKind::Text(seen) = &doc.document.layers.get(id).unwrap().kind else {
+            panic!("the layer is text");
+        };
+        assert_eq!(seen.text, "Edited", "the canvas shows the draft");
+
+        // The restore: byte-for-byte back, still no history entry.
+        doc.apply_text_draft(id, layer_model::LayerKind::Text(original.clone()))
+            .unwrap();
+        let layer_model::LayerKind::Text(restored) = &doc.document.layers.get(id).unwrap().kind
+        else {
+            panic!("the layer is text");
+        };
+        assert_eq!(restored, &original, "styles included");
+        assert_eq!(doc.history_depth(), depth);
+
+        // A payload that fails its own validation is refused before it can
+        // touch the layer.
+        let broken = layer_model::TextLayer {
+            text: "x".to_string(),
+            size_px: -4.0,
+            ..layer_model::TextLayer::default()
+        };
+        assert!(doc
+            .apply_text_draft(id, layer_model::LayerKind::Text(broken))
+            .is_err());
+        let layer_model::LayerKind::Text(after) = &doc.document.layers.get(id).unwrap().kind else {
+            panic!("the layer is text");
+        };
+        assert_eq!(after, &original, "the refused draft changed nothing");
+
+        // A blanket-locked layer refuses the draft, like SetLayerKind does.
+        doc.apply(Command::SetLayerProperties {
+            layer_id: id,
+            patch: editor_core::LayerPatch {
+                locked: Some(layer_model::LockState {
+                    all: true,
+                    ..layer_model::LockState::default()
+                }),
+                ..editor_core::LayerPatch::default()
+            },
+        })
+        .unwrap();
+        let depth = doc.history_depth();
+        assert!(doc
+            .apply_text_draft(id, LayerKind::Text(draft.clone()))
+            .is_err());
+        assert_eq!(doc.history_depth(), depth);
+        let layer_model::LayerKind::Text(locked) = &doc.document.layers.get(id).unwrap().kind
+        else {
+            panic!("the layer is text");
+        };
+        assert_eq!(locked, &original, "the locked layer kept its payload");
+
+        // Round-2 N4: a draft can retype a text layer, never convert a
+        // non-text one in place (the same-class guard).
+        let raster = {
+            let layer = Layer::raster("Pixels");
+            let id = layer.id;
+            doc.apply(Command::create_layer(layer)).unwrap();
+            id
+        };
+        assert!(doc
+            .apply_text_draft(raster, layer_model::LayerKind::Text(original.clone()))
+            .is_err());
+        assert!(matches!(
+            doc.document.layers.get(raster).unwrap().kind,
+            layer_model::LayerKind::Raster(_)
+        ));
+    }
+
+    /// Card 013: a preview moves the layer's pixels on screen while the
+    /// committed document, its history and its dirty flag stay exactly as
+    /// they were — and clearing the preview restores the exact baseline.
+    #[test]
+    fn a_preview_moves_pixels_on_screen_and_touches_nothing() {
+        let mut doc = OpenDocument::blank(DocumentId(9001), 64, 64, "preview", 32).unwrap();
+        // A second layer with ink in one corner, through the real command route.
+        let overlay = {
+            let layer = Layer::raster("Overlay");
+            let id = layer.id;
+            doc.apply(Command::create_layer(layer)).unwrap();
+            let mut bytes = vec![0u8; (TILE_SIZE * TILE_SIZE * 4) as usize];
+            for y in 8..16u32 {
+                for x in 8..16u32 {
+                    let i = ((y * TILE_SIZE + x) * 4) as usize;
+                    bytes[i..i + 4].copy_from_slice(&[10, 10, 10, 255]);
+                }
+            }
+            let hash = doc.tiles.insert_bytes(bytes);
+            doc.apply(
+                Command::paint_tiles(
+                    PixelTarget::Layer(id),
+                    vec![TileEdit::set(TileCoord::new(0, 0, 0), hash)],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            id
+        };
+        let region = PixelRect::new(0, 0, 64, 64);
+        let baseline = doc.composite(region).unwrap();
+        let depth_before = doc.history_depth();
+        // The setup above is real work; the preview must add no dirt of its own.
+        let dirty_before = doc.is_dirty();
+
+        // The lens: the layer renders 20 px to the right.
+        doc.set_preview(
+            overlay,
+            glam::Affine2::from_translation(glam::vec2(20.0, 0.0)),
+        );
+        let previewed = doc.composite(region).unwrap();
+        let at = |buf: &[u8], x: u32, y: u32| {
+            let i = ((y * 64 + x) * 4) as usize;
+            [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+        };
+        assert_ne!(at(&previewed, 8, 12), at(&baseline, 8, 12), "the ink moved");
+        assert_eq!(
+            at(&previewed, 28, 12),
+            [10, 10, 10, 255],
+            "the ink shows at the previewed position"
+        );
+        assert_eq!(
+            doc.history_depth(),
+            depth_before,
+            "a preview writes no history entry"
+        );
+        assert_eq!(doc.is_dirty(), dirty_before, "and adds no dirty flag");
+
+        // Clearing the lens restores the committed pixels exactly — the
+        // preview generation kept them out of every cache key.
+        doc.clear_preview();
+        let restored = doc.composite(region).unwrap();
+        assert_eq!(restored, baseline, "cancel restores the exact baseline");
+        assert_eq!(doc.preview, None);
+    }
+
+    /// Card 013: another open document's preview is its own — a preview held
+    /// by one document cannot reach another's composite or cache.
+    #[test]
+    fn another_document_cannot_reuse_a_preview() {
+        let mut a = OpenDocument::blank(DocumentId(9002), 64, 64, "a", 32).unwrap();
+        let mut b = OpenDocument::blank(DocumentId(9003), 64, 64, "b", 32).unwrap();
+        let layer = a.document.active_layer().unwrap();
+        let region = PixelRect::new(0, 0, 64, 64);
+        let b_before = b.composite(region).unwrap();
+
+        a.set_preview(
+            layer,
+            glam::Affine2::from_translation(glam::vec2(10.0, 0.0)),
+        );
+        assert!(a.preview.is_some());
+        assert!(b.preview.is_none(), "each document holds its own lens");
+        assert_eq!(b.composite(region).unwrap(), b_before);
+    }
+
     use layer_model::Layer;
     use raster::{Tile, TileCoord, TILE_SIZE};
 

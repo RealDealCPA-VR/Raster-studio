@@ -15,6 +15,23 @@ fn write_png(dir: &Path, name: &str, w: u32, h: u32, value: u8) -> PathBuf {
     path
 }
 
+/// Bounding box `(min_x, min_y, max_x, max_y)` of any non-zero pixel in an
+/// RGBA buffer of the given width. A cheap "where is the ink" probe.
+fn ink_bounds(buf: &[u8], width: u32) -> (u32, u32, u32, u32) {
+    assert_eq!(buf.len() % 4, 0);
+    let mut bounds: Option<(u32, u32, u32, u32)> = None;
+    for (i, px) in buf.chunks_exact(4).enumerate() {
+        if px.iter().any(|&c| c != 0) {
+            let (x, y) = ((i as u32) % width, (i as u32) / width);
+            bounds = Some(match bounds {
+                None => (x, y, x, y),
+                Some((x0, y0, x1, y1)) => (x0, y0, x1.max(x), y1.max(y)),
+            });
+        }
+    }
+    bounds.expect("the buffer holds some ink")
+}
+
 fn a_placed_document(dir: &Path, source: &Path, linked: bool) -> (Editor, PathBuf) {
     // A canvas to place into, then the menu item with the picker primed.
     let canvas = write_png(dir, "canvas.png", 64, 64, 0);
@@ -31,6 +48,81 @@ fn a_placed_document(dir: &Path, source: &Path, linked: bool) -> (Editor, PathBu
     );
     assert!(out.is_ok(), "{out:?}");
     (ed, canvas)
+}
+
+/// Card 058 (review round 2): the wells are PER-DOCUMENT — tabbing from a
+/// mask-targeted document A to document B shows B's own colours, and aiming
+/// B at a mask stashes B's real colours, not A's mask pair.
+#[test]
+fn the_wells_follow_each_documents_own_edit_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = bare(dir.path(), ScriptedDialogs::default());
+    let a = write_png(dir.path(), "a.png", 8, 8, 255);
+    editor.open_path(&a).unwrap();
+    editor.set_foreground([1.0, 0.0, 0.0, 1.0]); // A's content colour: red
+    editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
+    assert_eq!(editor.foreground(), crate::editor::MASK_EDIT_FOREGROUND);
+
+    // Open B and switch to it: B is a fresh CONTENT document — the wells
+    // must NOT show A's mask pair.
+    let b = write_png(dir.path(), "b.png", 8, 8, 255);
+    editor.open_path(&b).unwrap();
+    let count = editor.docs.len();
+    editor.activate(count - 1).unwrap();
+    assert_eq!(
+        editor.foreground(),
+        crate::editor::DEFAULT_FOREGROUND,
+        "a fresh document shows the default content colour, not the previous document's mask pair"
+    );
+
+    // Aiming B at its mask stashes B's real colour (the default), not the
+    // mask pair A left in the global wells.
+    editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
+    assert_eq!(editor.foreground(), crate::editor::MASK_EDIT_FOREGROUND);
+    editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Content);
+    assert_eq!(
+        editor.foreground(),
+        crate::editor::DEFAULT_FOREGROUND,
+        "B's content colour round-trips — it was never the mask pair"
+    );
+
+    // Tab back to A: still on its mask, still the mask pair.
+    editor.activate(0).unwrap();
+    assert_eq!(editor.foreground(), crate::editor::MASK_EDIT_FOREGROUND);
+    editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Content);
+    assert_eq!(editor.foreground(), [1.0, 0.0, 0.0, 1.0], "A's red returns");
+}
+
+/// Card 058: switching the edit target to the mask swaps the wells to
+/// the mask editing pair (white reveals / black conceals) WITHOUT
+/// losing the content colours — they are stashed and restored when
+/// the target switches back. A no-op re-switch never resets the wells.
+#[test]
+fn switching_edit_target_swaps_to_mask_colours_and_restores_the_content_colours() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = bare(dir.path(), ScriptedDialogs::default());
+    // The target switch is per-document, so one must be open.
+    let png = write_png(dir.path(), "swap.png", 8, 8, 255);
+    editor.open_path(&png).unwrap();
+    editor.set_foreground([1.0, 0.0, 0.0, 1.0]);
+    editor.set_background([0.0, 0.0, 1.0, 1.0]);
+
+    editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
+    assert_eq!(editor.foreground(), crate::editor::MASK_EDIT_FOREGROUND);
+    assert_eq!(editor.background(), crate::editor::MASK_EDIT_BACKGROUND);
+
+    // While on the mask, the user recolours — those are the mask
+    // colours, not content colours.
+    editor.set_foreground([0.5, 0.5, 0.5, 1.0]);
+
+    // A no-op re-switch (same kind) must NOT reset the wells.
+    editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
+    assert_eq!(editor.foreground(), [0.5, 0.5, 0.5, 1.0]);
+
+    // Back to content: the stashed red/blue return.
+    editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Content);
+    assert_eq!(editor.foreground(), [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(editor.background(), [0.0, 0.0, 1.0, 1.0]);
 }
 
 #[test]
@@ -462,12 +554,18 @@ fn a_rstudio_package_round_trips_the_bit_depth() {
 }
 
 fn bare(dir: &Path, dialogs: ScriptedDialogs) -> Editor {
-    Editor::with_state(
+    let mut ed = Editor::with_state(
         AppPaths::rooted(dir.join("config")),
         Preferences::default(),
         RecentFiles::new(),
         Box::new(dialogs),
-    )
+    );
+    // Card 052: the image clipboard is the deterministic fake — editor tests
+    // must not touch the real OS clipboard (parallel tests would race on it,
+    // and headless machines have none). The host-bound clipboard tests build
+    // their editors without this fixture and re-arm the real clipboard.
+    ed.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+    ed
 }
 
 /// An editor in a state where **every** action has something to do: two
@@ -537,6 +635,10 @@ fn expected_effect(action: Action) -> Effect {
         Action::ShowPreferences => Effect::Preferences,
         Action::ShowFileInfo => Effect::Preferences,
         Action::Quit => Effect::Quit,
+        // Card 052: Copy reports View (only the clipboard and the status
+        // change); Cut and Paste edit the document.
+        Action::Copy => Effect::View,
+        Action::Cut | Action::Paste => Effect::DocumentEdited,
         Action::Undo
         | Action::Redo
         | Action::NewLayer
@@ -577,6 +679,39 @@ fn every_action_does_something() {
                 .expect("no single group holds every tool");
             ed.set_tool(outside);
         }
+        // Card 052: the clipboard actions need their preconditions met. Cut
+        // clears a selection, and Paste needs something to have been copied —
+        // give them both, and give Copy a selection so the copied crop is a
+        // bounded region like a user's would be.
+        if matches!(action, Action::Copy | Action::Cut | Action::Paste) {
+            {
+                let doc = ed.active_mut().unwrap();
+                doc.document.selection = editor_core::Selection::Rect {
+                    min: glam::IVec2::new(2, 2),
+                    max: glam::IVec2::new(8, 8), // exclusive
+                };
+                // Ink inside the selection, so Cut's clear has something to
+                // clear (a no-op clear refuses rather than no-op).
+                let layer = doc.document.active_layer().unwrap();
+                let (w, h) = (doc.document.width(), doc.document.height());
+                let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
+                for y in 2..8 {
+                    for x in 2..8 {
+                        let i = ((y * w as i32 + x) * 4) as usize;
+                        rgba[i..i + 4].copy_from_slice(&[200, 10, 10, 255]);
+                    }
+                }
+                let paint = crate::menu_bridge::pixels::write_layer(doc, layer, &rgba, "ink")
+                    .expect("the ink paint");
+                ed.apply_command(paint);
+            }
+        }
+        if matches!(action, Action::Cut | Action::Paste) {
+            // Fill the internal store first: Cut copies through the same
+            // route, and Paste has nothing to do on an empty clipboard.
+            ed.dispatch(Action::Copy)
+                .unwrap_or_else(|e| panic!("copy pre-step: {e}"));
+        }
 
         let before = ed.revision();
         let effect = ed
@@ -588,6 +723,15 @@ fn every_action_does_something() {
             "{} produced the wrong kind of effect",
             action.id()
         );
+        if matches!(action, Action::Copy) {
+            // Copy's observable change is the clipboard, not the document —
+            // the revision must not move for a pixelless edit.
+            assert!(
+                ed.clipboard().is_some(),
+                "copy returned Ok without filling the clipboard"
+            );
+            continue;
+        }
         assert!(
             ed.revision() > before,
             "{} returned Ok without changing anything",
@@ -2270,16 +2414,26 @@ fn editing_a_smart_objects_contents_commits_the_edits_back() {
     // Edit Contents opens a scratch tab seeded with the object's pixels.
     ed.edit_smart_object_contents().unwrap();
     assert!(ed.embedded.is_some(), "embedded session recorded");
-    // The tab is active and its raster is the object's own (90).
+    // Card 050: the tab is the SOURCE frame - the stored tiles' extent
+    // (tile-aligned: a 32px source reads as one 256px tile) - never the
+    // parent canvas, so editing cannot reduce the source to canvas size.
     let tab = ed.active().unwrap();
     let (tw, th) = (tab.document.width(), tab.document.height());
-    assert_eq!((tw, th), (32, 32));
+    assert_eq!((tw, th), (256, 256), "the tab is the source frame");
     let tab_px = tab
         .layer_pixels(tab.document.layers.iter_depth_first()[0])
         .unwrap();
-    assert!(
-        tab_px.iter().all(|&b| b == 90),
-        "the tab is seeded from the object's pixels"
+    // The seeded ink: the object's own 32x32 at 90, the rest transparent.
+    assert_eq!(tab_px[0], 90, "the tab is seeded from the object's pixels");
+    assert_eq!(
+        tab_px[(31 * 256 + 31) * 4 + 3],
+        90,
+        "the seeded ink covers the object's own extent"
+    );
+    assert_eq!(
+        tab_px[(200 * 256 + 200) * 4 + 3],
+        0,
+        "beyond it: transparent"
     );
 
     // Change the tab's contents to 40 and commit.
@@ -2287,21 +2441,33 @@ fn editing_a_smart_objects_contents_commits_the_edits_back() {
     ed.commit_smart_object_contents().unwrap();
     assert!(ed.embedded.is_none(), "session cleared after commit");
 
-    // The parent smart object now carries the edited pixels, and the action is
-    // undoable on the parent: one undo step restores the original 90.
+    // The parent smart object now carries the edited pixels at SOURCE
+    // resolution (the tab's whole frame, not the canvas clip), and the
+    // action is undoable on the parent: one undo step restores the 90.
     let parent = ed.active().unwrap();
     let layer = parent.document.layers.iter_depth_first()[0];
-    let px = parent.layer_pixels(layer).unwrap();
-    assert!(px.iter().all(|&b| b == 40), "commit wrote 40 back");
+    let map = parent.document.layer_tiles(layer).unwrap();
+    let hash = map.get(raster::TileCoord::new(0, 0, 0)).unwrap();
+    {
+        use compositor::TileSource;
+        let bytes = parent.tiles.tile(hash).unwrap();
+        assert_eq!(bytes[0], 40, "commit wrote 40 back at source resolution");
+        assert_eq!(
+            bytes[(255 * 256 + 255) * 4 + 3],
+            40,
+            "the whole source frame carries the edit"
+        );
+    }
     ed.dispatch(Action::Undo).unwrap();
     let parent = ed.active().unwrap();
-    let px = parent
-        .layer_pixels(parent.document.layers.iter_depth_first()[0])
-        .unwrap();
-    assert!(
-        px.iter().all(|&b| b == 90),
-        "undo restored the original contents"
-    );
+    let layer = parent.document.layers.iter_depth_first()[0];
+    let map = parent.document.layer_tiles(layer).unwrap();
+    let hash = map.get(raster::TileCoord::new(0, 0, 0)).unwrap();
+    {
+        use compositor::TileSource;
+        let bytes = parent.tiles.tile(hash).unwrap();
+        assert_eq!(bytes[0], 90, "undo restored the original contents");
+    }
 }
 
 #[test]
@@ -2499,4 +2665,700 @@ fn rotating_90_swaps_the_canvas_and_turns_the_content() {
         ed.active().unwrap().document.height(),
     );
     assert_eq!((w, h), (2, 4), "dimensions swap on 90°");
+}
+
+// ---------------------------------------------------------------- card 048
+
+#[test]
+fn place_confirm_undo_removes_the_whole_object_and_redo_restores_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_png(dir.path(), "placed.png", 32, 32, 200);
+    let (mut ed, _canvas) = a_placed_document(dir.path(), &source, false);
+    let open = ed.active().unwrap();
+    let placed = open
+        .document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|id| {
+            matches!(
+                open.document.layers.get(*id).map(|l| &l.kind),
+                Some(layer_model::LayerKind::SmartObject(_))
+            )
+        })
+        .expect("the placed layer");
+    let depth_after_place = open.history_depth();
+    // The asset id, for the storage-policy check after undo.
+    let asset = match &ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .get(placed)
+        .unwrap()
+        .kind
+    {
+        layer_model::LayerKind::SmartObject(so) => so.asset,
+        other => panic!("the placed layer is a smart object: {other:?}"),
+    };
+
+    // Undo removes the WHOLE placed object: the layer is gone.
+    assert!(ed.active_mut().unwrap().undo().unwrap());
+    {
+        let open = ed.active().unwrap();
+        assert!(
+            open.document.layers.get(placed).is_none(),
+            "undo removed the placed layer"
+        );
+        // The asset record is retained by the storage policy (append-only):
+        // unreachable, but never a live reference to a removed asset.
+        assert!(
+            open.document.asset_origin(asset).is_some(),
+            "the asset record survives the undo"
+        );
+    }
+    // Redo restores it whole.
+    assert!(ed.active_mut().unwrap().redo().unwrap());
+    let open = ed.active().unwrap();
+    assert!(
+        open.document.layers.get(placed).is_some(),
+        "redo restored the placed layer"
+    );
+    assert_eq!(
+        open.history_depth(),
+        depth_after_place,
+        "the cycle is net-neutral on history"
+    );
+}
+
+#[test]
+fn a_failed_decode_changes_neither_layer_stack_nor_dirty_nor_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let garbage = dir.path().join("garbage.png");
+    std::fs::write(&garbage, b"not a png at all").unwrap();
+    let canvas = write_png(dir.path(), "canvas.png", 64, 64, 0);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new().placing(garbage));
+    ed.open_path(&canvas).unwrap();
+    let depth = ed.active().unwrap().history_depth();
+    let layers_before = ed.active().unwrap().document.layers.len();
+    let dirty = ed.active().unwrap().is_dirty();
+
+    use ui::menu::MenuAction;
+    let out = crate::menu_bridge::perform(MenuAction::PlaceEmbedded, &mut ed);
+    assert!(out.is_err(), "a failed decode reports the failure: {out:?}");
+
+    let open = ed.active().unwrap();
+    assert_eq!(open.document.layers.len(), layers_before, "no layer added");
+    assert_eq!(open.history_depth(), depth, "no history step");
+    assert_eq!(open.is_dirty(), dirty, "the dirty state did not change");
+}
+
+#[test]
+fn placement_inserts_above_the_active_layer_and_selects_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_png(dir.path(), "placed.png", 32, 32, 200);
+    let canvas = write_png(dir.path(), "canvas.png", 64, 64, 0);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new().placing(source));
+    ed.open_path(&canvas).unwrap();
+    // The opened canvas layer is active; the placement must land directly
+    // above it and become the selection.
+    let active = ed.active().unwrap().document.active_layer().unwrap();
+    use ui::menu::MenuAction;
+    crate::menu_bridge::perform(MenuAction::PlaceEmbedded, &mut ed).unwrap();
+
+    let open = ed.active().unwrap();
+    let placed = open
+        .document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|id| {
+            matches!(
+                open.document.layers.get(*id).map(|l| &l.kind),
+                Some(layer_model::LayerKind::SmartObject(_))
+            )
+        })
+        .expect("the placed layer");
+    // Siblings: the placed layer sits directly above the active one.
+    let sibs = open.document.layers.siblings_of(placed).unwrap();
+    let idx = open.document.layers.index_in_parent(placed).unwrap();
+    // The placed layer took the active's index; the active shifted one down.
+    assert_eq!(sibs.get(idx), Some(&placed));
+    assert_eq!(
+        sibs.get(idx + 1),
+        Some(&active),
+        "the placement landed directly above the active layer"
+    );
+    assert_eq!(
+        open.document.active_layer(),
+        Some(placed),
+        "the placed layer is selected"
+    );
+}
+
+#[test]
+fn an_embedded_placement_survives_save_and_reopen_without_the_source_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_png(dir.path(), "placed.png", 32, 32, 200);
+    let (mut ed, canvas) = a_placed_document(dir.path(), &source, false);
+    let region = ed.active().unwrap().canvas_rect();
+    let before = ed.active_mut().unwrap().composite(region).unwrap();
+
+    // Save the document natively, then remove the ORIGINAL file: an
+    // embedded placement carries its own bytes.
+    let package = dir.path().join("placed.rstudio");
+    ed.active_mut().unwrap().save_to(&package, "test").unwrap();
+    std::fs::remove_file(&source).unwrap();
+
+    let mut reopened = crate::editor::Editor::with_state(
+        crate::AppPaths::rooted(dir.path().join("config")),
+        crate::prefs::Preferences::default(),
+        crate::recent::RecentFiles::new(),
+        Box::new(ScriptedDialogs::new()),
+    );
+    reopened.open_path(&canvas).unwrap();
+    reopened.open_path(&package).unwrap();
+    let region = reopened.active().unwrap().canvas_rect();
+    let after = reopened.active_mut().unwrap().composite(region).unwrap();
+    assert_eq!(
+        after, before,
+        "the embedded placement survived without the source"
+    );
+}
+
+// ---------------------------------------------------------------- card 050
+
+#[test]
+fn a_linked_refresh_to_a_different_resolution_keeps_the_footprint_and_undo_restores() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_png(dir.path(), "portrait.png", 16, 16, 200);
+    let (mut ed, _canvas) = a_placed_document(dir.path(), &source, true);
+    let placed = ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|id| {
+            matches!(
+                ed.active()
+                    .unwrap()
+                    .document
+                    .layers
+                    .get(*id)
+                    .map(|l| &l.kind),
+                Some(layer_model::LayerKind::SmartObject(_))
+            )
+        })
+        .expect("the placed layer");
+    let transform_before = ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .get(placed)
+        .unwrap()
+        .transform;
+    let (composite_before, footprint_before) = {
+        let region = ed.active().unwrap().canvas_rect();
+        let composite = ed.active_mut().unwrap().composite(region).unwrap();
+        let bounds = ink_bounds(&composite, region.width);
+        (composite, bounds)
+    };
+    let depth_before = ed.active().unwrap().history_depth();
+
+    // The linked file changes on disk to a DIFFERENT RESOLUTION (2x).
+    std::fs::write(
+        &source,
+        raster::encode(raster::ExportFormat::Png, 32, 32, &[250u8; 32 * 32 * 4]).unwrap(),
+    )
+    .unwrap();
+
+    let out = ed.refresh_linked_sources().unwrap();
+    assert!(out.contains("1"), "{out:?}");
+    // The refresh is exactly one undoable step.
+    assert_eq!(
+        ed.active().unwrap().history_depth(),
+        depth_before + 1,
+        "the refresh is one undoable entry"
+    );
+    {
+        // The footprint stays predictable END TO END: the renormalized
+        // transform maps the doubled source into the same on-canvas frame,
+        // so the INK OCCUPIES THE SAME PIXELS (the colour itself changes,
+        // 200 -> 250, because the refreshed pixels are the new source's).
+        let region = ed.active().unwrap().canvas_rect();
+        let composite = ed.active_mut().unwrap().composite(region).unwrap();
+        assert_eq!(
+            ink_bounds(&composite, region.width),
+            footprint_before,
+            "the doubled-resolution refresh did not move or rescale the placement"
+        );
+        let (min_x, min_y, _, _) = footprint_before;
+        let probe = ((min_y * region.width + min_x) * 4) as usize;
+        assert_eq!(composite[probe], 250, "the ink is the new source's colour");
+        // The renormalization: the transform's linear part halved (the
+        // source doubled) while the footprint held - this pins the ratio's
+        // DIRECTION (an inverted ratio would double the scale and still
+        // keep the translation).
+        let open = ed.active().unwrap();
+        let t = open.document.layers.get(placed).unwrap().transform;
+        let scale_now = t.matrix2.x_axis.length();
+        let scale_before = transform_before.matrix2.x_axis.length();
+        assert!(
+            (scale_now - scale_before / 2.0).abs() < 1e-3,
+            "the transform renormalized across the resolution change: {scale_before} -> {scale_now}"
+        );
+        // The stored tiles now hold the new resolution's pixels.
+        use compositor::TileSource;
+        let map = open.document.layer_tiles(placed).unwrap();
+        let hash = map.get(raster::TileCoord::new(0, 0, 0)).unwrap();
+        let bytes = open.tiles.tile(hash).unwrap();
+        assert_eq!(bytes[0], 250, "the new source's pixels are stored");
+        // Identity/kind preserved.
+        assert!(matches!(
+            open.document.layers.get(placed).unwrap().kind,
+            layer_model::LayerKind::SmartObject(_)
+        ));
+    }
+    // One undoable step restores the previous appearance wholesale.
+    assert!(ed.active_mut().unwrap().undo().unwrap());
+    {
+        let open = ed.active().unwrap();
+        let t = open.document.layers.get(placed).unwrap().transform;
+        assert_eq!(t, transform_before, "undo restores the transform");
+        let region = open.canvas_rect();
+        let composite = ed.active_mut().unwrap().composite(region).unwrap();
+        assert_eq!(composite, composite_before, "undo restores the appearance");
+    }
+}
+
+#[test]
+fn a_missing_linked_source_is_reported_and_keeps_its_cached_appearance() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_png(dir.path(), "portrait.png", 16, 16, 200);
+    let (mut ed, _canvas) = a_placed_document(dir.path(), &source, true);
+    let before = {
+        let region = ed.active().unwrap().canvas_rect();
+        ed.active_mut().unwrap().composite(region).unwrap()
+    };
+    // Pretend the file changed, then delete it: the stamp must mismatch for
+    // the refresh to consider the source at all.
+    let placed = ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|id| {
+            matches!(
+                ed.active()
+                    .unwrap()
+                    .document
+                    .layers
+                    .get(*id)
+                    .map(|l| &l.kind),
+                Some(layer_model::LayerKind::SmartObject(_))
+            )
+        })
+        .unwrap();
+    let asset = match &ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .get(placed)
+        .unwrap()
+        .kind
+    {
+        layer_model::LayerKind::SmartObject(so) => so.asset,
+        other => panic!("smart object: {other:?}"),
+    };
+    // Force a stale stamp so the refresh looks at the (now missing) file.
+    ed.active_mut()
+        .unwrap()
+        .asset_stamps
+        .insert(asset, std::time::SystemTime::UNIX_EPOCH);
+    std::fs::remove_file(&source).unwrap();
+
+    let out = ed.refresh_linked_sources().unwrap();
+    // The card says the missing source is REPORTED, not silently skipped:
+    // the summary counts it and the status line names the reason.
+    assert!(out.contains("skipped"), "{out:?}");
+    assert!(
+        ed.status.as_deref().is_some_and(|s| s.contains("missing")),
+        "status = {:?}",
+        ed.status
+    );
+    // The appearance is untouched either way.
+    let region = ed.active().unwrap().canvas_rect();
+    let after = ed.active_mut().unwrap().composite(region).unwrap();
+    assert_eq!(after, before, "the last good cached appearance survived");
+}
+
+/// Card 050 review follow-up (major): the recorded source size must ride the
+/// undoable transaction. Otherwise refresh→undo leaves the record at the NEW
+/// resolution while the tiles and transform are the OLD ones, and the next
+/// refresh renormalizes against a size the restored placement does not match
+/// - the footprint jumps exactly when the card promises predictability.
+#[test]
+fn a_refresh_after_an_undo_renormalizes_against_the_restored_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_png(dir.path(), "portrait.png", 16, 16, 200);
+    let (mut ed, _canvas) = a_placed_document(dir.path(), &source, true);
+    let footprint = {
+        let region = ed.active().unwrap().canvas_rect();
+        let composite = ed.active_mut().unwrap().composite(region).unwrap();
+        ink_bounds(&composite, region.width)
+    };
+    // 16 -> 32: refresh, then undo. Undo must restore the recorded size to 16
+    // along with the tiles and the transform.
+    std::fs::write(
+        &source,
+        raster::encode(raster::ExportFormat::Png, 32, 32, &[250u8; 32 * 32 * 4]).unwrap(),
+    )
+    .unwrap();
+    ed.refresh_linked_sources().unwrap();
+    assert!(ed.active_mut().unwrap().undo().unwrap());
+    // The file changes again: 16 (restored) -> 48. The ratio must be 16/48,
+    // not the stale 32/48 that would scale the placement to twice its frame.
+    std::fs::write(
+        &source,
+        raster::encode(raster::ExportFormat::Png, 48, 48, &[120u8; 48 * 48 * 4]).unwrap(),
+    )
+    .unwrap();
+    ed.refresh_linked_sources().unwrap();
+    let region = ed.active().unwrap().canvas_rect();
+    let composite = ed.active_mut().unwrap().composite(region).unwrap();
+    assert_eq!(
+        ink_bounds(&composite, region.width),
+        footprint,
+        "the second refresh renormalized against the size undo restored"
+    );
+}
+
+/// Card 050 review follow-up (major): sibling layers sharing one linked
+/// source (duplicate, copy-paste) must all refresh together - a stamp written
+/// after the first would leave the rest stale forever.
+#[test]
+fn a_refresh_moves_every_sibling_layer_sharing_the_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_png(dir.path(), "portrait.png", 16, 16, 200);
+    let (mut ed, _canvas) = a_placed_document(dir.path(), &source, true);
+    ed.dispatch(Action::DuplicateLayer).unwrap();
+    let siblings: Vec<LayerId> = ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .filter(|id| {
+            matches!(
+                ed.active()
+                    .unwrap()
+                    .document
+                    .layers
+                    .get(*id)
+                    .map(|l| &l.kind),
+                Some(layer_model::LayerKind::SmartObject(_))
+            )
+        })
+        .collect();
+    assert_eq!(siblings.len(), 2, "the placed layer and its duplicate");
+    let (first, second) = (siblings[0], siblings[1]);
+    let asset_of = |ed: &Editor, id: LayerId| match &ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .get(id)
+        .unwrap()
+        .kind
+    {
+        layer_model::LayerKind::SmartObject(so) => so.asset,
+        other => panic!("smart object: {other:?}"),
+    };
+    assert_eq!(
+        asset_of(&ed, first),
+        asset_of(&ed, second),
+        "the duplicate shares the asset"
+    );
+    let depth_before = ed.active().unwrap().history_depth();
+    std::fs::write(
+        &source,
+        raster::encode(raster::ExportFormat::Png, 32, 32, &[250u8; 32 * 32 * 4]).unwrap(),
+    )
+    .unwrap();
+    let out = ed.refresh_linked_sources().unwrap();
+    assert!(out.contains("1"), "{out:?}");
+    // The history step names the layer - the label is how the user finds the
+    // gesture in the panel. The placed layer carries the source's stem.
+    assert!(
+        ed.active()
+            .unwrap()
+            .history_timeline()
+            .last()
+            .is_some_and(|label| label.contains("portrait") && label.contains("+1 sibling")),
+        "label = {:?}",
+        ed.active().unwrap().history_timeline().last()
+    );
+    use compositor::TileSource;
+    for id in [first, second] {
+        let open = ed.active().unwrap();
+        let hash = open
+            .document
+            .layer_tiles(id)
+            .unwrap()
+            .get(raster::TileCoord::new(0, 0, 0))
+            .expect("the refreshed tile");
+        let bytes = open.tiles.tile(hash).unwrap();
+        assert_eq!(bytes[0], 250, "every sibling holds the refreshed pixels");
+    }
+    // One undoable step for the whole source, siblings included.
+    assert_eq!(
+        ed.active().unwrap().history_depth(),
+        depth_before + 1,
+        "one transaction covers the shared source"
+    );
+    assert!(ed.active_mut().unwrap().undo().unwrap());
+    for id in [first, second] {
+        let open = ed.active().unwrap();
+        let hash = open
+            .document
+            .layer_tiles(id)
+            .unwrap()
+            .get(raster::TileCoord::new(0, 0, 0))
+            .expect("the restored tile");
+        let bytes = open.tiles.tile(hash).unwrap();
+        assert_eq!(bytes[0], 200, "undo restored both siblings");
+    }
+}
+
+/// Card 050 review follow-up: a stamp change without a content change (the
+/// first refresh after a reopen, since stamps are session-only) must re-decode
+/// WITHOUT pushing an undo entry - a no-op step in the panel is noise.
+#[test]
+fn an_unchanged_linked_refresh_records_no_undo_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_png(dir.path(), "portrait.png", 16, 16, 200);
+    let (mut ed, _canvas) = a_placed_document(dir.path(), &source, true);
+    // Force the session stamp stale so the refresh re-decodes, then rewrite
+    // the IDENTICAL bytes (the mtime moves, the content does not).
+    let placed = ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|id| {
+            matches!(
+                ed.active()
+                    .unwrap()
+                    .document
+                    .layers
+                    .get(*id)
+                    .map(|l| &l.kind),
+                Some(layer_model::LayerKind::SmartObject(_))
+            )
+        })
+        .unwrap();
+    let asset = match &ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .get(placed)
+        .unwrap()
+        .kind
+    {
+        layer_model::LayerKind::SmartObject(so) => so.asset,
+        other => panic!("smart object: {other:?}"),
+    };
+    ed.active_mut()
+        .unwrap()
+        .asset_stamps
+        .insert(asset, std::time::SystemTime::UNIX_EPOCH);
+    let depth_before = ed.active().unwrap().history_depth();
+    std::fs::write(
+        &source,
+        raster::encode(raster::ExportFormat::Png, 16, 16, &[200u8; 16 * 16 * 4]).unwrap(),
+    )
+    .unwrap();
+    let out = ed.refresh_linked_sources().unwrap();
+    assert_eq!(
+        out, "No linked source has changed",
+        "identical content is not a change"
+    );
+    assert_eq!(
+        ed.active().unwrap().history_depth(),
+        depth_before,
+        "no undo entry for identical content"
+    );
+    // The stamp was learned: a second pass does not even re-decode.
+    let out = ed.refresh_linked_sources().unwrap();
+    assert_eq!(out, "No linked source has changed");
+}
+
+/// Card 050 review follow-up (minor): when the new source is SMALLER on disk
+/// than the stored one, the tiles it no longer covers must actually clear -
+/// no ghost ink from the old resolution may survive the refresh.
+#[test]
+fn a_shrinking_refresh_clears_the_tiles_the_new_source_loses() {
+    let dir = tempfile::tempdir().unwrap();
+    // A large linked source: 600x500 spans tiles (0..3, 0..2).
+    let (w, h) = (600u32, 500u32);
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    for px in rgba.chunks_exact_mut(4) {
+        px.copy_from_slice(&[90, 120, 150, 255]);
+    }
+    let source = dir.path().join("big.png");
+    std::fs::write(
+        &source,
+        raster::encode(raster::ExportFormat::Png, w, h, &rgba).unwrap(),
+    )
+    .unwrap();
+    let (mut ed, _canvas) = a_placed_document(dir.path(), &source, true);
+    let placed = ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|id| {
+            matches!(
+                ed.active()
+                    .unwrap()
+                    .document
+                    .layers
+                    .get(*id)
+                    .map(|l| &l.kind),
+                Some(layer_model::LayerKind::SmartObject(_))
+            )
+        })
+        .expect("the placed layer");
+    let footprint = {
+        let region = ed.active().unwrap().canvas_rect();
+        let composite = ed.active_mut().unwrap().composite(region).unwrap();
+        ink_bounds(&composite, region.width)
+    };
+    use compositor::TileSource;
+    {
+        let open = ed.active().unwrap();
+        assert!(
+            open.document
+                .layer_tiles(placed)
+                .unwrap()
+                .get(raster::TileCoord::new(2, 1, 0))
+                .is_some(),
+            "the large source starts multi-tile"
+        );
+    }
+    // The file shrinks to 32x32 - the renormalization keeps the footprint.
+    std::fs::write(
+        &source,
+        raster::encode(raster::ExportFormat::Png, 32, 32, &[250u8; 32 * 32 * 4]).unwrap(),
+    )
+    .unwrap();
+    ed.refresh_linked_sources().unwrap();
+    let region = ed.active().unwrap().canvas_rect();
+    let composite = ed.active_mut().unwrap().composite(region).unwrap();
+    assert_eq!(
+        ink_bounds(&composite, region.width),
+        footprint,
+        "the renormalization kept the on-canvas footprint across the shrink"
+    );
+    let open = ed.active().unwrap();
+    let map = open.document.layer_tiles(placed).unwrap();
+    assert!(
+        map.get(raster::TileCoord::new(2, 1, 0)).is_none(),
+        "the far ghost tile is gone"
+    );
+    assert!(
+        map.get(raster::TileCoord::new(1, 0, 0)).is_none(),
+        "the mid ghost tile is gone"
+    );
+    let hash = map
+        .get(raster::TileCoord::new(0, 0, 0))
+        .expect("the surviving tile");
+    let bytes = open.tiles.tile(hash).unwrap();
+    assert_eq!(bytes[0], 250, "the shrunken source's pixels are stored");
+}
+
+#[test]
+fn embedded_content_editing_does_not_reduce_the_source_to_canvas_dimensions() {
+    let dir = tempfile::tempdir().unwrap();
+    // A source LARGER than the canvas: 600x500 into 64x64 — the placement
+    // fit it (scale 0.106) but the stored tiles hold the full source.
+    let (w, h) = (600u32, 500u32);
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            rgba[i..i + 4].copy_from_slice(&[90, 120, 150, 255]);
+        }
+    }
+    let source = dir.path().join("big.png");
+    std::fs::write(
+        &source,
+        raster::encode(raster::ExportFormat::Png, w, h, &rgba).unwrap(),
+    )
+    .unwrap();
+    let (mut ed, _canvas) = a_placed_document(dir.path(), &source, false);
+    let placed = ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|id| {
+            matches!(
+                ed.active()
+                    .unwrap()
+                    .document
+                    .layers
+                    .get(*id)
+                    .map(|l| &l.kind),
+                Some(layer_model::LayerKind::SmartObject(_))
+            )
+        })
+        .expect("the placed layer");
+
+    // Edit Contents opens the SOURCE frame (tile-aligned: a 600x500 source
+    // spans 3x2 tiles -> 768x512) — not the 64px canvas.
+    ed.edit_smart_object_contents().unwrap();
+    {
+        let tab = ed.active().unwrap();
+        assert_eq!(
+            (tab.document.width(), tab.document.height()),
+            (768, 512),
+            "the tab is the source frame, not the canvas"
+        );
+    }
+    // Commit something: the source frame is what lands back.
+    fill_active(ed.active_mut().unwrap(), 40);
+    ed.commit_smart_object_contents().unwrap();
+    {
+        let open = ed.active().unwrap();
+        use compositor::TileSource;
+        let map = open.document.layer_tiles(placed).unwrap();
+        // The stored tiles still cover the source's full frame: the far
+        // tiles (a 600x500 source spans tiles (0..3, 0..2)) survive.
+        assert!(
+            map.get(raster::TileCoord::new(2, 1, 0)).is_some(),
+            "the far-right/bottom source tiles survive the commit"
+        );
+        let hash = map.get(raster::TileCoord::new(2, 1, 0)).unwrap();
+        let bytes = open.tiles.tile(hash).unwrap();
+        assert_eq!(
+            bytes[(240 * 256 + 40) * 4 + 3],
+            40,
+            "the commit wrote the edit at source resolution, far from the canvas"
+        );
+    }
 }

@@ -644,7 +644,11 @@ fn a_v1_fixture_opens_through_the_migration_path() {
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/old-format-v1.rstudio");
     let loaded = project_format::open_project(&fixture).unwrap();
-    assert_eq!(loaded.document.meta.format_version, 3, "stamped to current");
+    assert_eq!(
+        loaded.document.meta.format_version,
+        editor_core::DOCUMENT_FORMAT_VERSION,
+        "stamped to current"
+    );
     assert_eq!(
         loaded.document.pixels.tile_count(),
         0,

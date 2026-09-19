@@ -6,6 +6,7 @@
 //! describes how to interpret them, which is what makes `Layer::mask`
 //! resolvable by the compositor instead of an inert id.
 
+use glam::Affine2;
 use serde::{Deserialize, Serialize};
 
 // Coverage is an alpha multiplier, so it obeys the same "map any f32 into
@@ -13,6 +14,7 @@ use serde::{Deserialize, Serialize};
 // re-implemented so the two cannot drift.
 use crate::blend::unit;
 use crate::ids::MaskId;
+use crate::layer::affine2_serde;
 
 /// What the [`MaskId`] resolves to in the store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -58,6 +60,15 @@ pub struct LayerMask {
     /// state in the layers panel). When `false` the mask stays put in document
     /// space while the layer content moves under it.
     pub linked: bool,
+    /// Card 043: the mask's own extra transform in LAYER space. The mask's
+    /// document pose is the layer transform composed with this. A linked
+    /// mask keeps it at identity (it rides the layer transform, exactly as
+    /// before this field existed); an unlinked mask accumulates the inverse
+    /// of every content transform applied after unlinking, so its document
+    /// pose stays frozen. Defaults to identity and changes nothing about the
+    /// wire format for documents that never unlinked a mask.
+    #[serde(serialize_with = "serialize_boxed_transform")]
+    pub transform: Box<Affine2>,
     /// A disabled mask is retained on the layer but contributes nothing; the
     /// compositor must treat coverage as 1.0 everywhere.
     pub enabled: bool,
@@ -80,6 +91,8 @@ struct LayerMaskRepr {
     kind: MaskKind,
     #[serde(default = "yes")]
     linked: bool,
+    #[serde(default = "identity_transform", with = "affine2_serde")]
+    transform: Affine2,
     #[serde(default = "yes")]
     enabled: bool,
     #[serde(default = "one")]
@@ -94,6 +107,18 @@ fn yes() -> bool {
     true
 }
 
+fn identity_transform() -> Affine2 {
+    Affine2::IDENTITY
+}
+
+#[allow(clippy::borrowed_box)]
+fn serialize_boxed_transform<S: serde::Serializer>(
+    t: &Box<Affine2>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    crate::layer::affine2_serde::serialize(t, s)
+}
+
 fn one() -> f32 {
     1.0
 }
@@ -105,6 +130,7 @@ impl TryFrom<LayerMaskRepr> for LayerMask {
         let mut m = LayerMask::new(r.id);
         m.kind = r.kind;
         m.linked = r.linked;
+        m.transform = Box::new(r.transform);
         m.enabled = r.enabled;
         m.inverted = r.inverted;
         m.set_density(r.density)?;
@@ -120,6 +146,7 @@ impl LayerMask {
             id,
             kind: MaskKind::Raster,
             linked: true,
+            transform: Box::new(Affine2::IDENTITY),
             enabled: true,
             density: 1.0,
             feather_px: 0.0,
@@ -362,6 +389,7 @@ mod tests {
             id: MaskId::new(),
             kind: MaskKind::Raster,
             linked: true,
+            transform: Affine2::IDENTITY,
             enabled: true,
             density: f32::NAN,
             feather_px: 0.0,
@@ -374,6 +402,7 @@ mod tests {
             id: MaskId::new(),
             kind: MaskKind::Raster,
             linked: true,
+            transform: Affine2::IDENTITY,
             enabled: true,
             density: 1.0,
             feather_px: f32::INFINITY,
@@ -405,5 +434,33 @@ mod tests {
         assert_eq!(m, back);
         assert_eq!(back.density(), 0.75);
         assert_eq!(back.feather_px(), 4.5);
+    }
+
+    #[cfg(test)]
+    mod card043_tests {
+        use super::*;
+
+        #[test]
+        fn a_mask_without_a_stored_transform_deserializes_with_identity() {
+            // Card 043's migration: documents written before the field existed
+            // (and hand-edited ones that omit it) deserialize with the identity
+            // extra transform — the historical behavior, unchanged.
+            let old = r#"{"id":"0f0e0d0c-0b0a-4948-8746-454443424140","kind":"Raster","linked":false,"enabled":true,"density":1.0,"feather_px":0.0,"inverted":false}"#;
+            let m: LayerMask = serde_json::from_str(old).expect("old mask json");
+            assert_eq!(*m.transform, Affine2::IDENTITY, "identity extra transform");
+            assert!(!m.linked);
+        }
+
+        #[test]
+        fn a_mask_transform_round_trips_through_serde() {
+            let mut m = LayerMask::new(MaskId::new());
+            *m.transform = Affine2::from_translation(glam::Vec2::new(-40.0, -30.0));
+            let json = serde_json::to_string(&m).expect("serialize");
+            let back: LayerMask = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(
+                back.transform, m.transform,
+                "the counter-transform persists"
+            );
+        }
     }
 }

@@ -105,6 +105,19 @@ pub enum Intent {
         layer: LayerId,
         expanded: bool,
     },
+    /// Aim the shell's edits at the active layer's content or its mask
+    /// coverage (card 007). The Properties panel's Layer/Mask control raises
+    /// this alongside its own display state; the shell owns the validated
+    /// target (`app_shell::edit_target`) and answers tools from it.
+    /// Card 026: double-clicking a text layer's row in the Layers panel
+    /// enters that layer for canvas text editing — the shell opens a live
+    /// session on the existing layer (never a new one).
+    EnterTextLayer {
+        layer: layer_model::LayerId,
+    },
+    SetEditTarget {
+        mask: bool,
+    },
     /// Move the history cursor by whole steps.
     HistoryJump(HistoryJump),
     /// Set the view zoom, as a scale factor (`1.0` is 100%).
@@ -308,8 +321,13 @@ impl ViewFlags {
 /// has anything to do.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct ClipboardState {
-    /// Pixels are available to paste.
+    /// Pixels are available to paste from the application's own store.
     pub pixels: bool,
+    /// Pixels are available from the OS image clipboard (a screenshot, another
+    /// application's copy). Card 052: these enable plain Paste but NOT Paste
+    /// Into — the external payload has no in-document origin yet, and masking
+    /// it by the selection is card 053's job.
+    pub external_pixels: bool,
     /// Whole layers are available to paste.
     pub layers: bool,
 }
@@ -318,12 +336,19 @@ impl ClipboardState {
     /// Nothing has been copied yet.
     pub const EMPTY: ClipboardState = ClipboardState {
         pixels: false,
+        external_pixels: false,
         layers: false,
     };
 
     /// `true` when Paste would produce something.
     pub const fn is_empty(self) -> bool {
-        !self.pixels && !self.layers
+        !self.pixels && !self.external_pixels && !self.layers
+    }
+
+    /// `true` when the application's own store holds something — the only
+    /// source Paste Into can honor before card 053.
+    pub const fn has_internal_pixels(self) -> bool {
+        self.pixels || self.layers
     }
 }
 
@@ -408,6 +433,7 @@ mod tests {
     fn an_empty_clipboard_knows_it() {
         assert!(ClipboardState::EMPTY.is_empty());
         assert!(!ClipboardState {
+            external_pixels: true,
             pixels: true,
             layers: false
         }

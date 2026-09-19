@@ -131,6 +131,10 @@ pub enum Pick {
     /// Photopea's multi-selection: the whole set, in click order, plus the
     /// active layer the click landed on.
     SelectLayers(Vec<LayerId>, Option<LayerId>),
+    /// Aim edits at the active layer's content or mask coverage (card 007).
+    EditTarget(crate::edit_target::EditTargetKind),
+    /// Card 026: double-clicking a text row enters that layer for editing.
+    EnterTextLayer(LayerId),
     /// Activate a tool AND a named choice it wears — the transform menu's
     /// Scale/Rotate/Skew/Distort/Perspective (`mode`) and Transform Selection
     /// (`target`), as one pick.
@@ -169,7 +173,7 @@ pub fn menus(editor: &Editor) -> Vec<Menu> {
 /// [`Workspace`] rather than from a default, which is what makes Window ▸
 /// Workspace and the View menu's checkmarks describe the window the user is
 /// looking at.
-pub fn context(editor: &Editor, workspace: &Workspace) -> MenuContext {
+pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
     let recent_files = editor
         .recent()
         .entries()
@@ -195,7 +199,15 @@ pub fn context(editor: &Editor, workspace: &Workspace) -> MenuContext {
     // carries a `ClipboardState`, but nothing ever wrote it, so Paste and Paste
     // Into were greyed out no matter how many times Copy had been used.
     context.clipboard = ui::ClipboardState {
+        // Card 052: the two sources are reported separately. The internal
+        // store enables every paste; the OS image clipboard (a screenshot,
+        // another application's payload) enables plain Paste only — it has
+        // no in-document origin yet, so Paste Into waits for card 053. The
+        // OS probe reads the image and is throttled inside the editor: the
+        // menu context is built every frame, and a full clipboard read per
+        // frame would be absurd.
         pixels: editor.clipboard().is_some(),
+        external_pixels: editor.os_clipboard_has_image(),
         layers: false,
     };
     context.open_documents = editor.documents().len();
@@ -238,6 +250,14 @@ pub fn pick(intent: &Intent, editor: &Editor) -> Option<Pick> {
         Intent::SelectLayers { layers, active } => {
             Some(Pick::SelectLayers(layers.clone(), *active))
         }
+        // The Properties panel's Layer/Mask control (card 007). The shell's
+        // per-document state is the authority; the panel keeps its own display
+        // echo. Not a workspace intent: the target is shell state, so it does
+        // not ride `Pick::Workspace` and its absorb-idempotency rule.
+        Intent::SetEditTarget { mask } => Some(Pick::EditTarget(
+            crate::edit_target::EditTargetKind::from_focus(*mask),
+        )),
+        Intent::EnterTextLayer { layer } => Some(Pick::EnterTextLayer(*layer)),
         Intent::HistoryJump(jump) => {
             // The panel counts *steps* from where the document stands; the
             // editor walks to an absolute depth. Converting here keeps the one
@@ -561,6 +581,8 @@ pub fn record(pick: Pick, out: &mut ChromeOutput) {
         }
         Pick::SelectLayer(layer) => out.select_layer = Some(layer),
         Pick::SelectLayers(layers, active) => out.select_layers = Some((layers, active)),
+        Pick::EditTarget(kind) => out.edit_target = Some(kind),
+        Pick::EnterTextLayer(layer) => out.enter_text_layer = Some(layer),
         Pick::History(depth) => out.history_jump = Some(depth),
         Pick::Zoom(zoom) => out.set_zoom = Some(zoom),
         Pick::ViewCenter(center) => out.set_view_center = Some(center),
@@ -594,7 +616,12 @@ pub fn resolve(action: MenuAction, context: &MenuContext, editor: &Editor) -> Re
 // ---------------------------------------------------------------------------
 
 /// Draw the menu bar and record whatever the user picked.
-pub fn draw(ctx: &egui::Context, editor: &Editor, workspace: &Workspace, out: &mut ChromeOutput) {
+pub fn draw(
+    ctx: &egui::Context,
+    editor: &mut Editor,
+    workspace: &Workspace,
+    out: &mut ChromeOutput,
+) {
     let menus = menus(editor);
     let context = context(editor, workspace);
     egui::TopBottomPanel::top("raster-menu-bar")
@@ -723,6 +750,256 @@ pub(crate) mod pixels {
 
     use crate::doc::OpenDocument;
 
+    /// Card 053: a selection's coverage as mask tiles - the focused
+    /// selection-to-coverage helper card 057's four mask-creation actions
+    /// will reuse and extend.
+    ///
+    /// Each entry is one full `TILE_SIZE` coverage tile (one byte per pixel:
+    /// 255 selected, 0 not). Tiles the selection never reaches are ABSENT
+    /// from the list, which is the compositor's missing-tile convention:
+    /// an absent mask tile is fully hidden. A tile entirely inside the
+    /// selection is present and all-255 (an absent tile could not express
+    /// "visible"), and a tile the selection boundary crosses carries the
+    /// per-pixel coverage - fractional lasso/wand samples map through
+    /// unchanged.
+    ///
+    /// `Selection::None` yields nothing: with no selection every pixel is
+    /// selected, and "visible everywhere" needs no mask at all - the caller
+    /// pastes unmasked instead.
+    pub fn selection_coverage_tiles(
+        selection: &Selection,
+        canvas_w: u32,
+        canvas_h: u32,
+    ) -> Vec<(TileCoord, Vec<u8>)> {
+        selection_coverage_tiles_with(selection, canvas_w, canvas_h, false)
+    }
+
+    /// The same coverage, inverted: 255 becomes 0 and the other way round.
+    /// Card 057's Hide Selection rides this — and the same absent-tile
+    /// rule does the last bit of work for free: a tile FULLY inside the
+    /// selection inverts to all-zero, which is exactly what an ABSENT tile
+    /// means, so it is omitted rather than stored.
+    pub fn selection_coverage_tiles_with(
+        selection: &Selection,
+        canvas_w: u32,
+        canvas_h: u32,
+        invert: bool,
+    ) -> Vec<(TileCoord, Vec<u8>)> {
+        let ts = TILE_SIZE as i32;
+        // The pixel-level test one pixel answers, specialized per shape.
+        let raw: Box<dyn Fn(IVec2) -> u8> = match selection {
+            Selection::None => return Vec::new(),
+            Selection::Rect { min, max } => {
+                let (min, max) = (*min, *max);
+                Box::new(move |p| {
+                    (p.x >= min.x && p.x < max.x && p.y >= min.y && p.y < max.y) as u8 * 255
+                })
+            }
+            Selection::Mask(m) => {
+                let m = m.clone();
+                Box::new(move |p| m.coverage_at(p))
+            }
+        };
+        let coverage_at: Box<dyn Fn(IVec2) -> u8> = if invert {
+            Box::new(move |p| 255 - raw(p))
+        } else {
+            raw
+        };
+        // Tiles that can hold selected pixels, clipped to the canvas: the
+        // pasted layer is canvas-sized, so tiles past its edge are pointless.
+        // The loop is bounded by the SELECTION's bounds — an 8K canvas with
+        // a small lasso must not walk 4 billion pixels.
+        let (tiles_x, tiles_y) = (canvas_w.div_ceil(TILE_SIZE), canvas_h.div_ceil(TILE_SIZE));
+        let mut out = Vec::new();
+        let x_range = match selection.bounds() {
+            Some((min, max)) => (min.x.div_euclid(ts)..=((max.x - 1).max(0)).div_euclid(ts))
+                .map(|t| t.clamp(0, tiles_x as i32 - 1))
+                .collect::<Vec<i32>>(),
+            None => (0..tiles_x as i32).collect(),
+        };
+        let y_range = match selection.bounds() {
+            Some((min, max)) => (min.y.div_euclid(ts)..=((max.y - 1).max(0)).div_euclid(ts))
+                .map(|t| t.clamp(0, tiles_y as i32 - 1))
+                .collect::<Vec<i32>>(),
+            None => (0..tiles_y as i32).collect(),
+        };
+        for ty in y_range {
+            for tx in x_range.clone() {
+                let tile_origin = IVec2::new(tx * ts, ty * ts);
+                let mut coverage = vec![0u8; (TILE_SIZE * TILE_SIZE) as usize];
+                let mut any = false;
+                for py in 0..ts {
+                    for px in 0..ts {
+                        let p = tile_origin + IVec2::new(px, py);
+                        if p.x < 0 || p.y < 0 || p.x >= canvas_w as i32 || p.y >= canvas_h as i32 {
+                            continue;
+                        }
+                        let c = coverage_at(p);
+                        coverage[(py * ts + px) as usize] = c;
+                        any |= c != 0;
+                    }
+                }
+                if !any {
+                    continue;
+                }
+                out.push((TileCoord::new(tx, ty, 0), coverage));
+            }
+        }
+        out
+    }
+
+    /// Which of the four mask-creation ops a coverage computation serves.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum MaskCoverageMode {
+        RevealAll,
+        HideAll,
+        RevealSelection,
+        HideSelection,
+    }
+
+    /// Card 057: mask-creation coverage for a layer, in the LAYER's local
+    /// tile space. A new mask attaches LINKED with an identity extra
+    /// transform, so the compositor resolves its coverage through the layer
+    /// transform — a document-space selection must be pre-imaged through
+    /// that transform's inverse before it can confine anything, or the
+    /// revealed area lands displaced by exactly the layer's transform.
+    ///
+    /// The walk covers the union of the layer's own content tiles and the
+    /// canvas rectangle's pre-image, because:
+    /// - Reveal All must reveal every pixel the layer could ever show (its
+    ///   content tiles — an oversized placed layer extends past the canvas),
+    ///   and absent tiles mean hidden, so "revealed" has to be STORED;
+    /// - Hide Selection must REVEAL the layer's off-canvas content too
+    ///   (inverted coverage outside the canvas is 255), which the content
+    ///   tiles also carry.
+    ///
+    /// Per pixel: map the layer-local point through `layer_to_doc` and test
+    /// the selection there. A document point past the canvas edge is outside
+    /// every selection (selections live in the canvas), so Hide Selection
+    /// reveals it and Reveal Selection conceals it.
+    ///
+    /// All-zero tiles are omitted (absent = hidden — the same statement for
+    /// less memory), which is what makes Hide Selection's fully-covered
+    /// interior tiles free.
+    pub fn mask_creation_coverage(
+        selection: &Selection,
+        layer_to_doc: glam::Affine2,
+        layer_content_tiles: &[TileCoord],
+        canvas_w: u32,
+        canvas_h: u32,
+        mode: MaskCoverageMode,
+    ) -> Result<Vec<(TileCoord, Vec<u8>)>, String> {
+        if matches!(mode, MaskCoverageMode::HideAll) {
+            // Absent tiles mean hidden: the empty mask IS the requested
+            // state, stated by the convention rather than by megabytes of
+            // zeros.
+            return Ok(Vec::new());
+        }
+        if matches!(
+            mode,
+            MaskCoverageMode::RevealSelection | MaskCoverageMode::HideSelection
+        ) && matches!(selection, Selection::None)
+        {
+            // "Hide nothing" / an all-pixels "reveal" is the OTHER op's job
+            // (Reveal All); the caller refuses a missing selection for these
+            // two.
+            return Ok(Vec::new());
+        }
+        let ts = TILE_SIZE as i32;
+        // The layer-space points one canvas corner maps to: the pre-image of
+        // the canvas rectangle bounds the tiles the canvas can possibly show.
+        let corners = [
+            glam::Vec2::ZERO,
+            glam::Vec2::new(canvas_w as f32, 0.0),
+            glam::Vec2::new(0.0, canvas_h as f32),
+            glam::Vec2::new(canvas_w as f32, canvas_h as f32),
+        ];
+        let to_layer = layer_to_doc.inverse();
+        let mut min_tx = i32::MAX;
+        let mut min_ty = i32::MAX;
+        let mut max_tx = i32::MIN;
+        let mut max_ty = i32::MIN;
+        let mut grow = |p: glam::Vec2| {
+            let tx = (p.x as i32).div_euclid(ts);
+            let ty = (p.y as i32).div_euclid(ts);
+            min_tx = min_tx.min(tx);
+            min_ty = min_ty.min(ty);
+            max_tx = max_tx.max(tx);
+            max_ty = max_ty.max(ty);
+        };
+        for c in corners {
+            grow(to_layer.transform_point2(c));
+        }
+        for coord in layer_content_tiles {
+            grow(glam::Vec2::new(
+                (coord.x * ts) as f32,
+                (coord.y * ts) as f32,
+            ));
+            grow(glam::Vec2::new(
+                ((coord.x + 1) * ts) as f32,
+                ((coord.y + 1) * ts) as f32,
+            ));
+        }
+        let in_canvas = |p: glam::Vec2| {
+            p.x >= 0.0 && p.y >= 0.0 && p.x < canvas_w as f32 && p.y < canvas_h as f32
+        };
+        // The pre-image of a strongly minified layer explodes (a 1% scale on
+        // a 300px canvas spans ~100 tiles per axis ... times 300). Cap the
+        // walk and refuse: storing hundreds of thousands of all-255 tiles in
+        // one undoable command is not a mask creation, it is a memory event.
+        // The bound is generous - a 16384px canvas is 64x64 = 4096 tiles.
+        const MAX_COVERAGE_TILES_PER_AXIS: i32 = 256;
+        if (max_tx - min_tx + 1) > MAX_COVERAGE_TILES_PER_AXIS
+            || (max_ty - min_ty + 1) > MAX_COVERAGE_TILES_PER_AXIS
+        {
+            // Say what happened instead of storing gigabytes in one undoable
+            // command — or worse, silently hiding a Reveal All.
+            return Err(
+                "The layer's transform spreads the mask over too large an area".to_string(),
+            );
+        }
+        let mut out = Vec::new();
+        for ty in min_ty..=max_ty {
+            for tx in min_tx..=max_tx {
+                let mut coverage = vec![0u8; (TILE_SIZE * TILE_SIZE) as usize];
+                let mut any = false;
+                for py in 0..ts {
+                    for px in 0..ts {
+                        let local = glam::Vec2::new(
+                            (tx * ts + px) as f32 + 0.5,
+                            (ty * ts + py) as f32 + 0.5,
+                        );
+                        let doc = layer_to_doc.transform_point2(local);
+                        let selected = if in_canvas(doc) {
+                            // `Selection::coverage_at` is already a 0..1 f32.
+                            selection.coverage_at(glam::IVec2::new(doc.x as i32, doc.y as i32))
+                        } else {
+                            // A document point past the canvas edge is
+                            // outside every selection (selections live in
+                            // the canvas): Hide Selection reveals it, Reveal
+                            // Selection conceals it.
+                            0.0
+                        };
+                        let c = match mode {
+                            MaskCoverageMode::RevealAll => 1.0,
+                            MaskCoverageMode::HideAll => unreachable!("returned above"),
+                            MaskCoverageMode::RevealSelection => selected,
+                            MaskCoverageMode::HideSelection => 1.0 - selected,
+                        };
+                        let v = (c * 255.0).round() as u8;
+                        coverage[(py * ts + px) as usize] = v;
+                        any |= v != 0;
+                    }
+                }
+                if !any {
+                    continue;
+                }
+                out.push((TileCoord::new(tx, ty, 0), coverage));
+            }
+        }
+        Ok(out)
+    }
+
     /// A layer's pixels, flattened over the canvas rectangle.
     ///
     /// Tiles outside the canvas are dropped and absent tiles read as
@@ -800,6 +1077,135 @@ pub(crate) mod pixels {
             }
         }
         let paint = Command::paint_tiles(PixelTarget::Layer(layer), edits)
+            .map_err(|e: editor_core::CommandError| e.to_string())?;
+        Ok(Command::Transaction {
+            label: label.to_string(),
+            commands: vec![paint],
+        })
+    }
+
+    /// Card 058: replace a layer's mask coverage with `coverage` (CANVAS-space
+    /// w×h grayscale bytes), resampled into the mask's LOCAL store space
+    /// through the mask pose. Emits ONLY the tiles that actually change —
+    /// an all-zero result tile is CLEARED (an absent tile means hidden), an
+    /// unchanged tile is skipped, and store tiles outside the canvas
+    /// pre-image are left untouched (a fill only claims the canvas). One
+    /// labelled transaction = one undo step; the layer's pixel tiles are
+    /// never touched — a coverage edit is a one-channel delta, never the
+    /// four-channel ColorPatch a content edit would be.
+    pub fn write_mask_coverage(
+        doc: &mut OpenDocument,
+        layer: LayerId,
+        coverage: &[u8],
+        label: &str,
+    ) -> Result<Command, String> {
+        let (w, h) = (doc.document.width(), doc.document.height());
+        if coverage.len() != (w as usize) * (h as usize) {
+            return Err("Coverage buffer does not match the canvas".to_string());
+        }
+        // Resolving the mask id doubles as the existence check.
+        doc.document
+            .layers
+            .get(layer)
+            .and_then(|l| l.mask_id())
+            .ok_or_else(|| "The layer has no mask".to_string())?;
+        let ts = raster::TILE_SIZE as usize;
+        let existing: std::collections::HashMap<raster::TileCoord, raster::TileHash> = doc
+            .document
+            .mask_tiles(layer)
+            .map(|m| m.iter().collect())
+            .unwrap_or_default();
+        let pose_inverse = crate::menu_bridge::mask_pose(doc, layer).inverse();
+        // The store tiles to (re)write: the pre-image of the CANVAS rectangle
+        // through the pose inverse — the mask-local area the canvas
+        // actually shows. (Corner-grow + cap, the same walk shape card 057's
+        // coverage helper uses.)
+        let mut min_tx = i32::MAX;
+        let mut min_ty = i32::MAX;
+        let mut max_tx = i32::MIN;
+        let mut max_ty = i32::MIN;
+        for corner in [
+            glam::Vec2::ZERO,
+            glam::Vec2::new(w as f32, 0.0),
+            glam::Vec2::new(0.0, h as f32),
+            glam::Vec2::new(w as f32, h as f32),
+        ] {
+            let (mx, my) = crate::menu_bridge::canvas_to_mask(pose_inverse, corner);
+            let (mx2, my2) =
+                crate::menu_bridge::canvas_to_mask(pose_inverse, corner + glam::Vec2::splat(1.0));
+            for (x, y) in [(mx, my), (mx2, my2)] {
+                let (tx, ty) = (x.div_euclid(ts as i32), y.div_euclid(ts as i32));
+                min_tx = min_tx.min(tx);
+                min_ty = min_ty.min(ty);
+                max_tx = max_tx.max(tx);
+                max_ty = max_ty.max(ty);
+            }
+        }
+        // A strongly minified pose explodes the pre-image; refuse rather
+        // than emit a memory event (card 057's bound).
+        const MAX_COVERAGE_TILES_PER_AXIS: i32 = 256;
+        if (max_tx - min_tx + 1) > MAX_COVERAGE_TILES_PER_AXIS
+            || (max_ty - min_ty + 1) > MAX_COVERAGE_TILES_PER_AXIS
+        {
+            return Err(
+                "The mask's transform spreads the canvas over too large an area".to_string(),
+            );
+        }
+        let mut edits = Vec::new();
+        for ty in min_ty..=max_ty {
+            for tx in min_tx..=max_tx {
+                let coord = raster::TileCoord::new(tx, ty, 0);
+                let old_bytes: Vec<u8> = existing
+                    .get(&coord)
+                    .and_then(|hash| compositor::TileSource::tile(&doc.tiles, *hash))
+                    .map(|b| b.to_vec())
+                    .unwrap_or_else(|| vec![0u8; ts * ts]);
+                let mut bytes = old_bytes.clone();
+                let mut in_canvas = false;
+                for py in 0..ts {
+                    for px in 0..ts {
+                        // This store pixel's document position; pixels that
+                        // land off-canvas keep the coverage they already
+                        // have — the fill only claims the canvas.
+                        let (cx, cy) = crate::menu_bridge::mask_to_canvas(
+                            pose_inverse.inverse(),
+                            glam::Vec2::new(
+                                (tx * ts as i32 + px as i32) as f32,
+                                (ty * ts as i32 + py as i32) as f32,
+                            ),
+                        );
+                        if cx < 0 || cy < 0 || cx >= w as i64 || cy >= h as i64 {
+                            continue;
+                        }
+                        bytes[py * ts + px] = coverage[cy as usize * w as usize + cx as usize];
+                        in_canvas = true;
+                    }
+                }
+                if !in_canvas {
+                    continue;
+                }
+                if bytes == old_bytes {
+                    continue;
+                }
+                if bytes.iter().all(|&v| v == 0) {
+                    // All-zero IS the absent-tile meaning: an existing tile
+                    // whose coverage vanished must be CLEARED, not left
+                    // behind silently revealing stale coverage.
+                    if existing.contains_key(&coord) {
+                        edits.push(TileEdit::clear(coord));
+                    }
+                    continue;
+                }
+                let hash = doc.tiles.insert_bytes(bytes);
+                edits.push(TileEdit::set(coord, hash));
+            }
+        }
+        if edits.is_empty() {
+            return Err("The mask edit would change nothing".to_string());
+        }
+        // `PixelTarget::Mask` names the LAYER; resolve_pixel_key maps it to
+        // the layer's mask (existence checked at apply time).
+        let paint = Command::paint_tiles(PixelTarget::Mask(layer), edits)
             .map_err(|e: editor_core::CommandError| e.to_string())?;
         Ok(Command::Transaction {
             label: label.to_string(),
@@ -1041,8 +1447,8 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         }
         MenuAction::ColorRange => color_range(editor),
         // Select ▸ Save / Load / Reselect — the store lives on the document
-        // (``Document::stored_selection` / `saved_selections`); selection edits
-        // are direct field writes, not undo steps, exactly like the marquee.
+        // (`Document::stored_selection` / `saved_selections`); the selection
+        // changes themselves ride history since card 056.
         MenuAction::SaveSelection => save_selection(editor),
         MenuAction::LoadSelection => load_selection(editor),
         MenuAction::Reselect => reselect(editor),
@@ -1060,6 +1466,16 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::Mask(MaskOp::Toggle) => toggle_mask(editor, false),
         MenuAction::Mask(MaskOp::ToggleLink) => toggle_mask(editor, true),
         MenuAction::Mask(MaskOp::Apply) => apply_mask(editor),
+        // Card 057: the four creation ops attach mask + coverage atomically.
+        MenuAction::Mask(
+            op @ (MaskOp::RevealAll
+            | MaskOp::HideAll
+            | MaskOp::RevealSelection
+            | MaskOp::HideSelection),
+        ) => create_mask(editor, op),
+        // Card 058: inverting coverage is a one-channel pixel edit on the
+        // mask's tile map — undoable, layer pixels untouched.
+        MenuAction::Mask(MaskOp::Invert) => invert_mask(editor),
         // `LayerStyle(_)` never reaches here: the chrome's dialog host opens
         // the real dialog for it (`DialogHost::open_for_menu_action`) and the
         // confirmed style arrives as the command the dialog emits. Reaching
@@ -1455,6 +1871,70 @@ pub(crate) fn fill_selection_with(
 /// The shared fill painter: `source` answers the paint colour (normalized
 /// RGBA) for each canvas pixel, so the solid colours and the tiled pattern go
 /// through the same source-over-with-blend loop and the same selection mask.
+/// Card 058: fill the MASK coverage when the edit target is the mask.
+///
+/// The paint's value is the source colour's LUMINANCE (the same mapping a
+/// brush stroke uses — white reveals, black conceals), applied at the
+/// dialog's opacity inside the selection. Non-Normal blend modes are
+/// refused: they are defined over RGBA compositing, not a scalar field, and
+/// pretending otherwise would invent semantics. `preserve_transparency` is
+/// ignored — a mask has no alpha to preserve — and the layer's pixel
+/// tiles are never touched.
+fn fill_mask_coverage(
+    editor: &mut Editor,
+    layer: layer_model::LayerId,
+    spec: &ui::dialogs::FillSpec,
+    source: &dyn Fn(i64, i64) -> [f32; 4],
+    w: u32,
+    h: u32,
+) -> Result<String, String> {
+    if spec.blend != layer_model::BlendMode::Normal {
+        return Err(
+            "Blend modes other than Normal are not meaningful on a coverage mask".to_string(),
+        );
+    }
+    // The dialog's opacity: on the solid route `fill_selection_with` bakes
+    // it into the source's alpha (the content fill does the same), on the
+    // pattern route the pattern's own alpha passes through. Either way the
+    // mask route must NOT multiply again — a dialog opacity of 50% would
+    // otherwise apply 25%.
+    let command = {
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        let before = read_mask_coverage(doc, layer, w, h);
+        let selection = doc.document.selection.clone();
+        let mut after = before.clone();
+        for py in 0..i64::from(h) {
+            for px in 0..i64::from(w) {
+                let paint = source(px, py);
+                // The paint's VALUE is its luminance (the same mapping a
+                // brush stroke uses) and its AMOUNT is the paint alpha —
+                // coverage blends toward the VALUE by the AMOUNT, exactly
+                // like `CoveragePatch::blend` on the brush path: black
+                // hides, white reveals, grey lands in between.
+                let value = tools::patch::mask_coverage_of(paint);
+                let amount = paint[3].clamp(0.0, 1.0);
+                let i = py as usize * w as usize + px as usize;
+                let c = selection.coverage_at(glam::IVec2::new(px as i32, py as i32));
+                let old = f32::from(before[i]) / 255.0;
+                let blended = old * (1.0 - amount) + value * amount;
+                after[i] = ((old * (1.0 - c) + blended * c) * 255.0)
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
+            }
+        }
+        pixels::write_mask_coverage(doc, layer, &after, "Fill Mask")?
+    };
+    editor.apply_command(command);
+    Ok(format!(
+        "Filled the mask with {} at {}% opacity",
+        match &spec.contents {
+            ui::dialogs::FillContents::Pattern(_) => "the pattern",
+            _ => "the foreground colour",
+        },
+        (spec.opacity * 100.0).round() as i64
+    ))
+}
+
 pub(crate) fn fill_selection_painting(
     editor: &mut Editor,
     spec: &ui::dialogs::FillSpec,
@@ -1462,6 +1942,21 @@ pub(crate) fn fill_selection_painting(
 ) -> Result<String, String> {
     let layer = pixel_layer(editor)?;
     let (w, h) = canvas_of(editor)?;
+    // Card 058: when the edit target is the layer's mask, a Fill paints
+    // COVERAGE — one grayscale channel, never the four-channel ColorPatch
+    // a content fill would be (that mismatch is the card's stated hazard).
+    let mask_fill = editor.edit_target_is_mask()
+        && editor
+            .active()
+            .and_then(|d| {
+                d.document
+                    .active_layer()
+                    .and_then(|id| d.document.layers.get(id).and_then(|l| l.mask_id()))
+            })
+            .is_some();
+    if mask_fill {
+        return fill_mask_coverage(editor, layer, spec, source, w, h);
+    }
     let command = {
         let doc = editor.active_mut().ok_or("No document is open")?;
         let before = pixels::read_layer(doc, layer);
@@ -1646,35 +2141,30 @@ pub(crate) fn stroke_selection_with(
 
 /// Replace the active document's selection.
 ///
-/// # Not undoable, and `editor_core` is why
-///
-/// The selection is a *field* of [`editor_core::Document`] with no command
-/// behind it, which the crate documents and which
-/// `crate::tools::SelectionEdit` already relies on: a marquee drag changes it
-/// directly too. So Select ▸ Inverse behaves exactly like dragging a new
-/// marquee — it marks the document dirty and it is not on the undo stack. It is
-/// stated here rather than implied because a menu item that looks undoable and
-/// is not is a trap.
+/// Card 056: every Select-menu selection change rides HISTORY as
+/// `Command::SetSelection` (inverse = the previous selection), the same route
+/// a marquee drag takes since that card — so Select ▸ Inverse and a marquee
+/// drag are both undoable, one gesture per step. A change that does not
+/// alter the selection is refused rather than recorded as a no-op step.
 fn set_selection(
     editor: &mut Editor,
     next: impl FnOnce(&editor_core::Selection, u32, u32) -> Result<editor_core::Selection, String>,
 ) -> Result<(), String> {
     let (w, h) = canvas_of(editor)?;
-    let doc = editor.active_mut().ok_or("No document is open")?;
-    let value = next(&doc.document.selection, w, h)?;
-    if value == doc.document.selection {
+    let current = editor
+        .active()
+        .ok_or("No document is open")?
+        .document
+        .selection
+        .clone();
+    let value = next(&current, w, h)?;
+    if value == current {
         return Err("The selection is already that".to_string());
     }
-    doc.document.selection = value;
-    doc.document.mark_dirty();
+    editor.apply_command(Command::SetSelection { selection: value });
     Ok(())
 }
 
-/// The radius each Select ▸ Modify item uses, in pixels.
-///
-/// Photoshop asks; this build has no numeric prompt to ask in, so each one uses
-/// the value that dialog opens at. Named as a constant so the number is one
-/// decision in one place rather than five literals.
 /// Select ▸ Save Selection: set the document's stored selection to the
 /// current one and append it to the named list (suffixed with a counter,
 /// since the shell hosts no dialog to name it with).
@@ -1710,9 +2200,9 @@ fn load_selection(editor: &mut Editor) -> Result<String, String> {
     if doc.document.selection == saved {
         return Err("The saved selection is already active".to_string());
     }
-    doc.document.selection = saved;
     doc.document.stored_selection = None;
-    doc.document.mark_dirty();
+    // Card 056: a user-facing selection edit rides history like every other.
+    editor.apply_command(Command::SetSelection { selection: saved });
     Ok("Loaded the saved selection".to_string())
 }
 
@@ -1731,12 +2221,17 @@ fn reselect(editor: &mut Editor) -> Result<String, String> {
     if doc.document.selection == saved {
         return Err("The saved selection is already active".to_string());
     }
-    doc.document.selection = saved;
     doc.document.stored_selection = None;
-    doc.document.mark_dirty();
+    // Card 056: history-backed, like every Select-menu edit.
+    editor.apply_command(Command::SetSelection { selection: saved });
     Ok("Reselected".to_string())
 }
 
+/// The radius each Select ▸ Modify item uses, in pixels.
+///
+/// Photoshop asks; this build has no numeric prompt to ask in, so each one uses
+/// the value that dialog opens at. Named as a constant so the number is one
+/// decision in one place rather than five literals.
 pub const MODIFY_RADIUS: u32 = 4;
 
 fn modify_selection(editor: &mut Editor, op: ui::menu::ModifySelection) -> Result<String, String> {
@@ -1863,15 +2358,36 @@ fn copy(editor: &mut Editor, merged: bool) -> Result<String, String> {
     editor.set_clipboard(crate::editor::Clipboard {
         width: cw,
         height: ch,
-        rgba8: rgba,
+        rgba8: rgba.clone(),
     });
+    // Card 052: the same pixels cross the process boundary — the OS image
+    // clipboard carries the copy so another application can take it. A
+    // refusal there (busy, image-less platform) does NOT fail the copy: the
+    // internal store above still holds everything, and the status says what
+    // did not cross.
+    let mut os_note = String::new();
+    match editor
+        .image_clipboard_mut()
+        .set_image(&crate::clipboard::ClipboardImage {
+            width: cw,
+            height: ch,
+            rgba: rgba.clone(),
+        }) {
+        Ok(()) => editor.remember_os_copy(&crate::clipboard::ClipboardImage {
+            width: cw,
+            height: ch,
+            rgba,
+        }),
+        Err(e) => os_note = format!(" (the OS clipboard refused: {e})"),
+    }
     Ok(format!(
-        "Copied {cw}×{ch} pixels{}",
+        "Copied {cw}×{ch} pixels{}{}",
         if merged {
             " from every visible layer"
         } else {
             ""
-        }
+        },
+        os_note
     ))
 }
 
@@ -1883,18 +2399,58 @@ fn cut(editor: &mut Editor) -> Result<String, String> {
 
 /// Edit ▸ Paste and Edit ▸ Paste Into.
 ///
-/// The clipboard lands on a **new layer** at the canvas origin, which is one
-/// undoable step and cannot destroy what was already there. Paste Into masks it
-/// by the current selection, which is the only thing that distinguishes the two.
+/// Card 052 freshness policy (plain Paste only): the OS image clipboard is
+/// read FIRST. An image that is NOT the editor's own last copy — a screenshot,
+/// another application's payload — wins and pastes through the full-source
+/// placement builder (centered; see [`Editor::paste_external_image`]); the
+/// editor's OWN copy is recognized by fingerprint and pastes through the
+/// internal store below (same pixels, at-origin semantics). A clipboard that
+/// holds no image, or cannot be read at all (busy, image-less platform), falls
+/// back to the internal store — the card's "internal Copy → Paste still works
+/// when the OS clipboard is temporarily unavailable". A TEXT payload is never
+/// fetched or converted: no URL becomes an image.
+///
+/// The internal path lands on a **new layer** at the canvas origin, which is
+/// one undoable step and cannot destroy what was already there. Paste Into
+/// masks it by the current selection, which is the only thing that
+/// distinguishes the two; Paste Into keeps the internal path (card 053 owns
+/// its mask semantics).
 fn paste(editor: &mut Editor, into: bool) -> Result<String, String> {
+    if !into {
+        let external = editor.image_clipboard_mut().get_image();
+        match external {
+            Ok(Some(image)) if !editor.os_copy_is_ours(&image) => {
+                return editor.paste_external_image(image);
+            }
+            Ok(Some(_)) | Ok(None) | Err(_) => {}
+        }
+    }
     let clip = editor
         .clipboard()
         .cloned()
         .ok_or("The clipboard is empty")?;
     let (w, h) = canvas_of(editor)?;
     let label = if into { "Paste Into" } else { "Paste" };
+    // Card 053: the selection's coverage is read before anything mutates.
+    let selection = editor
+        .active()
+        .ok_or("No document is open")?
+        .document
+        .selection
+        .clone();
+    if into && selection.is_empty() {
+        return Err("Paste Into: the selection holds no pixels".to_string());
+    }
+    // The layer is created up front so its exact id is available after the
+    // transaction applies (the paste selects what it created).
+    let layer = layer_model::Layer::raster(label);
+    let new_id = layer.id;
     let command = {
         let doc = editor.active_mut().ok_or("No document is open")?;
+        // The FULL image is stored - nothing is multiplied away here. What
+        // confines it to the selection is a retained raster mask derived from
+        // the selection, so disabling the mask (Layer > Layer Mask > Toggle)
+        // reveals every original pixel again.
         let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
         let rows = clip.height.min(h);
         let cols = clip.width.min(w);
@@ -1907,16 +2463,6 @@ fn paste(editor: &mut Editor, into: bool) -> Result<String, String> {
             let n = cols as usize * 4;
             rgba[d..d + n].copy_from_slice(&clip.rgba8[s..s + n]);
         }
-        if into {
-            let selection = doc.document.selection.clone();
-            let empty = vec![0u8; rgba.len()];
-            pixels::mask_by_selection(&empty, &mut rgba, &selection, w, h);
-            if rgba.iter().skip(3).step_by(4).all(|a| *a == 0) {
-                return Err("Paste Into: the selection hides all of it".to_string());
-            }
-        }
-        let layer = layer_model::Layer::raster(label);
-        let new_id = layer.id;
         let mut commands = vec![Command::create_layer(layer)];
         let grid = raster::TileGrid::from_rgba8(w, h, &rgba).map_err(|e| e.to_string())?;
         let mut edits = Vec::new();
@@ -1928,12 +2474,51 @@ fn paste(editor: &mut Editor, into: bool) -> Result<String, String> {
             Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(new_id), edits)
                 .map_err(|e| e.to_string())?,
         );
+        if into {
+            // The mask rides in the SAME transaction: one undo removes the
+            // layer, its pixels and its mask together. The layer is born at
+            // the canvas origin with an identity transform, so the coverage
+            // (computed in document space) aligns exactly; `linked: true`
+            // keeps that alignment as the layer moves. Fractional samples
+            // from a lasso/wand selection map through unchanged.
+            let coverage = pixels::selection_coverage_tiles(&selection, w, h);
+            if coverage.is_empty() {
+                // The selection has bounds but never intersects the canvas
+                // (or the origin-pinned clip): a raster mask with no tiles is
+                // hidden EVERYWHERE, so this paste would land invisible and
+                // "succeed".
+                return Err("Paste Into: the selection hides all of it".to_string());
+            }
+            let mut mask_edits = Vec::new();
+            for (coord, coverage_bytes) in coverage {
+                let hash = doc.tiles.insert_bytes(coverage_bytes);
+                mask_edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+            }
+            commands.push(Command::SetLayerProperties {
+                layer_id: new_id,
+                patch: editor_core::LayerPatch {
+                    mask: editor_core::Patch::Set(layer_model::LayerMask::new(
+                        layer_model::MaskId::new(),
+                    )),
+                    ..Default::default()
+                },
+            });
+            commands.push(
+                Command::paint_tiles(editor_core::pixels::PixelTarget::Mask(new_id), mask_edits)
+                    .map_err(|e| e.to_string())?,
+            );
+        }
         Command::Transaction {
             label: label.to_string(),
             commands,
         }
     };
     editor.apply_command(command);
+    // The pasted layer becomes the selection: the next gesture aims at what
+    // the user just pasted (the same rule card 048 gave placements). The
+    // created id is exact — if paste ever changes insertion position, an
+    // indirect root().first() would silently select the wrong layer.
+    editor.set_layer_selection(vec![new_id], Some(new_id));
     Ok(format!("{label}d onto a new layer"))
 }
 
@@ -2227,6 +2812,220 @@ fn toggle_mask(editor: &mut Editor, link: bool) -> Result<String, String> {
     Ok(message.to_string())
 }
 
+/// Card 057: the four mask-creation ops (Layer ▸ Layer Mask ▸ …) as REAL
+/// coverage — the E09 lesson is that a bare `LayerMask::new` has NO tiles and
+/// the compositor's convention reads an absent tile as HIDDEN, so "Reveal All"
+/// without coverage hid the layer completely. Each op now attaches the mask
+/// and paints its coverage in ONE undoable transaction.
+///
+/// The rules:
+/// - **Reveal All** writes all-255 coverage over the whole canvas — it MUST
+///   be stored, because "absent" means hidden and there is no absent-tile
+///   way to say "revealed".
+/// - **Hide All** attaches the mask with no tiles at all: absent means
+///   hidden, which is exactly the requested state, stated by the convention
+///   rather than by megabytes of zeros.
+/// - **Reveal / Hide Selection** derive per-pixel coverage from the current
+///   selection through the card 053 helper (fractional lasso/wand samples
+///   survive; Hide Selection inverts, and a tile fully inside the selection
+///   inverts to all-zero — omitted, because absent already hides it).
+/// - An already-masked layer is REFUSED (delete the mask first): the menu
+///   gates this too, and a silent replace would destroy coverage the user
+///   can see.
+/// - The selection ops refuse without a selection (`Selection::None` means
+///   EVERY pixel, so "reveal none-of-it" and "hide all-of-it" are the other
+///   two ops' jobs).
+///
+/// Card 058: invert the active layer's mask coverage (255 − v per stored
+/// pixel).
+///
+/// One labelled transaction — one undo step — and the layer's pixel tiles
+/// are never touched. The inversion runs over the mask's OWN store space, so
+/// it is exact for any pose (a moved unlinked mask inverts where its
+/// coverage lives, not where the canvas grid happens to be) and covers the
+/// tiles the compositor samples: canvas-grid tiles that are absent read 0
+/// (hidden) and become STORED all-255 (revealed), while existing tiles —/// including any outside the canvas pre-image — flip in place. The
+/// all-zero-tile convention composes with itself: inverting twice returns
+/// the exact original store.
+fn invert_mask(editor: &mut Editor) -> Result<String, String> {
+    use editor_core::pixels::{PixelTarget, TileEdit};
+    let layer = pixel_layer(editor)?;
+    let (w, h) = canvas_of(editor)?;
+    let command = {
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        doc.document
+            .layers
+            .get(layer)
+            .and_then(|l| l.mask_id())
+            .ok_or_else(|| "The layer has no mask".to_string())?;
+        let ts = raster::TILE_SIZE as usize;
+        let existing: std::collections::HashMap<raster::TileCoord, raster::TileHash> = doc
+            .document
+            .mask_tiles(layer)
+            .map(|m| m.iter().collect())
+            .unwrap_or_default();
+        let tiles_x = w.div_ceil(ts as u32) as i32;
+        let tiles_y = h.div_ceil(ts as u32) as i32;
+        let mut edits = Vec::new();
+        for ty in 0..tiles_y {
+            for tx in 0..tiles_x {
+                let coord = raster::TileCoord::new(tx, ty, 0);
+                match existing.get(&coord) {
+                    Some(hash) => {
+                        let bytes = compositor::TileSource::tile(&doc.tiles, *hash)
+                            .ok_or_else(|| "The mask's coverage is missing".to_string())?;
+                        let inverted: Vec<u8> = bytes.iter().map(|&v| 255 - v).collect();
+                        if inverted == bytes {
+                            continue;
+                        }
+                        if inverted.iter().all(|&v| v == 0) {
+                            // An all-zero result IS the absent-tile meaning:
+                            // CLEAR the tile, don't store stale zeros (which
+                            // would still read hidden but bloat the store
+                            // and break the round-trip's convention).
+                            edits.push(TileEdit::clear(coord));
+                        } else {
+                            let hash = doc.tiles.insert_bytes(inverted);
+                            edits.push(TileEdit::set(coord, hash));
+                        }
+                    }
+                    // Absent = all-hidden: the inversion reveals it, and an
+                    // all-255 tile must be STORED, not left absent (the
+                    // convention would keep reading it as hidden).
+                    None => {
+                        let hash = doc.tiles.insert_bytes(vec![255u8; ts * ts]);
+                        edits.push(TileEdit::set(coord, hash));
+                    }
+                }
+            }
+        }
+        // Store tiles outside the canvas grid flip in place too: they are
+        // part of the mask's coverage field.
+        for (coord, hash) in &existing {
+            if coord.x >= 0 && coord.y >= 0 && coord.x < tiles_x && coord.y < tiles_y {
+                continue;
+            }
+            if let Some(bytes) = compositor::TileSource::tile(&doc.tiles, *hash) {
+                let inverted: Vec<u8> = bytes.iter().map(|&v| 255 - v).collect();
+                if inverted != bytes {
+                    if inverted.iter().all(|&v| v == 0) {
+                        edits.push(TileEdit::clear(*coord));
+                    } else {
+                        let hash = doc.tiles.insert_bytes(inverted);
+                        edits.push(TileEdit::set(*coord, hash));
+                    }
+                }
+            }
+        }
+        // Defensively unreachable for u8 (255 − v = v has no integer
+        // solution, and absent tiles always emit a set), but a ≥0-tile
+        // canvas must never emit an empty delta.
+        if edits.is_empty() {
+            return Err("Nothing to invert".to_string());
+        }
+        // `PixelTarget::Mask` names the LAYER; resolve_pixel_key maps it to
+        // the layer's mask (existence checked at apply time).
+        let paint = Command::paint_tiles(PixelTarget::Mask(layer), edits)
+            .map_err(|e: editor_core::CommandError| e.to_string())?;
+        Ok::<Command, String>(Command::Transaction {
+            label: "Invert Mask".to_string(),
+            commands: vec![paint],
+        })
+    }?;
+    editor.apply_command(command);
+    Ok("Inverted the layer mask".to_string())
+}
+
+fn create_mask(editor: &mut Editor, op: ui::menu::MaskOp) -> Result<String, String> {
+    let (w, h) = canvas_of(editor)?;
+    let selection = editor
+        .active()
+        .ok_or("No document is open")?
+        .document
+        .selection
+        .clone();
+    let needs_selection = matches!(
+        op,
+        ui::menu::MaskOp::RevealSelection | ui::menu::MaskOp::HideSelection
+    );
+    if needs_selection
+        && (matches!(selection, editor_core::Selection::None) || selection.is_empty())
+    {
+        return Err("Select an area first".to_string());
+    }
+    // Card 057 requirement: the coverage lives in the LAYER's local space
+    // (the new mask is linked, so the compositor resolves it through the
+    // layer transform) — the document-space selection is pre-imaged through
+    // the layer transform's inverse, and the walk spans the layer's own
+    // content tiles plus the canvas pre-image.
+    let (layer_to_doc, content_tiles) = {
+        let doc = editor.active().ok_or("No document is open")?;
+        let id = doc.document.active_layer().ok_or("Select a layer first")?;
+        let layer_to_doc = crate::interaction_geometry::document_transform_of(&doc.document, id, 0)
+            .unwrap_or(glam::Affine2::IDENTITY);
+        let content_tiles: Vec<raster::TileCoord> = doc
+            .document
+            .layer_tiles(id)
+            .map(|m| m.iter().map(|(c, _)| c).collect())
+            .unwrap_or_default();
+        (layer_to_doc, content_tiles)
+    };
+    let mode = match op {
+        ui::menu::MaskOp::RevealAll => pixels::MaskCoverageMode::RevealAll,
+        ui::menu::MaskOp::HideAll => pixels::MaskCoverageMode::HideAll,
+        ui::menu::MaskOp::RevealSelection => pixels::MaskCoverageMode::RevealSelection,
+        ui::menu::MaskOp::HideSelection => pixels::MaskCoverageMode::HideSelection,
+        _ => return Err("Not a mask-creation op".to_string()),
+    };
+    let coverage: Vec<(raster::TileCoord, Vec<u8>)> =
+        pixels::mask_creation_coverage(&selection, layer_to_doc, &content_tiles, w, h, mode)?;
+    let label = match op {
+        ui::menu::MaskOp::RevealAll => "Reveal All",
+        ui::menu::MaskOp::HideAll => "Hide All",
+        ui::menu::MaskOp::RevealSelection => "Reveal Selection",
+        ui::menu::MaskOp::HideSelection => "Hide Selection",
+        _ => unreachable!("filtered above"),
+    };
+    let command = {
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        let id = doc.document.active_layer().ok_or("Select a layer first")?;
+        if doc
+            .document
+            .layers
+            .get(id)
+            .is_some_and(|l| l.mask.is_some())
+        {
+            return Err("The layer already has a mask — delete it first".to_string());
+        }
+        let mut commands = vec![Command::SetLayerProperties {
+            layer_id: id,
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Set(layer_model::LayerMask::new(
+                    layer_model::MaskId::new(),
+                )),
+                ..Default::default()
+            },
+        }];
+        if !coverage.is_empty() {
+            let mut edits = Vec::new();
+            for (coord, coverage_bytes) in coverage {
+                let hash = doc.tiles.insert_bytes(coverage_bytes);
+                edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+            }
+            commands.push(
+                Command::paint_tiles(editor_core::pixels::PixelTarget::Mask(id), edits)
+                    .map_err(|e| e.to_string())?,
+            );
+        }
+        Command::Transaction {
+            label: label.to_string(),
+            commands,
+        }
+    };
+    editor.apply_command(command);
+    Ok(format!("{label} mask attached"))
+}
+
 /// Bake a layer's mask into its alpha and remove the mask.
 fn apply_mask(editor: &mut Editor) -> Result<String, String> {
     let (w, h) = canvas_of(editor)?;
@@ -2242,7 +3041,32 @@ fn apply_mask(editor: &mut Editor) -> Result<String, String> {
             return Err("The layer has no mask".to_string());
         }
         let before = pixels::read_layer(doc, id);
-        let coverage = read_mask_coverage(doc, id, w, h);
+        let mut coverage = read_mask_coverage(doc, id, w, h);
+        // Card 059 (review round 2): Apply bakes what the SCREEN shows, and
+        // the compositor applies the mask's INVERTED flag on top of the
+        // store — an inverted mask must flatten its complement, or the
+        // result contradicts the view. (Density/feather remain recorded
+        // limitations: the store's coverage is what the pipeline bakes.)
+        //
+        // RECORDED LIMITATION (review round 3, ledger row 059 / T043
+        // remainder): on a TRANSFORMED layer the bake mixes spaces —
+        // read_layer/write_layer lay tiles 1:1 onto canvas indices while the
+        // coverage read is pose-aware — so the exact bake for store
+        // pixel s is store(s) · cov(M⁻¹·s) (cov sampled through the
+        // mask's own extra-transform inverse), and this code computes
+        // store(s) · cov((T·M)⁻¹·s). Equal only at an identity layer
+        // transform; a moved layer's Apply can blank a stripe at its edge.
+        // Fixing it needs a store-space coverage read — recorded as work,
+        // not silently shipped as correct.
+        if doc
+            .document
+            .layers
+            .get(id)
+            .and_then(|l| l.mask.as_ref())
+            .is_some_and(|m| m.inverted)
+        {
+            coverage.iter_mut().for_each(|v| *v = 255 - *v);
+        }
         let mut after = before.clone();
         for (i, c) in coverage.iter().enumerate() {
             let a = i * 4 + 3;
@@ -2265,43 +3089,161 @@ fn apply_mask(editor: &mut Editor) -> Result<String, String> {
     Ok("Mask applied".to_string())
 }
 
-/// One coverage byte per canvas pixel, read out of a layer's mask tiles.
+/// Card 060: bake the Refine Mask dialog's parameters into the ACTIVE
+/// layer's mask coverage — one labelled transaction (one undo step), the
+/// layer's pixels never touched. The parameters run in the mask coverage's
+/// own pixels through [`selection::refine_mask`], the same pipeline the
+/// dialog's preview uses, so what was previewed is what lands.
+pub(crate) fn refine_mask_with(
+    editor: &mut Editor,
+    spec: &ui::dialogs::refine_mask::RefineMaskSpec,
+) -> Result<String, String> {
+    let layer = pixel_layer(editor)?;
+    let (w, h) = canvas_of(editor)?;
+    let command = {
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        doc.document
+            .layers
+            .get(layer)
+            .and_then(|l| l.mask_id())
+            .ok_or_else(|| "The layer has no mask".to_string())?;
+        let baseline = read_mask_coverage(doc, layer, w, h);
+        let mask = editor_core::SelectionMask::new(glam::IVec2::ZERO, w, h, baseline)
+            .map_err(|e| e.to_string())?;
+        let refined = selection::refine_mask(&mask, &spec.params()).map_err(|e| e.to_string())?;
+        // Canvas-align the refined field (its rect may have grown).
+        let mut coverage = vec![0u8; (w * h) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                coverage[(y * w + x) as usize] =
+                    refined.coverage_at(glam::IVec2::new(x as i32, y as i32));
+            }
+        }
+        pixels::write_mask_coverage(doc, layer, &coverage, "Refine Mask")?
+    };
+    editor.apply_command(command);
+    Ok(format!(
+        "Refined the mask: feather {} px, shift {} px, smooth {} px, contrast {:.0}%",
+        spec.feather_px,
+        spec.shift_px,
+        spec.smooth_px,
+        spec.contrast * 100.0
+    ))
+}
+
+/// Card 062: run the Remove Color Fringe dialog's cleanup over the ACTIVE
+/// layer's pixels — a SEPARATE edit from [`refine_mask_with`]: it recolours
+/// the boundary band toward the nearby interior ink and never touches the
+/// mask coverage. One labelled transaction (one undo step); the inverse
+/// restores the exact original RGB, which is how "disabling" the cleanup
+/// works — the operation is explicit and reversible, not a mode. Applies to
+/// the layer's whole masked boundary (not folded by the selection: the
+/// fringe lives where the MASK says the edge is). The mixed-space caveat of
+/// the card-060 family applies on transformed layers (raw-store read,
+/// canvas-aligned write).
+pub(crate) fn defringe_with(
+    editor: &mut Editor,
+    spec: &ui::dialogs::defringe::DefringeSpec,
+) -> Result<String, String> {
+    let layer = pixel_layer(editor)?;
+    let (w, h) = canvas_of(editor)?;
+    let command = {
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        doc.document
+            .layers
+            .get(layer)
+            .and_then(|l| l.mask.as_ref())
+            .ok_or_else(|| "The layer has no mask".to_string())?;
+        let before = pixels::read_layer(doc, layer);
+        let coverage = read_mask_coverage(doc, layer, w, h);
+        let mut after = before.clone();
+        filters::defringe::defringe(&mut after, &coverage, w, h, spec.params())
+            .map_err(|e| e.to_string())?;
+        if after == before {
+            return Err("No boundary fringe matched the cleanup parameters".to_string());
+        }
+        pixels::write_layer(doc, layer, &after, "Remove Color Fringe")?
+    };
+    editor.apply_command(command);
+    Ok(format!(
+        "Removed color fringe: radius {} px, strength {:.0}%",
+        spec.radius_px,
+        spec.strength * 100.0
+    ))
+}
+
+/// Card 058: the mask's document pose — the layer transform composed
+/// with the mask's own extra transform (card 043), the SAME pose the
+/// compositor samples the coverage through (`composite.rs`'s mask
+/// sampling). Identity for a linked mask on an untransformed layer.
+pub(crate) fn mask_pose(doc: &crate::doc::OpenDocument, layer: LayerId) -> glam::Affine2 {
+    crate::interaction_geometry::document_transform_of(&doc.document, layer, 0)
+        .unwrap_or(glam::Affine2::IDENTITY)
+        * doc
+            .document
+            .layers
+            .get(layer)
+            .and_then(|l| l.mask.as_ref())
+            .map(|m| *m.transform)
+            .unwrap_or(glam::Affine2::IDENTITY)
+}
+
+/// A pixel-center-consistent mapping pair for the mask store:
+/// store pixel `m` covers the document area around `pose * (m + 0.5)`,
+/// so canvas pixel `p`'s store pixel is
+/// `floor(pose.inverse() * (p + 0.5) − 0.5)` and the canvas pixel a
+/// store pixel writes is `floor(pose * (m + 0.5) − 0.5)`. At an
+/// identity pose both reduce to the plain integer coordinates.
+fn mask_to_canvas(pose: glam::Affine2, m: glam::Vec2) -> (i64, i64) {
+    let d = pose.transform_point2(m + glam::Vec2::splat(0.5)) - glam::Vec2::splat(0.5);
+    (d.x.floor() as i64, d.y.floor() as i64)
+}
+pub(crate) fn canvas_to_mask(pose_inverse: glam::Affine2, p: glam::Vec2) -> (i32, i32) {
+    let m = pose_inverse.transform_point2(p + glam::Vec2::splat(0.5)) - glam::Vec2::splat(0.5);
+    (m.x.floor() as i32, m.y.floor() as i32)
+}
+
+/// One coverage byte per canvas pixel, read out of a layer's mask tiles
+/// through the mask pose.
 ///
 /// An absent mask tile is *hidden* — the table in [`editor_core::pixels`] says
 /// so — which is why the buffer starts at zero rather than at 255.
-fn read_mask_coverage(doc: &crate::doc::OpenDocument, layer: LayerId, w: u32, h: u32) -> Vec<u8> {
+pub(crate) fn read_mask_coverage(
+    doc: &crate::doc::OpenDocument,
+    layer: LayerId,
+    w: u32,
+    h: u32,
+) -> Vec<u8> {
     let (w, h) = (w as usize, h as usize);
     let mut out = vec![0u8; w * h];
     let Some(map) = doc.document.mask_tiles(layer) else {
         return out;
     };
-    let ts = raster::TILE_SIZE as usize;
-    for (coord, hash) in map.iter() {
-        if coord.level != 0 {
-            continue;
-        }
-        let Some(bytes) = compositor::TileSource::tile(&doc.tiles, hash) else {
-            continue;
-        };
-        if bytes.len() < ts * ts {
-            continue;
-        }
-        let ox = coord.x as i64 * ts as i64;
-        let oy = coord.y as i64 * ts as i64;
-        for row in 0..ts {
-            let y = oy + row as i64;
-            if y < 0 || y >= h as i64 {
+    let ts = raster::TILE_SIZE as i32;
+    // Card 058: canvas pixels read through the mask pose — the SAME
+    // mapping the compositor samples the coverage through — so a read
+    // (and the fill/invert built on it) agrees with what the user sees on an
+    // unlinked, independently transformed mask. Nearest-store-pixel sampling;
+    // at an identity pose this is the exact 1:1 copy it always was.
+    let pose_inverse = mask_pose(doc, layer).inverse();
+    for y in 0..h {
+        for x in 0..w {
+            let (mx, my) = crate::menu_bridge::canvas_to_mask(
+                pose_inverse,
+                glam::Vec2::new(x as f32, y as f32),
+            );
+            let coord = raster::TileCoord::new(mx.div_euclid(ts), my.div_euclid(ts), 0);
+            let Some(hash) = map.get(coord) else {
+                continue; // absent tile = hidden
+            };
+            let Some(bytes) = compositor::TileSource::tile(&doc.tiles, hash) else {
+                continue;
+            };
+            if bytes.len() < (ts * ts) as usize {
                 continue;
             }
-            let x0 = ox.max(0);
-            let x1 = (ox + ts as i64).min(w as i64);
-            if x1 <= x0 {
-                continue;
-            }
-            let n = (x1 - x0) as usize;
-            let s = row * ts + (x0 - ox) as usize;
-            let d = y as usize * w + x0 as usize;
-            out[d..d + n].copy_from_slice(&bytes[s..s + n]);
+            let px = my.rem_euclid(ts) as usize * ts as usize + mx.rem_euclid(ts) as usize;
+            out[y * w + x] = bytes[px];
         }
     }
     out
@@ -2370,6 +3312,42 @@ mod tests {
         with_recent(dir, RecentFiles::new())
     }
 
+    /// Card 007: the Properties Layer/Mask control's intent lands as the
+    /// shell's edit-target pick, and applying it stores the validated target.
+    #[test]
+    fn the_properties_mask_focus_becomes_the_shell_edit_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("canvas.png");
+        std::fs::write(
+            &png,
+            raster::encode(raster::ExportFormat::Png, 32, 32, &[255u8; 32 * 32 * 4]).unwrap(),
+        )
+        .unwrap();
+        let mut ed = editor(dir.path());
+        ed.open_path(&png).unwrap();
+
+        // The intent the control raises (docks.rs), through the real bridge:
+        // routed, recorded into the frame's output, applied by the shell.
+        let intent = ui::Intent::SetEditTarget { mask: true };
+        let pick = crate::menu_bridge::pick(&intent, &ed).expect("the intent routes");
+        let mut out = crate::chrome::ChromeOutput::default();
+        crate::menu_bridge::record(pick, &mut out);
+        assert_eq!(
+            out.edit_target,
+            Some(crate::edit_target::EditTargetKind::Mask),
+            "the intent became an edit-target pick"
+        );
+
+        // The shell's half (`shell.rs::apply_chrome`).
+        if let Some(kind) = out.edit_target {
+            ed.set_edit_target_kind(kind);
+        }
+        // The opened layer has no mask yet: the snapshot falls back to
+        // content, the documented reconciliation.
+        let target = ed.edit_target().expect("a target for the active layer");
+        assert_eq!(target.kind, crate::edit_target::EditTargetKind::Content);
+    }
+
     fn with_recent(dir: &std::path::Path, recent: RecentFiles) -> Editor {
         Editor::with_state(
             AppPaths::rooted(dir.join("config")),
@@ -2434,9 +3412,10 @@ mod tests {
             ..Default::default()
         };
         let mut painted = Vec::new();
+        let mut ed = ed;
         for _ in 0..2 {
             let output = ctx.run(input.clone(), |ctx| {
-                chrome.ui(ctx, &ed);
+                chrome.ui(ctx, &mut ed);
             });
             painted = painted_text(&ctx, &output);
         }
@@ -2490,7 +3469,7 @@ mod tests {
     /// — the ratchet would fall to zero and nothing would have been wired at
     /// all. The bucket an item lands in is decided by *who* refused it: the
     /// shared model (disabled) or this shell (unwired).
-    fn tally(ed: &Editor, ws: &Workspace) -> Tally {
+    fn tally(ed: &mut Editor, ws: &Workspace) -> Tally {
         let context = context(ed, ws);
         let mut tally = Tally::default();
         for menu in menus(ed) {
@@ -2558,7 +3537,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new();
 
-        for (label, ed, min_performable, max_unwired) in [
+        for (label, mut ed, min_performable, max_unwired) in [
             (
                 "with a document open",
                 editor_with_a_document(dir.path()),
@@ -2572,7 +3551,7 @@ mod tests {
                 MAX_UNWIRED_WITH_NOTHING_OPEN,
             ),
         ] {
-            let t = tally(&ed, &ws);
+            let t = tally(&mut ed, &ws);
             assert!(t.total() > 200, "{label}: only {} items walked", t.total());
             for (action, reason) in &t.disabled {
                 assert!(!reason.is_empty(), "{label}: {action:?} greys out silently");
@@ -2603,9 +3582,9 @@ mod tests {
         // reviewer measured as dead: all four workspace presets, all thirteen
         // panels, and every view overlay.
         let dir = tempfile::tempdir().unwrap();
-        let ed = editor_with_a_document(dir.path());
+        let mut ed = editor_with_a_document(dir.path());
         let ws = Workspace::new();
-        let context = context(&ed, &ws);
+        let context = context(&mut ed, &ws);
 
         for layout in ui::LayoutId::ALL {
             match resolve(MenuAction::ApplyLayout(*layout), &context, &ed) {
@@ -2642,11 +3621,11 @@ mod tests {
         // stop, so the round trip is the assertion: resolve the menu item,
         // absorb what it produced, and read the dock back.
         let dir = tempfile::tempdir().unwrap();
-        let ed = editor_with_a_document(dir.path());
+        let mut ed = editor_with_a_document(dir.path());
         let mut ws = Workspace::new();
         assert!(!ws.dock.is_open(ui::PanelId::Channels), "not open yet");
 
-        let context = context(&ed, &ws);
+        let context = context(&mut ed, &ws);
         let Ok(Pick::Workspace(intent)) = resolve(
             MenuAction::TogglePanel(ui::PanelId::Channels),
             &context,
@@ -2659,7 +3638,7 @@ mod tests {
 
         // ...and the menu now shows the checkmark, because the context is read
         // off the same workspace rather than off a fresh default.
-        let after = self::context(&ed, &ws);
+        let after = self::context(&mut ed, &ws);
         assert_eq!(
             MenuAction::TogglePanel(ui::PanelId::Channels).checked(&after),
             Some(true)
@@ -2669,8 +3648,8 @@ mod tests {
     #[test]
     fn the_file_menu_routes_the_actions_this_build_has() {
         let dir = tempfile::tempdir().unwrap();
-        let ed = editor(dir.path());
-        let context = context(&ed, &Workspace::new());
+        let mut ed = editor(dir.path());
+        let context = context(&mut ed, &Workspace::new());
         assert_eq!(
             resolve(MenuAction::NewDocument, &context, &ed),
             Ok(Pick::Action(Action::NewDocument))
@@ -2696,7 +3675,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ed = editor(dir.path());
         ed.dispatch(Action::NewDocument).expect("a new document");
-        let context = context(&ed, &Workspace::new());
+        let context = context(&mut ed, &Workspace::new());
         // Place routes and performs now (P2.4): the item resolves to a real
         // command — the dialog asks where the file lives (C7 removed the
         // stale reason that read as a live product limitation).
@@ -2749,7 +3728,7 @@ mod tests {
         // today; this one is wired ahead of a renderer that can show it.
         let mut ws = Workspace::new();
         ws.canvas.view.camera.set_rotation(0.7);
-        let context = context(&ed, &ws);
+        let context = context(&mut ed, &ws);
 
         for action in [
             MenuAction::Zoom(Z::FillScreen),
@@ -2828,8 +3807,8 @@ mod tests {
         let path = dir.path().join("seaside.png");
         let mut recent = RecentFiles::new();
         recent.record(path.clone());
-        let ed = with_recent(dir.path(), recent);
-        let context = context(&ed, &Workspace::new());
+        let mut ed = with_recent(dir.path(), recent);
+        let context = context(&mut ed, &Workspace::new());
         assert_eq!(MenuAction::OpenRecent(0).label_in(&context), "seaside.png");
         assert_eq!(
             resolve(MenuAction::OpenRecent(0), &context, &ed),
@@ -2870,6 +3849,11 @@ mod tests {
     /// which most of the menu bar is live.
     fn opened(dir: &std::path::Path) -> Editor {
         let mut ed = editor(dir);
+        // Card 052: the image clipboard is the deterministic fake — default
+        // menu tests must not touch the real OS clipboard (parallel tests
+        // would race on it, and headless machines have none). The host-bound
+        // paste test re-arms the real clipboard explicitly.
+        ed.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
         ed.open_path(&probe_png(dir, 48, 32))
             .expect("the probe opens");
         ed
@@ -3113,7 +4097,7 @@ mod tests {
         select_rect(&mut ed, (10, 10), (20, 20));
 
         let message = {
-            let context = context(&ed, &Workspace::new());
+            let context = context(&mut ed, &Workspace::new());
             let Ok(Pick::Menu(a)) = resolve(
                 MenuAction::Modify(ui::menu::ModifySelection::Expand),
                 &context,
@@ -3137,7 +4121,7 @@ mod tests {
         );
 
         // ...and Contract by the same radius takes it back.
-        let context = context(&ed, &Workspace::new());
+        let context = context(&mut ed, &Workspace::new());
         let Ok(Pick::Menu(a)) = resolve(
             MenuAction::Modify(ui::menu::ModifySelection::Contract),
             &context,
@@ -3187,7 +4171,7 @@ mod tests {
         select_rect(&mut ed, (4, 4), (12, 10));
 
         // Paste is off until something has been copied, and it says so.
-        let context = context(&ed, &Workspace::new());
+        let context = context(&mut ed, &Workspace::new());
         assert_eq!(
             resolve(MenuAction::Paste, &context, &ed),
             Err("The clipboard is empty".to_string())
@@ -3218,6 +4202,1343 @@ mod tests {
         assert!(ed.clipboard().is_some(), "Cut did not copy");
         let after = pixels::read_layer(ed.active().unwrap(), layer);
         assert_eq!(after[3], 0, "Cut did not clear the selected pixels");
+    }
+
+    /// Card 052: Copy also crosses the process boundary, and the OS
+    /// clipboard's image is authoritative on paste — a payload ANOTHER
+    /// application put there wins over the editor's stale internal copy.
+    #[test]
+    fn an_external_clipboard_image_wins_over_the_stale_internal_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        select_rect(&mut ed, (4, 4), (12, 10));
+        assert!(invoke(&mut ed, MenuAction::Copy).unwrap());
+
+        // Another application replaces the OS clipboard's image entirely.
+        let foreign =
+            crate::clipboard::ClipboardImage::validate(2, 1, vec![9, 8, 7, 255, 6, 5, 4, 255])
+                .unwrap();
+        let mut os = crate::clipboard::FakeClipboard::new();
+        os.seed(foreign);
+        ed.set_image_clipboard(Box::new(os));
+
+        assert!(invoke(&mut ed, MenuAction::Paste).unwrap());
+        let open = ed.active().unwrap();
+        let pasted = open.document.active_layer().unwrap();
+        // The external payload routes through full-source placement: a smart
+        // object over an embedded asset, not the at-origin raster the
+        // internal route makes.
+        assert!(
+            matches!(
+                open.document.layers.get(pasted).unwrap().kind,
+                layer_model::LayerKind::SmartObject(_)
+            ),
+            "an external image pastes as a placed smart object"
+        );
+        use compositor::TileSource;
+        let hash = open
+            .document
+            .layer_tiles(pasted)
+            .unwrap()
+            .get(raster::TileCoord::new(0, 0, 0))
+            .expect("the placed source's first tile");
+        let bytes = open.tiles.tile(hash).unwrap();
+        assert_eq!(
+            &bytes[0..4],
+            &[9, 8, 7, 255],
+            "the external payload's pixels won, not the stale copy"
+        );
+        assert_eq!(
+            ed.status(),
+            Some("Pasted 2×1 from the clipboard"),
+            "the status names the external paste"
+        );
+    }
+
+    /// Card 052 ownership policy: the editor's OWN copy is recognized by
+    /// fingerprint and keeps the internal at-origin route — Copy → Paste
+    /// behaves exactly as before card 052.
+    #[test]
+    fn the_editors_own_copy_still_pastes_through_the_internal_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let original = pixels::read_layer(ed.active().unwrap(), layer);
+        select_rect(&mut ed, (4, 4), (12, 10));
+        assert!(invoke(&mut ed, MenuAction::Copy).unwrap());
+        assert!(invoke(&mut ed, MenuAction::Paste).unwrap());
+        let doc = ed.active().unwrap();
+        let pasted = doc.document.layers.root()[0];
+        assert!(
+            matches!(
+                doc.document.layers.get(pasted).unwrap().kind,
+                layer_model::LayerKind::Raster(_)
+            ),
+            "our own copy keeps the internal at-origin route"
+        );
+        let clip = ed.clipboard().expect("the internal store still holds it");
+        assert_eq!(&pixels::read_layer(doc, pasted)[0..4], &clip.rgba8[0..4]);
+        assert_eq!(
+            &clip.rgba8[0..4],
+            &original[((4 * 48) + 4) * 4..((4 * 48) + 4) * 4 + 4],
+            "the copied pixels are what pasted"
+        );
+    }
+
+    /// Card 052: the OS clipboard being unreadable (busy, image-less
+    /// platform) degrades to the internal store — Copy → Paste keeps working.
+    #[test]
+    fn paste_falls_back_to_the_internal_store_when_the_os_clipboard_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        ed.set_image_clipboard(Box::new(
+            crate::clipboard::FakeClipboard::new()
+                .with_failure(crate::clipboard::ClipboardError::Busy),
+        ));
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let original = pixels::read_layer(ed.active().unwrap(), layer);
+        select_rect(&mut ed, (4, 4), (12, 10));
+        let message = perform(MenuAction::Copy, &mut ed).unwrap();
+        assert!(
+            message.contains("refused"),
+            "the copy says the OS clipboard would not take it: {message}"
+        );
+        // The copy itself succeeded regardless.
+        assert!(ed.clipboard().is_some(), "the internal store filled anyway");
+        assert!(invoke(&mut ed, MenuAction::Paste).unwrap());
+        let doc = ed.active().unwrap();
+        let pasted = doc.document.layers.root()[0];
+        assert_eq!(
+            &pixels::read_layer(doc, pasted)[0..4],
+            &original[((4 * 48) + 4) * 4..((4 * 48) + 4) * 4 + 4],
+            "the internal fallback pasted the copied pixels"
+        );
+    }
+
+    /// Card 052: menu enablement distinguishes the two sources. With ONLY a
+    /// foreign OS image (no internal copy), plain Paste is enabled and Paste
+    /// Into is not — an external payload has no in-document origin to mask
+    /// into yet (card 053).
+    #[test]
+    fn only_the_os_image_enables_paste_but_not_paste_into() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        // No internal copy at all; the OS clipboard holds a foreign image.
+        let foreign = crate::clipboard::ClipboardImage::validate(3, 2, vec![1; 24]).unwrap();
+        let mut os = crate::clipboard::FakeClipboard::new();
+        os.seed(foreign);
+        ed.set_image_clipboard(Box::new(os));
+        let context = context(&mut ed, &Workspace::new());
+        assert!(
+            resolve(MenuAction::Paste, &context, &ed).is_ok(),
+            "a foreign OS image enables plain Paste"
+        );
+        assert_eq!(
+            resolve(MenuAction::PasteInto, &context, &ed),
+            Err("The clipboard is empty".to_string()),
+            "Paste Into waits for card 053: the external payload cannot honor the mask"
+        );
+    }
+
+    /// Card 052: Copy Merged writes the OS clipboard too — the composited
+    /// pixels, not one layer's — and remembers the fingerprint, so the
+    /// editor's own merged copy still pastes through the internal route.
+    #[test]
+    fn copy_merged_writes_the_os_clipboard_and_still_pastes_internally() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        select_rect(&mut ed, (4, 4), (12, 10));
+        assert!(invoke(&mut ed, MenuAction::CopyMerged).unwrap());
+        // The OS clipboard now holds the merged crop: paste finds OUR
+        // fingerprint and takes the internal route.
+        assert!(invoke(&mut ed, MenuAction::Paste).unwrap());
+        let doc = ed.active().unwrap();
+        let pasted = doc.document.layers.root()[0];
+        assert!(
+            matches!(
+                doc.document.layers.get(pasted).unwrap().kind,
+                layer_model::LayerKind::Raster(_)
+            ),
+            "our own merged copy keeps the internal at-origin route"
+        );
+    }
+
+    /// Card 052: the keyboard reaches the same policy — Action::Paste (the
+    /// Ctrl+V binding, card 052's keymap defaults) routes the foreign OS
+    /// payload through placement exactly like the menu item.
+    #[test]
+    fn the_paste_action_routes_the_foreign_os_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let foreign = crate::clipboard::ClipboardImage::validate(
+            2,
+            2,
+            vec![7, 7, 7, 255, 8, 8, 8, 255, 9, 9, 9, 255, 10, 10, 10, 255],
+        )
+        .unwrap();
+        let mut os = crate::clipboard::FakeClipboard::new();
+        os.seed(foreign);
+        ed.set_image_clipboard(Box::new(os));
+        ed.dispatch(Action::Paste).unwrap();
+        let open = ed.active().unwrap();
+        let pasted = open.document.active_layer().unwrap();
+        assert!(
+            matches!(
+                open.document.layers.get(pasted).unwrap().kind,
+                layer_model::LayerKind::SmartObject(_)
+            ),
+            "Ctrl+V pasted the foreign payload as a placed smart object"
+        );
+        use compositor::TileSource;
+        let hash = open
+            .document
+            .layer_tiles(pasted)
+            .unwrap()
+            .get(raster::TileCoord::new(0, 0, 0))
+            .expect("the placed source's first tile");
+        let bytes = open.tiles.tile(hash).unwrap();
+        assert_eq!(
+            &bytes[0..4],
+            &[7, 7, 7, 255],
+            "the keyboard route used the OS payload"
+        );
+    }
+
+    /// Card 053: Paste Into keeps the FULL image on the new layer and
+    /// confines it with a retained selection-derived mask - the destructive
+    /// alpha multiplication is gone. Disabling the mask reveals every
+    /// original pixel; one undo removes layer, pixels and mask together.
+    #[test]
+    fn paste_into_keeps_the_full_image_under_a_selection_mask() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let original = pixels::read_layer(ed.active().unwrap(), layer);
+        select_rect(&mut ed, (4, 4), (12, 10));
+        assert!(invoke(&mut ed, MenuAction::Copy).unwrap());
+        // The backdrop changes AFTER the copy: the pasted crop (the old ink)
+        // is now distinguishable from what is below it.
+        {
+            let doc = ed.active_mut().unwrap();
+            let (w, h) = (doc.document.width(), doc.document.height());
+            let red = vec![255u8; (w as usize) * (h as usize) * 4];
+            let paint = pixels::write_layer(doc, layer, &red, "red").unwrap();
+            ed.apply_command(paint);
+        }
+        let depth_before = ed.active().unwrap().history_depth();
+        assert!(invoke(&mut ed, MenuAction::PasteInto).unwrap());
+
+        let doc = ed.active().unwrap();
+        let pasted = doc.document.layers.root()[0];
+        let stored = pixels::read_layer(doc, pasted);
+        // The stored pixels are the full crop: NOTHING was multiplied away.
+        assert_eq!(
+            &stored[0..4],
+            &original[((4 * 48) + 4) * 4..((4 * 48) + 4) * 4 + 4],
+            "the layer stores the full copied image"
+        );
+        // The composite shows the pasted ink only INSIDE the selection.
+        let rect = ed.active().unwrap().canvas_rect();
+        let composite = ed.active_mut().unwrap().composite(rect).unwrap();
+        let outside = ((20 * 48) + 20) * 4;
+        assert_eq!(
+            &composite[outside..outside + 4],
+            &[255, 255, 255, 255],
+            "outside the selection the red backdrop shows"
+        );
+        // One undo removes the layer and its mask together.
+        assert_eq!(
+            ed.active().unwrap().history_depth(),
+            depth_before + 1,
+            "the whole paste-into is one undoable step"
+        );
+        assert!(ed.active_mut().unwrap().undo().unwrap());
+        {
+            let doc = ed.active().unwrap();
+            assert_eq!(
+                doc.document.layers.root().len(),
+                1,
+                "the pasted layer is gone"
+            );
+            assert!(
+                doc.document.layers.get(layer).unwrap().mask.is_none(),
+                "undo restored the backdrop untouched"
+            );
+        }
+        // Back to the pasted state: disabling the mask reveals the FULL
+        // original image. Probe a pixel inside the pasted crop (it sits at
+        // the canvas origin) but outside the selection — masked it was
+        // hidden, unmasked the original ink shows.
+        assert!(ed.active_mut().unwrap().redo().unwrap());
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::Toggle)).unwrap());
+        let rect = ed.active().unwrap().canvas_rect();
+        let composite = ed.active_mut().unwrap().composite(rect).unwrap();
+        let crop_only = ((2 * 48) + 2) * 4;
+        // The crop came from (4,4), so canvas (2,2) holds original (6,6).
+        let source = ((6 * 48) + 6) * 4;
+        assert_eq!(
+            &composite[crop_only..crop_only + 4],
+            &original[source..source + 4],
+            "with the mask disabled the full original image shows"
+        );
+    }
+
+    /// Card 053: fractional selection coverage maps through the mask - a
+    /// half-covered pixel composites as a half blend, not a cutoff.
+    #[test]
+    fn paste_into_maps_fractional_coverage_through_the_mask() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let original = pixels::read_layer(ed.active().unwrap(), layer);
+        // A mask selection with HALF coverage over an 8x8 box.
+        let (w, h) = (8u32, 8u32);
+        let coverage = vec![128u8; (w * h) as usize];
+        let mask = editor_core::SelectionMask::new(glam::IVec2::new(4, 4), w, h, coverage).unwrap();
+        ed.active_mut().unwrap().document.selection = editor_core::Selection::Mask(mask);
+        assert!(invoke(&mut ed, MenuAction::Copy).unwrap());
+        {
+            let doc = ed.active_mut().unwrap();
+            let (cw, ch) = (doc.document.width(), doc.document.height());
+            let red = vec![255u8; (cw as usize) * (ch as usize) * 4];
+            let paint = pixels::write_layer(doc, layer, &red, "red").unwrap();
+            ed.apply_command(paint);
+        }
+        assert!(invoke(&mut ed, MenuAction::PasteInto).unwrap());
+        let rect = ed.active().unwrap().canvas_rect();
+        let composite = ed.active_mut().unwrap().composite(rect).unwrap();
+        // The copied ink at (5,5), composited at half coverage over the
+        // white backdrop. The compositing runs in the working (linear)
+        // space, so the exact byte is not the sRGB-space formula — what the
+        // card demands is that the coverage BLENDS: strictly between the
+        // backdrop and the full ink (a cutoff would be pure ink, full
+        // coverage would hide the backdrop entirely).
+        let probe = ((5 * 48) + 5) * 4;
+        // The clip was copied from the selection at (4,4), so canvas (5,5)
+        // holds original (9,9) — the pixel that must be blending.
+        let ink = &original[((9 * 48) + 9) * 4..((9 * 48) + 9) * 4 + 4];
+        for c in 0..3 {
+            assert!(
+                composite[probe + c] > ink[c] && composite[probe + c] < 255,
+                "channel {c}: {} must blend between ink {} and backdrop 255",
+                composite[probe + c],
+                ink[c]
+            );
+        }
+    }
+
+    /// Card 056: the Select menu rides history too - Select All is one
+    /// undoable step, and undo puts the previous selection back.
+    #[test]
+    fn select_all_is_one_undoable_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let depth_before = ed.active().unwrap().history_depth();
+        assert!(invoke(&mut ed, MenuAction::SelectAll).unwrap());
+        assert!(
+            ed.active().unwrap().document.selection.bounds().is_some(),
+            "Select All selects the canvas"
+        );
+        assert_eq!(
+            ed.active().unwrap().history_depth(),
+            depth_before + 1,
+            "one undoable step"
+        );
+        assert!(ed.active_mut().unwrap().undo().unwrap());
+        assert_eq!(
+            ed.active().unwrap().document.selection,
+            editor_core::Selection::None,
+            "undo restores no selection"
+        );
+    }
+
+    // ---- Card 057: the four mask-creation ops ----------------------------
+
+    /// Card 057: the four ops produce REAL coverage — a known two-colour
+    /// image gives four distinct, exactly-pinned results through the real
+    /// menu actions, one undoable step each.
+    #[test]
+    fn the_four_mask_creation_ops_produce_four_distinct_real_coverages() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+
+        // Reveal All: the whole canvas revealed with stored coverage.
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::RevealAll)).unwrap());
+        {
+            let doc = ed.active().unwrap();
+            assert!(doc.document.layers.get(layer).unwrap().mask.is_some());
+            let coverage = read_mask_coverage(doc, layer, 48, 32);
+            assert!(
+                coverage.iter().all(|&c| c == 255),
+                "Reveal All stores all-255 coverage (absent tiles mean hidden, so it MUST be stored)"
+            );
+        }
+        ed.active_mut().unwrap().undo().unwrap();
+        assert!(
+            ed.active()
+                .unwrap()
+                .document
+                .layers
+                .get(layer)
+                .unwrap()
+                .mask
+                .is_none(),
+            "undo removes the mask the op attached"
+        );
+
+        // Hide All: the mask with no tiles at all — absent means hidden,
+        // which IS the requested state.
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::HideAll)).unwrap());
+        assert_eq!(
+            read_mask_coverage(ed.active().unwrap(), layer, 48, 32),
+            vec![0u8; 48 * 32],
+            "Hide All hides everything"
+        );
+        let rect = ed.active().unwrap().canvas_rect();
+        let composite = ed.active_mut().unwrap().composite(rect).unwrap();
+        assert!(
+            composite.iter().skip(3).step_by(4).all(|&a| a == 0),
+            "the layer is fully hidden"
+        );
+        ed.active_mut().unwrap().undo().unwrap();
+
+        // Reveal Selection: only the selected area shows, fractional edges
+        // retained by the shared helper.
+        select_rect(&mut ed, (0, 0), (24, 32));
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::RevealSelection)).unwrap());
+        let rect = ed.active().unwrap().canvas_rect();
+        let composite = ed.active_mut().unwrap().composite(rect).unwrap();
+        assert_ne!(composite[3], 0, "inside the selection shows");
+        assert_eq!(
+            composite[(40 * 4) + 3],
+            0,
+            "outside the selection is hidden"
+        );
+        ed.active_mut().unwrap().undo().unwrap();
+
+        // Hide Selection: the mirror image.
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::HideSelection)).unwrap());
+        let rect = ed.active().unwrap().canvas_rect();
+        let composite = ed.active_mut().unwrap().composite(rect).unwrap();
+        assert_eq!(composite[3], 0, "the selection is hidden");
+        assert_ne!(composite[(40 * 4) + 3], 0, "outside the selection shows");
+        // One undo removes the mask and its coverage together.
+        assert!(ed.active_mut().unwrap().undo().unwrap());
+        assert!(
+            ed.active()
+                .unwrap()
+                .document
+                .layers
+                .get(layer)
+                .unwrap()
+                .mask
+                .is_none(),
+            "undo removes the whole op"
+        );
+    }
+
+    /// Card 057: the already-masked rule and the selection rules.
+    #[test]
+    fn mask_creation_refuses_an_existing_mask_and_a_missing_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+
+        // Reveal Selection with NO selection refuses — the menu gate says
+        // it first; the app-side rule (create_mask) is the defensive second
+        // gate, driven directly here.
+        let err = invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::RevealSelection)).unwrap_err();
+        assert!(
+            err.contains("no selection") || err.contains("Select an area"),
+            "{err:?}"
+        );
+        let err = create_mask(&mut ed, ui::menu::MaskOp::RevealSelection).unwrap_err();
+        assert!(err.contains("Select an area"), "{err:?}");
+
+        // An existing mask refuses creation (delete first — a silent replace
+        // would destroy coverage).
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::RevealAll)).unwrap());
+        let err = invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::HideAll)).unwrap_err();
+        assert!(err.contains("already has a mask"), "{err:?}");
+        // The refused op changed nothing.
+        assert!(
+            ed.active()
+                .unwrap()
+                .document
+                .layers
+                .get(ed.active().unwrap().document.active_layer().unwrap())
+                .unwrap()
+                .mask
+                .is_some(),
+            "the original mask survives the refusal"
+        );
+    }
+
+    /// Card 057: the ops survive a MULTI-TILE canvas, where the absent-tile
+    /// convention bites: Hide Selection must REVEAL outside the selection's
+    /// bounding tiles (the round-1 review's single-tile blind spot), and
+    /// Reveal All must store 255 over every tile the layer touches.
+    #[test]
+    fn mask_creation_on_a_multi_tile_canvas_respects_the_missing_tile_convention() {
+        let dir = tempfile::tempdir().unwrap();
+        // 300x64: two tiles wide, one tall. The selection sits in tile (0,0)
+        // only, so tiles (1,0) — and the far half of tile (0,0) — are
+        // outside it.
+        let mut ed = {
+            let png = dir.path().join("wide.png");
+            let mut rgba = vec![0u8; (300 * 64 * 4) as usize];
+            for px in rgba.chunks_exact_mut(4) {
+                px.copy_from_slice(&[120, 40, 200, 255]);
+            }
+            std::fs::write(
+                &png,
+                raster::encode(raster::ExportFormat::Png, 300, 64, &rgba).unwrap(),
+            )
+            .unwrap();
+            let mut ed = opened(dir.path());
+            ed.open_path(&png).expect("the wide canvas opens");
+            ed
+        };
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        select_rect(&mut ed, (10, 10), (40, 40));
+
+        // Hide Selection: INSIDE hidden, and — the convention — the far
+        // tile REVEALED (stored 255), not absent.
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::HideSelection)).unwrap());
+        {
+            let doc = ed.active().unwrap();
+            let coverage = read_mask_coverage(doc, layer, 300, 64);
+            assert_eq!(
+                coverage[(20 * 300 + 20) as usize],
+                0,
+                "inside the selection hides"
+            );
+            assert_eq!(
+                coverage[(30 * 300 + 200) as usize],
+                255,
+                "the far tile is STORED revealed (an absent tile would hide it)"
+            );
+        }
+        ed.active_mut().unwrap().undo().unwrap();
+
+        // Reveal All: every tile the layer touches carries stored 255 —
+        // including tile (1,0), which a bounds-clipped walk would skip.
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::RevealAll)).unwrap());
+        {
+            let doc = ed.active().unwrap();
+            let coverage = read_mask_coverage(doc, layer, 300, 64);
+            assert!(
+                coverage.iter().all(|&c| c == 255),
+                "Reveal All stores 255 over the whole multi-tile extent"
+            );
+        }
+    }
+
+    /// Card 057: fractional selection coverage is retained through the ops
+    /// themselves — a half-covered selection reveals at half strength.
+    #[test]
+    fn reveal_selection_retains_fractional_coverage() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        // A mask selection with HALF coverage over an 8x8 box at the origin.
+        let coverage = vec![128u8; 8 * 8];
+        let mask = editor_core::SelectionMask::new(glam::IVec2::ZERO, 8, 8, coverage).unwrap();
+        ed.active_mut().unwrap().document.selection = editor_core::Selection::Mask(mask);
+
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::RevealSelection)).unwrap());
+        let stored = read_mask_coverage(ed.active().unwrap(), layer_of(&ed), 48, 32);
+        assert_eq!(
+            stored[0], 128,
+            "the fractional sample survives the op verbatim"
+        );
+        // The composite blends: strictly between hidden and fully shown.
+        let rect = ed.active().unwrap().canvas_rect();
+        let composite = ed.active_mut().unwrap().composite(rect).unwrap();
+        assert!(
+            composite[3] > 0 && composite[3] < 255,
+            "the half coverage blends (alpha {})",
+            composite[3]
+        );
+
+        fn layer_of(ed: &Editor) -> layer_model::LayerId {
+            ed.active().unwrap().document.active_layer().unwrap()
+        }
+    }
+
+    /// Card 057: the coverage lives in the LAYER's local space, so a
+    /// document-space selection survives a TRANSFORMED layer: move the layer
+    /// first, then Reveal Selection — the document-space area the user drew
+    /// is what shows.
+    #[test]
+    fn reveal_selection_on_a_moved_layer_lands_on_the_document_space_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+
+        // Move the layer +12px right: its content now sits at document
+        // x in [12, 60] — still inside the 48px canvas for probing, but the
+        // document-space selection no longer lines up with layer-local
+        // coordinates.
+        editor_core::Command::TransformLayer {
+            layer_id: layer,
+            matrix: glam::Affine2::from_translation(glam::Vec2::new(12.0, 0.0)).to_cols_array(),
+        }
+        .apply(&mut ed.active_mut().unwrap().document)
+        .unwrap();
+
+        // Select a document-space rect over the moved layer's content.
+        select_rect(&mut ed, (20, 8), (40, 24));
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::RevealSelection)).unwrap());
+
+        // The DOCUMENT-space selection area shows; the unselected part of the
+        // moved layer (document x=44, still on the layer) is hidden.
+        let rect = ed.active().unwrap().canvas_rect();
+        let composite = ed.active_mut().unwrap().composite(rect).unwrap();
+        let inside = ((16 * 48) + 24) * 4;
+        let outside = ((16 * 48) + 44) * 4;
+        assert_ne!(
+            composite[inside + 3],
+            0,
+            "the document-space selection shows"
+        );
+        assert_eq!(
+            composite[outside + 3], 0,
+            "the rest of the moved layer is hidden (the coverage was not painted in document space)"
+        );
+    }
+
+    /// Card 058: with the edit target on the mask, a Fill paints COVERAGE
+    /// (one channel, selection-constrained, undoable) — the layer's pixels
+    /// are never touched, and a non-Normal blend is refused rather than
+    /// inventing semantics for a scalar field.
+    #[test]
+    fn fill_targets_the_mask_when_the_edit_target_is_the_mask() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        // Start from Hide All: coverage absent (hidden) everywhere, so white
+        // reveals exactly where the fill lands.
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::HideAll)).unwrap());
+        // Aim at the mask — the wells swap to the mask pair (white fg).
+        ed.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
+        select_rect(&mut ed, (4, 4), (12, 12));
+
+        use compositor::TileSource as _;
+        let layer_pixels = |ed: &Editor| {
+            let doc = ed.active().unwrap();
+            doc.document
+                .layer_tiles(layer)
+                .map(|m| {
+                    m.iter()
+                        .map(|(_, h)| doc.tiles.tile(h).map(|b| b.to_vec()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let layer_before = layer_pixels(&ed);
+
+        assert!(invoke(&mut ed, MenuAction::FillDialog).unwrap());
+        {
+            let doc = ed.active().unwrap();
+            let coverage = read_mask_coverage(doc, layer, 48, 32);
+            assert_eq!(
+                coverage[6 * 48 + 6],
+                255,
+                "inside the selection the fill reveals"
+            );
+            assert_eq!(
+                coverage[20 * 48 + 30],
+                0,
+                "outside the selection nothing was stored"
+            );
+            assert_eq!(
+                layer_pixels(&ed),
+                layer_before,
+                "a mask fill changed no layer pixels"
+            );
+        }
+        // One undo removes the fill.
+        ed.active_mut().unwrap().undo().unwrap();
+        {
+            let doc = ed.active().unwrap();
+            let coverage = read_mask_coverage(doc, layer, 48, 32);
+            assert_eq!(coverage[6 * 48 + 6], 0, "undo restores the hidden mask");
+        }
+
+        // A non-Normal blend mode is refused on a coverage mask.
+        let spec = ui::dialogs::FillSpec {
+            contents: ui::dialogs::FillContents::Foreground,
+            blend: layer_model::BlendMode::Multiply,
+            ..Default::default()
+        };
+        let err = fill_selection_with(&mut ed, &spec).unwrap_err();
+        assert!(
+            err.contains("not meaningful on a coverage mask"),
+            "the refusal names the limitation: {err}"
+        );
+    }
+
+    /// Card 058: the Layer \u25b8 Layer Mask \u25b8 Invert op flips the
+    /// coverage (255 \u2212 v), is one undo step, and never touches the
+    /// layer's pixels.
+    #[test]
+    fn the_mask_invert_op_flips_coverage_and_is_undoable() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        select_rect(&mut ed, (4, 4), (12, 12));
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::RevealSelection)).unwrap());
+        {
+            let doc = ed.active().unwrap();
+            let coverage = read_mask_coverage(doc, layer, 48, 32);
+            assert_eq!(coverage[6 * 48 + 6], 255);
+            assert_eq!(coverage[20 * 48 + 30], 0);
+        }
+
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::Invert)).unwrap());
+        {
+            let doc = ed.active().unwrap();
+            let coverage = read_mask_coverage(doc, layer, 48, 32);
+            assert_eq!(coverage[6 * 48 + 6], 0, "the revealed area conceals");
+            assert_eq!(
+                coverage[20 * 48 + 30],
+                255,
+                "the absent (hidden) area reveals — and is now STORED, not absent"
+            );
+        }
+        ed.active_mut().unwrap().undo().unwrap();
+        {
+            let doc = ed.active().unwrap();
+            let coverage = read_mask_coverage(doc, layer, 48, 32);
+            assert_eq!(
+                coverage[6 * 48 + 6],
+                255,
+                "undo restores the selection reveal"
+            );
+            assert_eq!(coverage[20 * 48 + 30], 0);
+        }
+    }
+
+    /// Card 058 (review round 1): the invert round trip on a MULTI-TILE
+    /// canvas — Reveal All stores 255 over every tile, Invert must CLEAR the
+    /// all-zero result tiles (an absent tile IS the all-hidden meaning), and
+    /// a second Invert restores the stored 255s. The round-1 critical: the
+    /// writer's clear path never ran, so Invert silently no-op'd.
+    #[test]
+    fn invert_round_trips_over_a_multi_tile_canvas() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = {
+            let png = dir.path().join("wide.png");
+            let mut rgba = vec![0u8; (300 * 64 * 4) as usize];
+            for px in rgba.chunks_exact_mut(4) {
+                px.copy_from_slice(&[120, 40, 200, 255]);
+            }
+            std::fs::write(
+                &png,
+                raster::encode(raster::ExportFormat::Png, 300, 64, &rgba).unwrap(),
+            )
+            .unwrap();
+            let mut ed = opened(dir.path());
+            ed.open_path(&png).expect("the wide canvas opens");
+            ed
+        };
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::RevealAll)).unwrap());
+
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::Invert)).unwrap());
+        {
+            let doc = ed.active().unwrap();
+            let coverage = read_mask_coverage(doc, layer, 300, 64);
+            assert!(
+                coverage.iter().all(|&c| c == 0),
+                "the inversion hid everything"
+            );
+            assert_eq!(
+                doc.document.mask_tiles(layer).map(|m| m.len()),
+                None,
+                "all-zero result tiles are CLEARED — the store empties entirely (None = no tiles, the absent-tile meaning, not stale 255s)"
+            );
+        }
+        // ...and the second inversion restores the stored reveal.
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::Invert)).unwrap());
+        {
+            let doc = ed.active().unwrap();
+            let coverage = read_mask_coverage(doc, layer, 300, 64);
+            assert!(
+                coverage.iter().all(|&c| c == 255),
+                "the second inversion reveals again"
+            );
+        }
+    }
+
+    /// Card 058 (review round 1): BLACK hides — the fill's blend must go
+    /// toward the paint's LUMINANCE, not toward white. A black fill on a
+    /// revealed mask conceals; a 50%-opacity white fill lands strictly
+    /// between; Gray50 lands near half.
+    #[test]
+    fn mask_fills_blend_toward_the_paint_value_at_the_paint_strength() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::RevealAll)).unwrap());
+        ed.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
+        select_rect(&mut ed, (0, 0), (48, 32)); // the whole canvas
+
+        // Black fg (the wells show the mask pair's black as bg; pick it).
+        ed.set_foreground([0.0, 0.0, 0.0, 1.0]);
+        assert!(invoke(&mut ed, MenuAction::FillDialog).unwrap());
+        {
+            let doc = ed.active().unwrap();
+            let coverage = read_mask_coverage(doc, layer, 48, 32);
+            assert_eq!(coverage[16 * 48 + 24], 0, "black hides");
+        }
+        ed.active_mut().unwrap().undo().unwrap();
+
+        // 50%-opacity black on the revealed mask: coverage blends toward
+        // the value (0) by the amount (0.5) — half strength, not a
+        // no-op (50% WHITE on revealed would legitimately change nothing,
+        // because blending toward 1.0 at any amount keeps 1.0).
+        let spec = ui::dialogs::FillSpec {
+            contents: ui::dialogs::FillContents::Foreground,
+            blend: layer_model::BlendMode::Normal,
+            opacity: 0.5,
+            preserve_transparency: false,
+        };
+        ed.set_foreground([0.0, 0.0, 0.0, 1.0]);
+        assert!(fill_selection_with(&mut ed, &spec).is_ok());
+        {
+            let doc = ed.active().unwrap();
+            let coverage = read_mask_coverage(doc, layer, 48, 32);
+            let v = coverage[16 * 48 + 24];
+            assert!(
+                (120..=136).contains(&v),
+                "50% black on revealed lands at half coverage (got {v})"
+            );
+        }
+        ed.active_mut().unwrap().undo().unwrap();
+
+        // Gray50: mid-luminance (the brush's own value mapping).
+        let spec = ui::dialogs::FillSpec {
+            contents: ui::dialogs::FillContents::Gray50,
+            blend: layer_model::BlendMode::Normal,
+            opacity: 1.0,
+            preserve_transparency: false,
+        };
+        assert!(fill_selection_with(&mut ed, &spec).is_ok());
+        {
+            let doc = ed.active().unwrap();
+            let coverage = read_mask_coverage(doc, layer, 48, 32);
+            let v = coverage[16 * 48 + 24];
+            assert!(
+                (100..=200).contains(&v),
+                "a half-grey fill lands mid-coverage (got {v})"
+            );
+        }
+    }
+
+    /// Card 058 (review round 1): a fill on a TRANSFORMED mask lands where
+    /// the mask displays — the canvas-space coverage is resampled through
+    /// the mask pose, so a +8px unlinked mask reveals the pointer's whole
+    /// canvas area, not a displaced strip.
+    #[test]
+    fn mask_fill_maps_through_the_mask_pose() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::HideAll)).unwrap());
+        // Give the mask its own +8px transform (unlinked, moved).
+        let mut mask = layer_model::LayerMask::new(layer_model::MaskId::new());
+        mask.transform = Box::new(glam::Affine2::from_translation(glam::Vec2::new(8.0, 0.0)));
+        ed.apply_command(editor_core::Command::SetLayerProperties {
+            layer_id: layer,
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Set(mask),
+                ..Default::default()
+            },
+        });
+        ed.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
+        select_rect(&mut ed, (0, 0), (48, 32));
+
+        assert!(invoke(&mut ed, MenuAction::FillDialog).unwrap());
+        {
+            use compositor::TileSource as _;
+            let doc = ed.active().unwrap();
+            // Probe the STORE at the pose-mapped points: canvas (24,16) is
+            // store (16,16) — revealed; the displaced store point (24,16)
+            // (= canvas 32) must ALSO be revealed, because the pose maps the
+            // whole canvas rect through.
+            let map = doc.document.mask_tiles(layer).unwrap();
+            let hash = map.get(raster::TileCoord::new(0, 0, 0)).unwrap();
+            let bytes = doc.tiles.tile(hash).unwrap();
+            assert_eq!(bytes[16 * 256 + 16], 255, "the mapped point reveals");
+            assert_eq!(
+                bytes[16 * 256 + 33],
+                255,
+                "the pose-shifted point reveals too"
+            );
+        }
+        // What the user sees: every canvas pixel the fill covered shows.
+        {
+            let doc = ed.active().unwrap();
+            let coverage = read_mask_coverage(doc, layer, 48, 32);
+            assert_eq!(
+                coverage[16 * 48 + 4],
+                255,
+                "the left edge reveals — not displaced"
+            );
+        }
+    }
+
+    /// Card 059 (review round 2): the pose-aware READ direction is
+    /// discriminated — canvas (16,16) over a +8px unlinked mask reads store
+    /// (8,16), the INVERSE mapping the compositor samples with, never the
+    /// forward mapping's (24,16).
+    #[test]
+    fn reading_mask_coverage_maps_through_the_pose_inverse() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::HideAll)).unwrap());
+        // Replace the mask with one carrying a +8px own transform.
+        let mut mask = layer_model::LayerMask::new(layer_model::MaskId::new());
+        mask.transform = Box::new(glam::Affine2::from_translation(glam::Vec2::new(8.0, 0.0)));
+        ed.apply_command(editor_core::Command::SetLayerProperties {
+            layer_id: layer,
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Set(mask),
+                ..Default::default()
+            },
+        });
+        // Paint coverage at STORE (8,16) only (a 1px hole in an empty store).
+        let doc = ed.active_mut().unwrap();
+        let ts = raster::TILE_SIZE as usize;
+        let mut tile = vec![0u8; ts * ts];
+        tile[16 * ts + 8] = 255;
+        let hash = doc.tiles.insert_bytes(tile);
+        let delta = editor_core::pixels::TileDelta::new(std::iter::once(
+            editor_core::pixels::TileEdit::set(raster::TileCoord::new(0, 0, 0), hash),
+        ))
+        .unwrap();
+        editor_core::Command::PaintTiles {
+            target: editor_core::pixels::PixelTarget::Mask(layer),
+            delta,
+        }
+        .apply(&mut doc.document)
+        .unwrap();
+
+        let coverage = {
+            let doc = ed.active().unwrap();
+            read_mask_coverage(doc, layer, 48, 32)
+        };
+        // canvas (16,16) → store (8,16) through the INVERSE: revealed.
+        assert_eq!(
+            coverage[16 * 48 + 16],
+            255,
+            "the read maps canvas → store through the pose INVERSE (the compositor's direction)"
+        );
+        // canvas (24,16) → store (16,16): the forward mapping's answer —
+        // must stay hidden.
+        assert_eq!(
+            coverage[16 * 48 + 24],
+            0,
+            "the forward mapping would light this pixel up — wrong direction"
+        );
+    }
+
+    /// Card 060: the Refine Mask service bakes the dialog's parameters as
+    /// ONE undoable transaction, leaves the layer's pixels untouched, and
+    /// undo restores the exact baseline coverage. The baked field is exactly
+    /// `selection::refine_mask` over the baseline, canvas-aligned — the
+    /// same pipeline the preview uses.
+    #[test]
+    fn refining_a_mask_is_one_undoable_step_that_keeps_the_pixels() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        // A real half-plane mask (a synthetic edge, the card's controlled
+        // case): reveal all, then hide the LEFT half via Hide Selection.
+        select_rect(&mut ed, (0, 0), (24, 32));
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::RevealSelection)).unwrap());
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::Invert)).unwrap());
+        let baseline = {
+            let doc = ed.active().unwrap();
+            read_mask_coverage(doc, layer, 48, 32)
+        };
+        assert_eq!(baseline[8 * 48 + 4], 0, "the left half is hidden");
+        assert_eq!(baseline[8 * 48 + 40], 255, "the right half is revealed");
+        let depth_before = ed.active().unwrap().history.undo_depth();
+        let pixels_before = {
+            use compositor::TileSource as _;
+            let doc = ed.active().unwrap();
+            doc.document
+                .layer_tiles(layer)
+                .map(|m| {
+                    m.iter()
+                        .map(|(_, hash)| doc.tiles.tile(hash).map(|b| b.to_vec()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+
+        let spec = ui::dialogs::refine_mask::RefineMaskSpec {
+            feather_px: 4.0,
+            shift_px: 4, // expand: the edge moves left by 4
+            ..Default::default()
+        };
+        let message = refine_mask_with(&mut ed, &spec).unwrap();
+        assert!(message.contains("Refined the mask"), "{message}");
+
+        // ONE undo step.
+        assert_eq!(
+            ed.active().unwrap().history.undo_depth(),
+            depth_before + 1,
+            "one confirmation is one history entry"
+        );
+        // The layer's pixels are untouched.
+        {
+            use compositor::TileSource as _;
+            let doc = ed.active().unwrap();
+            let pixels_after = doc
+                .document
+                .layer_tiles(layer)
+                .map(|m| {
+                    m.iter()
+                        .map(|(_, hash)| doc.tiles.tile(hash).map(|b| b.to_vec()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            assert_eq!(pixels_after, pixels_before, "the source RGB never moved");
+        }
+        // The baked field is refine_mask over the baseline, canvas-aligned:
+        // the +4px expand moved the edge left; the feather softened it.
+        {
+            let doc = ed.active().unwrap();
+            let baked = read_mask_coverage(doc, layer, 48, 32);
+            let baseline_mask =
+                editor_core::SelectionMask::new(glam::IVec2::ZERO, 48, 32, baseline.clone())
+                    .unwrap();
+            let expected_full = selection::refine_mask(&baseline_mask, &spec.params()).unwrap();
+            let expected = |x: usize, y: usize| {
+                expected_full.coverage_at(glam::IVec2::new(x as i32, y as i32))
+            };
+            assert_eq!(
+                baked[8 * 48 + 8],
+                expected(8, 8),
+                "the baked field is the pipeline's"
+            );
+            // The expand moved the old edge (x=24) left: x=20 was hidden, now
+            // it is inside the expanded+feathered ramp's solid side... verify
+            // geometrically: the baked value at the OLD edge region is above
+            // the baseline's.
+            assert!(
+                baked[8 * 48 + 20] > baseline[8 * 48 + 20],
+                "the +4px shift moved the edge left ({} > {})",
+                baked[8 * 48 + 20],
+                baseline[8 * 48 + 20]
+            );
+        }
+        // Undo restores the EXACT baseline coverage.
+        ed.active_mut().unwrap().undo().unwrap();
+        {
+            let doc = ed.active().unwrap();
+            let restored = read_mask_coverage(doc, layer, 48, 32);
+            assert_eq!(
+                restored, baseline,
+                "undo restores the baseline byte-for-byte"
+            );
+        }
+        // Redo replays it.
+        ed.active_mut().unwrap().redo().unwrap();
+        {
+            let doc = ed.active().unwrap();
+            let again = read_mask_coverage(doc, layer, 48, 32);
+            assert_ne!(
+                again[8 * 48 + 20],
+                baseline[8 * 48 + 20],
+                "redo replays the refine"
+            );
+        }
+    }
+
+    /// Card 060: the dialog host REFUSES to open over a layer without a mask,
+    /// and canceling an opened dialog writes nothing at all.
+    #[test]
+    fn the_refine_dialog_opens_only_over_a_mask_and_cancel_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let depth = ed.active().unwrap().history.undo_depth();
+
+        // No mask: the host refuses (the menu gates the same way).
+        let mut host = crate::dialog_host::DialogHost::default();
+        assert!(
+            !host.open_for_menu_action(&MenuAction::RefineMask, &ed),
+            "a maskless layer has nothing to refine"
+        );
+
+        // With a mask: the dialog opens over the layer's pixels + baseline.
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::RevealAll)).unwrap());
+        let mut host = crate::dialog_host::DialogHost::default();
+        assert!(host.open_for_menu_action(&MenuAction::RefineMask, &ed));
+        // Cancel = drop the host: nothing was written, nothing to undo.
+        drop(host);
+        assert_eq!(
+            ed.active().unwrap().history.undo_depth(),
+            depth + 1, // only the Reveal All from the setup
+            "opening and canceling the dialog wrote no history"
+        );
+        let coverage = {
+            let doc = ed.active().unwrap();
+            read_mask_coverage(doc, layer, 48, 32)
+        };
+        assert!(
+            coverage.iter().all(|&c| c == 255),
+            "the baseline coverage survived the canceled dialog"
+        );
+    }
+
+    /// Card 062 fixture: an opaque grey left half with a GREEN fringe
+    /// column just inside the edge (x=23 of 48), the right half transparent,
+    /// under a Reveal-All mask. The controlled colored-background fringe the
+    /// card's check names.
+    fn fringed_cutout(ed: &mut Editor) -> LayerId {
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let (w, h) = (48u32, 32u32);
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let i = (y * w as usize + x) * 4;
+                if x < 23 {
+                    rgba[i] = 40;
+                    rgba[i + 1] = 40;
+                    rgba[i + 2] = 40;
+                    rgba[i + 3] = 255;
+                } else if x == 23 {
+                    rgba[i] = 20;
+                    rgba[i + 1] = 230;
+                    rgba[i + 2] = 30;
+                    rgba[i + 3] = 255;
+                }
+            }
+        }
+        let paint = {
+            let doc = ed.active_mut().unwrap();
+            pixels::write_layer(doc, layer, &rgba, "Cutout").unwrap()
+        };
+        ed.apply_command(paint);
+        // The mask FOLLOWS the cutout edge (reveal the left 24 columns) —
+        // a Reveal-All mask would have no boundary for the cleanup to find.
+        select_rect(ed, (0, 0), (24, 32));
+        assert!(invoke(ed, MenuAction::Mask(ui::menu::MaskOp::RevealSelection)).unwrap());
+        layer
+    }
+
+    /// Card 062: the fringe cleanup reduces the known colored-background
+    /// fringe, keeps the interior's exact bytes and the coverage untouched,
+    /// and is one undoable step whose undo restores the original RGB.
+    #[test]
+    fn defringe_reduces_the_boundary_fringe_in_one_undoable_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = fringed_cutout(&mut ed);
+        let depth_before = ed.active().unwrap().history.undo_depth();
+        let coverage_before = {
+            let doc = ed.active().unwrap();
+            read_mask_coverage(doc, layer, 48, 32)
+        };
+
+        let spec = ui::dialogs::defringe::DefringeSpec {
+            radius_px: 3,
+            strength: 1.0,
+            ..Default::default()
+        };
+        let message = defringe_with(&mut ed, &spec).unwrap();
+        assert!(message.contains("Removed color fringe"), "{message}");
+
+        // ONE undo step.
+        assert_eq!(
+            ed.active().unwrap().history.undo_depth(),
+            depth_before + 1,
+            "one confirmation is one history entry"
+        );
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        let at = |x: usize, y: usize| (y * 48 + x) * 4;
+        // The fringe pixel is pulled to the interior ink exactly (full
+        // strength; its whole interior window is the flat grey).
+        assert_eq!(after[at(23, 4)], 40);
+        assert_eq!(after[at(23, 4) + 1], 40, "the green fringe is gone");
+        assert_eq!(after[at(23, 4) + 3], 255, "alpha untouched");
+        // Interior away from the boundary keeps its exact bytes.
+        assert_eq!(
+            after[at(10, 4)..at(10, 4) + 4],
+            [40, 40, 40, 255],
+            "the interior does not move"
+        );
+        // The mask coverage is untouched — a colour cleanup never regrades.
+        let coverage_after = {
+            let doc = ed.active().unwrap();
+            read_mask_coverage(doc, layer, 48, 32)
+        };
+        assert_eq!(coverage_after, coverage_before);
+
+        // Undo restores the exact original RGB.
+        ed.active_mut().unwrap().undo().unwrap();
+        let restored = pixels::read_layer(ed.active().unwrap(), layer);
+        assert_eq!(restored[at(23, 4) + 1], 230, "undo brings the fringe back");
+        assert_eq!(restored[at(10, 4)..at(10, 4) + 4], [40, 40, 40, 255]);
+    }
+
+    /// Card 062 gates: a maskless layer refuses (the fringe lives where the
+    /// MASK says the edge is), and a no-op parameter set refuses without
+    /// touching history.
+    #[test]
+    fn defringe_refuses_a_maskless_layer_and_a_no_op() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = fringed_cutout(&mut ed);
+        // Strip the mask.
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::Delete)).unwrap());
+        let depth = ed.active().unwrap().history.undo_depth();
+        let spec = ui::dialogs::defringe::DefringeSpec {
+            radius_px: 3,
+            strength: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            defringe_with(&mut ed, &spec).unwrap_err(),
+            "The layer has no mask"
+        );
+        // Re-attach the mask (Reveal All) and ask for the identity: refused.
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::RevealAll)).unwrap());
+        // Restore the cutout pixels (mask delete/attach left them alone, but
+        // Reveal All may have re-created coverage only).
+        let identity = ui::dialogs::defringe::DefringeSpec::default();
+        assert!(defringe_with(&mut ed, &identity).is_err());
+        assert_eq!(
+            ed.active().unwrap().history.undo_depth(),
+            depth + 1, // the Reveal All only
+            "a refused cleanup writes no history"
+        );
+        let _ = layer;
+    }
+
+    /// Card 062 (host path): the dialog opens over the RAW layer pixels —
+    /// seeded so the preview's cleaned content differs from the raw input at
+    /// the fringe column while the coverage stays the baseline.
+    #[test]
+    fn the_defringe_dialog_opens_over_the_raw_content_and_confirms_one_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let _layer = fringed_cutout(&mut ed);
+        // (Maskless refusal is covered by defringe_refuses_a_maskless_layer_and_a_no_op
+        // and the ui gate test; the fixture's mask is required here.)
+        // The dialog opens over the raw content: the fringe column's green
+        // is visible in the dialog's own content seam.
+        let mut host = crate::dialog_host::DialogHost::default();
+        assert!(host.open_for_menu_action(&MenuAction::RemoveColorFringe, &ed));
+        let raw = host
+            .active_defringe_dialog_for_test()
+            .content_pixel_for_test(23, 4);
+        assert_eq!(
+            raw,
+            [20, 230, 30, 255],
+            "the raw fringe pixel, not a masked blend"
+        );
+        // A non-identity spec confirms to the Defringe action (the shell's
+        // DialogAction::Defringe arm routes it to defringe_with, whose
+        // end-to-end behaviour the first test pins).
+        host.active_defringe_dialog_for_test().set_spec_for_test(
+            ui::dialogs::defringe::DefringeSpec {
+                radius_px: 3,
+                strength: 1.0,
+                ..Default::default()
+            },
+        );
+        use ui::dialogs::Dialog as _;
+        match host.active_defringe_dialog_for_test().confirm() {
+            Some(ui::dialogs::DialogAction::Defringe(spec)) => {
+                assert_eq!(spec.radius_px, 3);
+                assert_eq!(spec.strength, 1.0);
+            }
+            other => panic!("the confirmation carries the spec: {other:?}"),
+        }
+        drop(host);
+    }
+
+    /// Card 060 (review round 2): the HOST-fed path — the dialog's content
+    /// must be the layer's RAW pixels, not the masked composite. A positive
+    /// expand REVEALS ink where the baseline was fully hidden; under the
+    /// round-1 defect (masked `layer_pixels` as content) that area showed the
+    /// backdrop instead.
+    #[test]
+    fn the_refine_dialog_previews_expansion_over_the_raw_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        // Baseline: everything hidden on the LEFT half (a controlled edge).
+        select_rect(&mut ed, (0, 0), (24, 32));
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::RevealSelection)).unwrap());
+        assert!(invoke(&mut ed, MenuAction::Mask(ui::menu::MaskOp::Invert)).unwrap());
+
+        // Open the dialog the way the shell does.
+        let mut host = crate::dialog_host::DialogHost::default();
+        assert!(host.open_for_menu_action(&MenuAction::RefineMask, &ed));
+        let dialog = host.active_refine_mask_dialog_for_test();
+        let probe = dialog.content_pixel_for_test(22, 8);
+        let ink = probe[0];
+        assert_eq!(probe[3], 255, "the fixture's layer is opaque at the probe");
+
+        // Expand +4: the refined coverage covers part of the concealed half,
+        // so the preview must show INK there (over the black backdrop).
+        dialog.set_spec_for_test(ui::dialogs::refine_mask::RefineMaskSpec {
+            shift_px: 4,
+            background: ui::dialogs::refine_mask::PreviewBackground::Black,
+            ..Default::default()
+        });
+        let (rgba, pw, _ph) = dialog.preview_sized().unwrap();
+        // The preview's own scale: canvas x=10 maps to preview x=10 (48 < 256).
+        assert_eq!(pw, 48);
+        let coverage = dialog.refined_coverage().unwrap();
+        // The baseline hid x<24; the +4px expand moved the edge LEFT to ~20,
+        // so canvas x=20..24 gained coverage.
+        let c = f32::from(coverage[8 * 48 + 22]) / 255.0;
+        assert!(c > 0.0, "the expand revealed part of the concealed half");
+        // Black backdrop: the preview pixel is the raw ink scaled by c.
+        let expected = (f32::from(ink) * c).round() as u8;
+        let got = rgba[(8 * pw as usize + 22) * 4];
+        assert_eq!(
+            got, expected,
+            "the preview shows the RAW content pixel, not the backdrop"
+        );
+        assert!(
+            got > 0,
+            "under the round-1 defect this pixel was the black backdrop"
+        );
+    }
+
+    /// Card 052's host-bound check, the repeatable form of "a screenshot can"
+    /// be pasted": seed the OS clipboard from any other application (or take
+    /// a screenshot), then run
+    /// `cargo test -p app-shell --lib paste_takes_a_foreign -- --ignored --nocapture`.
+    /// The paste must route the FOREIGN payload through full-source placement.
+    #[test]
+    #[ignore = "host-bound: reads whatever image the OS clipboard currently holds"]
+    fn paste_takes_a_foreign_os_clipboard_image_through_real_placement() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(dir.path());
+        // Real OS clipboard by construction; a document to paste into.
+        ed.open_path(&probe_png(dir.path(), 48, 32))
+            .expect("the probe opens");
+        assert!(invoke(&mut ed, MenuAction::Paste).unwrap());
+        let open = ed.active().unwrap();
+        let pasted = open.document.active_layer().unwrap();
+        assert!(
+            matches!(
+                open.document.layers.get(pasted).unwrap().kind,
+                layer_model::LayerKind::SmartObject(_)
+            ),
+            "the foreign image pasted as a placed smart object"
+        );
+        println!("status: {:?}", ed.status());
     }
 
     #[test]
@@ -3337,8 +5658,8 @@ mod tests {
         // one item cannot leave another with nothing to do.
         let dir = tempfile::tempdir().unwrap();
         let mut checked = 0usize;
-        let template = with_two_layers(dir.path());
-        let context = context(&template, &Workspace::new());
+        let mut template = with_two_layers(dir.path());
+        let context = context(&mut template, &Workspace::new());
         let candidates: Vec<MenuAction> = menus(&template)
             .into_iter()
             .flat_map(|m| m.actions())
@@ -3783,7 +6104,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new();
         for ed in [editor(dir.path()), with_two_layers(dir.path())] {
-            let context = context(&ed, &ws);
+            let mut ed = ed;
+            let context = context(&mut ed, &ws);
             for menu in menus(&ed) {
                 for action in menu.actions() {
                     if let Err(reason) = resolve(action, &context, &ed) {
@@ -3827,8 +6149,8 @@ mod tests {
     #[test]
     fn switching_appearance_writes_the_preference_rather_than_a_dead_action() {
         let dir = tempfile::tempdir().unwrap();
-        let ed = editor(dir.path());
-        let context = context(&ed, &Workspace::new());
+        let mut ed = editor(dir.path());
+        let context = context(&mut ed, &Workspace::new());
         let other = match context.theme {
             design::Theme::Dark => design::Theme::Light,
             design::Theme::Light => design::Theme::Dark,
@@ -3894,5 +6216,36 @@ mod tests {
         let bounds = ed.active().unwrap().document.selection.bounds().unwrap();
         assert_eq!(bounds.0, glam::IVec2::new(2, 2));
         assert_eq!(bounds.1, glam::IVec2::new(6, 6));
+    }
+
+    /// Card 026: the Layers panel's double-click intent routes to the shell's
+    /// enter-text-session output.
+    #[test]
+    fn the_enter_text_layer_intent_routes_to_the_shell() {
+        use layer_model::{Layer, LayerKind, TextLayer};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("canvas.png"),
+            raster::encode(raster::ExportFormat::Png, 32, 32, &[255u8; 32 * 32 * 4]).unwrap(),
+        )
+        .unwrap();
+        let mut ed = editor(dir.path());
+        let layer = Layer::with_kind(
+            "Headline",
+            LayerKind::Text(TextLayer {
+                text: "THUMBNAILS".to_string(),
+                font_family: "DejaVu Sans".to_string(),
+                size_px: 32.0,
+                ..TextLayer::default()
+            }),
+        );
+        let id = layer.id;
+        ed.apply_command(Command::create_layer(layer));
+
+        let intent = ui::Intent::EnterTextLayer { layer: id };
+        let pick = crate::menu_bridge::pick(&intent, &ed).expect("the intent routes");
+        let mut out = crate::chrome::ChromeOutput::default();
+        crate::menu_bridge::record(pick, &mut out);
+        assert_eq!(out.enter_text_layer, Some(id), "the pick carries the layer");
     }
 }

@@ -80,8 +80,9 @@
 //! several drags, the transform quad stays live under its handles — and publish
 //! only from `Tool::commit`. Nothing called it, so `grep '\.commit('` over this
 //! crate returned nothing and a crop drag produced a rectangle, no command, no
-//! status and no pixel. [`ToolPointer::commit`] is that call: Enter confirms
-//! (see [`crate::shell::Shell::on_key`]) and Escape cancels through the same
+//! status and no pixel. [`ToolPointer::commit`] is that call: a transform's
+//! Enter confirms (see [`crate::shell::Shell::on_key`]; a text run ends on
+//! Ctrl+Enter, card 031) and Escape cancels through the same
 //! [`ToolPointer::cancel`] that abandons a stroke. Type and Pen hold a gesture
 //! the same way — an open text run, an unfinished path — and end on the same
 //! key.
@@ -98,11 +99,9 @@
 //!   tool applies to the mirrored camera has nowhere to be written back to and
 //!   is dropped. The gesture reaches the tool and the tool is correct; the
 //!   renderer cannot show the result. Hand and Zoom write back in full.
-//! * **A selection gesture is not undoable.** `editor-core` models the
-//!   selection as a field rather than a command, so a marquee changes
-//!   `Document::selection` directly and marks the document dirty. That is the
-//!   gap [`tools::SelectionEdit`]'s own documentation names, not a shortcut
-//!   taken here.
+//! * **A selection gesture is undoable (card 056).** The gesture's edits fold
+//!   into `Command::SetSelection` entries — one gesture, one step — so undo
+//!   and redo carry the selection exactly like any other edit.
 //! * **A bare hover reaches no tool.** Only samples inside a claimed gesture
 //!   are forwarded. Nothing in this shell draws the previews a hover would feed
 //!   (the polygonal lasso's rubber band, the brush ring), and building a
@@ -148,6 +147,7 @@ use ui::canvas::{
 
 use crate::doc::DocumentId;
 use crate::editor::Editor;
+use layer_model::text::Frame;
 
 /// A [`tools::TileAccess`] over one open document.
 ///
@@ -168,6 +168,252 @@ impl<'a> DocumentTiles<'a> {
     pub fn new(refs: &'a PixelStore, bytes: &'a mut MemoryTileSource) -> Self {
         Self { refs, bytes }
     }
+}
+
+/// Card 040: the ACTIVE paintable layer's document→layer mapping (Raster,
+/// Generator and SmartObject own pixels; text/shape are refused at commit).
+/// `None` = identity or not paintable.
+/// Card 042: a layer's tight ink extent in DOCUMENT space. Raster kinds
+/// scan alpha (`alpha_bounds`, layer space) and map the rect's corners
+/// through the layer's full document transform; text/shape kinds have exact
+/// geometry bounds from `document_bounds` already.
+pub(crate) fn tight_document_bounds(
+    doc: &editor_core::Document,
+    tiles: &compositor::MemoryTileSource,
+    id: layer_model::LayerId,
+) -> Option<PixelRect> {
+    let raster = compositor::bounds::alpha_bounds(
+        doc,
+        tiles,
+        id,
+        0,
+        compositor::CompositeOptions::default(),
+    )
+    .ok()
+    .flatten();
+    match raster {
+        Some(ink) => {
+            let m = crate::interaction_geometry::document_transform_of(doc, id, 0).ok()?;
+            let corners = [
+                glam::vec2(ink.x as f32, ink.y as f32),
+                glam::vec2((ink.x + ink.width as i64) as f32, ink.y as f32),
+                glam::vec2(ink.x as f32, (ink.y + ink.height as i64) as f32),
+                glam::vec2(
+                    (ink.x + ink.width as i64) as f32,
+                    (ink.y + ink.height as i64) as f32,
+                ),
+            ];
+            let mapped: Vec<glam::Vec2> = corners.iter().map(|p| m.transform_point2(*p)).collect();
+            let min_x = mapped.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+            let min_y = mapped.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+            let max_x = mapped.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
+            let max_y = mapped.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
+            let min_i = min_x.floor() as i64;
+            let min_j = min_y.floor() as i64;
+            // checked_sub closes the pathological finite-saturation case.
+            let width = (max_x.ceil() as i64).checked_sub(min_i).unwrap_or(0).max(0) as u32;
+            let height = (max_y.ceil() as i64).checked_sub(min_j).unwrap_or(0).max(0) as u32;
+            Some(PixelRect::new(min_i, min_j, width, height))
+        }
+        None => compositor::bounds::document_bounds(
+            doc,
+            tiles,
+            id,
+            0,
+            compositor::CompositeOptions::default(),
+        )
+        .ok()
+        .flatten(),
+    }
+}
+
+/// Card 042: the snap candidates + document-space threshold for the moving
+/// geometry. Canvas edges/center, then every layer NOT in the selected set
+/// (nor a descendant of one) contributes its tight bounds' edges and center.
+/// Candidate LAYERS are capped so layer-heavy documents stay cheap.
+pub(crate) const SNAP_CANDIDATE_LAYER_CAP: usize = 64;
+
+pub(crate) fn snap_candidates_for(
+    doc: &editor_core::Document,
+    tiles: &compositor::MemoryTileSource,
+    zoom: f32,
+    selected: &[layer_model::LayerId],
+) -> (Vec<tools::SnapCandidate>, f32) {
+    let threshold_doc = ui::canvas::snapping::SnapSettings::default().threshold() / zoom.max(0.05);
+    let mut candidates = Vec::new();
+    let canvas = glam::vec2(doc.width() as f32, doc.height() as f32);
+    for (axis, values) in [
+        (tools::SnapAxis::X, [0.0f32, canvas.x, canvas.x * 0.5]),
+        (tools::SnapAxis::Y, [0.0f32, canvas.y, canvas.y * 0.5]),
+    ] {
+        for v in values {
+            candidates.push(tools::SnapCandidate { axis, doc: v });
+        }
+    }
+    let mut layers = 0usize;
+    for id in doc.layers.iter_depth_first() {
+        let selected_or_descendant = selected.contains(&id) || {
+            let mut parent = doc.layers.parent_of(id);
+            while let Some(p) = parent {
+                if selected.contains(&p) {
+                    break;
+                }
+                parent = doc.layers.parent_of(p);
+            }
+            // The walk breaks on a selected ancestor (parent stays Some) or
+            // exhausts to the root (parent None) — is_some() is the answer.
+            parent.is_some()
+        };
+        if selected_or_descendant {
+            continue;
+        }
+        if layers >= SNAP_CANDIDATE_LAYER_CAP {
+            break;
+        }
+        let Some(b) = tight_document_bounds(doc, tiles, id) else {
+            continue;
+        };
+        layers += 1;
+        for (axis, lo, hi, mid) in [
+            (
+                tools::SnapAxis::X,
+                b.x as f32,
+                (b.x + b.width as i64) as f32,
+                b.x as f32 + b.width as f32 * 0.5,
+            ),
+            (
+                tools::SnapAxis::Y,
+                b.y as f32,
+                (b.y + b.height as i64) as f32,
+                b.y as f32 + b.height as f32 * 0.5,
+            ),
+        ] {
+            for v in [lo, hi, mid] {
+                candidates.push(tools::SnapCandidate { axis, doc: v });
+            }
+        }
+    }
+    (candidates, threshold_doc)
+}
+
+/// Card 058: pointer samples for MASK painting map through the MASK's
+/// document pose — the layer transform composed with the mask's own extra
+/// transform (card 043) — because that is the pose the compositor samples
+/// the coverage through. A linked mask (identity extra transform) reduces to
+/// the layer mapping; an unlinked, independently moved mask paints where it
+/// displays, not where the layer's local grid happens to be.
+/// Card 058: one mapping per paint target — the layer's document→layer
+/// mapping for content, the mask pose's inverse for mask coverage.
+fn sample_to_paint_target_of(
+    doc: &editor_core::Document,
+    layer: Option<layer_model::LayerId>,
+    target: tools::PaintTarget,
+) -> Option<glam::Affine2> {
+    match target {
+        tools::PaintTarget::Layer => sample_to_layer_of(doc, layer),
+        tools::PaintTarget::Mask => sample_to_mask_of(doc, layer)
+            // A mask painting target with no resolvable pose falls back to
+            // the layer mapping (the identity-pose answer) rather than to
+            // document space, which would paint at the raw pointer position.
+            .or_else(|| sample_to_layer_of(doc, layer)),
+    }
+}
+
+fn sample_to_mask_of(
+    doc: &editor_core::Document,
+    layer: Option<layer_model::LayerId>,
+) -> Option<glam::Affine2> {
+    let layer = layer?;
+    let layer_transform = crate::interaction_geometry::document_transform_of(doc, layer, 0).ok()?;
+    let mask = doc.layers.get(layer)?.mask.as_ref()?;
+    (layer_transform * *mask.transform).inverse().into()
+}
+
+/// Card 058: the canvas rectangle expressed in the paint target's space —
+/// content paints in layer space (the canvas rect itself, matching card
+/// 040's semantics); a MASK paints in mask-local space, where the visible
+/// canvas is the canvas rect pre-imaged through the mask pose (bounding box
+/// of the transformed corners). This is the rect stroke dabs are clipped and
+/// rasterized against; `ctx.canvas` is document space and would clip a
+/// visible strip of a transformed mask.
+fn paint_space_canvas_of(
+    doc: &editor_core::Document,
+    layer: Option<layer_model::LayerId>,
+    target: tools::PaintTarget,
+    canvas: PixelRect,
+) -> PixelRect {
+    match target {
+        tools::PaintTarget::Layer => canvas,
+        tools::PaintTarget::Mask => {
+            let pose = layer
+                .and_then(|l| {
+                    crate::interaction_geometry::document_transform_of(doc, l, 0)
+                        .ok()
+                        .zip(
+                            doc.layers
+                                .get(l)
+                                .and_then(|l| l.mask.as_ref())
+                                .map(|m| *m.transform),
+                        )
+                })
+                .map(|(t, extra)| t * extra);
+            match pose {
+                Some(pose) if !is_identity_pose(&pose) => {
+                    let c0 =
+                        pose.transform_point2(glam::Vec2::new(canvas.x as f32, canvas.y as f32));
+                    let c1 = pose.transform_point2(glam::Vec2::new(
+                        (canvas.x + canvas.width as i64) as f32,
+                        canvas.y as f32,
+                    ));
+                    let c2 = pose.transform_point2(glam::Vec2::new(
+                        canvas.x as f32,
+                        (canvas.y + canvas.height as i64) as f32,
+                    ));
+                    let c3 = pose.transform_point2(glam::Vec2::new(
+                        (canvas.x + canvas.width as i64) as f32,
+                        (canvas.y + canvas.height as i64) as f32,
+                    ));
+                    let min_x = c0.x.min(c1.x).min(c2.x.min(c3.x)).floor() as i64;
+                    let min_y = c0.y.min(c1.y).min(c2.y.min(c3.y)).floor() as i64;
+                    let max_x = c0.x.max(c1.x).max(c2.x.max(c3.x)).ceil() as i64;
+                    let max_y = c0.y.max(c1.y).max(c2.y.max(c3.y)).ceil() as i64;
+                    PixelRect::new(
+                        min_x,
+                        min_y,
+                        (max_x - min_x).max(1) as u32,
+                        (max_y - min_y).max(1) as u32,
+                    )
+                }
+                _ => canvas,
+            }
+        }
+    }
+}
+
+/// Card 058: pose identity test (a translation-only check would still
+/// resample; only the exact identity takes the 1:1 path).
+fn is_identity_pose(pose: &glam::Affine2) -> bool {
+    *pose == glam::Affine2::IDENTITY
+}
+
+fn sample_to_layer_of(
+    doc: &editor_core::Document,
+    layer: Option<layer_model::LayerId>,
+) -> Option<glam::Affine2> {
+    layer
+        .filter(|l| {
+            matches!(
+                doc.layers.get(*l).map(|l| &l.kind),
+                Some(layer_model::LayerKind::Raster(_))
+                    | Some(layer_model::LayerKind::Generator(_))
+                    | Some(layer_model::LayerKind::SmartObject(_))
+            )
+        })
+        .and_then(|layer| {
+            crate::interaction_geometry::document_transform_of(doc, layer, 0)
+                .ok()
+                .map(|t| t.inverse())
+        })
 }
 
 impl TileAccess for DocumentTiles<'_> {
@@ -192,6 +438,53 @@ impl TileAccess for DocumentTiles<'_> {
 /// insets are empty and the scale is one, which makes a point in this viewport
 /// a physical pixel of the surface, the unit `winit` reports and the unit
 /// [`render::Camera`] measures in.
+/// Card 030: one overlay line for the text session — a caret bar or a
+/// selection edge, tagged so the shell can colour them apart.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextOverlaySegment {
+    /// Start point, in document space.
+    pub a: Vec2,
+    /// End point, in document space.
+    pub b: Vec2,
+    /// Caret bars get the brighter colour; selection edges the dimmer one.
+    pub kind: TextOverlayKind,
+}
+
+/// Card 030: which overlay line a segment is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextOverlayKind {
+    /// The caret bar (drawn with the emphasis colour).
+    Caret,
+    /// A selection rectangle edge (drawn with the dim colour).
+    Selection,
+    /// Card 032: the paragraph box's frame edge (drawn dimmest).
+    BoxFrame,
+}
+
+impl TextOverlaySegment {
+    /// Overlay emphasis colour for caret bars.
+    pub const CARET: TextOverlayKind = TextOverlayKind::Caret;
+    /// Overlay dim colour for selection edges.
+    pub const SELECTION: TextOverlayKind = TextOverlayKind::Selection;
+    /// Card 032: overlay dimmest colour for paragraph-box frame edges.
+    pub const BOX_FRAME: TextOverlayKind = TextOverlayKind::BoxFrame;
+}
+
+/// Card 030: one rectangle's four edges as overlay segments (the caret rect
+/// is zero-width, so its edges collapse to one visible vertical bar — the
+/// other three edges are degenerate and harmless to draw).
+fn push_rect_edges(out: &mut Vec<TextOverlaySegment>, r: text_engine::Rect, kind: TextOverlayKind) {
+    let (x, y, w, h) = (r.x, r.y, r.width, r.height);
+    for (a, b) in [
+        (Vec2::new(x, y), Vec2::new(x + w, y)),
+        (Vec2::new(x + w, y), Vec2::new(x + w, y + h)),
+        (Vec2::new(x + w, y + h), Vec2::new(x, y + h)),
+        (Vec2::new(x, y + h), Vec2::new(x, y)),
+    ] {
+        out.push(TextOverlaySegment { a, b, kind });
+    }
+}
+
 pub fn canvas_viewport(surface_px: Vec2) -> Viewport {
     Viewport::new(surface_px, PanelInsets::NONE, 1.0)
 }
@@ -359,9 +652,66 @@ pub fn crop_command(document: &Document, req: &CropRequest) -> Option<Command> {
 /// One tool instance is kept alive across the events of a gesture, because a
 /// tool *is* a state machine — a stroke that rebuilt its tool between the press
 /// and the release would emit nothing at all.
+/// Card 055: the edit target a gesture pinned - the full triple the tools
+/// route pixels with, not just the surface kind, so a mid-gesture layer
+/// change redirects nothing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PinnedEditTarget {
+    pub layer: Option<layer_model::LayerId>,
+    pub mask: Option<layer_model::MaskId>,
+    pub paint: tools::PaintTarget,
+}
+
+/// Card 055: THE target resolver - one function for pointer gestures and
+/// off-pointer operations alike, so a brush stroke and a menu fill can never
+/// disagree about where pixels land. Quick mask reroutes to the scratch
+/// layer's mask (a temporary mode: the sticky edit target is untouched, so
+/// exiting restores it); otherwise the sticky edit target decides, with a
+/// maskless layer painting content (the read-time validation keeps the
+/// stored target honest).
+fn resolve_edit_target(
+    doc: &editor_core::Document,
+    quick_mask: bool,
+    quick_mask_layer: Option<layer_model::LayerId>,
+    edit_target_is_mask: bool,
+    active_layer: Option<layer_model::LayerId>,
+    active_mask: Option<layer_model::MaskId>,
+) -> PinnedEditTarget {
+    if quick_mask {
+        if let Some(sid) = quick_mask_layer {
+            return PinnedEditTarget {
+                layer: Some(sid),
+                mask: doc.layers.get(sid).and_then(|l| l.mask_id()),
+                paint: PaintTarget::Mask,
+            };
+        }
+    }
+    if edit_target_is_mask && active_mask.is_some() {
+        PinnedEditTarget {
+            layer: active_layer,
+            mask: active_mask,
+            paint: PaintTarget::Mask,
+        }
+    } else {
+        PinnedEditTarget {
+            layer: active_layer,
+            mask: active_mask,
+            paint: PaintTarget::Layer,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct ToolPointer {
     router: InputRouter,
+    /// Card 055: the edit target (layer, mask, paint surface) the running
+    /// gesture was PINNED to. Resolved through the one shared resolver at
+    /// the gesture's Down sample; a target change - a thumbnail click, a
+    /// layer chord - cannot redirect the middle of a stroke or its Up's
+    /// commit. Overwritten at every Down (every gesture begins with one);
+    /// only ever READ between a Down and its Up, because a sample outside a
+    /// gesture is a hover the router declines before the pin is consulted.
+    pinned_paint_target: Option<PinnedEditTarget>,
     /// The live tool and the id it was built for.
     current: Option<(ToolId, Box<dyn Tool>)>,
     /// The document the running gesture was aimed at, while one is running.
@@ -370,6 +720,11 @@ pub struct ToolPointer {
     /// index would silently re-aim the stroke at the document that slid into
     /// the slot. See the module docs.
     aimed_at: Option<DocumentId>,
+    /// The document a published session's geometry belongs to (card 012):
+    /// claimed with the gesture, retained while the session is visible, so a
+    /// free-transform's handles survive its own pointer-up and die with the
+    /// session.
+    session_doc: Option<DocumentId>,
 }
 
 impl ToolPointer {
@@ -400,6 +755,93 @@ impl ToolPointer {
     /// The document the running gesture belongs to, while one is running.
     pub fn aimed_at(&self) -> Option<DocumentId> {
         self.aimed_at
+    }
+
+    /// Show the live transform session as a preview (card 013), or clear the
+    /// lens when there is no session: the one route every caller shares, so a
+    /// committed, cancelled and abandoned gesture all end with the preview
+    /// gone and the committed document exactly as it was.
+    pub fn settle_preview(&mut self, editor: &mut Editor) {
+        let geometry = self.live_geometry();
+        match &geometry {
+            Some((
+                doc_id,
+                tools::SessionGeometry::Transform {
+                    layer: Some(layer),
+                    state,
+                    ..
+                },
+            )) => {
+                if editor.active().is_some_and(|d| d.id() == *doc_id) {
+                    if let Some(delta) =
+                        tools::transform::quad_affine(state.source_corners(), state.corners)
+                    {
+                        // Card 035: the commit lands P⁻¹·Δ·P pre-multiplied
+                        // onto the layer's own transform — the preview must
+                        // compose the same way, or a transformed layer's
+                        // preview teleports and snaps on commit.
+                        let doc = editor.active_mut().expect("checked above");
+                        let own = doc
+                            .document
+                            .layers
+                            .get(*layer)
+                            .map(|l| l.transform)
+                            .unwrap_or_default();
+                        let parent = crate::interaction_geometry::document_transform_of(
+                            &doc.document,
+                            *layer,
+                            0,
+                        )
+                        .ok()
+                        .and_then(|total| {
+                            doc.document
+                                .layers
+                                .get(*layer)
+                                .map(|l| total * l.transform.inverse())
+                        })
+                        .unwrap_or(glam::Affine2::IDENTITY);
+                        let composed = parent.inverse() * delta * parent * own;
+                        doc.set_preview(*layer, composed);
+                        return;
+                    }
+                }
+                if let Some(doc) = editor.active_mut() {
+                    doc.clear_preview();
+                }
+            }
+            _ => {
+                if let Some(doc) = editor.active_mut() {
+                    doc.clear_preview();
+                }
+            }
+        }
+    }
+
+    /// The live tool's overlay geometry, together with the document it
+    /// belongs to (card 012). The shell publishes this into the canvas
+    /// sessions every frame; `None` — no tool, no live session, or a session
+    /// whose document was never claimed — clears the overlays. The same call
+    /// publishes and un-publishes, so there is no second mechanism to forget.
+    ///
+    /// The document is the one the gesture claimed (`aimed_at`), remembered
+    /// for the lifetime of the geometry: a free-transform session outlives its
+    /// pointer claim (it commits on Enter, not on release), so the association
+    /// outlives the claim too.
+    pub fn live_geometry(&mut self) -> Option<(DocumentId, tools::SessionGeometry)> {
+        let geometry = self
+            .current
+            .as_ref()
+            .and_then(|(_, tool)| tool.live_geometry());
+        match geometry {
+            Some(geometry) => {
+                let document = self.session_doc.or(self.aimed_at)?;
+                Some((document, geometry))
+            }
+            None => {
+                self.session_doc = None;
+                None
+            }
+        }
     }
 
     /// The live instance of `id`, building it if the active tool changed.
@@ -482,6 +924,9 @@ impl ToolPointer {
             .unwrap_or_else(|_| tools::gradient::GradientRamp::black_to_white());
         let quick_mask = editor.quick_mask();
         let quick_mask_layer = editor.quick_mask_layer();
+        // Card 055: the off-pointer route resolves the target through the
+        // SAME resolver the pointer gestures use (one answer everywhere).
+        let edit_target_is_mask = editor.edit_target_is_mask();
         let Some(doc) = editor.active_mut() else {
             return (Ok(()), Vec::new(), Vec::new());
         };
@@ -505,23 +950,132 @@ impl ToolPointer {
                 Some((id, shape.clone()))
             })
             .collect();
+        // Card 042: snap candidates for the moving geometry — canvas
+        // edges/center + every layer NOT in the selected set (nor its
+        // descendants), in document space. The threshold rides along in
+        // doc pixels.
+        let selected = doc.document.layer_selection();
+        let (snap_candidates, snap_threshold_doc) =
+            snap_candidates_for(&doc.document, &doc.tiles, doc.camera.zoom, &selected);
+        // Card 042: the commit route gets the same tight-ink answer as the
+        // gesture route — a future snap consumer here must not see None.
+        let active_layer_ink_bounds =
+            active_layer.and_then(|layer| tight_document_bounds(&doc.document, &doc.tiles, layer));
+        // Card 043: the link chain — every layer carrying the flag.
+        let linked_layers: Vec<layer_model::LayerId> = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter(|id| doc.document.layers.get(*id).is_some_and(|l| l.linked))
+            .collect();
+
+        // Card 034: the bounds query borrows the tile source immutably, so
+        // it runs BEFORE the mutable tool access is built. document_bounds
+        // maps through the layer transform — document space, like the tool.
+        let active_layer_content_bounds = active_layer.and_then(|layer| {
+            compositor::bounds::document_bounds(
+                &doc.document,
+                &doc.tiles,
+                layer,
+                0,
+                compositor::CompositeOptions::default(),
+            )
+            .ok()
+            .flatten()
+        });
         let mut access = DocumentTiles::new(&doc.document.pixels, &mut doc.tiles);
         let mut ctx = ToolContext::new(&mut access, canvas);
         ctx.shape_paths = shape_paths;
-        ctx.active_layer = active_layer;
-        ctx.active_mask = active_mask;
-        // Quick-mask mode reroutes pixel edits to the scratch layer's mask —
-        // the tools' existing PaintTarget::Mask route, unchanged.
-        if quick_mask {
-            if let Some(sid) = quick_mask_layer {
-                let smask = doc.document.layers.get(sid).and_then(|l| l.mask_id());
-                ctx.active_layer = Some(sid);
-                ctx.active_mask = smask;
-                ctx.paint_target = PaintTarget::Mask;
-            }
-        } else {
-            ctx.paint_target = PaintTarget::Layer;
-        }
+        // Card 055: the ONE resolver, unconditionally — quick mask reroutes
+        // to the scratch layer's mask inside it, the sticky edit target
+        // decides otherwise; pointer gestures and off-pointer operations
+        // cannot disagree.
+        let target = resolve_edit_target(
+            &doc.document,
+            quick_mask,
+            quick_mask_layer,
+            edit_target_is_mask,
+            active_layer,
+            active_mask,
+        );
+        ctx.active_layer = target.layer;
+        ctx.active_mask = target.mask;
+        ctx.paint_target = target.paint;
+        // Card 044: the effective edit target keeps editable geometry?
+        // Computed AFTER the quick-mask reroute so the flag describes the
+        // layer that will actually be edited (card 040's lesson).
+        let active_layer_parametric = ctx.active_layer.is_some_and(|id| {
+            doc.document
+                .layers
+                .get(id)
+                .is_some_and(|l| l.kind.parametric())
+        });
+        // Card 034: the active layer's real content extent, for tools that
+        // start geometry over the ink rather than the canvas.
+        ctx.active_layer_content_bounds = active_layer_content_bounds;
+        // Card 040: paint tools write the ACTIVE layer's pixels in LAYER
+        // space — hand them the document→layer mapping (paintable kinds
+        // only; text/shape kinds are refused at commit with NotPaintable
+        // rather than storing invisible tiles).
+        ctx.sample_to_layer =
+            sample_to_paint_target_of(&doc.document, ctx.active_layer, ctx.paint_target);
+        ctx.paint_space_canvas = Some(paint_space_canvas_of(
+            &doc.document,
+            ctx.active_layer,
+            ctx.paint_target,
+            canvas,
+        ));
+        // Card 042: the snap candidates + threshold computed pre-access.
+        ctx.snap_candidates = snap_candidates;
+        ctx.snap_threshold_doc = snap_threshold_doc;
+        ctx.active_layer_ink_bounds = active_layer_ink_bounds;
+        ctx.linked_layers = linked_layers;
+        ctx.active_layer_parametric = active_layer_parametric;
+        // Card 036: the panel's selection set, ancestry and locks.
+        ctx.selected_layers = doc.document.layer_selection();
+        ctx.layer_parents = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .iter()
+            .map(|id| (*id, doc.document.layers.parent_of(*id)))
+            .collect();
+        ctx.layer_locks = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .iter()
+            .map(|id| {
+                (
+                    *id,
+                    doc.document
+                        .layers
+                        .get(*id)
+                        .is_some_and(|l| l.locked.blocks_transform()),
+                )
+            })
+            .collect();
+        ctx.layer_parent_transforms = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .iter()
+            .filter_map(|id| {
+                let total =
+                    crate::interaction_geometry::document_transform_of(&doc.document, *id, 0)
+                        .ok()?;
+                let own = doc.document.layers.get(*id)?.transform;
+                Some((*id, total * own.inverse()))
+            })
+            .collect();
+        // Card 035: the parent chain (see handle's fill).
+        ctx.active_layer_parent_transform = ctx.active_layer.and_then(|layer| {
+            let total =
+                crate::interaction_geometry::document_transform_of(&doc.document, layer, 0).ok()?;
+            let own = doc.document.layers.get(layer)?.transform;
+            Some(total * own.inverse())
+        });
         ctx.selection = selection;
         ctx.foreground = foreground;
         ctx.background = background;
@@ -540,13 +1094,122 @@ impl ToolPointer {
     /// consumed — `false` means no run is open and the key belongs to the
     /// keymap, which is what stops Space from typing a space when nobody is
     /// typing.
+    /// Card 028: the live session's selected text, for the shell to hand to
+    /// the OS clipboard (copy/cut). Read-only — no outbox traffic.
+    pub fn text_selection_text(&mut self, editor: &Editor) -> Option<String> {
+        let (_, tool) = self.current.as_mut()?;
+        editor.active()?;
+        tool.text_selection_text()
+    }
+
+    /// Card 030: the live text session's overlay geometry, in DOCUMENT space
+    /// — the caret bar and one 4-edge loop per shaped selection rectangle.
+    /// The document's text layer is the draft (card 025 rides edits through
+    /// `apply_text_draft`), so shaping it IS shaping what the canvas shows:
+    /// the caret agrees with rendering after transform and zoom by
+    /// construction. `None` without a live session.
+    pub fn text_overlay_geometry(&mut self, editor: &Editor) -> Vec<TextOverlaySegment> {
+        let Some((_, tool)) = self.current.as_mut() else {
+            return Vec::new();
+        };
+        let Some(layer) = tool.text_session_layer() else {
+            return Vec::new();
+        };
+        let Some((caret, anchor)) = tool.text_caret_anchor() else {
+            return Vec::new();
+        };
+        let Some(doc) = editor.active() else {
+            return Vec::new();
+        };
+        let Some(doc_layer) = doc.document.layers.get(layer) else {
+            return Vec::new();
+        };
+        let layer_model::LayerKind::Text(text) = &doc_layer.kind else {
+            return Vec::new();
+        };
+        let run = text_engine::TextRun::from(text);
+        let mut out = Vec::new();
+        let caret_rect = compositor::text_caret_rect(&run, caret.min(text.text.len()));
+        push_rect_edges(&mut out, caret_rect, TextOverlaySegment::CARET);
+        let (lo, hi) = if anchor <= caret {
+            (anchor, caret)
+        } else {
+            (caret, anchor)
+        };
+        for rect in compositor::text_selection_rects(&run, lo, hi) {
+            push_rect_edges(&mut out, rect, TextOverlaySegment::SELECTION);
+        }
+        // Card 032: a boxed paragraph draws its frame — the resize handles'
+        // home. Auto height uses the shaped run's content height.
+        if let Frame::Box { width, height } = text.frame {
+            let shaped = compositor::text_content_height(&run);
+            let h = height.unwrap_or(shaped.max(1.0));
+            let box_rect = text_engine::Rect {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height: h,
+            };
+            push_rect_edges(&mut out, box_rect, TextOverlaySegment::BOX_FRAME);
+        }
+        // Layer space → document space, so the shell maps one transform for
+        // every endpoint (the same camera a click is routed against).
+        for segment in &mut out {
+            if let Ok(a) =
+                crate::interaction_geometry::layer_to_document(&doc.document, layer, 0, segment.a)
+            {
+                segment.a = a;
+            }
+            if let Ok(b) =
+                crate::interaction_geometry::layer_to_document(&doc.document, layer, 0, segment.b)
+            {
+                segment.b = b;
+            }
+        }
+        out
+    }
+
+    /// Card 029: whether the live session has an IME composition under way —
+    /// the shell suppresses plain-character insertion while it is.
+    pub fn text_composing(&mut self, editor: &Editor) -> bool {
+        let Some((_, tool)) = self.current.as_mut() else {
+            return false;
+        };
+        if editor.active().is_none() {
+            return false;
+        }
+        tool.text_composing()
+    }
+
     pub fn text_edit(&mut self, editor: &mut Editor, edit: tools::TextEdit<'_>) -> CommitOutcome {
         let mut out = CommitOutcome::default();
         if !self.is_text_editing() || editor.active().is_none() {
             return out;
         }
+        // Card 026: the run lives in its own document. A tab switch must not
+        // let typing, confirm or cancel land on the wrong document — the
+        // keystroke is consumed (the run still owns the keyboard) and the
+        // status bar says where to go to finish it.
+        let session_layer = self
+            .current
+            .as_ref()
+            .and_then(|(_, tool)| tool.text_session_layer());
+        if let Some(layer) = session_layer {
+            let in_active = editor
+                .active()
+                .map(|d| d.document.layers.get(layer).is_some())
+                .unwrap_or(false);
+            if !in_active {
+                editor.set_status(
+                    "the text run belongs to another document — switch back to it to finish it",
+                );
+                out.had_pending = true;
+                return out;
+            }
+        }
         out.had_pending = true;
-        let (result, commands, _) = self.off_pointer(editor, |tool, ctx| tool.text_edit(ctx, edit));
+        let (result, commands, requests) =
+            self.off_pointer(editor, |tool, ctx| tool.text_edit(ctx, edit));
         if let Err(e) = result {
             out.failed = Some(e.to_string());
             editor.set_status(e.to_string());
@@ -557,7 +1220,209 @@ impl ToolPointer {
         }
         let after = editor.active().map(|d| d.history_depth()).unwrap_or(0);
         out.steps = after.saturating_sub(before);
+        // Card 025: the live draft rides the request outbox and lands on the
+        // document **outside history** — the canvas renders every keystroke,
+        // undo stays clean until the session confirms.
+        for request in requests {
+            out.steps += Self::perform_text_request(editor, request);
+        }
         out
+    }
+
+    /// Card 026: the top-most unlocked text layer whose transformed ink contains
+    /// `doc_pt`, with the caret byte index the shaped hit test chose.
+    ///
+    /// The click is converted document → layer-local through the layer's composed
+    /// document transform (`interaction_geometry`, the convention T009 pinned),
+    /// and the hit test runs on the layer's own run. Clicks that miss every text
+    /// layer return `None` — the Type tool then creates a new layer, unchanged.
+    fn text_hit_under(
+        doc: &editor_core::Document,
+        doc_pt: glam::Vec2,
+    ) -> Option<tools::TextHitCaret> {
+        for id in doc.layers.iter_depth_first() {
+            let Some(layer) = doc.layers.get(id) else {
+                continue;
+            };
+            if layer.locked.all || !layer.visible {
+                continue;
+            }
+            let layer_model::LayerKind::Text(text) = &layer.kind else {
+                continue;
+            };
+            let Ok(local) = crate::interaction_geometry::document_to_layer(doc, id, 0, doc_pt)
+            else {
+                continue;
+            };
+            if let Some(caret) =
+                compositor::text_hit_index(&text_engine::TextRun::from(text), local.x, local.y)
+            {
+                return Some(tools::TextHitCaret {
+                    layer: id,
+                    original: text.clone(),
+                    caret,
+                });
+            }
+        }
+        None
+    }
+
+    /// Card 026: double-clicking a text row enters that layer — the shell
+    /// resolves the payload, caret (end of the run) and origin from the
+    /// ACTIVE document, then hands them to the Type tool. No-op (and no
+    /// session) when the layer is gone, is not text, or is blanket-locked.
+    pub fn enter_text_session(&mut self, editor: &mut Editor, layer: layer_model::LayerId) {
+        // Card 025/026: reconcile any live text session first — its typed
+        // draft lands as one history entry instead of being silently dropped
+        // by the tool replacement below.
+        if self.is_text_editing() {
+            self.text_edit(editor, tools::TextEdit::Confirm);
+        }
+        // Make Type the editor's effective tool BEFORE the session begins:
+        // the next canvas click must route to the session's tool, not
+        // silently replace it (the round-1 strand hole).
+        editor.set_tool(ToolId::Type);
+        let Some(doc) = editor.active() else {
+            return;
+        };
+        let Some(l) = doc.document.layers.get(layer) else {
+            return;
+        };
+        if l.locked.all {
+            return;
+        }
+        let layer_model::LayerKind::Text(original) = &l.kind else {
+            return;
+        };
+        let original = original.clone();
+        let origin = glam::Vec2::new(l.transform.translation.x, l.transform.translation.y);
+        let caret = original.text.len();
+        self.tool(ToolId::Type)
+            .enter_text_session(layer, original, caret, origin);
+        // Card 031: the visible affordance for the session's lifecycle (the
+        // docks see only the Document, so the Confirm/Cancel buttons they
+        // would host need session-state plumbing first) — set only when the
+        // session actually opened, after every guard above.
+        if self.is_text_editing() {
+            editor.set_status(
+                "editing text — Enter for a new line, Ctrl+Enter to finish, Escape to cancel",
+            );
+        }
+    }
+
+    /// Perform one text-session request (card 025). Drafts land on the
+    /// document history-free (0 steps); a confirm restores the original
+    /// payload first and only then applies the `SetLayerKind`, so the
+    /// command's inverse is the original and one undo takes the whole
+    /// session back. Reports the history steps the request cost.
+    /// Card 036/038: conjugate the document-space delta through EACH
+    /// participant's own parent chain and commit the whole set as one
+    /// transaction — one undo entry.
+    fn perform_transform_layers(
+        editor: &mut Editor,
+        layers: &[layer_model::LayerId],
+        delta: [f32; 6],
+    ) -> usize {
+        let Some(doc) = editor.active_mut() else {
+            editor.set_status("no document to transform");
+            return 0;
+        };
+        let mut commands = Vec::new();
+        for layer in layers {
+            let total =
+                crate::interaction_geometry::document_transform_of(&doc.document, *layer, 0).ok();
+            let own = doc.document.layers.get(*layer).map(|l| l.transform);
+            if let (Some(total), Some(own)) = (total, own) {
+                let parent = total * own.inverse();
+                let delta_parent = glam::Affine2::from_cols_array(&delta);
+                // TransformLayer pre-multiplies onto the layer's own
+                // transform — the conjugated delta is the whole matrix.
+                let matrix = (parent.inverse() * delta_parent * parent).to_cols_array();
+                commands.push(Command::TransformLayer {
+                    layer_id: *layer,
+                    matrix,
+                });
+            }
+        }
+        let count = commands.len();
+        if count == 0 {
+            return 0;
+        }
+        // All-or-nothing: a refusal (a position lock that slipped through,
+        // say) leaves nothing applied AND reports no history step.
+        match doc.apply(Command::Transaction {
+            label: format!("transform {count} layers"),
+            commands,
+        }) {
+            Ok(_) => {
+                editor.set_status(format!("moved {count} layers"));
+                1
+            }
+            Err(e) => {
+                editor.set_status(e.to_string());
+                0
+            }
+        }
+    }
+
+    fn perform_text_request(editor: &mut Editor, request: tools::ToolRequest) -> usize {
+        match request {
+            tools::ToolRequest::TextDraft { layer, kind } => {
+                if let Err(e) = editor.active_mut().unwrap().apply_text_draft(layer, *kind) {
+                    editor.set_status(e.to_string());
+                }
+                0
+            }
+            tools::ToolRequest::TextConfirm {
+                layer,
+                original,
+                draft,
+            } => Self::perform_text_confirm(editor, layer, original, draft),
+            _ => 0,
+        }
+    }
+
+    /// The confirm reconciliation: restore (history-free), then commit (one
+    /// entry whose inverse is the restored original). If the restore fails
+    /// (e.g. the layer was locked mid-session) the DRAFT is re-applied so it
+    /// stays visible and nothing strands stale — the status bar says why —
+    /// and the reported steps are the history depth that actually moved.
+    fn perform_text_confirm(
+        editor: &mut Editor,
+        layer: layer_model::LayerId,
+        original: Box<layer_model::LayerKind>,
+        draft: Box<layer_model::LayerKind>,
+    ) -> usize {
+        let before = editor.active().map(|d| d.history_depth()).unwrap_or(0);
+        if let Err(e) = editor
+            .active_mut()
+            .unwrap()
+            .apply_text_draft(layer, *original.clone())
+        {
+            // The restore could not run: keep the draft on the layer (it is
+            // already there and visible) instead of attempting a commit whose
+            // inverse would be the draft itself.
+            editor.set_status(format!(
+                "{e} — the text run is not committed; unlock the layer to commit it"
+            ));
+            if let Err(e) = editor.active_mut().unwrap().apply_text_draft(layer, *draft) {
+                editor.set_status(e.to_string());
+            }
+            return editor
+                .active()
+                .map(|d| d.history_depth())
+                .unwrap_or(0)
+                .saturating_sub(before);
+        }
+        editor.apply_command(editor_core::Command::SetLayerKind {
+            layer_id: layer,
+            kind: draft,
+        });
+        editor
+            .active()
+            .map(|d| d.history_depth())
+            .unwrap_or(0)
+            .saturating_sub(before)
     }
 
     /// Confirm the gesture the live tool is holding: Enter, or the options
@@ -600,6 +1465,27 @@ impl ToolPointer {
 
         for request in requests {
             match request {
+                ToolRequest::TextDraft { layer, kind } => {
+                    // A draft arriving on the commit drain is performed the
+                    // same history-free way (card 025); confirm's own
+                    // reconciliation rides its TextConfirm request.
+                    if let Err(e) = editor.active_mut().unwrap().apply_text_draft(layer, *kind) {
+                        editor.set_status(e.to_string());
+                    }
+                }
+                ToolRequest::TextConfirm {
+                    layer,
+                    original,
+                    draft,
+                } => {
+                    out.steps += Self::perform_text_confirm(editor, layer, original, draft);
+                }
+                ToolRequest::TransformLayers { layers, delta } => {
+                    // Card 035/036: one shared performer — the conjugated
+                    // delta is the whole matrix (TransformLayer
+                    // pre-multiplies onto the layer's own transform).
+                    out.steps += Self::perform_transform_layers(editor, &layers, delta);
+                }
                 ToolRequest::Crop(req) => {
                     let command = editor
                         .active()
@@ -683,7 +1569,7 @@ impl ToolPointer {
         editor: &mut Editor,
         input: PointerInput,
         over_panel: bool,
-        choices: &[(String, usize)],
+        settings: &[(String, tools::ToolSetting)],
     ) -> PointerOutcome {
         let mut out = PointerOutcome::default();
         if over_panel && !self.router.is_gesture_active() {
@@ -716,6 +1602,9 @@ impl ToolPointer {
         let effective = editor.effective_tool();
         let foreground = editor.foreground();
         let background = editor.background();
+        // Card 055: the validated edit target, read once per event before the
+        // document borrow. The gesture pins it (see the ctx build below).
+        let edit_target_is_mask = editor.edit_target_is_mask();
 
         let (dispatch, viewport) = {
             let doc = editor.active_mut().expect("checked immediately above");
@@ -725,6 +1614,11 @@ impl ToolPointer {
             out.view_changed = write_camera_back(&camera, &mut doc.camera);
             (dispatch, viewport)
         };
+        // Card 012: a published session rides the claim's document, and stays
+        // with it for the geometry's lifetime (which can outlive the claim).
+        if self.router.is_gesture_active() && self.session_doc.is_none() {
+            self.session_doc = Some(active_id);
+        }
         // The pin is taken from the router rather than from the phase, so it
         // says exactly as long as the claim does: set while a gesture is
         // running — a pan's as much as a stroke's, since panning the wrong
@@ -743,10 +1637,6 @@ impl ToolPointer {
             Dispatch::ToTool(routed) => routed,
         };
         out.route = Some(routed.route);
-        eprintln!(
-            "ROUTED in_gesture={} route={:?}",
-            routed.in_gesture, routed.route
-        );
         if !routed.in_gesture {
             // A hover. See the module docs: nothing here consumes one yet.
             return out;
@@ -773,14 +1663,33 @@ impl ToolPointer {
         // untouched tool's slot answers with the settings
         // `tools::registry::make` built it holding, so this writes the Pencil
         // its own one hard aliased pixel back.
+        // The pin is snapshotted before the tool borrow and written back
+        // after the sample: the gesture pin belongs to the pointer, not to
+        // one sample of it.
+        let mut pinned_paint_target = self.pinned_paint_target;
         let brush = (routed.phase == PointerPhase::Down).then(|| editor.brush_for(id));
         let tool = self.tool(id);
         if let Some(brush) = brush {
             tool.set_brush(brush);
-            // The named mode rides the same seed: the options bar's choice is
-            // what the tool is, for tools that have more than one shape.
-            for (key, index) in choices {
-                tool.set_choice(key, *index);
+            // The typed options ride the same seed (card 010): what the
+            // options bar holds is what the tool is, applied at the press so a
+            // gesture's settings are pinned for its lifetime. A refused value
+            // is surfaced, not swallowed — an options-bar control that
+            // silently did nothing is the defect this seam exists to prevent.
+            for (key, setting) in settings {
+                // Two keys never reach `set_setting` here: the
+                // brush-shared ones already travelled through `set_brush`
+                // (the chrome's brush_from_options reads them out of the
+                // same options map), and the UI-supplied keys (the paint
+                // blend mode) name no registry option a tool could answer.
+                // Both would burn the refusal channel on every
+                // pointer-down.
+                if crate::chrome::BRUSH_KEYS.contains(&key.as_str()) || key.starts_with("ui.") {
+                    continue;
+                }
+                if let Err(e) = tool.set_setting(key, *setting) {
+                    out.failed = Some(e.to_string());
+                }
             }
         }
 
@@ -791,6 +1700,34 @@ impl ToolPointer {
             let active_mask = active_layer
                 .and_then(|id| doc.document.layers.get(id))
                 .and_then(|layer| layer.mask_id());
+            // Card 055: the gesture's edit target - resolved through THE one
+            // shared resolver at the Down that begins the gesture, pinned for
+            // every later sample of it (the Up's commit included). The
+            // precomputed bounds below describe the layer that will actually
+            // be edited.
+            let target = if routed.phase == PointerPhase::Down {
+                let t = resolve_edit_target(
+                    &doc.document,
+                    quick_mask,
+                    quick_mask_layer,
+                    edit_target_is_mask,
+                    active_layer,
+                    active_mask,
+                );
+                pinned_paint_target = Some(t);
+                t
+            } else {
+                pinned_paint_target.unwrap_or_else(|| {
+                    resolve_edit_target(
+                        &doc.document,
+                        quick_mask,
+                        quick_mask_layer,
+                        edit_target_is_mask,
+                        active_layer,
+                        active_mask,
+                    )
+                })
+            };
             let selection = doc.document.selection.clone();
             // Top-most first, which is the order `LayerTree` keeps its roots in
             // — what the move tool's auto-select walks.
@@ -810,30 +1747,149 @@ impl ToolPointer {
                 .collect();
             let view = canvas_camera_of(&doc.camera).to_view_state(&viewport);
 
+            // Card 034: the effective edit target's bounds in DOCUMENT space
+            // (document_bounds maps through the layer transform — a text
+            // layer placed by click surrounds its visible text, not its
+            // layer-local origin). The quick-mask reroute decides the target
+            // first, so the bounds describe the layer that will be edited.
+            let effective_layer = target.layer;
+            let active_layer_content_bounds = effective_layer.and_then(|layer| {
+                compositor::bounds::document_bounds(
+                    &doc.document,
+                    &doc.tiles,
+                    layer,
+                    0,
+                    compositor::CompositeOptions::default(),
+                )
+                .ok()
+                .flatten()
+            });
+
+            // Card 037: the bounded visible-content pick under this sample —
+            // bounds queries per layer, alpha only for bounds candidates.
+            // Computed before the mutable tile access is built.
+            let content_hit = crate::hit_testing::visible_content_at(
+                &doc.document,
+                &doc.document.pixels,
+                &doc.tiles,
+                routed.event.pos,
+                0.5,
+            )
+            .map(|hit| hit.layer);
+            // Card 042: snap candidates (tight ink bounds, selection and
+            // its descendants excluded) + the dragged layer's tight ink.
+            let selected = doc.document.layer_selection();
+            let (snap_candidates, snap_threshold_doc) =
+                snap_candidates_for(&doc.document, &doc.tiles, doc.camera.zoom, &selected);
+            let active_layer_ink_bounds = effective_layer
+                .and_then(|layer| tight_document_bounds(&doc.document, &doc.tiles, layer));
+            // Card 043: the link chain — every layer carrying the flag.
+            let linked_layers: Vec<layer_model::LayerId> = doc
+                .document
+                .layers
+                .iter_depth_first()
+                .into_iter()
+                .filter(|id| doc.document.layers.get(*id).is_some_and(|l| l.linked))
+                .collect();
+            // Card 044: the active layer keeps editable geometry?
+            let active_layer_parametric = effective_layer.is_some_and(|id| {
+                doc.document
+                    .layers
+                    .get(id)
+                    .is_some_and(|l| l.kind.parametric())
+            });
             let mut access = DocumentTiles::new(&doc.document.pixels, &mut doc.tiles);
             let mut ctx = ToolContext::new(&mut access, canvas);
             ctx.shape_paths = shape_paths;
-            ctx.active_layer = active_layer;
-            ctx.active_mask = active_mask;
-            // Nothing in this shell selects a mask for editing yet, so a pixel
-            // tool writes to the layer — except in quick-mask mode, where the
-            // scratch layer's mask is exactly where edits belong.
-            if quick_mask {
-                if let Some(sid) = quick_mask_layer {
-                    let smask = doc.document.layers.get(sid).and_then(|l| l.mask_id());
-                    ctx.active_layer = Some(sid);
-                    ctx.active_mask = smask;
-                    ctx.paint_target = PaintTarget::Mask;
-                }
-            } else {
-                ctx.paint_target = PaintTarget::Layer;
-            }
+            // Card 055: the pinned target routes everything - the layer the
+            // edits land on, the mask they mask with, and the surface they
+            // paint. Quick mask is a temporary mode above the sticky target:
+            // it reroutes while live and exits to the sticky target
+            // untouched.
+            ctx.active_layer = target.layer;
+            ctx.active_mask = target.mask;
+            ctx.paint_target = target.paint;
+            ctx.active_layer_content_bounds = active_layer_content_bounds;
+            ctx.sample_to_layer =
+                sample_to_paint_target_of(&doc.document, ctx.active_layer, ctx.paint_target);
+            ctx.paint_space_canvas = Some(paint_space_canvas_of(
+                &doc.document,
+                ctx.active_layer,
+                ctx.paint_target,
+                canvas,
+            ));
+            ctx.content_pick = Some(content_hit);
+            ctx.snap_candidates = snap_candidates;
+            ctx.snap_threshold_doc = snap_threshold_doc;
+            ctx.active_layer_ink_bounds = active_layer_ink_bounds;
+            ctx.linked_layers = linked_layers;
+            ctx.active_layer_parametric = active_layer_parametric;
+
+            // Card 036: the panel's selection set, ancestry and locks — the
+            // transform tool's multi-layer session reads all three.
+            ctx.selected_layers = doc.document.layer_selection();
+            ctx.layer_parents = doc
+                .document
+                .layers
+                .iter_depth_first()
+                .iter()
+                .map(|id| (*id, doc.document.layers.parent_of(*id)))
+                .collect();
+            ctx.layer_locks = doc
+                .document
+                .layers
+                .iter_depth_first()
+                .iter()
+                .map(|id| {
+                    (
+                        *id,
+                        doc.document
+                            .layers
+                            .get(*id)
+                            .is_some_and(|l| l.locked.blocks_transform()),
+                    )
+                })
+                .collect();
+            ctx.layer_parent_transforms = doc
+                .document
+                .layers
+                .iter_depth_first()
+                .iter()
+                .filter_map(|id| {
+                    let total =
+                        crate::interaction_geometry::document_transform_of(&doc.document, *id, 0)
+                            .ok()?;
+                    let own = doc.document.layers.get(*id)?.transform;
+                    Some((*id, total * own.inverse()))
+                })
+                .collect();
+            // Card 035: the parent chain for the transform delta's
+            // conjugation (document_transform_of includes the layer's own
+            // transform; the parent is it minus the own).
+            ctx.active_layer_parent_transform = ctx.active_layer.and_then(|layer| {
+                let total =
+                    crate::interaction_geometry::document_transform_of(&doc.document, layer, 0)
+                        .ok()?;
+                let own = doc.document.layers.get(layer)?.transform;
+                Some(total * own.inverse())
+            });
             ctx.selection = selection;
             ctx.foreground = foreground;
             ctx.background = background;
             ctx.view = view;
             ctx.layer_stack = layer_stack;
 
+            // Card 026: a fresh Type press-release may ENTER an existing text
+            // layer instead of creating one. The shell resolves the hit — it
+            // owns the shaping stack: the top-most unlocked text layer whose
+            // transformed ink contains the click, and the caret the shaped
+            // hit test chose.
+            if routed.phase == PointerPhase::Up
+                && tool.id() == ToolId::Type
+                && !tool.is_text_editing()
+            {
+                ctx.text_hit = Self::text_hit_under(&doc.document, routed.event.pos);
+            }
             let result = match routed.phase {
                 PointerPhase::Down => tool.on_pointer_down(&mut ctx, routed.event),
                 PointerPhase::Move => tool.on_pointer_move(&mut ctx, routed.event),
@@ -855,45 +1911,78 @@ impl ToolPointer {
             drop(ctx);
             out
         };
+        // (the snapshot above is written back right after the block)
+        self.pinned_paint_target = pinned_paint_target;
 
         if let Err(e) = result {
             out.failed = Some(e.to_string());
             editor.set_status(e.to_string());
         }
 
+        // The step count is measured across BOTH apply paths below — the
+        // selection fold and the pixel commands — so a selection gesture
+        // reports the history step it landed (card 056).
+        let before = editor.active().map(|d| d.history_depth()).unwrap_or(0);
+        if !selection_edits.is_empty() {
+            // Card 056: selection changes ride HISTORY as Command::SetSelection
+            // (whose inverse is the previous selection), with one gesture's
+            // edits coalesced into ONE undoable step — undo one marquee drag
+            // and redo it without any image pixel moving. The fold runs
+            // sequentially so a gesture's second edit composes onto its first
+            // (add on top of replace, exactly as the direct assignment did).
+            // Today every selection tool emits at most one edit per gesture
+            // (all at Up), so the transaction branch is future-proofing —
+            // the coalescing contract is what a multi-edit tool would ride.
+            let doc = editor.active_mut().expect("checked above");
+            let mut current = doc.document.selection.clone();
+            let mut selection_commands: Vec<Command> = Vec::new();
+            let mut failure: Option<String> = None;
+            for edit in &selection_edits {
+                match edit.apply(canvas_rect, &current) {
+                    Ok(next) if next != current => {
+                        selection_commands.push(Command::SetSelection {
+                            selection: next.clone(),
+                        });
+                        current = next;
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        failure = Some(e.to_string());
+                        break;
+                    }
+                }
+            }
+            match failure {
+                Some(reason) => {
+                    out.failed = Some(reason.clone());
+                    editor.set_status(reason);
+                }
+                None if !selection_commands.is_empty() => {
+                    let command = if selection_commands.len() == 1 {
+                        selection_commands.into_iter().next().expect("non-empty")
+                    } else {
+                        Command::Transaction {
+                            label: "Select".to_string(),
+                            commands: selection_commands,
+                        }
+                    };
+                    editor.apply_command(command);
+                    // The selection is part of the saved document; the
+                    // command route marks the dirty state through the editor.
+                    out.selection_changed = true;
+                }
+                None => {}
+            }
+        }
+
         // Through the editor, so a gesture is undone by exactly the Ctrl+Z that
         // undoes a panel edit. The count is what history really took, not what
         // the tool offered: a command History refuses is not a step.
-        let before = editor.active().map(|d| d.history_depth()).unwrap_or(0);
         for command in commands {
             editor.apply_command(command);
         }
         let after = editor.active().map(|d| d.history_depth()).unwrap_or(0);
         out.steps = after.saturating_sub(before);
-
-        if !selection_edits.is_empty() {
-            let doc = editor.active_mut().expect("checked above");
-            for edit in selection_edits {
-                match edit.apply(canvas_rect, &doc.document.selection) {
-                    Ok(next) => {
-                        if next != doc.document.selection {
-                            doc.document.selection = next;
-                            // The selection is part of the saved document, so
-                            // changing it is unsaved work — even though there
-                            // is no command to undo it with.
-                            doc.document.mark_dirty();
-                            out.selection_changed = true;
-                        }
-                    }
-                    Err(e) => {
-                        let reason = e.to_string();
-                        out.failed = Some(reason.clone());
-                        editor.set_status(reason);
-                        break;
-                    }
-                }
-            }
-        }
 
         if let Some(rgba) = picked {
             editor.set_foreground(rgba);
@@ -912,6 +2001,36 @@ impl ToolPointer {
                 match request {
                     ToolRequest::SelectLayer(id) => {
                         editor.set_layer_selection(vec![id], Some(id));
+                    }
+                    ToolRequest::TextDraft { layer, kind } => {
+                        // The live text draft renders from the pointer route
+                        // too (IME updates can arrive between keystrokes) —
+                        // but only into the document the run lives in.
+                        let in_active = editor
+                            .active()
+                            .map(|d| d.document.layers.get(layer).is_some())
+                            .unwrap_or(false);
+                        if !in_active {
+                            continue;
+                        }
+                        if let Err(e) = editor.active_mut().unwrap().apply_text_draft(layer, *kind)
+                        {
+                            editor.set_status(e.to_string());
+                        }
+                    }
+                    ToolRequest::TextConfirm {
+                        layer,
+                        original,
+                        draft,
+                    } => {
+                        out.steps += Self::perform_text_confirm(editor, layer, original, draft);
+                    }
+                    ToolRequest::TransformLayers { layers, delta } => {
+                        // Card 038: the Move tool commits its set move at
+                        // pointer-up — perform it now, exactly as the
+                        // commit drain would, and COUNT the history step so
+                        // changed_document/repaint see it.
+                        out.steps += Self::perform_transform_layers(editor, &layers, delta);
                     }
                     ToolRequest::Crop(_) | ToolRequest::Slices(_) => deferred += 1,
                 }
@@ -1059,6 +2178,797 @@ mod tests {
             }
         }
         out
+    }
+
+    /// Card 010: the typed settings channel. The Auto-Select boolean rides
+    /// `ToolPointer::handle`'s settings into the running Move tool, so a press
+    /// claims the layer whose ink is under the pointer — not the active layer
+    /// the panel has selected.
+    #[test]
+    fn auto_select_forwarded_through_the_pointer_route_picks_the_layer_under_the_pointer() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Move);
+
+        // A second layer ON TOP with dark ink in one corner only. Created
+        // through the real command route; the panel selection stays on the
+        // opened canvas layer beneath it.
+        let corner = TileCoord::new(0, 0, 0);
+        let ink_rect = 4u32..12;
+        let mut bytes = Vec::with_capacity(256 * 256 * 4);
+        for y in 0..256u32 {
+            for x in 0..256u32 {
+                bytes.extend_from_slice(&if ink_rect.contains(&x) && ink_rect.contains(&y) {
+                    [10, 10, 10, 255]
+                } else {
+                    [0, 0, 0, 0]
+                });
+            }
+        }
+        let overlay_id = {
+            let doc = editor.active_mut().unwrap();
+            let layer = layer_model::Layer::raster("Corner ink");
+            let id = layer.id;
+            doc.apply(Command::create_layer(layer)).unwrap();
+            let hash = doc.tiles.insert_bytes(bytes);
+            doc.apply(
+                Command::paint_tiles(
+                    editor_core::PixelTarget::Layer(id),
+                    vec![editor_core::TileEdit::set(corner, hash)],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            id
+        };
+        // The active layer is the opened canvas beneath, as the panel would
+        // have it — NOT the corner-ink layer the pointer will be over.
+        let canvas_layer = {
+            let doc = editor.active_mut().unwrap();
+            let id = doc
+                .document
+                .layers
+                .iter_depth_first()
+                .into_iter()
+                .find(|id| *id != overlay_id)
+                .unwrap();
+            doc.document.set_layer_selection(vec![id]).unwrap();
+            doc.document.set_active_layer(Some(id)).unwrap();
+            id
+        };
+        assert_ne!(canvas_layer, overlay_id);
+
+        // Down over the corner ink with Auto-Select forwarded as a typed
+        // setting: the press claims the corner layer.
+        let mut pointer = ToolPointer::new();
+        let settings = [("auto_select".to_string(), tools::ToolSetting::Bool(true))];
+        let before = composite(&mut editor);
+        let before_at = |x: u32, y: u32| {
+            let i = ((y * 64 + x) * 4) as usize;
+            [before[i], before[i + 1], before[i + 2], before[i + 3]]
+        };
+        // The corner ink is where the pointer will press.
+        assert_eq!(before_at(8, 8), [10, 10, 10, 255]);
+        let down = pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Down, screen(8.0, 8.0)),
+            false,
+            &settings,
+        );
+        assert!(down.reached_tool, "{down:?}");
+        assert!(
+            down.failed.is_none(),
+            "the setting is accepted: {:?}",
+            down.failed
+        );
+        for at in [(10.0, 10.0), (14.0, 14.0)] {
+            pointer.handle(
+                &mut editor,
+                sample(PointerPhase::Move, screen(at.0, at.1)),
+                false,
+                &settings,
+            );
+        }
+        let up = pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Up, screen(18.0, 18.0)),
+            false,
+            &settings,
+        );
+        assert!(up.failed.is_none(), "{up:?}");
+
+        // The corner layer moved; the canvas beneath did not. If the press had
+        // claimed the active layer instead, the whole white canvas would have
+        // shifted and every pixel would differ.
+        let after = composite(&mut editor);
+        let alpha_at = |x: u32, y: u32| {
+            let i = ((y * 64 + x) * 4) as usize;
+            [after[i], after[i + 1], after[i + 2], after[i + 3]]
+        };
+        assert_ne!(
+            alpha_at(8, 8),
+            before_at(8, 8),
+            "the corner ink moved away from its old spot"
+        );
+        assert_eq!(
+            alpha_at(40, 40),
+            before_at(40, 40),
+            "the canvas layer did not move: auto-select claimed the ink under the pointer"
+        );
+    }
+
+    /// Card 012: a live transform session publishes its geometry — and a
+    /// committed or cancelled session un-publishes it — through the same call.
+    #[test]
+    fn a_live_transform_session_publishes_geometry_until_it_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::FreeTransform);
+        let doc_id = editor.active().unwrap().id();
+        let mut pointer = ToolPointer::new();
+
+        // A press on the canvas's top-left corner starts the session over the
+        // canvas bounds and grabs that corner's handle.
+        let down = pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Down, screen(0.0, 0.0)),
+            false,
+            &[],
+        );
+        assert!(down.reached_tool, "{down:?}");
+        let (published_doc, geometry) = pointer
+            .live_geometry()
+            .expect("a live transform session publishes its geometry");
+        assert_eq!(published_doc, doc_id, "the geometry names its document");
+        let tools::SessionGeometry::Transform {
+            state,
+            mode,
+            active: _,
+            layer: _,
+        } = &geometry;
+
+        assert_eq!(*mode, tools::transform::TransformMode::Scale);
+        assert_eq!(
+            state.source,
+            PixelRect::new(0, 0, 64, 64),
+            "the session starts over the canvas"
+        );
+
+        // The geometry follows the gesture: a drag moves the grabbed corner.
+        // Card 041: corner scaling preserves aspect by default, so the drag
+        // is diagonal (a horizontal-only drag cannot move the corner).
+        let before = state.corners;
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Move, screen(8.0, 8.0)),
+            false,
+            &[],
+        );
+        let (_, geometry) = pointer.live_geometry().expect("still live");
+        let tools::SessionGeometry::Transform {
+            state: after,
+            active,
+            ..
+        } = geometry;
+        assert_ne!(after.corners, before, "the drag moved the published state");
+        assert!(active.is_some(), "the grabbed handle is published");
+
+        // Escape: the session ends, and the same route un-publishes.
+        assert!(pointer.cancel(&mut editor));
+        assert!(
+            pointer.live_geometry().is_none(),
+            "cancel clears the geometry"
+        );
+    }
+
+    /// Card 013, end to end: while a transform session is live, the layer's
+    /// pixels move **before release** (the preview through the one
+    /// compositor); cancelling restores the exact baseline and leaves no
+    /// history; committing lands the settled preview at committed quality and
+    /// drops the lens — no double transform, one undo entry.
+    #[test]
+    fn the_live_transform_preview_moves_pixels_before_release_and_resolves_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::FreeTransform);
+
+        // Ink in the canvas layer's middle, so a corner drag moves visible
+        // pixels: draw a dark square, through the real command route.
+        {
+            let doc = editor.active_mut().unwrap();
+            let mut bytes = vec![0u8; (256 * 256 * 4) as usize];
+            for y in 24..40u32 {
+                for x in 24..40u32 {
+                    let i = ((y * 256 + x) * 4) as usize;
+                    bytes[i..i + 4].copy_from_slice(&[10, 10, 10, 255]);
+                }
+            }
+            let hash = doc.tiles.insert_bytes(bytes);
+            let layer = doc.document.active_layer().unwrap();
+            doc.apply(
+                Command::paint_tiles(
+                    editor_core::PixelTarget::Layer(layer),
+                    vec![editor_core::TileEdit::set(TileCoord::new(0, 0, 0), hash)],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let depth_after_setup = editor.active().unwrap().history_depth();
+        let mut pointer = ToolPointer::new();
+
+        // Baseline.
+        let baseline = composite(&mut editor);
+        let px = |buf: &[u8], x: f32, y: f32| {
+            let (x, y) = (x as usize, y as usize);
+            let i = (y * 64 + x) * 4;
+            [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+        };
+
+        // Gesture: grab inside the ink (an interior drag translates the quad)
+        // and drag it by (+12, +12).
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Down, screen(32.0, 24.0)),
+            false,
+            &[],
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Move, screen(44.0, 36.0)),
+            false,
+            &[],
+        );
+        // The shell settles the preview after every sample; the test calls the
+        // same route.
+        pointer.settle_preview(&mut editor);
+
+        // Still held — and the pixels have already moved: the preview renders
+        // through the one compositor while the handles move.
+        let previewed = composite(&mut editor);
+        let at = |buf: &[u8], x: f32, y: f32| px(buf, x, y);
+        assert_eq!(
+            at(&previewed, 42.0, 42.0),
+            [10, 10, 10, 255],
+            "the ink moved before release: the preview renders the drag"
+        );
+        assert_eq!(
+            at(&previewed, 26.0, 26.0),
+            [0, 0, 0, 0],
+            "the ink's old spot is empty: the preview moved it"
+        );
+        // The history is untouched while the handles move.
+        assert_eq!(
+            editor.active().unwrap().history_depth(),
+            depth_after_setup,
+            "preview writes no history"
+        );
+
+        // Cancel: the baseline comes back exactly, no entry, lens gone.
+        assert!(pointer.cancel(&mut editor));
+        pointer.settle_preview(&mut editor);
+        assert_eq!(
+            composite(&mut editor),
+            baseline,
+            "cancel restores the exact baseline"
+        );
+        assert_eq!(editor.active().unwrap().history_depth(), depth_after_setup);
+
+        // Commit: the settled preview's pixels become the committed ones —
+        // and the preview is dropped, so nothing is transformed twice.
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Down, screen(32.0, 24.0)),
+            false,
+            &[],
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Move, screen(44.0, 36.0)),
+            false,
+            &[],
+        );
+        pointer.settle_preview(&mut editor);
+        let previewed = composite(&mut editor);
+        assert_eq!(
+            at(&previewed, 42.0, 42.0),
+            [10, 10, 10, 255],
+            "the settled preview moved the ink"
+        );
+        let committed = pointer.commit(&mut editor);
+        pointer.settle_preview(&mut editor);
+        assert!(committed.had_pending, "{committed:?}");
+        assert_eq!(
+            editor.active().unwrap().history_depth(),
+            depth_after_setup + 1,
+            "one undo entry"
+        );
+        let after = composite(&mut editor);
+        let worst = previewed
+            .iter()
+            .zip(&after)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        assert!(
+            worst <= 3,
+            "commit matches the settled preview (worst channel diff {worst})"
+        );
+        assert_ne!(after, baseline, "and the move persisted");
+    }
+
+    // ---- Card 055: the edit target routes pixel edits ------------------
+
+    /// Attaches a fresh reveal-all raster mask to the active layer through
+    /// the real command route.
+    fn attach_mask(editor: &mut Editor) {
+        let command = Command::SetLayerProperties {
+            layer_id: editor
+                .active()
+                .unwrap()
+                .document
+                .active_layer()
+                .expect("a layer"),
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Set(layer_model::LayerMask::new(
+                    layer_model::MaskId::new(),
+                )),
+                ..Default::default()
+            },
+        };
+        editor.apply_command(command);
+    }
+
+    fn layer_tile_hashes(editor: &Editor) -> Vec<raster::TileHash> {
+        let doc = editor.active().unwrap();
+        let layer = doc.document.active_layer().unwrap();
+        doc.document
+            .layer_tiles(layer)
+            .map(|m| m.iter().map(|(_, h)| h).collect())
+            .unwrap_or_default()
+    }
+
+    fn mask_tile_count(editor: &Editor) -> usize {
+        let doc = editor.active().unwrap();
+        let layer = doc.document.active_layer().unwrap();
+        doc.document.mask_tiles(layer).map(|m| m.len()).unwrap_or(0)
+    }
+
+    /// Brush on the MASK-targeted layer changes coverage tiles only — the
+    /// layer's pixels are untouched. Switching back paints content.
+    #[test]
+    fn brush_on_the_selected_mask_paints_coverage_only_and_back_paints_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Brush);
+        editor.set_foreground([1.0, 0.0, 0.0, 1.0]);
+        attach_mask(&mut editor);
+        editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
+        let mut pointer = ToolPointer::new();
+
+        let layer_before = layer_tile_hashes(&editor);
+        let mask_tiles_before = mask_tile_count(&editor);
+        stroke(&mut pointer, &mut editor, &[(32.0, 32.0), (44.0, 32.0)]);
+        assert_eq!(
+            layer_tile_hashes(&editor),
+            layer_before,
+            "a mask-targeted brush changed no layer pixels"
+        );
+        assert!(
+            mask_tile_count(&editor) > mask_tiles_before,
+            "the mask gained coverage (a fresh mask starts with no tiles)"
+        );
+        // The composite changed where the mask reveals: a covered brush
+        // stroke over an opaque mask paints ink through the mask.
+        // (mask tile present = revealed area painted with the stroke ink)
+
+        // Switch back to content: the same gesture now paints pixels. A
+        // fresh pointer: each stroke is its own gesture, exactly as a user's
+        // separate drag is.
+        editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Content);
+        let mask_hashes_after_mask_stroke = mask_tile_count(&editor);
+        let layer_hashes_before = layer_tile_hashes(&editor);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(40.0, 48.0), (52.0, 48.0)]);
+        assert_ne!(
+            layer_tile_hashes(&editor),
+            layer_hashes_before,
+            "a content-targeted brush paints pixels"
+        );
+        assert_eq!(
+            mask_tile_count(&editor),
+            mask_hashes_after_mask_stroke,
+            "the content brush changed no coverage"
+        );
+    }
+
+    /// Card 058: pointer geometry maps through the MASK's document pose
+    /// (layer transform ∘ mask.transform), not the layer's local grid —
+    /// an unlinked, independently transformed mask is painted where it
+    /// displays, exactly where the compositor samples it.
+    #[test]
+    fn a_stroke_on_a_transformed_mask_lands_through_the_mask_pose() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Brush);
+        attach_mask(&mut editor);
+        // Give the mask its own +8px transform in LAYER space (an unlinked
+        // mask the user dragged): the compositor samples the coverage through
+        // layer_transform ∘ mask.transform, so coverage painted at the
+        // pointer must land 8px to the LEFT in the mask's local store.
+        let layer_id = editor.active().unwrap().document.active_layer().unwrap();
+        let mut mask = layer_model::LayerMask::new(layer_model::MaskId::new());
+        mask.transform = Box::new(glam::Affine2::from_translation(glam::Vec2::new(8.0, 0.0)));
+        editor.apply_command(Command::SetLayerProperties {
+            layer_id,
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Set(mask),
+                ..Default::default()
+            },
+        });
+        editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
+        // The target switch swapped the wells to the mask pair (white fg),
+        // which is exactly the colour this test strokes: on a fresh (all
+        // hidden) mask, white REVEALS — so every touched coverage pixel
+        // must rise above 0, and the probe can tell the pose-mapped point
+        // from the layer-local mirror.
+        //
+        // A 2px hard brush keeps the reach arithmetic exact: dab radius 1 in
+        // MASK-LOCAL pixels (the brush paints in target space).
+        let mut brush = *editor.brush();
+        brush.size = 2.0;
+        brush.hardness = 1.0;
+        editor.set_brush(brush);
+
+        let layer_before = layer_tile_hashes(&editor);
+
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(24.0, 16.0), (25.0, 16.0)]);
+
+        assert_eq!(
+            layer_tile_hashes(&editor),
+            layer_before,
+            "a mask-targeted brush changed no layer pixels"
+        );
+        // Probe the STORE bytes (mask-local) directly — the ground truth the
+        // compositor samples. With radius 1 the pose-mapped stroke covers
+        // store x in [15, 18] on row 16; a layer-space shortcut would paint
+        // [23, 26] instead.
+        use compositor::TileSource as _;
+        let store = |ed: &Editor, x: usize, y: usize| -> u8 {
+            let doc = ed.active().unwrap();
+            let map = doc.document.mask_tiles(layer_id).unwrap();
+            let hash = map
+                .get(raster::TileCoord::new(0, 0, 0))
+                .expect("the stroke stored coverage");
+            doc.tiles.tile(hash).unwrap()[y * 256 + x]
+        };
+        assert!(
+            store(&editor, 16, 16) > 0,
+            "the stroke reveals at mask-local (16,16) — the pointer's doc point (24,16) mapped through the pose inverse"
+        );
+        assert_eq!(
+            store(&editor, 24, 16), 0,
+            "the pointer's raw document position is untouched in the store — no layer-space shortcut"
+        );
+        assert_eq!(
+            store(&editor, 33, 16), 0,
+            "mask-local (33,16) is beyond the pose-mapped reach — the stroke did not smear through the layer grid"
+        );
+    }
+
+    /// Card 058: a mask stroke is CONSTRAINED by the active selection —
+    /// outside the marquee the coverage does not move at all (no tiles are
+    /// even created), inside it the paint lands.
+    #[test]
+    fn a_mask_stroke_is_constrained_by_the_active_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Brush);
+        attach_mask(&mut editor);
+        editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
+        // White reveals; the wells are already swapped to the mask pair.
+        let mut brush = *editor.brush();
+        brush.size = 2.0;
+        brush.hardness = 1.0;
+        editor.set_brush(brush);
+
+        // A small selection in the canvas's upper left; the stroke targets a
+        // point well OUTSIDE it.
+        editor.active_mut().unwrap().document.selection = editor_core::Selection::Rect {
+            min: glam::IVec2::new(2, 2),
+            max: glam::IVec2::new(10, 10),
+        };
+
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(32.0, 16.0), (33.0, 16.0)]);
+        assert_eq!(
+            mask_tile_count(&editor),
+            0,
+            "a stroke outside the selection creates no coverage at all"
+        );
+
+        // Inside the selection the same stroke reveals.
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(5.0, 5.0), (6.0, 5.0)]);
+        assert!(
+            mask_tile_count(&editor) > 0,
+            "a stroke inside the selection reveals coverage"
+        );
+        let doc = editor.active().unwrap();
+        let layer = doc.document.active_layer().unwrap();
+        let coverage = crate::menu_bridge::read_mask_coverage(doc, layer, 48, 32);
+        assert!(coverage[5 * 48 + 5] > 0);
+        assert_eq!(
+            coverage[16 * 48 + 32],
+            0,
+            "the outside point stayed hidden — the selection constrained the stroke"
+        );
+    }
+
+    /// Card 061: the boundary-refine brush rides the real route — the mask
+    /// target (card 055's resolver), one undo step, and only the painted band
+    /// moves.
+    /// Card 061 (review round 4): the FULL forward boundary, chrome to
+    /// tool. The options bar holds a brush key (size), the UI-supplied
+    /// blend mode, and a real tool option (strength); the chrome derives
+    /// the forward set and the shell's conversion feeds a real press. Two
+    /// invariants: nothing refused (no spurious status-bar error from keys
+    /// the tool cannot answer — the blend mode must never reach
+    /// `set_setting`), and the tool still receives what it does implement
+    /// (the strength the op answers).
+    #[test]
+    fn a_touched_blend_mode_presses_clean_through_the_chrome_boundary() {
+        use tools::ToolId;
+        use ui::OptionValue;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::RefineBoundary);
+        attach_mask(&mut editor);
+        editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
+
+        // What a user's options bar holds after touching three controls:
+        // the brush size (a brush key), the paint blend mode (a UI-supplied
+        // key with no registry answer), and the refine strength (real).
+        let mut chrome = crate::chrome::Chrome::new();
+        chrome.set_tool_option(ToolId::RefineBoundary, "size", OptionValue::Float(8.0));
+        chrome.set_tool_option(
+            ToolId::RefineBoundary,
+            ui::tool_options::BLEND_MODE_KEY,
+            OptionValue::Choice(1),
+        );
+        // Non-default: setting the schema default is a deliberate no-op in
+        // ToolOptions::set, and this test needs the strength actually held.
+        chrome.set_tool_option(ToolId::RefineBoundary, "strength", OptionValue::Float(0.7));
+        // The chrome's forward set already excludes the ui-supplied key.
+        let held = chrome.tool_options(ToolId::RefineBoundary);
+        assert!(
+            !held.iter().any(|(k, _)| k.starts_with("ui.")),
+            "ui-supplied keys never forward: {held:?}"
+        );
+        // The shell's boundary conversion (shell.rs), verbatim.
+        let settings: Vec<(String, tools::ToolSetting)> = held
+            .into_iter()
+            .map(|(key, value)| {
+                let setting = match value {
+                    ui::OptionValue::Float(v) => tools::ToolSetting::Float(v),
+                    ui::OptionValue::Int(v) => tools::ToolSetting::Int(v),
+                    ui::OptionValue::Bool(v) => tools::ToolSetting::Bool(v),
+                    ui::OptionValue::Choice(v) => tools::ToolSetting::Choice(v),
+                    ui::OptionValue::Color(v) => tools::ToolSetting::Color(v),
+                };
+                (key, setting)
+            })
+            .collect();
+
+        // A real press over the mask. Solid coverage is a correct no-op for
+        // the op itself — this test pins the refusal channel, not geometry.
+        let mut pointer = ToolPointer::new();
+        let out = pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Down, screen(16.0, 16.0)),
+            false,
+            &settings,
+        );
+        assert!(
+            out.failed.is_none(),
+            "a touched blend mode must not spuriously refuse: {:?}",
+            out.failed
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Up, screen(17.0, 16.0)),
+            false,
+            &settings,
+        );
+    }
+
+    #[test]
+    fn the_boundary_refine_brush_regrades_the_mask_band_over_the_real_route() {
+        use tools::ToolId;
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::RefineBoundary);
+        attach_mask(&mut editor);
+        editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
+        // A STAIR-STEP baseline (the refine's food: flat runs are fixed
+        // points, so a solid mask would be a correct no-op) — painted
+        // directly (Reveal All is a CREATION op and would refuse).
+        let layer = editor.active().unwrap().document.active_layer().unwrap();
+        {
+            let doc = editor.active_mut().unwrap();
+            let ts = raster::TILE_SIZE as usize;
+            let mut tile = vec![0u8; ts * ts];
+            for y in 0..ts {
+                for x in 0..ts {
+                    tile[y * ts + x] = ((x / 6) % 4) as u8 * 85;
+                }
+            }
+            let hash = doc.tiles.insert_bytes(tile);
+            editor_core::Command::PaintTiles {
+                target: editor_core::pixels::PixelTarget::Mask(layer),
+                delta: editor_core::pixels::TileDelta::new(std::iter::once(
+                    editor_core::pixels::TileEdit::set(raster::TileCoord::new(0, 0, 0), hash),
+                ))
+                .unwrap(),
+            }
+            .apply(&mut doc.document)
+            .unwrap();
+        }
+
+        let before = {
+            use compositor::TileSource as _;
+            let doc = editor.active().unwrap();
+            doc.document
+                .mask_tiles(layer)
+                .map(|m| {
+                    m.iter()
+                        .map(|(c, h)| (c, doc.tiles.tile(h).map(|b| b.to_vec())))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let layer_before = layer_tile_hashes(&editor);
+        // The direct coverage paint above is itself a history entry; the
+        // refine stroke adds exactly one MORE.
+        let depth_before = editor.active().unwrap().history.undo_depth();
+
+        // Stroke a band across the middle of the mask.
+        editor.set_brush(tools::BrushSettings {
+            size: 8.0,
+            hardness: 1.0,
+            ..*editor.brush()
+        });
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(12.0, 16.0), (36.0, 16.0)]);
+
+        // ONE undo step; the layer's pixels untouched; the band's coverage
+        // regraded (the solid 255 plateau under the stroke stays 255 — a
+        // fixed point — so the byte-level discriminator is the history +
+        // the unchanged layer; a NON-solid fixture is covered tools-level).
+        assert_eq!(
+            editor.active().unwrap().history.undo_depth(),
+            depth_before + 1,
+            "one refine stroke is one undo step"
+        );
+        assert_eq!(
+            layer_tile_hashes(&editor),
+            layer_before,
+            "the refine brush changed no layer pixels"
+        );
+        let after = {
+            use compositor::TileSource as _;
+            let doc = editor.active().unwrap();
+            doc.document
+                .mask_tiles(layer)
+                .map(|m| {
+                    m.iter()
+                        .map(|(c, h)| (c, doc.tiles.tile(h).map(|b| b.to_vec())))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(after.len(), before.len(), "the same tiles are still there");
+        // The band's coverage MOVED: the stair under the stroke was regraded
+        // into a ramp (compare the tile bytes at the stroked row).
+        let moved = after.iter().zip(before.iter()).any(|((ca, ha), (cb, hb))| {
+            ca == cb
+                && match (ha.as_deref(), hb.as_deref()) {
+                    (Some(a), Some(b)) => a != b,
+                    _ => false,
+                }
+        });
+        assert!(moved, "the refine stroke regraded the band's coverage");
+        // Undo restores the pre-stroke coverage exactly.
+        editor.active_mut().unwrap().undo().unwrap();
+        let restored = {
+            use compositor::TileSource as _;
+            let doc = editor.active().unwrap();
+            doc.document
+                .mask_tiles(layer)
+                .map(|m| {
+                    m.iter()
+                        .map(|(c, h)| (c, doc.tiles.tile(h).map(|b| b.to_vec())))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(restored, before, "undo restores the baseline coverage");
+    }
+
+    /// Card 055: the gesture PINS its target — a target change landing
+    /// between samples cannot redirect the middle of a stroke.
+    #[test]
+    fn a_target_change_between_samples_cannot_redirect_the_stroke_in_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Brush);
+        editor.set_foreground([1.0, 0.0, 0.0, 1.0]);
+        attach_mask(&mut editor);
+        // Content target at gesture start.
+        editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Content);
+        let layer_before = layer_tile_hashes(&editor);
+        let mask_before = mask_tile_count(&editor);
+        let mut pointer = ToolPointer::new();
+
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Down, screen(24.0, 24.0)),
+            false,
+            &[],
+        );
+        // The target flips MID-GESTURE (a thumbnail click landing between
+        // samples).
+        editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Move, screen(32.0, 24.0)),
+            false,
+            &[],
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Up, screen(40.0, 24.0)),
+            false,
+            &[],
+        );
+
+        assert_ne!(
+            layer_tile_hashes(&editor),
+            layer_before,
+            "the stroke stayed on the target it was pinned to (content)"
+        );
+        assert_eq!(
+            mask_tile_count(&editor),
+            mask_before,
+            "the mid-gesture flip did not redirect coverage"
+        );
+    }
+
+    /// A mask target whose mask has been removed resolves to content — the
+    /// read-time validation keeps painting possible instead of silently
+    /// dropping edits.
+    #[test]
+    fn a_mask_target_without_a_mask_falls_back_to_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Brush);
+        editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
+        // Card 058: the switch swapped the wells to the mask pair (white),
+        // which is a no-op ink on the white canvas — so the test picks a
+        // colour AFTER the switch, as a user would.
+        editor.set_foreground([1.0, 0.0, 0.0, 1.0]);
+        // No mask was ever attached: the sticky kind names a mask that is
+        // not there.
+        let layer_before = layer_tile_hashes(&editor);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(32.0, 32.0), (44.0, 32.0)]);
+        assert_ne!(
+            layer_tile_hashes(&editor),
+            layer_before,
+            "the fallback paints the layer's pixels"
+        );
     }
 
     /// The headline: a brush drag paints, once, only where it was dragged.
@@ -1245,10 +3155,216 @@ mod tests {
             (10, 12, 40, 44),
             "the marquee did not cover the dragged rectangle"
         );
-        // A marquee edits no pixel, so it is not a history step...
-        assert_eq!(doc.history_depth(), 0);
-        // ...but it is unsaved work.
+        // Card 056: the selection rides history now — one gesture, one
+        // undoable step — and it is unsaved work like any other edit.
+        assert_eq!(doc.history_depth(), 1);
+        assert!(
+            outcomes.iter().any(|o| o.steps == 1),
+            "the selection gesture reports its history step: {outcomes:?}"
+        );
         assert!(doc.is_dirty());
+        // No image pixel changed: the composite is byte-identical.
+        // (verified in the composability test below)
+
+        // Undo restores NO selection; redo restores the rectangle.
+        assert!(ed_undo(&mut editor));
+        assert_eq!(
+            editor.active().unwrap().document.selection,
+            Selection::None,
+            "undo removes the selection"
+        );
+        assert!(editor.active_mut().unwrap().redo().unwrap());
+        let (min, max) = editor
+            .active()
+            .unwrap()
+            .document
+            .selection
+            .bounds()
+            .expect("the redo restores the rectangle");
+        assert_eq!((min.x, min.y, max.x, max.y), (10, 12, 40, 44));
+    }
+
+    /// A redo/undo helper: `Editor::redo` is the action's route.
+    fn ed_undo(editor: &mut Editor) -> bool {
+        editor.active_mut().unwrap().undo().unwrap()
+    }
+
+    /// Card 056: add/subtract compose through history, one gesture is one
+    /// step, and not one image pixel moves.
+    #[test]
+    fn a_selection_gesture_composes_add_and_subtract_through_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::RectMarquee);
+        let composite_before = composite(&mut editor);
+        let mut pointer = ToolPointer::new();
+
+        // Replace: the base rectangle.
+        stroke(&mut pointer, &mut editor, &[(10.0, 10.0), (30.0, 30.0)]);
+        assert_eq!(editor.active().unwrap().history_depth(), 1);
+        // Add (shift): a second rectangle unioned onto the first — one more
+        // gesture, one more step.
+        let mut add_points = [sample(PointerPhase::Down, screen(40.0, 40.0))];
+        add_points[0].modifiers.shift = true;
+        pointer.handle(&mut editor, add_points[0], false, &[]);
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Move, screen(50.0, 50.0)),
+            false,
+            &[],
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Up, screen(50.0, 50.0)),
+            false,
+            &[],
+        );
+        assert_eq!(editor.active().unwrap().history_depth(), 2);
+        let (bmin, bmax) = editor
+            .active()
+            .unwrap()
+            .document
+            .selection
+            .bounds()
+            .expect("both");
+        assert_eq!((bmin.x, bmin.y), (10, 10), "the add covers the first rect");
+        assert_eq!((bmax.x, bmax.y), (50, 50), "the add covers the second rect");
+
+        // Subtract (alt): carve the middle out of the union.
+        let mut sub_points = [sample(PointerPhase::Down, screen(20.0, 20.0))];
+        sub_points[0].modifiers.alt = true;
+        pointer.handle(&mut editor, sub_points[0], false, &[]);
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Move, screen(45.0, 45.0)),
+            false,
+            &[],
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Up, screen(45.0, 45.0)),
+            false,
+            &[],
+        );
+        assert_eq!(editor.active().unwrap().history_depth(), 3);
+
+        // Not one image pixel moved through all three gestures.
+        assert_eq!(
+            composite(&mut editor),
+            composite_before,
+            "selection edits paint nothing"
+        );
+
+        // Undo walks the gestures back one at a time, and not one image
+        // pixel moved through any of it.
+        assert_eq!(
+            composite(&mut editor),
+            composite_before,
+            "the subtract painted nothing"
+        );
+        ed_undo(&mut editor);
+        let (smin, smax) = editor
+            .active()
+            .unwrap()
+            .document
+            .selection
+            .bounds()
+            .expect("union");
+        assert_eq!(
+            (smin.x, smin.y, smax.x, smax.y),
+            (10, 10, 50, 50),
+            "undo removes exactly the subtract"
+        );
+        ed_undo(&mut editor);
+        let (fmin, fmax) = editor
+            .active()
+            .unwrap()
+            .document
+            .selection
+            .bounds()
+            .expect("first");
+        assert_eq!(
+            (fmin.x, fmin.y, fmax.x, fmax.y),
+            (10, 10, 30, 30),
+            "undo removes exactly the add"
+        );
+        ed_undo(&mut editor);
+        assert_eq!(editor.active().unwrap().document.selection, Selection::None);
+        // Redo replays all three.
+        for _ in 0..3 {
+            assert!(editor.active_mut().unwrap().redo().unwrap());
+        }
+        let (rmin, rmax) = editor
+            .active()
+            .unwrap()
+            .document
+            .selection
+            .bounds()
+            .expect("redone");
+        assert_eq!(
+            (rmin.x, rmin.y, rmax.x, rmax.y),
+            (10, 10, 50, 50),
+            "redo replays the composed selection"
+        );
+        assert_eq!(
+            composite(&mut editor),
+            composite_before,
+            "redo still paints nothing"
+        );
+    }
+
+    /// Card 056: a committed selection survives save/reopen, and a gesture
+    /// that never commits (abandoned mid-drag) replays nothing.
+    #[test]
+    fn a_committed_selection_survives_save_and_an_abandoned_gesture_leaves_no_trace() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::RectMarquee);
+        let mut pointer = ToolPointer::new();
+
+        // A committed gesture...
+        stroke(&mut pointer, &mut editor, &[(8.0, 8.0), (24.0, 24.0)]);
+        let committed = editor.active().unwrap().document.selection.clone();
+        let package = dir.path().join("selection.rstudio");
+        editor
+            .active_mut()
+            .unwrap()
+            .save_to(&package, "test")
+            .expect("the project saves");
+
+        // ...an ABANDONED one: down, move, Escape — cancel emits nothing.
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Down, screen(40.0, 40.0)),
+            false,
+            &[],
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Move, screen(50.0, 50.0)),
+            false,
+            &[],
+        );
+        pointer.cancel(&mut editor);
+        assert_eq!(
+            editor.active().unwrap().document.selection,
+            committed,
+            "the abandoned gesture changed nothing"
+        );
+
+        // Reopen: the committed selection is exactly what was saved.
+        let mut reopened = Editor::with_state(
+            AppPaths::rooted(dir.path().join("config2")),
+            crate::prefs::Preferences::default(),
+            crate::recent::RecentFiles::new(),
+            Box::new(crate::dialogs::ScriptedDialogs::new()),
+        );
+        reopened.open_path(&package).expect("the project reopens");
+        assert_eq!(
+            reopened.active().unwrap().document.selection,
+            committed,
+            "the committed selection survives persistence"
+        );
     }
 
     #[test]
@@ -2225,19 +4341,19 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Down, screen(16.0, 16.0)),
             false,
-            &[("target".to_string(), 1)],
+            &[("target".to_string(), tools::ToolSetting::Choice(1))],
         );
         pointer.handle(
             &mut editor,
             sample(PointerPhase::Move, screen(8.0, 8.0)),
             false,
-            &[("target".to_string(), 1)],
+            &[("target".to_string(), tools::ToolSetting::Choice(1))],
         );
         pointer.handle(
             &mut editor,
             sample(PointerPhase::Up, screen(8.0, 8.0)),
             false,
-            &[("target".to_string(), 1)],
+            &[("target".to_string(), tools::ToolSetting::Choice(1))],
         );
 
         let outcome = pointer.commit(&mut editor);
@@ -2578,19 +4694,19 @@ mod tests {
             &mut editor,
             sample(PointerPhase::Down, screen(16.0, 16.0)),
             false,
-            &[("mode".to_string(), 5)],
+            &[("mode".to_string(), tools::ToolSetting::Choice(5))],
         );
         warp.handle(
             &mut editor,
             sample(PointerPhase::Move, screen(26.0, 26.0)),
             false,
-            &[("mode".to_string(), 5)],
+            &[("mode".to_string(), tools::ToolSetting::Choice(5))],
         );
         warp.handle(
             &mut editor,
             sample(PointerPhase::Up, screen(26.0, 26.0)),
             false,
-            &[("mode".to_string(), 5)],
+            &[("mode".to_string(), tools::ToolSetting::Choice(5))],
         );
         assert!(warp.has_pending_commit(), "the warp session stayed live");
 
@@ -2705,7 +4821,9 @@ mod tests {
         assert!(pointer.is_text_editing());
     }
 
-    /// The other half of the Type tool: a keystroke reaches the layer's run.
+    /// The other half of the Type tool: a keystroke reaches the layer's run —
+    /// live, through the history-free draft route (card 025), with the whole
+    /// run landing as one history entry on confirm.
     #[test]
     fn typing_after_a_type_click_rewrites_the_layers_run() {
         let dir = tempfile::tempdir().unwrap();
@@ -2713,11 +4831,17 @@ mod tests {
         editor.set_tool(ToolId::Type);
         let mut pointer = ToolPointer::new();
         stroke(&mut pointer, &mut editor, &[(8.0, 8.0)]);
+        let depth_after_create = editor.active().unwrap().history_depth();
 
         for ch in ["H", "i"] {
             let out = pointer.text_edit(&mut editor, tools::TextEdit::Insert(ch));
             assert!(out.had_pending, "the keystroke reached nobody: {out:?}");
-            assert_eq!(out.steps, 1, "{out:?}");
+            assert_eq!(out.steps, 0, "keystrokes render outside history: {out:?}");
+            assert_eq!(
+                editor.active().unwrap().history_depth(),
+                depth_after_create,
+                "typing costs no history"
+            );
         }
         let run = |editor: &Editor| {
             let doc = editor.active().unwrap();
@@ -2732,13 +4856,20 @@ mod tests {
                 })
                 .unwrap()
         };
-        assert_eq!(run(&editor), "Hi");
+        assert_eq!(run(&editor), "Hi", "the draft is on the canvas");
         pointer.text_edit(&mut editor, tools::TextEdit::Backspace);
         assert_eq!(run(&editor), "H");
 
-        // Enter ends the run, and the keyboard goes back to the shortcut table.
-        assert!(pointer.commit(&mut editor).had_pending);
+        // Confirm ends the run, lands the whole typed draft as ONE history
+        // entry, and the keyboard goes back to the shortcut table.
+        let out = pointer.text_edit(&mut editor, tools::TextEdit::Confirm);
+        assert!(out.had_pending);
+        assert_eq!(out.steps, 1, "confirm is one undoable entry: {out:?}");
         assert!(!pointer.is_text_editing());
+        assert_eq!(
+            editor.active().unwrap().history_depth(),
+            depth_after_create + 1
+        );
         assert!(
             !pointer
                 .text_edit(&mut editor, tools::TextEdit::Insert("x"))
@@ -2746,6 +4877,574 @@ mod tests {
             "a keystroke was consumed after the run ended"
         );
         assert_eq!(run(&editor), "H");
+    }
+
+    /// Card 025's cancel semantics: Escape on a click-created run removes the
+    /// layer — no stray layer survives — and an entered layer would be
+    /// restored without a history entry (exercised with the create case here;
+    /// the restore path is the same history-free draft route).
+    #[test]
+    fn cancelling_a_type_run_leaves_no_stray_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Type);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(8.0, 8.0)]);
+        let depth_after_create = editor.active().unwrap().history_depth();
+        pointer.text_edit(&mut editor, tools::TextEdit::Insert("d"));
+        pointer.text_edit(&mut editor, tools::TextEdit::Insert("r"));
+        assert_eq!(
+            editor.active().unwrap().history_depth(),
+            depth_after_create,
+            "the draft never touched history"
+        );
+
+        let out = pointer.text_edit(&mut editor, tools::TextEdit::Cancel);
+        assert!(out.had_pending);
+        assert!(!pointer.is_text_editing());
+        let doc = editor.active().unwrap();
+        let text_layers = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter_map(|id| doc.document.layers.get(id))
+            .filter(|l| matches!(l.kind, layer_model::LayerKind::Text(_)))
+            .count();
+        assert_eq!(text_layers, 0, "no stray layer survives the cancel");
+        assert_eq!(
+            doc.history_depth(),
+            depth_after_create + 1,
+            "the cancellation is the one delete step"
+        );
+    }
+
+    /// Card 025: one undo after a confirmed run restores the pre-session
+    /// payload byte-for-byte — the confirm entry's inverse is the ORIGINAL,
+    /// not the already-rendered draft.
+    #[test]
+    fn undo_after_a_confirmed_run_takes_the_whole_session_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Type);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(8.0, 8.0)]);
+        let depth_after_create = editor.active().unwrap().history_depth();
+        for ch in ["H", "i"] {
+            pointer.text_edit(&mut editor, tools::TextEdit::Insert(ch));
+        }
+        let confirmed = pointer.text_edit(&mut editor, tools::TextEdit::Confirm);
+        assert_eq!(confirmed.steps, 1, "confirm is one entry: {confirmed:?}");
+
+        editor.active_mut().unwrap().undo().unwrap();
+        let run = |editor: &Editor| {
+            let doc = editor.active().unwrap();
+            doc.document
+                .layers
+                .iter_depth_first()
+                .into_iter()
+                .filter_map(|id| doc.document.layers.get(id))
+                .find_map(|l| match &l.kind {
+                    layer_model::LayerKind::Text(t) => Some(t.text.clone()),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(run(&editor), "", "one undo is the whole session back");
+        assert_eq!(editor.active().unwrap().history_depth(), depth_after_create);
+        editor.active_mut().unwrap().redo().unwrap();
+        assert_eq!(run(&editor), "Hi", "redo brings the confirmed draft back");
+    }
+
+    /// Card 025, round-2 N1: a second Type click CONFIRMS the outgoing run —
+    /// both layers keep their typed text and every keystroke is accounted
+    /// for by exactly one history entry.
+    #[test]
+    fn a_second_type_click_confirms_the_first_run_rather_than_stranding_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Type);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(8.0, 8.0)]);
+        pointer.text_edit(&mut editor, tools::TextEdit::Insert("one"));
+        let depth_after_one = editor.active().unwrap().history_depth();
+        assert_eq!(
+            depth_after_one, 1,
+            "create only — the draft is history-free"
+        );
+
+        // The second click: the first run confirms (one entry), the second
+        // layer is created (one entry), and the new run starts empty.
+        stroke(&mut pointer, &mut editor, &[(60.0, 60.0)]);
+        let out = pointer.text_edit(&mut editor, tools::TextEdit::Insert("two"));
+        assert!(out.had_pending);
+        let doc = editor.active().unwrap();
+        let texts: Vec<String> = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter_map(|id| doc.document.layers.get(id))
+            .filter_map(|l| match &l.kind {
+                layer_model::LayerKind::Text(t) => Some(t.text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts.len(), 2, "two text layers");
+        assert!(
+            texts.iter().any(|t| t == "one") && texts.iter().any(|t| t == "two"),
+            "both runs keep their typed text: {texts:?}"
+        );
+        assert_eq!(
+            doc.history_depth(),
+            depth_after_one + 2,
+            "confirm(one) + create(two): {texts:?}"
+        );
+    }
+
+    /// Card 025, round-2 N3: locking the layer mid-session makes confirm
+    /// refuse cleanly — the draft stays visible, history does not move, and
+    /// the reported steps are the truth (zero).
+    #[test]
+    fn confirming_a_mid_session_locked_layer_preserves_the_draft_and_reports_zero_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Type);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(8.0, 8.0)]);
+        pointer.text_edit(&mut editor, tools::TextEdit::Insert("draft"));
+
+        // The user locks the layer from the Layers panel mid-session.
+        let layer = editor
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .find(|id| {
+                matches!(
+                    editor
+                        .active()
+                        .unwrap()
+                        .document
+                        .layers
+                        .get(*id)
+                        .unwrap()
+                        .kind,
+                    layer_model::LayerKind::Text(_)
+                )
+            })
+            .unwrap();
+        editor.apply_command(Command::SetLayerProperties {
+            layer_id: layer,
+            patch: editor_core::LayerPatch {
+                locked: Some(layer_model::LockState {
+                    all: true,
+                    ..layer_model::LockState::default()
+                }),
+                ..editor_core::LayerPatch::default()
+            },
+        });
+        let depth_after_lock = editor.active().unwrap().history_depth();
+
+        let out = pointer.text_edit(&mut editor, tools::TextEdit::Confirm);
+        assert_eq!(out.steps, 0, "history never moved: {out:?}");
+        assert!(out.failed.is_some() || editor.status().is_some());
+        assert!(!pointer.is_text_editing(), "the session still ends");
+        let doc = editor.active().unwrap();
+        let layer_model::LayerKind::Text(t) = &doc.document.layers.get(layer).unwrap().kind else {
+            panic!("the layer is text");
+        };
+        assert_eq!(
+            t.text, "draft",
+            "the draft stays visible, not stranded invisibly"
+        );
+        assert_eq!(doc.history_depth(), depth_after_lock);
+    }
+
+    /// Card 026's check: clicking the middle of a transformed headline edits
+    /// THAT layer — no new layer, caret where the shaped hit test said, and
+    /// the session's confirm is one entry on the existing layer.
+    #[test]
+    fn a_type_click_on_a_transformed_headline_enters_that_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Type);
+        let mut pointer = ToolPointer::new();
+
+        // The headline, placed at (20, 20) through the command route.
+        let headline = {
+            let layer = layer_model::Layer::with_kind(
+                "Headline",
+                layer_model::LayerKind::Text(layer_model::TextLayer {
+                    text: "THUMBNAILS".to_string(),
+                    font_family: "DejaVu Sans".to_string(),
+                    size_px: 32.0,
+                    ..layer_model::TextLayer::default()
+                }),
+            );
+            let id = layer.id;
+            editor.apply_command(Command::create_layer(layer));
+            editor.apply_command(Command::SetLayerProperties {
+                layer_id: id,
+                patch: editor_core::LayerPatch {
+                    transform: Some([1.0, 0.0, 0.0, 1.0, 20.0, 20.0]),
+                    ..editor_core::LayerPatch::default()
+                },
+            });
+            id
+        };
+        let depth = editor.active().unwrap().history_depth();
+
+        // The expected caret, computed through the same facade the shell
+        // uses: document (30, 40) is layer-local (10, 20) — mid-line inside
+        // the transformed headline.
+        let run = text_engine::TextRun::from(&layer_model::TextLayer {
+            text: "THUMBNAILS".to_string(),
+            font_family: "DejaVu Sans".to_string(),
+            size_px: 32.0,
+            ..layer_model::TextLayer::default()
+        });
+        let expected_caret = compositor::text_hit_index(&run, 10.0, 20.0).expect("inside hits");
+
+        stroke(&mut pointer, &mut editor, &[(30.0, 40.0)]);
+        assert!(
+            pointer.is_text_editing(),
+            "the click entered the headline instead of starting a create"
+        );
+        {
+            let doc = editor.active().unwrap();
+            assert_eq!(doc.history_depth(), depth, "entering commits nothing");
+            let text_layers = doc
+                .document
+                .layers
+                .iter_depth_first()
+                .into_iter()
+                .filter(|id| {
+                    matches!(
+                        doc.document.layers.get(*id).unwrap().kind,
+                        layer_model::LayerKind::Text(_)
+                    )
+                })
+                .count();
+            assert_eq!(text_layers, 1, "no new layer behind the click");
+        }
+
+        // Typing lands at the hit caret on THAT layer, history-free; confirm
+        // is one entry on the existing layer.
+        pointer.text_edit(&mut editor, tools::TextEdit::Insert("X"));
+        let out = pointer.text_edit(&mut editor, tools::TextEdit::Confirm);
+        assert_eq!(out.steps, 1, "{out:?}");
+        let doc = editor.active().unwrap();
+        let layer_model::LayerKind::Text(t) = &doc.document.layers.get(headline).unwrap().kind
+        else {
+            panic!("the headline is still text");
+        };
+        let mut expected = "THUMBNAILS".to_string();
+        expected.insert(expected_caret, 'X');
+        assert_eq!(t.text, expected, "the caret is the hit test's answer");
+        assert_eq!(doc.history_depth(), depth + 1);
+    }
+
+    /// Card 026's hit policy, half one: a click that misses every text
+    /// layer's ink creates a new layer, exactly as before.
+    #[test]
+    fn a_type_click_off_the_ink_still_creates_a_new_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Type);
+        let mut pointer = ToolPointer::new();
+        let layer = layer_model::Layer::with_kind(
+            "Headline",
+            layer_model::LayerKind::Text(layer_model::TextLayer {
+                text: "THUMBNAILS".to_string(),
+                font_family: "DejaVu Sans".to_string(),
+                size_px: 32.0,
+                ..layer_model::TextLayer::default()
+            }),
+        );
+        editor.apply_command(Command::create_layer(layer));
+        let depth = editor.active().unwrap().history_depth();
+
+        // (40, 63) is inside the 64x64 canvas but below the headline's ink
+        // and its half-line-height padding (the block ends near y=57.6).
+        stroke(&mut pointer, &mut editor, &[(40.0, 63.0)]);
+        let doc = editor.active().unwrap();
+        let text_layers = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter(|id| {
+                matches!(
+                    doc.document.layers.get(*id).unwrap().kind,
+                    layer_model::LayerKind::Text(_)
+                )
+            })
+            .count();
+        assert_eq!(text_layers, 2, "the miss created a layer");
+        assert_eq!(doc.history_depth(), depth + 1);
+        assert!(pointer.is_text_editing());
+    }
+
+    /// Card 026's hit policy, half two: a blanket-locked headline is skipped
+    /// for entering — the click falls through to a new layer.
+    #[test]
+    fn a_locked_headline_is_skipped_for_entering() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Type);
+        let mut pointer = ToolPointer::new();
+        let layer = layer_model::Layer::with_kind(
+            "Headline",
+            layer_model::LayerKind::Text(layer_model::TextLayer {
+                text: "THUMBNAILS".to_string(),
+                font_family: "DejaVu Sans".to_string(),
+                size_px: 32.0,
+                ..layer_model::TextLayer::default()
+            }),
+        );
+        let locked = layer.id;
+        editor.apply_command(Command::create_layer(layer));
+        editor.apply_command(Command::SetLayerProperties {
+            layer_id: locked,
+            patch: editor_core::LayerPatch {
+                locked: Some(layer_model::LockState {
+                    all: true,
+                    ..layer_model::LockState::default()
+                }),
+                ..editor_core::LayerPatch::default()
+            },
+        });
+
+        // The click lands inside the locked headline's ink; the layer is
+        // skipped, so the click creates a fresh layer instead.
+        stroke(&mut pointer, &mut editor, &[(30.0, 40.0)]);
+        let doc = editor.active().unwrap();
+        let text_layers = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter(|id| {
+                matches!(
+                    doc.document.layers.get(*id).unwrap().kind,
+                    layer_model::LayerKind::Text(_)
+                )
+            })
+            .count();
+        assert_eq!(text_layers, 2, "the locked layer was not entered");
+        // Behavioral proof the session is on the NEW layer: typing + confirm
+        // lands there, and the locked headline keeps its payload verbatim.
+        pointer.text_edit(&mut editor, tools::TextEdit::Insert("new"));
+        pointer.text_edit(&mut editor, tools::TextEdit::Confirm);
+        let doc = editor.active().unwrap();
+        for id in doc.document.layers.iter_depth_first() {
+            let layer_model::LayerKind::Text(t) = &doc.document.layers.get(id).unwrap().kind else {
+                continue;
+            };
+            if id == locked {
+                assert_eq!(t.text, "THUMBNAILS", "the locked layer was not edited");
+            } else {
+                assert_eq!(t.text, "new", "the typed draft landed on the new layer");
+            }
+        }
+    }
+
+    /// Card 026: a text layer inside a transformed GROUP is entered through
+    /// the composed ancestor transform — the click lands on the child, and
+    /// the typed draft reaches the child through the group.
+    #[test]
+    fn a_type_click_enters_a_text_layer_inside_a_transformed_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Type);
+        let mut pointer = ToolPointer::new();
+
+        // The child, then a group that takes it in, then the group's own
+        // translate — the click's coordinates go through BOTH.
+        let child = {
+            let layer = layer_model::Layer::with_kind(
+                "Grouped",
+                layer_model::LayerKind::Text(layer_model::TextLayer {
+                    text: "GROUPED".to_string(),
+                    font_family: "DejaVu Sans".to_string(),
+                    size_px: 24.0,
+                    ..layer_model::TextLayer::default()
+                }),
+            );
+            let id = layer.id;
+            editor.apply_command(Command::create_layer(layer));
+            id
+        };
+        let group = {
+            let layer = layer_model::Layer::with_kind(
+                "Group",
+                layer_model::LayerKind::Group(layer_model::GroupLayer {
+                    children: vec![],
+                    collapsed: false,
+                    blending: Default::default(),
+                }),
+            );
+            let id = layer.id;
+            editor.apply_command(Command::create_layer(layer));
+            editor.apply_command(Command::MoveLayer {
+                layer_id: child,
+                parent: Some(id),
+                index: 0,
+            });
+            editor.apply_command(Command::SetLayerProperties {
+                layer_id: id,
+                patch: editor_core::LayerPatch {
+                    transform: Some([1.0, 0.0, 0.0, 1.0, 40.0, 0.0]),
+                    ..editor_core::LayerPatch::default()
+                },
+            });
+            assert!(
+                editor.active().unwrap().document.layers.get(id).is_some(),
+                "the group survived its own setup"
+            );
+            assert!(
+                editor
+                    .active()
+                    .unwrap()
+                    .document
+                    .layers
+                    .get(child)
+                    .is_some(),
+                "the child survived the group setup"
+            );
+            id
+        };
+
+        // Document (50, 15) = child-local (10, 15) — inside "GROUPED"'s ink.
+        stroke(&mut pointer, &mut editor, &[(50.0, 15.0)]);
+        assert!(pointer.is_text_editing(), "the grouped layer was entered");
+        pointer.text_edit(&mut editor, tools::TextEdit::Insert("X"));
+        let out = pointer.text_edit(&mut editor, tools::TextEdit::Confirm);
+        assert_eq!(out.steps, 1, "{out:?}");
+        let doc = editor.active().unwrap();
+        let layer_model::LayerKind::Text(t) = &doc.document.layers.get(child).unwrap().kind else {
+            panic!("the child is still text");
+        };
+        assert_eq!(t.text.len(), 8, "the X landed in the grouped child");
+        assert!(t.text.contains('X'));
+        assert!(doc.document.layers.get(group).is_some());
+        // The child is still the group's child — the session did not
+        // restructure the tree.
+        let layer_model::LayerKind::Group(g) = &doc.document.layers.get(group).unwrap().kind else {
+            panic!("the group is a group");
+        };
+        assert_eq!(g.children, vec![child]);
+    }
+
+    /// Card 026: the run lives in its own document — switching tabs refuses
+    /// text operations against the wrong document instead of corrupting it,
+    /// and switching back resumes the run.
+    #[test]
+    fn text_ops_refuse_when_the_run_lives_in_another_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Type);
+        let mut pointer = ToolPointer::new();
+        stroke(&mut pointer, &mut editor, &[(8.0, 8.0)]);
+        let run_doc_depth = editor.active().unwrap().history_depth();
+
+        // A second document becomes active.
+        let second = dir.path().join("second.png");
+        std::fs::write(
+            &second,
+            raster::encode(
+                raster::ExportFormat::Png,
+                W,
+                H,
+                &[240u8; (W * H * 4) as usize],
+            )
+            .expect("the second canvas encodes"),
+        )
+        .expect("the second canvas writes");
+        editor.open_path(&second).expect("the second doc opens");
+        assert_eq!(editor.active().unwrap().history_depth(), 0);
+
+        // Typing is consumed and lands NOWHERE.
+        let out = pointer.text_edit(&mut editor, tools::TextEdit::Insert("x"));
+        assert!(out.had_pending, "the run still owns the keyboard");
+        assert_eq!(out.steps, 0);
+        assert_eq!(
+            editor.active().unwrap().history_depth(),
+            0,
+            "no draft on the wrong doc"
+        );
+        assert_eq!(
+            editor.active().unwrap().history_depth(),
+            0,
+            "no draft on the wrong doc"
+        );
+        // The second document (opened from the PNG) carries its own imported
+        // canvas layer — the run added nothing to it.
+        let second_layers = editor
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .iter_depth_first()
+            .len();
+        let second_texts = editor
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter(|id| {
+                matches!(
+                    editor
+                        .active()
+                        .unwrap()
+                        .document
+                        .layers
+                        .get(*id)
+                        .unwrap()
+                        .kind,
+                    layer_model::LayerKind::Text(_)
+                )
+            })
+            .count();
+        assert_eq!(
+            second_texts, 0,
+            "no text layer was created on the wrong document"
+        );
+        assert!(
+            second_layers <= 1,
+            "the second document gained nothing from the run: {second_layers}"
+        );
+
+        // Switching back resumes the run on its own document.
+        editor.activate(0).unwrap();
+        pointer.text_edit(&mut editor, tools::TextEdit::Insert("kept"));
+        let doc = editor.active().unwrap();
+        let texts: Vec<String> = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter_map(|id| doc.document.layers.get(id))
+            .filter_map(|l| match &l.kind {
+                layer_model::LayerKind::Text(t) => Some(t.text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            vec!["kept".to_string()],
+            "the run resumed in its document"
+        );
+        assert_eq!(
+            doc.history_depth(),
+            run_doc_depth,
+            "still history-free while typing"
+        );
     }
 
     /// A pen click sequence builds the path those clicks describe, and Enter
@@ -2900,5 +5599,693 @@ mod tests {
         let before = camera.center;
         assert!(!write_camera_back(&broken, &mut camera));
         assert_eq!(camera.center, before);
+    }
+
+    /// Card 026: the double-click route begins an entered session on the
+    /// EXISTING layer — caret at the end of the run, cancel restores the
+    /// original (created_layer is false), and no new layer ever appears.
+    #[test]
+    fn the_double_click_intent_enters_the_existing_layer_at_the_run_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        let layer = layer_model::Layer::with_kind(
+            "Headline",
+            layer_model::LayerKind::Text(layer_model::TextLayer {
+                text: "THUMBNAILS".to_string(),
+                font_family: "DejaVu Sans".to_string(),
+                size_px: 32.0,
+                ..layer_model::TextLayer::default()
+            }),
+        );
+        let id = layer.id;
+        editor.apply_command(Command::create_layer(layer));
+        let depth = editor.active().unwrap().history_depth();
+
+        let mut pointer = ToolPointer::new();
+        pointer.enter_text_session(&mut editor, id);
+        assert!(pointer.is_text_editing(), "the session entered the layer");
+        pointer.text_edit(&mut editor, tools::TextEdit::Insert("!"));
+        let out = pointer.text_edit(&mut editor, tools::TextEdit::Confirm);
+        assert_eq!(out.steps, 1, "{out:?}");
+        let doc = editor.active().unwrap();
+        let layer_model::LayerKind::Text(t) = &doc.document.layers.get(id).unwrap().kind else {
+            panic!("the layer is text");
+        };
+        assert_eq!(t.text, "THUMBNAILS!", "the caret sat at the run's end");
+        assert_eq!(doc.history_depth(), depth + 1);
+
+        // Cancel semantics for an entered layer: the original comes back,
+        // history-free — card 025's entered-layer machinery behind the new
+        // route.
+        editor.set_tool(ToolId::Type);
+        pointer.enter_text_session(&mut editor, id);
+        pointer.text_edit(&mut editor, tools::TextEdit::Insert("XX"));
+        pointer.text_edit(&mut editor, tools::TextEdit::Cancel);
+        let doc = editor.active().unwrap();
+        let layer_model::LayerKind::Text(restored) = &doc.document.layers.get(id).unwrap().kind
+        else {
+            panic!("the layer is text");
+        };
+        assert_eq!(
+            restored.text, "THUMBNAILS!",
+            "cancel restored the confirmed payload"
+        );
+        assert_eq!(doc.history_depth(), depth + 1, "the cancel added no entry");
+    }
+
+    /// Card 026's overlap policy, pinned: only TEXT layers are candidates and
+    /// they are walked top-most first — a raster portrait above or below
+    /// never blocks entering the text, and of two overlapping headlines the
+    /// top-most wins.
+    #[test]
+    fn the_overlap_policy_is_top_most_text_and_rasters_never_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Type);
+        let mut pointer = ToolPointer::new();
+
+        // Two overlapping headlines; a raster "portrait" is created LAST, so
+        // it is top-most of all and covers the same area.
+        let headline = {
+            let layer = layer_model::Layer::with_kind(
+                "Headline",
+                layer_model::LayerKind::Text(layer_model::TextLayer {
+                    text: "THUMBNAILS".to_string(),
+                    font_family: "DejaVu Sans".to_string(),
+                    size_px: 32.0,
+                    ..layer_model::TextLayer::default()
+                }),
+            );
+            let id = layer.id;
+            editor.apply_command(Command::create_layer(layer));
+            id
+        };
+        let subhead = {
+            let layer = layer_model::Layer::with_kind(
+                "Subhead",
+                layer_model::LayerKind::Text(layer_model::TextLayer {
+                    text: "SUB".to_string(),
+                    font_family: "DejaVu Sans".to_string(),
+                    size_px: 32.0,
+                    ..layer_model::TextLayer::default()
+                }),
+            );
+            let id = layer.id;
+            editor.apply_command(Command::create_layer(layer));
+            id
+        };
+        let portrait = {
+            let layer = layer_model::Layer::raster("Portrait");
+            let id = layer.id;
+            editor.apply_command(Command::create_layer(layer));
+            id
+        };
+        let _ = portrait;
+
+        // The click lands where BOTH headlines' ink overlaps. The top-most
+        // TEXT candidate is the subhead (created after the headline), and the
+        // raster above them does not block.
+        stroke(&mut pointer, &mut editor, &[(10.0, 16.0)]);
+        assert!(
+            pointer.is_text_editing(),
+            "the text under the portrait is entered"
+        );
+        pointer.text_edit(&mut editor, tools::TextEdit::Insert("!"));
+        let doc = editor.active().unwrap();
+        let layer_model::LayerKind::Text(sub) = &doc.document.layers.get(subhead).unwrap().kind
+        else {
+            panic!("the subhead is text");
+        };
+        // The click's caret was mid-glyph (10px into a 32px "S"), so the
+        // insertion sits inside the word — mid-string placement through the
+        // transform is the point being proven.
+        assert_eq!(sub.text, "S!UB", "the TOP-MOST text won at the hit caret");
+        let layer_model::LayerKind::Text(head) = &doc.document.layers.get(headline).unwrap().kind
+        else {
+            panic!("the headline is text");
+        };
+        assert_eq!(head.text, "THUMBNAILS", "the lower text was not entered");
+    }
+
+    /// Card 026: a HIDDEN text layer is skipped like a locked one — a click
+    /// on invisible ink falls through to layer creation.
+    #[test]
+    fn a_hidden_text_layer_is_skipped_for_entering() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Type);
+        let mut pointer = ToolPointer::new();
+        let layer = layer_model::Layer::with_kind(
+            "Hidden",
+            layer_model::LayerKind::Text(layer_model::TextLayer {
+                text: "INVISIBLE".to_string(),
+                font_family: "DejaVu Sans".to_string(),
+                size_px: 32.0,
+                ..layer_model::TextLayer::default()
+            }),
+        );
+        let hidden = layer.id;
+        editor.apply_command(Command::create_layer(layer));
+        editor.apply_command(Command::SetLayerProperties {
+            layer_id: hidden,
+            patch: editor_core::LayerPatch {
+                visible: Some(false),
+                ..editor_core::LayerPatch::default()
+            },
+        });
+
+        // The click lands inside the hidden layer's ink; it is skipped, so a
+        // fresh layer is created and the hidden one keeps its payload.
+        stroke(&mut pointer, &mut editor, &[(10.0, 16.0)]);
+        pointer.text_edit(&mut editor, tools::TextEdit::Insert("new"));
+        pointer.text_edit(&mut editor, tools::TextEdit::Confirm);
+        let doc = editor.active().unwrap();
+        for id in doc.document.layers.iter_depth_first() {
+            let layer_model::LayerKind::Text(t) = &doc.document.layers.get(id).unwrap().kind else {
+                continue;
+            };
+            if id == hidden {
+                assert_eq!(t.text, "INVISIBLE", "the hidden layer was not entered");
+            } else {
+                assert_eq!(t.text, "new", "the click created and entered a fresh layer");
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod text_overlay_tests {
+        use super::*;
+
+        #[test]
+        fn a_caret_rect_collapses_to_a_bar_and_a_selection_rect_yields_four_edges() {
+            let caret = text_engine::Rect {
+                x: 12.0,
+                y: 4.0,
+                width: 0.0,
+                height: 20.0,
+            };
+            let mut segments = Vec::new();
+            push_rect_edges(&mut segments, caret, TextOverlaySegment::CARET);
+            // All four edges exist but the horizontal ones are degenerate
+            // (w=0): the two vertical edges are the same bar, overdrawn.
+            let visible: Vec<_> = segments
+                .iter()
+                .filter(|segment| (segment.b - segment.a).length() > 0.5)
+                .collect();
+            assert_eq!(
+                visible.len(),
+                2,
+                "the zero-width caret is one bar, drawn twice"
+            );
+            for segment in &visible {
+                // Direction varies with the edge winding; the bar's extent
+                // does not.
+                let (lo, hi) = if segment.a.y <= segment.b.y {
+                    (segment.a, segment.b)
+                } else {
+                    (segment.b, segment.a)
+                };
+                assert_eq!(lo, Vec2::new(12.0, 4.0));
+                assert_eq!(hi, Vec2::new(12.0, 24.0));
+                assert_eq!(segment.kind, TextOverlayKind::Caret);
+            }
+
+            let selection = text_engine::Rect {
+                x: 2.0,
+                y: 4.0,
+                width: 10.0,
+                height: 20.0,
+            };
+            let mut edges = Vec::new();
+            push_rect_edges(&mut edges, selection, TextOverlaySegment::SELECTION);
+            assert_eq!(edges.len(), 4, "a selection rectangle is four edges");
+            assert!(edges
+                .iter()
+                .all(|segment| segment.kind == TextOverlayKind::Selection));
+            // The loop is closed: every corner is touched by exactly two segments.
+            for corner in [
+                Vec2::new(2.0, 4.0),
+                Vec2::new(12.0, 4.0),
+                Vec2::new(12.0, 24.0),
+                Vec2::new(2.0, 24.0),
+            ] {
+                let touches = edges
+                    .iter()
+                    .filter(|segment| segment.a == corner || segment.b == corner)
+                    .count();
+                assert_eq!(touches, 2, "corner {corner:?} is shared by two edges");
+            }
+        }
+
+        #[test]
+        fn the_publisher_needs_a_live_session_and_shapes_the_document_layer() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut pointer = ToolPointer::default();
+            let editor = editor(dir.path());
+            // No session: empty geometry, no panic.
+            assert!(pointer.text_overlay_geometry(&editor).is_empty());
+        }
+    }
+
+    #[test]
+    fn the_publisher_shapes_a_live_sessions_caret_and_selection_in_document_space() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        let layer = layer_model::Layer::with_kind(
+            "Headline",
+            layer_model::LayerKind::Text(layer_model::TextLayer {
+                text: "THUMBNAILS".to_string(),
+                font_family: "DejaVu Sans".to_string(),
+                size_px: 32.0,
+                ..layer_model::TextLayer::default()
+            }),
+        );
+        let id = layer.id;
+        editor.apply_command(Command::create_layer(layer));
+        let mut pointer = ToolPointer::new();
+        pointer.enter_text_session(&mut editor, id);
+        assert!(pointer.is_text_editing());
+
+        // The caret bar exists in document space; it is zoom-independent —
+        // the SAME geometry at 1x and 2x (the shell maps the camera once per
+        // endpoint, so the caret agrees with rendering at every zoom).
+        let at_one = pointer.text_overlay_geometry(&editor);
+        assert!(
+            at_one
+                .iter()
+                .any(|segment| segment.kind == TextOverlayKind::Caret),
+            "the caret bar is published"
+        );
+        editor.active_mut().unwrap().camera.zoom = 2.0;
+        let at_two = pointer.text_overlay_geometry(&editor);
+        assert_eq!(at_one, at_two, "document-space geometry ignores zoom");
+
+        // Selecting a range publishes selection edges alongside the caret.
+        pointer.text_edit(&mut editor, tools::TextEdit::SelectAll);
+        let selected = pointer.text_overlay_geometry(&editor);
+        assert!(
+            selected
+                .iter()
+                .any(|segment| segment.kind == TextOverlayKind::Selection),
+            "the selection publishes its rectangle edges"
+        );
+        assert!(selected
+            .iter()
+            .any(|segment| segment.kind == TextOverlayKind::Caret));
+
+        // Card 032: converting to a box publishes the box's frame edges —
+        // the resize handles' home — alongside everything else.
+        pointer.text_edit(
+            &mut editor,
+            tools::TextEdit::ResizeBox {
+                width: 120.0,
+                height: None,
+            },
+        );
+        let boxed = pointer.text_overlay_geometry(&editor);
+        assert!(
+            boxed
+                .iter()
+                .any(|segment| segment.kind == TextOverlayKind::BoxFrame),
+            "the box frame is published"
+        );
+    }
+
+    #[test]
+    fn the_preview_matches_the_commit_for_an_already_transformed_layer() {
+        // Card 035 round-2: with own != I, the preview must compose
+        // P⁻¹·Δ·P·own so it agrees with the commit's placement — no
+        // teleport-and-snap on a second gesture.
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::FreeTransform);
+        {
+            let doc = editor.active_mut().unwrap();
+            let mut bytes = vec![0u8; (256 * 256 * 4) as usize];
+            for y in 24..40u32 {
+                for x in 24..40u32 {
+                    let i = ((y * 256 + x) * 4) as usize;
+                    bytes[i..i + 4].copy_from_slice(&[10, 10, 10, 255]);
+                }
+            }
+            let hash = doc.tiles.insert_bytes(bytes);
+            let layer = doc.document.active_layer().unwrap();
+            doc.apply(
+                Command::paint_tiles(
+                    editor_core::PixelTarget::Layer(layer),
+                    vec![editor_core::TileEdit::set(TileCoord::new(0, 0, 0), hash)],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            // Move the layer first: own != I now.
+            doc.apply(Command::TransformLayer {
+                layer_id: layer,
+                matrix: [1.0, 0.0, 0.0, 1.0, 16.0, 8.0],
+            })
+            .unwrap();
+        }
+        let mut pointer = ToolPointer::new();
+
+        // The ink now lives at (40,32)..(56,48). Grab deep inside it and
+        // drag by (+8, +6).
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Down, screen(48.0, 40.0)),
+            false,
+            &[],
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Move, screen(56.0, 46.0)),
+            false,
+            &[],
+        );
+        pointer.settle_preview(&mut editor);
+        let previewed = composite(&mut editor);
+        let at = |buf: &[u8], x: f32, y: f32| {
+            let (x, y) = (x as usize, y as usize);
+            let i = (y * 64 + x) * 4;
+            [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+        };
+        assert_eq!(
+            at(&previewed, 52.0, 44.0),
+            [10, 10, 10, 255],
+            "the preview moved the transformed layer's ink"
+        );
+        assert_eq!(
+            at(&previewed, 46.0, 38.0),
+            [0, 0, 0, 0],
+            "the preview did not leave the ink at its pre-drag spot"
+        );
+
+        // Commit: the layer transform lands where the preview showed it.
+        pointer.commit(&mut editor);
+        let committed = composite(&mut editor);
+        assert_eq!(
+            at(&committed, 52.0, 44.0),
+            [10, 10, 10, 255],
+            "the commit matches the preview"
+        );
+        assert_eq!(
+            at(&committed, 46.0, 38.0),
+            [0, 0, 0, 0],
+            "the commit matches the preview (old spot empty)"
+        );
+    }
+
+    #[test]
+    fn painting_a_moved_layer_marks_the_displayed_pointer_location() {
+        // Card 040's done-check: a moved raster layer is painted where the
+        // pointer displays, and undo restores the original source hashes.
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        // An ink patch on its own layer at (24..40, 24..40), then MOVE the
+        // layer +32 in x: the ink now displays at (56..72).
+        let layer = layer_model::Layer::raster("Ink");
+        let ink_id = layer.id;
+        {
+            let doc = editor.active_mut().unwrap();
+            let mut bytes = vec![0u8; (256 * 256 * 4) as usize];
+            for y in 24..40usize {
+                for x in 24..40usize {
+                    let i = (y * 256 + x) * 4;
+                    bytes[i..i + 4].copy_from_slice(&[10, 60, 10, 255]);
+                }
+            }
+            let hash = doc.tiles.insert_bytes(bytes);
+            doc.apply(Command::create_layer(layer)).unwrap();
+            doc.apply(
+                Command::paint_tiles(
+                    editor_core::PixelTarget::Layer(ink_id),
+                    vec![editor_core::TileEdit::set(TileCoord::new(0, 0, 0), hash)],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            doc.apply(Command::TransformLayer {
+                layer_id: ink_id,
+                matrix: [1.0, 0.0, 0.0, 1.0, 32.0, 0.0],
+            })
+            .unwrap();
+        }
+        let hashes_before = {
+            let doc = editor.active().unwrap();
+            doc.document.layer_tiles(ink_id).cloned()
+        };
+
+        // Paint at the DISPLAYED location (56, 32) — inside the moved ink.
+        editor.set_layer_selection(vec![ink_id], Some(ink_id));
+        editor.set_tool(ToolId::Brush);
+        let mut pointer = ToolPointer::new();
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Down, screen(56.0, 32.0)),
+            false,
+            &[],
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Move, screen(58.0, 32.0)),
+            false,
+            &[],
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Up, screen(58.0, 32.0)),
+            false,
+            &[],
+        );
+
+        // The layer's OWN pixels gained ink at layer-local (24..40, 32) —
+        // where the pointer pointed in layer space.
+        let (hash, doc_tiles) = {
+            let doc = editor.active().unwrap();
+            (
+                doc.document
+                    .layer_tiles(ink_id)
+                    .unwrap()
+                    .get(TileCoord::new(0, 0, 0)),
+                &doc.tiles,
+            )
+        };
+        let bytes = hash.and_then(|h| doc_tiles.tile(h));
+        let local = |x: usize, y: usize| {
+            let i = (y * 256 + x) * 4;
+            bytes.map(|b| [b[i], b[i + 1], b[i + 2], b[i + 3]])
+        };
+
+        // The displayed (57,32) maps to layer-local (25,32) through the
+        // +32 move — the paint lands THERE, and layer-local (57,32) stays
+        // clean (that would be the raw-document-coordinate bug this card
+        // removes).
+        assert_eq!(
+            local(25, 32),
+            Some([0, 0, 0, 255]),
+            "the brush marked the DISPLAYED location in layer space"
+        );
+        assert_eq!(
+            local(57, 32),
+            Some([0, 0, 0, 0]),
+            "no ink at the raw document coordinate in layer space"
+        );
+        // And the composite shows it at the displayed document location.
+        let shown = composite(&mut editor);
+        let shown_at = |x: usize, y: usize| {
+            let i = (y * 64 + x) * 4;
+            [shown[i], shown[i + 1], shown[i + 2], shown[i + 3]]
+        };
+        assert_eq!(
+            shown_at(57, 32),
+            [0, 0, 0, 255],
+            "ink at the displayed doc spot"
+        );
+        // Undo restores the original source hashes.
+        editor.active_mut().unwrap().undo().unwrap();
+        assert_eq!(
+            editor
+                .active()
+                .unwrap()
+                .document
+                .layer_tiles(ink_id)
+                .cloned(),
+            hashes_before,
+            "undo restores the original source hashes"
+        );
+    }
+
+    #[test]
+    fn a_move_drag_snaps_the_moving_geometry_to_another_layers_edge() {
+        // Card 042's done-check: the moving layer's edge lands on another
+        // layer's edge at zoom 1, and its center lands on the canvas center
+        // at zoom 2 — the snap is committed, not just displayed.
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        let layer_a = layer_model::Layer::raster("A");
+        let a_id = layer_a.id;
+        let layer_b = layer_model::Layer::raster("B");
+        let b_id = layer_b.id;
+        {
+            let doc = editor.active_mut().unwrap();
+            let ink_a = {
+                let mut bytes = vec![0u8; (256 * 256 * 4) as usize];
+                for y in 0..40usize {
+                    for x in 0..40usize {
+                        let i = (y * 256 + x) * 4;
+                        bytes[i..i + 4].copy_from_slice(&[10, 60, 10, 255]);
+                    }
+                }
+                doc.tiles.insert_bytes(bytes)
+            };
+            let ink_b = {
+                let mut bytes = vec![0u8; (256 * 256 * 4) as usize];
+                for y in 8..18usize {
+                    for x in 62..72usize {
+                        let i = (y * 256 + x) * 4;
+                        bytes[i..i + 4].copy_from_slice(&[60, 10, 10, 255]);
+                    }
+                }
+                doc.tiles.insert_bytes(bytes)
+            };
+            doc.apply(Command::create_layer(layer_a)).unwrap();
+            doc.apply(
+                Command::paint_tiles(
+                    editor_core::PixelTarget::Layer(a_id),
+                    vec![editor_core::TileEdit::set(TileCoord::new(0, 0, 0), ink_a)],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            doc.apply(Command::create_layer(layer_b)).unwrap();
+            doc.apply(
+                Command::paint_tiles(
+                    editor_core::PixelTarget::Layer(b_id),
+                    vec![editor_core::TileEdit::set(TileCoord::new(0, 0, 0), ink_b)],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        editor.set_layer_selection(vec![a_id], Some(a_id));
+
+        let screen_at = |doc_pt: Vec2, zoom: f32| -> Vec2 {
+            let center = Vec2::new(W as f32 / 2.0, H as f32 / 2.0);
+            VIEWPORT * 0.5 + (doc_pt - center) * zoom
+        };
+        let bounds_of = |editor: &mut Editor, id: layer_model::LayerId| -> PixelRect {
+            let doc = editor.active().unwrap();
+            tight_document_bounds(&doc.document, &doc.tiles, id).expect("bounds")
+        };
+
+        editor.set_tool(ToolId::Move);
+        let mut pointer = ToolPointer::new();
+        // Zoom 1: drag A right by 21.6 — its right edge (61.6) is within
+        // the 8pt threshold of B's left edge (62), so the commit is 22.
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Down, screen_at(Vec2::new(10.0, 10.0), 1.0)),
+            false,
+            &[],
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Move, screen_at(Vec2::new(31.6, 10.0), 1.0)),
+            false,
+            &[],
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Up, screen_at(Vec2::new(31.6, 10.0), 1.0)),
+            false,
+            &[],
+        );
+        let a = bounds_of(&mut editor, a_id);
+        assert_eq!(
+            a.x as f32 + a.width as f32,
+            62.0,
+            "A's right edge snapped onto B's left edge"
+        );
+        assert_eq!(a.y, 0, "the y axis did not drift");
+        // B never moved: the snap adjusts the dragged layer only.
+        let b = bounds_of(&mut editor, b_id);
+        assert_eq!(b.x, 62, "the snap target stayed put");
+
+        // Zoom 2 (threshold 4pt = 2 doc px): drag A (ink now 22..62) so its
+        // CENTER misses the canvas center x=32 by 0.8 — the center feature
+        // snaps exactly (delta -10.8 -> -10).
+        editor.active_mut().unwrap().camera.zoom = 2.0;
+        let mut pointer = ToolPointer::new();
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Down, screen_at(Vec2::new(40.0, 10.0), 2.0)),
+            false,
+            &[],
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Move, screen_at(Vec2::new(29.2, 10.0), 2.0)),
+            false,
+            &[],
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Up, screen_at(Vec2::new(29.2, 10.0), 2.0)),
+            false,
+            &[],
+        );
+        let a = bounds_of(&mut editor, a_id);
+        assert_eq!(
+            a.x as f32 + a.width as f32 * 0.5,
+            32.0,
+            "A's center snapped onto the canvas center at zoom 2"
+        );
+    }
+
+    #[test]
+    fn tight_bounds_survive_ink_mapped_to_negative_document_coordinates() {
+        // Card 042: dragging a layer off the canvas' left/top edge is an
+        // ordinary state the Move tool itself creates — the mapped ink may
+        // reach negative coordinates and the extent arithmetic must keep
+        // the true width (no u32 saturation collapse).
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        let layer = layer_model::Layer::raster("Off");
+        let off_id = layer.id;
+        {
+            let doc = editor.active_mut().unwrap();
+            let mut bytes = vec![0u8; (256 * 256 * 4) as usize];
+            for y in 0..20usize {
+                for x in 0..20usize {
+                    let i = (y * 256 + x) * 4;
+                    bytes[i..i + 4].copy_from_slice(&[10, 60, 10, 255]);
+                }
+            }
+            let hash = doc.tiles.insert_bytes(bytes);
+            doc.apply(Command::create_layer(layer)).unwrap();
+            doc.apply(
+                Command::paint_tiles(
+                    editor_core::PixelTarget::Layer(off_id),
+                    vec![editor_core::TileEdit::set(TileCoord::new(0, 0, 0), hash)],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            // Drag the ink to x ∈ [-40, -20), y ∈ [-30, -10): both edges
+            // negative on x, only the origin negative on y.
+            doc.apply(Command::TransformLayer {
+                layer_id: off_id,
+                matrix: [1.0, 0.0, 0.0, 1.0, -40.0, -30.0],
+            })
+            .unwrap();
+        }
+        let doc = editor.active().unwrap();
+        let bounds = tight_document_bounds(&doc.document, &doc.tiles, off_id).expect("bounds");
+        assert_eq!(bounds.x, -40, "the negative origin survives");
+        assert_eq!(
+            bounds.width, 20,
+            "the width is the true extent, not a saturation artifact"
+        );
+        assert_eq!(bounds.y, -30, "the negative y origin survives");
+        assert_eq!(bounds.height, 20, "the height is the true extent");
     }
 }

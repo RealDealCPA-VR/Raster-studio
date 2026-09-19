@@ -80,6 +80,72 @@ impl FontSlant {
     }
 }
 
+/// Horizontal face width — the OpenType `usWidthClass` scale, the same nine
+/// steps the font database reports for a face. A family's condensed faces map
+/// onto it directly (card 022: face selection must reach them when installed).
+/// Variant order is width order, narrowest first.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
+pub enum FontStretch {
+    /// `usWidthClass` 1.
+    UltraCondensed,
+    /// `usWidthClass` 2.
+    ExtraCondensed,
+    /// `usWidthClass` 3.
+    Condensed,
+    /// `usWidthClass` 4.
+    SemiCondensed,
+    /// `usWidthClass` 5 — the default.
+    #[default]
+    Normal,
+    /// `usWidthClass` 6.
+    SemiExpanded,
+    /// `usWidthClass` 7.
+    Expanded,
+    /// `usWidthClass` 8.
+    ExtraExpanded,
+    /// `usWidthClass` 9.
+    UltraExpanded,
+}
+
+impl FontStretch {
+    /// The `usWidthClass` number (1–9) this step stands for.
+    #[must_use]
+    pub const fn width_class(self) -> u16 {
+        match self {
+            Self::UltraCondensed => 1,
+            Self::ExtraCondensed => 2,
+            Self::Condensed => 3,
+            Self::SemiCondensed => 4,
+            Self::Normal => 5,
+            Self::SemiExpanded => 6,
+            Self::Expanded => 7,
+            Self::ExtraExpanded => 8,
+            Self::UltraExpanded => 9,
+        }
+    }
+
+    /// The step for a `usWidthClass` number; out-of-range values clamp to the
+    /// nearest step.
+    #[must_use]
+    pub const fn from_width_class(class: u16) -> Self {
+        match class {
+            0 => Self::UltraCondensed,
+            1 => Self::UltraCondensed,
+            2 => Self::ExtraCondensed,
+            3 => Self::Condensed,
+            4 => Self::SemiCondensed,
+            6 => Self::SemiExpanded,
+            7 => Self::Expanded,
+            8 => Self::ExtraExpanded,
+            9 => Self::UltraExpanded,
+            // 5 and everything above 9.
+            _ => Self::Normal,
+        }
+    }
+}
+
 /// Vertical position of a run relative to the baseline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ScriptPosition {
@@ -125,6 +191,8 @@ pub struct CharStyle {
     pub weight: FontWeight,
     /// Requested slant.
     pub slant: FontSlant,
+    /// Requested face width, so a family's condensed faces are selectable.
+    pub stretch: FontStretch,
     /// Fill colour as **linear**, straight (non-premultiplied) RGBA.
     pub color: [f32; 4],
     /// Draw an underline beneath this run.
@@ -152,6 +220,7 @@ impl Default for CharStyle {
             size_px: 16.0,
             weight: FontWeight::NORMAL,
             slant: FontSlant::Normal,
+            stretch: FontStretch::Normal,
             color: [0.0, 0.0, 0.0, 1.0],
             underline: false,
             strikethrough: false,
@@ -185,6 +254,8 @@ pub struct StyleOverride {
     pub weight: Option<FontWeight>,
     /// Override the slant.
     pub slant: Option<FontSlant>,
+    /// Override the face width.
+    pub stretch: Option<FontStretch>,
     /// Override the colour.
     pub color: Option<[f32; 4]>,
     /// Override the underline flag.
@@ -213,6 +284,9 @@ impl StyleOverride {
         }
         if let Some(v) = self.slant {
             out.slant = v;
+        }
+        if let Some(v) = self.stretch {
+            out.stretch = v;
         }
         if let Some(v) = self.color {
             out.color = v;
@@ -243,6 +317,13 @@ impl StyleOverride {
     #[must_use]
     pub const fn with_slant(mut self, slant: FontSlant) -> Self {
         self.slant = Some(slant);
+        self
+    }
+
+    /// Builder: set the face width.
+    #[must_use]
+    pub const fn with_stretch(mut self, stretch: FontStretch) -> Self {
+        self.stretch = Some(stretch);
         self
     }
 

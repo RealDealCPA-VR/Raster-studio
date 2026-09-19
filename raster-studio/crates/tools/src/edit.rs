@@ -21,7 +21,9 @@ use selection::{
 
 use crate::error::ToolError;
 use crate::patch::{read_rgba8, ColorPatch};
-use crate::tool::{CropRequest, PointerEvent, Slice, Tool, ToolContext, ToolId, ToolRequest};
+use crate::tool::{
+    CropRequest, PointerEvent, Slice, Tool, ToolContext, ToolId, ToolRequest, ToolSetting,
+};
 
 // ---------------------------------------------------------------- move ----
 
@@ -67,8 +69,24 @@ pub struct MoveTool {
     /// Grab whatever layer has an opaque pixel under the pointer instead of
     /// the one selected in the panel.
     pub auto_select: bool,
+    /// Card 038: Layer/Group selection mode — when on, an auto-select pick
+    /// climbs to the picked leaf's top-level ancestor group.
+    pub select_groups: bool,
     /// How opaque a pixel has to be for auto-select to claim it.
     pub auto_select_threshold: f32,
+    /// Whether transform controls are shown for the selected layer. The
+    /// option is spec'd and forwarded (card 010); drawing the controls is
+    /// cards 012/038's live-geometry work.
+    pub show_transform: bool,
+    /// Card 038: the selected layer's content bounds, cached on the last
+    /// pointer contact so Show Transform Controls can draw its box without
+    /// starting an edit session.
+    display_bounds: Option<PixelRect>,
+    /// Card 038: the layer the display box frames.
+    display_layer: Option<LayerId>,
+    /// Card 042: the dragged layer's ink at pointer-down — the rect the
+    /// snap adjusts.
+    base_bounds: Option<PixelRect>,
     start: Option<Vec2>,
     current: Vec2,
     layer: Option<LayerId>,
@@ -78,7 +96,12 @@ impl Default for MoveTool {
     fn default() -> Self {
         Self {
             auto_select: false,
+            select_groups: false,
             auto_select_threshold: 0.5,
+            show_transform: false,
+            display_bounds: None,
+            display_layer: None,
+            base_bounds: None,
             start: None,
             current: Vec2::ZERO,
             layer: None,
@@ -90,6 +113,26 @@ impl MoveTool {
     /// The topmost layer in `ctx.layer_stack` with a sufficiently opaque pixel
     /// at `p`.
     pub fn layer_under(&self, ctx: &ToolContext<'_>, p: Vec2) -> Option<LayerId> {
+        // Card 037: the shell's bounded visible-content pick is authoritative
+        // whenever the shell ran — an inner `None` is a real "nothing visible
+        // here" (a hidden or masked-out layer must not resurrect through the
+        // raw sampler). The sampler below serves sessions begun without the
+        // shell (direct tests).
+        if let Some(pick) = ctx.content_pick {
+            // Card 038: Group selection mode climbs the picked leaf to its
+            // top-level ancestor group (the panel's group row); Layer mode
+            // keeps the leaf.
+            return match pick {
+                Some(leaf) if self.select_groups => {
+                    let mut top = leaf;
+                    while let Some(parent) = ctx.parent_of(top) {
+                        top = parent;
+                    }
+                    Some(top)
+                }
+                other => other,
+            };
+        }
         let pt = IVec2::new(p.x.floor() as i32, p.y.floor() as i32);
         let rect = PixelRect::new(pt.x as i64, pt.y as i64, 1, 1);
         for id in &ctx.layer_stack {
@@ -129,6 +172,58 @@ impl Tool for MoveTool {
         ToolId::Move
     }
 
+    /// The typed forwarding seam (card 010): exactly the keys the registry
+    /// declares for Move, each answering for its own kind. Anything else is
+    /// refused loudly — an options-bar control that silently did nothing is
+    /// the defect this seam exists to prevent.
+    fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        match (key, setting) {
+            ("auto_select", ToolSetting::Bool(v)) => {
+                self.auto_select = v;
+                Ok(())
+            }
+            ("show_transform", ToolSetting::Bool(v)) => {
+                self.show_transform = v;
+                if !v {
+                    // The box follows the option: off means no geometry.
+                    self.display_bounds = None;
+                    self.display_layer = None;
+                }
+                Ok(())
+            }
+            ("select_groups", ToolSetting::Bool(v)) => {
+                self.select_groups = v;
+                Ok(())
+            }
+            ("auto_select", _) | ("select_groups", _) | ("show_transform", _) => {
+                Err(ToolError::OptionKindMismatch {
+                    key: key.to_owned(),
+                })
+            }
+            _ => Err(ToolError::UnknownOption {
+                key: key.to_owned(),
+            }),
+        }
+    }
+
+    /// Card 038: Show Transform Controls displays the selected layer's box
+    /// WITHOUT starting an edit — an identity transform state over the
+    /// cached ink bounds. No session, no commands, no history.
+    fn live_geometry(&self) -> Option<crate::tool::SessionGeometry> {
+        if !self.show_transform {
+            return None;
+        }
+        let bounds = self.display_bounds?;
+        let layer = self.display_layer?;
+        let state = crate::transform::TransformState::new(bounds);
+        Some(crate::tool::SessionGeometry::Transform {
+            state,
+            mode: crate::transform::TransformMode::Scale,
+            active: None,
+            layer: Some(layer),
+        })
+    }
+
     fn on_pointer_down(
         &mut self,
         ctx: &mut ToolContext<'_>,
@@ -142,16 +237,60 @@ impl Tool for MoveTool {
         } else {
             ctx.active_layer
         };
+        // Card 042: the snap reference rect — the dragged layer's TIGHT ink
+        // at pointer-down (tile-level bounds as the fallback).
+        self.base_bounds = ctx
+            .active_layer_ink_bounds
+            .or(ctx.active_layer_content_bounds);
+        // Card 038: a canvas click updates the highlighted layer row — the
+        // auto-select pick (climbed in Group mode) becomes the selection,
+        // without losing the rest of a Shift-selected set? No: auto-select
+        // REPLACES the selection with the picked layer, matching the drag
+        // semantics above.
+        if self.auto_select {
+            // The CLIMBED pick (Group mode resolves to the ancestor the
+            // panel shows) — emitting the raw leaf would make the drag move
+            // it twice inside a group transaction.
+            if ctx.content_pick.is_some() {
+                if let Some(target) = self.layer {
+                    ctx.emit_request(crate::tool::ToolRequest::SelectLayer(target));
+                }
+            }
+        }
+        // Card 038: Show Transform Controls draws its box without starting
+        // an edit — cache the framed layer's ink on every contact. The ink
+        // bounds are known only for the ACTIVE layer, so the box frames the
+        // pick only when the pick IS the active layer (otherwise no box
+        // rather than a box around the wrong ink).
+        if self.show_transform {
+            self.display_bounds = if self.layer == ctx.active_layer {
+                ctx.active_layer_content_bounds
+            } else {
+                None
+            };
+            self.display_layer = self.layer;
+        }
         Ok(())
     }
 
     fn on_pointer_move(
         &mut self,
-        _ctx: &mut ToolContext<'_>,
+        ctx: &mut ToolContext<'_>,
         event: PointerEvent,
     ) -> Result<(), ToolError> {
-        if self.start.is_some() && event.pos.x.is_finite() && event.pos.y.is_finite() {
-            self.current = event.pos;
+        if let (Some(start), true) = (
+            self.start,
+            event.pos.x.is_finite() && event.pos.y.is_finite(),
+        ) {
+            // Card 042: snap the moving geometry — the dragged rect's
+            // edges/centers against the shell's candidates.
+            let delta = event.pos - start;
+            let snapped = if let Some(base) = self.base_bounds {
+                crate::snap_delta(base, delta, &ctx.snap_candidates, ctx.snap_threshold_doc)
+            } else {
+                delta
+            };
+            self.current = start + snapped;
         }
         Ok(())
     }
@@ -177,14 +316,91 @@ impl Tool for MoveTool {
         };
         crate::error::finite_pt("move end", end)?;
         let layer = self.layer.take().ok_or(ToolError::NoActiveLayer)?;
-        let d = end - start;
+        // Card 042: the COMMITTED delta is the snapped one — the same snap
+        // the drag applied, recomputed at the release point (a no-Move
+        // drag snaps here).
+        let d = if let Some(base) = self.base_bounds.take() {
+            crate::snap_delta(
+                base,
+                end - start,
+                &ctx.snap_candidates,
+                ctx.snap_threshold_doc,
+            )
+        } else {
+            end - start
+        };
         // A click that moved nothing is not an edit; emitting an identity
         // transform would put a do-nothing entry in the undo stack.
         if d.length() < 1e-4 {
             return Ok(());
         }
+        // Card 038: with a multi-layer selection the WHOLE set moves — one
+        // transaction (the shell conjugates per participant). The active
+        // layer leads so the delta is defined even for an empty panel set.
+        // Lock policy: locked participants are FILTERED here (they stay put;
+        // the panel's lock badges are the user's cue), while a locked ACTIVE
+        // layer re-enters below and the whole transaction refuses
+        // all-or-nothing at apply.
+        // Card 043: a linked participant carries the whole link chain —
+        // expanded BEFORE the lock filter so locked chain members follow
+        // the same stay-put rule as any locked participant.
+        // Card 045: an ancestor-shadowed participant is dropped — a child
+        // inside a moving group must not also move itself. The check is
+        // ORDER-INDEPENDENT (the transform tool's rule): a candidate is
+        // shadowed when ANY selected id sits on its ancestor chain, not
+        // just the ones kept so far.
+        let selected: Vec<LayerId> = ctx
+            .selected_layers
+            .iter()
+            .copied()
+            .filter(|id| {
+                let mut parent = ctx.parent_of(*id);
+                while let Some(p) = parent {
+                    if ctx.selected_layers.contains(&p) {
+                        return false;
+                    }
+                    parent = ctx.parent_of(p);
+                }
+                true
+            })
+            .collect();
+        let mut participants: Vec<LayerId> = crate::with_link_chain(&selected, &ctx.linked_layers)
+            .into_iter()
+            .filter(|id| ctx.layer_lock(*id) != Some(true))
+            .collect();
+        // The active layer leads so the delta is defined even for an empty
+        // panel set — but not when a kept ancestor already carries it (card
+        // 045: the shadow rule outranks the leader rule).
+        // The shadow check runs against the SURVIVING participants: a locked
+        // ancestor was filtered out (card 036's stay-put rule), so its
+        // unlocked child moves independently — the lock bars the group's own
+        // transform, not the child's.
+        let active_shadowed = participants.iter().any(|top| {
+            let mut parent = ctx.parent_of(layer);
+            while let Some(p) = parent {
+                if p == *top {
+                    break;
+                }
+                parent = ctx.parent_of(p);
+            }
+            parent.is_some()
+        });
+        if !participants.contains(&layer) && !active_shadowed {
+            participants.insert(0, layer);
+        }
+        if participants.len() > 1 {
+            ctx.emit_request(crate::tool::ToolRequest::TransformLayers {
+                layers: participants,
+                delta: [1.0, 0.0, 0.0, 1.0, d.x, d.y],
+            });
+            return Ok(());
+        }
+        // Card 045: the single commit targets the surviving participant —
+        // when the shadow rule dropped the active layer in favor of its
+        // ancestor, the ancestor is what the drag moves.
+        let target = participants.first().copied().unwrap_or(layer);
         ctx.emit(Command::TransformLayer {
-            layer_id: layer,
+            layer_id: target,
             matrix: translation_matrix(d),
         });
         Ok(())
@@ -193,6 +409,8 @@ impl Tool for MoveTool {
     fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {
         self.start = None;
         self.layer = None;
+        // Card 042: the snap reference dies with the gesture.
+        self.base_bounds = None;
     }
 
     fn is_active(&self) -> bool {
@@ -1062,5 +1280,330 @@ mod tests {
         assert_eq!(red_eye_strength(grey, 1.6), 0.0);
         assert!(red_eye_strength(skin, 1.6) < 0.2);
         assert_eq!(red_eye_strength([0.0; 4], 1.6), 0.0);
+    }
+
+    // -- card 010: the typed forwarding seam -------------------------------
+
+    #[test]
+    fn move_tool_adopts_its_declared_options_through_set_setting() {
+        let mut tool = MoveTool::default();
+        assert!(!tool.auto_select);
+        assert!(!tool.show_transform);
+
+        tool.set_setting("auto_select", ToolSetting::Bool(true))
+            .unwrap();
+        assert!(tool.auto_select, "the Auto-Select boolean reaches the tool");
+        tool.set_setting("show_transform", ToolSetting::Bool(true))
+            .unwrap();
+        assert!(tool.show_transform);
+
+        // An absolute set: the same key clears it again.
+        tool.set_setting("auto_select", ToolSetting::Bool(false))
+            .unwrap();
+        assert!(!tool.auto_select);
+    }
+
+    #[test]
+    fn set_setting_refuses_unknown_keys_and_kind_mismatches_loudly() {
+        let mut tool = MoveTool::default();
+        assert!(
+            matches!(
+                tool.set_setting("no_such_option", ToolSetting::Bool(true)),
+                Err(ToolError::UnknownOption { .. })
+            ),
+            "an unknown key is refused, not swallowed"
+        );
+        // Right key, wrong kind: the registry declares a Bool.
+        assert!(matches!(
+            tool.set_setting("auto_select", ToolSetting::Float(0.5)),
+            Err(ToolError::OptionKindMismatch { .. })
+        ));
+    }
+
+    #[cfg(test)]
+    mod content_pick_tests {
+        use super::*;
+        use crate::tiles::MemoryTiles;
+
+        #[test]
+        fn an_authoritative_empty_pick_blocks_the_raw_sampler_over_stored_ink() {
+            // Card 037: the shell's bounded test said "nothing visible here" —
+            // the raw tile sampler must not resurrect a stored pixel through it.
+            let mut tiles = MemoryTiles::new();
+            let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64));
+            ctx.active_layer = Some(layer_model::LayerId::new());
+            // The tri-state's inner None is authoritative even over stored ink.
+            ctx.content_pick = Some(None);
+            let tool = MoveTool::default();
+            assert!(
+                tool.layer_under(&ctx, Vec2::new(30.0, 30.0)).is_none(),
+                "an authoritative empty pick wins over the raw sampler"
+            );
+            // No shell ran: the raw sampler answers (nothing stored → None here,
+            // but the branch is taken rather than the authoritative path).
+            let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64));
+            ctx.active_layer = Some(layer_model::LayerId::new());
+            assert!(tool.layer_under(&ctx, Vec2::new(30.0, 30.0)).is_none());
+        }
+    }
+
+    #[cfg(test)]
+    mod move_options_tests {
+        use super::*;
+        use crate::tiles::MemoryTiles;
+
+        #[test]
+        fn group_selection_mode_climbs_to_the_top_level_ancestor() {
+            // Card 038: Layer/Group mode — an auto-select pick of a leaf inside
+            // a nested group resolves to the group row the panel shows.
+            let mut tiles = MemoryTiles::new();
+            let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64));
+            let group = layer_model::LayerId::new();
+            let child = layer_model::LayerId::new();
+            ctx.layer_parents = vec![(child, Some(group)), (group, None)];
+            let mut tool = MoveTool {
+                auto_select: true,
+                select_groups: true,
+                ..MoveTool::default()
+            };
+            ctx.content_pick = Some(Some(child));
+            assert_eq!(tool.layer_under(&ctx, Vec2::new(8.0, 8.0)), Some(group));
+            // Layer mode keeps the leaf.
+            tool.select_groups = false;
+            assert_eq!(tool.layer_under(&ctx, Vec2::new(8.0, 8.0)), Some(child));
+            // An authoritative empty pick stays empty in both modes.
+            ctx.content_pick = Some(None);
+            assert!(tool.layer_under(&ctx, Vec2::new(8.0, 8.0)).is_none());
+        }
+
+        #[test]
+        fn show_transform_controls_publishes_a_box_without_starting_an_edit() {
+            let mut tiles = MemoryTiles::new();
+            let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 96, 96));
+            let layer = layer_model::LayerId::new();
+            ctx.active_layer = Some(layer);
+            ctx.active_layer_content_bounds = Some(PixelRect::new(20, 24, 30, 18));
+            let mut tool = MoveTool {
+                show_transform: true,
+                ..MoveTool::default()
+            };
+
+            // A no-motion click caches the framed layer's ink and emits nothing.
+            tool.on_pointer_down(
+                &mut ctx,
+                PointerEvent {
+                    pos: Vec2::new(30.0, 30.0),
+                    pressure: 1.0,
+                    modifiers: Default::default(),
+                },
+            )
+            .unwrap();
+            tool.on_pointer_up(
+                &mut ctx,
+                PointerEvent {
+                    pos: Vec2::new(30.0, 30.0),
+                    pressure: 1.0,
+                    modifiers: Default::default(),
+                },
+            )
+            .unwrap();
+            assert!(ctx.drain().is_empty(), "a no-motion click is not an edit");
+            let geometry = tool.live_geometry().expect("the box is published");
+            let crate::tool::SessionGeometry::Transform {
+                state,
+                layer: framed,
+                active,
+                ..
+            } = geometry;
+            assert_eq!(framed, Some(layer));
+            assert!(active.is_none(), "no handle is being dragged");
+            assert_eq!(state.source, PixelRect::new(20, 24, 30, 18));
+        }
+
+        #[test]
+        fn a_multi_selection_drag_moves_the_whole_set_in_one_transaction() {
+            let mut tiles = MemoryTiles::new();
+            let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 96, 96));
+            let a = layer_model::LayerId::new();
+            let b = layer_model::LayerId::new();
+            ctx.active_layer = Some(a);
+            ctx.selected_layers = vec![a, b];
+            let mut tool = MoveTool::default();
+            tool.on_pointer_down(
+                &mut ctx,
+                PointerEvent {
+                    pos: Vec2::new(10.0, 10.0),
+                    pressure: 1.0,
+                    modifiers: Default::default(),
+                },
+            )
+            .unwrap();
+            tool.on_pointer_up(
+                &mut ctx,
+                PointerEvent {
+                    pos: Vec2::new(24.0, 20.0),
+                    pressure: 1.0,
+                    modifiers: Default::default(),
+                },
+            )
+            .unwrap();
+            let requests = ctx.drain_requests();
+            assert_eq!(requests.len(), 1, "the set rides one request");
+            let ToolRequest::TransformLayers { layers, delta } = &requests[0] else {
+                panic!("a set move: {:?}", requests[0]);
+            };
+            assert_eq!(layers, &[a, b]);
+            assert_eq!(&delta[4..], &[14.0, 10.0]);
+        }
+
+        #[test]
+        fn a_linked_participant_moves_the_whole_chain_together() {
+            // Card 043: moving a linked layer drags every other linked
+            // layer with it — one request, each id exactly once, leader
+            // first.
+            let mut tiles = MemoryTiles::new();
+            let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 96, 96));
+            let a = layer_model::LayerId::new();
+            let b = layer_model::LayerId::new();
+            let c = layer_model::LayerId::new();
+            ctx.active_layer = Some(a);
+            ctx.selected_layers = vec![a];
+            ctx.linked_layers = vec![b, a, c];
+            let mut tool = MoveTool::default();
+            tool.on_pointer_down(
+                &mut ctx,
+                PointerEvent {
+                    pos: Vec2::new(10.0, 10.0),
+                    pressure: 1.0,
+                    modifiers: Default::default(),
+                },
+            )
+            .unwrap();
+            tool.on_pointer_up(
+                &mut ctx,
+                PointerEvent {
+                    pos: Vec2::new(24.0, 20.0),
+                    pressure: 1.0,
+                    modifiers: Default::default(),
+                },
+            )
+            .unwrap();
+            let requests = ctx.drain_requests();
+            assert_eq!(requests.len(), 1, "the chain rides one request");
+            let ToolRequest::TransformLayers { layers, delta } = &requests[0] else {
+                panic!("a chain move: {:?}", requests[0]);
+            };
+            assert_eq!(layers, &[a, b, c], "leader first, chain deduped");
+            assert_eq!(&delta[4..], &[14.0, 10.0]);
+        }
+
+        #[test]
+        fn an_unlinked_participant_moves_alone() {
+            // Card 043: no linked participant — no expansion, the plain
+            // single-layer TransformLayer commit.
+            let mut tiles = MemoryTiles::new();
+            let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 96, 96));
+            let a = layer_model::LayerId::new();
+            ctx.active_layer = Some(a);
+            ctx.selected_layers = vec![a];
+            ctx.linked_layers = vec![layer_model::LayerId::new()];
+            let mut tool = MoveTool::default();
+            tool.on_pointer_down(
+                &mut ctx,
+                PointerEvent {
+                    pos: Vec2::new(10.0, 10.0),
+                    pressure: 1.0,
+                    modifiers: Default::default(),
+                },
+            )
+            .unwrap();
+            tool.on_pointer_up(
+                &mut ctx,
+                PointerEvent {
+                    pos: Vec2::new(24.0, 20.0),
+                    pressure: 1.0,
+                    modifiers: Default::default(),
+                },
+            )
+            .unwrap();
+            assert!(ctx.drain_requests().is_empty(), "no expansion");
+            assert!(matches!(
+                ctx.drain().last(),
+                Some(Command::TransformLayer { layer_id, .. }) if *layer_id == a
+            ));
+        }
+
+        #[test]
+        fn a_locked_chain_member_stays_put_while_the_rest_move() {
+            // Card 043: a LOCKED chain member follows the card-036 rule —
+            // filtered out (stays put), not a refusal.
+            let mut tiles = MemoryTiles::new();
+            let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 96, 96));
+            let a = layer_model::LayerId::new();
+            let b = layer_model::LayerId::new();
+            let c = layer_model::LayerId::new();
+            ctx.active_layer = Some(a);
+            ctx.selected_layers = vec![a];
+            ctx.linked_layers = vec![a, b, c];
+            ctx.layer_locks = vec![(c, true)];
+            let mut tool = MoveTool::default();
+            tool.on_pointer_down(
+                &mut ctx,
+                PointerEvent {
+                    pos: Vec2::new(10.0, 10.0),
+                    pressure: 1.0,
+                    modifiers: Default::default(),
+                },
+            )
+            .unwrap();
+            tool.on_pointer_up(
+                &mut ctx,
+                PointerEvent {
+                    pos: Vec2::new(24.0, 20.0),
+                    pressure: 1.0,
+                    modifiers: Default::default(),
+                },
+            )
+            .unwrap();
+            let requests = ctx.drain_requests();
+            assert_eq!(requests.len(), 1, "a and b move; c is locked out");
+            let ToolRequest::TransformLayers { layers, .. } = &requests[0] else {
+                panic!("a chain move: {:?}", requests[0]);
+            };
+            assert_eq!(layers, &[a, b], "the locked chain member stays put");
+        }
+    }
+
+    #[cfg(test)]
+    mod snap_tests {
+        use super::*;
+        use crate::tool::{SnapAxis, SnapCandidate};
+
+        #[test]
+        fn the_moving_rect_snaps_to_another_layers_edge() {
+            // Card 042: the dragged rect (0..40) moved by ~+22 lands its right
+            // edge on the neighbour's left edge at 62 (delta 22 → snapped 22).
+            let base = PixelRect::new(0, 0, 40, 40);
+            let candidates = vec![
+                SnapCandidate {
+                    axis: SnapAxis::X,
+                    doc: 62.0,
+                },
+                SnapCandidate {
+                    axis: SnapAxis::Y,
+                    doc: 0.0,
+                },
+            ];
+            let snapped = crate::snap_delta(base, Vec2::new(21.6, 0.0), &candidates, 8.0);
+            assert!(
+                (snapped.x - 22.0).abs() < 1e-4,
+                "the right edge (40 + delta) snaps to 62: {snapped:?}"
+            );
+            assert_eq!(snapped.y, 0.0, "the y axis had no candidate in range");
+
+            // Outside the threshold: no snap, the raw delta survives.
+            let raw = crate::snap_delta(base, Vec2::new(31.0, 0.0), &candidates, 8.0);
+            assert!((raw.x - 31.0).abs() < 1e-4, "beyond the threshold no snap");
+        }
     }
 }

@@ -26,8 +26,7 @@
 
 use editor_core::{Command, Document, History, LayerPatch, Patch};
 use layer_model::{
-    AdjustmentKind, AdjustmentLayer, ClippingMode, Layer, LayerId, LayerKind, LayerMask, LockState,
-    MaskId,
+    AdjustmentKind, AdjustmentLayer, ClippingMode, Layer, LayerId, LayerKind, LockState,
 };
 use raster::ExportFormat;
 
@@ -704,6 +703,9 @@ pub enum MaskOp {
     HideAll,
     RevealSelection,
     HideSelection,
+    /// Card 058: invert the layer's mask coverage (255 − v per pixel) —
+    /// an undoable one-channel delta, not a content edit.
+    Invert,
     Delete,
     Apply,
     Toggle,
@@ -716,6 +718,7 @@ impl MaskOp {
         MaskOp::HideAll,
         MaskOp::RevealSelection,
         MaskOp::HideSelection,
+        MaskOp::Invert,
         MaskOp::Delete,
         MaskOp::Apply,
         MaskOp::Toggle,
@@ -728,6 +731,7 @@ impl MaskOp {
             MaskOp::HideAll => "Hide All",
             MaskOp::RevealSelection => "Reveal Selection",
             MaskOp::HideSelection => "Hide Selection",
+            MaskOp::Invert => "Invert",
             MaskOp::Delete => "Delete Mask",
             MaskOp::Apply => "Apply Mask",
             MaskOp::Toggle => "Disable / Enable Mask",
@@ -943,6 +947,15 @@ pub enum MenuAction {
     /// is_enabled_there` pins the two together.
     EditAdjustmentLayer,
     CreateClippingMask,
+    /// Card 060: Layer ▸ Refine Mask… (a top-level Layer item beside the
+    /// Layer Mask submenu) — the edge-refinement dialog over the active
+    /// layer's mask.
+    RefineMask,
+    /// Card 062: Layer ▸ Remove Color Fringe… — the edge COLOUR cleanup
+    /// dialog over the active layer's pixels near the mask boundary. A
+    /// separate edit from [`MenuAction::RefineMask`]: it recolours, it never
+    /// regrades coverage.
+    RemoveColorFringe,
     ReleaseClippingMask,
     BlendingOptions,
     LayerStyle(EffectSlot),
@@ -1452,6 +1465,8 @@ impl MenuAction {
         out.extend([
             MenuAction::EditAdjustmentLayer,
             MenuAction::CreateClippingMask,
+            MenuAction::RefineMask,
+            MenuAction::RemoveColorFringe,
             MenuAction::ReleaseClippingMask,
             MenuAction::BlendingOptions,
         ]);
@@ -1616,6 +1631,8 @@ impl MenuAction {
 
             MenuAction::LastFilter => "Last Filter".into(),
             MenuAction::FilterGallery => "Filter Gallery…".into(),
+            MenuAction::RefineMask => "Refine Mask…".into(),
+            MenuAction::RemoveColorFringe => "Remove Color Fringe…".into(),
             MenuAction::Filter(f) => f.label().into(),
 
             MenuAction::Zoom(z) => z.label().into(),
@@ -1789,9 +1806,14 @@ impl MenuAction {
                     .or(ctx.clipboard.is_empty().then_some("The clipboard is empty")),
                 act(self),
             ),
+            // Card 052: Paste Into is gated on the APPLICATION's own store —
+            // an OS-clipboard image has no in-document origin yet, and masking
+            // one by the selection is card 053's job. Enabling it on the
+            // external payload alone would let the menu promise something the
+            // perform cannot do.
             MenuAction::PasteInto => gate(
                 ctx.need_document()
-                    .or(ctx.clipboard.is_empty().then_some("The clipboard is empty"))
+                    .or((!ctx.clipboard.has_internal_pixels()).then_some("The clipboard is empty"))
                     .or((!ctx.has_selection).then_some("Paste Into needs a selection")),
                 act(self),
             ),
@@ -2045,6 +2067,31 @@ impl MenuAction {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
             },
+            MenuAction::RefineMask => {
+                // Card 060: the dialog refines the ACTIVE layer's mask — it
+                // needs a layer with one, and says so when the gate holds it
+                // back.
+                let layer = match ctx.need_layer() {
+                    Ok(l) => l,
+                    Err(r) => return Resolution::Disabled(r),
+                };
+                gate(
+                    (!layer.has_mask).then_some("The layer has no mask"),
+                    act(MenuAction::RefineMask),
+                )
+            }
+            MenuAction::RemoveColorFringe => {
+                // Card 062: the fringe cleanup samples the ACTIVE layer's
+                // mask boundary — same gate as RefineMask, a different edit.
+                let layer = match ctx.need_layer() {
+                    Ok(l) => l,
+                    Err(r) => return Resolution::Disabled(r),
+                };
+                gate(
+                    (!layer.has_mask).then_some("The layer has no mask"),
+                    act(MenuAction::RemoveColorFringe),
+                )
+            }
             MenuAction::FilterGallery | MenuAction::Filter(_) => match ctx.need_editable_pixels() {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
@@ -2112,17 +2159,12 @@ fn resolve_mask(op: MaskOp, ctx: &MenuContext) -> Resolution {
         return Resolution::Disabled("There is no selection");
     }
     match op {
-        // Adding a mask is a property patch, so it is a command outright. The
-        // *contents* of a Reveal/Hide Selection mask are pixels, which the
-        // application rasterises — but the attach is the same command.
+        // Card 057: the four creation ops carry REAL coverage, and coverage
+        // is pixels the application rasterises (the tile store lives there).
+        // The menu gates (layer, existing mask, selection); the app attaches
+        // mask + coverage atomically in one undoable transaction.
         MaskOp::RevealAll | MaskOp::HideAll | MaskOp::RevealSelection | MaskOp::HideSelection => {
-            cmd(Command::SetLayerProperties {
-                layer_id: layer.id,
-                patch: LayerPatch {
-                    mask: Patch::Set(LayerMask::new(MaskId::new())),
-                    ..Default::default()
-                },
-            })
+            act(MenuAction::Mask(op))
         }
         MaskOp::Delete => cmd(Command::SetLayerProperties {
             layer_id: layer.id,
@@ -2134,6 +2176,9 @@ fn resolve_mask(op: MaskOp, ctx: &MenuContext) -> Resolution {
         // Applying a mask bakes coverage into pixels; that is not a property
         // patch, so it goes back to the application.
         MaskOp::Apply => act(MenuAction::Mask(op)),
+        // Card 058: inverting coverage is a pixel edit on the mask's tile
+        // map — back to the application like the other coverage ops.
+        MaskOp::Invert => act(MenuAction::Mask(op)),
         MaskOp::Toggle | MaskOp::ToggleLink => act(MenuAction::Mask(op)),
     }
 }
@@ -2381,6 +2426,8 @@ fn layer_menu() -> Menu {
             item(MenuAction::DeleteLayer),
             Entry::Separator,
             Entry::submenu("Layer Mask", items(MaskOp::ALL, MenuAction::Mask)),
+            item(MenuAction::RefineMask),
+            item(MenuAction::RemoveColorFringe),
             item(MenuAction::CreateClippingMask),
             item(MenuAction::ReleaseClippingMask),
             Entry::Separator,
@@ -2684,6 +2731,7 @@ mod tests {
                 last_filter: Some(FilterId::GaussianBlur),
                 clipboard: ClipboardState {
                     pixels: true,
+                    external_pixels: false,
                     layers: true,
                 },
                 ..ctx_with_layer(&doc, inside)
@@ -2803,6 +2851,7 @@ mod tests {
         let with = MenuContext {
             clipboard: ClipboardState {
                 pixels: true,
+                external_pixels: false,
                 layers: false,
             },
             ..ctx
@@ -3123,14 +3172,14 @@ mod tests {
     }
 
     #[test]
-    fn adding_a_mask_is_a_command_and_a_second_one_is_refused() {
+    fn adding_a_mask_routes_to_the_app_and_a_second_one_is_refused() {
         let (doc, _g, inside, _b) = stacked_document();
         let ctx = ctx_with_layer(&doc, inside);
+        // Card 057: the creation ops route to the APPLICATION (the coverage
+        // is pixels the app rasterises and attaches atomically); the menu's
+        // job is the gating below.
         match MenuAction::Mask(MaskOp::RevealAll).resolve(&ctx).intent() {
-            Some(Intent::Document(Command::SetLayerProperties { layer_id, patch })) => {
-                assert_eq!(*layer_id, inside);
-                assert!(matches!(patch.mask, Patch::Set(_)));
-            }
+            Some(Intent::Action(MenuAction::Mask(MaskOp::RevealAll))) => {}
             other => panic!("unexpected resolution: {other:?}"),
         }
         let masked = MenuContext {
@@ -3147,11 +3196,40 @@ mod tests {
                 .reason(),
             Some("The layer already has a mask")
         );
-        // ...and deleting is the other way round.
+        // ...and deleting is the other way round. Card 058's Invert is a
+        // mask op, not a creation op: it needs a mask and routes to the app.
         assert_eq!(
             MenuAction::Mask(MaskOp::Delete).resolve(&ctx).reason(),
             Some("The layer has no mask")
         );
+        assert_eq!(
+            MenuAction::Mask(MaskOp::Invert).resolve(&ctx).reason(),
+            Some("The layer has no mask")
+        );
+        match MenuAction::Mask(MaskOp::Invert).resolve(&masked).intent() {
+            Some(Intent::Action(MenuAction::Mask(MaskOp::Invert))) => {}
+            other => panic!("unexpected resolution: {other:?}"),
+        }
+        // Card 060: the Refine Mask dialog needs a mask to refine — the
+        // same gate, routing to the dialog host.
+        assert_eq!(
+            MenuAction::RefineMask.resolve(&ctx).reason(),
+            Some("The layer has no mask")
+        );
+        match MenuAction::RefineMask.resolve(&masked).intent() {
+            Some(Intent::Action(MenuAction::RefineMask)) => {}
+            other => panic!("unexpected resolution: {other:?}"),
+        }
+        // Card 062: the fringe cleanup shares the mask gate, routes as its
+        // own action.
+        assert_eq!(
+            MenuAction::RemoveColorFringe.resolve(&ctx).reason(),
+            Some("The layer has no mask")
+        );
+        match MenuAction::RemoveColorFringe.resolve(&masked).intent() {
+            Some(Intent::Action(MenuAction::RemoveColorFringe)) => {}
+            other => panic!("unexpected resolution: {other:?}"),
+        }
         match MenuAction::Mask(MaskOp::Delete).resolve(&masked).intent() {
             Some(Intent::Document(Command::SetLayerProperties { patch, .. })) => {
                 assert!(matches!(patch.mask, Patch::Clear));

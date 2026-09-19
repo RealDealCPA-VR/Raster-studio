@@ -25,7 +25,7 @@
 //! `every_action_does_something` proves at run time that no wired arm is a
 //! silent no-op.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -463,6 +463,24 @@ pub struct Editor {
     /// Help-menu browser launches (see [`dialogs::UrlLauncher`]); the shipped
     /// default opens the platform browser, tests inject a recorder.
     urls: Box<dyn UrlLauncher>,
+    /// The OS image clipboard service (card 051) — the "separate job" the
+    /// internal [`Clipboard`] store's doc comment names: crossing the process
+    /// boundary. The OS clipboard by construction, a
+    /// [`crate::clipboard::FakeClipboard`] in tests.
+    image_clipboard: Box<dyn crate::clipboard::ImageClipboard>,
+    /// Fingerprint of what Edit ▸ Copy last wrote to the OS image clipboard
+    /// (card 052's ownership policy): paste compares the OS payload against
+    /// it, so the editor's OWN copy pastes through the internal route (same
+    /// pixels, in-place semantics) while anything ELSE on the OS clipboard —
+    /// a screenshot, another app's image — wins as the fresher payload.
+    os_copy_fingerprint: Option<u64>,
+    /// Cached "does the OS clipboard hold an image?" answer:
+    /// `(probed_at, has_image)`. The menu context is built EVERY frame, and
+    /// reading the OS clipboard per frame (a 4K screenshot is ~33 MB) would
+    /// be absurd — so the probe is throttled to one read per second and
+    /// re-probed immediately when the window regains focus (the moment a
+    /// foreign app's copy can arrive) and after our own copy/paste.
+    os_image_probe: Option<(std::time::Instant, bool)>,
     app_version: String,
     /// The GPU adapter the window actually got, for the diagnostics bundle.
     gpu_adapter_name: Option<String>,
@@ -489,6 +507,16 @@ pub struct Editor {
     brushes: BTreeMap<ToolId, BrushSettings>,
     foreground: [f32; 4],
     background: [f32; 4],
+    /// Card 058: the content colour wells stashed while a document's edit
+    /// target is its mask (mask editing swaps to white/black without losing
+    /// these). Per-DOCUMENT: tabbing from a mask-targeted document A to a
+    /// fresh document B and aiming B at a mask must not overwrite A's stash.
+    content_color_backups: std::collections::HashMap<DocumentId, ([f32; 4], [f32; 4])>,
+    /// Card 058 (review round 2): the colour wells are per-document state —
+    /// a document aimed at its mask carries the mask pair, a content
+    /// document carries the user's colours, and tabbing between them shows
+    /// the right wells without one document's state leaking into another's.
+    doc_colors: std::collections::HashMap<DocumentId, ([f32; 4], [f32; 4])>,
     /// The ramp the gradient tools paint with. The options bar and the
     /// gradient dialog edit the workspace's copy; the read-back lands here so
     /// [`crate::tool_input::ToolPointer`] can thread it into the tool's
@@ -557,6 +585,11 @@ pub struct Editor {
     /// needs a platform clipboard and an encode/decode of the payload) and
     /// nothing here depends on which side of it the pixels live on.
     clipboard: Option<Clipboard>,
+    /// The sticky content-vs-mask target per document. Validity is computed at
+    /// read time — see [`crate::edit_target`]. Card 007.
+    pub(crate) edit_targets: crate::edit_target::EditTargets,
+    /// The live pending edit, if a gesture is holding one (card 011).
+    pub(crate) edit_sessions: crate::edit_session::EditSessions,
 }
 
 /// A rectangle of pixels lifted out of a document, straight RGBA8.
@@ -584,6 +617,12 @@ fn tops_out_with_kind_edit(doc: &OpenDocument, layer: LayerId) -> bool {
 pub const DEFAULT_FOREGROUND: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 pub const DEFAULT_BACKGROUND: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
+/// Card 058: the colour wells a MASK edit target shows — white foreground
+/// reveals coverage, black conceals (the mask semantics, not the content
+/// colours, which are stashed until the target switches back).
+pub const MASK_EDIT_FOREGROUND: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+pub const MASK_EDIT_BACKGROUND: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
 /// `#RRGGBB` for a colour, so the status bar can name what changed.
 pub fn color_hex(rgba: [f32; 4]) -> String {
     let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -593,6 +632,18 @@ pub fn color_hex(rgba: [f32; 4]) -> String {
 /// Bumped once per [`Editor`] built, so two editors in one process cannot mint
 /// the same session tag even if the clock does not tick between them.
 static SESSION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// The card 052 ownership fingerprint: dimensions plus every pixel byte, so
+/// two images agree only when they ARE the same image. Any standard hasher
+/// works — this only ever compares an editor against itself.
+fn fingerprint_image(image: &crate::clipboard::ClipboardImage) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    image.width.hash(&mut hasher);
+    image.height.hash(&mut hasher);
+    hasher.write(&image.rgba);
+    hasher.finish()
+}
 
 /// A token that is unique to this run of the process.
 ///
@@ -644,6 +695,9 @@ impl Editor {
             presets,
             dialogs,
             urls: Box::new(BrowserUrls),
+            image_clipboard: Box::new(crate::clipboard::OsClipboard),
+            os_copy_fingerprint: None,
+            os_image_probe: None,
             app_version: env!("CARGO_PKG_VERSION").to_string(),
             gpu_adapter_name: None,
             docs: Vec::new(),
@@ -655,6 +709,8 @@ impl Editor {
             brushes: BTreeMap::new(),
             foreground: DEFAULT_FOREGROUND,
             background: DEFAULT_BACKGROUND,
+            content_color_backups: std::collections::HashMap::new(),
+            doc_colors: std::collections::HashMap::new(),
             gradient_ramp: layer_model::Gradient::default(),
             panels_visible: true,
             preferences_open: false,
@@ -673,6 +729,8 @@ impl Editor {
             revision: 0,
             kind_gesture: None,
             clipboard: None,
+            edit_targets: crate::edit_target::EditTargets::default(),
+            edit_sessions: crate::edit_session::EditSessions::default(),
             embedded: None,
         }
     }
@@ -710,6 +768,153 @@ impl Editor {
     /// The Help-menu browser launcher, for `menu_bridge::perform`.
     pub fn url_launcher_mut(&mut self) -> &mut dyn UrlLauncher {
         self.urls.as_mut()
+    }
+
+    /// Swap the OS image clipboard service (card 051). The shipped editor
+    /// never calls this — it runs the OS clipboard — and tests inject
+    /// [`crate::clipboard::FakeClipboard`] so paste behavior is deterministic.
+    pub fn set_image_clipboard(&mut self, clipboard: Box<dyn crate::clipboard::ImageClipboard>) {
+        self.image_clipboard = clipboard;
+    }
+
+    /// The OS image clipboard service, for the Copy/Paste routing (card 052).
+    pub fn image_clipboard_mut(&mut self) -> &mut dyn crate::clipboard::ImageClipboard {
+        self.image_clipboard.as_mut()
+    }
+
+    /// Whether an image paste would find anything on the OS clipboard — the
+    /// menu-enablement probe (card 052). Throttled: see
+    /// [`Editor::os_image_probe`] for why this must not read per frame.
+    pub(crate) fn os_clipboard_has_image(&mut self) -> bool {
+        const PROBE_TTL: std::time::Duration = std::time::Duration::from_millis(1000);
+        if let Some((at, has)) = self.os_image_probe {
+            if at.elapsed() < PROBE_TTL {
+                return has;
+            }
+        }
+        let has = self.image_clipboard.has_image();
+        self.os_image_probe = Some((std::time::Instant::now(), has));
+        has
+    }
+
+    /// Drops the cached OS-clipboard probe so the next menu context re-reads
+    /// it. Called on window focus changes — the moment a payload copied in
+    /// another application can have arrived.
+    pub(crate) fn invalidate_os_image_probe(&mut self) {
+        self.os_image_probe = None;
+    }
+
+    /// Records the fingerprint of an image Edit ▸ Copy just put on the OS
+    /// clipboard (card 052's ownership policy).
+    pub(crate) fn remember_os_copy(&mut self, image: &crate::clipboard::ClipboardImage) {
+        self.os_copy_fingerprint = Some(fingerprint_image(image));
+        // We JUST put an image there: the next menu context need not re-read.
+        self.os_image_probe = Some((std::time::Instant::now(), true));
+    }
+
+    /// Whether an image read back from the OS clipboard is the editor's OWN
+    /// last copy (same pixels we wrote) — the comparison that routes our copy
+    /// through the internal store and anything else through placement.
+    pub(crate) fn os_copy_is_ours(&self, image: &crate::clipboard::ClipboardImage) -> bool {
+        self.os_copy_fingerprint == Some(fingerprint_image(image))
+    }
+
+    /// Paste an image that came from OUTSIDE the application (card 052): the
+    /// OS clipboard's payload, routed through the full-source placement
+    /// builder exactly like a placed file — nothing is resampled away, the
+    /// image lands as a smart object over an embedded asset, ABOVE the active
+    /// layer, and becomes the selection.
+    ///
+    /// The semantics are explicit: external pixels carry no in-document
+    /// origin, so they paste **centered** through the same fit the Place
+    /// menu item uses (`place_source_fit`, no upscale). The clipboard's
+    /// pixels are untagged, so they are read as sRGB — the honest assumption
+    /// for everything the OS clipboard carries — and the embedded asset's
+    /// bytes are a PNG encoding of the same pixels, so Edit ▸ Contents can
+    /// re-decode the source later.
+    pub fn paste_external_image(
+        &mut self,
+        image: crate::clipboard::ClipboardImage,
+    ) -> Result<String, String> {
+        let name = "Pasted image".to_string();
+        // Embedded bytes for the asset record: a PNG of the same pixels, so
+        // the stored source is a re-decodable image rather than a bare buffer.
+        let png = raster::encode(
+            raster::ExportFormat::Png,
+            image.width,
+            image.height,
+            &image.rgba,
+        )
+        .map_err(|e| e.to_string())?;
+        let decoded = crate::import::DecodedImage {
+            width: image.width,
+            height: image.height,
+            rgba8: image.rgba,
+            color_space: color::ColorSpace::Srgb,
+            icc_profile: None,
+        };
+        let asset = layer_model::AssetId::new();
+        let (command, layer_id) = {
+            let doc = self.active_mut().ok_or("No document is open")?;
+            let canvas = raster::PixelRect::new(0, 0, doc.document.width(), doc.document.height());
+            let working = doc.document.meta.color_space.clone();
+            let mut placement = crate::placement::place_source_fit(
+                &decoded,
+                &name,
+                canvas,
+                &working,
+                false,
+                &mut doc.tiles,
+            )
+            .map_err(|e| e.to_string())?;
+            placement = placement.with_layer_kind(layer_model::LayerKind::SmartObject(
+                layer_model::SmartObjectLayer {
+                    asset,
+                    linked: false,
+                },
+            ));
+            if let Some(active) = doc.document.active_layer() {
+                let parent = doc.document.layers.parent_of(active);
+                let index = doc.document.layers.index_in_parent(active);
+                if let Some(index) = index {
+                    placement.command = match placement.command {
+                        Command::Transaction { label, commands } => Command::Transaction {
+                            label,
+                            commands: {
+                                let mut c = commands;
+                                c.push(Command::MoveLayer {
+                                    layer_id: placement.layer,
+                                    parent,
+                                    index,
+                                });
+                                c
+                            },
+                        },
+                        other => other,
+                    };
+                }
+            }
+            (placement.command, placement.layer)
+        };
+        // Same append-only registration policy as placement (card 048).
+        if let Some(doc) = self.active_mut() {
+            doc.document.set_asset_origin(layer_model::AssetRecord {
+                id: asset,
+                origin: layer_model::AssetOrigin::Embedded { name, bytes: png },
+                source_size: Some((image.width, image.height)),
+            });
+        }
+        self.apply_command(command);
+        self.set_layer_selection(vec![layer_id], Some(layer_id));
+        self.touch();
+        self.status = Some(format!(
+            "Pasted {}×{} from the clipboard",
+            image.width, image.height
+        ));
+        Ok(format!(
+            "Pasted {}×{} from the clipboard",
+            image.width, image.height
+        ))
     }
 
     /// The dialog-facing view of the application preferences.
@@ -983,9 +1188,10 @@ impl Editor {
     /// hidden because its only job is to carry the painted coverage, and
     /// attaching the mask there means the tools' existing
     /// [`tools::PaintTarget::Mask`] route works unchanged. Leaving reads the
-    /// painted coverage back as a [`editor_core::SelectionMask`] (a direct
-    /// field write, exactly like the marquee — selection edits are not undo
-    /// steps) and deletes the scratch layer.
+    /// painted coverage back as a [`editor_core::SelectionMask`] (mode
+    /// machinery, not a user selection edit — the scratch coverage is not a
+    /// marquee gesture, so it bypasses history the way card 056's exception
+    /// describes) and deletes the scratch layer.
     /// Convert the document to a colour mode (Image ▸ Mode ▸ …).
     ///
     /// Tiles are always stored RGBA, so a conversion rewrites every layer's
@@ -1409,13 +1615,17 @@ impl Editor {
     }
 
     /// Place an image file into the active document as a smart object whose
-    /// pixels are the source rendered at its own size, clipped to the canvas.
+    /// tiles hold the FULL decoded source (fit as a layer transform,
+    /// color-converted into the working space) — nothing is clipped away.
     ///
     /// An embedded place carries the file's bytes in the document's asset
     /// table; a linked one carries the path, and [`Editor::refresh_linked_sources`]
     /// re-reads it when the file changes. The pixels land as one undoable
     /// Transaction, so undo removes the placed object entirely.
     pub fn place_path(&mut self, path: &Path, linked: bool) -> Result<String, String> {
+        // Cards 046-048: decode and read the source bytes BEFORE anything
+        // mutates - a failed decode or read changes neither the layer stack
+        // nor dirty/history state.
         let image = crate::import::DecodedImage::decode_path(path).map_err(|e| e.to_string())?;
         let name = path
             .file_stem()
@@ -1433,55 +1643,74 @@ impl Editor {
             }
         };
 
-        let command = {
+        // The builder places the FULL source - fit as a layer transform,
+        // color-converted into the document's working space - instead of
+        // clipping to the canvas. Nothing decoded is lost: off-canvas and
+        // transparent-margin content stays in the stored tiles.
+        let (command, layer_id) = {
             let doc = self.active_mut().ok_or("No document is open")?;
-            let (cw, ch) = (doc.document.width(), doc.document.height());
-            // Placed at its own size from the canvas origin, clipped to the
-            // canvas: a 4096-wide source into a 64-wide canvas places its
-            // top-left 64 columns, which is what a composer can show.
-            let w = image.width.min(cw);
-            let h = image.height.min(ch);
-            // Crop the decoded buffer to the clip rect, row-major RGBA8.
-            let mut clipped_rgba = Vec::with_capacity((w * h * 4) as usize);
-            for y in 0..h {
-                let row = (y * image.width * 4) as usize;
-                clipped_rgba.extend_from_slice(&image.rgba8[row..row + (w * 4) as usize]);
+            let canvas = raster::PixelRect::new(0, 0, doc.document.width(), doc.document.height());
+            let working = doc.document.meta.color_space.clone();
+            let mut placement = crate::placement::place_source_fit(
+                &image,
+                &name,
+                canvas,
+                &working,
+                false,
+                &mut doc.tiles,
+            )
+            .map_err(|e| e.to_string())?;
+            // The placed layer is a smart object over the registered asset,
+            // keeping the builder's layer id.
+            placement = placement.with_layer_kind(layer_model::LayerKind::SmartObject(
+                layer_model::SmartObjectLayer { asset, linked },
+            ));
+            // Insert ABOVE the active layer: same parent, its index. A
+            // create lands at the root top, so the move makes the placement
+            // a sibling exactly where the user is looking.
+            if let Some(active) = doc.document.active_layer() {
+                let parent = doc.document.layers.parent_of(active);
+                let index = doc.document.layers.index_in_parent(active);
+                if let Some(index) = index {
+                    placement.command = match placement.command {
+                        Command::Transaction { label, commands } => Command::Transaction {
+                            label,
+                            commands: {
+                                let mut c = commands;
+                                c.push(Command::MoveLayer {
+                                    layer_id: placement.layer,
+                                    parent,
+                                    index,
+                                });
+                                c
+                            },
+                        },
+                        other => other,
+                    };
+                }
             }
-            let layer = layer_model::Layer::with_kind(
-                name.clone(),
-                layer_model::LayerKind::SmartObject(layer_model::SmartObjectLayer {
-                    asset,
-                    linked,
-                }),
-            );
-            let new_id = layer.id;
-            let mut commands = vec![Command::create_layer(layer)];
-            let clipped =
-                raster::TileGrid::from_rgba8(w, h, &clipped_rgba).map_err(|e| e.to_string())?;
-            let mut edits = Vec::new();
-            for (coord, tile) in clipped.iter() {
-                let hash = doc.tiles.insert_bytes(tile.data().to_vec());
-                edits.push(editor_core::pixels::TileEdit::set(coord, hash));
-            }
-            commands.push(
-                Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(new_id), edits)
-                    .map_err(|e| e.to_string())?,
-            );
-            Command::Transaction {
-                label: format!("Place {name}"),
-                commands,
-            }
+            (placement.command, placement.layer)
         };
-        // The asset table is a field, like the selection: registration is not
-        // an undoable edit, and the pixels that use it are.
+        // The asset table is a field, like the selection: registration is
+        // not an undoable edit, and the pixels that use it are. STORAGE
+        // POLICY (card 048): the table is append-only for the session - an
+        // undone placement leaves its record and embedded blob in place
+        // (unreachable, immutable, cheap to keep) rather than risking a live
+        // reference to a removed asset.
         if let Some(doc) = self.active_mut() {
-            doc.document
-                .set_asset_origin(layer_model::AssetRecord { id: asset, origin });
+            doc.document.set_asset_origin(layer_model::AssetRecord {
+                id: asset,
+                origin,
+                source_size: Some((image.width, image.height)),
+            });
             if let Ok(stamp) = std::fs::metadata(path).and_then(|m| m.modified()) {
                 doc.asset_stamps.insert(asset, stamp);
             }
         }
         self.apply_command(command);
+        // The placed layer becomes the selection: the next gesture aims at
+        // what the user just placed.
+        self.set_layer_selection(vec![layer_id], Some(layer_id));
         self.touch();
         self.status = Some(format!(
             "Placed {}{}",
@@ -1492,10 +1721,15 @@ impl Editor {
     }
 
     /// Re-read every linked asset source whose file changed on disk, replacing
-    /// the smart object layer's pixels as one undoable step per changed
-    /// source. Embedded sources are the user's own bytes and never re-read.
+    /// the smart object layers' pixels as one undoable step per changed
+    /// source. Sibling layers sharing an asset (duplicate, copy-paste) move
+    /// together in that one step - the stamp is written only after every
+    /// sibling has been refreshed. Embedded sources are the user's own bytes
+    /// and never re-read.
     pub fn refresh_linked_sources(&mut self) -> Result<String, String> {
         let mut changed = 0usize;
+        let mut failures: Vec<String> = Vec::new();
+        // Pass 1 (read-only): every smart-object layer, in depth-first order.
         let ids: Vec<(DocumentId, LayerId, layer_model::AssetId)> = {
             let mut out = Vec::new();
             for open in &self.docs {
@@ -1509,55 +1743,196 @@ impl Editor {
             }
             out
         };
+        // Pass 2: group siblings per (document, asset). Siblings share one
+        // linked source and one asset record, so the decode, the stamp and
+        // the recorded source size are per group, not per layer.
+        let mut order: Vec<(DocumentId, layer_model::AssetId)> = Vec::new();
+        let mut grouped: HashMap<(DocumentId, layer_model::AssetId), Vec<LayerId>> = HashMap::new();
         for (doc_id, layer_id, asset) in ids {
-            let (w, h, rgba) = {
-                let Some(open) = self.docs.iter_mut().find(|d| d.id() == doc_id) else {
-                    continue;
-                };
-                let Some(layer_model::AssetOrigin::Linked { path }) =
-                    open.document.asset_origin(asset).cloned()
-                else {
-                    continue;
-                };
-                let Ok(current) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
-                    continue;
-                };
-                if open.asset_stamps.get(&asset) == Some(&current) {
-                    continue;
-                }
-                let image =
-                    crate::import::DecodedImage::decode_path(&path).map_err(|e| e.to_string())?;
-                open.asset_stamps.insert(asset, current);
-                (image.width, image.height, image.rgba8)
-            };
+            if !grouped.contains_key(&(doc_id, asset)) {
+                order.push((doc_id, asset));
+            }
+            grouped.entry((doc_id, asset)).or_default().push(layer_id);
+        }
+        for (doc_id, asset) in order {
             let Some(open) = self.docs.iter_mut().find(|d| d.id() == doc_id) else {
                 continue;
             };
-            let (cw, ch) = (open.document.width(), open.document.height());
-            let (w, h) = (w.min(cw), h.min(ch));
-            let mut clipped_rgba = Vec::with_capacity((w * h * 4) as usize);
-            for y in 0..h {
-                let row = (y * w * 4) as usize;
-                clipped_rgba.extend_from_slice(&rgba[row..row + (w * 4) as usize]);
+            let name_for = |open: &OpenDocument, id: LayerId| {
+                open.document
+                    .layers
+                    .get(id)
+                    .map(|l| l.name.clone())
+                    .unwrap_or_default()
+            };
+            let layers = grouped.remove(&(doc_id, asset)).unwrap_or_default();
+            let Some(layer_model::AssetOrigin::Linked { path }) =
+                open.document.asset_origin(asset).cloned()
+            else {
+                continue;
+            };
+            let current = match std::fs::metadata(&path).and_then(|m| m.modified()) {
+                Ok(stamp) => stamp,
+                Err(_) => {
+                    // A missing source: keep the last good cached appearance
+                    // and say so - never replace it with empty pixels. Every
+                    // sibling holding the asset reports.
+                    for layer_id in &layers {
+                        failures.push(format!("{}: source is missing", name_for(open, *layer_id)));
+                    }
+                    continue;
+                }
+            };
+            if open.asset_stamps.get(&asset) == Some(&current) {
+                continue;
             }
-            let grid =
-                raster::TileGrid::from_rgba8(w, h, &clipped_rgba).map_err(|e| e.to_string())?;
-            let mut edits = Vec::new();
-            for (coord, tile) in grid.iter() {
-                let hash = open.tiles.insert_bytes(tile.data().to_vec());
-                edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+            // Card 050: the replacement IS the builder - the same shared
+            // conversion into the working space (an unsupported profile is
+            // an error, not a silent recolor) and the same slicing, so the
+            // refresh cannot drift from placement. The layers' masks,
+            // effects and identities are untouched: only tiles + transforms
+            // move, as one undoable transaction. The decode happens once per
+            // source; the sibling layers reuse it.
+            let image = match crate::import::DecodedImage::decode_path(&path) {
+                Ok(image) => image,
+                Err(e) => {
+                    for layer_id in &layers {
+                        failures.push(format!("{}: {e}", name_for(open, *layer_id)));
+                    }
+                    continue;
+                }
+            };
+            let converted = match crate::placement::working_space_pixels(
+                &image,
+                &open.document.meta.color_space,
+            ) {
+                Ok(converted) => converted,
+                Err(e) => {
+                    for layer_id in &layers {
+                        failures.push(format!("{}: {e}", name_for(open, *layer_id)));
+                    }
+                    continue;
+                }
+            };
+            let new_tiles: Vec<(raster::TileCoord, Vec<u8>)> =
+                crate::placement::slice_source_tiles(&converted, glam::IVec2::ZERO);
+            // The renormalization: the ratio is OLD source dims / NEW source
+            // dims (both known - the record stores what was placed),
+            // conjugated through each layer's own transform so the on-canvas
+            // footprint stays identical across a resolution change. Without a
+            // recorded size (a pre-048 document) the transform is left alone
+            // - no jump, ever.
+            let old_size = open.document.asset_source_size(asset);
+            let resolution_changed = old_size
+                .map(|(w, h)| w != image.width || h != image.height)
+                .unwrap_or(false);
+            let mut commands: Vec<Command> = Vec::new();
+            let mut refreshed_any = false;
+            for layer_id in &layers {
+                let mut edits = Vec::new();
+                let mut identical = !resolution_changed;
+                for (coord, bytes) in &new_tiles {
+                    let hash = open.tiles.insert_bytes(bytes.clone());
+                    // A no-op check: the stored map must hold the very same
+                    // tile at the very same coordinate. Only then can a
+                    // refresh whose file content did not actually change skip
+                    // its undo entry (the stamps are session-only, so the
+                    // first refresh after a reopen re-decodes and lands here).
+                    match open
+                        .document
+                        .layer_tiles(*layer_id)
+                        .and_then(|m| m.get(*coord))
+                    {
+                        Some(old) if old == hash => {}
+                        _ => identical = false,
+                    }
+                    edits.push(editor_core::pixels::TileEdit::set(*coord, hash));
+                }
+                // Ghost cleanup: the old coords the new source does not
+                // actually store (a tile transparent in the new source is
+                // absent from it - the old ink there must go). A leftover
+                // ghost also breaks the no-op check.
+                if let Some(old_map) = open.document.layer_tiles(*layer_id) {
+                    for (c, _) in old_map.iter() {
+                        if !new_tiles.iter().any(|(coord, _)| *coord == c) {
+                            edits.push(editor_core::pixels::TileEdit::clear(c));
+                            identical = false;
+                        }
+                    }
+                }
+                if identical {
+                    continue;
+                }
+                refreshed_any = true;
+                commands.push(
+                    Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(*layer_id), edits)
+                        .map_err(|e| e.to_string())?,
+                );
+                if let Some((old_w, old_h)) = old_size {
+                    let own = open
+                        .document
+                        .layers
+                        .get(*layer_id)
+                        .map(|l| l.transform)
+                        .unwrap_or(glam::Affine2::IDENTITY);
+                    if image.width > 0 && image.height > 0 {
+                        let ratio = glam::Affine2::from_scale(glam::Vec2::new(
+                            old_w as f32 / image.width as f32,
+                            old_h as f32 / image.height as f32,
+                        ));
+                        let matrix = (own * ratio * own.inverse()).to_cols_array();
+                        commands.push(Command::TransformLayer {
+                            layer_id: *layer_id,
+                            matrix,
+                        });
+                    }
+                }
             }
-            let command =
-                Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(layer_id), edits)
-                    .map_err(|e| e.to_string())?;
-            open.apply(command).map_err(|e| e.to_string())?;
+            if !refreshed_any {
+                // The file's stamp moved but the decoded content (and the
+                // resolution) is what is already stored: nothing to undo,
+                // nothing to report - just learn the new stamp.
+                open.asset_stamps.insert(asset, current);
+                continue;
+            }
+            // The recorded size becomes the new source's INSIDE the same
+            // transaction (card 050 review): undo then reverts the appearance
+            // and the anchor together, so the next refresh renormalizes
+            // against a size the reverted tiles actually match.
+            commands.push(Command::SetAssetSourceSize {
+                asset,
+                size: Some((image.width, image.height)),
+            });
+            let first = name_for(open, layers[0]);
+            let label = if layers.len() == 1 {
+                format!("Refresh {first}")
+            } else {
+                format!("Refresh {first} +{} sibling(s)", layers.len() - 1)
+            };
+            open.apply(Command::Transaction { label, commands })
+                .map_err(|e| e.to_string())?;
+            open.asset_stamps.insert(asset, current);
             changed += 1;
         }
-        if changed == 0 {
+        if changed == 0 && failures.is_empty() {
             return Ok("No linked source has changed".to_string());
         }
+        if !failures.is_empty() {
+            self.status = Some(format!(
+                "Refresh problems ({}): {}",
+                failures.len(),
+                failures.join("; ")
+            ));
+        }
         self.touch();
-        Ok(format!("Updated {changed} linked source(s)"))
+        if failures.is_empty() {
+            Ok(format!("Updated {changed} linked source(s)"))
+        } else {
+            Ok(format!(
+                "Updated {changed}; {} skipped (see status)",
+                failures.len()
+            ))
+        }
     }
 
     pub fn convert_to_smart_object(&mut self) -> Result<String, String> {
@@ -1796,7 +2171,7 @@ impl Editor {
     /// writes the edits back as one undoable step on the parent. This is the
     /// S1.2 embedded-document editor.
     pub fn edit_smart_object_contents(&mut self) -> Result<String, String> {
-        let (parent, layer_id, name, w, h, rgba) = {
+        let (parent, layer_id, name, w, h) = {
             let open = self
                 .active()
                 .ok_or_else(|| "No document is open".to_string())?;
@@ -1831,14 +2206,24 @@ impl Editor {
                 .get(layer)
                 .map(|l| l.name.clone())
                 .unwrap_or_else(|| "Smart Object".to_string());
-            let rgba = open.layer_pixels(layer).map_err(|e| e.to_string())?;
+            // Card 050: the tab is the SOURCE frame - the stored tiles'
+            // extent - never the parent canvas, so editing cannot reduce the
+            // source to the canvas dimensions.
+            let (mut mx, mut my) = (0i32, 0i32);
+            let map = open
+                .document
+                .layer_tiles(layer)
+                .ok_or_else(|| "The smart object has no stored pixels".to_string())?;
+            for (c, _) in map.iter() {
+                mx = mx.max(c.x);
+                my = my.max(c.y);
+            }
             (
                 open.id(),
                 layer,
                 name,
-                open.document.width(),
-                open.document.height(),
-                rgba,
+                (mx + 1) as u32 * raster::TILE_SIZE,
+                (my + 1) as u32 * raster::TILE_SIZE,
             )
         };
         let title = format!("{name} @ Contents");
@@ -1852,19 +2237,47 @@ impl Editor {
             layer: layer_id,
             contents: contents_id,
         });
-        // Seed the tab with the object's own pixels as its first undoable step,
-        // so the tab's raster IS the smart object's contents from frame one.
+        // Seed the tab with the object's FULL stored tiles (content-addressed
+        // bytes re-inserted into the tab's own store), so the tab's raster IS
+        // the smart object's source from frame one - at source resolution.
         let seed = {
-            let target_layer = self
-                .active()
-                .and_then(|d| d.document.layers.iter_depth_first().first().copied())
-                .ok_or_else(|| "Contents document has no layer".to_string())?;
-            let grid = raster::TileGrid::from_rgba8(w, h, &rgba).map_err(|e| e.to_string())?;
-            let mut edits = Vec::new();
+            // Gather (coord, bytes) from the parent first; the tab's store
+            // is separate, so the bytes re-insert there.
+            let pairs: Vec<(raster::TileCoord, Vec<u8>)> = {
+                let parent = self
+                    .docs
+                    .iter()
+                    .find(|d| d.id() == parent)
+                    .ok_or("Parent document missing")?;
+                let map = parent
+                    .document
+                    .layer_tiles(layer_id)
+                    .ok_or("The smart object has no stored pixels")?;
+                map.iter()
+                    .map(|(coord, hash)| {
+                        parent
+                            .tiles
+                            .tile(hash)
+                            .map(|b| b.to_vec())
+                            .map(|bytes| (coord, bytes))
+                            .ok_or_else(|| {
+                                "A smart object tile is missing from the store".to_string()
+                            })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?
+            };
             let doc = self.active_mut().ok_or("Contents document missing")?;
-            for (coord, tile) in grid.iter() {
-                let hash = doc.tiles.insert_bytes(tile.data().to_vec());
-                edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+            let target_layer = doc
+                .document
+                .layers
+                .iter_depth_first()
+                .first()
+                .copied()
+                .ok_or_else(|| "Contents document has no layer".to_string())?;
+            let mut edits = Vec::new();
+            for (coord, bytes) in pairs {
+                let h = doc.tiles.insert_bytes(bytes);
+                edits.push(editor_core::pixels::TileEdit::set(coord, h));
             }
             Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(target_layer), edits)
                 .map_err(|e| e.to_string())?
@@ -1884,26 +2297,48 @@ impl Editor {
             .clone()
             .ok_or_else(|| "No smart object contents are being edited".to_string())?;
 
-        // Composite the scratch tab at its own resolution.
-        let (w, h, rgba) = {
-            let idx = self
-                .docs
-                .iter()
-                .position(|d| d.id() == embedded.contents)
-                .ok_or_else(|| "The contents document is gone".to_string())?;
-            let doc = self
-                .docs
-                .get_mut(idx)
-                .ok_or_else(|| "The contents document is gone".to_string())?;
-            let rect = doc.canvas_rect();
-            let rgba = doc.composite(rect).map_err(|e| e.to_string())?;
-            (doc.document.width(), doc.document.height(), rgba)
-        };
-
-        // Write those pixels onto the parent smart object as a command, so the
-        // whole commit is one undo step.
+        // Card 050: write the tab's pixels back at SOURCE resolution - the
+        // tab IS the source frame - replacing the object's stored tiles
+        // wholesale (a coordinate the tab cleared is cleared on the parent
+        // too, so erasures propagate). One undo step.
         let layer = embedded.layer;
         let command = {
+            // Card 050: the tab must still exist — a silent empty read here
+            // would erase the object under a success message. A missing tab
+            // or layer is refused loudly; a legitimately EMPTY map (the user
+            // erased everything) commits as a wholesale clear.
+            let tab = self
+                .docs
+                .iter()
+                .find(|d| d.id() == embedded.contents)
+                .ok_or_else(|| "The contents document is gone".to_string())?;
+            let contents_layer = tab
+                .document
+                .layers
+                .iter_depth_first()
+                .first()
+                .copied()
+                .ok_or_else(|| "The contents document has no layer".to_string())?;
+            // Gather (coord, bytes) from the tab first: its store is
+            // separate from the parent's, and the borrow must end before the
+            // parent is taken mutably.
+            let pairs: Vec<(raster::TileCoord, Vec<u8>)> = tab
+                .document
+                .layer_tiles(contents_layer)
+                .map(|m| {
+                    m.iter()
+                        .map(|(coord, hash)| {
+                            tab.tiles
+                                .tile(hash)
+                                .map(|b| b.to_vec())
+                                .map(|bytes| (coord, bytes))
+                                .ok_or_else(|| {
+                                    "A contents tile is missing from the store".to_string()
+                                })
+                        })
+                        .collect::<Result<Vec<_>, String>>()
+                })
+                .unwrap_or_else(|| Ok(Vec::new()))?;
             let parent_idx = self
                 .docs
                 .iter()
@@ -1913,11 +2348,21 @@ impl Editor {
                 .docs
                 .get_mut(parent_idx)
                 .ok_or_else(|| "The parent document is gone".to_string())?;
-            let grid = raster::TileGrid::from_rgba8(w, h, &rgba).map_err(|e| e.to_string())?;
             let mut edits = Vec::new();
-            for (coord, tile) in grid.iter() {
-                let hash = parent.tiles.insert_bytes(tile.data().to_vec());
+            let mut new_coords = std::collections::BTreeSet::new();
+            for (coord, bytes) in pairs {
+                new_coords.insert(coord);
+                let hash = parent.tiles.insert_bytes(bytes);
                 edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+            }
+            // Ghost cleanup: the object's old coords the tab no longer holds
+            // (an erasure in the tab propagates as a clear).
+            if let Some(old_map) = parent.document.layer_tiles(layer) {
+                for (c, _) in old_map.iter() {
+                    if !new_coords.contains(&c) {
+                        edits.push(editor_core::pixels::TileEdit::clear(c));
+                    }
+                }
             }
             Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(layer), edits)
                 .map_err(|e| e.to_string())?
@@ -2178,6 +2623,18 @@ impl Editor {
     /// Every open document, mutably — for the shell's per-window state (the
     /// camera's viewport size). Not an editing path: content still changes only
     /// through [`Editor::apply_command`].
+    /// Card 039: drop every preview lens on non-active documents — a tab
+    /// switch must not leave a stale transform preview behind on the tab
+    /// the user left.
+    pub fn clear_stale_previews(&mut self) {
+        let active = self.active().map(|d| d.id());
+        for doc in self.docs.iter_mut() {
+            if Some(doc.id()) != active && doc.has_preview() {
+                doc.clear_preview();
+            }
+        }
+    }
+
     pub fn documents_mut(&mut self) -> &mut [OpenDocument] {
         &mut self.docs
     }
@@ -2387,6 +2844,77 @@ impl Editor {
         self.touch();
     }
 
+    /// The validated edit target for the active document: which half of the
+    /// active layer — content or mask coverage — edits aim at (card 007).
+    ///
+    /// The stored kind is sticky per document; validity is computed here, so a
+    /// mask removed while selected (undo, delete), a tab switch, or an
+    /// active-layer change all fall back to content without any repair pass.
+    pub fn edit_target(&self) -> Option<crate::edit_target::EditTarget> {
+        let doc = self.active()?;
+        let kind = self.edit_targets.kind_of(doc.id());
+        crate::edit_target::resolve_active(doc, kind)
+    }
+
+    /// The sticky kind stored for one document, validated or not.
+    pub fn edit_target_kind(&self, id: DocumentId) -> crate::edit_target::EditTargetKind {
+        self.edit_targets.kind_of(id)
+    }
+
+    /// Whether pixel edits currently aim at the active layer's MASK (card
+    /// 055): the validated read-time answer both tool routes share. A target
+    /// whose mask has since been removed resolves to content here, exactly
+    /// as it does everywhere else the target is read.
+    pub fn edit_target_is_mask(&self) -> bool {
+        matches!(
+            self.edit_target(),
+            Some(crate::edit_target::EditTarget {
+                kind: crate::edit_target::EditTargetKind::Mask,
+                ..
+            })
+        )
+    }
+
+    /// Aim the active document's edits at its content or mask coverage. A
+    /// preference, not a pixel edit: nothing here (and nothing in selection)
+    /// may mark the document dirty.
+    ///
+    /// Card 058: switching to the mask swaps the colour wells to the mask
+    /// editing pair (white foreground reveals, black conceals) WITHOUT
+    /// losing the user's content colours — they are stashed and restored
+    /// when the target switches back. A no-op switch (same kind) touches
+    /// nothing, so re-aiming at the current target never resets the wells.
+    pub fn set_edit_target_kind(&mut self, kind: crate::edit_target::EditTargetKind) {
+        let Some(doc) = self.active() else {
+            return;
+        };
+        if self.edit_targets.kind_of(doc.id()) == kind {
+            return;
+        }
+        let doc_id = doc.id();
+        self.edit_targets.set_kind(doc_id, kind);
+        // The CURRENT wells for this document (per-doc entry, or the global
+        // wells a fresh document inherits).
+        let current = self
+            .doc_colors
+            .get(&doc_id)
+            .copied()
+            .unwrap_or((self.foreground, self.background));
+        match kind {
+            crate::edit_target::EditTargetKind::Mask => {
+                self.content_color_backups.insert(doc_id, current);
+                self.doc_colors
+                    .insert(doc_id, (MASK_EDIT_FOREGROUND, MASK_EDIT_BACKGROUND));
+            }
+            crate::edit_target::EditTargetKind::Content => {
+                if let Some((fg, bg)) = self.content_color_backups.remove(&doc_id) {
+                    self.doc_colors.insert(doc_id, (fg, bg));
+                }
+            }
+        }
+        self.touch();
+    }
+
     /// Show the user a failure through the platform's dialog.
     pub fn report_error(&mut self, title: &str, message: &str) {
         self.dialogs.report_error(title, message);
@@ -2503,16 +3031,42 @@ impl Editor {
         self.touch();
     }
 
+    /// The colour wells. Card 058: per-DOCUMENT while a document is active
+    /// (each document's target switch manages its own entry), falling back
+    /// to these fields when no document is open — so tabbing between a
+    /// mask-targeted document and a content document never mixes their
+    /// colour state.
     pub fn foreground(&self) -> [f32; 4] {
+        if let Some(doc) = self.active() {
+            if let Some((fg, _)) = self.doc_colors.get(&doc.id()) {
+                return *fg;
+            }
+        }
         self.foreground
     }
 
     pub fn background(&self) -> [f32; 4] {
+        if let Some(doc) = self.active() {
+            if let Some((_, bg)) = self.doc_colors.get(&doc.id()) {
+                return *bg;
+            }
+        }
         self.background
     }
 
     pub fn set_foreground(&mut self, rgba: [f32; 4]) {
-        self.foreground = rgba;
+        match self.active() {
+            Some(doc) => {
+                let id = doc.id();
+                let bg = self
+                    .doc_colors
+                    .get(&id)
+                    .map(|(_, bg)| *bg)
+                    .unwrap_or(self.background);
+                self.doc_colors.insert(id, (rgba, bg));
+            }
+            None => self.foreground = rgba,
+        }
         self.touch();
     }
 
@@ -2529,7 +3083,18 @@ impl Editor {
     }
 
     pub fn set_background(&mut self, rgba: [f32; 4]) {
-        self.background = rgba;
+        match self.active() {
+            Some(doc) => {
+                let id = doc.id();
+                let fg = self
+                    .doc_colors
+                    .get(&id)
+                    .map(|(fg, _)| *fg)
+                    .unwrap_or(self.foreground);
+                self.doc_colors.insert(id, (fg, rgba));
+            }
+            None => self.background = rgba,
+        }
         self.touch();
     }
 
@@ -2703,6 +3268,15 @@ impl Editor {
         if let Some(doc) = self.docs.get(index) {
             let id = doc.id();
             self.discard_autosave(id);
+            // Card 050: closing either half of an embedded-contents session
+            // ends the session - a dangling one would let a later commit
+            // erase the object (the commit refuses loudly when the tab is
+            // gone; this removes the reason it ever gets there).
+            if let Some(embedded) = &self.embedded {
+                if embedded.contents == id || embedded.parent == id {
+                    self.embedded = None;
+                }
+            }
         }
         self.docs.remove(index);
         self.active = if self.docs.is_empty() {
@@ -3003,6 +3577,11 @@ impl Editor {
             | Action::ZoomFit
             | Action::ZoomActualPixels
             | Action::TemporaryHand
+            // Copy reads the canvas; Cut and Paste edit it. All three need a
+            // document — there is no canvas to copy from without one.
+            | Action::Copy
+            | Action::Cut
+            | Action::Paste
             | Action::NewLayer => doc.map(|_| ()).ok_or_else(no_doc),
 
             Action::Undo => match doc {
@@ -3091,6 +3670,31 @@ impl Editor {
                 Ok(Effect::DocumentSet)
             }
             Action::Quit => self.act_quit(),
+            // Card 052: the keyboard route reaches the same menu bridge the
+            // Edit menu drives, so the freshness policy (external payload
+            // first, internal fallback) is one policy no matter how the user
+            // asked. A refusal is a status line, not an error dialog.
+            Action::Copy => match crate::menu_bridge::perform(ui::menu::MenuAction::Copy, self) {
+                Ok(_) => Ok(Effect::View),
+                Err(e) => {
+                    self.status = Some(e);
+                    Ok(Effect::View)
+                }
+            },
+            Action::Cut => match crate::menu_bridge::perform(ui::menu::MenuAction::Cut, self) {
+                Ok(_) => Ok(Effect::DocumentEdited),
+                Err(e) => {
+                    self.status = Some(e);
+                    Ok(Effect::View)
+                }
+            },
+            Action::Paste => match crate::menu_bridge::perform(ui::menu::MenuAction::Paste, self) {
+                Ok(_) => Ok(Effect::DocumentEdited),
+                Err(e) => {
+                    self.status = Some(e);
+                    Ok(Effect::View)
+                }
+            },
             Action::Undo => self.act_undo(),
             Action::Redo => self.act_redo(),
             Action::NewLayer => self.act_new_layer(),
@@ -3526,6 +4130,63 @@ pub fn layer_kind_name(kind: &LayerKind) -> &'static str {
 /// Duration between autosaves, exposed for the shell's frame scheduler.
 pub fn autosave_period(prefs: &Preferences) -> Option<Duration> {
     prefs.autosave_interval()
+}
+
+#[cfg(test)]
+mod preview_sweep_tests {
+    use super::*;
+
+    #[test]
+    fn a_tab_switch_leaves_no_stale_preview_on_the_tab_the_user_left() {
+        // Card 039: two open documents; a preview lens lives on the inactive
+        // one; the sweep drops it without touching the active document's.
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("a.png");
+        std::fs::write(
+            &png,
+            raster::encode(raster::ExportFormat::Png, 16, 16, &[255u8; 16 * 16 * 4]).unwrap(),
+        )
+        .unwrap();
+        let mut editor = Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(crate::dialogs::ScriptedDialogs::new()),
+        );
+        editor.open_path(&png).unwrap();
+        let first = editor.active().unwrap().id();
+        editor.open_path(&png).unwrap();
+        let second = editor.active().unwrap().id();
+        // A preview on the FIRST document (now inactive).
+        let layer = editor.documents()[0].document.active_layer().unwrap();
+        editor.documents_mut()[0]
+            .set_preview(layer, glam::Affine2::from_translation(glam::vec2(4.0, 0.0)));
+        assert!(editor.documents()[0].has_preview());
+
+        editor.clear_stale_previews();
+        assert!(
+            !editor.documents()[0].has_preview(),
+            "the inactive tab's lens is swept"
+        );
+        // The active document's lens (none here) is untouched; setting one
+        // on the active document survives the sweep.
+        let layer = editor.active().unwrap().document.active_layer().unwrap();
+        editor
+            .active_mut()
+            .unwrap()
+            .set_preview(layer, glam::Affine2::IDENTITY);
+        editor.clear_stale_previews();
+        assert!(
+            editor
+                .documents()
+                .iter()
+                .find(|d| d.id() == second)
+                .unwrap()
+                .has_preview(),
+            "the active document's lens survives"
+        );
+        let _ = first;
+    }
 }
 
 #[cfg(test)]

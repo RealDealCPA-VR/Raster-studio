@@ -63,6 +63,7 @@ pub mod chrome;
 pub mod color_edit;
 pub mod color_picker;
 pub mod controls;
+pub mod defringe;
 pub mod export_as;
 pub mod fill_stroke;
 pub mod filter_dialog;
@@ -73,6 +74,7 @@ pub mod image_size;
 pub mod layer_style;
 pub mod new_document;
 pub mod preferences;
+pub mod refine_mask;
 pub mod sizes;
 pub mod units;
 
@@ -141,6 +143,33 @@ pub(crate) mod tests_support {
             )),
             Box::new(PreferencesDialog::default()),
             Box::new(FillDialog::new(FillSpec::default(), Vec::new())),
+            Box::new(refine_mask::RefineMaskDialog::with_spec(
+                // A non-identity spec: the dialog refuses to confirm an
+                // all-identity refinement, and the registry test requires
+                // Enter to confirm.
+                refine_mask::RefineMaskSpec {
+                    feather_px: 4.0,
+                    ..Default::default()
+                },
+                vec![0; 16 * 16 * 4],
+                vec![255; 16 * 16],
+                16,
+                16,
+            )),
+            Box::new(defringe::DefringeDialog::with_spec(
+                // A non-identity spec: the dialog refuses to confirm an
+                // all-identity cleanup, and the registry test requires
+                // Enter to confirm.
+                defringe::DefringeSpec {
+                    radius_px: 3,
+                    strength: 0.8,
+                    ..Default::default()
+                },
+                vec![0; 16 * 16 * 4],
+                vec![255; 16 * 16],
+                16,
+                16,
+            )),
             Box::new(StrokeDialog::new(StrokeSpec::default())),
         ];
         for filter in filter_dialog::FILTERS {
@@ -173,6 +202,11 @@ pub(crate) mod tests_support {
                 FilterDialog::with_placeholder(&filter_dialog::FILTERS[0]).invocation(),
             )),
             DialogAction::Fill(Box::<FillSpec>::default()),
+            DialogAction::Defringe(Box::new(defringe::DefringeSpec {
+                radius_px: 3,
+                strength: 0.8,
+                ..Default::default()
+            })),
             DialogAction::Stroke(Box::<StrokeSpec>::default()),
         ]
     }

@@ -63,6 +63,13 @@ pub enum DialogAction {
     RunFilter(Box<FilterInvocation>),
     /// Fill the active selection.
     Fill(Box<super::fill_stroke::FillSpec>),
+    /// Card 060: bake the Refine Mask dialog's parameters into the active
+    /// layer's mask coverage (one undoable transaction, shell-side).
+    RefineMask(Box<super::refine_mask::RefineMaskSpec>),
+    /// Card 062: run the Remove Color Fringe dialog's cleanup over the
+    /// active layer's pixels near the mask boundary (one undoable
+    /// transaction, shell-side; coverage untouched).
+    Defringe(Box<super::defringe::DefringeSpec>),
     /// Stroke the active selection's border.
     Stroke(Box<super::fill_stroke::StrokeSpec>),
 }
@@ -93,6 +100,11 @@ impl DialogAction {
             Self::RunFilter(invocation) => invocation.is_valid(),
             Self::Fill(spec) => spec.is_valid(),
             Self::Stroke(spec) => spec.is_valid(),
+            // Card 060: the dialog refuses an all-identity spec, so a
+            // confirmed refinement always has at least one parameter set.
+            Self::RefineMask(spec) => !spec.is_identity(),
+            // Card 062: the dialog refuses an all-identity cleanup.
+            Self::Defringe(spec) => !spec.is_identity(),
         }
     }
 
@@ -111,6 +123,8 @@ impl DialogAction {
             Self::SetPreferences(_) => "Preferences".to_string(),
             Self::Fill(_) => "Fill".to_string(),
             Self::Stroke(_) => "Stroke".to_string(),
+            Self::RefineMask(_) => crate::strings::tr("ui.refine_mask.title").to_string(),
+            Self::Defringe(_) => crate::strings::tr("ui.defringe.title").to_string(),
             Self::RunFilter(invocation) => invocation.filter.name().to_string(),
         }
     }

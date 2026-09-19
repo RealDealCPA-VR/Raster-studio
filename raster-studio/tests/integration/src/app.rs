@@ -26,18 +26,25 @@
 //! adapter of exactly this shape and this file can be deleted.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use app_shell::doc::{DocumentId, OpenDocument};
+use app_shell::editor::Editor;
+use app_shell::tool_input::{PointerOutcome, ToolPointer};
+use app_shell::{dialogs::ScriptedDialogs, prefs::AppPaths, recent::RecentFiles};
 use color::ColorSpace;
 use compositor::{Canvas, CompositeOptions, MemoryTileSource, TileSource};
 use editor_core::{
-    Command, LayerPatch, Patch, PixelKey, PixelStore, PixelTarget, TileEdit, TileMap,
+    Command, LayerPatch, Patch, PixelKey, PixelStore, PixelTarget, Selection, TileEdit, TileMap,
     MASK_TILE_BYTES,
 };
+use glam::Vec2;
 use layer_model::{Layer, LayerId, LayerMask, MaskId};
 use raster::{PixelFormat, PixelRect, Tile, TileCoord, TileHash, TILE_SIZE};
 use tools::TileAccess;
+use ui::canvas::{PointerInput, PointerPhase};
+use ui::menu::MenuAction;
 
 /// The version string a save records. The application passes its own; the value
 /// only has to be stable so a reopened package can be compared with itself.
@@ -119,6 +126,157 @@ pub fn open_image(path: &std::path::Path) -> OpenDocument {
 /// Reopen a `.rstudio` package, through the application's own path.
 pub fn open_project(path: &std::path::Path) -> OpenDocument {
     OpenDocument::open_project(next_id(), path, HISTORY_DEPTH).expect("the package opens")
+}
+
+// ---------------------------------------------------------------------------
+// Real shell routes (Task 004)
+//
+// `DocExt` above drives `OpenDocument` directly, which is the engine but not
+// the shell. The helpers below drive the `app_shell::Editor` the binary runs —
+// the same `ToolPointer` route `shell.rs` feeds pointer samples into, the same
+// `Workspace::menu_context` a frame builds before every menu resolves, and the
+// same `Editor::apply_command` every `ChromeOutput` command lands in. They
+// exist so the reproducer tests can fail for the *product's* behavior rather
+// than for a model's.
+// ---------------------------------------------------------------------------
+
+/// The viewport the shell-route helpers set up, large enough that a 64 x 64
+/// canvas fits at 100% zoom with the image centred.
+pub const SHELL_VIEWPORT: Vec2 = Vec2::new(400.0, 300.0);
+
+/// An `Editor` holding one opaque white `w × h` canvas document — File ▸ Open
+/// through the application's own path — its camera at 100% with the image
+/// centred, so document pixel `(x, y)` maps to the screen point
+/// [`shell_screen_pt`] names. The same setup `app-shell`'s own pointer-route
+/// tests use, rebuilt through the crate's public surface.
+///
+/// The tempdir must outlive the editor: `AppPaths` keeps the path.
+pub fn shell_editor(dir: &Path, w: u32, h: u32) -> Editor {
+    let canvas = dir.join("canvas.png");
+    let white = vec![255u8; (w as usize) * (h as usize) * 4];
+    std::fs::write(
+        &canvas,
+        raster::encode(raster::ExportFormat::Png, w, h, &white).expect("a white canvas encodes"),
+    )
+    .expect("the canvas png writes");
+    let mut editor = Editor::with_state(
+        AppPaths::rooted(dir.join("config")),
+        app_shell::prefs::Preferences::default(),
+        RecentFiles::new(),
+        Box::new(ScriptedDialogs::new()),
+    );
+    editor.open_path(&canvas).expect("the canvas opens");
+    center_camera(editor.active_mut().expect("one document"));
+    editor
+}
+
+/// Camera at 100% with the image centred, over [`SHELL_VIEWPORT`].
+pub fn center_camera(doc: &mut OpenDocument) {
+    doc.set_viewport(SHELL_VIEWPORT);
+    doc.camera.zoom = 1.0;
+    doc.camera.center = Vec2::new(
+        doc.document.width() as f32 / 2.0,
+        doc.document.height() as f32 / 2.0,
+    );
+}
+
+/// The screen point a document pixel sits at, under the fixture camera.
+pub fn shell_screen_pt(doc: &OpenDocument, x: f32, y: f32) -> Vec2 {
+    SHELL_VIEWPORT * 0.5 + Vec2::new(x, y)
+        - Vec2::new(doc.document.width() as f32, doc.document.height() as f32) / 2.0
+}
+
+/// One pointer sample through [`ToolPointer::handle`] — the route `shell.rs`
+/// feeds winit events into.
+pub fn shell_pointer(
+    pointer: &mut ToolPointer,
+    editor: &mut Editor,
+    phase: PointerPhase,
+    doc_pt: Vec2,
+) -> PointerOutcome {
+    let doc = editor.active().expect("a document is open");
+    let pos = shell_screen_pt(doc, doc_pt.x, doc_pt.y);
+    pointer.handle(editor, PointerInput::at(phase, pos), false, &[])
+}
+
+/// Press, drag through `points`, release — one real gesture.
+pub fn shell_stroke(
+    pointer: &mut ToolPointer,
+    editor: &mut Editor,
+    points: &[Vec2],
+) -> Vec<PointerOutcome> {
+    let mut out = Vec::new();
+    for (i, p) in points.iter().enumerate() {
+        let phase = if i == 0 {
+            PointerPhase::Down
+        } else {
+            PointerPhase::Move
+        };
+        out.push(shell_pointer(pointer, editor, phase, *p));
+    }
+    let last = *points.last().expect("at least one point");
+    out.push(shell_pointer(pointer, editor, PointerPhase::Up, last));
+    out
+}
+
+/// Resolve a menu action the way a frame does — [`ui::Workspace::menu_context`]
+/// over the active document, then the action's own enablement — and hand back
+/// the intent the menu item would emit.
+///
+/// `focus` is the Properties panel's Layer/Mask state; the shell's frame builds
+/// its menu context from the same workspace the segmented control writes, so
+/// the reproducer passes the state the control produces.
+pub fn menu_intent(
+    workspace: &ui::Workspace,
+    editor: &Editor,
+    action: MenuAction,
+) -> Option<ui::intent::Intent> {
+    let doc = editor.active()?;
+    let ctx = workspace.menu_context(&doc.document, &doc.history);
+    action.resolve(&ctx).intent().cloned()
+}
+
+/// Apply a [`ui::intent::Intent::Document`] command through the editor's real
+/// history, exactly what the shell does with `ChromeOutput::commands`.
+pub fn apply_intent(editor: &mut Editor, intent: ui::intent::Intent) {
+    match intent {
+        ui::intent::Intent::Document(command) => editor.apply_command(command),
+        other => panic!("the harness only applies document intents, got {other:?}"),
+    }
+}
+
+/// The layer a fresh `shell_editor` document opens with: the canvas image
+/// itself, active because a one-layer document activates it.
+pub fn the_opened_layer(editor: &Editor) -> LayerId {
+    editor
+        .active()
+        .and_then(|doc| doc.document.active_layer())
+        .expect("the opened canvas is one active layer")
+}
+
+/// The layer's tile references, for before/after identity checks.
+pub fn layer_tile_map(editor: &Editor, layer: LayerId) -> Option<TileMap> {
+    editor
+        .active()
+        .and_then(|doc| doc.document.layer_tiles(layer).cloned())
+}
+
+/// The layer's mask coverage tile map, the same way.
+pub fn mask_tile_map(editor: &Editor, layer: LayerId) -> Option<TileMap> {
+    editor
+        .active()
+        .and_then(|doc| doc.document.mask_tiles(layer).cloned())
+}
+
+/// Set the document's selection the way the marquee does — a direct field
+/// write, not a command (`app-shell`'s own doc: a selection gesture is not
+/// undoable yet).
+pub fn set_selection(editor: &mut Editor, selection: Selection) {
+    editor
+        .active_mut()
+        .expect("a document is open")
+        .document
+        .selection = selection;
 }
 
 /// Command builders and read-backs the tests share.

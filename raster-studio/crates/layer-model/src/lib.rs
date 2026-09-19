@@ -38,6 +38,7 @@ pub mod effects;
 pub mod ids;
 pub mod layer;
 pub mod mask;
+pub mod text;
 pub mod tree;
 
 pub use blend::{dissolve_keeps_source, BlendMode};

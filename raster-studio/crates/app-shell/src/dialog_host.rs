@@ -61,6 +61,11 @@ pub enum ActiveDialog {
     Fill(Box<ui::dialogs::FillDialog>),
     /// Edit ▸ Stroke…
     Stroke(Box<ui::dialogs::StrokeDialog>),
+    /// Layer ▸ Refine Mask… — the edge-refinement dialog (card 060).
+    RefineMask(Box<ui::dialogs::refine_mask::RefineMaskDialog>),
+    /// Layer ▸ Remove Color Fringe… — the edge colour cleanup dialog
+    /// (card 062).
+    Defringe(Box<ui::dialogs::defringe::DefringeDialog>),
 }
 
 impl ActiveDialog {
@@ -90,6 +95,8 @@ impl ActiveDialog {
             Self::FilterGallery(dialog) => dialog.show(ctx),
             Self::Fill(dialog) => dialog.show(ctx, sampler),
             Self::Stroke(dialog) => dialog.show(ctx),
+            Self::RefineMask(dialog) => dialog.show(ctx),
+            Self::Defringe(dialog) => dialog.show(ctx),
         }
     }
 }
@@ -189,7 +196,26 @@ impl DialogHost {
                 }
                 None => false,
             },
-            // Filter ▸ Filter Gallery opens the browser over the catalogue.
+            // Card 060: Layer ▸ Refine Mask… — the dialog
+            // is seeded with the active layer's RAW pixels and its mask's
+            // pose-aware baseline (see refine_mask_dialog).
+            ui::menu::MenuAction::RefineMask => match refine_mask_dialog(editor) {
+                Some(dialog) => {
+                    self.open(dialog);
+                    true
+                }
+                None => false,
+            },
+            // Card 062: Layer ▸ Remove Color Fringe… — the dialog is seeded
+            // with the active layer's RAW pixels and its mask's pose-aware
+            // coverage (see defringe_dialog).
+            ui::menu::MenuAction::RemoveColorFringe => match defringe_dialog(editor) {
+                Some(dialog) => {
+                    self.open(dialog);
+                    true
+                }
+                None => false,
+            },
             ui::menu::MenuAction::FilterGallery => match filter_gallery_dialog(editor) {
                 Some(dialog) => {
                     self.open(dialog);
@@ -309,6 +335,30 @@ impl DialogHost {
         match self.active_for_test() {
             ActiveDialog::Fill(dialog) => dialog,
             other => panic!("the active dialog is {other:?}, not the fill dialog"),
+        }
+    }
+
+    /// Card 060: the opened Refine Mask dialog, for host-path tests — the
+    /// place where the content-source wiring (raw pixels vs masked) broke in
+    /// review round 1.
+    #[cfg(test)]
+    pub(crate) fn active_refine_mask_dialog_for_test(
+        &mut self,
+    ) -> &mut ui::dialogs::refine_mask::RefineMaskDialog {
+        match self.active_for_test() {
+            ActiveDialog::RefineMask(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the refine-mask dialog"),
+        }
+    }
+
+    /// Card 062: the opened Remove Color Fringe dialog, for host-path tests.
+    #[cfg(test)]
+    pub(crate) fn active_defringe_dialog_for_test(
+        &mut self,
+    ) -> &mut ui::dialogs::defringe::DefringeDialog {
+        match self.active_for_test() {
+            ActiveDialog::Defringe(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the defringe dialog"),
         }
     }
 
@@ -574,6 +624,62 @@ fn filter_dialog_for(editor: &crate::Editor, id: ui::menu::FilterId) -> Option<A
     Some(ActiveDialog::Filter(Box::new(FilterDialog::new(
         spec, source,
     ))))
+}
+
+/// Card 060: a [`RefineMaskDialog`] over the active layer's RAW pixels
+/// (card 059 review lesson: `layer_pixels` already carries the enabled mask
+/// in its alpha — the preview would double-apply the baseline and hide the
+/// expand/outer-feather effect) and its mask's pose-aware baseline coverage.
+/// `None` when there is no layer or no mask to refine (the menu gates the
+/// same way; this is the second line of defence).
+///
+/// RECORDED (row 060 / T043 remainder, the apply_mask mixed-space family):
+/// `read_layer` lays the store 1:1 onto canvas indices, so on a TRANSFORMED
+/// layer the preview's content and the pose-aware coverage only align at an
+/// identity layer transform — the confirmation itself writes through the
+/// pose-aware writer either way.
+fn refine_mask_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
+    let open = editor.active()?;
+    let layer = open.document.active_layer()?;
+    // The second line of defence behind the menu's gate: no mask, no dialog.
+    open.document.layers.get(layer)?.mask.as_ref()?;
+    let (w, h) = (open.document.width(), open.document.height());
+    let command = {
+        let doc = editor.active()?;
+        crate::menu_bridge::pixels::read_layer(doc, layer)
+    };
+    let baseline = {
+        let doc = editor.active()?;
+        crate::menu_bridge::read_mask_coverage(doc, layer, w, h)
+    };
+    Some(ActiveDialog::RefineMask(Box::new(
+        ui::dialogs::refine_mask::RefineMaskDialog::new(command, baseline, w, h),
+    )))
+}
+
+/// Card 062: a [`DefringeDialog`] over the active layer's RAW pixels and
+/// its mask's pose-aware canvas-space coverage. `None` when there is no
+/// layer or no mask (the menu gates the same way; this is the second line
+/// of defence). The mixed-space caveat of [`refine_mask_dialog`] applies
+/// identically: on a TRANSFORMED layer the preview aligns only at an
+/// identity layer transform; the confirmation writes through the pose-aware
+/// pixel writer either way.
+fn defringe_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
+    let open = editor.active()?;
+    let layer = open.document.active_layer()?;
+    open.document.layers.get(layer)?.mask.as_ref()?;
+    let (w, h) = (open.document.width(), open.document.height());
+    let command = {
+        let doc = editor.active()?;
+        crate::menu_bridge::pixels::read_layer(doc, layer)
+    };
+    let coverage = {
+        let doc = editor.active()?;
+        crate::menu_bridge::read_mask_coverage(doc, layer, w, h)
+    };
+    Some(ActiveDialog::Defringe(Box::new(
+        ui::dialogs::defringe::DefringeDialog::new(command, coverage, w, h),
+    )))
 }
 
 /// The [`FilterGalleryDialog`] over the active layer's pixels.

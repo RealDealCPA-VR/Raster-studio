@@ -558,24 +558,43 @@ fn a_transform_moves_pixels_and_emits_one_command() {
     let canvas = fx.canvas();
     let cmds = {
         let mut ctx = ToolContext::new(&mut fx.tiles, canvas).with_layer(layer);
+        // Card 035: the session began through the tool's own begin() — the
+        // layer identity rides the context, and the whole-layer affine
+        // commits as a transform update, never a resample.
+        ctx.active_layer = Some(layer);
         tool.commit(&mut ctx).unwrap();
         ctx.drain()
     };
     assert_eq!(cmds.len(), 1, "a transform commit is one command");
+    let Command::TransformLayer { layer_id, matrix } = cmds[0] else {
+        panic!(
+            "a whole-layer affine commits as a transform update: {:?}",
+            cmds[0]
+        );
+    };
+    assert_eq!(layer_id, layer);
+    // The delta: 100 px right, 60 px down (the Inside-handle dragged from
+    // (40,40) to (140,100) moves the box by the difference).
+    assert_eq!(&matrix[4..], &[100.0, 60.0], "the translation landed");
     let undo = fx.commit(cmds);
 
+    // The tiles are untouched — the transform moves them at composite time.
     assert_eq!(
-        fx.pixel(140, 100),
+        fx.pixel(40, 40),
         [200, 10, 10, 255],
-        "content did not arrive"
+        "the source pixels keep their hashes"
     );
-    assert_eq!(fx.pixel(40, 40), [0, 0, 0, 0], "content did not leave");
-    for x in 100..200 {
-        let p = fx.pixel(x, 100);
-        assert!(p[0] == 0 || p[0] == 200, "resampling produced {p:?}");
-    }
+    assert_eq!(
+        fx.doc.layers.get(fx.layer).unwrap().transform.translation,
+        glam::Vec2::new(100.0, 60.0),
+        "the transform moved"
+    );
     fx.commit(undo);
-    assert_eq!(fx.pixel(40, 40), [200, 10, 10, 255], "undo did not restore");
+    assert_eq!(
+        fx.doc.layers.get(fx.layer).unwrap().transform.translation,
+        glam::Vec2::ZERO,
+        "undo restores the baseline transform"
+    );
 }
 
 #[test]
@@ -1491,15 +1510,178 @@ fn a_scale_after_a_visit_to_warp_mode_is_not_clipped_to_the_stale_mesh() {
     let canvas = fx.canvas();
     let cmds = {
         let mut ctx = ToolContext::new(&mut fx.tiles, canvas).with_layer(layer);
+        // Card 035: a whole-layer scale is a transform update — no mesh, no
+        // resample, so the stale warp mesh cannot clip it.
+        ctx.active_layer = Some(layer);
         tool.commit(&mut ctx).unwrap();
         ctx.drain()
     };
     assert_eq!(cmds.len(), 1, "a transform commit is one command");
+    assert!(
+        matches!(cmds[0], Command::TransformLayer { .. }),
+        "the scale lands as a transform update: {:?}",
+        cmds[0]
+    );
+    fx.commit(cmds);
+    let transform = fx.doc.layers.get(fx.layer).unwrap().transform;
+    assert!(
+        transform.matrix2.x_axis.x > 4.0,
+        "the scale grew past the stale mesh box: {transform:?}"
+    );
+}
+
+#[test]
+fn a_whole_layer_skew_commits_as_a_transform_update() {
+    // Card 035: affine skew is in the layer-transform set — a whole-layer
+    // skew must not rasterize the layer.
+    let mut fx = fixture(256, 256);
+    fx.paint_rect(PixelRect::new(20, 20, 40, 40), [200, 10, 10, 255]);
+    let hashes_before = common::tile_hashes(&fx.tiles, fx.key(), PixelRect::new(0, 0, 256, 256));
+
+    let mut tool = TransformTool::default();
+    tool.mode = TransformMode::Skew;
+    tool.begin(PixelRect::new(20, 20, 40, 40)).unwrap();
+    {
+        let state = tool.state.as_mut().unwrap();
+        state.drag(
+            TransformMode::Skew,
+            Handle::Edge(0),
+            Vec2::new(20.0, 40.0),
+            Vec2::new(60.0, 40.0),
+        );
+    }
+    let layer = fx.layer;
+    let canvas = fx.canvas();
+    let cmds = {
+        let mut ctx = ToolContext::new(&mut fx.tiles, canvas).with_layer(layer);
+        ctx.active_layer = Some(layer);
+        tool.commit(&mut ctx).unwrap();
+        ctx.drain()
+    };
+    assert_eq!(cmds.len(), 1, "one command");
+    assert!(
+        matches!(cmds[0], Command::TransformLayer { .. }),
+        "the skew lands as a transform update: {:?}",
+        cmds[0]
+    );
+    fx.commit(cmds);
+    assert_eq!(
+        common::tile_hashes(&fx.tiles, fx.key(), PixelRect::new(0, 0, 256, 256)),
+        hashes_before,
+        "the tiles keep their hashes through a skew"
+    );
+}
+
+/// Card 044's done-check: perspective/distort/warp over a parametric layer
+/// is refused with a sentence — never silently rasterized, never corrupted.
+/// The affine modes stay editable for every kind.
+#[test]
+fn a_warp_on_a_parametric_layer_is_refused_not_rasterized() {
+    use layer_model::{text::TextLayer, Layer, LayerKind};
+
+    let mut fx = fixture(128, 128);
+    let text = Layer::with_kind(
+        "Headline",
+        LayerKind::Text(TextLayer::legacy("hello", "DejaVu Sans", 24.0)),
+    );
+    let text_id = text.id;
+    Command::create_layer(text).apply(&mut fx.doc).unwrap();
+    fx.doc.set_active_layer(Some(text_id)).unwrap();
+
+    let mut tool = TransformTool::with_mode(TransformMode::Warp);
+    tool.begin(PixelRect::new(0, 0, 96, 96)).unwrap();
+    tool.state.as_mut().unwrap().drag(
+        TransformMode::Warp,
+        Handle::Mesh(1, 1),
+        Vec2::new(10.0, 10.0),
+        Vec2::new(30.0, 24.0),
+    );
+
+    let canvas = fx.canvas();
+    let mut ctx = ToolContext::new(&mut fx.tiles, canvas).with_layer(text_id);
+    ctx.active_layer_parametric = true;
+    let err = tool.commit(&mut ctx).unwrap_err();
+    assert!(
+        matches!(err, tools::ToolError::NonAffineParametric),
+        "expected NonAffineParametric, got {err:?}"
+    );
+    assert!(
+        ctx.commands().is_empty() && ctx.drain_requests().is_empty(),
+        "a refused warp still emitted"
+    );
+    drop(ctx);
+    // The layer's own tiles were never touched: nothing to rasterize into.
+    assert!(
+        fx.doc.pixels.tiles(PixelKey::Layer(text_id)).is_none(),
+        "the refused warp wrote tiles into the text layer"
+    );
+    // The affine modes stay editable: a skew commits as a layer transform.
+    let mut tool = TransformTool::with_mode(TransformMode::Skew);
+    tool.begin(PixelRect::new(0, 0, 96, 96)).unwrap();
+    tool.state.as_mut().unwrap().drag(
+        TransformMode::Skew,
+        Handle::Corner(1),
+        Vec2::new(96.0, 0.0),
+        Vec2::new(120.0, 0.0),
+    );
+    let canvas = fx.canvas();
+    let mut ctx = ToolContext::new(&mut fx.tiles, canvas).with_layer(text_id);
+    ctx.active_layer_parametric = true;
+    tool.commit(&mut ctx)
+        .expect("an affine skew stays editable");
+    assert!(
+        ctx.commands()
+            .iter()
+            .any(|c| matches!(c, Command::TransformLayer { layer_id, .. } if *layer_id == text_id)),
+        "the skew committed as a layer transform"
+    );
+    drop(ctx);
+}
+
+/// Card 044: a distorted layer may land partly off-canvas — the tile store
+/// holds off-canvas content, so the resample must write there instead of
+/// clipping stored ink at the picture edge.
+#[test]
+fn a_distort_keeps_the_ink_that_lands_off_the_canvas() {
+    let mut fx = fixture(128, 128);
+    fx.paint_rect(PixelRect::new(32, 32, 64, 64), [12, 34, 56, 255]);
+
+    let mut tool = TransformTool::with_mode(TransformMode::Distort);
+    tool.begin(PixelRect::new(32, 32, 64, 64)).unwrap();
+    // Drag the right corners past the canvas edge.
+    tool.state.as_mut().unwrap().drag(
+        TransformMode::Distort,
+        Handle::Corner(1),
+        Vec2::new(96.0, 32.0),
+        Vec2::new(180.0, 40.0),
+    );
+    tool.state.as_mut().unwrap().drag(
+        TransformMode::Distort,
+        Handle::Corner(2),
+        Vec2::new(96.0, 96.0),
+        Vec2::new(180.0, 90.0),
+    );
+
+    let canvas = fx.canvas();
+    let mut ctx = ToolContext::new(&mut fx.tiles, canvas).with_layer(fx.layer);
+    ctx.active_layer_parametric = false;
+    tool.commit(&mut ctx)
+        .expect("a distort on raster pixels commits");
+    let cmds = ctx.drain();
+    drop(ctx);
     fx.commit(cmds);
 
-    assert_eq!(
-        fx.pixel(400, 400),
-        [255, 0, 0, 255],
-        "the scaled result was truncated to the stale mesh box"
+    // The ink survives off-canvas: doc (150, 60) is inside the distorted
+    // quad, well past the 128px picture edge.
+    let patch = tools::ColorPatch::load(
+        &fx.tiles,
+        PixelKey::Layer(fx.layer),
+        PixelRect::new(128, 0, 64, 128),
+    )
+    .unwrap();
+    let at = patch.buffer().get(150, 60);
+    assert!(
+        at[3] > 0.5,
+        "the ink that landed off-canvas was clipped away: {at:?}"
     );
 }

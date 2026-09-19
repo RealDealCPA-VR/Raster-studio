@@ -79,6 +79,13 @@ pub enum ImportError {
     EmptyImage { width: u32, height: u32 },
     #[error("the image does not hold {expected} bytes of RGBA8 ({found} found)")]
     PixelCount { expected: usize, found: usize },
+    /// Card 047: the source's ICC profile cannot be transformed (not a
+    /// matrix-shaper profile, or its bytes are missing). Placement refuses
+    /// rather than silently treating the pixels as sRGB — the fallback the
+    /// infallible entry points take is exactly what this error exists to
+    /// surface.
+    #[error("this image's colour profile ({name}) cannot be converted into the working space")]
+    UnsupportedColorProfile { name: &'static str },
     #[error(transparent)]
     Grid(#[from] raster::GridError),
     #[error("building the import command failed: {0}")]

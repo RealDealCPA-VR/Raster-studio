@@ -134,7 +134,9 @@ pub use registry::{Cursor, OptionKind, OptionSpec, ToolGroup, ToolInfo};
 pub use stroke::{StrokeBuffer, StrokeOp, StrokeTool};
 pub use text::{TextSession, TypeTool};
 pub use tiles::{MemoryTiles, TileAccess};
+pub use tool::TextHitCaret;
 pub use tool::{
-    CropRequest, Modifiers, PaintTarget, Pattern, PointerEvent, SelectionEdit, Slice, TextEdit,
-    Tool, ToolContext, ToolId, ToolRequest, ViewState,
+    snap_delta, with_link_chain, CropRequest, Modifiers, PaintTarget, Pattern, PointerEvent,
+    SelectionEdit, SessionGeometry, Slice, SnapAxis, SnapCandidate, TextEdit, Tool, ToolContext,
+    ToolId, ToolRequest, ToolSetting, ViewState,
 };

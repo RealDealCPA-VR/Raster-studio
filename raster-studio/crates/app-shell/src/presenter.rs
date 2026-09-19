@@ -369,6 +369,15 @@ pub struct CanvasPresenter {
     /// — the document did not move — so without this flag the change would
     /// appear only where the user next painted.
     mask_dirty: bool,
+    /// Card 059: how the ACTIVE layer's mask is presented (the Layers panel's
+    /// mask well picks it) and the theme tint the overlay mode blends with.
+    /// A view setting, exactly like [`CanvasPresenter::mask`]: applied to
+    /// every buffer on its way to the texture, never to the document.
+    mask_view: ui::MaskViewMode,
+    overlay_tint: [u8; 3],
+    /// `true` when the mask view changed since the last upload (same shape as
+    /// [`CanvasPresenter::mask_dirty`]).
+    mask_view_dirty: bool,
 }
 
 impl CanvasPresenter {
@@ -430,6 +439,119 @@ impl CanvasPresenter {
         true
     }
 
+    /// Card 059: how the ACTIVE layer's mask reaches the canvas, and the
+    /// theme tint the overlay blends with. Like [`Self::set_channel_mask`]:
+    /// the shell reads the panel's choice every frame and a change dirties
+    /// the whole texture, because a view change alters every pixel without
+    /// moving a single tile.
+    pub fn set_mask_view(&mut self, view: ui::MaskViewMode, tint: [u8; 3]) -> bool {
+        if self.mask_view == view && self.overlay_tint == tint {
+            return false;
+        }
+        self.mask_view = view;
+        self.overlay_tint = tint;
+        self.mask_view_dirty = true;
+        true
+    }
+
+    /// Card 059: apply the mask view to one canvas-space `rect` of RGBA8.
+    ///
+    /// `Grayscale` replaces the pixels with the mask plane itself (black
+    /// hidden to white revealed, opaque); `Overlay` blends the theme tint
+    /// over the concealed area, fading out as coverage rises. Both sample
+    /// the SAME pose-aware coverage the compositor masks with, so all three
+    /// views show the same mask geometry; a DISABLED mask contributes
+    /// nothing to the composite, so both views fall back to it (the
+    /// coverage stays stored — disabling never discards). With no active
+    /// layer or no mask there is nothing to present, which is also the
+    /// composite.
+    fn apply_mask_view(&self, doc: &OpenDocument, rect: PixelRect, rgba: &mut [u8]) {
+        if self.mask_view == ui::MaskViewMode::Composite {
+            return;
+        }
+        let Some(layer) = doc.document.active_layer() else {
+            return;
+        };
+        let Some(mask) = doc.document.layers.get(layer).and_then(|l| l.mask.as_ref()) else {
+            return;
+        };
+        // Card 059 (review round 1): the compositor no-ops a mask that
+        // does not AFFECT the composite — disabled OR zero density
+        // (`LayerMask::affects_composite`) — so both views fall back to the
+        // composite: tinting or graying by coverage the compositor is
+        // ignoring would lie about the geometry. (Mid-range density and
+        // feather are presented at store strength — recorded limitation.)
+        if !mask.affects_composite() {
+            return;
+        }
+        let pose = crate::menu_bridge::mask_pose(doc, layer);
+        let pose_inverse = pose.inverse();
+        let store = doc.document.mask_tiles(layer);
+        let ts = raster::TILE_SIZE as i32;
+        // Card 059 (review round 1): the compositor applies the mask's
+        // INVERTED flag on top of the store (`LayerMask::coverage` answers
+        // 1.0 − s) — reachable from the Properties panel's Invert checkbox
+        // and PSD import. The view must present the same field, or grayscale
+        // shows white exactly where the layer is hidden.
+        let inverted = mask.inverted;
+        let read = |x: i64, y: i64| -> u8 {
+            let (mx, my) = crate::menu_bridge::canvas_to_mask(
+                pose_inverse,
+                glam::Vec2::new(x as f32, y as f32),
+            );
+            let coord = raster::TileCoord::new(mx.div_euclid(ts), my.div_euclid(ts), 0);
+            let v = store
+                .and_then(|m| m.get(coord))
+                .and_then(|hash| compositor::TileSource::tile(&doc.tiles, hash))
+                .map(|bytes| {
+                    let px = my.rem_euclid(ts) as usize * ts as usize + mx.rem_euclid(ts) as usize;
+                    bytes.get(px).copied().unwrap_or(0)
+                })
+                .unwrap_or(0);
+            if inverted {
+                255 - v
+            } else {
+                v
+            }
+        };
+        let [tr, tg, tb] = self.overlay_tint;
+        for y in 0..rect.height as i64 {
+            for x in 0..rect.width as i64 {
+                let v = read(rect.x + x, rect.y + y);
+                let i = ((y as usize) * rect.width as usize + x as usize) * 4;
+                match self.mask_view {
+                    ui::MaskViewMode::Grayscale => {
+                        rgba[i] = v;
+                        rgba[i + 1] = v;
+                        rgba[i + 2] = v;
+                        rgba[i + 3] = 255;
+                    }
+                    ui::MaskViewMode::Overlay => {
+                        // Full tint where the mask fully conceals, fading
+                        // out linearly to none where it fully reveals.
+                        let k = (255 - v) as f32 / 255.0;
+                        rgba[i] = (rgba[i] as f32 * (1.0 - k) + tr as f32 * k).round() as u8;
+                        rgba[i + 1] =
+                            (rgba[i + 1] as f32 * (1.0 - k) + tg as f32 * k).round() as u8;
+                        rgba[i + 2] =
+                            (rgba[i + 2] as f32 * (1.0 - k) + tb as f32 * k).round() as u8;
+                        // Card 059 (review round 1): the canvas shader mixes
+                        // by ALPHA (`mix(backdrop, src.rgb, a)`), so a fully
+                        // concealed pixel of a masked-out transparent canvas
+                        // has alpha 0 and would DISCARD the tint. Raise the
+                        // alpha to carry it — the composite's own alpha
+                        // otherwise stands.
+                        let carried = (k * 255.0).round() as u8;
+                        if carried > rgba[i + 3] {
+                            rgba[i + 3] = carried;
+                        }
+                    }
+                    ui::MaskViewMode::Composite => {}
+                }
+            }
+        }
+    }
+
     /// Bring the texture in step with `doc`.
     pub fn sync(
         &mut self,
@@ -445,8 +567,9 @@ impl CanvasPresenter {
         // 8256x5504 camera JPEG.
         let fit = PresentFit::choose(width, height, gpu.max_texture_dimension_2d());
         let mut dirty = doc.take_dirty();
-        if std::mem::take(&mut self.mask_dirty) {
-            // A channel toggle changes every pixel and dirties no tile.
+        if std::mem::take(&mut self.mask_dirty) || std::mem::take(&mut self.mask_view_dirty) {
+            // A channel toggle or a mask-view change alters every pixel and
+            // dirties no tile.
             dirty.mark_all();
         }
 
@@ -592,6 +715,9 @@ impl CanvasPresenter {
     ) -> Result<Vec<u8>, DocumentError> {
         let mut rgba = doc.composite(rect)?;
         self.mask.apply(&mut rgba);
+        // Card 059: the mask view is the last mile, after the channel mask —
+        // it presents the active layer's mask over the finished composite.
+        self.apply_mask_view(doc, rect, &mut rgba);
         Ok(rgba)
     }
 }
@@ -876,6 +1002,496 @@ mod tests {
             outline.of(&doc.document),
             traced.as_slice(),
             "a rectangle's outline should not depend on the canvas size"
+        );
+    }
+
+    /// Card 059: the three mask views show the SAME mask geometry. A half
+    /// canvas revealed: grayscale is white there and black elsewhere; the
+    /// overlay tints exactly the concealed side and leaves the revealed side
+    /// at the composite's pixels; the composite itself is untouched.
+    #[test]
+    fn the_mask_views_show_the_same_geometry_as_the_composite() {
+        let image = swatch(16, 16);
+        let mut doc = crate::doc::OpenDocument::from_import(
+            crate::doc::DocumentId(1),
+            crate::import::document_from_image(&image, "swatch.png", 100).unwrap(),
+        );
+        let layer = doc.document.active_layer().unwrap();
+        // A mask that reveals the LEFT half, conceals the RIGHT half.
+        // Attach the mask the view will present.
+        editor_core::Command::SetLayerProperties {
+            layer_id: layer,
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Set(layer_model::LayerMask::new(
+                    layer_model::MaskId::new(),
+                )),
+                ..Default::default()
+            },
+        }
+        .apply(&mut doc.document)
+        .unwrap();
+        // A full tile of coverage: revealed for x < 8, concealed beyond —
+        // a tile is 256px, so the geometry sits in its top-left corner.
+        let ts = raster::TILE_SIZE as usize;
+        let coverage = {
+            let mut c = vec![0u8; ts * ts];
+            for y in 0..16usize {
+                for x in 0..8usize {
+                    c[y * ts + x] = 255;
+                }
+            }
+            c
+        };
+        let grid = editor_core::pixels::TileDelta::new(std::iter::once(
+            editor_core::pixels::TileEdit::set(
+                raster::TileCoord::new(0, 0, 0),
+                doc.tiles.insert_bytes(coverage),
+            ),
+        ))
+        .unwrap();
+        editor_core::Command::PaintTiles {
+            target: editor_core::pixels::PixelTarget::Mask(layer),
+            delta: grid,
+        }
+        .apply(&mut doc.document)
+        .unwrap();
+        let whole = PixelRect::new(0, 0, 16, 16);
+        let composite = doc.composite(whole).unwrap();
+
+        // ---- grayscale: the mask plane alone, same boundary --------------
+        let mut presenter = CanvasPresenter::new();
+        presenter.set_mask_view(ui::MaskViewMode::Grayscale, [255, 0, 0]);
+        let mut gray = composite.clone();
+        presenter.apply_mask_view(&doc, whole, &mut gray);
+        let at = |buf: &[u8], x: usize, y: usize| buf[(y * 16 + x) * 4];
+        assert_eq!(at(&gray, 2, 8), 255, "the revealed half shows white");
+        assert_eq!(at(&gray, 13, 8), 0, "the concealed half shows black");
+        assert_ne!(at(&gray, 2, 8), at(&gray, 13, 8));
+        assert_eq!(gray[(8 * 16 + 7) * 4 + 3], 255, "grayscale is opaque");
+
+        // ---- overlay: tint on the concealed side, composite on the rest --
+        presenter.set_mask_view(ui::MaskViewMode::Overlay, [255, 0, 0]);
+        let mut overlaid = composite.clone();
+        presenter.apply_mask_view(&doc, whole, &mut overlaid);
+        assert_eq!(
+            at(&overlaid, 2, 8),
+            at(&composite, 2, 8),
+            "the revealed side keeps the composite's pixels"
+        );
+        assert!(
+            at(&overlaid, 13, 8) != at(&composite, 13, 8),
+            "the concealed side is tinted"
+        );
+        assert_eq!(at(&overlaid, 13, 8), 255, "fully concealed = full tint");
+
+        // The boundary lands in the same place in every view: the pixel
+        // column at x=7 (revealed) is untinted in the overlay and white in
+        // grayscale; x=8 (concealed) is tinted and black.
+        assert_eq!(at(&gray, 7, 0), 255);
+        assert_eq!(at(&gray, 8, 0), 0);
+        assert_eq!(at(&overlaid, 7, 0), at(&composite, 7, 0));
+        assert_ne!(at(&overlaid, 8, 0), at(&composite, 8, 0));
+    }
+
+    /// Card 059: a DISABLED mask contributes nothing to the composite, so
+    /// both mask views fall back to it — while the coverage itself stays
+    /// stored (disabling never discards).
+    #[test]
+    fn a_disabled_mask_falls_back_to_the_composite_and_keeps_its_coverage() {
+        let image = swatch(16, 16);
+        let mut doc = crate::doc::OpenDocument::from_import(
+            crate::doc::DocumentId(1),
+            crate::import::document_from_image(&image, "swatch.png", 100).unwrap(),
+        );
+        let layer = doc.document.active_layer().unwrap();
+        // Attach the mask the view will present.
+        editor_core::Command::SetLayerProperties {
+            layer_id: layer,
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Set(layer_model::LayerMask::new(
+                    layer_model::MaskId::new(),
+                )),
+                ..Default::default()
+            },
+        }
+        .apply(&mut doc.document)
+        .unwrap();
+        // A full tile of coverage: revealed for x < 8, concealed beyond —
+        // a tile is 256px, so the geometry sits in its top-left corner.
+        let ts = raster::TILE_SIZE as usize;
+        let coverage = {
+            let mut c = vec![0u8; ts * ts];
+            for y in 0..16usize {
+                for x in 0..8usize {
+                    c[y * ts + x] = 255;
+                }
+            }
+            c
+        };
+        let grid = editor_core::pixels::TileDelta::new(std::iter::once(
+            editor_core::pixels::TileEdit::set(
+                raster::TileCoord::new(0, 0, 0),
+                doc.tiles.insert_bytes(coverage),
+            ),
+        ))
+        .unwrap();
+        editor_core::Command::PaintTiles {
+            target: editor_core::pixels::PixelTarget::Mask(layer),
+            delta: grid,
+        }
+        .apply(&mut doc.document)
+        .unwrap();
+        // Disable honestly through the layer model, then pin the contract:
+        // the presenter falls back to the composite while the coverage stays.
+        if let Some(m) = doc
+            .document
+            .layers
+            .get_mut(layer)
+            .and_then(|l| l.mask.as_mut())
+        {
+            m.enabled = false;
+        }
+        // A full tile of coverage: revealed for x < 8, concealed beyond —
+        // a tile is 256px, so the geometry sits in its top-left corner.
+        let ts = raster::TILE_SIZE as usize;
+        let coverage = {
+            let mut c = vec![0u8; ts * ts];
+            for y in 0..16usize {
+                for x in 0..8usize {
+                    c[y * ts + x] = 255;
+                }
+            }
+            c
+        };
+        let grid = editor_core::pixels::TileDelta::new(std::iter::once(
+            editor_core::pixels::TileEdit::set(
+                raster::TileCoord::new(0, 0, 0),
+                doc.tiles.insert_bytes(coverage),
+            ),
+        ))
+        .unwrap();
+        editor_core::Command::PaintTiles {
+            target: editor_core::pixels::PixelTarget::Mask(layer),
+            delta: grid,
+        }
+        .apply(&mut doc.document)
+        .unwrap();
+        let whole = PixelRect::new(0, 0, 16, 16);
+        let composite = doc.composite(whole).unwrap();
+        let mask_tiles = doc.document.mask_tiles(layer).map(|m| m.len()).unwrap_or(0);
+        assert!(mask_tiles > 0, "disabling must not discard the coverage");
+
+        let mut presenter = CanvasPresenter::new();
+        for mode in [ui::MaskViewMode::Grayscale, ui::MaskViewMode::Overlay] {
+            presenter.set_mask_view(mode, [255, 0, 0]);
+            let mut shown = composite.clone();
+            presenter.apply_mask_view(&doc, whole, &mut shown);
+            assert_eq!(
+                shown, composite,
+                "{mode:?} of a DISABLED mask shows the composite"
+            );
+        }
+    }
+
+    /// Card 059: the view is applied by the PRESENTER only — the document's
+    /// own composite (what exports and saves read) is byte-identical while a
+    /// mask-only view is on the screen.
+    #[test]
+    fn the_mask_view_never_touches_the_document() {
+        let image = swatch(16, 16);
+        let mut doc = crate::doc::OpenDocument::from_import(
+            crate::doc::DocumentId(1),
+            crate::import::document_from_image(&image, "swatch.png", 100).unwrap(),
+        );
+        let layer = doc.document.active_layer().unwrap();
+        // Attach the mask the view will present.
+        editor_core::Command::SetLayerProperties {
+            layer_id: layer,
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Set(layer_model::LayerMask::new(
+                    layer_model::MaskId::new(),
+                )),
+                ..Default::default()
+            },
+        }
+        .apply(&mut doc.document)
+        .unwrap();
+        // A full tile of coverage: revealed for x < 8, concealed beyond —
+        // a tile is 256px, so the geometry sits in its top-left corner.
+        let ts = raster::TILE_SIZE as usize;
+        let coverage = {
+            let mut c = vec![0u8; ts * ts];
+            for y in 0..16usize {
+                for x in 0..8usize {
+                    c[y * ts + x] = 255;
+                }
+            }
+            c
+        };
+        let grid = editor_core::pixels::TileDelta::new(std::iter::once(
+            editor_core::pixels::TileEdit::set(
+                raster::TileCoord::new(0, 0, 0),
+                doc.tiles.insert_bytes(coverage),
+            ),
+        ))
+        .unwrap();
+        editor_core::Command::PaintTiles {
+            target: editor_core::pixels::PixelTarget::Mask(layer),
+            delta: grid,
+        }
+        .apply(&mut doc.document)
+        .unwrap();
+        let whole = PixelRect::new(0, 0, 16, 16);
+        let before = doc.composite(whole).unwrap();
+
+        let mut presenter = CanvasPresenter::new();
+        presenter.set_mask_view(ui::MaskViewMode::Grayscale, [255, 0, 0]);
+        let mut shown = before.clone();
+        presenter.apply_mask_view(&doc, whole, &mut shown);
+        assert_ne!(shown, before, "the view changed what the canvas shows");
+        assert_eq!(
+            doc.composite(whole).unwrap(),
+            before,
+            "the document's composite is untouched — exports cannot leak the view"
+        );
+    }
+
+    /// Card 059 (review round 1): the mask's INVERTED flag (Properties
+    /// checkbox, PSD import) is part of the field the compositor masks
+    /// with — the views must present the complement, or grayscale shows
+    /// white exactly where the layer is hidden.
+    #[test]
+    fn an_inverted_mask_presents_the_complement_in_every_view() {
+        let image = swatch(16, 16);
+        let mut doc = crate::doc::OpenDocument::from_import(
+            crate::doc::DocumentId(1),
+            crate::import::document_from_image(&image, "swatch.png", 100).unwrap(),
+        );
+        let layer = doc.document.active_layer().unwrap();
+        // Attach the mask the view will present.
+        editor_core::Command::SetLayerProperties {
+            layer_id: layer,
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Set(layer_model::LayerMask::new(
+                    layer_model::MaskId::new(),
+                )),
+                ..Default::default()
+            },
+        }
+        .apply(&mut doc.document)
+        .unwrap();
+        // A full tile of coverage: revealed for x < 8, concealed beyond —
+        // a tile is 256px, so the geometry sits in its top-left corner.
+        let ts = raster::TILE_SIZE as usize;
+        let coverage = {
+            let mut c = vec![0u8; ts * ts];
+            for y in 0..16usize {
+                for x in 0..8usize {
+                    c[y * ts + x] = 255;
+                }
+            }
+            c
+        };
+        let grid = editor_core::pixels::TileDelta::new(std::iter::once(
+            editor_core::pixels::TileEdit::set(
+                raster::TileCoord::new(0, 0, 0),
+                doc.tiles.insert_bytes(coverage),
+            ),
+        ))
+        .unwrap();
+        editor_core::Command::PaintTiles {
+            target: editor_core::pixels::PixelTarget::Mask(layer),
+            delta: grid,
+        }
+        .apply(&mut doc.document)
+        .unwrap();
+        // Invert via the layer model — the same flag the Properties panel's
+        // checkbox and PSD import set.
+        if let Some(m) = doc
+            .document
+            .layers
+            .get_mut(layer)
+            .and_then(|l| l.mask.as_mut())
+        {
+            m.inverted = true;
+        }
+
+        let whole = PixelRect::new(0, 0, 16, 16);
+        let mut presenter = CanvasPresenter::new();
+        presenter.set_mask_view(ui::MaskViewMode::Grayscale, [255, 0, 0]);
+        let mut gray = doc.composite(whole).unwrap();
+        presenter.apply_mask_view(&doc, whole, &mut gray);
+        let at = |buf: &[u8], x: usize, y: usize| buf[(y * 16 + x) * 4];
+        assert_eq!(
+            at(&gray, 2, 8),
+            0,
+            "the revealed half shows BLACK — the mask is inverted"
+        );
+        assert_eq!(
+            at(&gray, 13, 8),
+            255,
+            "the concealed half shows WHITE — the inversion is presented"
+        );
+
+        // The overlay tints the complement too: the previously revealed side
+        // (now concealed by the inversion) is tinted.
+        presenter.set_mask_view(ui::MaskViewMode::Overlay, [255, 0, 0]);
+        let mut overlaid = doc.composite(whole).unwrap();
+        presenter.apply_mask_view(&doc, whole, &mut overlaid);
+        assert_eq!(at(&overlaid, 2, 8), 255, "the now-concealed side is tinted");
+        // ...and its alpha was carried so the shader actually shows it.
+        assert_eq!(
+            at(&overlaid, 2, 8),
+            255,
+            "the now-concealed side carries the full red tint"
+        );
+    }
+
+    /// Card 059 (review round 1): the overlay's tint must REACH THE SCREEN —
+    /// the canvas shader mixes by alpha, so a tinted pixel over a fully
+    /// concealed, transparent-canvas area needs its alpha carried up.
+    #[test]
+    fn the_overlay_carries_alpha_over_transparent_concealed_pixels() {
+        let image = swatch(16, 16);
+        let mut doc = crate::doc::OpenDocument::from_import(
+            crate::doc::DocumentId(1),
+            crate::import::document_from_image(&image, "swatch.png", 100).unwrap(),
+        );
+        let layer = doc.document.active_layer().unwrap();
+        // Attach the mask the view will present.
+        editor_core::Command::SetLayerProperties {
+            layer_id: layer,
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Set(layer_model::LayerMask::new(
+                    layer_model::MaskId::new(),
+                )),
+                ..Default::default()
+            },
+        }
+        .apply(&mut doc.document)
+        .unwrap();
+        // Hide the RIGHT half (the swatch layer is fully opaque, so its own
+        // pixels vanish there — the composite goes transparent).
+        let ts = raster::TILE_SIZE as usize;
+        let coverage = {
+            let mut c = vec![0u8; ts * ts];
+            for y in 0..16usize {
+                for x in 0..8usize {
+                    c[y * ts + x] = 255;
+                }
+            }
+            c
+        };
+        let grid = editor_core::pixels::TileDelta::new(std::iter::once(
+            editor_core::pixels::TileEdit::set(
+                raster::TileCoord::new(0, 0, 0),
+                doc.tiles.insert_bytes(coverage),
+            ),
+        ))
+        .unwrap();
+        editor_core::Command::PaintTiles {
+            target: editor_core::pixels::PixelTarget::Mask(layer),
+            delta: grid,
+        }
+        .apply(&mut doc.document)
+        .unwrap();
+        let whole = PixelRect::new(0, 0, 16, 16);
+        let composite = doc.composite(whole).unwrap();
+        assert_eq!(
+            composite[(8 * 16 + 13) * 4 + 3],
+            0,
+            "the concealed side is transparent in the composite — the shader would discard a tint without carried alpha"
+        );
+
+        let mut presenter = CanvasPresenter::new();
+        presenter.set_mask_view(ui::MaskViewMode::Overlay, [255, 0, 0]);
+        let mut overlaid = composite.clone();
+        presenter.apply_mask_view(&doc, whole, &mut overlaid);
+        // What reaches the screen at (13, 8): the tint, at the carried
+        // alpha — not the checkerboard.
+        assert_eq!(
+            overlaid[(8 * 16 + 13) * 4 + 3],
+            255,
+            "a fully concealed pixel carries full alpha so the tint shows"
+        );
+        assert_eq!(overlaid[(8 * 16 + 13) * 4], 255, "the tint's red shows");
+        // The revealed side keeps the composite's own alpha.
+        assert_eq!(
+            overlaid[(8 * 16 + 2) * 4 + 3],
+            composite[(8 * 16 + 2) * 4 + 3],
+            "the revealed side is untouched"
+        );
+    }
+
+    /// Card 059 (review round 1): the mask THUMBNAIL presents the same field
+    /// as the compositor — including the inverted flag — as opaque grayscale
+    /// bytes at the requested size.
+    #[test]
+    fn the_mask_thumbnail_shows_the_coverage_including_the_inversion() {
+        let image = swatch(16, 16);
+        let mut doc = crate::doc::OpenDocument::from_import(
+            crate::doc::DocumentId(1),
+            crate::import::document_from_image(&image, "swatch.png", 100).unwrap(),
+        );
+        let layer = doc.document.active_layer().unwrap();
+        // Attach the mask the view will present.
+        editor_core::Command::SetLayerProperties {
+            layer_id: layer,
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Set(layer_model::LayerMask::new(
+                    layer_model::MaskId::new(),
+                )),
+                ..Default::default()
+            },
+        }
+        .apply(&mut doc.document)
+        .unwrap();
+        let ts = raster::TILE_SIZE as usize;
+        let coverage = {
+            let mut c = vec![0u8; ts * ts];
+            for y in 0..16usize {
+                for x in 0..8usize {
+                    c[y * ts + x] = 255;
+                }
+            }
+            c
+        };
+        let grid = editor_core::pixels::TileDelta::new(std::iter::once(
+            editor_core::pixels::TileEdit::set(
+                raster::TileCoord::new(0, 0, 0),
+                doc.tiles.insert_bytes(coverage),
+            ),
+        ))
+        .unwrap();
+        editor_core::Command::PaintTiles {
+            target: editor_core::pixels::PixelTarget::Mask(layer),
+            delta: grid,
+        }
+        .apply(&mut doc.document)
+        .unwrap();
+
+        let (w, h, rgba) = doc.mask_thumbnail(layer, 64).unwrap();
+        assert_eq!((w, h), (16, 16), "a 16px canvas thumbnails 1:1");
+        let at = |x: usize, y: usize| rgba[(y * 16 + x) * 4];
+        assert_eq!(at(2, 8), 255, "the revealed half is white");
+        assert_eq!(at(13, 8), 0, "the concealed half is black");
+        assert_ne!(at(2, 8), at(13, 8));
+
+        // Invert: the thumbnail flips with it.
+        if let Some(m) = doc
+            .document
+            .layers
+            .get_mut(layer)
+            .and_then(|l| l.mask.as_mut())
+        {
+            m.inverted = true;
+        }
+        let (_, _, rgba) = doc.mask_thumbnail(layer, 64).unwrap();
+        assert_eq!(rgba[(8 * 16 + 2) * 4], 0, "the revealed half is now black");
+        assert_eq!(
+            rgba[(8 * 16 + 13) * 4],
+            255,
+            "the concealed half is now white"
         );
     }
 

@@ -1,0 +1,17 @@
+{
+  "manifest_version": 2,
+  "app_version": "integration-test",
+  "document_path": "document.msgpack",
+  "assets_collected": true,
+  "contents": {
+    "document.msgpack": {
+      "size": 39074,
+      "blake3": "c7ae0c3abb0a47a0e79cd9c5dcd461993eb54bd3cd00d005da4004ba2ad6dee9"
+    },
+    "previews/preview.png": {
+      "size": 22487,
+      "blake3": "73cdcb57a2ac1308d5498fd96f4417b947506b4cfc1d17fa86a2d91477a6cb42"
+    }
+  },
+  "integrity": "0142ac2d1de9f40bc47522cd99da981f07f3b7edd4e2fe9f702feb85c626e6ce"
+}

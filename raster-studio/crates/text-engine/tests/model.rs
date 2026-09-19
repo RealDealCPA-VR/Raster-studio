@@ -16,17 +16,25 @@ fn the_engine_reports_itself_available() {
 
 #[test]
 fn a_text_layer_round_trips_through_a_text_run() {
-    let layer = layer_model::TextLayer {
-        text: "Hello, layer".to_string(),
-        font_family: "DejaVu Sans".to_string(),
-        size_px: 24.0,
-    };
+    let layer = layer_model::TextLayer::legacy("Hello, layer", "DejaVu Sans", 24.0);
     let run = TextRun::from(&layer);
     assert_eq!(run.text, layer.text);
     assert_eq!(run.style.family, layer.font_family);
     assert_eq!(run.style.size_px, layer.size_px);
     assert!(run.runs.is_empty());
     assert_eq!(run.frame, TextFrame::Point);
+    // A weight-only change now survives: the E01 defect's shape, gone.
+    let bold = layer_model::TextLayer {
+        style: layer_model::text::BaseStyle {
+            weight: layer_model::text::Weight(700),
+            ..layer_model::text::BaseStyle::default()
+        },
+        ..layer_model::TextLayer::legacy("Hello, layer", "DejaVu Sans", 24.0)
+    };
+    let bold_run = TextRun::from(&bold);
+    let bold_back = layer_model::TextLayer::from(&bold_run);
+    assert_eq!(bold_back, bold, "a styled layer round-trips without loss");
+    assert_eq!(bold_run.style.weight.0, 700);
 
     let back = layer_model::TextLayer::from(&run);
     assert_eq!(back, layer, "the three stored fields survive the trip");
@@ -105,6 +113,7 @@ fn the_serialised_shape_is_stable() {
                 "size_px": 12.0,
                 "weight": 400,
                 "slant": "Normal",
+                "stretch": "Normal",
                 "color": [0.0, 0.0, 0.0, 1.0],
                 "underline": false,
                 "strikethrough": false,

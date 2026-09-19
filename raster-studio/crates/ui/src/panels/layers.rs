@@ -102,6 +102,12 @@ pub struct LayersState {
     pub filter: Option<crate::menu::LayerClass>,
     /// The thumbnail size the rows draw at.
     pub thumb_scale: ThumbScale,
+    /// Card 059: the mask well whose view/ops popup is open, if any. The
+    /// popup draws anchored to that well each frame while this is set.
+    pub mask_menu: Option<LayerId>,
+    /// Card 059: true on the frame the popup opened, so the opening
+    /// right-click's own release does not close it.
+    pub mask_menu_fresh: bool,
 }
 
 /// Photopea's thumbnail sizes. The multiplier applies to the row height, so a

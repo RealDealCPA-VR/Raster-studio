@@ -104,6 +104,7 @@
 
 pub mod adjust;
 pub mod blending;
+pub mod bounds;
 pub mod cache;
 pub mod canvas;
 pub mod composite;
@@ -123,11 +124,14 @@ pub use blending::{blend_atop, blend_over, dissolve_noise, BlendContext, BlendSp
 pub use cache::{CacheStats, TileCompositor, DEFAULT_CACHE_TILES};
 pub use canvas::{Canvas, MAX_CANVAS_PIXELS};
 pub use composite::{
-    composite_rect, composite_region, composite_subtree, composite_tile, tile_rect,
-    CompositeOptions, MAX_PREIMAGE_PIXELS, TAP_WINDOW,
+    composite_rect, composite_region, composite_region_with, composite_subtree, composite_tile,
+    tile_rect, CompositeOptions, LayerOverride, MAX_PREIMAGE_PIXELS, TAP_WINDOW,
 };
 pub use effects::MAX_REACH;
 pub use error::CompositeError;
 pub use shape::MAX_SHAPE_PIXELS;
 pub use source::{MemoryTileSource, TileSource};
-pub use text::{font_families, load_font, no_fonts};
+pub use text::{
+    font_families, font_family_faces, font_substitute_for, load_font, no_fonts, text_caret_rect,
+    text_content_height, text_hit_index, text_overset_lines, text_selection_rects,
+};

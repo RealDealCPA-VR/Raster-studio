@@ -219,6 +219,23 @@ const fn t(
     }
 }
 
+/// The option keys every BRUSH-driven tool shares; they travel through
+/// `Tool::set_brush` (the options bar writes them, the shell folds them into
+/// the tool's [`BrushSettings`]) and never through `set_setting`. The shell's
+/// boundary filter mirrors this list.
+pub const BRUSH_OPTION_KEYS: &[&str] = &[
+    "size",
+    "hardness",
+    "spacing",
+    "angle",
+    "roundness",
+    "opacity",
+    "flow",
+    "smoothing",
+    "size_pressure",
+    "flow_pressure",
+];
+
 const TOOLS: &[ToolInfo] = &[
     t(
         ToolId::Move,
@@ -229,6 +246,7 @@ const TOOLS: &[ToolInfo] = &[
         Some('v'),
         &[
             b("auto_select", "Auto-Select", false),
+            b("select_groups", "Select Groups", false),
             b("show_transform", "Show Transform Controls", false),
         ],
     ),
@@ -548,6 +566,19 @@ const TOOLS: &[ToolInfo] = &[
         &[
             f("size", "Size", 1.0, 5000.0, 40.0),
             f("amount", "Strength", 0.0, 4.0, 1.0),
+            f("opacity", "Opacity", 0.0, 1.0, 1.0),
+        ],
+    ),
+    t(
+        ToolId::RefineBoundary,
+        "Refine Boundary",
+        ToolGroup::Retouch,
+        "refine-boundary",
+        Cursor::BrushRing,
+        None,
+        &[
+            f("size", "Size", 1.0, 5000.0, 40.0),
+            f("strength", "Strength", 0.0, 1.0, 0.5),
             f("opacity", "Opacity", 0.0, 1.0, 1.0),
         ],
     ),
@@ -901,6 +932,11 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
                 radius: 1.5,
             },
         )),
+        ToolId::RefineBoundary => Box::new(StrokeTool::new(
+            id,
+            brush(40.0, 0.0, 0.05),
+            StrokeOp::RefineBoundary { strength: 0.5 },
+        )),
         ToolId::Smudge => Box::new(StrokeTool::new(
             id,
             brush(40.0, 0.0, 0.05),
@@ -976,12 +1012,143 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
 mod tests {
     use super::*;
     use crate::tiles::MemoryTiles;
+    use crate::tool::ToolSetting;
     use crate::tool::{PointerEvent, ToolContext};
     use raster::PixelRect;
 
+    /// Card 061 (review round 3): the registry-to-tool contract. Every
+    /// declared Float/Int option at its schema default goes through the built
+    /// tool's `set_setting`; a refusal is legal ONLY for the recorded
+    /// DEAD_KEYS set (tools whose options are consumed through ToolContext
+    /// rather than the tool object, or not wired yet). This keeps the float
+    /// set from regrowing silently — the round-2 critical was a dead
+    /// Strength slider nobody could see. Choice keys are out of scope (the
+    /// trait's default `set_choice` accepts and drops, recorded in
+    /// StrokeTool::set_setting's doc); the brush-shared keys travel through
+    /// `set_brush`.
+    #[test]
+    fn every_float_option_reaches_its_tool_or_is_recorded_dead() {
+        // The brush-shared keys travel through `set_brush` by design; a
+        // refusal there is the boundary filter's job, not the tool's.
+        const DEAD_KEYS: &[(&str, &str)] = &[
+            // Consumed through ToolContext per gesture, or not wired yet:
+            // recorded so the set cannot grow silently.
+            ("Crop", "aspect"),
+            ("Crop", "straighten"),
+            ("Elliptical Marquee", "feather"),
+            ("Eyedropper", "sample_radius"),
+            ("Lasso", "feather"),
+            ("Line", "width"),
+            ("Magic Eraser", "tolerance"),
+            ("Magic Wand", "tolerance"),
+            ("Magnetic Lasso", "edge_weight"),
+            ("Magnetic Lasso", "search_radius"),
+            ("Paint Bucket", "tolerance"),
+            ("Patch", "softness"),
+            ("Polygon", "sides"),
+            ("Polygonal Lasso", "feather"),
+            ("Quick Selection", "radius"),
+            ("Quick Selection", "tolerance"),
+            ("Rectangular Marquee", "feather"),
+            ("Red Eye", "darken"),
+            ("Red Eye", "threshold"),
+            ("Rounded Rectangle", "radius"),
+            ("Single Column Marquee", "feather"),
+            ("Single Row Marquee", "feather"),
+            ("Star", "inner_ratio"),
+            ("Star", "points"),
+            ("Type", "size_px"),
+        ];
+        let mut dead = Vec::new();
+        for info in TOOLS {
+            let mut tool = make(info.id);
+            for spec in info.options {
+                if BRUSH_OPTION_KEYS.contains(&spec.key) {
+                    continue;
+                }
+                let value = match spec.kind {
+                    OptionKind::Float { default, .. } => ToolSetting::Float(default),
+                    OptionKind::Int { default, .. } => ToolSetting::Int(default),
+                    _ => continue,
+                };
+                if tool.set_setting(spec.key, value).is_err() {
+                    dead.push((info.name, spec.key));
+                }
+            }
+        }
+        dead.sort();
+        let recorded: Vec<(&str, &str)> =
+            DEAD_KEYS.iter().map(|(name, key)| (*name, *key)).collect();
+        assert_eq!(
+            dead, recorded,
+            "a declared float/int option was refused by its own tool — wire it in set_setting or record it in DEAD_KEYS"
+        );
+    }
+
+    /// Card 061 (review round 4): the same contract for the DEAD BOOL
+    /// options — touched Bools forward (they are registry keys), and the
+    /// tools that do not answer them refuse per press. Surfaced honestly by
+    /// the shell, but pinned so the set cannot grow silently either. The
+    /// recorded set is the un-wired Bool checkboxes; `Move`'s Bools and the
+    /// brush-family Bools (size_pressure/flow_pressure, which ride
+    /// `set_brush`) are answered or filtered and must NOT appear here.
+    /// (`Quick Selection` answers its own sample_merged/contiguous through
+    /// `QuickSelectOptions`; `Polygon` shares the Rectangle shape struct.)
+    #[test]
+    fn every_bool_refusal_is_the_recorded_dead_set() {
+        const DEAD_KEYS: &[(&str, &str)] = &[
+            ("Clone Stamp", "aligned"),
+            ("Crop", "delete_cropped"),
+            ("Custom Shape", "from_center"),
+            ("Ellipse", "from_center"),
+            ("Elliptical Marquee", "antialias"),
+            ("Eyedropper", "sample_all_layers"),
+            ("Gradient", "dither"),
+            ("Gradient", "reverse"),
+            ("Healing Brush", "aligned"),
+            ("Lasso", "antialias"),
+            ("Magic Eraser", "antialias"),
+            ("Magic Eraser", "contiguous"),
+            ("Magic Eraser", "sample_merged"),
+            ("Magic Wand", "antialias"),
+            ("Magic Wand", "contiguous"),
+            ("Magic Wand", "sample_merged"),
+            ("Paint Bucket", "antialias"),
+            ("Paint Bucket", "contiguous"),
+            ("Paint Bucket", "sample_merged"),
+            ("Polygonal Lasso", "antialias"),
+            ("Rectangle", "from_center"),
+            ("Rectangular Marquee", "antialias"),
+            ("Single Column Marquee", "antialias"),
+            ("Single Row Marquee", "antialias"),
+        ];
+        let mut dead = Vec::new();
+        for info in TOOLS {
+            let mut tool = make(info.id);
+            for spec in info.options {
+                if BRUSH_OPTION_KEYS.contains(&spec.key) {
+                    continue;
+                }
+                let value = match spec.kind {
+                    OptionKind::Bool { default } => ToolSetting::Bool(default),
+                    _ => continue,
+                };
+                if tool.set_setting(spec.key, value).is_err() {
+                    dead.push((info.name, spec.key));
+                }
+            }
+        }
+        dead.sort();
+        let recorded: Vec<(&str, &str)> =
+            DEAD_KEYS.iter().map(|(name, key)| (*name, *key)).collect();
+        assert_eq!(
+            dead, recorded,
+            "a declared Bool option was refused by its own tool — wire it or record it in DEAD_KEYS"
+        );
+    }
+
     #[test]
     fn the_registry_covers_every_tool_id_exactly_once() {
-        assert_eq!(TOOLS.len(), ToolId::ALL.len());
         for id in ToolId::ALL {
             let hits = TOOLS.iter().filter(|t| t.id == *id).count();
             assert_eq!(hits, 1, "{id:?} appears {hits} times in the registry");

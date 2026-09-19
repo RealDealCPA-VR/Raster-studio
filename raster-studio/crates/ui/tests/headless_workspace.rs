@@ -52,6 +52,7 @@ fn busy_document() -> (Document, History) {
                     text: "Hello".into(),
                     font_family: "Inter".into(),
                     size_px: 32.0,
+                    ..Default::default()
                 }),
             ),
             None,

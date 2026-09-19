@@ -75,8 +75,12 @@ Document versions 1 and 2 migrate through `project_format::migrate`. Neither
 step transforms data — every field version 3 added has a serde default — but the
 2→3 step *repairs*: it clears `pixels` and `selection`, because no pre-version-3
 build could write either, so a version-1 document carrying them is damaged or
-forged and its tile references have no blobs behind them. The version is read
-out of the serialized document by a one-field probe **before** the document is
+forged and its tile references have no blobs behind them. **Version 4** carries
+the persisted rich-text schema for text layers (styled spans, paragraph settings,
+frame, kerning — plan card 018); its migration is the schema's own serde
+defaults, so a version-3 text layer loads black, regular, auto-leading point
+text — exactly what the pre-version-4 renderer produced. The version is read out
+of the serialized document by a one-field probe **before** the document is
 decoded, so a file from a newer build produces a sentence about versions rather
 than a MessagePack error about an unknown field.
 

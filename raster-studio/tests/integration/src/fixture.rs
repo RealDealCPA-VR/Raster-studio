@@ -4,6 +4,8 @@ use std::path::Path;
 
 use raster::{CodecError, EncodeOptions, EncodedPixels, ExportFormat};
 
+pub mod thumbnail;
+
 /// A deterministic, structured, fully opaque image.
 ///
 /// Structured on purpose: a flat colour survives almost any mistake — a

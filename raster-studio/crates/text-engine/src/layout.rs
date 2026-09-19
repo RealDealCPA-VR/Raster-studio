@@ -18,7 +18,7 @@ use cosmic_text::{
     LineEnding, LineIter, Metrics, Shaping, Weight, Wrap,
 };
 
-use crate::font::{db_style, FontId, FontLibrary};
+use crate::font::{db_stretch, db_style, FontId, FontLibrary};
 use crate::model::{Alignment, TextFrame, TextRun};
 use crate::style::{resolve_style, CharStyle, FontWeight, StyleRun};
 
@@ -280,7 +280,7 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
 
     // The base style also drives lines that contain no styled segment at all
     // (an empty paragraph), so the caret there has the right height.
-    let default_attrs = attrs_for(&run.style, usize::MAX, line_height);
+    let default_attrs = attrs_for(library, &run.style, usize::MAX, line_height);
 
     // A database with no faces at all must never reach the shaper: its font
     // fallback chain ends in "any font in the database", and cosmic-text takes
@@ -292,15 +292,11 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
     // process abort rather than something a caller could catch.
     let fontless = library.is_empty();
 
-    let mut buffer = Buffer::new_empty(Metrics::new(base_size, line_height));
-    let font_system = library.system_mut();
-    buffer.set_wrap(font_system, wrap);
-    // Height is deliberately not handed to the shaper: it clips runs, and we
-    // would rather report every line and let the caller decide about overset.
-    buffer.set_size(font_system, width_opt, None);
-
+    // Lines are built first — they need only the styles, not the font system —
+    // so the immutable `library` borrows end before `system_mut()` takes the
+    // mutable one.
     let paragraph_offsets = paragraph_offsets(&run.text);
-    buffer.lines.clear();
+    let mut lines = Vec::with_capacity(paragraph_offsets.len());
     for (index, &offset) in paragraph_offsets.iter().enumerate() {
         let (text, ending) = paragraph_slice(&run.text, &paragraph_offsets, index);
         let mut attrs_list = AttrsList::new(&default_attrs);
@@ -310,14 +306,24 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
             if start < end {
                 attrs_list.add_span(
                     start - offset..end - offset,
-                    &attrs_for(&seg.style, seg_index, line_height),
+                    &attrs_for(library, &seg.style, seg_index, line_height),
                 );
             }
         }
         let mut line = BufferLine::new(text, ending, attrs_list, Shaping::Advanced);
         line.set_align(Some(align));
-        buffer.lines.push(line);
+        lines.push(line);
     }
+
+    let mut buffer = Buffer::new_empty(Metrics::new(base_size, line_height));
+    let font_system = library.system_mut();
+    buffer.set_wrap(font_system, wrap);
+    // Height is deliberately not handed to the shaper: it clips runs, and we
+    // would rather report every line and let the caller decide about overset.
+    buffer.set_size(font_system, width_opt, None);
+
+    buffer.lines.clear();
+    buffer.lines.extend(lines);
     if !fontless {
         buffer.shape_until_scroll(font_system, false);
     }
@@ -782,7 +788,22 @@ fn ceil_char_boundary(text: &str, index: usize) -> usize {
     index
 }
 
-fn attrs_for(style: &CharStyle, metadata: usize, line_height: f32) -> Attrs<'_> {
+/// The run's text attributes: family, weight, stretch, slant, features and
+/// metrics.
+///
+/// Card 022's substitution rule lives here, not in the shaping stack's own
+/// fallback: an installed family (or the empty generic-sans request) shapes
+/// as requested; a family that is not installed is replaced **up front** by
+/// [`Family::SansSerif`] — exactly the family [`FontLibrary::substitute_for`]
+/// reports to the user — instead of the stack's opaque nearest-match pick,
+/// which can even prefer an emoji face. The requested name stays in the
+/// document; only shaping sees the substitute.
+fn attrs_for<'a>(
+    library: &FontLibrary,
+    style: &'a CharStyle,
+    metadata: usize,
+    line_height: f32,
+) -> Attrs<'a> {
     let mut features = FontFeatures::new();
     if !style.ligatures {
         features.disable(FeatureTag::STANDARD_LIGATURES);
@@ -791,7 +812,9 @@ fn attrs_for(style: &CharStyle, metadata: usize, line_height: f32) -> Attrs<'_> 
     if !style.kerning {
         features.disable(FeatureTag::KERNING);
     }
-    let family = if style.family.is_empty() {
+    let family = if style.family.is_empty() || !library.has_family(&style.family) {
+        // Generic sans (empty request) or the documented substitute for a
+        // missing family — the database's pinned sans-serif default.
         Family::SansSerif
     } else {
         Family::Name(style.family.as_str())
@@ -799,6 +822,7 @@ fn attrs_for(style: &CharStyle, metadata: usize, line_height: f32) -> Attrs<'_> 
     let mut attrs = Attrs::new()
         .family(family)
         .weight(Weight(style.weight.0))
+        .stretch(db_stretch(style.stretch))
         .style(db_style(style.slant))
         .metadata(metadata)
         .metrics(Metrics::new(style.effective_size_px(), line_height))

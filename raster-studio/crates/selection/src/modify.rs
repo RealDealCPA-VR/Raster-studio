@@ -544,6 +544,87 @@ pub fn invert(mask: &SelectionMask, canvas: Rect) -> Result<SelectionMask, Selec
     out.into_mask()
 }
 
+/// Card 060: the edge-refinement pipeline's parameters, in DOCUMENT pixels.
+///
+/// Every radius is a plain pixel count of the coverage buffer the caller
+/// hands over — the dialog and the confirmation path share this struct and
+/// both run it over the pose-aware canvas-space coverage, so what the preview
+/// shows is exactly what a confirmation bakes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RefineParams {
+    /// Soften the edge: a hard boundary becomes a ramp reaching this many
+    /// pixels to each side (0.0 = off).
+    pub feather_px: f32,
+    /// Shift the edge: positive grows the selection, negative shrinks it.
+    pub shift_px: i32,
+    /// Round the boundary: morphological opening by this radius, which
+    /// removes spikes andSmooths stair-steps without moving straight edges.
+    pub smooth_px: u32,
+    /// Harden or soften the coverage RAMP: 0.0 leaves it; up to 1.0 pushes
+    /// samples away from the 50% midpoint (an edge contrast curve, NOT
+    /// subject recognition).
+    pub contrast: f32,
+}
+
+impl Default for RefineParams {
+    fn default() -> Self {
+        Self {
+            feather_px: 0.0,
+            shift_px: 0,
+            smooth_px: 0,
+            contrast: 0.0,
+        }
+    }
+}
+
+/// Card 060: run the edge-refinement pipeline over `mask`.
+///
+/// The stages run in a fixed order — SMOOTH the boundary, SHIFT the edge,
+/// FEATHER it, then apply the CONTRAST curve — matching the convention the
+/// major editors use, and each stage is skipped when its parameter is the
+/// identity. The result is a NEW mask; the input is never mutated.
+pub fn refine_mask(
+    mask: &SelectionMask,
+    params: &RefineParams,
+) -> Result<SelectionMask, SelectionOpError> {
+    let mut current = mask.clone();
+    if params.smooth_px > 0 {
+        current = smooth(&current, params.smooth_px)?;
+    }
+    if params.shift_px > 0 {
+        current = expand(&current, params.shift_px as u32)?;
+    } else if params.shift_px < 0 {
+        current = contract(&current, (-params.shift_px) as u32)?;
+    }
+    if params.feather_px > 0.0 {
+        current = feather(&current, params.feather_px)?;
+    }
+    if params.contrast > 0.0 {
+        current = contrast(&current, params.contrast)?;
+    }
+    Ok(current)
+}
+
+/// Card 060: push the coverage ramp away from the 50% midpoint — "edge
+/// contrast". `strength` 0.0..=1.0 maps the deviation from 128 through a
+/// gain of `1 + 3 * strength`, so a soft ramp hardens toward a cutout and a
+/// strength of 1.0 binarizes at the midpoint. Values ABOVE the midpoint rise,
+/// values below fall; the midpoint itself is pinned.
+pub fn contrast(mask: &SelectionMask, strength: f32) -> Result<SelectionMask, SelectionOpError> {
+    let strength = strength.clamp(0.0, 1.0);
+    if strength <= 0.0 {
+        return Ok(mask.clone());
+    }
+    let gain = 1.0 + 3.0 * strength;
+    let mut out = CoverageBuf::from_mask(mask)?;
+    for v in out.data_mut() {
+        let d = f32::from(*v) - 128.0;
+        let shifted = 128.0 + d * gain;
+        *v = shifted.round().clamp(0.0, 255.0) as u8;
+    }
+    out.into_mask()
+}
+
 /// [`invert`] for a document selection: inverting "no selection" yields an
 /// empty selection, and inverting an empty one yields the whole canvas.
 pub fn invert_selection(sel: &Selection, canvas: Rect) -> Result<Selection, SelectionOpError> {
@@ -555,6 +636,92 @@ pub fn invert_selection(sel: &Selection, canvas: Rect) -> Result<Selection, Sele
 mod tests {
     use super::*;
     use crate::marquee::{ellipse, rectangle};
+
+    /// Card 060: the refine pipeline on a synthetic edge — feather widens
+    /// the transition band to about twice the radius, a positive shift
+    /// EXPANDS (the revealed half grows, the edge moves right), and the
+    /// combination is the composition of both.
+    #[test]
+    fn the_refine_pipeline_shifts_and_softens_a_synthetic_edge() {
+        let mask = editor_core::SelectionMask::new(glam::IVec2::ZERO, 64, 16, {
+            let mut c = vec![0u8; 64 * 16];
+            for y in 0..16 {
+                for x in 0..32 {
+                    c[y * 64 + x] = 255;
+                }
+            }
+            c
+        })
+        .unwrap();
+        let params = RefineParams {
+            feather_px: 4.0,
+            shift_px: 4,
+            ..Default::default()
+        };
+        let out = refine_mask(&mask, &params).unwrap();
+        let at = |x: i32, y: i32| out.coverage_at(glam::IVec2::new(x, y));
+        // The SIGN CONVENTION: positive shift = EXPAND = the revealed half
+        // GROWS, so the edge moves RIGHT (32 → ~36 on this left-revealed
+        // half-plane).
+        assert!(
+            at(24, 8) > at(40, 8),
+            "the expanded side is more covered than the contracted side"
+        );
+        assert!(
+            at(28, 8) > 128 && at(36, 8) < 128,
+            "the edge now sits near 36, the old edge shifted by +4: {} / {}",
+            at(28, 8),
+            at(36, 8)
+        );
+        // The feather's softness: the ramp between solid and empty spans
+        // about twice the radius (4px each side of the shifted edge).
+        // The pipeline's stages compose: expand(+4) moves the solid region to
+        // x<36, then feather(4) ramps it — solid through ~32, the ramp
+        // crossing the midpoint near the SHIFTED edge (36), empty past 40.
+        assert!(
+            at(30, 8) >= 250,
+            "solid inside the shifted edge: {}",
+            at(30, 8)
+        );
+        assert!(
+            at(36, 8) <= 128,
+            "past the midpoint it has fallen: {}",
+            at(36, 8)
+        );
+        assert!(at(40, 8) <= 32, "the ramp's tail: {}", at(40, 8));
+        assert!(
+            at(34, 8) > at(38, 8),
+            "the transition descends across the shifted edge"
+        );
+    }
+
+    /// Card 060: the contrast stage hardens a soft ramp toward the midpoint
+    /// without moving the 50% crossing.
+    #[test]
+    fn the_contrast_stage_hardens_a_ramp_in_place() {
+        let soft =
+            editor_core::SelectionMask::new(glam::IVec2::ZERO, 5, 1, vec![64, 96, 128, 160, 192])
+                .unwrap();
+        let hard = contrast(&soft, 0.5).unwrap();
+        let at = |x: i32| hard.coverage_at(glam::IVec2::new(x, 0));
+        // The midpoint is pinned; the extremes spread away from it.
+        assert_eq!(at(2), 128, "the midpoint does not move");
+        assert!(at(0) < 64, "below-midpoint samples fall: {}", at(0));
+        assert!(at(4) > 192, "above-midpoint samples rise: {}", at(4));
+        // And a full-strength pass binarizes around the midpoint.
+        let cut = contrast(&soft, 1.0).unwrap();
+        assert_eq!(cut.coverage_at(glam::IVec2::new(1, 0)), 0);
+        assert_eq!(cut.coverage_at(glam::IVec2::new(3, 0)), 255);
+    }
+
+    /// Card 060: the pipeline is skipped stage-by-stage at identity
+    /// parameters — an all-identity run returns the input unchanged.
+    #[test]
+    fn an_identity_refine_returns_the_input() {
+        let mask = editor_core::SelectionMask::new(glam::IVec2::ZERO, 8, 8, vec![255; 64]).unwrap();
+        let out = refine_mask(&mask, &RefineParams::default()).unwrap();
+        assert_eq!(out.coverage(), mask.coverage());
+    }
 
     fn cov(m: &SelectionMask, x: i32, y: i32) -> u8 {
         m.coverage_at(IVec2::new(x, y))

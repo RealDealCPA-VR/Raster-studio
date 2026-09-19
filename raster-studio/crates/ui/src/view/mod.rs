@@ -63,6 +63,39 @@ pub mod ids {
         egui::Id::new(("raster-layer-eye", layer))
     }
 
+    /// The content thumbnail of one layer row (card 055): clicking it aims
+    /// edits at the layer's pixels.
+    pub fn layer_content_thumb(layer: layer_model::LayerId) -> egui::Id {
+        egui::Id::new(("raster-layer-content-thumb", layer))
+    }
+
+    /// The mask thumbnail of one layer row (card 055): clicking it aims
+    /// edits at the layer's mask coverage.
+    pub fn layer_mask_thumb(layer: layer_model::LayerId) -> egui::Id {
+        egui::Id::new(("raster-layer-mask-thumb", layer))
+    }
+
+    /// Card 059: one view-mode row of the mask well's popup, by mode.
+    pub fn mask_view_item(mode: crate::MaskViewMode) -> egui::Id {
+        egui::Id::new(("raster-mask-view-item", mode as u8))
+    }
+
+    /// Card 059: the active-target badge on the mask well (the well the
+    /// edit target is aimed at), so tests can find the indicator.
+    pub fn mask_target_badge(layer: layer_model::LayerId) -> egui::Id {
+        egui::Id::new(("raster-mask-target-badge", layer))
+    }
+
+    /// Card 059: the popup's enable/disable row for one layer's mask.
+    pub fn mask_toggle_item(layer: layer_model::LayerId) -> egui::Id {
+        egui::Id::new(("raster-mask-toggle-item", layer))
+    }
+
+    /// Card 059: the popup's link row for one layer's mask.
+    pub fn mask_link_item(layer: layer_model::LayerId) -> egui::Id {
+        egui::Id::new(("raster-mask-link-item", layer))
+    }
+
     /// One row of the history panel, by its index in the flattened stack.
     pub fn history_row(index: usize) -> egui::Id {
         egui::Id::new(("raster-history-row", index))
@@ -140,6 +173,11 @@ pub mod ids {
     /// The Character panel's font Family field.
     pub fn character_family(layer: layer_model::LayerId) -> egui::Id {
         egui::Id::new(("raster-character-family", layer))
+    }
+
+    /// The Character panel's Face picker (card 022).
+    pub fn character_face(layer: layer_model::LayerId) -> egui::Id {
+        egui::Id::new(("raster-character-face", layer))
     }
 
     /// The Colour panel's Hex field.

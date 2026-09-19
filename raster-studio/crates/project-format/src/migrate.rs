@@ -66,6 +66,15 @@ const STEPS: &[Step] = &[
             doc.selection = editor_core::Selection::None;
         },
     },
+    Step {
+        // Version 4 added the persisted rich-text schema (card 018). The
+        // migration is the schema's own serde defaults: a text layer from any
+        // older document deserializes with black regular auto-leading point
+        // text - exactly what the old renderer produced - so no data changes
+        // hands here.
+        from: 3,
+        apply: |_doc| {},
+    },
 ];
 
 /// Read `meta.format_version` out of a serialized document without decoding the

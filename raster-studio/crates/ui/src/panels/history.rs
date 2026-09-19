@@ -132,6 +132,9 @@ impl StepKind {
             // the document, not a paint on any one layer.
             Command::ResampleImage { .. } => StepKind::Transformed,
             Command::SetGuides { .. } => StepKind::Transformed,
+            // Asset-table bookkeeping: it rides inside a refresh Transaction
+            // (shown as one Batch row) and never stands alone in the panel.
+            Command::SetAssetSourceSize { .. } => StepKind::Transformed,
             Command::PaintTiles { .. } => StepKind::Painted,
             Command::FillRegion { .. } => StepKind::Filled,
             Command::ClearRegion { .. } => StepKind::Cleared,

@@ -244,6 +244,7 @@ mod tests {
         let full = MenuContext {
             clipboard: ClipboardState {
                 pixels: true,
+                external_pixels: false,
                 layers: false,
             },
             ..empty

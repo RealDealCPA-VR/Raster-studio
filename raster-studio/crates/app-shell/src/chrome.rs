@@ -190,6 +190,13 @@ pub struct ChromeOutput {
     /// Photopea's multi-selection: the whole set, in click order, plus the
     /// layer the click landed on.
     pub select_layers: Option<(Vec<LayerId>, Option<LayerId>)>,
+    /// The Properties Layer/Mask focus was set this frame (card 007). The
+    /// shell stores the validated target per document; the tools read it back
+    /// through `Editor::edit_target`.
+    pub edit_target: Option<crate::edit_target::EditTargetKind>,
+    /// Card 026: a text layer's row was double-clicked — the shell opens a
+    /// live text session on that existing layer.
+    pub enter_text_layer: Option<LayerId>,
     /// A recent-files entry was chosen.
     pub open_recent: Option<PathBuf>,
     /// A history row was clicked: walk the timeline to this many applied
@@ -270,18 +277,9 @@ pub struct ChromeOutput {
 ///
 /// Kept beside [`push_brush`] so the two cannot drift: a key written out but
 /// never read back — or the reverse — is how the two copies disagreed before.
-const BRUSH_KEYS: &[&str] = &[
-    "size",
-    "hardness",
-    "spacing",
-    "angle",
-    "roundness",
-    "opacity",
-    "flow",
-    "smoothing",
-    "size_pressure",
-    "flow_pressure",
-];
+/// The brush-shared option keys, from the registry (the single source the
+/// options bar, the brush fold, and the forward-to-tool filter all read).
+pub(crate) const BRUSH_KEYS: &[&str] = tools::registry::BRUSH_OPTION_KEYS;
 
 /// Whether an intent could have changed the active tool's brush.
 fn touches_brush(intent: &ui::Intent) -> bool {
@@ -457,6 +455,9 @@ pub fn chord_from_egui(key: egui::Key, mods: egui::Modifiers) -> Option<Chord> {
 /// document or in the editor.
 #[derive(Default)]
 pub struct Chrome {
+    /// Card 059: the document id the mask-well popup state belongs to —
+    /// switching tabs closes the popup (it anchors a layer of that stack).
+    showing_document: Option<crate::doc::DocumentId>,
     /// The `ui` crate's workspace: the dock, the panels, the tool palette's
     /// fly-outs, the tool options, the view overlays.
     workspace: ui::Workspace,
@@ -532,6 +533,13 @@ impl Chrome {
             .set(tool, key, ui::OptionValue::Choice(index));
     }
 
+    /// Write one option value for `tool` — the options bar's write half for
+    /// the non-choice kinds (the intents route here in production; tests
+    /// call it directly to drive the forward boundary).
+    pub fn set_tool_option(&mut self, tool: tools::ToolId, key: &str, value: ui::OptionValue) {
+        self.workspace.options.set(tool, key, value);
+    }
+
     /// Every choice option the options bar holds for `tool`, as (key, index)
     /// pairs — the seed the live tool is fed at each press, so the transform
     /// tool's mode and target are both what the options bar shows.
@@ -554,10 +562,24 @@ impl Chrome {
             .collect()
     }
 
+    /// Every option value the options bar holds for `tool`, as (key, value)
+    /// pairs — the typed seed the live tool is fed at each press (card 010).
+    /// Only options the workspace actually holds are forwarded, so a tool
+    /// rebuilt from the registry keeps its defaults for everything the user
+    /// never touched. The values are the UI crate's here; the shell converts
+    /// them at the boundary before a tool sees them.
+    /// What the tool is told at pointer-down: only options the USER has
+    /// actually touched. The options bar renders every declared option (its
+    /// schema default when untouched) for display, but forwarding untouched
+    /// defaults to the tool would demand `set_setting` answers for keys no
+    /// tool implements — the refusals would flood the status bar on every
+    /// press and drown genuine ones. A tool's untouched options are its
+    /// registry defaults by construction.
+    pub fn tool_options(&self, tool: tools::ToolId) -> Vec<(String, ui::OptionValue)> {
+        self.workspace.options.held(tool)
+    }
+
     /// Whether a modal dialog is open this frame. The shell suppresses the
-    /// keymap and refuses new canvas gestures while it is, so Escape and Enter
-    /// belong to the dialog alone and a click that dismisses it can never
-    /// start a stroke underneath.
     /// Whether the open dialog is waiting for a chord (the Preferences
     /// dialog's keymap section), for the status bar.
     pub fn is_recording(&self) -> bool {
@@ -607,6 +629,7 @@ impl Chrome {
     /// on the next repaint.
     fn refresh_layer_thumbs(&mut self, ctx: &egui::Context, editor: &Editor) {
         self.workspace.layer_thumbs.clear();
+        self.workspace.mask_thumbs.clear();
         let Some(open) = editor.active() else {
             return;
         };
@@ -619,6 +642,25 @@ impl Chrome {
                     egui::TextureOptions::NEAREST,
                 );
                 self.workspace.layer_thumbs.insert(id, tex);
+            }
+            // Card 059: the mask's real coverage thumbnail, for layers that
+            // have a mask. The well falls back to the glyph without it.
+            if open
+                .document
+                .layers
+                .get(id)
+                .is_some_and(|l| l.mask.is_some())
+            {
+                if let Ok((w, h, rgba)) = open.mask_thumbnail(id, 64) {
+                    let img =
+                        egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+                    let tex = ctx.load_texture(
+                        format!("mask-thumb-{}", id),
+                        img,
+                        egui::TextureOptions::NEAREST,
+                    );
+                    self.workspace.mask_thumbs.insert(id, tex);
+                }
             }
         }
     }
@@ -635,8 +677,28 @@ impl Chrome {
         crate::presenter::ChannelMask::from_channels(&self.workspace.channels)
     }
 
+    /// Card 059: how the active layer's mask should reach the canvas.
+    ///
+    /// Like channel isolation, a VIEW setting: the Layers panel owns it (the
+    /// mask well's popup writes it), this chrome reads it out every frame,
+    /// and the presenter applies it on the composite's way to the GPU —
+    /// never to the document, which is what keeps a mask-only view out of
+    /// exports.
+    pub fn mask_view(&self) -> ui::MaskViewMode {
+        self.workspace.mask_view
+    }
+
+    /// Card 059: the overlay tint, from the theme's accent token — the same
+    /// palette the chrome paints with, resolved for the theme the user is
+    /// in, not a hard-coded colour in the painter.
+    pub fn mask_overlay_tint(&self) -> [u8; 3] {
+        let tokens = self.workspace.theme.tokens();
+        let c = tokens.palette.color(design::ColorRole::Accent);
+        [c.r, c.g, c.b]
+    }
+
     /// Draw one frame of chrome.
-    pub fn ui(&mut self, ctx: &egui::Context, editor: &Editor) -> ChromeOutput {
+    pub fn ui(&mut self, ctx: &egui::Context, editor: &mut Editor) -> ChromeOutput {
         let mut out = ChromeOutput::default();
         self.read_gesture(ctx);
         self.sync_workspace(editor);
@@ -664,6 +726,10 @@ impl Chrome {
             }
         }
         self.start_screen(ctx, editor, &mut out);
+        // The live tool session's overlays, over the canvas the surface shows
+        // (card 012). After the docks, so the canvas rectangle is what the
+        // docks left; clipped to it, because a panel must never grow handles.
+        self.paint_live_tool_geometry(ctx, editor);
         // The modal dialog host, after the docks: a dialog floats over
         // everything and, opened by a click this frame, draws from the next
         // one — so the click that opened it is never the click that lands on
@@ -794,6 +860,15 @@ impl Chrome {
     /// camera ever had.
     fn sync_workspace(&mut self, editor: &Editor) {
         let w = &mut self.workspace;
+        // Card 059: a mask-well popup belongs to the document it opened on —
+        // switching tabs must not leave it anchored over a layer that is not
+        // on this document's stack.
+        let active_doc = editor.active().map(|d| d.id());
+        if self.showing_document != active_doc {
+            self.showing_document = active_doc;
+            w.layers.mask_menu = None;
+            w.layers.mask_menu_fresh = false;
+        }
         w.theme = editor.preferences().theme.resolve(design::Theme::Dark);
         w.recent = editor
             .recent()
@@ -873,6 +948,78 @@ impl Chrome {
     ///
     /// The one command that genuinely belongs to the smaller rectangle is Zoom
     /// to Selection, and it asks for it by name: see [`Chrome::frame_selection`].
+    /// Publish the live tool session's geometry into the canvas sessions the
+    /// overlays are drawn from (card 012).
+    ///
+    /// Called by the shell every frame after the pointer route ran. `None` —
+    /// or a geometry whose document is no longer in front — clears the
+    /// published state, so a committed or cancelled gesture and a tab switch
+    /// both remove the overlays with no second mechanism to forget. The
+    /// publication is the shell's, never a test helper's: a test that wants
+    /// geometry on screen drives a real gesture and calls this.
+    pub fn publish_tool_geometry(
+        &mut self,
+        geometry: Option<(crate::doc::DocumentId, tools::SessionGeometry)>,
+        active_document: Option<crate::doc::DocumentId>,
+    ) {
+        let sessions = &mut self.workspace.canvas.sessions;
+        match geometry {
+            Some((
+                doc,
+                tools::SessionGeometry::Transform {
+                    state,
+                    mode,
+                    active,
+                    layer: _,
+                },
+            )) if Some(doc) == active_document => {
+                sessions.transform = Some((state, mode));
+                sessions.active_handle = active;
+            }
+            _ => {
+                if sessions.transform.is_some() {
+                    sessions.transform = None;
+                    sessions.active_handle = None;
+                }
+            }
+        }
+    }
+
+    /// Paint the published live geometry over the canvas (card 012).
+    ///
+    /// The image is a wgpu composite behind egui and `CanvasHost::
+    /// central_panel` is never drawn by this shell, so this is the route the
+    /// overlays actually appear through: the same painters the canvas view
+    /// uses (`ui::canvas::paint`), against the same camera the surface was
+    /// rendered with, clipped to the rectangle the docks left.
+    fn paint_live_tool_geometry(&mut self, ctx: &egui::Context, editor: &Editor) {
+        use ui::canvas::{handles::HandleLayout, paint, style::CanvasStyle};
+
+        let Some((state, mode)) = self.workspace.canvas.sessions.transform.clone() else {
+            return;
+        };
+        let Some(doc) = editor.active() else {
+            return;
+        };
+        let camera = crate::tool_input::canvas_camera_of(&doc.camera);
+        let viewport = crate::tool_input::canvas_viewport(doc.camera.viewport_size);
+        let style = CanvasStyle::from_context(ctx);
+        let layout = HandleLayout::default();
+        let active = self.workspace.canvas.sessions.active_handle;
+        let session = ui::canvas::paint::TransformPaint {
+            state: &state,
+            mode,
+            layout: &layout,
+            active,
+        };
+        let mut painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Middle,
+            egui::Id::new("raster-live-tool-overlays"),
+        ));
+        painter.set_clip_rect(ctx.available_rect());
+        paint::transform(&painter, &camera, &viewport, &session, &style);
+    }
+
     fn record_viewport(&mut self, ctx: &egui::Context) {
         let content = ctx.available_rect();
         let (w, h) = (content.width(), content.height());
@@ -1120,7 +1267,7 @@ impl Chrome {
     /// menus, their labels, their shortcut hints and their enablement all come
     /// from the shared model in the `ui` crate; the bridge is the one place
     /// that says which of them this build can actually perform.
-    fn menu_bar(&self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
+    fn menu_bar(&self, ctx: &egui::Context, editor: &mut Editor, out: &mut ChromeOutput) {
         crate::menu_bridge::draw(ctx, editor, &self.workspace, out);
     }
 
@@ -1679,14 +1826,19 @@ mod tests {
     use crate::dialogs::ScriptedDialogs;
     use crate::prefs::{AppPaths, Preferences};
     use crate::recent::RecentFiles;
+    use crate::tool_input::ToolPointer;
 
     fn editor(dir: &std::path::Path) -> Editor {
-        Editor::with_state(
+        // Card 052: hermetic — chrome tests must not read the real OS
+        // clipboard through the menu-context probe.
+        let mut ed = Editor::with_state(
             AppPaths::rooted(dir),
             Preferences::default(),
             RecentFiles::new(),
             Box::new(ScriptedDialogs::new()),
-        )
+        );
+        ed.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+        ed
     }
 
     fn png(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
@@ -1716,7 +1868,29 @@ mod tests {
     /// its galley — which knows both its text and its size. That is what lets a
     /// headless test assert on *where* the window put something, not only that
     /// it was drawn.
-    fn painted_text(editor: &Editor) -> Vec<(String, egui::Rect)> {
+    /// Every shape one drawn frame painted (card 012's visibility check).
+    /// Like [`painted_text`], but the whole shape list: the transform quad is
+    /// a closed path, not text, so its presence in the paint output is the
+    /// only honest answer to "did the published geometry appear".
+    fn painted_shapes(chrome: &mut Chrome, editor: &mut Editor) -> Vec<egui::Shape> {
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut shapes = Vec::new();
+        // Two passes: the first frame is where egui learns the sizes.
+        for _ in 0..2 {
+            let output = ctx.run(raw_input(Vec::new()), |ctx| {
+                chrome.ui(ctx, editor);
+            });
+            shapes = output
+                .shapes
+                .iter()
+                .map(|clipped| clipped.shape.clone())
+                .collect();
+        }
+        shapes
+    }
+
+    fn painted_text(editor: &mut Editor) -> Vec<(String, egui::Rect)> {
         let ctx = egui::Context::default();
         install_theme(&ctx, design::Theme::Dark);
         let mut chrome = Chrome::new();
@@ -1746,7 +1920,7 @@ mod tests {
     /// Two passes: the first registers every widget's rectangle, the second
     /// delivers a press and a release at the target's centre. What comes back
     /// is the second pass's [`ChromeOutput`].
-    fn run_chrome(editor: &Editor, click: Option<egui::Id>) -> ChromeOutput {
+    fn run_chrome(editor: &mut Editor, click: Option<egui::Id>) -> ChromeOutput {
         let ctx = egui::Context::default();
         install_theme(&ctx, design::Theme::Dark);
         let mut chrome = Chrome::new();
@@ -1800,7 +1974,7 @@ mod tests {
             "\\a directory with a long name".repeat(12)
         ));
 
-        let painted = painted_text(&ed);
+        let painted = painted_text(&mut ed);
         // The status bar is the bottom-most panel of the window.
         let row: Vec<&(String, egui::Rect)> = painted
             .iter()
@@ -1835,6 +2009,169 @@ mod tests {
         }
     }
 
+    /// Card 061 (review round 4): push_brush's key list and the registry's
+    /// brush-shared option set are ONE list — a new BrushSettings field with
+    /// an option key must update both or the two copies drift again.
+    #[test]
+    fn push_brush_writes_exactly_the_brush_option_keys() {
+        let mut w = ui::Workspace::default();
+        // The written set: keys the workspace's held values carry for Brush.
+        // push_brush only writes TOUCHED values, so seed the whole brush
+        // family by hand first — each key moved off its schema default
+        // (range's far end, flipped when the default sits at the max, as
+        // Opacity's 1.0 does) so set() actually stores it.
+        for key in tools::registry::BRUSH_OPTION_KEYS {
+            let spec = ui::ToolOptions::spec_for_test(tools::ToolId::Brush, key)
+                .unwrap_or_else(|| panic!("{key} is not a registry option"));
+            let changed = match spec.kind {
+                tools::OptionKind::Float { default, min, max } => {
+                    let far = if (default - max).abs() < f32::EPSILON {
+                        min
+                    } else {
+                        max
+                    };
+                    ui::OptionValue::Float(far)
+                }
+                tools::OptionKind::Bool { default, .. } => ui::OptionValue::Bool(!default),
+                other => unreachable!("brush keys are floats/bools, got {other:?}"),
+            };
+            w.options.set(tools::ToolId::Brush, key, changed);
+        }
+        let held = w.options.held(tools::ToolId::Brush);
+        let mut written: Vec<&str> = held.iter().map(|(k, _)| k.as_str()).collect();
+        written.sort_unstable();
+        let mut expected: Vec<&str> = tools::registry::BRUSH_OPTION_KEYS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(
+            written, expected,
+            "push_brush keys drifted from the registry"
+        );
+    }
+
+    #[test]
+    fn tool_options_forwards_every_value_the_options_bar_holds() {
+        // Card 010's read half: the workspace's option values reach the
+        // boundary channel as (key, value) pairs, whatever their kind — not
+        // the choice-only subset the old seam forwarded.
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut chrome = Chrome::new();
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+
+        // Card 061 (review round 3): NOTHING set yet forwards NOTHING — the
+        // forward channel carries only TOUCHED options, because an untouched
+        // option is its registry default and demanding `set_setting` answers
+        // for keys no tool implements flooded the status bar on every press
+        // (the round-2 critical). The options BAR renders the declared
+        // defaults; this channel is the forward-to-tool set.
+        let defaults = chrome.tool_options(tools::ToolId::Move);
+        assert!(
+            defaults.is_empty(),
+            "untouched defaults do not forward: {defaults:?}"
+        );
+
+        // The options bar writes the workspace; the boundary reads it back.
+        chrome.set_tool_choice(tools::ToolId::FreeTransform, "mode", 2);
+        chrome.workspace.options.set(
+            tools::ToolId::Move,
+            "auto_select",
+            ui::OptionValue::Bool(true),
+        );
+        let options = chrome.tool_options(tools::ToolId::Move);
+        assert!(
+            options.contains(&("auto_select".to_string(), ui::OptionValue::Bool(true))),
+            "the set value is forwarded: {options:?}"
+        );
+    }
+
+    /// Card 012's check: a shell-published transform session is *visible* —
+    /// the same frame paints the quad and handles, and an ended session paints
+    /// none. Publication happens through the production publisher fed by a
+    /// real gesture's geometry, never by writing the sessions field by hand.
+    #[test]
+    fn a_published_transform_session_paints_handles_until_the_session_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+        // The camera the surface is rendered with: 100%, image centred, over
+        // the full test window.
+        {
+            let doc = ed.active_mut().unwrap();
+            doc.set_viewport(glam::Vec2::new(1400.0, 900.0));
+            doc.camera.zoom = 1.0;
+            doc.camera.center = glam::Vec2::new(4.0, 4.0);
+        }
+        ed.set_tool(tools::ToolId::FreeTransform);
+
+        // A real gesture: press on the document's corner, drag it.
+        let mut pointer = ToolPointer::new();
+        let doc_to_screen = |x: f32, y: f32| egui::pos2(700.0 + x - 4.0, 450.0 + y - 4.0);
+        let at = |phase: ui::canvas::PointerPhase, pos: egui::Pos2| {
+            ui::canvas::PointerInput::at(phase, glam::Vec2::new(pos.x, pos.y))
+        };
+        pointer.handle(
+            &mut ed,
+            at(ui::canvas::PointerPhase::Down, doc_to_screen(0.0, 0.0)),
+            false,
+            &[],
+        );
+        pointer.handle(
+            &mut ed,
+            at(ui::canvas::PointerPhase::Move, doc_to_screen(6.0, 0.0)),
+            false,
+            &[],
+        );
+
+        // Publish through the production publisher, then look at what the
+        // chrome actually painted.
+        let geometry = pointer.live_geometry();
+        assert!(geometry.is_some(), "the session is live");
+        let mut chrome = Chrome::new();
+        chrome.publish_tool_geometry(geometry, ed.active().map(|d| d.id()));
+        let painted = painted_shapes(&mut chrome, &mut ed);
+        let quad = painted
+            .iter()
+            .filter(|s| matches!(s, egui::Shape::Path(path) if path.closed))
+            .any(|s| {
+                let points = match s {
+                    egui::Shape::Path(path) => &path.points,
+                    _ => unreachable!(),
+                };
+                points
+                    .iter()
+                    .any(|p| (p.x - 702.0).abs() < 3.0 && (p.y - 446.0).abs() < 3.0)
+                    || points
+                        .iter()
+                        .any(|p| (p.x - 702.0).abs() < 3.0 && (p.y - 450.0).abs() < 3.0)
+            });
+        assert!(
+            quad,
+            "the transform quad is painted at the dragged corner: {painted:?}"
+        );
+
+        // End the session: the same publication route clears, and the next
+        // frame paints no quad there.
+        assert!(pointer.cancel(&mut ed));
+        let geometry = pointer.live_geometry();
+        assert!(geometry.is_none());
+        chrome.publish_tool_geometry(geometry, ed.active().map(|d| d.id()));
+        assert!(chrome.workspace.canvas.sessions.transform.is_none());
+        let painted = painted_shapes(&mut chrome, &mut ed);
+        let quad = painted
+            .iter()
+            .filter(|s| matches!(s, egui::Shape::Path(path) if path.closed))
+            .any(|s| match s {
+                egui::Shape::Path(path) => path
+                    .points
+                    .iter()
+                    .any(|p| (p.x - 702.0).abs() < 3.0 && (p.y - 446.0).abs() < 3.0),
+                _ => false,
+            });
+        assert!(!quad, "the ended session paints no quad: {painted:?}");
+    }
+
     #[test]
     fn tab_labels_mark_unsaved_documents() {
         let dir = tempfile::tempdir().unwrap();
@@ -1867,7 +2204,7 @@ mod tests {
         ed.open_path(&p).unwrap();
         assert!(ed.active().unwrap().document.active_layer().is_some());
 
-        let out = run_chrome(&ed, None);
+        let out = run_chrome(&mut ed, None);
         assert_eq!(out.select_layer, None, "nothing was clicked: {out:?}");
         assert!(out.is_empty(), "{out:?}");
     }
@@ -1891,7 +2228,7 @@ mod tests {
             .find(|id| *id != active)
             .expect("two layers");
 
-        let out = run_chrome(&ed, Some(ui::view::ids::layer_eye(other)));
+        let out = run_chrome(&mut ed, Some(ui::view::ids::layer_eye(other)));
         assert_eq!(out.commands.len(), 1, "the eye emits one command: {out:?}");
         assert!(
             matches!(
@@ -1906,7 +2243,7 @@ mod tests {
         // ...and clicking the row itself is what selects — through the
         // multi-selection route now: the whole set, click order, the clicked
         // row active.
-        let out = run_chrome(&ed, Some(ui::view::ids::layer_row(other)));
+        let out = run_chrome(&mut ed, Some(ui::view::ids::layer_row(other)));
         assert_eq!(
             out.select_layers,
             Some((vec![other], Some(other))),
@@ -1925,7 +2262,7 @@ mod tests {
         ed.open_path(&p).unwrap();
         assert_eq!(ed.active().unwrap().document.layers.len(), 1);
 
-        let out = run_chrome(&ed, Some(ui::view::ids::new_layer()));
+        let out = run_chrome(&mut ed, Some(ui::view::ids::new_layer()));
         assert_eq!(out.commands.len(), 1, "{out:?}");
         assert!(out.actions.is_empty(), "{out:?}");
 
@@ -1980,7 +2317,7 @@ mod tests {
         }
         assert_eq!(ed.active().unwrap().history_depth(), 3);
 
-        let out = run_chrome(&ed, Some(ui::view::ids::history_row(1)));
+        let out = run_chrome(&mut ed, Some(ui::view::ids::history_row(1)));
         assert_eq!(out.history_jump, Some(1), "{out:?}");
 
         // ...and performing it really moves the document there.
@@ -1990,7 +2327,7 @@ mod tests {
         assert_eq!(ed.active().unwrap().document.layers.len(), 2);
 
         // A row ahead of us walks forward again, through History's redo.
-        let out = run_chrome(&ed, Some(ui::view::ids::history_row(3)));
+        let out = run_chrome(&mut ed, Some(ui::view::ids::history_row(3)));
         assert_eq!(out.history_jump, Some(3), "{out:?}");
         assert_eq!(ed.jump_history(3), 2);
         assert_eq!(ed.active().unwrap().document.layers.len(), 4);
@@ -2027,7 +2364,7 @@ mod tests {
         install_theme(&ctx, design::Theme::Dark);
         let mut chrome = Chrome::new();
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            chrome.ui(ctx, &ed);
+            chrome.ui(ctx, &mut ed);
         });
         assert_eq!(chrome.workspace().color.foreground(), [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(chrome.workspace().color.background(), [0.0, 0.0, 1.0, 1.0]);
@@ -2036,7 +2373,7 @@ mod tests {
         // performs, rather than being written straight into the workspace.
         ed.dispatch(Action::SwapColors).unwrap();
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            chrome.ui(ctx, &ed);
+            chrome.ui(ctx, &mut ed);
         });
         assert_eq!(chrome.workspace().color.foreground(), [0.0, 0.0, 1.0, 1.0]);
     }
@@ -2159,7 +2496,7 @@ mod tests {
             let mut chrome = Chrome::new();
             for _ in 0..2 {
                 let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-                    let _ = chrome.ui(ctx, &ed);
+                    let _ = chrome.ui(ctx, &mut ed);
                 });
             }
         }
@@ -2178,7 +2515,7 @@ mod tests {
         ed.open_path(&p).unwrap();
         let layer = ed.active().unwrap().document.active_layer().unwrap();
 
-        let painted: Vec<String> = painted_text(&ed).into_iter().map(|(t, _)| t).collect();
+        let painted: Vec<String> = painted_text(&mut ed).into_iter().map(|(t, _)| t).collect();
         let dock = ui::DockState::default();
         let open: Vec<ui::PanelId> = ui::DockSide::ALL
             .iter()
@@ -2199,7 +2536,7 @@ mod tests {
         let mut chrome = Chrome::new();
         for _ in 0..2 {
             let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-                chrome.ui(ctx, &ed);
+                chrome.ui(ctx, &mut ed);
             });
         }
         assert!(
@@ -2227,7 +2564,7 @@ mod tests {
         install_theme(&ctx, design::Theme::Dark);
         let mut chrome = Chrome::new();
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            chrome.ui(ctx, &ed);
+            chrome.ui(ctx, &mut ed);
         });
         assert!(!chrome.workspace().dock.is_open(ui::PanelId::Navigator));
 
@@ -2237,7 +2574,7 @@ mod tests {
         });
         let mut out = ChromeOutput::default();
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            out = chrome.ui(ctx, &ed);
+            out = chrome.ui(ctx, &mut ed);
         });
         assert_eq!(
             out.workspace,
@@ -2253,7 +2590,7 @@ mod tests {
         );
 
         // ...and the next frame really draws it.
-        let painted: Vec<String> = painted_text_with(&ctx, &mut chrome, &ed);
+        let painted: Vec<String> = painted_text_with(&ctx, &mut chrome, &mut ed);
         assert!(
             painted.iter().any(|t| t == ui::PanelId::Navigator.title()),
             "the Navigator never appeared: {painted:?}"
@@ -2261,7 +2598,11 @@ mod tests {
     }
 
     /// Draw two more frames on an existing chrome and read back what they said.
-    fn painted_text_with(ctx: &egui::Context, chrome: &mut Chrome, editor: &Editor) -> Vec<String> {
+    fn painted_text_with(
+        ctx: &egui::Context,
+        chrome: &mut Chrome,
+        editor: &mut Editor,
+    ) -> Vec<String> {
         let mut painted = Vec::new();
         for _ in 0..2 {
             let output = ctx.run(raw_input(Vec::new()), |ctx| {
@@ -2288,7 +2629,7 @@ mod tests {
     fn painted_characters(
         ctx: &egui::Context,
         chrome: &mut Chrome,
-        editor: &Editor,
+        editor: &mut Editor,
     ) -> Vec<(egui::FontId, char)> {
         fn walk(shape: &egui::Shape, out: &mut Vec<(egui::FontId, char)>) {
             match shape {
@@ -2345,7 +2686,7 @@ mod tests {
         // Everything on screen at once: a panel that is closed paints nothing,
         // and the surfaces this bug lived on were spread across all of them.
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            chrome.ui(ctx, &ed);
+            chrome.ui(ctx, &mut ed);
         });
         for panel in ui::PanelId::ALL.iter().copied() {
             chrome
@@ -2353,7 +2694,7 @@ mod tests {
                 .emit(ui::Intent::SetPanelOpen { panel, open: true });
         }
         for _ in 0..4 {
-            let _ = painted_characters(&ctx, &mut chrome, &ed);
+            let _ = painted_characters(&ctx, &mut chrome, &mut ed);
         }
 
         // Every tool, not just the one that happens to be active. The options
@@ -2369,8 +2710,8 @@ mod tests {
             ed.set_tool(info.id);
             // Two frames: the first settles the new options bar's layout, the
             // second is the one a user would be looking at.
-            let _ = painted_characters(&ctx, &mut chrome, &ed);
-            painted.extend(painted_characters(&ctx, &mut chrome, &ed));
+            let _ = painted_characters(&ctx, &mut chrome, &mut ed);
+            painted.extend(painted_characters(&ctx, &mut chrome, &mut ed));
             tools_drawn += 1;
         }
         assert!(
@@ -2448,7 +2789,7 @@ mod tests {
         install_theme(&ctx, design::Theme::Dark);
         let mut chrome = Chrome::new();
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            chrome.ui(ctx, &ed);
+            chrome.ui(ctx, &mut ed);
         });
         chrome
             .workspace
@@ -2456,7 +2797,7 @@ mod tests {
         chrome.workspace.emit(ui::Intent::SetZoom(2.5));
         let mut out = ChromeOutput::default();
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            out = chrome.ui(ctx, &ed);
+            out = chrome.ui(ctx, &mut ed);
         });
         assert_eq!(out.set_view_center, Some((12.0, 34.0)), "{out:?}");
         assert_eq!(out.set_zoom, Some(2.5), "{out:?}");
@@ -2474,7 +2815,7 @@ mod tests {
     }
 
     impl Window {
-        fn new(editor: &Editor) -> Self {
+        fn new(editor: &mut Editor) -> Self {
             let ctx = egui::Context::default();
             install_theme(&ctx, design::Theme::Dark);
             let mut window = Self {
@@ -2491,13 +2832,13 @@ mod tests {
         /// the overflow, and that narrows every widget in it — so a rectangle
         /// read from an early frame is not where the click will land. The left
         /// rail of the default layout needs this; the right one happens not to.
-        fn settle(&mut self, editor: &Editor) {
+        fn settle(&mut self, editor: &mut Editor) {
             for _ in 0..4 {
                 self.frame(editor);
             }
         }
 
-        fn frame(&mut self, editor: &Editor) -> ChromeOutput {
+        fn frame(&mut self, editor: &mut Editor) -> ChromeOutput {
             let mut out = ChromeOutput::default();
             let chrome = &mut self.chrome;
             let _ = self.ctx.run(raw_input(Vec::new()), |ctx| {
@@ -2511,7 +2852,7 @@ mod tests {
         /// C3's validate: the start screen must actually be *painted*, not
         /// merely laid out — galleys are still readable from the shape list
         /// before tessellation, so this walks `FullOutput::shapes`.
-        fn painted_texts(&mut self, editor: &Editor) -> Vec<String> {
+        fn painted_texts(&mut self, editor: &mut Editor) -> Vec<String> {
             let mut out = ChromeOutput::default();
             let chrome = &mut self.chrome;
             let full = self.ctx.run(raw_input(Vec::new()), |ctx| {
@@ -2528,7 +2869,7 @@ mod tests {
         }
 
         /// Click a widget by id and return what that frame meant.
-        fn click(&mut self, editor: &Editor, id: egui::Id) -> ChromeOutput {
+        fn click(&mut self, editor: &mut Editor, id: egui::Id) -> ChromeOutput {
             let pos = self
                 .ctx
                 .read_response(id)
@@ -2569,7 +2910,12 @@ mod tests {
 
         /// Press on `from_id`, drag across `to_id`, release: the tab-strip
         /// drag gesture, one frame per phase the way a real drag spans them.
-        fn drag(&mut self, editor: &Editor, from_id: egui::Id, to_id: egui::Id) -> ChromeOutput {
+        fn drag(
+            &mut self,
+            editor: &mut Editor,
+            from_id: egui::Id,
+            to_id: egui::Id,
+        ) -> ChromeOutput {
             let from = self
                 .ctx
                 .read_response(from_id)
@@ -2618,7 +2964,7 @@ mod tests {
 
         /// Click a field, select its content, and type over it — one Text
         /// event per character, the way a keyboard delivers them.
-        fn type_into(&mut self, editor: &Editor, id: egui::Id, text: &str) -> ChromeOutput {
+        fn type_into(&mut self, editor: &mut Editor, id: egui::Id, text: &str) -> ChromeOutput {
             let mut merged = self.click(editor, id);
             merged.set_zoom = merged.set_zoom.or(None);
             let select_all = egui::Event::Key {
@@ -2650,7 +2996,7 @@ mod tests {
 
         /// Right-click at a widget's centre: the gesture that opens a context
         /// menu.
-        fn right_click(&mut self, editor: &Editor, id: egui::Id) -> ChromeOutput {
+        fn right_click(&mut self, editor: &mut Editor, id: egui::Id) -> ChromeOutput {
             let pos = self
                 .ctx
                 .read_response(id)
@@ -2681,7 +3027,7 @@ mod tests {
         }
 
         /// Middle-click at a widget's centre.
-        fn middle_click(&mut self, editor: &Editor, id: egui::Id) -> ChromeOutput {
+        fn middle_click(&mut self, editor: &mut Editor, id: egui::Id) -> ChromeOutput {
             let pos = self
                 .ctx
                 .read_response(id)
@@ -2736,8 +3082,8 @@ mod tests {
         assert!(ed.documents().is_empty());
         assert_eq!(ed.recent().entries(), std::slice::from_ref(&target));
 
-        let mut window = Window::new(&ed);
-        let out = window.click(&ed, Chrome::start_recent_id(0));
+        let mut window = Window::new(&mut ed);
+        let out = window.click(&mut ed, Chrome::start_recent_id(0));
         assert_eq!(
             out.open_recent,
             Some(target.clone()),
@@ -2753,15 +3099,15 @@ mod tests {
     #[test]
     fn the_start_screen_offers_new_and_open() {
         let dir = tempfile::tempdir().unwrap();
-        let ed = editor(dir.path());
+        let mut ed = editor(dir.path());
         assert!(ed.documents().is_empty());
-        let mut window = Window::new(&ed);
-        let out = window.click(&ed, egui::Id::new("raster-start-new"));
+        let mut window = Window::new(&mut ed);
+        let out = window.click(&mut ed, egui::Id::new("raster-start-new"));
         assert!(
             out.actions.contains(&Action::NewDocument),
             "the New button meant {out:?}"
         );
-        let out = window.click(&ed, egui::Id::new("raster-start-open"));
+        let out = window.click(&mut ed, egui::Id::new("raster-start-open"));
         assert!(
             out.actions.contains(&Action::Open),
             "the Open button meant {out:?}"
@@ -2776,11 +3122,11 @@ mod tests {
     #[test]
     fn the_start_screen_title_and_buttons_are_painted_only_when_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let ed = editor(&dir.path().join("config"));
+        let mut ed = editor(&dir.path().join("config"));
         assert!(ed.documents().is_empty());
 
-        let mut window = Window::new(&ed);
-        let texts = window.painted_texts(&ed);
+        let mut window = Window::new(&mut ed);
+        let texts = window.painted_texts(&mut ed);
         let joined = texts.join("\n");
         assert!(
             joined.contains("Raster Studio"),
@@ -2796,13 +3142,13 @@ mod tests {
         );
 
         // A document open means the start screen is gone entirely.
-        let ed = {
+        let mut ed = {
             let mut ed = editor(&dir.path().join("config"));
             ed.open_path(&png(dir.path(), "shown.png")).unwrap();
             ed
         };
         assert_eq!(ed.documents().len(), 1);
-        let texts = window.painted_texts(&ed);
+        let texts = window.painted_texts(&mut ed);
         let joined = texts.join("\n");
         assert!(
             !joined.contains("Raster Studio"),
@@ -2822,8 +3168,8 @@ mod tests {
         ed.open_path(&png(dir.path(), "two.png")).unwrap();
         assert_eq!(ed.documents().len(), 2);
 
-        let mut window = Window::new(&ed);
-        let out = window.middle_click(&ed, Chrome::tab_id(1));
+        let mut window = Window::new(&mut ed);
+        let out = window.middle_click(&mut ed, Chrome::tab_id(1));
         assert_eq!(out.close, Some(1), "middle-click meant {out:?}");
 
         // Through the shell's apply path the document is gone.
@@ -2838,11 +3184,11 @@ mod tests {
         ed.open_path(&png(dir.path(), "one.png")).unwrap();
         ed.open_path(&png(dir.path(), "two.png")).unwrap();
 
-        let mut window = Window::new(&ed);
-        let _ = window.right_click(&ed, Chrome::tab_id(1));
+        let mut window = Window::new(&mut ed);
+        let _ = window.right_click(&mut ed, Chrome::tab_id(1));
         // The shared drawer draws the menu inside the next frame's chrome;
         // one quiet frame lets it appear.
-        let _ = window.frame(&ed);
+        let _ = window.frame(&mut ed);
 
         // Exactly three rows: the File menu's close family.
         let items = ui::context_menu::tab_items(&ui::MenuContext {
@@ -2878,7 +3224,7 @@ mod tests {
         );
 
         // "Close Others" routes through the menu bridge to the action.
-        let out = window.click(&ed, ui::context_menu::ids::context_item(1));
+        let out = window.click(&mut ed, ui::context_menu::ids::context_item(1));
         assert!(
             out.actions.contains(&Action::CloseOthers),
             "the tab menu's Close Others meant {out:?}"
@@ -2917,7 +3263,7 @@ mod tests {
         ed.open_path(&png(dir.path(), "a.png")).unwrap();
         let pick = crate::menu_bridge::resolve(
             MenuAction::Transform(T::Rotate),
-            &crate::menu_bridge::context(&ed, &ui::Workspace::new()),
+            &crate::menu_bridge::context(&mut ed, &ui::Workspace::new()),
             &ed,
         )
         .unwrap();
@@ -3003,11 +3349,11 @@ mod tests {
         let mut ed = editor(&dir.path().join("config"));
         ed.open_path(&png(dir.path(), "one.png")).unwrap();
 
-        let mut window = Window::new(&ed);
-        window.type_into(&ed, Chrome::status_zoom_id(), "200");
+        let mut window = Window::new(&mut ed);
+        window.type_into(&mut ed, Chrome::status_zoom_id(), "200");
         // Commit by clicking elsewhere: the field loses focus, the value lands
         // in `ChromeOutput::set_zoom`.
-        let out = window.click(&ed, Chrome::status_readouts_id());
+        let out = window.click(&mut ed, Chrome::status_readouts_id());
         assert_eq!(out.set_zoom, Some(2.0), "typing 200 meant {out:?}");
 
         // Through the shell's apply path the camera follows, and the canvas
@@ -3028,8 +3374,8 @@ mod tests {
             |ed: &Editor| -> Vec<String> { ed.documents().iter().map(|d| d.tab_label()).collect() };
         assert_eq!(names(&ed), ["one.png", "two.png"]);
 
-        let mut window = Window::new(&ed);
-        let out = window.drag(&ed, Chrome::tab_id(0), Chrome::tab_id(1));
+        let mut window = Window::new(&mut ed);
+        let out = window.drag(&mut ed, Chrome::tab_id(0), Chrome::tab_id(1));
         assert_eq!(out.move_document, Some((0, 1)), "the drag meant {out:?}");
         ed.move_document(0, 1);
         assert_eq!(names(&ed), ["two.png", "one.png"]);
@@ -3045,8 +3391,8 @@ mod tests {
         let mut ed = editor(&dir.path().join("config"));
         ed.open_path(&png(dir.path(), &long)).unwrap();
 
-        let mut window = Window::new(&ed);
-        window.settle(&ed);
+        let mut window = Window::new(&mut ed);
+        window.settle(&mut ed);
         let tab = window
             .read_rect(Chrome::tab_id(0))
             .expect("the tab was drawn");
@@ -3072,7 +3418,7 @@ mod tests {
         let mut ed = editor(&dir.path().join("config"));
         ed.open_path(&p).unwrap();
 
-        let mut window = Window::new(&ed);
+        let mut window = Window::new(&mut ed);
         let before = window.panels_on(ui::DockSide::Right);
         assert!(before.len() >= 3, "the right rail holds {before:?}");
         // The reorder control belongs to the ACTIVE tab of the bottom group
@@ -3090,8 +3436,8 @@ mod tests {
         };
         let from = before.len() - 1;
 
-        window.click(&ed, ui::view::ids::panel_menu(panel));
-        let out = window.click(&ed, ui::view::ids::panel_reorder(panel, true));
+        window.click(&mut ed, ui::view::ids::panel_menu(panel));
+        let out = window.click(&mut ed, ui::view::ids::panel_reorder(panel, true));
 
         // One click on the up chevron moved the group one slot up: History
         // now sits between Adjustments and Layers instead of after Layers.
@@ -3130,14 +3476,17 @@ mod tests {
         let mut ed = editor(&dir.path().join("config"));
         ed.open_path(&p).unwrap();
 
-        let mut window = Window::new(&ed);
+        let mut window = Window::new(&mut ed);
         let panel = ui::PanelId::History;
         assert!(!window.panels_on(ui::DockSide::Bottom).contains(&panel));
         let from = window.chrome.workspace().dock.placement(panel).side;
         assert_ne!(from, ui::DockSide::Bottom);
 
-        window.click(&ed, ui::view::ids::panel_menu(panel));
-        let out = window.click(&ed, ui::view::ids::panel_dock(panel, ui::DockSide::Bottom));
+        window.click(&mut ed, ui::view::ids::panel_menu(panel));
+        let out = window.click(
+            &mut ed,
+            ui::view::ids::panel_dock(panel, ui::DockSide::Bottom),
+        );
 
         assert_eq!(
             out.workspace,
@@ -3150,7 +3499,7 @@ mod tests {
         assert_eq!(window.panels_on(ui::DockSide::Bottom), vec![panel]);
         assert!(!window.panels_on(from).contains(&panel));
         // ...and the window really draws it down there on the next frame.
-        let painted = painted_text_with(&window.ctx, &mut window.chrome, &ed);
+        let painted = painted_text_with(&window.ctx, &mut window.chrome, &mut ed);
         assert!(
             painted.iter().any(|t| t == panel.title()),
             "the bottom rail never drew {panel:?}: {painted:?}"
@@ -3169,7 +3518,7 @@ mod tests {
         let mut ed = editor(&dir.path().join("config"));
         ed.open_path(&p).unwrap();
 
-        let mut window = Window::new(&ed);
+        let mut window = Window::new(&mut ed);
         assert_eq!(
             window.chrome.channel_mask(),
             crate::presenter::ChannelMask::ALL
@@ -3185,10 +3534,10 @@ mod tests {
             .workspace
             .dock
             .set_open(ui::PanelId::Channels, true);
-        window.settle(&ed);
+        window.settle(&mut ed);
 
         // Row 0 is the composite; row 1 is the first component.
-        let out = window.click(&ed, ui::view::ids::channel_eye(1));
+        let out = window.click(&mut ed, ui::view::ids::channel_eye(1));
         assert_eq!(
             out.workspace,
             vec![ui::Intent::SetChannelVisible {
@@ -3222,7 +3571,7 @@ mod tests {
         install_theme(&ctx, design::Theme::Dark);
         let mut chrome = Chrome::new();
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            chrome.ui(ctx, &ed);
+            chrome.ui(ctx, &mut ed);
         });
 
         let command = egui::Modifiers {
@@ -3240,7 +3589,7 @@ mod tests {
         };
         let mut out = ChromeOutput::default();
         let _ = ctx.run(raw_input(press(egui::Key::Num3)), |ctx| {
-            out = chrome.ui(ctx, &ed);
+            out = chrome.ui(ctx, &mut ed);
         });
         assert_eq!(
             chrome.channel_mask(),
@@ -3259,14 +3608,14 @@ mod tests {
 
         // Ctrl+2 is the composite, and puts every channel back.
         let _ = ctx.run(raw_input(press(egui::Key::Num2)), |ctx| {
-            out = chrome.ui(ctx, &ed);
+            out = chrome.ui(ctx, &mut ed);
         });
         assert_eq!(chrome.channel_mask(), crate::presenter::ChannelMask::ALL);
 
         // Ctrl+1 belongs to the application's keymap (100%), so the panel must
         // not steal it — there is no row wearing digit 1 either.
         let _ = ctx.run(raw_input(press(egui::Key::Num1)), |ctx| {
-            out = chrome.ui(ctx, &ed);
+            out = chrome.ui(ctx, &mut ed);
         });
         assert_eq!(chrome.channel_mask(), crate::presenter::ChannelMask::ALL);
     }
@@ -3292,7 +3641,7 @@ mod tests {
         let mut out = ChromeOutput::default();
         for _ in 0..3 {
             let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-                out = chrome.ui(ctx, &ed);
+                out = chrome.ui(ctx, &mut ed);
             });
         }
         let id = Chrome::tab_close_id(0);
@@ -3321,7 +3670,7 @@ mod tests {
             },
         ];
         let _ = ctx.run(raw_input(events), |ctx| {
-            out = chrome.ui(ctx, &ed);
+            out = chrome.ui(ctx, &mut ed);
         });
         assert_eq!(out.close, Some(0), "{out:?}");
     }
@@ -3335,12 +3684,12 @@ mod tests {
         let model = ui::PaletteModel::build();
         let slot = model.slot_of(ToolId::Brush).expect("the brush has a slot");
 
-        let out = run_chrome(&ed, Some(ui::view::ids::tool_slot(slot)));
+        let out = run_chrome(&mut ed, Some(ui::view::ids::tool_slot(slot)));
         assert_eq!(out.select_tool, Some(ToolId::Brush), "{out:?}");
     }
 
     /// One frame of the chrome, returning what it emitted.
-    fn one_frame(chrome: &mut Chrome, editor: &Editor) -> ChromeOutput {
+    fn one_frame(chrome: &mut Chrome, editor: &mut Editor) -> ChromeOutput {
         let ctx = egui::Context::default();
         install_theme(&ctx, design::Theme::Dark);
         let mut out = ChromeOutput::default();
@@ -3366,7 +3715,7 @@ mod tests {
         brush.size += 12.0;
         let expected = brush.size;
         editor.set_brush(brush);
-        one_frame(&mut chrome, &editor);
+        one_frame(&mut chrome, &mut editor);
         assert_eq!(
             chrome
                 .workspace()
@@ -3401,7 +3750,7 @@ mod tests {
         let mut editor = editor(dir.path());
         editor.set_tool(tools::ToolId::Pencil);
         let mut chrome = Chrome::new();
-        one_frame(&mut chrome, &editor);
+        one_frame(&mut chrome, &mut editor);
 
         // Editor -> options bar: the Pencil's slider reads 1, not the
         // application default of 24.
@@ -3520,11 +3869,12 @@ mod tests {
         };
 
         let mut gestures = Vec::new();
+        let mut ed = ed;
         let mut frame = |events: Vec<egui::Event>| {
             chrome.workspace.emit(intent.clone());
             let mut out = ChromeOutput::default();
             let _ = ctx.run(raw_input(events), |ctx| {
-                out = chrome.ui(ctx, &ed);
+                out = chrome.ui(ctx, &mut ed);
             });
             assert_eq!(out.layer_kind.len(), 1, "the edit was dropped");
             out.layer_kind[0].gesture
@@ -3567,9 +3917,9 @@ mod tests {
         // it, so a stale one puts the image at the zoom some other window would
         // have needed.
         let dir = tempfile::tempdir().unwrap();
-        let ed = editor(dir.path());
+        let mut ed = editor(dir.path());
         let mut chrome = Chrome::new();
-        one_frame(&mut chrome, &ed);
+        one_frame(&mut chrome, &mut ed);
 
         let viewport = chrome.workspace().canvas.view.viewport();
         // `raw_input` gives the frame a 1400x900 window.
@@ -3651,7 +4001,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ed = wide_document(dir.path());
 
-        let (fill, chrome) = view_item(&ed, M::Zoom(Z::FillScreen));
+        let (fill, chrome) = view_item(&mut ed, M::Zoom(Z::FillScreen));
         let fill_zoom = fill.set_zoom.expect("Fill Screen reports a zoom");
         // The Fit this application actually performs, on this same editor.
         ed.dispatch(crate::Action::ZoomFit).unwrap();
@@ -3697,9 +4047,9 @@ mod tests {
         use ui::menu::MenuAction as M;
         use ui::menu::ZoomCommand as Z;
         let dir = tempfile::tempdir().unwrap();
-        let ed = wide_document(dir.path());
+        let mut ed = wide_document(dir.path());
 
-        let (out, chrome) = view_item(&ed, M::Zoom(Z::ToSelection));
+        let (out, chrome) = view_item(&mut ed, M::Zoom(Z::ToSelection));
         let geometry = chrome.frame_geometry.expect("a frame was drawn");
         let mut camera = render_camera(&ed, geometry);
         camera.zoom = out.set_zoom.expect("Zoom to Selection reports a zoom");
@@ -3740,7 +4090,7 @@ mod tests {
         // rectangle — which is exactly the defect this distinction exists to
         // prevent, just moved one intent along.
         let mut both = Chrome::new();
-        one_frame(&mut both, &ed);
+        one_frame(&mut both, &mut ed);
         let mut batch = ChromeOutput::default();
         batch
             .workspace
@@ -3750,7 +4100,7 @@ mod tests {
             .push(ui::Intent::Action(M::Zoom(Z::FillScreen)));
         both.harvest_workspace_for_test(&mut batch, &ed);
         let after = batch.set_zoom.expect("Fill Screen reports a zoom");
-        let alone = view_item(&ed, M::Zoom(Z::FillScreen))
+        let alone = view_item(&mut ed, M::Zoom(Z::FillScreen))
             .0
             .set_zoom
             .expect("Fill Screen reports a zoom");
@@ -3772,7 +4122,7 @@ mod tests {
         ed.active_mut().unwrap().document.selection = editor_core::Selection::None;
         let before = ed.active().unwrap().camera.center;
 
-        let (out, _) = view_item(&ed, M::Zoom(Z::ToSelection));
+        let (out, _) = view_item(&mut ed, M::Zoom(Z::ToSelection));
         let (cx, cy) = out.set_view_center.expect("the read-back still reports");
         assert!(
             (cx - before.x).abs() < 1e-3 && (cy - before.y).abs() < 1e-3,
@@ -3782,7 +4132,7 @@ mod tests {
     }
 
     /// Run one frame, then absorb `action` as the menu bar would have.
-    fn view_item(editor: &Editor, action: ui::menu::MenuAction) -> (ChromeOutput, Chrome) {
+    fn view_item(editor: &mut Editor, action: ui::menu::MenuAction) -> (ChromeOutput, Chrome) {
         let mut chrome = Chrome::new();
         // The first frame is what tells the workspace's canvas host how big the
         // window and the document are.
@@ -3814,7 +4164,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // Deliberately not the window's shape: Fit and Fill only differ on a
         // document whose aspect ratio is not the viewport's.
-        let ed = wide_document(dir.path());
+        let mut ed = wide_document(dir.path());
         let started = ed.active().unwrap().camera.zoom;
 
         // *That* Fill is larger than Fit is
@@ -3822,7 +4172,7 @@ mod tests {
         // which compares against the Fit the application performs rather than
         // against another guess made on the same host. Here the claim is only
         // that the number reaches the document's camera at all.
-        let (fill, _) = view_item(&ed, M::Zoom(Z::FillScreen));
+        let (fill, _) = view_item(&mut ed, M::Zoom(Z::FillScreen));
         assert!(
             fill.set_zoom.is_some_and(|z| (z - started).abs() > 1e-3),
             "Fill Screen reported {:?}, which is the zoom the document already \
@@ -3830,7 +4180,7 @@ mod tests {
             fill.set_zoom
         );
 
-        let (print, _) = view_item(&ed, M::Zoom(Z::PrintSize));
+        let (print, _) = view_item(&mut ed, M::Zoom(Z::PrintSize));
         let want = ui::canvas::workspace::POINTS_PER_INCH / ui::canvas::workspace::DEFAULT_PPI;
         assert!(
             print.set_zoom.is_some_and(|z| (z - want).abs() < 1e-3),
@@ -3841,7 +4191,7 @@ mod tests {
         // *Where* Zoom to Selection puts the selection is
         // `zoom_to_selection_frames_the_selection_where_the_docks_are_not`; the
         // claim here is that it reports a centre near the selection at all.
-        let (selection, _) = view_item(&ed, M::Zoom(Z::ToSelection));
+        let (selection, _) = view_item(&mut ed, M::Zoom(Z::ToSelection));
         let center = selection
             .set_view_center
             .expect("Zoom to Selection reports a centre");
@@ -3856,7 +4206,7 @@ mod tests {
         // can rotate it. That makes this an assertion about the routing, not
         // about anything a user can do here today.
         let mut chrome = Chrome::new();
-        one_frame(&mut chrome, &ed);
+        one_frame(&mut chrome, &mut ed);
         chrome.workspace.canvas.view.camera.rotation = 0.7;
         let mut out = ChromeOutput::default();
         out.workspace.push(ui::Intent::Action(M::ResetViewRotation));
@@ -3916,7 +4266,7 @@ mod tests {
         let mut painted = Vec::new();
         for _ in 0..3 {
             let full = ctx.run(raw_input(Vec::new()), |ctx| {
-                out = chrome.ui(ctx, &ed);
+                out = chrome.ui(ctx, &mut ed);
             });
             painted = painted_in(&full);
         }
@@ -3942,7 +4292,7 @@ mod tests {
                 physical_key: None,
             }]),
             |ctx| {
-                out = chrome.ui(ctx, &ed);
+                out = chrome.ui(ctx, &mut ed);
             },
         );
         assert!(!out.dialog_open, "Escape did not close the dialog");
@@ -3977,7 +4327,7 @@ mod tests {
         let mut out = ChromeOutput::default();
         for _ in 0..3 {
             let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-                out = chrome.ui(ctx, &ed);
+                out = chrome.ui(ctx, &mut ed);
             });
         }
         assert!(out.dialog_open, "setup: the dialog is open");
@@ -4004,7 +4354,7 @@ mod tests {
         let mut out = ChromeOutput::default();
         let mut pointer_wanted = false;
         let _ = ctx.run(raw_input(events), |ctx| {
-            out = chrome.ui(ctx, &ed);
+            out = chrome.ui(ctx, &mut ed);
             pointer_wanted = ctx.wants_pointer_input();
         });
         // egui did receive and process the press: it registered a click.
@@ -4054,7 +4404,7 @@ mod tests {
         let mut out = ChromeOutput::default();
         for _ in 0..3 {
             let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-                out = chrome.ui(ctx, &ed);
+                out = chrome.ui(ctx, &mut ed);
             });
             // The shell performs the chrome's actions; the toggle-off has to
             // land or the intent re-fires every frame.
@@ -4101,7 +4451,7 @@ mod tests {
                 physical_key: None,
             }]),
             |ctx| {
-                out = chrome.ui(ctx, &ed);
+                out = chrome.ui(ctx, &mut ed);
             },
         );
         assert!(!out.dialog_open, "Enter did not close the dialog");
@@ -4140,7 +4490,7 @@ mod tests {
         let mut out = ChromeOutput::default();
         for _ in 0..3 {
             let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-                out = chrome.ui(ctx, &ed);
+                out = chrome.ui(ctx, &mut ed);
             });
         }
         assert!(out.dialog_open, "the fill dialog opened");
@@ -4174,7 +4524,7 @@ mod tests {
         let mut out = ChromeOutput::default();
         for _ in 0..3 {
             let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-                out = chrome.ui(ctx, &ed);
+                out = chrome.ui(ctx, &mut ed);
             });
         }
         assert!(out.dialog_open, "the brush editor opened");
@@ -4195,7 +4545,7 @@ mod tests {
                 physical_key: None,
             }]),
             |ctx| {
-                out = chrome.ui(ctx, &ed);
+                out = chrome.ui(ctx, &mut ed);
             },
         );
         assert!(!out.dialog_open, "Enter did not close the editor");
@@ -4225,7 +4575,7 @@ mod tests {
         let mut painted = Vec::new();
         for _ in 0..3 {
             let full = ctx.run(raw_input(Vec::new()), |ctx| {
-                out = chrome.ui(ctx, &ed);
+                out = chrome.ui(ctx, &mut ed);
             });
             painted = painted_in(&full);
         }
@@ -4260,7 +4610,7 @@ mod tests {
                 physical_key: None,
             }]),
             |ctx| {
-                out = chrome.ui(ctx, &ed);
+                out = chrome.ui(ctx, &mut ed);
             },
         );
         assert!(!out.dialog_open, "Enter did not close the editor");
@@ -4303,7 +4653,7 @@ mod tests {
         let mut painted = Vec::new();
         for _ in 0..3 {
             let full = ctx.run(raw_input(Vec::new()), |ctx| {
-                out = chrome.ui(ctx, &ed);
+                out = chrome.ui(ctx, &mut ed);
             });
             painted = painted_in(&full);
         }
@@ -4327,7 +4677,7 @@ mod tests {
                 physical_key: None,
             }]),
             |ctx| {
-                out = chrome.ui(ctx, &ed);
+                out = chrome.ui(ctx, &mut ed);
             },
         );
         assert!(!out.dialog_open, "Enter did not close the picker");
@@ -4343,7 +4693,7 @@ mod tests {
     fn cancelling_the_new_document_dialog_creates_no_document() {
         // No document open to begin with — the point is that nothing appears.
         let dir = tempfile::tempdir().unwrap();
-        let ed = editor(&dir.path().join("config"));
+        let mut ed = editor(&dir.path().join("config"));
         assert!(ed.documents().is_empty());
 
         let ctx = egui::Context::default();
@@ -4356,7 +4706,7 @@ mod tests {
         let mut painted = Vec::new();
         for _ in 0..3 {
             let full = ctx.run(raw_input(Vec::new()), |ctx| {
-                out = chrome.ui(ctx, &ed);
+                out = chrome.ui(ctx, &mut ed);
             });
             painted = painted_in(&full);
         }
@@ -4377,7 +4727,7 @@ mod tests {
                 physical_key: None,
             }]),
             |ctx| {
-                out = chrome.ui(ctx, &ed);
+                out = chrome.ui(ctx, &mut ed);
             },
         );
         assert!(!out.dialog_open);

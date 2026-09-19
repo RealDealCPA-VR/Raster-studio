@@ -632,6 +632,11 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
         }
     });
 
+    // Card 026: double-clicking a TEXT row enters that layer for editing —
+    // the shell opens the session; other classes keep plain selection.
+    if response.double_clicked() && row.class == crate::menu::LayerClass::Text {
+        w.emit(Intent::EnterTextLayer { layer: row.id });
+    }
     if response.clicked() {
         let modifiers = ui.input(|i| i.modifiers);
         if modifiers.command {
@@ -662,24 +667,73 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
 /// "adjustment" is honest; a blank well is not — and the glyph fallback is
 /// also exactly what a headless draw sees, since no application has uploaded
 /// textures there.
-fn thumbnail(ui: &mut Ui, w: &Workspace, row: &LayerRow) {
+fn thumbnail(ui: &mut Ui, w: &mut Workspace, row: &LayerRow) {
     let t = current_tokens(ui);
     let height = (t.metrics.list_row_height * w.layers.thumb_scale.height()) - Space::XSmall.pt();
     let size = Vec2::new(height * 4.0 / 3.0, height);
+    content_well(ui, w, row, size);
+    if row.has_mask {
+        // Card 055: a layer with a mask carries a second well — clicking it
+        // aims edits at the mask coverage, the same state the Properties
+        // Layer/Mask control mirrors.
+        mask_well(ui, w, row, Vec2::new(size.x * 0.6, size.y));
+    }
+}
+
+/// The content thumbnail well (card 055): shows the layer's pixels and is
+/// the click target that aims edits at CONTENT. A stroke border marks the
+/// well the current edit target points at.
+fn content_well(ui: &mut Ui, w: &mut Workspace, row: &LayerRow, size: Vec2) {
+    let t = current_tokens(ui);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     if !ui.is_rect_visible(rect) {
         return;
     }
-    let radius = Radius::Small.resolve(&t.radii, height);
-    super::checkerboard(ui.painter(), rect, Space::XSmall.pt());
-    ui.painter().rect_stroke(
+    // Clicking the well (not dragging the row) aims at content.
+    let response = ui.interact(
         rect,
-        rounding(radius),
-        egui::Stroke::new(
-            t.borders.hairline,
-            color32(t.palette.color(ColorRole::ControlStroke)),
-        ),
+        super::ids::layer_content_thumb(row.id),
+        Sense::click(),
     );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            true,
+            crate::strings::tr("ui.docks.content.thumbnail"),
+        )
+    });
+    if response.clicked() {
+        // Card 055: the click aims at THIS row — selecting it first, exactly
+        // as the row's own click does. Without the selection the target
+        // would resolve against the previously active layer while the
+        // clicked row's well showed the border.
+        w.layers.select_only(row.id);
+        let selection = w.layers.selection().to_vec();
+        w.emit(Intent::SelectLayers {
+            layers: selection,
+            active: Some(row.id),
+        });
+        w.property_focus = crate::panels::properties::PropertyFocus::Layer;
+        w.emit(crate::Intent::SetEditTarget { mask: false });
+    }
+    let radius = Radius::Small.resolve(&t.radii, size.y);
+    super::checkerboard(ui.painter(), rect, Space::XSmall.pt());
+    // Card 055: the target border — THE target row's well (the active
+    // layer, which is what the edit target resolves against) of the focused
+    // kind, and nothing else.
+    let border =
+        if w.property_focus == crate::panels::properties::PropertyFocus::Layer && row.active {
+            egui::Stroke::new(
+                t.borders.thick,
+                color32(t.palette.color(ColorRole::SelectionStroke)),
+            )
+        } else {
+            egui::Stroke::new(
+                t.borders.hairline,
+                color32(t.palette.color(ColorRole::ControlStroke)),
+            )
+        };
+    ui.painter().rect_stroke(rect, rounding(radius), border);
     if let Some(tex) = w.layer_thumbs.get(&row.id) {
         let r = rect;
         ui.painter().image(
@@ -700,6 +754,286 @@ fn thumbnail(ui: &mut Ui, w: &Workspace, row: &LayerRow) {
         super::kind_icon(row.class),
         TextRole::Secondary,
     );
+}
+
+/// The mask thumbnail well (card 055): shown only on layers that HAVE a
+/// mask; clicking it aims edits at the mask coverage. Card 059: it draws the
+/// mask's REAL coverage thumbnail when the application supplied one, carries
+/// an obvious active-target badge, and a secondary-click popup with the mask
+/// view modes (Composite/Grayscale/Overlay) plus the mask ops.
+fn mask_well(ui: &mut Ui, w: &mut Workspace, row: &LayerRow, size: Vec2) {
+    let t = current_tokens(ui);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    // Card 059: the popup's lifecycle runs BEFORE the visibility cull — a
+    // popup whose well is scrolled out of view must still close on Escape
+    // or an outside click, or it resurrects on the way back.
+    if w.layers.mask_menu == Some(row.id) {
+        if !row.has_mask {
+            // The mask went away (deleted, applied, undone): the popup has
+            // nothing to present and must not re-anchor later.
+            w.layers.mask_menu = None;
+            w.layers.mask_menu_fresh = false;
+        } else {
+            mask_view_popup(w, ui, row, rect, w.layers.mask_menu_fresh);
+            // The fresh flag guards exactly one frame (the opening one).
+            w.layers.mask_menu_fresh = false;
+        }
+    }
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let response = ui.interact(rect, super::ids::layer_mask_thumb(row.id), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            true,
+            crate::strings::tr("ui.docks.mask.thumbnail"),
+        )
+    });
+    if response.clicked() {
+        // Card 055: the click aims at THIS row's mask — selecting the row
+        // first, so the target cannot resolve against another layer.
+        w.layers.select_only(row.id);
+        let selection = w.layers.selection().to_vec();
+        w.emit(Intent::SelectLayers {
+            layers: selection,
+            active: Some(row.id),
+        });
+        w.property_focus = crate::panels::properties::PropertyFocus::Mask;
+        w.emit(crate::Intent::SetEditTarget { mask: true });
+    }
+    if response.secondary_clicked() {
+        // Card 059: the well's own popup — view modes + the mask ops. The
+        // fresh flag keeps the opening right-click's own release from
+        // closing it the same frame (the shared context menu's trick).
+        //
+        // The right-click also SELECTS the row, exactly as the left click
+        // does: the mask ops ride MenuOp::Toggle, which acts on the ACTIVE
+        // layer, and a popup over a selected-but-not-active row would
+        // otherwise silently hit another layer's mask.
+        w.layers.select_only(row.id);
+        let selection = w.layers.selection().to_vec();
+        w.emit(Intent::SelectLayers {
+            layers: selection,
+            active: Some(row.id),
+        });
+        w.layers.mask_menu = Some(row.id);
+        w.layers.mask_menu_fresh = true;
+    }
+    let radius = Radius::Small.resolve(&t.radii, size.y);
+    super::checkerboard(ui.painter(), rect, Space::XSmall.pt());
+    let border = if w.property_focus == crate::panels::properties::PropertyFocus::Mask && row.active
+    {
+        egui::Stroke::new(
+            t.borders.thick,
+            color32(t.palette.color(ColorRole::SelectionStroke)),
+        )
+    } else {
+        egui::Stroke::new(
+            t.borders.hairline,
+            color32(t.palette.color(ColorRole::ControlStroke)),
+        )
+    };
+    ui.painter().rect_stroke(rect, rounding(radius), border);
+    if let Some(tex) = w.mask_thumbs.get(&row.id) {
+        // Card 059: the real coverage thumbnail — grayscale bytes straight
+        // from the mask's pose-sampled store.
+        ui.painter().image(
+            tex.id(),
+            rect,
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+            crate::dialogs::controls::UNTINTED,
+        );
+    } else {
+        let side = rect.height() * 0.7;
+        let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(side));
+        if row.mask_enabled {
+            super::paint_icon(ui, icon_rect, "mask", TextRole::Secondary);
+        } else {
+            super::paint_icon(ui, icon_rect, "mask", TextRole::Tertiary);
+        }
+    }
+    // Card 059: the active-target badge — a filled accent dot on the corner
+    // of THE well the edit target is aimed at, so the indicator survives a
+    // thumbnail that fills the whole well (the border alone reads as
+    // selection, not as "edits land here").
+    if w.property_focus == crate::panels::properties::PropertyFocus::Mask && row.active {
+        let r = 2.5_f32.min(rect.width() * 0.15);
+        let centre = egui::pos2(rect.right() - r - 2.0, rect.top() + r + 2.0);
+        // A hover-sensed interact keeps the badge discoverable (tooltip) and
+        // gives tests a stable id to assert the indicator by.
+        let badge = ui.interact(
+            egui::Rect::from_center_size(centre, Vec2::splat(r * 2.0)),
+            super::ids::mask_target_badge(row.id),
+            Sense::hover(),
+        );
+        badge.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                true,
+                crate::strings::tr("ui.docks.mask.target.badge"),
+            )
+        });
+        badge.on_hover_text(crate::strings::tr("ui.docks.mask.target.badge"));
+        ui.painter()
+            .circle_filled(centre, r, color32(t.palette.color(ColorRole::Accent)));
+    }
+}
+
+/// Card 059: the mask well's popup — the three view modes (a direct write to
+/// the panel-owned [`Workspace::mask_view`], exactly like the Channels
+/// panel's toggles) above the enable/disable and link ops, which resolve
+/// through the same menu route the Layer ▸ Layer Mask items use.
+fn mask_view_popup(
+    w: &mut Workspace,
+    ui: &mut Ui,
+    row: &LayerRow,
+    anchor: egui::Rect,
+    fresh: bool,
+) {
+    let t = current_tokens(ui);
+    let popup_id = super::ids::layer_mask_thumb(row.id).with("menu");
+    let mut close = false;
+    // Clamp the anchor so a well near the panel's bottom still shows the
+    // whole popup: five rows (three modes + two ops) at the control height.
+    let estimated_h = t.metrics.control_height * 5.0 + 8.0;
+    let screen_bottom = ui.ctx().screen_rect().bottom();
+    let top = (anchor.bottom() + 2.0).min(screen_bottom - estimated_h);
+    egui::Area::new(popup_id)
+        .order(egui::Order::Foreground)
+        .fixed_pos(egui::pos2(anchor.left(), top.max(0.0)))
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_min_width(120.0);
+                ui.spacing_mut().item_spacing.y = 0.0;
+                // The rows are drawn the way the shared context menu draws
+                // its items — allocate + interact under a STABLE id — so a
+                // test can click a row by name the same way it clicks any
+                // other drawn control.
+                let row_h = t.metrics.control_height;
+                let font =
+                    design::egui_theme::text_style(design::TypeRole::Body).resolve(ui.style());
+                let menu_row = |ui: &mut egui::Ui,
+                                id: egui::Id,
+                                label: &str,
+                                checked: bool,
+                                enabled: bool|
+                 -> bool {
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), row_h),
+                        egui::Sense::hover(),
+                    );
+                    let response = ui.interact(rect, id, egui::Sense::click());
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            enabled,
+                            label.to_string(),
+                        )
+                    });
+                    if enabled && response.hovered() {
+                        ui.painter().rect_filled(
+                            rect,
+                            egui::Rounding::ZERO,
+                            color32(t.palette.color(ColorRole::ControlFillHovered)),
+                        );
+                    }
+                    // The checked row reads in the accent (a drawing would
+                    // need an inline glyph; the accent does the job the typed
+                    // check mark must not).
+                    let (text, color) = if checked && enabled {
+                        (
+                            label.to_string(),
+                            color32(t.palette.color(ColorRole::Accent)),
+                        )
+                    } else {
+                        (
+                            label.to_string(),
+                            color32(t.palette.text(if enabled {
+                                TextRole::Secondary
+                            } else {
+                                TextRole::Tertiary
+                            })),
+                        )
+                    };
+                    ui.painter().text(
+                        egui::pos2(
+                            rect.left() + design::tokens::spacing::Space::Small.pt(),
+                            rect.center().y - font.size * 0.5,
+                        ),
+                        egui::Align2::LEFT_TOP,
+                        text,
+                        font.clone(),
+                        color,
+                    );
+                    enabled && response.clicked()
+                };
+                // ---- view modes ---------------------------------
+                for mode in crate::MaskViewMode::ALL {
+                    let key = match mode {
+                        crate::MaskViewMode::Composite => "ui.docks.mask.view.composite",
+                        crate::MaskViewMode::Grayscale => "ui.docks.mask.view.grayscale",
+                        crate::MaskViewMode::Overlay => "ui.docks.mask.view.overlay",
+                    };
+                    if menu_row(
+                        ui,
+                        super::ids::mask_view_item(*mode),
+                        crate::strings::tr(key),
+                        *mode == w.mask_view,
+                        true,
+                    ) {
+                        w.mask_view = *mode;
+                        close = true;
+                    }
+                }
+                // ---- mask ops (the same gates the Layer menu applies) --
+                let toggle_enabled = row.active || w.layers.is_selected(row.id);
+                if menu_row(
+                    ui,
+                    super::ids::mask_toggle_item(row.id),
+                    if row.mask_enabled {
+                        crate::strings::tr("ui.docks.mask.disable")
+                    } else {
+                        crate::strings::tr("ui.docks.mask.enable")
+                    },
+                    false,
+                    toggle_enabled,
+                ) {
+                    w.emit(crate::Intent::Action(crate::menu::MenuAction::Mask(
+                        crate::menu::MaskOp::Toggle,
+                    )));
+                    close = true;
+                }
+                if menu_row(
+                    ui,
+                    super::ids::mask_link_item(row.id),
+                    crate::strings::tr("ui.docks.mask.toggle.link"),
+                    false,
+                    toggle_enabled,
+                ) {
+                    w.emit(crate::Intent::Action(crate::menu::MenuAction::Mask(
+                        crate::menu::MaskOp::ToggleLink,
+                    )));
+                    close = true;
+                }
+            });
+        });
+    // Close on Escape, or on any click that did not land inside the popup
+    // (the popup's own controls set `close` themselves) — but never on the
+    // release that opened it.
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        close = true;
+    } else if !fresh && ui.input(|i| i.pointer.any_click()) {
+        let popup_rect = ui.ctx().read_response(popup_id).map(|r| r.rect);
+        let pointer = ui.input(|i| i.pointer.interact_pos()).unwrap_or_default();
+        let clicked_inside = popup_rect.is_some_and(|r| r.contains(pointer));
+        if !clicked_inside {
+            close = true;
+        }
+    }
+    if close {
+        w.layers.mask_menu = None;
+    }
 }
 
 /// Where in a row a pointer at `y` would drop.
@@ -1153,6 +1487,13 @@ fn properties_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
                 PropertyFocus::Mask
             };
             w.property_focus = focus;
+            // Card 007: the shell owns the validated edit target; this control
+            // shows the choice and reports it. Not a workspace intent — the
+            // target lives on the editor, so it travels as its own intent and
+            // is applied by the shell (`shell.rs::apply_chrome`).
+            w.emit(crate::Intent::SetEditTarget {
+                mask: focus == PropertyFocus::Mask,
+            });
         }
     });
 }
@@ -1728,13 +2069,117 @@ fn character_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
         return;
     };
     let mut changed = false;
-    let mut family: Option<String> = None;
+    let mut picked_family: Option<String> = None;
+    let mut picked_face: Option<text_engine::FaceRecord> = None;
     design::inspector_field(ui, "Family", |ui| {
-        family =
-            super::text_field(ui, super::ids::character_family(layer), &run.style.family).committed;
+        // Card 022: the field stays free-text — a name the machine does not
+        // have is kept in the document and reported below, never rewritten —
+        // and while it is edited the installed families narrow to the search.
+        // Picking one commits it exactly like typing it would.
+        let edit = super::text_field(ui, super::ids::character_family(layer), &run.style.family);
+        if let Some(committed) = edit.committed {
+            picked_family = Some(committed);
+        }
+        if edit.editing {
+            let families = compositor::font_families();
+            let candidates = text_panel::family_candidates(&edit.text, &families);
+            let picked = &mut picked_family;
+            egui::popup_below_widget(
+                ui,
+                super::ids::character_family(layer).with("candidates"),
+                &edit.response,
+                egui::PopupCloseBehavior::CloseOnClickOutside,
+                |popup_ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(12.0 * popup_ui.spacing().interact_size.y)
+                        .show(popup_ui, |list_ui| {
+                            if candidates.is_empty() {
+                                list_ui.label(hint(
+                                    ui,
+                                    crate::strings::tr("ui.docks.character.no.matching.family"),
+                                ));
+                            }
+                            for name in &candidates {
+                                if list_ui
+                                    .selectable_label(
+                                        *name == run.style.family,
+                                        body(ui, name.clone()),
+                                    )
+                                    .clicked()
+                                {
+                                    // A candidate click beats the same frame's
+                                    // commit of the search text, and the edit's
+                                    // in-progress buffer is dropped so a later
+                                    // Enter re-seeds from the picked family
+                                    // instead of committing the search string
+                                    // over it.
+                                    *picked = Some(name.clone());
+                                    ui.memory_mut(|m| {
+                                        m.data.remove::<String>(
+                                            super::ids::character_family(layer).with("in-progress"),
+                                        );
+                                    });
+                                }
+                            }
+                        });
+                },
+            );
+        }
     });
-    if let Some(family) = family {
+    if let Some(family) = picked_family {
         changed |= text_panel::Character::set_family(&mut run, &family);
+    }
+    // Card 022: an uninstalled family is reported with the substitute the
+    // shaper will use — the same rule `attrs_for` applies, so the report and
+    // the render agree. The requested name stays in the document.
+    if let Some(substitute) = text_panel::substitution(&run.style.family) {
+        ui.label(hint(
+            ui,
+            format!(
+                "{} {}",
+                crate::strings::tr("ui.docks.character.family.not.installed"),
+                substitute
+            ),
+        ));
+    }
+    let faces = compositor::font_family_faces(&run.style.family);
+    design::inspector_field(ui, "Face", |ui| {
+        if faces.is_empty() {
+            // Nothing to list — the control cannot act, so instead of a combo
+            // that would go nowhere, the row states the reason (the note above
+            // names the substitute doing the shaping).
+            ui.label(hint(ui, crate::strings::tr("ui.docks.character.face.none")));
+        } else {
+            let current = faces.iter().find(|f| {
+                f.weight == run.style.weight
+                    && f.slant == run.style.slant
+                    && f.stretch == run.style.stretch
+            });
+            let selected = current.map_or_else(
+                || text_panel::weight_label(run.style.weight).to_string(),
+                |f| text_panel::face_label(f.weight, f.slant, f.stretch),
+            );
+            egui::ComboBox::from_id_salt(super::ids::character_face(layer))
+                .selected_text(body(ui, selected))
+                .show_ui(ui, |combo_ui| {
+                    for face in &faces {
+                        let label = text_panel::face_label(face.weight, face.slant, face.stretch);
+                        if combo_ui
+                            .selectable_label(
+                                current
+                                    .is_some_and(|c| c.post_script_name == face.post_script_name),
+                                body(combo_ui, label),
+                            )
+                            .clicked()
+                        {
+                            picked_face = Some(face.clone());
+                        }
+                    }
+                });
+        }
+    });
+    if let Some(face) = picked_face {
+        changed |= text_panel::Character::set_face(&mut run, face.weight, face.slant, face.stretch);
     }
     let mut size = run.style.size_px;
     if design::slider_row(
@@ -1764,6 +2209,20 @@ fn character_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             });
         if picked != run.style.weight.0 {
             changed |= text_panel::Character::set_weight(&mut run, picked);
+        }
+    });
+    // Card 021: the direct fill colour control. The model stores linear
+    // straight RGBA; egui's picker edits gamma-space RGBA8, so the value is
+    // converted on the way in (`swatch_to_fill`) and shown converted back
+    // (`fill_to_swatch`). The picker drag reaches the shell as one intent per
+    // frame and folds into one undo step under the established gesture
+    // contract, exactly like the sliders.
+    let mut fill = run.style.color;
+    design::inspector_field(ui, "Fill", |ui| {
+        let mut picked = text_panel::fill_to_swatch(fill);
+        if ui.color_edit_button_srgba(&mut picked).changed() {
+            fill = text_panel::swatch_to_fill(picked);
+            changed |= text_panel::Character::set_color(&mut run, fill);
         }
     });
     let mut italic = run.style.slant != text_engine::FontSlant::Normal;
@@ -1807,6 +2266,81 @@ fn paragraph_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
         return;
     };
     let mut changed = false;
+
+    // Card 023: point text vs a wrapping box. The box is the paragraph's own
+    // geometry: changing it reflows without touching the em size, and the
+    // layer transform stays the layer transform. A fixed height that is too
+    // small never clips — the engine reports the overset and the panel shows
+    // it below.
+    let mut boxed = matches!(run.frame, text_engine::TextFrame::Box { .. });
+    let mut want_boxed = boxed;
+    design::inspector_field(ui, "Frame", |ui| {
+        ui.checkbox(
+            &mut want_boxed,
+            hint(ui, crate::strings::tr("ui.docks.paragraph.boxed")),
+        );
+    });
+    if want_boxed != boxed {
+        changed |= text_panel::Paragraph::set_boxed(&mut run, want_boxed);
+        boxed = want_boxed;
+    }
+    if boxed {
+        if let Some((width, mut height)) = text_panel::Paragraph::box_size(&run) {
+            let mut w = width;
+            if design::slider_row(
+                ui,
+                "Width",
+                &mut w,
+                text_panel::MIN_BOX_SIZE_PX..=text_panel::MAX_BOX_SIZE_PX,
+            )
+            .changed()
+            {
+                changed |= text_panel::Paragraph::set_box_width(&mut run, w);
+            }
+            let mut fixed = height.is_some();
+            design::inspector_field(ui, "Height", |ui| {
+                if ui
+                    .checkbox(
+                        &mut fixed,
+                        hint(ui, crate::strings::tr("ui.docks.paragraph.fixed.height")),
+                    )
+                    .changed()
+                {
+                    // Seeding from the laid-out content height: fixing the
+                    // height starts where the auto box already is, so the
+                    // switch itself never oversets.
+                    height = fixed.then(|| compositor::text_content_height(&run));
+                    changed |= text_panel::Paragraph::set_box_height(&mut run, height);
+                }
+            });
+            if let Some(h) = height {
+                let mut vh = h;
+                if design::slider_row(
+                    ui,
+                    crate::strings::tr("ui.docks.paragraph.box.height"),
+                    &mut vh,
+                    text_panel::MIN_BOX_SIZE_PX..=text_panel::MAX_BOX_SIZE_PX,
+                )
+                .changed()
+                {
+                    changed |= text_panel::Paragraph::set_box_height(&mut run, Some(vh));
+                }
+            }
+        }
+    }
+    if let Some(count) = text_panel::overset_lines(&run) {
+        if count > 0 {
+            ui.label(hint(
+                ui,
+                format!(
+                    "{} — {} {}",
+                    crate::strings::tr("ui.docks.paragraph.overset"),
+                    count,
+                    crate::strings::tr("ui.docks.paragraph.overset.lines"),
+                ),
+            ));
+        }
+    }
 
     let mut index = text_panel::ALIGNMENTS
         .iter()

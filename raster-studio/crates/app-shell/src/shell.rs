@@ -434,9 +434,12 @@ pub struct Shell {
     pen_pressure: f32,
     /// When this shell started, which is the clock the marching ants crawl on.
     /// A wall-clock reading would jump when the system clock is adjusted; the
-    /// phase is a pure function of this elapsed time, so a dropped frame catches
-    /// up rather than making the ants stutter.
+    /// dash phase is a pure function of this elapsed time, so a dropped frame
+    /// catches up rather than making the ants stutter.
     started: Instant,
+    /// Card 030: the last value handed to `set_ime_allowed` — winit does not
+    /// dedupe the OS call, so per-frame toggling would hammer the IMM.
+    ime_allowed_last: bool,
     repaint_at: Option<Instant>,
     /// A start-up failure that happened inside the event loop.
     ///
@@ -478,6 +481,7 @@ impl Shell {
             modifiers: ModifiersState::empty(),
             pen_pressure: 1.0,
             started: Instant::now(),
+            ime_allowed_last: false,
             repaint_at: Some(Instant::now()),
             startup_error: None,
             shot,
@@ -849,6 +853,11 @@ impl Shell {
             // document. Read every frame: the panel is the authority, and the
             // presenter re-uploads only when the answer actually changes.
             state.presenter.set_channel_mask(self.chrome.channel_mask());
+            // Card 059: the mask view rides the same per-frame read — the
+            // panel owns it, the chrome exposes it, the presenter applies it.
+            state
+                .presenter
+                .set_mask_view(self.chrome.mask_view(), self.chrome.mask_overlay_tint());
             match state.presenter.sync(&state.gpu, doc) {
                 Ok(report) => {
                     if report.texture_replaced {
@@ -894,7 +903,116 @@ impl Shell {
                 ants_segments(&geometry)
             })
             .unwrap_or_default();
-        let has_ants = !ants.is_empty();
+        // Card 039: a tab switch must not leave a stale preview lens on the
+        // tab the user left.
+        self.editor.clear_stale_previews();
+
+        // ---- the text session's caret and selection, also in no texture ----
+        //
+        // Card 030: shaped from the document's own text layer (the draft rides
+        // it), so the caret agrees with rendering after transform and zoom by
+        // construction. Same screen mapping as a click route; the caret bar is
+        // also the IME cursor window's anchor.
+        let mut overlay_segments = ants;
+        let text_geometry = self.pointer.text_overlay_geometry(&self.editor);
+        let caret_screen = {
+            if let (Some(doc), Some(bar)) = (
+                self.editor.active(),
+                text_geometry.iter().find(|segment| {
+                    segment.kind == crate::tool_input::TextOverlayKind::Caret
+                        && (segment.b - segment.a).length() > 0.5
+                }),
+            ) {
+                let viewport = crate::tool_input::canvas_viewport(doc.camera.viewport_size);
+                let camera = crate::tool_input::canvas_camera_of(&doc.camera);
+                let a = crate::interaction_geometry::document_to_screen(&camera, &viewport, bar.a);
+                let b = crate::interaction_geometry::document_to_screen(&camera, &viewport, bar.b);
+                Some((a, b))
+            } else {
+                None
+            }
+        };
+        {
+            let (viewport, camera) = self
+                .editor
+                .active()
+                .map(|doc| {
+                    (
+                        crate::tool_input::canvas_viewport(doc.camera.viewport_size),
+                        crate::tool_input::canvas_camera_of(&doc.camera),
+                    )
+                })
+                .unwrap_or_default();
+            for segment in &text_geometry {
+                let (a, b) = (
+                    crate::interaction_geometry::document_to_screen(&camera, &viewport, segment.a),
+                    crate::interaction_geometry::document_to_screen(&camera, &viewport, segment.b),
+                );
+                overlay_segments.push(render::Segment {
+                    a,
+                    b,
+                    width_px: if segment.kind == crate::tool_input::TextOverlayKind::Caret {
+                        1.5
+                    } else {
+                        1.0
+                    },
+                    color: match segment.kind {
+                        crate::tool_input::TextOverlayKind::Caret => [0.1, 0.5, 1.0, 0.95],
+                        crate::tool_input::TextOverlayKind::Selection => [0.1, 0.5, 1.0, 0.45],
+                        crate::tool_input::TextOverlayKind::BoxFrame => [0.1, 0.5, 1.0, 0.3],
+                    },
+                });
+            }
+        }
+        // Card 029/030: the IME composition window sits at the shaped caret,
+        // mapped through the same camera — the OS popup lands exactly where
+        // the text will appear, whatever the zoom.
+        let ime_wanted = caret_screen.is_some();
+        if self.ime_allowed_last != ime_wanted {
+            state.window.set_ime_allowed(ime_wanted);
+            self.ime_allowed_last = ime_wanted;
+        }
+        if let Some((a, b)) = caret_screen {
+            let position = winit::dpi::PhysicalPosition::new(a.x.min(b.x) as f64, a.y as f64);
+            let size = winit::dpi::PhysicalSize::new(1.0f64, (b.y - a.y).abs().max(1.0) as f64);
+            state.window.set_ime_cursor_area(position, size);
+        }
+        // Card 039: a stable pivot marker for a live transform session — a
+        // small cross at the recorded pivot, screen-constant in size, drawn
+        // through the same camera as the handles.
+        if let (Some(doc), Some((geometry_doc, geometry))) =
+            (self.editor.active(), self.pointer.live_geometry())
+        {
+            if geometry_doc == doc.id() {
+                let tools::SessionGeometry::Transform { state, .. } = &geometry;
+                let viewport = crate::tool_input::canvas_viewport(doc.camera.viewport_size);
+                let camera = crate::tool_input::canvas_camera_of(&doc.camera);
+                let pivot = crate::interaction_geometry::document_to_screen(
+                    &camera,
+                    &viewport,
+                    state.pivot,
+                );
+                let arm = 5.0;
+                for (a, b) in [
+                    (
+                        Vec2::new(pivot.x - arm, pivot.y),
+                        Vec2::new(pivot.x + arm, pivot.y),
+                    ),
+                    (
+                        Vec2::new(pivot.x, pivot.y - arm),
+                        Vec2::new(pivot.x, pivot.y + arm),
+                    ),
+                ] {
+                    overlay_segments.push(render::Segment {
+                        a,
+                        b,
+                        width_px: 1.0,
+                        color: [1.0, 0.4, 0.1, 0.9],
+                    });
+                }
+            }
+        }
+        let has_ants = !overlay_segments.is_empty();
         state.overlay.set_viewport(
             &state.gpu,
             Vec2::new(
@@ -902,13 +1020,13 @@ impl Shell {
                 state.surface_config.height as f32,
             ),
         );
-        state.overlay.set_segments(&state.gpu, &ants);
+        state.overlay.set_segments(&state.gpu, &overlay_segments);
 
         // ---- chrome ----
         let raw_input = state.egui_state.take_egui_input(&state.window);
         let (full_output, chrome_output) = {
             let chrome = &mut self.chrome;
-            let editor = &self.editor;
+            let editor = &mut self.editor;
             let mut captured = crate::chrome::ChromeOutput::default();
             let full = state.egui_ctx.run(raw_input, |ctx| {
                 captured = chrome.ui(ctx, editor);
@@ -1043,6 +1161,15 @@ impl Shell {
         } else if let Some(id) = output.select_layer {
             self.editor.set_active_layer(id);
         }
+        // Card 007: the Properties Layer/Mask focus lands as shell-owned
+        // state; tools read it back through `Editor::edit_target`.
+        // Card 026: double-clicking a text row enters that layer.
+        if let Some(layer) = output.enter_text_layer {
+            self.pointer.enter_text_session(&mut self.editor, layer);
+        }
+        if let Some(kind) = output.edit_target {
+            self.editor.set_edit_target_kind(kind);
+        }
         if let Some(depth) = output.history_jump {
             let moved = self.editor.jump_history(depth);
             if moved > 0 {
@@ -1085,6 +1212,12 @@ impl Shell {
             }
         }
         if let Some(tool) = output.select_tool {
+            // Card 025: switching tools ends a live text session through its
+            // cancel route first, so the draft never strands on the layer.
+            if self.pointer.is_text_editing() {
+                self.pointer
+                    .text_edit(&mut self.editor, tools::TextEdit::Cancel);
+            }
             self.editor.set_tool(tool);
         }
         for command in output.commands {
@@ -1098,6 +1231,10 @@ impl Shell {
         // status bar: `perform` sets it either way, so an operation that
         // refused says why instead of looking like it worked.
         for action in output.menu {
+            // Card 025: a menu pick is a deliberate gesture — a live text
+            // session confirms first (its draft lands as one history entry),
+            // never silently stranded by a menu-driven tool switch.
+            self.confirm_live_text_session();
             if let Err(reason) = crate::menu_bridge::perform(action, &mut self.editor) {
                 tracing::warn!("{}: {reason}", action.label());
             }
@@ -1215,6 +1352,19 @@ impl Shell {
                         self.editor.set_status(reason);
                     }
                 }
+                DialogAction::RefineMask(spec) => {
+                    if let Err(reason) =
+                        crate::menu_bridge::refine_mask_with(&mut self.editor, &spec)
+                    {
+                        self.editor.set_status(reason);
+                    }
+                }
+                DialogAction::Defringe(spec) => {
+                    if let Err(reason) = crate::menu_bridge::defringe_with(&mut self.editor, &spec)
+                    {
+                        self.editor.set_status(reason);
+                    }
+                }
                 DialogAction::Stroke(spec) => {
                     if let Err(reason) =
                         crate::menu_bridge::stroke_selection_with(&mut self.editor, &spec)
@@ -1236,6 +1386,7 @@ impl Shell {
                     .find(|(angle, _)| (turns - angle).abs() < 1e-9);
                     match orthogonal {
                         Some((_, fixed)) => {
+                            self.confirm_live_text_session();
                             if let Err(reason) = crate::menu_bridge::perform(
                                 ui::menu::MenuAction::RotateCanvas(fixed.unwrap()),
                                 &mut self.editor,
@@ -1378,16 +1529,70 @@ impl Shell {
     /// Reports whether it was consumed. The rules are the narrow ones: only
     /// while [`ToolPointer::is_text_editing`], only when egui does not hold the
     /// keyboard, and never with Ctrl or Alt held — so Ctrl+S still saves while
-    /// the user is typing. Enter and Escape deliberately fall through: they end
-    /// the run through the commit and cancel routes below, which is the only
-    /// way out of a text session.
+    /// the user is typing. Ctrl+Enter confirms the run (the draft commits as
+    /// one history entry), plain Enter inserts a line break (card 031), and
+    /// Escape cancels it (an entered layer returns to its original payload
+    /// with no history entry; a layer the click created is deleted) — through
+    /// the text-session routes, the only way out of a text session (card 025).
     fn route_text_key(&mut self, owner: KeyboardOwner, logical: &winit::keyboard::Key) -> bool {
         use winit::keyboard::Key as WKey;
         if owner.egui_text_focus || owner.recording_shortcut || !self.pointer.is_text_editing() {
             return false;
         }
-        if self.modifiers.control_key() || self.modifiers.alt_key() || self.modifiers.super_key() {
+        // Card 028: while a session is live, Ctrl+A belongs to the text
+        // (select-all); every other Ctrl/Alt/Super chord still reaches the
+        // keymap — Ctrl+S keeps saving mid-typing.
+        if self.modifiers.control_key() || self.modifiers.super_key() {
+            if let winit::keyboard::Key::Character(c) = logical {
+                // Card 028: Ctrl+C/X/V/A belong to the text while a session
+                // is live; every other chord still reaches the keymap —
+                // Ctrl+S keeps saving mid-typing.
+                let key = c.to_lowercase().to_string();
+                let clipboard_key = match key.as_str() {
+                    "c" => (true, false, false, false),
+                    "x" => (false, true, false, false),
+                    "v" => (false, false, true, false),
+                    "a" => (false, false, false, true),
+                    _ => (false, false, false, false),
+                };
+                if clipboard_key != (false, false, false, false) {
+                    let (copy, cut, paste, select_all) = clipboard_key;
+                    return self.route_text_clipboard_key(copy, cut, paste, select_all);
+                }
+            }
+        }
+        // Card 031: Ctrl+Enter confirms the session — the only Ctrl chord
+        // admitted past this guard (alongside card 028's clipboard keys in
+        // the branch above); every other Ctrl/Alt/Super chord still reaches
+        // the keymap — Ctrl+S keeps saving mid-typing.
+        let enter_confirm_chord =
+            self.modifiers.control_key() && matches!(logical, WKey::Named(NamedKey::Enter));
+        if !enter_confirm_chord
+            && (self.modifiers.control_key()
+                || self.modifiers.alt_key()
+                || self.modifiers.super_key())
+        {
             return false;
+        }
+        // Card 029: while an IME composition is live, the platform owns the
+        // text — characters and editing keys alike arrive through
+        // `Ime::Preedit`/`Ime::Commit`, and acting on them here would double
+        // or lose the text (Backspace would strand the preedit as plain text;
+        // Enter would end the session before the commit lands). Movement
+        // keys are fine: their arms commit the preedit first, matching how
+        // real IMEs behave on arrow keys.
+        if self.pointer.text_composing(&self.editor)
+            && matches!(
+                logical,
+                WKey::Character(_)
+                    | WKey::Named(NamedKey::Space)
+                    | WKey::Named(NamedKey::Backspace)
+                    | WKey::Named(NamedKey::Delete)
+                    | WKey::Named(NamedKey::Enter)
+                    | WKey::Named(NamedKey::Escape)
+            )
+        {
+            return true;
         }
         let edit = match logical {
             // The platform's own text for the key, so a shifted letter arrives
@@ -1396,6 +1601,38 @@ impl Shell {
             WKey::Character(text) => tools::TextEdit::Insert(text.as_str()),
             WKey::Named(NamedKey::Space) => tools::TextEdit::Insert(" "),
             WKey::Named(NamedKey::Backspace) => tools::TextEdit::Backspace,
+            WKey::Named(NamedKey::Delete) => tools::TextEdit::DeleteForward,
+            // Card 031: Enter inserts a line break (paragraph text, card
+            // 023); Ctrl+Enter confirms the session as one history entry for
+            // the whole run; Escape cancels it (restore-or-delete, no entry
+            // for an entered layer). None falls through to the keymap while a
+            // run is open — a composing IME is consumed earlier (card 029),
+            // so Enter during composition belongs to the platform.
+            WKey::Named(NamedKey::Enter) => {
+                if self.modifiers.control_key() {
+                    tools::TextEdit::Confirm
+                } else {
+                    tools::TextEdit::Insert("\n")
+                }
+            }
+            WKey::Named(NamedKey::Escape) => tools::TextEdit::Cancel,
+            // Card 027: movement keys, with Shift extending the selection.
+            WKey::Named(NamedKey::ArrowLeft) => tools::TextEdit::CaretStep {
+                back: true,
+                extend: self.modifiers.shift_key(),
+            },
+            WKey::Named(NamedKey::ArrowRight) => tools::TextEdit::CaretStep {
+                back: false,
+                extend: self.modifiers.shift_key(),
+            },
+            WKey::Named(NamedKey::Home) => tools::TextEdit::ParagraphEdge {
+                end: false,
+                extend: self.modifiers.shift_key(),
+            },
+            WKey::Named(NamedKey::End) => tools::TextEdit::ParagraphEdge {
+                end: true,
+                extend: self.modifiers.shift_key(),
+            },
             _ => return false,
         };
         let outcome = self.pointer.text_edit(&mut self.editor, edit);
@@ -1403,6 +1640,157 @@ impl Shell {
             self.repaint_at = Some(Instant::now());
         }
         outcome.had_pending
+    }
+
+    /// Card 028: Ctrl+C copies the session's selected text to the OS
+    /// clipboard, Ctrl+X copies then deletes the range, Ctrl+V pastes
+    /// clipboard text over the selection (or at the caret), Ctrl+A selects
+    /// the whole draft. Clipboard failures degrade to a no-op.
+    fn route_text_clipboard_key(
+        &mut self,
+        copy: bool,
+        cut: bool,
+        paste: bool,
+        select_all: bool,
+    ) -> bool {
+        use arboard::Clipboard;
+        if select_all {
+            let outcome = self
+                .pointer
+                .text_edit(&mut self.editor, tools::TextEdit::SelectAll);
+            if outcome.needs_repaint() {
+                self.repaint_at = Some(Instant::now());
+            }
+            return outcome.had_pending;
+        }
+        if copy || cut {
+            if let Some(text) = self.pointer.text_selection_text(&self.editor) {
+                // The same process-wide lock the image clipboard holds (card
+                // 052): every clipboard access in the process serializes.
+                crate::clipboard::with_os_clipboard_lock(|| {
+                    if let Ok(mut clip) = Clipboard::new() {
+                        let _ = clip.set_text(text);
+                    }
+                });
+            }
+        }
+        if cut {
+            // No selection means nothing to cut — the chord is consumed but
+            // must not degrade into deleting one character.
+            if self.pointer.text_selection_text(&self.editor).is_none() {
+                return true;
+            }
+            let outcome = self
+                .pointer
+                .text_edit(&mut self.editor, tools::TextEdit::DeleteForward);
+            if outcome.needs_repaint() {
+                self.repaint_at = Some(Instant::now());
+            }
+            return outcome.had_pending;
+        }
+        if paste {
+            // Card 028: an empty (or image-only) clipboard is consumed while
+            // typing — falling through would let a user-bound paste chord
+            // create a layer mid-typing.
+            let pasted = crate::clipboard::with_os_clipboard_lock(|| {
+                Clipboard::new()
+                    .and_then(|mut clip| clip.get_text())
+                    .unwrap_or_default()
+            });
+            if pasted.is_empty() {
+                return true;
+            }
+            let outcome = self
+                .pointer
+                .text_edit(&mut self.editor, tools::TextEdit::PasteText(&pasted));
+            if outcome.needs_repaint() {
+                self.repaint_at = Some(Instant::now());
+            }
+            return outcome.had_pending;
+        }
+        false
+    }
+
+    /// Card 029: IME events route into the live text session. A non-empty
+    /// preedit begins/replaces the composition; an empty one withdraws it; a
+    /// commit turns the preedit into draft text plus the committed string.
+    /// Without a session the events are ignored (the IME is only enabled
+    /// while text editing, but platforms can be loose about ordering).
+    /// Card 049: the dropped-file routing seam — the one function the
+    /// window event calls, and the one tests drive.
+    ///
+    /// A native project (an `.rstudio` package — by name or by manifest —
+    /// plus `.psd`/`.psb`) OPENS; anything else PLACES into the active
+    /// composition when one is open, and opens when none is. Multiple
+    /// dropped files are processed in arrival order, each as its own
+    /// documented per-file step: every failure is collected and reported in
+    /// the status after the batch, so nothing blocks and no later success
+    /// buries an earlier failure.
+    pub fn on_dropped_files(&mut self, paths: &[std::path::PathBuf]) {
+        let mut failures: Vec<String> = Vec::new();
+        for path in paths {
+            // The project half uses the Editor's own predicate: it also
+            // recognizes a manifest-bearing package DIRECTORY without the
+            // extension.
+            let opens = crate::editor::Editor::is_project_path(path)
+                || path
+                    .extension()
+                    .map(|e| e.eq_ignore_ascii_case("psd") || e.eq_ignore_ascii_case("psb"))
+                    .unwrap_or(false);
+            if opens || self.editor.active().is_none() {
+                // open_path answers the failure instead of raising the
+                // blocking modal open_paths routes through.
+                if let Err(e) = self.editor.open_path(path) {
+                    failures.push(format!(
+                        "{}: {e}",
+                        path.file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default()
+                    ));
+                }
+            } else if let Err(e) = self.editor.place_path(path, false) {
+                failures.push(format!(
+                    "{}: {e}",
+                    path.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default()
+                ));
+            }
+        }
+        if !failures.is_empty() {
+            self.editor
+                .set_status(format!("Drop failed ({})", failures.join("; ")));
+        }
+        self.sync_marker();
+        self.repaint_at = Some(Instant::now());
+    }
+
+    fn on_ime(&mut self, ime: &winit::event::Ime) {
+        use winit::event::Ime;
+        match ime {
+            Ime::Preedit(text, _) => {
+                let edit = if text.is_empty() {
+                    tools::TextEdit::ClearComposition
+                } else {
+                    tools::TextEdit::SetComposition(text.as_str())
+                };
+                let outcome = self.pointer.text_edit(&mut self.editor, edit);
+                if outcome.needs_repaint() {
+                    self.repaint_at = Some(Instant::now());
+                }
+            }
+            Ime::Commit(text) => {
+                let outcome = self
+                    .pointer
+                    .text_edit(&mut self.editor, tools::TextEdit::CommitIme(text.as_str()));
+                if outcome.needs_repaint() {
+                    self.repaint_at = Some(Instant::now());
+                }
+            }
+            // The platform toggles the IME; the session state itself is
+            // driven by preedit/commit events.
+            Ime::Enabled | Ime::Disabled => {}
+        }
     }
 
     /// Route one key press. Separated from `window_event` so it can be driven
@@ -1446,6 +1834,11 @@ impl Shell {
                 // stays whatever the keymap says it is.
                 if chord == Chord::plain(Key::Enter) {
                     let outcome = self.pointer.commit(&mut self.editor);
+                    // Card 039: a commit ends the session — settle the
+                    // preview NOW, or a keyboard undo right after Enter
+                    // misrenders through the stale lens until the next
+                    // cursor move heals it.
+                    self.pointer.settle_preview(&mut self.editor);
                     if outcome.needs_repaint() {
                         self.repaint_at = Some(Instant::now());
                     }
@@ -1470,10 +1863,40 @@ impl Shell {
     /// Reports whether there was one, and forgets the held button with it — a
     /// gesture the router still believes in refuses every later press as
     /// somebody else's, which is how a canvas goes permanently dead.
+    /// Confirm a live text session, if one is open (card 025): the typed
+    /// draft lands as one history entry before a menu-driven action —
+    /// notably the Transform items' `set_tool` — can move the tool out from
+    /// under it.
+    fn confirm_live_text_session(&mut self) {
+        if self.pointer.is_text_editing() {
+            let outcome = self
+                .pointer
+                .text_edit(&mut self.editor, tools::TextEdit::Confirm);
+            if outcome.needs_repaint() {
+                self.repaint_at = Some(Instant::now());
+            }
+        }
+    }
+
     fn abandon_gesture(&mut self) -> bool {
+        // Card 025: a live text session is reconciled through its own cancel
+        // route (restore-or-delete, history-free for entered layers) — the
+        // bare Tool::cancel contract would strand the draft on the layer.
+        if self.pointer.is_text_editing() {
+            let outcome = self
+                .pointer
+                .text_edit(&mut self.editor, tools::TextEdit::Cancel);
+            self.held = None;
+            if outcome.needs_repaint() {
+                self.repaint_at = Some(Instant::now());
+            }
+            return outcome.had_pending;
+        }
         if !self.pointer.cancel(&mut self.editor) {
             return false;
         }
+        // Card 013: an abandoned gesture drops its preview with it.
+        self.pointer.settle_preview(&mut self.editor);
         self.held = None;
         self.repaint_at = Some(Instant::now());
         true
@@ -1520,10 +1943,43 @@ impl Shell {
             PointerPhase::Up => self.held = None,
             PointerPhase::Move => {}
         }
-        let choices = self.chrome.tool_choices(self.editor.effective_tool());
+        // Card 010: what the options bar holds is what the tool is. The
+        // conversion happens here, at the boundary — the UI crate's value
+        // types never reach a tool.
+        let settings: Vec<(String, tools::ToolSetting)> = self
+            .chrome
+            .tool_options(self.editor.effective_tool())
+            .into_iter()
+            .map(|(key, value)| {
+                let setting = match value {
+                    ui::OptionValue::Float(v) => tools::ToolSetting::Float(v),
+                    ui::OptionValue::Int(v) => tools::ToolSetting::Int(v),
+                    ui::OptionValue::Bool(v) => tools::ToolSetting::Bool(v),
+                    ui::OptionValue::Choice(v) => tools::ToolSetting::Choice(v),
+                    ui::OptionValue::Color(v) => tools::ToolSetting::Color(v),
+                };
+                (key, setting)
+            })
+            .collect();
         let outcome = self
             .pointer
-            .handle(&mut self.editor, input, over_panel, &choices);
+            .handle(&mut self.editor, input, over_panel, &settings);
+        // Card 012: publish (or clear) the live session's overlay geometry
+        // every frame, through the production publisher.
+        // Card 012: publish (or clear) the live session's overlay geometry
+        // every frame, through the production publisher.
+        let geometry = self.pointer.live_geometry();
+        self.chrome
+            .publish_tool_geometry(geometry.clone(), self.editor.active().map(|doc| doc.id()));
+        // Card 013: the same live session is what the compositor previews —
+        // the object's pixels move as the handles move, through the one
+        // compositor, with the committed document and its history untouched.
+        self.pointer.settle_preview(&mut self.editor);
+        if let Some(failed) = outcome.failed.as_deref() {
+            // A refused setting is surfaced, not swallowed — the options
+            // bar's contract (card 010's seam).
+            self.editor.set_status(failed);
+        }
         if outcome.needs_repaint() {
             self.repaint_at = Some(Instant::now());
         }
@@ -1769,12 +2225,11 @@ impl ApplicationHandler<crate::shell::AppEvent> for Shell {
                 }
                 self.repaint_at = Some(Instant::now());
             }
+            WindowEvent::Ime(ime) => self.on_ime(&ime),
             WindowEvent::ModifiersChanged(mods) => self.modifiers = mods.state(),
             WindowEvent::RedrawRequested => self.redraw(),
             WindowEvent::DroppedFile(path) => {
-                self.editor.open_paths(&[path]);
-                self.sync_marker();
-                self.repaint_at = Some(Instant::now());
+                self.on_dropped_files(&[path]);
             }
             WindowEvent::KeyboardInput {
                 event: key_event, ..
@@ -1813,7 +2268,14 @@ impl ApplicationHandler<crate::shell::AppEvent> for Shell {
             // claimed would refuse every later press as somebody else's. Not
             // `CursorLeft`: dragging past the edge of the window and back is a
             // gesture, and winit keeps delivering its moves.
+            // Card 052: a focus change is the moment the OS clipboard's
+            // content can have changed (another application copied while we
+            // were unfocused), so the menu-enablement probe is re-read.
+            WindowEvent::Focused(true) => {
+                self.editor.invalidate_os_image_probe();
+            }
             WindowEvent::Focused(false) => {
+                self.editor.invalidate_os_image_probe();
                 self.abandon_gesture();
             }
             WindowEvent::MouseWheel { delta, .. } if !consumed => {
@@ -3405,6 +3867,273 @@ mod tests {
         assert!(
             rgba.chunks_exact(4).all(|p| p == [255, 255, 255, 255]),
             "the white background did not composite as white"
+        );
+    }
+
+    #[test]
+    fn ctrl_enter_confirms_and_plain_enter_breaks_the_line_in_a_text_session() {
+        // Card 031's core keybinding, at the SHELL route level (the tool-level
+        // arms cannot catch a routing regression).
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        let layer = layer_model::Layer::with_kind(
+            "Headline",
+            layer_model::LayerKind::Text(layer_model::TextLayer {
+                text: "top".to_string(),
+                font_family: "DejaVu Sans".to_string(),
+                size_px: 32.0,
+                ..layer_model::TextLayer::default()
+            }),
+        );
+        let id = layer.id;
+        shell
+            .editor
+            .apply_command(editor_core::Command::create_layer(layer));
+        shell.pointer.enter_text_session(&mut shell.editor, id);
+        assert!(shell.pointer.is_text_editing(), "the session is live");
+        let depth_before_session = shell.editor.active().unwrap().history_depth();
+
+        let owner = KeyboardOwner::default();
+        // Plain Enter: a line break, session still open.
+        press(
+            &mut shell,
+            owner,
+            WKey::Named(NamedKey::Enter),
+            ModifiersState::empty(),
+        );
+        assert!(shell.pointer.is_text_editing(), "plain Enter keeps typing");
+        let doc = shell.editor.active().unwrap();
+        let text = match &doc.document.layers.get(id).unwrap().kind {
+            layer_model::LayerKind::Text(t) => t.text.clone(),
+            _ => panic!("still a text layer"),
+        };
+        assert!(
+            text.contains('\n'),
+            "plain Enter inserted a break: {text:?}"
+        );
+
+        // While an IME composition is live, Enter (with or without Ctrl)
+        // belongs to the platform — consumed, session untouched.
+        shell
+            .pointer
+            .text_edit(&mut shell.editor, tools::TextEdit::SetComposition("kanji"));
+        assert!(shell.pointer.text_composing(&shell.editor));
+        press(
+            &mut shell,
+            owner,
+            WKey::Named(NamedKey::Enter),
+            ModifiersState::CONTROL,
+        );
+        assert!(
+            shell.pointer.is_text_editing(),
+            "Ctrl+Enter during composition is the IME's"
+        );
+        shell
+            .pointer
+            .text_edit(&mut shell.editor, tools::TextEdit::CommitIme("kanji"));
+
+        // Ctrl+Enter: confirm — the run commits as one transaction and the
+        // session closes.
+        press(
+            &mut shell,
+            owner,
+            WKey::Named(NamedKey::Enter),
+            ModifiersState::CONTROL,
+        );
+        assert!(
+            !shell.pointer.is_text_editing(),
+            "Ctrl+Enter confirms the session"
+        );
+        let doc = shell.editor.active().unwrap();
+        let text = match &doc.document.layers.get(id).unwrap().kind {
+            layer_model::LayerKind::Text(t) => t.text.clone(),
+            _ => panic!("still a text layer"),
+        };
+        assert!(
+            text.contains("kanji"),
+            "the committed text landed: {text:?}"
+        );
+        assert!(text.contains('\n'), "the line break survived the commit");
+        // Card 031's undo contract: the whole run is ONE history entry.
+        assert_eq!(
+            shell.editor.active().unwrap().history_depth(),
+            depth_before_session + 1,
+            "typing a sentence is one document undo"
+        );
+    }
+
+    // ---------------------------------------------------------------- card 049
+
+    fn shell_with_canvas_only(dir: &std::path::Path) -> Shell {
+        let png = dir.join("canvas.png");
+        std::fs::write(
+            &png,
+            raster::encode(raster::ExportFormat::Png, 32, 32, &[9u8; 32 * 32 * 4]).unwrap(),
+        )
+        .unwrap();
+        let mut editor = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        editor.open_path(&png).unwrap();
+        Shell::new(editor, Vec::new())
+    }
+
+    fn write_source_png(dir: &std::path::Path, name: &str, value: u8) -> std::path::PathBuf {
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            raster::encode(raster::ExportFormat::Png, 16, 16, &[value; 16 * 16 * 4]).unwrap(),
+        )
+        .unwrap();
+        path
+    }
+
+    /// Card 049's done-check: dropping a portrait into a composition adds a
+    /// LAYER to the open document instead of opening a second image tab.
+    #[test]
+    fn dropping_an_image_on_an_open_canvas_places_it_as_a_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_canvas_only(dir.path());
+        let portrait = write_source_png(dir.path(), "portrait.png", 200);
+        let docs_before = shell.editor.documents().len();
+        let layers_before = shell
+            .editor
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .iter_depth_first()
+            .len();
+
+        shell.on_dropped_files(&[portrait]);
+
+        assert_eq!(
+            shell.editor.documents().len(),
+            docs_before,
+            "the drop did not open a second tab"
+        );
+        let open = shell.editor.active().unwrap();
+        assert_eq!(
+            open.document.layers.iter_depth_first().len(),
+            layers_before + 1,
+            "the drop added one placed layer"
+        );
+        assert!(open
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .any(|id| matches!(
+                open.document.layers.get(id).map(|l| &l.kind),
+                Some(layer_model::LayerKind::SmartObject(_))
+            )));
+    }
+
+    /// Card 049: dropping a native project still OPENS it.
+    #[test]
+    fn dropping_a_native_project_opens_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_canvas_only(dir.path());
+        // A native package saved from a helper document.
+        let source_png = write_source_png(dir.path(), "proj-src.png", 60);
+        let mut proj = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("cfg2")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        proj.open_path(&source_png).unwrap();
+        let package = dir.path().join("project.rstudio");
+        proj.active_mut()
+            .unwrap()
+            .save_to(&package, "test")
+            .unwrap();
+
+        let docs_before = shell.editor.documents().len();
+        shell.on_dropped_files(&[package]);
+
+        assert_eq!(
+            shell.editor.documents().len(),
+            docs_before + 1,
+            "the dropped project opened as its own document"
+        );
+    }
+
+    /// Card 049: dropping with NO document open opens the image.
+    #[test]
+    fn dropping_with_no_document_open_opens_the_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let editor = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        assert!(editor.active().is_none(), "the fixture starts empty");
+        let mut shell = Shell::new(editor, Vec::new());
+        let portrait = write_source_png(dir.path(), "first.png", 40);
+
+        shell.on_dropped_files(&[portrait]);
+
+        assert_eq!(
+            shell.editor.documents().len(),
+            1,
+            "the drop opened the image as a document"
+        );
+    }
+
+    /// Card 049: multiple dropped files preserve order and a failure is
+    /// reported without blocking the files after it.
+    #[test]
+    fn multiple_dropped_files_place_in_order_and_report_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_canvas_only(dir.path());
+        let first = write_source_png(dir.path(), "first.png", 40);
+        let garbage = dir.path().join("broken.png");
+        std::fs::write(&garbage, b"definitely not a png").unwrap();
+        let second = write_source_png(dir.path(), "second.png", 80);
+
+        shell.on_dropped_files(&[first, garbage, second]);
+
+        let open = shell.editor.active().unwrap();
+        // Order preserved: two placed layers exist (the garbage file reported,
+        // not blocking the second image).
+        let placed: Vec<_> = open
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter(|id| {
+                matches!(
+                    open.document.layers.get(*id).map(|l| &l.kind),
+                    Some(layer_model::LayerKind::SmartObject(_))
+                )
+            })
+            .collect();
+        assert_eq!(placed.len(), 2, "both images placed despite the failure");
+        // iter_depth_first is top-most first, so the FIRST dropped file's
+        // layer sits at the END of the placed list.
+        let last = placed.last().unwrap();
+        let first_asset = match &open.document.layers.get(*last).unwrap().kind {
+            layer_model::LayerKind::SmartObject(so) => so.asset,
+            other => panic!("smart object: {other:?}"),
+        };
+        let origin = open.document.asset_origin(first_asset);
+        assert!(
+            matches!(
+                origin,
+                Some(layer_model::AssetOrigin::Embedded { ref name, .. }) if name == "first"
+            ),
+            "the order is preserved: the first dropped file placed first: {origin:?}"
+        );
+        // The failure was reported in the status.
+        let status = shell.editor.status().unwrap_or("");
+        assert!(
+            status.contains("Drop failed"),
+            "the failed file was reported: {status:?}"
         );
     }
 }
