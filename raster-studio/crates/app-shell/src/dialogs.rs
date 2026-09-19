@@ -34,6 +34,10 @@ pub trait FileDialogs {
     fn pick_open_file(&mut self) -> Option<PathBuf>;
     /// "Place Embedded…"/"Place Linked…". `None` means the user cancelled.
     fn pick_place_file(&mut self) -> Option<PathBuf>;
+    /// Card 069: "Replace Contents…" on a smart object. A separate question
+    /// so a scripted test can answer Place and Replace independently.
+    /// `None` means the user cancelled.
+    fn pick_replace_file(&mut self) -> Option<PathBuf>;
     /// "Open Project…". A separate question because a `.rstudio` package is a
     /// **directory**, and no file picker can return one — which is why File ▸
     /// Open could not open the application's own save format at all.
@@ -117,6 +121,14 @@ impl FileDialogs for NativeDialogs {
             .add_filter("Images", IMAGE_EXTENSIONS)
             .add_filter("All files", &["*"])
             .set_title("Place")
+            .pick_file()
+    }
+
+    fn pick_replace_file(&mut self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .add_filter("Images", IMAGE_EXTENSIONS)
+            .add_filter("All files", &["*"])
+            .set_title("Replace Contents")
             .pick_file()
     }
 
@@ -226,6 +238,8 @@ pub struct ScriptedDialogs {
     pub suggested: Vec<PathBuf>,
     /// Answers for the picker behind "Place Embedded…"/"Place Linked…".
     pub place_files: Vec<PathBuf>,
+    /// Answers for the picker behind "Replace Contents…" (card 069).
+    pub replace_files: Vec<PathBuf>,
 }
 
 impl ScriptedDialogs {
@@ -241,6 +255,12 @@ impl ScriptedDialogs {
     /// Answer for the "Place Embedded…/Place Linked…" picker.
     pub fn placing(mut self, path: impl Into<PathBuf>) -> Self {
         self.place_files.push(path.into());
+        self
+    }
+
+    /// Answer for the "Replace Contents…" picker (card 069).
+    pub fn replacing_with(mut self, path: impl Into<PathBuf>) -> Self {
+        self.replace_files.push(path.into());
         self
     }
 
@@ -286,6 +306,10 @@ impl FileDialogs for ScriptedDialogs {
 
     fn pick_place_file(&mut self) -> Option<PathBuf> {
         (!self.place_files.is_empty()).then(|| self.place_files.remove(0))
+    }
+
+    fn pick_replace_file(&mut self) -> Option<PathBuf> {
+        (!self.replace_files.is_empty()).then(|| self.replace_files.remove(0))
     }
 
     fn pick_save_path(&mut self, suggested: &Path) -> Option<PathBuf> {

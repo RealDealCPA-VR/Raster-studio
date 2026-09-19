@@ -38,8 +38,8 @@ use glam::Affine2;
 use serde::{Deserialize, Serialize};
 
 use layer_model::{
-    AssetId, BlendMode, ClippingMode, DetachedSubtree, Layer, LayerEffects, LayerId, LayerKind,
-    LayerMask, LockState,
+    AssetId, AssetOrigin, BlendMode, ClippingMode, DetachedSubtree, Layer, LayerEffects, LayerId,
+    LayerKind, LayerMask, LockState,
 };
 use raster::PixelRect;
 
@@ -484,6 +484,29 @@ pub enum Command {
     SetAssetSourceSize {
         asset: AssetId,
         size: Option<(u32, u32)>,
+    },
+    /// Card 069: swap a placed asset's source out from under every smart
+    /// object layer that references it — the row's origin (the new bytes or
+    /// path) AND the recorded source size move together, because they are
+    /// one fact about the source: the tiles a refresh or replacement
+    /// renormalizes against must describe the same pixels the origin now
+    /// holds. Splitting them would let an undo restore new pixels beside a
+    /// stale anchor (or the reverse). The pixels themselves ride in their
+    /// own [`Command::PaintTiles`] edits inside the caller's transaction;
+    /// this variant is the metadata half.
+    ///
+    /// The inverse restores the previous origin AND size (both cloned from
+    /// the row as it was). Refused when the asset row does not exist, for
+    /// the same reason [`Command::SetAssetSourceSize`] refuses: a stale
+    /// caller must not conjure a table entry the inverse could not remove.
+    ///
+    /// # Wire format
+    ///
+    /// Purely additive, like [`Command::SetAssetSourceSize`].
+    ReplaceAssetSource {
+        asset: AssetId,
+        origin: AssetOrigin,
+        source_size: Option<(u32, u32)>,
     },
     /// A batch of commands applied atomically (import, AI result, flatten...).
     /// Its inverse is the reversed inverses of its members.
@@ -1100,6 +1123,33 @@ impl Command {
                 })
             }
 
+            Command::ReplaceAssetSource {
+                asset,
+                origin,
+                source_size,
+            } => {
+                // Same refusal contract as SetAssetSourceSize above.
+                if doc.asset_origin(*asset).is_none() {
+                    return Err(CommandError::AssetNotFound(*asset));
+                }
+                let (previous_origin, previous_size) = doc
+                    .assets()
+                    .iter()
+                    .find(|a| a.id == *asset)
+                    .map(|a| (a.origin.clone(), a.source_size))
+                    .expect("checked above");
+                doc.set_asset_origin(layer_model::AssetRecord {
+                    id: *asset,
+                    origin: origin.clone(),
+                    source_size: *source_size,
+                });
+                Ok(Command::ReplaceAssetSource {
+                    asset: *asset,
+                    origin: previous_origin,
+                    source_size: previous_size,
+                })
+            }
+
             Command::Transaction { label, commands } => {
                 let mut inverses: Vec<Command> = Vec::with_capacity(commands.len());
                 for c in commands {
@@ -1172,6 +1222,7 @@ impl Command {
             Command::ResampleImage { .. } => "Image Size".into(),
             Command::SetGuides { .. } => "Edit Guides".into(),
             Command::SetAssetSourceSize { .. } => "Record Source Size".into(),
+            Command::ReplaceAssetSource { .. } => "Replace Contents".into(),
             Command::Transaction { label, .. } => label.clone(),
         }
     }
@@ -1982,6 +2033,73 @@ mod tests {
         let err = Command::SetAssetSourceSize {
             asset: layer_model::AssetId::new(),
             size: Some((9, 9)),
+        }
+        .apply(&mut doc)
+        .unwrap_err();
+        assert!(matches!(err, CommandError::AssetNotFound(_)), "{err:?}");
+        assert_eq!(doc, before, "the refusal changed nothing");
+    }
+
+    /// Card 069: replacing an asset's source swaps the row's origin AND the
+    /// recorded source size as one invertible fact — undo restores BOTH, so
+    /// a refresh after an undo renormalizes against the size the restored
+    /// origin actually describes. A missing row is refused, like every
+    /// asset-table command.
+    #[test]
+    fn a_replaced_asset_source_round_trips_origin_and_size_together() {
+        let (mut doc, _id) = doc_with_layer();
+        let asset = layer_model::AssetId::new();
+        doc.set_asset_origin(layer_model::AssetRecord {
+            id: asset,
+            origin: layer_model::AssetOrigin::Embedded {
+                name: "portrait.png".into(),
+                bytes: vec![1, 2, 3, 4],
+            },
+            source_size: Some((16, 16)),
+        });
+        let before = doc.clone();
+
+        let inverse = Command::ReplaceAssetSource {
+            asset,
+            origin: layer_model::AssetOrigin::Embedded {
+                name: "logo.png".into(),
+                bytes: vec![9; 8],
+            },
+            source_size: Some((32, 32)),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(
+            doc.asset_origin(asset),
+            Some(&layer_model::AssetOrigin::Embedded {
+                name: "logo.png".into(),
+                bytes: vec![9; 8],
+            })
+        );
+        assert_eq!(doc.asset_source_size(asset), Some((32, 32)));
+        // The inverse restores BOTH fields, byte-exact.
+        assert_eq!(
+            inverse,
+            Command::ReplaceAssetSource {
+                asset,
+                origin: layer_model::AssetOrigin::Embedded {
+                    name: "portrait.png".into(),
+                    bytes: vec![1, 2, 3, 4],
+                },
+                source_size: Some((16, 16)),
+            }
+        );
+        inverse.apply(&mut doc).unwrap();
+        assert_eq!(doc, before, "the round trip is byte-exact");
+
+        // An unknown asset is refused before anything is written.
+        let err = Command::ReplaceAssetSource {
+            asset: layer_model::AssetId::new(),
+            origin: layer_model::AssetOrigin::Embedded {
+                name: "ghost.png".into(),
+                bytes: vec![],
+            },
+            source_size: None,
         }
         .apply(&mut doc)
         .unwrap_err();
@@ -3714,6 +3832,23 @@ mod tests {
                 Command::create_layer(layer.clone()),
                 Command::DeleteLayer { layer_id: id },
             ],
+        });
+        // Card 069: the replace carries an AssetOrigin (embedded bytes) and
+        // the recorded size — one fact about the source, serialized whole.
+        json_roundtrip(&Command::ReplaceAssetSource {
+            asset: layer_model::AssetId::new(),
+            origin: layer_model::AssetOrigin::Embedded {
+                name: "logo.png".into(),
+                bytes: vec![1, 2, 3],
+            },
+            source_size: Some((16, 16)),
+        });
+        json_roundtrip(&Command::ReplaceAssetSource {
+            asset: layer_model::AssetId::new(),
+            origin: layer_model::AssetOrigin::Linked {
+                path: std::path::PathBuf::from("new/logo.png"),
+            },
+            source_size: None,
         });
     }
 

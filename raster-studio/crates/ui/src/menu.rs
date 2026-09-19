@@ -972,6 +972,10 @@ pub enum MenuAction {
     ApplyStylePreset,
     ClearLayerStyle,
     ConvertToSmartObject,
+    /// Card 069: swap the active smart object's source file without redoing
+    /// the layout — one undoable transaction covering tiles, transforms and
+    /// the asset row for every layer sharing the asset.
+    ReplaceContents,
     EditSmartObjectContents,
     CommitSmartObjectContents,
     Rasterize(RasterizeTarget),
@@ -1488,6 +1492,7 @@ impl MenuAction {
         out.push(MenuAction::ApplyStylePreset);
         out.push(MenuAction::ClearLayerStyle);
         out.push(MenuAction::ConvertToSmartObject);
+        out.push(MenuAction::ReplaceContents);
         out.push(MenuAction::EditSmartObjectContents);
         out.push(MenuAction::CommitSmartObjectContents);
         out.extend(
@@ -1617,6 +1622,7 @@ impl MenuAction {
             MenuAction::LayerStyle(s) => s.label().into(),
             MenuAction::ClearLayerStyle => "Clear Layer Style".into(),
             MenuAction::ConvertToSmartObject => "Convert to Smart Object".into(),
+            MenuAction::ReplaceContents => "Replace Contents…".into(),
             MenuAction::EditSmartObjectContents => "Edit Contents…".into(),
             MenuAction::CommitSmartObjectContents => "Commit Contents".into(),
             MenuAction::Rasterize(t) => t.label().into(),
@@ -1992,6 +1998,11 @@ impl MenuAction {
                     Resolution::Disabled("The layer is already a smart object")
                 }
                 Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::ReplaceContents => match ctx.need_layer() {
+                Ok(l) if l.class == LayerClass::SmartObject => act(self),
+                Ok(_) => Resolution::Disabled("The active layer is not a smart object"),
                 Err(r) => Resolution::Disabled(r),
             },
             MenuAction::EditSmartObjectContents => match ctx.need_layer() {
@@ -2484,6 +2495,7 @@ fn layer_menu() -> Menu {
                 "Smart Object",
                 vec![
                     item(MenuAction::EditSmartObjectContents),
+                    item(MenuAction::ReplaceContents),
                     item(MenuAction::CommitSmartObjectContents),
                 ],
             ),

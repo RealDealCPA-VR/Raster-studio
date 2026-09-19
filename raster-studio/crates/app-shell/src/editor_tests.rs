@@ -3519,3 +3519,388 @@ fn embedded_content_editing_does_not_reduce_the_source_to_canvas_dimensions() {
         );
     }
 }
+
+// ---- Card 069: Replace Contents ------------------------------------------------
+
+/// Card 069: replacing an embedded placed source keeps the layer's identity,
+/// transform base, mask, effects and group position; the new source is fit to
+/// the existing source frame (the card-050 renormalization), all in ONE
+/// undoable transaction whose undo restores old pixels AND the old asset row.
+#[test]
+fn replacing_an_embedded_source_keeps_identity_and_layout_and_round_trips() {
+    use editor_core::{Command, LayerPatch};
+    use ui::menu::{MaskOp, MenuAction};
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_png(dir.path(), "portrait.png", 16, 16, 200);
+    let (mut ed, _canvas) = a_placed_document(dir.path(), &source, false);
+    let placed = ed.active().unwrap().document.active_layer().unwrap();
+
+    // Attach a mask and an effect FIRST, so the replace must preserve them.
+    let out = crate::menu_bridge::perform(MenuAction::Mask(MaskOp::RevealAll), &mut ed);
+    assert!(out.is_ok(), "{out:?}");
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerProperties {
+            layer_id: placed,
+            patch: LayerPatch {
+                effects: Some(Box::new(layer_model::LayerEffects {
+                    drop_shadow: Some(layer_model::ShadowEffect {
+                        color: [0.0, 0.0, 0.0, 1.0],
+                        opacity: 0.9,
+                        angle_deg: 0.0,
+                        use_global_light: false,
+                        distance_px: 12.0,
+                        spread: 0.0,
+                        size_px: 4.0,
+                        noise: 0.0,
+                        blend_mode: layer_model::BlendMode::Normal,
+                        knockout: false,
+                    }),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    // Put the layer in a group: the replace must not move it.
+    let _ = crate::menu_bridge::perform(MenuAction::GroupLayers, &mut ed);
+
+    let before = {
+        let open = ed.active().unwrap();
+        let layer = open.document.layers.get(placed).unwrap();
+        (
+            layer.name.clone(),
+            layer.transform,
+            layer.mask.clone(),
+            layer.effects.clone(),
+            open.document.layers.parent_of(placed),
+            open.document.layers.index_in_parent(placed),
+        )
+    };
+    let (composite_before, footprint_before) = {
+        let open = ed.active().unwrap();
+        let region = open.canvas_rect();
+        let composite = ed.active_mut().unwrap().composite(region).unwrap();
+        let bounds = ink_bounds(&composite, region.width);
+        (composite, bounds)
+    };
+    let depth_before = ed.active().unwrap().history_depth();
+
+    // Replace with a 32x32 file: the recorded size exists, so the transform
+    // renormalizes (halves) and the footprint holds.
+    let replacement = write_png(dir.path(), "logo.png", 32, 32, 250);
+    let out = ed.replace_smart_object_contents(&replacement).unwrap();
+    assert!(out.contains("logo"), "{out:?}");
+
+    {
+        let open = ed.active().unwrap();
+        let layer = open.document.layers.get(placed).unwrap();
+        // Identity: same layer id (we looked it up), same name, same kind.
+        assert_eq!(layer.name, before.0, "the name is untouched");
+        assert!(matches!(layer.kind, layer_model::LayerKind::SmartObject(_)));
+        // Mask and effects are byte-identical.
+        assert_eq!(layer.mask, before.2, "the mask is untouched");
+        assert_eq!(layer.effects, before.3, "the effects are untouched");
+        // Group position unchanged.
+        assert_eq!(open.document.layers.parent_of(placed), before.4);
+        assert_eq!(open.document.layers.index_in_parent(placed), before.5);
+        // Fit sizing: the transform's linear part halved (16 -> 32), keeping
+        // the on-canvas footprint.
+        let scale_now = layer.transform.matrix2.x_axis.length();
+        let scale_before = before.1.matrix2.x_axis.length();
+        assert!(
+            (scale_now - scale_before / 2.0).abs() < 1e-3,
+            "the transform renormalized across the resolution change: {scale_before} -> {scale_now}"
+        );
+        // The new pixels are stored, the asset row carries the new origin
+        // AND the new size.
+        use compositor::TileSource;
+        let hash = open
+            .document
+            .layer_tiles(placed)
+            .unwrap()
+            .get(raster::TileCoord::new(0, 0, 0))
+            .unwrap();
+        assert_eq!(open.tiles.tile(hash).unwrap()[0], 250);
+        let asset = match &layer.kind {
+            layer_model::LayerKind::SmartObject(so) => so.asset,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            open.document.asset_origin(asset),
+            Some(&layer_model::AssetOrigin::Embedded {
+                name: "logo.png".into(),
+                bytes: std::fs::read(&replacement).unwrap(),
+            }),
+            "an embedded source stays embedded, with the new bytes"
+        );
+        assert_eq!(open.document.asset_source_size(asset), Some((32, 32)));
+    }
+    // The footprint (the layout) is identical end to end.
+    {
+        let region = ed.active().unwrap().canvas_rect();
+        let composite = ed.active_mut().unwrap().composite(region).unwrap();
+        assert_eq!(
+            ink_bounds(&composite, region.width),
+            footprint_before,
+            "the replacement did not move or rescale the placement"
+        );
+    }
+    // Exactly ONE undoable entry.
+    assert_eq!(
+        ed.active().unwrap().history_depth(),
+        depth_before + 1,
+        "the replace is one undoable transaction"
+    );
+    assert!(
+        ed.active()
+            .unwrap()
+            .history_timeline()
+            .last()
+            .is_some_and(|label| label.contains("Replace Contents")),
+        "label = {:?}",
+        ed.active().unwrap().history_timeline().last()
+    );
+
+    // Undo restores old pixels AND the old asset row.
+    assert!(ed.active_mut().unwrap().undo().unwrap());
+    {
+        let open = ed.active().unwrap();
+        let layer = open.document.layers.get(placed).unwrap();
+        assert_eq!(layer.transform, before.1, "undo restores the transform");
+        use compositor::TileSource;
+        let hash = open
+            .document
+            .layer_tiles(placed)
+            .unwrap()
+            .get(raster::TileCoord::new(0, 0, 0))
+            .unwrap();
+        assert_eq!(
+            open.tiles.tile(hash).unwrap()[0],
+            200,
+            "undo restores old pixels"
+        );
+        let asset = match &layer.kind {
+            layer_model::LayerKind::SmartObject(so) => so.asset,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            open.document.asset_origin(asset),
+            Some(&layer_model::AssetOrigin::Embedded {
+                name: "portrait".into(),
+                bytes: std::fs::read(&source).unwrap(),
+            }),
+            "undo restores the old origin (old bytes back)"
+        );
+        assert_eq!(open.document.asset_source_size(asset), Some((16, 16)));
+        let region = open.canvas_rect();
+        let composite = ed.active_mut().unwrap().composite(region).unwrap();
+        assert_eq!(composite, composite_before, "undo restores the appearance");
+    }
+    // Redo replays.
+    assert!(ed.active_mut().unwrap().redo().unwrap());
+    {
+        let open = ed.active().unwrap();
+        use compositor::TileSource;
+        let hash = open
+            .document
+            .layer_tiles(placed)
+            .unwrap()
+            .get(raster::TileCoord::new(0, 0, 0))
+            .unwrap();
+        assert_eq!(
+            open.tiles.tile(hash).unwrap()[0],
+            250,
+            "redo replays the replace"
+        );
+    }
+}
+
+/// Card 069's explicit shared-assets policy: a duplicate made BEFORE the
+/// replace shares the asset, so BOTH instances update together in one
+/// transaction. Unrelated layers (no shared asset id) are untouched.
+#[test]
+fn replacing_a_shared_asset_updates_every_sibling_together() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_png(dir.path(), "portrait.png", 16, 16, 200);
+    let (mut ed, _canvas) = a_placed_document(dir.path(), &source, false);
+    ed.dispatch(Action::DuplicateLayer).unwrap();
+    let siblings: Vec<LayerId> = ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .filter(|id| {
+            matches!(
+                ed.active()
+                    .unwrap()
+                    .document
+                    .layers
+                    .get(*id)
+                    .map(|l| &l.kind),
+                Some(layer_model::LayerKind::SmartObject(_))
+            )
+        })
+        .collect();
+    assert_eq!(siblings.len(), 2, "the placed layer and its duplicate");
+    let depth_before = ed.active().unwrap().history_depth();
+    let replacement = write_png(dir.path(), "logo.png", 16, 16, 250);
+    ed.replace_smart_object_contents(&replacement).unwrap();
+    use compositor::TileSource;
+    for id in &siblings {
+        let open = ed.active().unwrap();
+        let hash = open
+            .document
+            .layer_tiles(*id)
+            .unwrap()
+            .get(raster::TileCoord::new(0, 0, 0))
+            .unwrap();
+        assert_eq!(
+            open.tiles.tile(hash).unwrap()[0],
+            250,
+            "every sibling holds the replaced pixels"
+        );
+        let asset = match &open.document.layers.get(*id).unwrap().kind {
+            layer_model::LayerKind::SmartObject(so) => so.asset,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            open.document.asset_source_size(asset),
+            Some((16, 16)),
+            "the shared row moved once"
+        );
+    }
+    // One transaction for the whole shared source, siblings included.
+    assert_eq!(
+        ed.active().unwrap().history_depth(),
+        depth_before + 1,
+        "one transaction covers the shared asset"
+    );
+    // Undo restores both siblings.
+    assert!(ed.active_mut().unwrap().undo().unwrap());
+    for id in &siblings {
+        let open = ed.active().unwrap();
+        let hash = open
+            .document
+            .layer_tiles(*id)
+            .unwrap()
+            .get(raster::TileCoord::new(0, 0, 0))
+            .unwrap();
+        assert_eq!(
+            open.tiles.tile(hash).unwrap()[0],
+            200,
+            "undo restored both siblings"
+        );
+    }
+}
+
+/// Card 069 gates: the menu route works through the scripted dialog, a
+/// non-smart-object active layer refuses, and a declined dialog refuses
+/// loudly.
+#[test]
+fn replace_contents_menu_route_and_gates() {
+    use ui::menu::MenuAction;
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_png(dir.path(), "portrait.png", 16, 16, 200);
+    let replacement = write_png(dir.path(), "logo.png", 16, 16, 250);
+    let canvas = write_png(dir.path(), "canvas.png", 64, 64, 0);
+    // The menu route with the replace picker primed.
+    let mut ed = bare(
+        dir.path(),
+        ScriptedDialogs::new()
+            .placing(source.to_path_buf())
+            .replacing_with(replacement.to_path_buf()),
+    );
+    ed.open_path(&canvas).unwrap();
+    crate::menu_bridge::perform(MenuAction::PlaceEmbedded, &mut ed).unwrap();
+    let out = crate::menu_bridge::perform(MenuAction::ReplaceContents, &mut ed);
+    assert!(out.is_ok(), "{out:?}");
+    {
+        let open = ed.active().unwrap();
+        use compositor::TileSource;
+        let placed = open.document.active_layer().unwrap();
+        let hash = open
+            .document
+            .layer_tiles(placed)
+            .unwrap()
+            .get(raster::TileCoord::new(0, 0, 0))
+            .unwrap();
+        assert_eq!(
+            open.tiles.tile(hash).unwrap()[0],
+            250,
+            "the menu route replaced"
+        );
+    }
+    // Gate: a non-smart-object active layer refuses, naming the class.
+    let plain = write_png(dir.path(), "plain.png", 8, 8, 9);
+    let mut ed2 = bare(
+        dir.path(),
+        ScriptedDialogs::new().replacing_with(plain.to_path_buf()),
+    );
+    ed2.open_path(&plain).unwrap();
+    let err = ed2.replace_smart_object_contents(&plain).unwrap_err();
+    assert!(
+        err.contains("raster") && err.contains("smart object"),
+        "{err:?}"
+    );
+    // Gate: a declined dialog refuses loudly (Place answers, Replace does not).
+    let mut ed3 = bare(
+        dir.path(),
+        ScriptedDialogs::new().placing(source.to_path_buf()),
+    );
+    ed3.open_path(&canvas).unwrap();
+    crate::menu_bridge::perform(MenuAction::PlaceEmbedded, &mut ed3).unwrap();
+    let err = ed3.replace_from_dialog().unwrap_err();
+    assert!(err.contains("cancelled"), "{err:?}");
+}
+
+/// Card 069's sizing contract for a pre-069 record: without a recorded
+/// source_size the transform is left alone — no jump, ever.
+#[test]
+fn replacing_without_a_recorded_source_size_keeps_the_transform() {
+    use editor_core::Command;
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_png(dir.path(), "portrait.png", 16, 16, 200);
+    let (mut ed, _canvas) = a_placed_document(dir.path(), &source, false);
+    let placed = ed.active().unwrap().document.active_layer().unwrap();
+    let transform_before = ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .get(placed)
+        .unwrap()
+        .transform;
+    // Wipe the recorded size (a pre-069 record has none).
+    let asset = match &ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .get(placed)
+        .unwrap()
+        .kind
+    {
+        layer_model::LayerKind::SmartObject(so) => so.asset,
+        other => panic!("{other:?}"),
+    };
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetAssetSourceSize { asset, size: None })
+        .unwrap();
+    let replacement = write_png(dir.path(), "logo.png", 32, 32, 250);
+    ed.replace_smart_object_contents(&replacement).unwrap();
+    let open = ed.active().unwrap();
+    assert_eq!(
+        open.document.layers.get(placed).unwrap().transform,
+        transform_before,
+        "no recorded size: the transform is untouched"
+    );
+    assert_eq!(
+        open.document.asset_source_size(asset),
+        Some((32, 32)),
+        "the new size IS recorded for the next replacement"
+    );
+}

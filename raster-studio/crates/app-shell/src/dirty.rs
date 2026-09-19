@@ -123,7 +123,11 @@ pub fn touched_by(command: &Command) -> DirtyTiles {
         // other members carry the dirtiness.
         Command::SetSelection { .. }
         | Command::SetMetaColorMode { .. }
-        | Command::SetAssetSourceSize { .. } => DirtyTiles::none(),
+        | Command::SetAssetSourceSize { .. }
+        // Card 069: the replace's asset-row swap is bookkeeping the same way
+        // the recorded size is — it always rides inside a replace Transaction
+        // whose PaintTiles/TransformLayer members carry the dirtiness.
+        | Command::ReplaceAssetSource { .. } => DirtyTiles::none(),
         Command::Transaction { commands, .. } => {
             let mut out = DirtyTiles::none();
             for c in commands {

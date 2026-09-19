@@ -135,6 +135,10 @@ impl StepKind {
             // Asset-table bookkeeping: it rides inside a refresh Transaction
             // (shown as one Batch row) and never stands alone in the panel.
             Command::SetAssetSourceSize { .. } => StepKind::Transformed,
+            // Card 069: a replace rides inside a Transaction like the refresh
+            // (tiles + transforms + the asset row), so it reads as a geometry
+            // step rather than as a plain paint.
+            Command::ReplaceAssetSource { .. } => StepKind::Transformed,
             Command::PaintTiles { .. } => StepKind::Painted,
             Command::FillRegion { .. } => StepKind::Filled,
             Command::ClearRegion { .. } => StepKind::Cleared,

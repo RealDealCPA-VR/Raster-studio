@@ -1316,6 +1316,7 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::DuplicateDocument => editor.duplicate_document(),
         MenuAction::CloseAll => editor.close_all_documents(),
         MenuAction::EditSmartObjectContents => editor.edit_smart_object_contents(),
+        MenuAction::ReplaceContents => editor.replace_from_dialog(),
         MenuAction::CommitSmartObjectContents => editor.commit_smart_object_contents(),
         // ---- Filter --------------------------------------------------------
         MenuAction::Filter(id) => run_filter(editor, id),
@@ -5710,6 +5711,9 @@ mod tests {
                 // and a cancelled place refuses loudly — its point.
                 || action == MenuAction::PlaceEmbedded
                 || action == MenuAction::PlaceLinked
+                // Card 069: with no file queued the scripted dialog cancels,
+                // and a cancelled replace refuses loudly — its point.
+                || action == MenuAction::ReplaceContents
                 // SetColorMode refuses when the document already wears the
                 // requested mode — the correct loud answer to a no-op
                 // request; the other modes genuinely rewrite the tiles.

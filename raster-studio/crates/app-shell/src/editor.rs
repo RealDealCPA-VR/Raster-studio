@@ -1940,6 +1940,221 @@ impl Editor {
         }
     }
 
+    /// Layer ▸ Smart Object ▸ Replace Contents… (card 069): swap the active
+    /// smart object's source file out from under it without redoing the
+    /// layout — the layer keeps its id, name, transform base, mask, effects
+    /// and group position; only the stored tiles and the asset row move, in
+    /// one undoable [`Command::Transaction`].
+    ///
+    /// # Shared-assets policy (the explicit card-069 decision)
+    ///
+    /// Replacement updates the SHARED asset: every smart object layer in the
+    /// document that references the same [`layer_model::AssetId`] — including
+    /// duplicates and copy-pasted layers, which share the id — updates
+    /// together in the same transaction. That is the smart-object semantic
+    /// (a placed file is a reference to one source, not to one layer), and it
+    /// means no sibling can be left half-updated. There is no per-instance
+    /// variant: card 069 ships the shared policy only. Layers that do NOT
+    /// reference this asset are untouched — identity is never inferred from
+    /// layer names, only from the asset id.
+    ///
+    /// # Origin-kind policy
+    ///
+    /// An EMBEDDED source stays embedded (the new origin carries the new
+    /// file's name and bytes); a LINKED source stays linked (the new origin
+    /// carries the new path). The kind never flips behind the user's back.
+    ///
+    /// # Sizing (the card-050 renormalization)
+    ///
+    /// The new source is fit to the EXISTING source frame with aspect
+    /// preserved: each sibling's transform is conjugated through its own
+    /// matrix (`own · old/new · own⁻¹`), so the on-canvas footprint is
+    /// identical across a resolution change. When the asset row has no
+    /// recorded `source_size` (a pre-069 record), the transform is left
+    /// alone — no jump, ever. The file bytes are read ONCE, up front; the
+    /// decode converts into the document's working space and REFUSES an
+    /// unsupported profile loudly (card 050's contract — no silent sRGB
+    /// fallback), before anything mutates.
+    pub fn replace_smart_object_contents(&mut self, path: &Path) -> Result<String, String> {
+        // Read the bytes once, before anything mutates: a failed read or
+        // decode changes neither the layer stack nor history.
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        let open = self
+            .active_mut()
+            .ok_or_else(|| "No document is open".to_string())?;
+        // The ACTIVE layer must be a smart object: unlike Edit Contents
+        // (which falls back to the first smart object in the tree), Replace
+        // targets exactly what the user is looking at.
+        let (layer_id, asset) = {
+            let active = open
+                .document
+                .active_layer()
+                .ok_or_else(|| "Select a smart object layer first".to_string())?;
+            match open.document.layers.get(active).map(|l| &l.kind) {
+                Some(LayerKind::SmartObject(so)) => (active, so.asset),
+                Some(other) => {
+                    let class = editor_core::command::layer_class_name(other);
+                    return Err(format!("The active layer is a {class}, not a smart object"));
+                }
+                None => return Err("Select a smart object layer first".to_string()),
+            }
+        };
+        let _ = layer_id;
+        let old_origin =
+            open.document.asset_origin(asset).cloned().ok_or_else(|| {
+                "The smart object's asset is missing from the document".to_string()
+            })?;
+        // Origin-kind policy: embedded stays embedded, linked stays linked.
+        let file_name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Replaced".to_string());
+        let (origin, linked) = match &old_origin {
+            layer_model::AssetOrigin::Embedded { .. } => (
+                layer_model::AssetOrigin::Embedded {
+                    name: file_name.clone(),
+                    bytes: bytes.clone(),
+                },
+                false,
+            ),
+            layer_model::AssetOrigin::Linked { .. } => (
+                layer_model::AssetOrigin::Linked {
+                    path: path.to_path_buf(),
+                },
+                true,
+            ),
+        };
+        // Decode: from the captured bytes for an embedded source, from the
+        // file for a linked one — both through the raster codec.
+        let image = if linked {
+            let decoded = raster::decode_surface_path(path, raster::ImportLimits::default())
+                .map_err(|e| e.to_string())?
+                .into_decoded_image();
+            crate::import::DecodedImage {
+                width: decoded.width,
+                height: decoded.height,
+                rgba8: decoded.rgba8,
+                color_space: decoded.color_space,
+                icc_profile: decoded.icc_profile,
+            }
+        } else {
+            let decoded = raster::decode_surface_bytes(&bytes, raster::ImportLimits::default())
+                .map_err(|e| e.to_string())?
+                .into_decoded_image();
+            crate::import::DecodedImage {
+                width: decoded.width,
+                height: decoded.height,
+                rgba8: decoded.rgba8,
+                color_space: decoded.color_space,
+                icc_profile: decoded.icc_profile,
+            }
+        };
+        let converted =
+            crate::placement::working_space_pixels(&image, &open.document.meta.color_space)
+                .map_err(|e| e.to_string())?;
+        let new_tiles: Vec<(raster::TileCoord, Vec<u8>)> =
+            crate::placement::slice_source_tiles(&converted, glam::IVec2::ZERO);
+        let new_size = (image.width, image.height);
+        // Every sibling layer referencing the asset, depth-first like the
+        // refresh's pass 2 grouping.
+        let layers: Vec<layer_model::LayerId> = open
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter(|id| {
+                matches!(
+                    open.document.layers.get(*id).map(|l| &l.kind),
+                    Some(LayerKind::SmartObject(so)) if so.asset == asset
+                )
+            })
+            .collect();
+        let old_size = open.document.asset_source_size(asset);
+        let mut commands: Vec<Command> = Vec::new();
+        for layer_id in &layers {
+            let mut edits = Vec::new();
+            for (coord, bytes) in &new_tiles {
+                let hash = open.tiles.insert_bytes(bytes.clone());
+                edits.push(editor_core::pixels::TileEdit::set(*coord, hash));
+            }
+            // Ghost cleanup: the old coords the new source does not actually
+            // store (transparent in it) must lose their old ink.
+            if let Some(old_map) = open.document.layer_tiles(*layer_id) {
+                for (c, _) in old_map.iter() {
+                    if !new_tiles.iter().any(|(coord, _)| *coord == c) {
+                        edits.push(editor_core::pixels::TileEdit::clear(c));
+                    }
+                }
+            }
+            commands.push(
+                Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(*layer_id), edits)
+                    .map_err(|e| e.to_string())?,
+            );
+            // The renormalization: ONLY when the row records a source size
+            // (a pre-069 record keeps its transform — no jump ever).
+            if let Some((old_w, old_h)) = old_size {
+                let own = open
+                    .document
+                    .layers
+                    .get(*layer_id)
+                    .map(|l| l.transform)
+                    .unwrap_or(glam::Affine2::IDENTITY);
+                if new_size.0 > 0 && new_size.1 > 0 {
+                    let ratio = glam::Affine2::from_scale(glam::Vec2::new(
+                        old_w as f32 / new_size.0 as f32,
+                        old_h as f32 / new_size.1 as f32,
+                    ));
+                    let matrix = (own * ratio * own.inverse()).to_cols_array();
+                    commands.push(Command::TransformLayer {
+                        layer_id: *layer_id,
+                        matrix,
+                    });
+                }
+            }
+        }
+        // The asset row swaps INSIDE the same transaction (card 050's rule
+        // for the recorded size): undo then reverts the appearance AND the
+        // metadata together.
+        commands.push(Command::ReplaceAssetSource {
+            asset,
+            origin,
+            source_size: Some(new_size),
+        });
+        let label = if layers.len() == 1 {
+            format!("Replace Contents of {file_name}")
+        } else {
+            format!(
+                "Replace Contents of {file_name} (+{} sibling(s))",
+                layers.len() - 1
+            )
+        };
+        open.apply(Command::Transaction { label, commands })
+            .map_err(|e| e.to_string())?;
+        // Stamp handling, mirroring the refresh: a linked source learns the
+        // new file's stamp so a later refresh does not immediately re-decode
+        // the file we just stored; an embedded source has no file to watch.
+        if linked {
+            if let Ok(stamp) = std::fs::metadata(path).and_then(|m| m.modified()) {
+                open.asset_stamps.insert(asset, stamp);
+            }
+        } else {
+            open.asset_stamps.remove(&asset);
+        }
+        self.touch();
+        self.status = Some(format!("Replaced contents with {file_name}"));
+        Ok(format!("Replaced contents with {file_name}"))
+    }
+
+    /// Layer ▸ Smart Object ▸ Replace Contents…: ask for an image, then swap
+    /// it in. The dialog answer is `None` when the user cancelled, which is a
+    /// cancelled action, not a failure.
+    pub fn replace_from_dialog(&mut self) -> Result<String, String> {
+        let Some(path) = self.dialogs.pick_replace_file() else {
+            return Err("Replace was cancelled".to_string());
+        };
+        self.replace_smart_object_contents(&path)
+    }
+
     pub fn convert_to_smart_object(&mut self) -> Result<String, String> {
         let Some(open) = self.active() else {
             return Err("No document is open".to_string());
