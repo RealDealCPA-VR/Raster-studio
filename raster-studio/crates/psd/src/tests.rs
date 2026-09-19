@@ -1893,19 +1893,100 @@ fn a_tysh_without_a_text_key_is_kept_verbatim_with_no_string() {
     assert_eq!(text.raw, raw, "the block is preserved verbatim");
 }
 
-/// A minimal `lfx2` drop-shadow block: object version, descriptor version,
-/// then a descriptor naming the effect and switching it on.
+/// The card-073/075 `lfx2` block: object version, descriptor version, then a
+/// descriptor carrying the four required effects (with real Photoshop keys,
+/// one deliberately disabled) plus one kind this build does not model.
+/// The block is retained verbatim on every layer that carries it.
 ///
-/// Like the `TySh`, this is hand-crafted bytes — the crate preserves effects
-/// verbatim rather than modelling their parameters.
+/// Block level: the master switch on, and a 150 % scale that multiplies every
+/// pixel length below. Effects, bottom-up in the descriptor:
+///
+/// * `DrSh` drop shadow, on — multiply, black, 75 %, angle 130° (own light),
+///   distance 8 px, size 16 px, spread 4 px.
+/// * `FrFX` solid stroke, on — normal, white, 100 %, 4 px, outside.
+/// * `SoFi` colour overlay, on — colour blend, sRGB (220, 60, 30), 50 %.
+/// * `OrGl` outer glow, **off** — a full parameter set that must land absent
+///   and silent: Photoshop does not draw it either.
+/// * `ChFX` satin — a kind this build does not model; named, not half-mapped.
+fn card073_effects_descriptor() -> crate::Descriptor {
+    let unit = |unit: &str, value: f64| crate::Value::UnitFloat {
+        unit: unit.as_bytes().try_into().unwrap(),
+        value,
+    };
+    let rgb = |r: f64, g: f64, b: f64| {
+        let mut c = crate::Descriptor::new("RGBC");
+        c.push("Rd  ", crate::Value::Double(r)).unwrap();
+        c.push("Grn ", crate::Value::Double(g)).unwrap();
+        c.push("Bl  ", crate::Value::Double(b)).unwrap();
+        crate::Value::Descriptor(c)
+    };
+    let blnm = |v: &str| crate::Value::Enumerated {
+        type_id: "BlnM".into(),
+        value: v.into(),
+    };
+    let enumerated = |ty: &str, v: &str| crate::Value::Enumerated {
+        type_id: ty.into(),
+        value: v.into(),
+    };
+
+    let mut top = crate::Descriptor::new("Lfx2");
+    top.push("masterFXSwitch", crate::Value::Bool(true))
+        .unwrap();
+    top.push("Scl ", unit("#Prc", 150.0)).unwrap();
+
+    let mut drsh = crate::Descriptor::new("DrSh");
+    drsh.push("enab", crate::Value::Bool(true)).unwrap();
+    drsh.push("Md  ", blnm("Mltp")).unwrap();
+    drsh.push("Clr ", rgb(0.0, 0.0, 0.0)).unwrap();
+    drsh.push("opacity", unit("#Prc", 75.0)).unwrap();
+    drsh.push("lagl", unit("#Ang", 130.0)).unwrap();
+    drsh.push("uglg", crate::Value::Bool(false)).unwrap();
+    drsh.push("Dstn", unit("#Pxl", 8.0)).unwrap();
+    drsh.push("blur", unit("#Pxl", 16.0)).unwrap();
+    drsh.push("Ckmt", unit("#Pxl", 4.0)).unwrap();
+    drsh.push("Nose", unit("#Prc", 0.0)).unwrap();
+    drsh.push("layerConceals", crate::Value::Bool(false))
+        .unwrap();
+    top.push("DrSh", crate::Value::Descriptor(drsh)).unwrap();
+
+    let mut frfx = crate::Descriptor::new("FrFX");
+    frfx.push("enab", crate::Value::Bool(true)).unwrap();
+    frfx.push("Md  ", blnm("Nrml")).unwrap();
+    frfx.push("Clr ", rgb(255.0, 255.0, 255.0)).unwrap();
+    frfx.push("Opct", unit("#Prc", 100.0)).unwrap();
+    frfx.push("Sz  ", unit("#Pxl", 4.0)).unwrap();
+    frfx.push("PntT", enumerated("FrFl", "SClr")).unwrap();
+    frfx.push("Styl", enumerated("FStl", "OutF")).unwrap();
+    frfx.push("overprint", crate::Value::Bool(false)).unwrap();
+    top.push("FrFX", crate::Value::Descriptor(frfx)).unwrap();
+
+    let mut sofi = crate::Descriptor::new("SoFi");
+    sofi.push("enab", crate::Value::Bool(true)).unwrap();
+    sofi.push("Md  ", blnm("Clr ")).unwrap();
+    sofi.push("Clr ", rgb(220.0, 60.0, 30.0)).unwrap();
+    sofi.push("Opct", unit("#Prc", 50.0)).unwrap();
+    top.push("SoFi", crate::Value::Descriptor(sofi)).unwrap();
+
+    let mut orgl = crate::Descriptor::new("OrGl");
+    orgl.push("enab", crate::Value::Bool(false)).unwrap();
+    orgl.push("Md  ", blnm("Scrn")).unwrap();
+    orgl.push("Clr ", rgb(255.0, 255.0, 0.0)).unwrap();
+    orgl.push("Opct", unit("#Prc", 60.0)).unwrap();
+    orgl.push("blur", unit("#Pxl", 10.0)).unwrap();
+    orgl.push("Ckmt", unit("#Pxl", 0.0)).unwrap();
+    top.push("OrGl", crate::Value::Descriptor(orgl)).unwrap();
+
+    top.push(
+        "ChFX",
+        crate::Value::Descriptor(crate::Descriptor::new("ChFX")),
+    )
+    .unwrap();
+    top
+}
+
+/// The same block as the bytes an effects record carries.
 fn card073_drop_shadow() -> Vec<u8> {
-    let mut s = crate::bytes::Sink::new();
-    s.u32(1); // object version
-    s.u32(16); // descriptor version
-    let mut d = crate::Descriptor::new("Lfx2");
-    d.push("Sdsw", crate::Value::Bool(true)).unwrap();
-    d.write(&mut s).unwrap();
-    s.into_inner()
+    crate::effects::tests::lfx2(&card073_effects_descriptor())
 }
 
 /// A minimal descriptor-shaped adjustment payload for `hue2`.
@@ -1923,6 +2004,72 @@ fn card073_hue_saturation() -> Vec<u8> {
     .unwrap();
     d.write(&mut s).unwrap();
     s.into_inner()
+}
+
+/// Card 075: the same block decodes into editable `LayerEffects` parameters
+/// exactly — colours stored gamma-encoded in document space (decoded to
+/// linear at render by the compositor), percentages to 0..1, pixels
+/// scaled, the disabled glow absent, the satin named and left behind.
+#[test]
+fn the_card073_effects_decode_into_the_expected_parameters() {
+    let scene = card073_scene();
+    let fx = scene.all_layers()[5]
+        .effects
+        .as_ref()
+        .expect("the headline carries effects");
+    let imported = crate::import_effects(fx, &ReadOptions::default()).expect("lfx2 parses");
+
+    assert_eq!(
+        imported.unmapped,
+        vec!["satin".to_string()],
+        "the disabled glow is silent; the satin is named"
+    );
+    let e = imported.effects;
+    assert!(e.enabled, "the master switch is on");
+
+    let s = e.drop_shadow.expect("the drop shadow mapped");
+    assert_eq!(s.blend_mode, BlendMode::Multiply);
+    assert!((s.opacity - 0.75).abs() < 1e-6);
+    assert!((s.angle_deg - 130.0).abs() < 1e-6);
+    assert!(!s.use_global_light);
+    assert!((s.distance_px - 12.0).abs() < 1e-6, "8 px × 150 %");
+    assert!((s.size_px - 24.0).abs() < 1e-6);
+    assert!((s.spread - 0.25).abs() < 1e-6, "6 px of 24 px");
+    assert!((s.noise).abs() < 1e-6);
+    assert!(!s.knockout);
+    assert_eq!(s.color, [0.0, 0.0, 0.0, 1.0]);
+
+    let k = e.stroke.expect("the solid stroke mapped");
+    assert_eq!(k.blend_mode, BlendMode::Normal);
+    assert!((k.opacity - 1.0).abs() < 1e-6);
+    assert!((k.size_px - 6.0).abs() < 1e-6, "4 px × 150 %");
+    assert_eq!(k.position, layer_model::StrokePosition::Outside);
+    assert!(!k.overprint);
+    match k.fill {
+        layer_model::FillStyle::Solid(c) => {
+            assert!((c[0] - 1.0).abs() < 1e-6 && (c[1] - 1.0).abs() < 1e-6);
+            assert!((c[2] - 1.0).abs() < 1e-6, "white, not black");
+            assert_eq!(c[3], 1.0);
+        }
+        _ => panic!("the stroke fill is solid"),
+    }
+
+    let o = e.color_overlay.expect("the colour overlay mapped");
+    assert_eq!(o.blend_mode, BlendMode::Color);
+    assert!((o.opacity - 0.5).abs() < 1e-6);
+    match o.color {
+        // sRGB 220, 60, 30 stored gamma-encoded — the raw bytes over 255,
+        // deliberately not linear light. The compositor decodes at render.
+        [r, g, b, 1.0] => {
+            assert!((r - 220.0 / 255.0).abs() < 1e-3, "{r}");
+            assert!((g - 60.0 / 255.0).abs() < 1e-3, "{g}");
+            assert!((b - 30.0 / 255.0).abs() < 1e-3, "{b}");
+        }
+        other => panic!("unexpected overlay colour {other:?}"),
+    }
+
+    assert!(e.outer_glow.is_none(), "a disabled effect is absent");
+    assert!(e.inner_shadow.is_none() && e.inner_glow.is_none());
 }
 
 /// The full card-073 scene. Bottom-to-top, the order the file itself uses:
@@ -2091,7 +2238,6 @@ fn the_card073_fixture_round_trips_with_its_recorded_layer_metadata() {
     let fx = headline.effects.as_ref().expect("the lfx2 block survived");
     assert_eq!(fx.key, *b"lfx2");
     assert_eq!(fx.data, card073_drop_shadow());
-
     // E12's other shape: translated content keeps its offset rectangle and
     // its visibility, with no transform block involved.
     let effects_group = &title.children()[1];

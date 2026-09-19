@@ -760,13 +760,78 @@ mod card073 {
         s.into_inner()
     }
 
-    /// A minimal `lfx2` drop-shadow block, retained verbatim by the model.
-    pub fn drop_shadow() -> Vec<u8> {
+    /// The card-075 `lfx2` block: the four required effects (the outer glow
+    /// deliberately disabled) plus a satin kind this build does not model,
+    /// at 150 % scale — the same values the psd crate's card-073 builder
+    /// writes, rebuilt here through the public descriptor API.
+    pub fn effects_block() -> Vec<u8> {
+        let unit = |unit: &str, value: f64| Value::UnitFloat {
+            unit: unit.as_bytes().try_into().unwrap(),
+            value,
+        };
+        let rgb = |r: f64, g: f64, b: f64| {
+            let mut c = Descriptor::new("RGBC");
+            c.push("Rd  ", Value::Double(r)).unwrap();
+            c.push("Grn ", Value::Double(g)).unwrap();
+            c.push("Bl  ", Value::Double(b)).unwrap();
+            Value::Descriptor(c)
+        };
+        let blnm = |v: &str| Value::Enumerated {
+            type_id: "BlnM".into(),
+            value: v.into(),
+        };
+        let enumerated = |ty: &str, v: &str| Value::Enumerated {
+            type_id: ty.into(),
+            value: v.into(),
+        };
+
         let mut s = Sink::new();
         s.u32(1); // object version
         s.u32(16); // descriptor version
         let mut d = Descriptor::new("Lfx2");
-        d.push("Sdsw", Value::Bool(true)).unwrap();
+        d.push("masterFXSwitch", Value::Bool(true)).unwrap();
+        d.push("Scl ", unit("#Prc", 150.0)).unwrap();
+
+        let mut drsh = Descriptor::new("DrSh");
+        drsh.push("enab", Value::Bool(true)).unwrap();
+        drsh.push("Md  ", blnm("Mltp")).unwrap();
+        drsh.push("Clr ", rgb(0.0, 0.0, 0.0)).unwrap();
+        drsh.push("opacity", unit("#Prc", 75.0)).unwrap();
+        drsh.push("lagl", unit("#Ang", 130.0)).unwrap();
+        drsh.push("uglg", Value::Bool(false)).unwrap();
+        drsh.push("Dstn", unit("#Pxl", 8.0)).unwrap();
+        drsh.push("blur", unit("#Pxl", 16.0)).unwrap();
+        drsh.push("Ckmt", unit("#Pxl", 4.0)).unwrap();
+        drsh.push("layerConceals", Value::Bool(false)).unwrap();
+        d.push("DrSh", Value::Descriptor(drsh)).unwrap();
+
+        let mut frfx = Descriptor::new("FrFX");
+        frfx.push("enab", Value::Bool(true)).unwrap();
+        frfx.push("Md  ", blnm("Nrml")).unwrap();
+        frfx.push("Clr ", rgb(255.0, 255.0, 255.0)).unwrap();
+        frfx.push("Opct", unit("#Prc", 100.0)).unwrap();
+        frfx.push("Sz  ", unit("#Pxl", 4.0)).unwrap();
+        frfx.push("PntT", enumerated("FrFl", "SClr")).unwrap();
+        frfx.push("Styl", enumerated("FStl", "OutF")).unwrap();
+        d.push("FrFX", Value::Descriptor(frfx)).unwrap();
+
+        let mut sofi = Descriptor::new("SoFi");
+        sofi.push("enab", Value::Bool(true)).unwrap();
+        sofi.push("Md  ", blnm("Clr ")).unwrap();
+        sofi.push("Clr ", rgb(220.0, 60.0, 30.0)).unwrap();
+        sofi.push("Opct", unit("#Prc", 50.0)).unwrap();
+        d.push("SoFi", Value::Descriptor(sofi)).unwrap();
+
+        let mut orgl = Descriptor::new("OrGl");
+        orgl.push("enab", Value::Bool(false)).unwrap();
+        orgl.push("Md  ", blnm("Scrn")).unwrap();
+        orgl.push("Clr ", rgb(255.0, 255.0, 0.0)).unwrap();
+        orgl.push("Opct", unit("#Prc", 60.0)).unwrap();
+        orgl.push("blur", unit("#Pxl", 10.0)).unwrap();
+        d.push("OrGl", Value::Descriptor(orgl)).unwrap();
+
+        d.push("ChFX", Value::Descriptor(Descriptor::new("ChFX")))
+            .unwrap();
         d.write(&mut s).unwrap();
         s.into_inner()
     }
@@ -824,7 +889,7 @@ mod card073 {
         headline.clipping = true;
         headline.effects = Some(Effects {
             key: *b"lfx2",
-            data: drop_shadow(),
+            data: effects_block(),
         });
         headline.text = Some(TextData {
             transform: ROTATED,
@@ -856,7 +921,8 @@ mod card073 {
 
 /// E11: importing the card-073 fixture keeps the layer metadata and names
 /// every loss — the type layer's parseable subset imports editable with the
-/// reported default-font substitution, effects are not imported, and the
+/// reported default-font substitution, the four required effects import as
+/// editable parameters with the unmapped satin named, and the
 /// adjustment this build cannot evaluate is kept as an empty layer with its
 /// tag named.
 ///
@@ -910,6 +976,37 @@ fn importing_the_card073_fixture_reports_every_loss_and_keeps_the_layer_metadata
     assert_eq!(headline.clipping, layer_model::ClippingMode::ClipToBelow);
     assert!(headline.visible);
 
+    // Card 075: the four required effects import as editable parameters —
+    // colours stored gamma-encoded in document space (decoded to linear at
+    // render by the compositor), percentages to 0..1, pixels scaled
+    // by the block's 150 %, the disabled glow absent.
+    {
+        let e = &headline.effects;
+        assert!(e.enabled, "the master switch is on");
+        let s = e.drop_shadow.as_ref().expect("the drop shadow mapped");
+        assert_eq!(s.blend_mode, BlendMode::Multiply);
+        assert_eq!(s.color, [0.0, 0.0, 0.0, 1.0]);
+        assert!((s.opacity - 0.75).abs() < 1e-6);
+        assert!((s.angle_deg - 130.0).abs() < 1e-6);
+        assert!(!s.use_global_light);
+        assert!((s.distance_px - 12.0).abs() < 1e-6, "8 px × 150 %");
+        assert!((s.size_px - 24.0).abs() < 1e-6);
+        assert!((s.spread - 0.25).abs() < 1e-6, "6 px of 24 px");
+        let k = e.stroke.as_ref().expect("the solid stroke mapped");
+        assert_eq!(k.blend_mode, BlendMode::Normal);
+        assert!((k.size_px - 6.0).abs() < 1e-6, "4 px × 150 %");
+        assert_eq!(k.position, layer_model::StrokePosition::Outside);
+        assert!(matches!(&k.fill, layer_model::FillStyle::Solid(c)
+            if c.iter().zip([1.0f32, 1.0, 1.0, 1.0]).all(|(a, b)| (a - b).abs() < 1e-6)));
+        let o = e.color_overlay.as_ref().expect("the colour overlay mapped");
+        assert_eq!(o.blend_mode, BlendMode::Color);
+        assert!((o.opacity - 0.5).abs() < 1e-6);
+        assert!(matches!(&o.color, [r, g, b, 1.0]
+            if (r - 220.0 / 255.0).abs() < 1e-3 && (g - 60.0 / 255.0).abs() < 1e-3 && (b - 30.0 / 255.0).abs() < 1e-3));
+        assert!(e.outer_glow.is_none(), "a disabled effect is absent");
+        assert_eq!(e.count(), 3);
+    }
+
     // The type layer's editable subset: the parseable `Txt ` string and the
     // `TySh` transform import as an editable text layer — with the editor's
     // default font, since the format does not name one outside the engine
@@ -959,11 +1056,94 @@ fn importing_the_card073_fixture_reports_every_loss_and_keeps_the_layer_metadata
             "type layer(s) (\u{201c}Headline\u{201d}) were imported as editable text with the \
              default font, size and fill — the source font is not in this build's supported \
              subset",
-            // E11, effects.
-            "layer effect(s) on \u{201c}Headline\u{201d} were not imported",
+            // E11, effects: the four required kinds imported (asserted
+            // below); the satin this build does not model is named, and the
+            // disabled glow is silent — Photoshop does not draw it either.
+            "the satin effect(s) on \u{201c}Headline\u{201d} were not imported",
         ],
         "nothing silent, nothing invented: the fixture's losses, by name"
     );
+}
+
+/// Card 075 render-path check: an imported effect colour must survive the
+/// compositor. The stored convention is gamma-encoded document-space 0..1,
+/// which the compositor decodes to linear once at render — so a solid colour
+/// overlay at 100 % opacity over a white background renders the *source*
+/// colour, not the double-darkened value a second linearisation would give.
+/// (The double-encoded value of sRGB 220, 60, 30 would render near 188, 6, 0.)
+#[test]
+fn an_imported_color_overlay_renders_the_source_colour_not_a_doubly_darkened_one() {
+    // The fixture: a white backdrop and a 32×32 swatch layer carrying one
+    // solid colour overlay — normal blend, sRGB 220, 60, 30, 100 %.
+    let mut file = PsdFile::new(PsdHeader::rgba8(64, 64));
+
+    let mut backdrop = PsdLayer::raster("Backdrop", Rect::sized(64, 64));
+    backdrop.set_rgba8(&vec![255u8; 64 * 64 * 4]).unwrap();
+
+    let mut swatch = PsdLayer::raster("Swatch", Rect::new(16, 16, 48, 48));
+    swatch
+        .set_rgba8(
+            &(0..32 * 32)
+                .flat_map(|_| [128u8, 128, 128, 255])
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+    let mut sofi = Descriptor::new("SoFi");
+    sofi.push(
+        "Md  ",
+        Value::Enumerated {
+            type_id: "BlnM".into(),
+            value: "Nrml".into(),
+        },
+    )
+    .unwrap();
+    let mut clr = Descriptor::new("RGBC");
+    clr.push("Rd  ", Value::Double(220.0)).unwrap();
+    clr.push("Grn ", Value::Double(60.0)).unwrap();
+    clr.push("Bl  ", Value::Double(30.0)).unwrap();
+    sofi.push("Clr ", Value::Descriptor(clr)).unwrap();
+    sofi.push(
+        "Opct",
+        Value::UnitFloat {
+            unit: b"#Prc".as_slice().try_into().unwrap(),
+            value: 100.0,
+        },
+    )
+    .unwrap();
+    let mut lfx2 = Descriptor::new("Lfx2");
+    lfx2.push("SoFi", Value::Descriptor(sofi)).unwrap();
+    // The `lfx2` record layout: object version, descriptor version, then the
+    // descriptor itself.
+    let mut s = psd::bytes::Sink::new();
+    s.u32(1);
+    s.u32(16);
+    lfx2.write(&mut s).unwrap();
+    swatch.effects = Some(Effects {
+        key: *b"lfx2",
+        data: s.into_inner(),
+    });
+
+    file.layers.push(backdrop);
+    file.layers.push(swatch);
+    file.merged = Some(MergedImage::from_rgba8(64, 64, &[255u8; 64 * 64 * 4]).unwrap());
+
+    // Import into a real document (an sRGB one — the space every PSD lands
+    // in here) and render it the way the screen sees it.
+    let bytes = psd::write(&file).unwrap();
+    let import = document_from_psd(&bytes, "glow.psd", 50).unwrap();
+    let mut doc = OpenDocument::from_import(app::next_id(), import.imported);
+    assert_eq!(doc.document.meta.color_space, color::ColorSpace::Srgb);
+    let composite = doc.composite_all();
+
+    // The pixel at the overlay's centre: Photoshop's appearance is the
+    // source colour — sRGB 220, 60, 30. Double-linearising at import would
+    // darken it to roughly (188, 6, 0), a delta the exact assert rejects.
+    let px = |x: usize, y: usize| &composite[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4];
+    assert_eq!(px(32, 32), &[220u8, 60, 30, 255], "overlay centre");
+    // A corner of the swatch, clear of any edge filtering.
+    assert_eq!(px(20, 20), &[220u8, 60, 30, 255], "overlay corner");
+    // And the backdrop outside the swatch stays white.
+    assert_eq!(px(4, 4), &[255u8, 255, 255, 255], "backdrop");
 }
 
 /// E12: exporting a document whose layers a `.psd` has no home for — and whose
@@ -1235,14 +1415,14 @@ fn the_card073_fixtures_can_be_materialized_for_the_record() {
     type_file.layers.push(headline);
     write_fixture("card073-type.psd", psd::write(&type_file).unwrap());
 
-    // The effect fixture on its own: a layer carrying a drop shadow as a
-    // retained `lfx2` block.
+    // The effect fixture on its own: a layer carrying the four required
+    // effects in one retained `lfx2` block.
     let mut shadow_file = PsdFile::new(PsdHeader::rgba8(64, 64));
     let mut shadowed = PsdLayer::raster("Shadowed", Rect::sized(64, 64));
     shadowed.set_rgba8(&vec![90u8; 64 * 64 * 4]).unwrap();
     shadowed.effects = Some(Effects {
         key: *b"lfx2",
-        data: card073::drop_shadow(),
+        data: card073::effects_block(),
     });
     shadow_file.layers.push(shadowed);
     write_fixture("card073-shadow.psd", psd::write(&shadow_file).unwrap());

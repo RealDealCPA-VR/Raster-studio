@@ -354,7 +354,8 @@ pub fn layer_tile_coords(doc: &Document, layer: LayerId) -> Vec<TileCoord> {
 // They disagree in both directions, and the disagreements are *reported* rather
 // than swallowed — see [`PsdNotes`]. A `.psd` has bit depths and colour modes
 // this editor does not store, adjustment payloads it cannot evaluate, type
-// layers it cannot re-typeset and layer effects it cannot re-describe; this
+// layers it cannot re-typeset, and layer effects beyond the four this build
+// maps (card 075: drop shadow, stroke, colour overlay, outer glow); this
 // document model has an arbitrary affine per layer, a mask density and feather,
 // and a blanket lock, none of which a `.psd` can carry. Silently dropping any
 // of those is the failure mode that makes a round trip untrustworthy, so every
@@ -437,6 +438,9 @@ struct Tally {
     type_layers: Vec<String>,
     editable_text: Vec<String>,
     effects: Vec<String>,
+    /// (layer, named kinds) for effects the descriptor listed but this build
+    /// does not map — or lists with required fields missing.
+    unmapped_effects: Vec<(String, String)>,
     second_masks: Vec<String>,
     off_canvas: Vec<String>,
     transformed: Vec<String>,
@@ -454,6 +458,19 @@ fn named(items: &[String]) -> String {
     match items.len().saturating_sub(shown.len()) {
         0 => shown.join(" and "),
         rest => format!("{} and {rest} more", shown.join(", ")),
+    }
+}
+
+/// `satin and inner shadow` / `satin, inner glow and bevel` — the kinds in a
+/// report note, in the order the file listed them.
+fn kinds_phrase(kinds: &[String]) -> String {
+    match kinds.len() {
+        0 => String::new(),
+        1 => kinds[0].clone(),
+        _ => {
+            let (last, head) = kinds.split_last().unwrap();
+            format!("{} and {last}", head.join(", "))
+        }
     }
 }
 
@@ -521,6 +538,19 @@ impl Tally {
             if !items.is_empty() {
                 notes.push(template.replace("{names}", &named(items)));
             }
+        }
+        // Unmapped effect kinds are named per kind, grouped by signature so
+        // layers with the same gap share one sentence.
+        let mut by_kinds: std::collections::BTreeMap<&str, Vec<&str>> = Default::default();
+        for (name, kinds) in &self.unmapped_effects {
+            by_kinds.entry(kinds).or_default().push(name);
+        }
+        for (kinds, names) in by_kinds {
+            let names: Vec<String> = names.into_iter().map(|s| s.to_string()).collect();
+            notes.push(format!(
+                "the {kinds} effect(s) on {} were not imported",
+                named(&names)
+            ));
         }
     }
 }
@@ -913,8 +943,26 @@ fn layer_common(source: &psd::PsdLayer, tally: &mut Tally) -> Layer {
         transparency: source.protection.transparency || source.transparency_protected,
         all: false,
     };
-    if source.effects.is_some() {
-        tally.effects.push(source.name.clone());
+    if let Some(effects) = &source.effects {
+        // Card 075: the four required effects decode into editable
+        // parameters. A block that does not parse at all keeps the blanket
+        // note; a block that parses but carries kinds (or required fields)
+        // this build does not map keeps a note naming those kinds. The
+        // verbatim `lfx2` bytes stay in the psd model either way — retention,
+        // not rendering.
+        match psd::import_effects(effects, &psd::ReadOptions::default()) {
+            Some(imported) => {
+                if !imported.effects.is_default() {
+                    layer.effects = imported.effects;
+                }
+                if !imported.unmapped.is_empty() {
+                    tally
+                        .unmapped_effects
+                        .push((source.name.clone(), kinds_phrase(&imported.unmapped)));
+                }
+            }
+            None => tally.effects.push(source.name.clone()),
+        }
     }
     if source.sheet_color.is_some_and(|c| c != 0) {
         tally.color_labels.push(source.name.clone());
@@ -1795,6 +1843,96 @@ mod tests {
         psd::write(&file).expect("the fixture must be writable")
     }
 
+    /// The card-075 `lfx2` fixture, built through the public descriptor API:
+    /// the four required effects (the outer glow deliberately disabled) plus
+    /// a satin kind this build does not model, at 150 % scale. Values match
+    /// the psd crate's card-073 builder so the two fixtures stay in step.
+    fn card075_lfx2() -> Vec<u8> {
+        let unit = |unit: &str, value: f64| psd::Value::UnitFloat {
+            unit: unit.as_bytes().try_into().unwrap(),
+            value,
+        };
+        let rgb = |r: f64, g: f64, b: f64| {
+            let mut c = psd::Descriptor::new("RGBC");
+            c.push("Rd  ", psd::Value::Double(r)).unwrap();
+            c.push("Grn ", psd::Value::Double(g)).unwrap();
+            c.push("Bl  ", psd::Value::Double(b)).unwrap();
+            psd::Value::Descriptor(c)
+        };
+        let blnm = |v: &str| psd::Value::Enumerated {
+            type_id: "BlnM".into(),
+            value: v.into(),
+        };
+        let enumerated = |ty: &str, v: &str| psd::Value::Enumerated {
+            type_id: ty.into(),
+            value: v.into(),
+        };
+
+        let mut s = psd::bytes::Sink::new();
+        s.u32(1);
+        s.u32(16);
+        let mut top = psd::Descriptor::new("Lfx2");
+        top.push("masterFXSwitch", psd::Value::Bool(true)).unwrap();
+        top.push("Scl ", unit("#Prc", 150.0)).unwrap();
+
+        let mut drsh = psd::Descriptor::new("DrSh");
+        drsh.push("enab", psd::Value::Bool(true)).unwrap();
+        drsh.push("Md  ", blnm("Mltp")).unwrap();
+        drsh.push("Clr ", rgb(0.0, 0.0, 0.0)).unwrap();
+        drsh.push("opacity", unit("#Prc", 75.0)).unwrap();
+        drsh.push("lagl", unit("#Ang", 130.0)).unwrap();
+        drsh.push("uglg", psd::Value::Bool(false)).unwrap();
+        drsh.push("Dstn", unit("#Pxl", 8.0)).unwrap();
+        drsh.push("blur", unit("#Pxl", 16.0)).unwrap();
+        drsh.push("Ckmt", unit("#Pxl", 4.0)).unwrap();
+        drsh.push("layerConceals", psd::Value::Bool(false)).unwrap();
+        top.push("DrSh", psd::Value::Descriptor(drsh)).unwrap();
+
+        let mut frfx = psd::Descriptor::new("FrFX");
+        frfx.push("enab", psd::Value::Bool(true)).unwrap();
+        frfx.push("Md  ", blnm("Nrml")).unwrap();
+        frfx.push("Clr ", rgb(255.0, 255.0, 255.0)).unwrap();
+        frfx.push("Opct", unit("#Prc", 100.0)).unwrap();
+        frfx.push("Sz  ", unit("#Pxl", 4.0)).unwrap();
+        frfx.push("PntT", enumerated("FrFl", "SClr")).unwrap();
+        frfx.push("Styl", enumerated("FStl", "OutF")).unwrap();
+        top.push("FrFX", psd::Value::Descriptor(frfx)).unwrap();
+
+        let mut sofi = psd::Descriptor::new("SoFi");
+        sofi.push("enab", psd::Value::Bool(true)).unwrap();
+        sofi.push("Md  ", blnm("Clr ")).unwrap();
+        sofi.push("Clr ", rgb(220.0, 60.0, 30.0)).unwrap();
+        sofi.push("Opct", unit("#Prc", 50.0)).unwrap();
+        top.push("SoFi", psd::Value::Descriptor(sofi)).unwrap();
+
+        let mut orgl = psd::Descriptor::new("OrGl");
+        orgl.push("enab", psd::Value::Bool(false)).unwrap();
+        orgl.push("Md  ", blnm("Scrn")).unwrap();
+        orgl.push("Clr ", rgb(255.0, 255.0, 0.0)).unwrap();
+        orgl.push("Opct", unit("#Prc", 60.0)).unwrap();
+        orgl.push("blur", unit("#Pxl", 10.0)).unwrap();
+        top.push("OrGl", psd::Value::Descriptor(orgl)).unwrap();
+
+        top.push("ChFX", psd::Value::Descriptor(psd::Descriptor::new("ChFX")))
+            .unwrap();
+        top.write(&mut s).unwrap();
+        s.into_inner()
+    }
+
+    /// A PSD whose one layer carries [`card075_lfx2`].
+    fn styled_psd() -> Vec<u8> {
+        let mut file = psd::PsdFile::new(psd::PsdHeader::rgba8(64, 64));
+        let canvas = psd::Rect::sized(64, 64);
+        let mut styled = psd::PsdLayer::raster("Styled", canvas);
+        styled.set_rgba8(&solid(canvas, GREEN)).unwrap();
+        styled.effects = Some(psd::Effects {
+            key: *b"lfx2",
+            data: card075_lfx2(),
+        });
+        file.layers = vec![styled];
+        psd::write(&file).expect("the fixture must be writable")
+    }
+
     fn names_of(doc: &Document, ids: &[LayerId]) -> Vec<String> {
         ids.iter()
             .filter_map(|id| doc.layers.get(*id).map(|l| l.name.clone()))
@@ -2152,6 +2290,170 @@ mod tests {
     }
 
     #[test]
+    fn the_four_required_effects_import_as_editable_parameters_and_the_rest_is_named() {
+        let import = document_from_psd(&styled_psd(), "styled.psd", 10).unwrap();
+        let doc = &import.imported.document;
+        let styled = doc.layers.get(find(doc, "Styled")).unwrap();
+        let e = &styled.effects;
+
+        // Every mapped value, exactly as the fixture wrote them — colours
+        // stored gamma-encoded in document space (decoded to linear at
+        // render by the compositor), percentages in 0..1, pixels scaled by
+        // 150 %, the
+        // angle passed through unchanged (the compositor already uses
+        // Photoshop's convention), the disabled glow absent.
+        assert!(e.enabled, "the master switch is on");
+        let s = e.drop_shadow.as_ref().expect("the drop shadow mapped");
+        assert_eq!(s.blend_mode, BlendMode::Multiply);
+        assert_eq!(s.color, [0.0, 0.0, 0.0, 1.0]);
+        assert!((s.opacity - 0.75).abs() < 1e-6);
+        assert!((s.angle_deg - 130.0).abs() < 1e-6);
+        assert!(!s.use_global_light);
+        assert!((s.distance_px - 12.0).abs() < 1e-6);
+        assert!((s.size_px - 24.0).abs() < 1e-6);
+        assert!((s.spread - 0.25).abs() < 1e-6);
+        assert!((s.noise).abs() < 1e-6);
+        assert!(!s.knockout);
+
+        let k = e.stroke.as_ref().expect("the solid stroke mapped");
+        assert_eq!(k.blend_mode, BlendMode::Normal);
+        assert!((k.opacity - 1.0).abs() < 1e-6);
+        assert!((k.size_px - 6.0).abs() < 1e-6);
+        assert_eq!(k.position, layer_model::StrokePosition::Outside);
+        assert!(!k.overprint);
+        assert!(matches!(&k.fill, layer_model::FillStyle::Solid(c)
+            if c.iter().zip([1.0f32, 1.0, 1.0, 1.0]).all(|(a, b)| (a - b).abs() < 1e-6)));
+
+        let o = e.color_overlay.as_ref().expect("the colour overlay mapped");
+        assert_eq!(o.blend_mode, BlendMode::Color);
+        assert!((o.opacity - 0.5).abs() < 1e-6);
+        assert!(matches!(&o.color, [r, g, b, 1.0]
+            if (r - 220.0 / 255.0).abs() < 1e-3 && (g - 60.0 / 255.0).abs() < 1e-3 && (b - 30.0 / 255.0).abs() < 1e-3));
+
+        assert!(e.outer_glow.is_none(), "a disabled effect is absent");
+
+        // The honesty gate: the unmapped satin is named; the blanket
+        // "layer effect(s) … were not imported" is gone.
+        let told = import.notes.summary().expect("the satin must be named");
+        assert!(
+            told.contains("the satin effect(s) on \u{201c}Styled\u{201d} were not imported"),
+            "{told}"
+        );
+        assert!(!told.contains("layer effect(s) on"), "{told}");
+
+        // A native-package save/reopen preserves the imported effects.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("styled.rstudio");
+        project_format::save_project_with(
+            &path,
+            &import.imported.document,
+            &crate::doc::SourceTiles(&import.imported.tiles),
+            &project_format::SaveOptions::new("test"),
+        )
+        .unwrap();
+        let reopened = project_format::open_project(&path).unwrap().document;
+        let back = reopened.layers.get(find(&reopened, "Styled")).unwrap();
+        assert_eq!(back.effects, *e, "effects survive the native save");
+    }
+
+    #[test]
+    fn a_layer_whose_effects_all_map_loses_the_effects_warning() {
+        // The same fixture minus the satin and the disabled glow: every
+        // effect left maps completely, so nothing is named at all.
+        let mut file = psd::PsdFile::new(psd::PsdHeader::rgba8(64, 64));
+        let canvas = psd::Rect::sized(64, 64);
+        let mut styled = psd::PsdLayer::raster("Styled", canvas);
+        styled.set_rgba8(&solid(canvas, GREEN)).unwrap();
+        // Only a drop shadow and a colour overlay, both complete and enabled:
+        // everything present maps, so nothing is named.
+        let unit = |value: f64| psd::Value::UnitFloat {
+            unit: *b"#Prc",
+            value,
+        };
+        let mut s = psd::bytes::Sink::new();
+        s.u32(1);
+        s.u32(16);
+        let mut top = psd::Descriptor::new("Lfx2");
+        let mut drsh = psd::Descriptor::new("DrSh");
+        drsh.push("enab", psd::Value::Bool(true)).unwrap();
+        drsh.push(
+            "Md  ",
+            psd::Value::Enumerated {
+                type_id: "BlnM".into(),
+                value: "Mltp".into(),
+            },
+        )
+        .unwrap();
+        let mut black = psd::Descriptor::new("RGBC");
+        black.push("Rd  ", psd::Value::Double(0.0)).unwrap();
+        black.push("Grn ", psd::Value::Double(0.0)).unwrap();
+        black.push("Bl  ", psd::Value::Double(0.0)).unwrap();
+        drsh.push("Clr ", psd::Value::Descriptor(black)).unwrap();
+        drsh.push("opacity", unit(75.0)).unwrap();
+        drsh.push(
+            "lagl",
+            psd::Value::UnitFloat {
+                unit: *b"#Ang",
+                value: 120.0,
+            },
+        )
+        .unwrap();
+        drsh.push(
+            "Dstn",
+            psd::Value::UnitFloat {
+                unit: *b"#Pxl",
+                value: 8.0,
+            },
+        )
+        .unwrap();
+        drsh.push(
+            "blur",
+            psd::Value::UnitFloat {
+                unit: *b"#Pxl",
+                value: 16.0,
+            },
+        )
+        .unwrap();
+        top.push("DrSh", psd::Value::Descriptor(drsh)).unwrap();
+        let mut sofi = psd::Descriptor::new("SoFi");
+        sofi.push("enab", psd::Value::Bool(true)).unwrap();
+        sofi.push(
+            "Md  ",
+            psd::Value::Enumerated {
+                type_id: "BlnM".into(),
+                value: "Nrml".into(),
+            },
+        )
+        .unwrap();
+        let mut red = psd::Descriptor::new("RGBC");
+        red.push("Rd  ", psd::Value::Double(255.0)).unwrap();
+        red.push("Grn ", psd::Value::Double(0.0)).unwrap();
+        red.push("Bl  ", psd::Value::Double(0.0)).unwrap();
+        sofi.push("Clr ", psd::Value::Descriptor(red)).unwrap();
+        sofi.push("Opct", unit(100.0)).unwrap();
+        top.push("SoFi", psd::Value::Descriptor(sofi)).unwrap();
+        top.write(&mut s).unwrap();
+        let data = s.into_inner();
+        styled.effects = Some(psd::Effects {
+            key: *b"lfx2",
+            data,
+        });
+        file.layers = vec![styled];
+        let bytes = psd::write(&file).unwrap();
+
+        let import = document_from_psd(&bytes, "clean.psd", 10).unwrap();
+        assert!(
+            import.notes.is_empty(),
+            "a fully mapped file says nothing: {:?}",
+            import.notes
+        );
+        let doc = &import.imported.document;
+        let styled = doc.layers.get(find(doc, "Styled")).unwrap();
+        assert!(styled.effects.drop_shadow.is_some());
+        assert_eq!(styled.effects.count(), 2);
+    }
+
+    #[test]
     fn a_deep_bit_depth_document_is_converted_and_the_user_is_told() {
         // A 16-bit document: every sample is two big-endian bytes, so a reader
         // that treats the planes as 8-bit would produce half-width garbage.
@@ -2310,6 +2612,7 @@ mod tests {
             "type layer(s) ({names}) were imported as pixels; the text is no longer editable",
             "type layer(s) ({names}) were imported as editable text with the default font, size and fill — the source font is not in this build's supported subset",
             "layer effect(s) on {names} were not imported",
+            "the {kinds} effect(s) on {names} were not imported",
             "{names} carried a second, vector-derived mask that was not imported",
             "{names} extend past the canvas; the part outside it was not kept",
             "{names} carry a transform a .psd cannot express; their pixels were written              where they are stored",
