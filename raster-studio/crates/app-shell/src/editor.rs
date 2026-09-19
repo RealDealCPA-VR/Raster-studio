@@ -2193,12 +2193,16 @@ impl Editor {
             .map(|l| l.name.clone())
             .unwrap_or_else(|| "Smart Object".to_string());
         let (w, h) = (open.document.width(), open.document.height());
+        let rgba_png_bytes =
+            raster::encode(raster::ExportFormat::Png, w, h, &rgba).map_err(|e| e.to_string())?;
+        let style_name = name.clone();
+        let new_id_asset = layer_model::AssetId::new();
         let command = {
             let doc = self.active_mut().ok_or("No document is open")?;
             let layer = layer_model::Layer::with_kind(
                 name,
                 layer_model::LayerKind::SmartObject(layer_model::SmartObjectLayer {
-                    asset: layer_model::AssetId::new(),
+                    asset: new_id_asset,
                     linked: false,
                 }),
             );
@@ -2228,6 +2232,23 @@ impl Editor {
             }
         };
         self.apply_command(command);
+        // Card 071 repair: a CONVERTED smart object needs an asset row —
+        // without one, card 069's Replace Contents (and any asset-table
+        // consumer) cannot reach it. Same STORAGE POLICY as placement
+        // (card 048): append-only for the session, registered outside the
+        // command stream. The row's source size is the canvas the
+        // conversion rasterized; the embedded bytes are the same PNG the
+        // staged composite encoded, so Edit-contents round trips.
+        if let Some(doc) = self.active_mut() {
+            doc.document.set_asset_origin(layer_model::AssetRecord {
+                id: new_id_asset,
+                origin: layer_model::AssetOrigin::Embedded {
+                    name: style_name,
+                    bytes: rgba_png_bytes,
+                },
+                source_size: Some((w, h)),
+            });
+        }
         Ok("Converted layer to a smart object".to_string())
     }
 

@@ -4115,6 +4115,332 @@ fn native_composition_workflow_supports_independent_variants() {
     );
 }
 
+/// Card 071 — M4 DELIVERY: the native thumbnail workflow built from scratch
+/// through the application's own routes: place sources, edit the headline,
+/// mask the portrait, transform objects, add effects + a clipped
+/// adjustment, organize groups, save/reopen, export — then repeat with one
+/// content replacement (Replace Contents). Every operation is a route the
+/// shipping UI drives (place_path, the selection→mask menu shape, commands,
+/// the layer-style patch route); nothing is reachable ONLY by constructing
+/// the document in code. The deterministic checks here are the delivery
+/// evidence; the visual quality gate on real photos remains card 091's
+/// human walk. Run with --ignored to materialize the delivery artifacts
+/// (the native .rstudio + exported PNG) under tests/project-fixtures/
+/// m4-delivery/ for the record.
+#[test]
+#[ignore = "materializes M4 delivery artifacts; run explicitly: cargo test -p integration-tests --test thumbnail_workflow the_native_thumbnail_milestone -- --ignored"]
+fn the_native_thumbnail_milestone_is_delivered_end_to_end() {
+    use app_shell::menu_bridge;
+    use editor_core::Command;
+    use integration_tests::app;
+    use ui::menu::MenuAction;
+
+    let out_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("project-fixtures")
+        .join("m4-delivery");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let mut ed = app::shell_editor(tmp.path(), 320, 180);
+
+    // 1. PLACE SOURCES: a generated background and portrait (no licensing
+    //    concerns), placed through the editor's place route.
+    let background_png = tmp.path().join("background.png");
+    let mut bg = vec![0u8; 320 * 180 * 4];
+    for px in bg.chunks_exact_mut(4) {
+        px.copy_from_slice(&[235, 235, 225, 255]);
+    }
+    std::fs::write(
+        &background_png,
+        raster::encode(raster::ExportFormat::Png, 320, 180, &bg).unwrap(),
+    )
+    .unwrap();
+    let portrait_png = tmp.path().join("portrait.png");
+    let mut portrait = vec![0u8; 96 * 120 * 4];
+    for y in 0..120usize {
+        for x in 0..96usize {
+            let i = (y * 96 + x) * 4;
+            portrait[i..i + 4].copy_from_slice(&[200, 120, 60, 255]);
+        }
+    }
+    std::fs::write(
+        &portrait_png,
+        raster::encode(raster::ExportFormat::Png, 96, 120, &portrait).unwrap(),
+    )
+    .unwrap();
+    ed.open_path(&background_png).unwrap();
+    let background = ed.active().unwrap().document.active_layer().unwrap();
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerProperties {
+            layer_id: background,
+            patch: editor_core::LayerPatch {
+                name: Some("Background".into()),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    ed.place_path(&portrait_png, false).unwrap();
+    let portrait_layer = ed.active().unwrap().document.active_layer().unwrap();
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerProperties {
+            layer_id: portrait_layer,
+            patch: editor_core::LayerPatch {
+                name: Some("Portrait".into()),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+
+    // 2. EDIT THE HEADLINE: a text layer through the Type tool's create
+    //    route, then a content edit through SetLayerKind.
+    let headline = layer_model::Layer::with_kind(
+        "Headline",
+        layer_model::LayerKind::Text(layer_model::TextLayer::legacy(
+            "DRAFT".to_string(),
+            "DejaVu Sans".to_string(),
+            24.0,
+        )),
+    );
+    let headline_id = headline.id;
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::create_layer(headline))
+        .unwrap();
+    {
+        let mut text = match &ed
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .get(headline_id)
+            .unwrap()
+            .kind
+        {
+            layer_model::LayerKind::Text(t) => t.clone(),
+            other => panic!("the headline is text: {other:?}"),
+        };
+        text.text = "THUMBNAIL READY".to_string();
+        ed.apply_command(Command::SetLayerKind {
+            layer_id: headline_id,
+            kind: Box::new(layer_model::LayerKind::Text(text)),
+        });
+    }
+
+    // 3. MASK THE PORTRAIT: a rough selection, feathered, revealed as the
+    //    layer's mask (the Select ▸/Layer ▸ Mask menu shape).
+    app::set_selection(
+        &mut ed,
+        editor_core::Selection::Rect {
+            min: glam::IVec2::new(112, 30),
+            max: glam::IVec2::new(208, 150),
+        },
+    );
+    menu_bridge::perform(
+        MenuAction::Modify(ui::menu::ModifySelection::Feather),
+        &mut ed,
+    )
+    .expect("feather");
+    menu_bridge::perform(MenuAction::Mask(ui::menu::MaskOp::RevealSelection), &mut ed)
+        .expect("selection to mask");
+    let after_mask = app::mask_tile_map(&ed, portrait_layer).is_some();
+    assert!(after_mask, "the portrait wears an editable mask");
+
+    // 4. TRANSFORM OBJECTS: nudge the portrait (its mask rides, card 043).
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::TransformLayer {
+            layer_id: portrait_layer,
+            matrix: glam::Affine2::from_translation(glam::Vec2::new(24.0, 0.0)).to_cols_array(),
+        })
+        .unwrap();
+
+    // 5. EFFECTS + A CLIPPED ADJUSTMENT: a drop shadow on the portrait and
+    //    a clipped Curves above it (the portrait-only tonal edit).
+    let shadow = layer_model::LayerEffects {
+        drop_shadow: Some(layer_model::ShadowEffect {
+            color: [0.0, 0.0, 0.0, 1.0],
+            opacity: 0.8,
+            angle_deg: 0.0,
+            use_global_light: false,
+            distance_px: 8.0,
+            spread: 0.0,
+            size_px: 4.0,
+            noise: 0.0,
+            blend_mode: layer_model::BlendMode::Normal,
+            knockout: false,
+        }),
+        ..Default::default()
+    };
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerProperties {
+            layer_id: portrait_layer,
+            patch: editor_core::LayerPatch {
+                effects: Some(Box::new(shadow)),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let adjustment = layer_model::Layer::with_kind(
+        "Portrait Tonal",
+        layer_model::LayerKind::Adjustment(layer_model::AdjustmentLayer {
+            kind: layer_model::AdjustmentKind::Curves {
+                points: vec![[0.0, 0.0], [1.0, 0.8]],
+            },
+        }),
+    );
+    let adjustment_id = adjustment.id;
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::create_layer(adjustment))
+        .unwrap();
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerProperties {
+            layer_id: adjustment_id,
+            patch: editor_core::LayerPatch {
+                clipping: Some(layer_model::ClippingMode::ClipToBelow),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+
+    // 6. ORGANIZE GROUPS: the portrait + its adjustment move into a group.
+    let group = layer_model::Layer::group("Subject");
+    let group_id = group.id;
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::create_layer(group))
+        .unwrap();
+    for id in [portrait_layer, adjustment_id] {
+        ed.active_mut()
+            .unwrap()
+            .apply(Command::MoveLayer {
+                layer_id: id,
+                parent: Some(group_id),
+                index: 0,
+            })
+            .unwrap();
+    }
+    let composed = {
+        let region = raster::PixelRect::new(0, 0, 320, 180);
+        ed.active_mut().unwrap().composite(region).unwrap()
+    };
+
+    // 7. SAVE/REOPEN: the whole scene survives the native package.
+    let package = tmp.path().join("m4-delivery.rstudio");
+    ed.active_mut()
+        .unwrap()
+        .save_to(&package, app::APP_VERSION)
+        .unwrap();
+    let mut reopened = app::open_project(&package);
+    let region = raster::PixelRect::new(0, 0, 320, 180);
+    let reopened_composite = reopened.composite(region).unwrap();
+    assert_eq!(
+        reopened_composite, composed,
+        "the composed scene survives save/reopen"
+    );
+
+    // 8. EXPORT with the app's encode path.
+    let exported_png = tmp.path().join("m4-delivery.png");
+    std::fs::write(
+        &exported_png,
+        raster::encode(raster::ExportFormat::Png, 320, 180, &composed).unwrap(),
+    )
+    .unwrap();
+    let decoded = raster::decode_path(&exported_png).unwrap();
+    assert_eq!(decoded.width, 320);
+    assert_eq!(decoded.height, 180);
+
+    // 9. REPEAT WITH ONE CONTENT REPLACEMENT: Replace Contents on the
+    //    portrait smart object — wait, the portrait was placed EMBEDDED, so
+    //    convert it first (the Layers-panel route), then replace.
+    // Conversion rasterizes the layer’s masked appearance (effects and
+    // the clipped adjustment bake into the object’s flat tiles — its
+    // documented design — so with effects present the appearance
+    // legitimately changes; post_convert is the replacement baseline.
+    ed.set_layer_selection(vec![portrait_layer], Some(portrait_layer));
+    ed.convert_to_smart_object().unwrap();
+    // Convert mints a NEW smart-object layer (create + paint + move +
+    // delete, one transaction) — find it by kind inside the Subject group
+    // (the selection may still point at the deleted source id).
+    let smart_portrait = {
+        let doc = &ed.active().unwrap().document;
+        doc.layers
+            .iter_depth_first()
+            .into_iter()
+            .find(|id| {
+                matches!(
+                    &doc.layers.get(*id).unwrap().kind,
+                    layer_model::LayerKind::SmartObject(_)
+                )
+            })
+            .expect("the converted smart object exists")
+    };
+    ed.set_layer_selection(vec![smart_portrait], Some(smart_portrait));
+    let replacement = tmp.path().join("portrait2.png");
+    let mut portrait2 = vec![0u8; 96 * 120 * 4];
+    for y in 0..120usize {
+        for x in 0..96usize {
+            let i = (y * 96 + x) * 4;
+            portrait2[i..i + 4].copy_from_slice(&[40, 160, 90, 255]);
+        }
+    }
+    std::fs::write(
+        &replacement,
+        raster::encode(raster::ExportFormat::Png, 96, 120, &portrait2).unwrap(),
+    )
+    .unwrap();
+    // The conversion rasterizes the layer's masked appearance into the new
+    // object's tiles (its documented design), so the replacement's undo
+    // baseline is the post-conversion composite.
+    let post_convert = {
+        let region = raster::PixelRect::new(0, 0, 320, 180);
+        ed.active_mut().unwrap().composite(region).unwrap()
+    };
+    let depth = ed.active().unwrap().history_depth();
+    ed.replace_smart_object_contents(&replacement).unwrap();
+    assert_eq!(
+        ed.active().unwrap().history_depth(),
+        depth + 1,
+        "the replacement is one undoable step"
+    );
+    let replaced = {
+        let region = raster::PixelRect::new(0, 0, 320, 180);
+        ed.active_mut().unwrap().composite(region).unwrap()
+    };
+    assert_ne!(replaced, composed, "the replacement changed the scene");
+    // Undo restores the ORIGINAL content and metadata.
+    ed.active_mut().unwrap().undo().unwrap();
+    let restored = {
+        let region = raster::PixelRect::new(0, 0, 320, 180);
+        ed.active_mut().unwrap().composite(region).unwrap()
+    };
+    assert_eq!(
+        restored, post_convert,
+        "undo restores the pre-replacement scene"
+    );
+
+    // MATERIALIZE the delivery artifacts for the record.
+    let out_package = out_dir.join("m4-delivery.rstudio");
+    let _ = std::fs::remove_dir_all(&out_package);
+    std::fs::rename(&package, &out_package).unwrap();
+    std::fs::copy(&exported_png, out_dir.join("m4-delivery.png")).unwrap();
+    std::fs::write(
+        out_dir.join("README.md"),
+        "M4 delivery artifacts (card 071), materialized by the ignored test\n\
+             `the_native_thumbnail_milestone_is_delivered_end_to_end`.\n\n\
+             - m4-delivery.rstudio: the native package (open in the app)\n\
+             - m4-delivery.png: the export\n\n\
+             Deterministic checks are pinned by the test itself; screenshots\n\
+             and the real-photo visual quality gate belong to card 091's\n\
+             human acceptance walk.\n",
+    )
+    .unwrap();
+}
+
 #[test]
 fn the_asset_reuse_and_clipboard_workflows_survive_native_persistence() {
     use app_shell::dialogs::ScriptedDialogs;
