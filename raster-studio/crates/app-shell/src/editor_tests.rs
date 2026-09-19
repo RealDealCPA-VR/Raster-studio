@@ -1192,6 +1192,163 @@ fn export_writes_the_composite_of_the_document() {
 }
 
 #[test]
+fn layer_styles_are_reusable_across_layers_and_restarts() {
+    use editor_core::{Command, LayerPatch};
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_png(dir.path(), "a.png", 300, 200, 44);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&a).unwrap();
+
+    fn shadow_stroke_effects() -> layer_model::LayerEffects {
+        layer_model::LayerEffects {
+            drop_shadow: Some(layer_model::ShadowEffect {
+                color: [0.0, 0.0, 0.0, 1.0],
+                opacity: 0.9,
+                angle_deg: 0.0,
+                use_global_light: false,
+                distance_px: 12.0,
+                spread: 0.0,
+                size_px: 4.0,
+                noise: 0.0,
+                blend_mode: layer_model::BlendMode::Normal,
+                knockout: false,
+            }),
+            stroke: Some(layer_model::StrokeEffect {
+                size_px: 5.0,
+                position: layer_model::StrokePosition::Outside,
+                blend_mode: layer_model::BlendMode::Normal,
+                opacity: 1.0,
+                fill: layer_model::FillStyle::Solid([0.0, 0.0, 1.0, 1.0]),
+                overprint: false,
+            }),
+            ..Default::default()
+        }
+    }
+
+    // Two "headline" layers: A gets the style, B stays clean.
+    let layer_a = ed.active().unwrap().document.active_layer().unwrap();
+    let layer_b = {
+        let layer = layer_model::Layer::raster("Headline B");
+        let id = layer.id;
+        ed.active_mut()
+            .unwrap()
+            .apply(Command::create_layer(layer))
+            .unwrap();
+        ed.set_layer_selection(vec![id], Some(id));
+        id
+    };
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerProperties {
+            layer_id: layer_a,
+            patch: LayerPatch {
+                effects: Some(Box::new(shadow_stroke_effects())),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+
+    // COPY from A; PASTE onto B — one undoable step, style fields ONLY.
+    ed.set_layer_selection(vec![layer_a], Some(layer_a));
+    ed.copy_layer_style().unwrap();
+    ed.set_layer_selection(vec![layer_b], Some(layer_b));
+    let b_before = ed.active().unwrap().document.layers.get(layer_b).unwrap();
+    let (name_before, transform_before, kind_before) = (
+        b_before.name.clone(),
+        b_before.transform,
+        b_before.kind.clone(),
+    );
+    let depth = ed.active().unwrap().history_depth();
+    ed.paste_layer_style().unwrap();
+    {
+        let doc = ed.active().unwrap();
+        let b = doc.document.layers.get(layer_b).unwrap();
+        assert_eq!(b.effects, shadow_stroke_effects(), "B wears A's style");
+        assert_eq!(b.name, name_before, "the name is untouched");
+        assert_eq!(b.transform, transform_before, "the transform is untouched");
+        assert_eq!(b.kind, kind_before, "the layer kind is untouched");
+        assert!(b.mask.is_none(), "no mask is created by a style paste");
+        assert_eq!(
+            doc.history_depth(),
+            depth + 1,
+            "one paste is one undoable step"
+        );
+    }
+    ed.active_mut().unwrap().undo().unwrap();
+    assert!(
+        ed.active()
+            .unwrap()
+            .document
+            .layers
+            .get(layer_b)
+            .unwrap()
+            .effects
+            .is_default(),
+        "undo restores B's previous (default) style"
+    );
+    ed.active_mut().unwrap().redo().unwrap();
+
+    // NAMED PRESET: define from A, apply to a third layer, and it survives
+    // a restart (the preset store persists through `persist`).
+    ed.set_layer_selection(vec![layer_a], Some(layer_a));
+    ed.define_style_preset().unwrap();
+    assert_eq!(ed.presets().styles().len(), 1, "the preset is stored");
+    let layer_c = {
+        let layer = layer_model::Layer::raster("Headline C");
+        let id = layer.id;
+        ed.active_mut()
+            .unwrap()
+            .apply(Command::create_layer(layer))
+            .unwrap();
+        ed.set_layer_selection(vec![id], Some(id));
+        id
+    };
+    let depth = ed.active().unwrap().history_depth();
+    ed.apply_latest_style_preset().unwrap();
+    assert_eq!(
+        ed.active()
+            .unwrap()
+            .document
+            .layers
+            .get(layer_c)
+            .unwrap()
+            .effects,
+        shadow_stroke_effects(),
+        "the preset applies A's style to C"
+    );
+    assert_eq!(
+        ed.active().unwrap().history_depth(),
+        depth + 1,
+        "one preset apply is one undoable step"
+    );
+    ed.persist().unwrap();
+    // "Restart": a fresh editor over the SAME config root loads the
+    // persisted preset store and re-applies the preset.
+    let mut restarted = bare(dir.path(), ScriptedDialogs::new());
+    assert_eq!(
+        restarted.presets().styles().len(),
+        1,
+        "the preset survived the restart"
+    );
+    restarted.open_path(&a).unwrap();
+    restarted.apply_latest_style_preset().unwrap();
+    let active = restarted.active().unwrap().document.active_layer().unwrap();
+    assert_eq!(
+        restarted
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .get(active)
+            .unwrap()
+            .effects,
+        shadow_stroke_effects(),
+        "the preset re-applies after a restart"
+    );
+    let _ = layer_c;
+}
+
+#[test]
 fn duplicating_a_layer_copies_its_pixels_without_copying_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_png(dir.path(), "a.png", 300, 200, 44);

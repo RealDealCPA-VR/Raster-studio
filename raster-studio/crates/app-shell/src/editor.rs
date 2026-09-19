@@ -585,6 +585,10 @@ pub struct Editor {
     /// needs a platform clipboard and an encode/decode of the payload) and
     /// nothing here depends on which side of it the pixels live on.
     clipboard: Option<Clipboard>,
+    /// Card 067: the style block Copy Layer Style captured — style fields
+    /// ONLY (never position, masks, text, or asset identity), pasted by
+    /// `paste_layer_style` as one wholesale `LayerPatch::effects` replace.
+    copied_style: Option<layer_model::LayerEffects>,
     /// The sticky content-vs-mask target per document. Validity is computed at
     /// read time — see [`crate::edit_target`]. Card 007.
     pub(crate) edit_targets: crate::edit_target::EditTargets,
@@ -729,6 +733,7 @@ impl Editor {
             revision: 0,
             kind_gesture: None,
             clipboard: None,
+            copied_style: None,
             edit_targets: crate::edit_target::EditTargets::default(),
             edit_sessions: crate::edit_session::EditSessions::default(),
             embedded: None,
@@ -2550,6 +2555,100 @@ impl Editor {
 
     /// Edit ▸ Define Brush Preset: store the active tool's brush settings
     /// under a counter-suffixed name (the menu item opens no dialog).
+    /// Card 067: capture the ACTIVE layer's style block (style fields only —
+    /// the `LayerEffects` struct cannot hold position, masks, text, or asset
+    /// identity by construction).
+    pub fn copy_layer_style(&mut self) -> Result<String, String> {
+        let layer = self
+            .active()
+            .and_then(|d| d.document.active_layer())
+            .ok_or_else(|| "No document is open".to_string())?;
+        let effects = {
+            let doc = self.active().ok_or("No document is open")?;
+            doc.document.layers.get(layer).unwrap().effects.clone()
+        };
+        self.copied_style = Some(effects);
+        Ok("Copied the layer style".to_string())
+    }
+
+    /// Card 067: paste the copied style onto the ACTIVE layer — ONE
+    /// undoable step (the wholesale `LayerPatch::effects` replace; its
+    /// inverse restores the previous style block). Only style fields move.
+    pub fn paste_layer_style(&mut self) -> Result<String, String> {
+        let effects = self
+            .copied_style
+            .clone()
+            .ok_or_else(|| "No layer style has been copied".to_string())?;
+        let layer = self
+            .active()
+            .and_then(|d| d.document.active_layer())
+            .ok_or_else(|| "No document is open".to_string())?;
+        self.active_mut()
+            .ok_or_else(|| "No document is open".to_string())?
+            .apply(Command::SetLayerProperties {
+                layer_id: layer,
+                patch: editor_core::LayerPatch {
+                    effects: Some(Box::new(effects)),
+                    ..Default::default()
+                },
+            })
+            .map_err(|e| e.to_string())?;
+        Ok("Pasted the layer style".to_string())
+    }
+
+    /// Card 067: store the ACTIVE layer's style as the next named preset —
+    /// a full snapshot of the style block, persisted with the preset store
+    /// (survives restart via `persist`).
+    pub fn define_style_preset(&mut self) -> Result<String, String> {
+        let layer = self
+            .active()
+            .and_then(|d| d.document.active_layer())
+            .ok_or_else(|| "No document is open".to_string())?;
+        let effects = {
+            let doc = self.active().ok_or("No document is open")?;
+            doc.document.layers.get(layer).unwrap().effects.clone()
+        };
+        if effects.is_default() {
+            return Err("The layer has no style to define".to_string());
+        }
+        let name = format!("Style {}", self.presets.styles().len() + 1);
+        let json = serde_json::to_string(&effects).map_err(|e| e.to_string())?;
+        self.presets.define_style(&name, json);
+        Ok(format!("Defined style preset \"{name}\""))
+    }
+
+    /// Card 067: apply the most recently defined style preset to the ACTIVE
+    /// layer — ONE undoable step (the same wholesale replace as a paste).
+    pub fn apply_latest_style_preset(&mut self) -> Result<String, String> {
+        let (name, json) = self
+            .presets
+            .latest_style()
+            .cloned()
+            .ok_or_else(|| "No style preset has been defined".to_string())?;
+        let effects: layer_model::LayerEffects =
+            serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        let layer = self
+            .active()
+            .and_then(|d| d.document.active_layer())
+            .ok_or_else(|| "No document is open".to_string())?;
+        self.active_mut()
+            .ok_or_else(|| "No document is open".to_string())?
+            .apply(Command::SetLayerProperties {
+                layer_id: layer,
+                patch: editor_core::LayerPatch {
+                    effects: Some(Box::new(effects)),
+                    ..Default::default()
+                },
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(format!("Applied style preset \"{name}\""))
+    }
+
+    /// Card 067: the captured style block, if any (the Paste gate reads it).
+    pub fn copied_style(&self) -> Option<&layer_model::LayerEffects> {
+        self.copied_style.as_ref()
+    }
+
     pub fn define_brush_preset(&mut self) -> Result<String, String> {
         let tool = self.effective_tool();
         let settings = self.brush_for(tool);

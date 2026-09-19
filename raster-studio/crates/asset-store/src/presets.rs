@@ -44,7 +44,14 @@ impl PatternPreset {
 /// offers back.
 #[derive(Clone, PartialEq, Debug, Default, Serialize, Deserialize)]
 pub struct PresetStore {
+    #[serde(default)]
     patterns: Vec<PatternPreset>,
+    /// Named layer-style presets: `(name, serialized LayerEffects JSON)`.
+    /// The store crate deliberately does not depend on `layer-model`; the
+    /// application serializes at its own edge (the same contract as the
+    /// brushes' JSON).
+    #[serde(default)]
+    styles: Vec<(String, String)>,
     /// `(name, serialized settings)` — the application owns the schema.
     brushes: Vec<(String, String)>,
 }
@@ -100,9 +107,30 @@ impl PresetStore {
         &self.brushes
     }
 
+    /// Store a layer-style preset, replacing any of the same name.
+    pub fn define_style(&mut self, name: &str, effects_json: String) {
+        let slot = (name.to_string(), effects_json);
+        if let Some(existing) = self.styles.iter_mut().find(|(n, _)| n == name) {
+            *existing = slot;
+        } else {
+            self.styles.push(slot);
+        }
+    }
+
+    /// Every style preset, oldest first.
+    pub fn styles(&self) -> &[(String, String)] {
+        &self.styles
+    }
+
+    /// The most recently defined style preset — what an unnamed menu item
+    /// offers back (the same rule as [`Self::latest_pattern`]).
+    pub fn latest_style(&self) -> Option<&(String, String)> {
+        self.styles.last()
+    }
+
     /// Whether anything at all is stored.
     pub fn is_empty(&self) -> bool {
-        self.patterns.is_empty() && self.brushes.is_empty()
+        self.patterns.is_empty() && self.brushes.is_empty() && self.styles.is_empty()
     }
 
     /// Write the store as one pretty JSON document.

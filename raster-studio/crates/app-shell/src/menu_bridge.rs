@@ -1297,6 +1297,10 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         | MenuAction::Rasterize(ui::menu::RasterizeTarget::Layer)
         | MenuAction::Rasterize(ui::menu::RasterizeTarget::SmartObject) => editor.rasterize_layer(),
         MenuAction::DefinePattern => editor.define_pattern_from_selection(),
+        MenuAction::CopyLayerStyle => editor.copy_layer_style(),
+        MenuAction::PasteLayerStyle => editor.paste_layer_style(),
+        MenuAction::DefineStylePreset => editor.define_style_preset(),
+        MenuAction::ApplyStylePreset => editor.apply_latest_style_preset(),
         MenuAction::DefineBrush => editor.define_brush_preset(),
         MenuAction::Rasterize(ui::menu::RasterizeTarget::AllLayers) => editor.flatten_all_layers(),
         MenuAction::NewFillLayer(ui::menu::FillLayerKind::SolidColor) => {
@@ -5718,6 +5722,17 @@ mod tests {
                 // Define Brush Preset stores a *brush*, not pixels — the
                 // digest cannot move; `defining_a_brush_preset_offers_it_
                 // again_after_a_restart` pins the persistence instead.
+                // Card 067's style controls: Copy captures a session field
+                // (the digest cannot move), Define stores a preset (the
+                // same store as Define Brush), and Paste/Apply refuse
+                // LOUDLY when nothing was copied/defined — the correct
+                // answer with no style in flight. The dedicated test
+                // `layer_styles_are_reusable_across_layers_and_restarts`
+                // pins the real sequences.
+                || action == MenuAction::CopyLayerStyle
+                || action == MenuAction::PasteLayerStyle
+                || action == MenuAction::DefineStylePreset
+                || action == MenuAction::ApplyStylePreset
                 || action == MenuAction::DefineBrush
                 // New ▸ Fill Layer ▸ Pattern needs a user-defined pattern;
                 // `a_new_pattern_fill_layer_tiles_the_latest_pattern` drives

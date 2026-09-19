@@ -959,6 +959,17 @@ pub enum MenuAction {
     ReleaseClippingMask,
     BlendingOptions,
     LayerStyle(EffectSlot),
+    /// Card 067: capture the active layer's style block (style fields only).
+    CopyLayerStyle,
+    /// Card 067: paste the captured style onto the active layer — one
+    /// undoable wholesale effects replace.
+    PasteLayerStyle,
+    /// Card 067: store the active layer's style as the next named preset
+    /// (survives restart via the preset store).
+    DefineStylePreset,
+    /// Card 067: apply the most recently defined style preset — one
+    /// undoable step.
+    ApplyStylePreset,
     ClearLayerStyle,
     ConvertToSmartObject,
     EditSmartObjectContents,
@@ -1471,6 +1482,10 @@ impl MenuAction {
             MenuAction::BlendingOptions,
         ]);
         out.extend(EffectSlot::ALL.iter().copied().map(MenuAction::LayerStyle));
+        out.push(MenuAction::CopyLayerStyle);
+        out.push(MenuAction::PasteLayerStyle);
+        out.push(MenuAction::DefineStylePreset);
+        out.push(MenuAction::ApplyStylePreset);
         out.push(MenuAction::ClearLayerStyle);
         out.push(MenuAction::ConvertToSmartObject);
         out.push(MenuAction::EditSmartObjectContents);
@@ -1633,6 +1648,10 @@ impl MenuAction {
             MenuAction::FilterGallery => "Filter Gallery…".into(),
             MenuAction::RefineMask => "Refine Mask…".into(),
             MenuAction::RemoveColorFringe => "Remove Color Fringe…".into(),
+            MenuAction::CopyLayerStyle => "Copy Layer Style".into(),
+            MenuAction::PasteLayerStyle => "Paste Layer Style".into(),
+            MenuAction::DefineStylePreset => "New Style Preset".into(),
+            MenuAction::ApplyStylePreset => "Apply Latest Style Preset".into(),
             MenuAction::Filter(f) => f.label().into(),
 
             MenuAction::Zoom(z) => z.label().into(),
@@ -2080,6 +2099,23 @@ impl MenuAction {
                     act(MenuAction::RefineMask),
                 )
             }
+            MenuAction::CopyLayerStyle | MenuAction::DefineStylePreset => {
+                // Card 067: both capture the ACTIVE layer's style block.
+                match ctx.need_layer() {
+                    Ok(_) => act(self),
+                    Err(r) => Resolution::Disabled(r),
+                }
+            }
+            MenuAction::PasteLayerStyle | MenuAction::ApplyStylePreset => {
+                // Card 067: both replace the ACTIVE layer's style (one
+                // undoable step); a missing capture/preset is a runtime
+                // error the status bar reports, not a disabled item — the
+                // menu cannot see the session clipboard.
+                match ctx.need_layer() {
+                    Ok(_) => act(self),
+                    Err(r) => Resolution::Disabled(r),
+                }
+            }
             MenuAction::RemoveColorFringe => {
                 // Card 062: the fringe cleanup samples the ACTIVE layer's
                 // mask boundary — same gate as RefineMask, a different edit.
@@ -2434,6 +2470,11 @@ fn layer_menu() -> Menu {
             Entry::submenu("Layer Style", {
                 let mut e = vec![item(MenuAction::BlendingOptions), Entry::Separator];
                 e.extend(items(EffectSlot::ALL, MenuAction::LayerStyle));
+                e.push(Entry::Separator);
+                e.push(item(MenuAction::CopyLayerStyle));
+                e.push(item(MenuAction::PasteLayerStyle));
+                e.push(item(MenuAction::DefineStylePreset));
+                e.push(item(MenuAction::ApplyStylePreset));
                 e.push(Entry::Separator);
                 e.push(item(MenuAction::ClearLayerStyle));
                 e
