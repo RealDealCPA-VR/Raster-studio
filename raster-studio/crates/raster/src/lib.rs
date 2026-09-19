@@ -28,8 +28,8 @@ pub mod tile;
 
 pub use codec::{
     decode_bytes, decode_path, decode_surface_bytes, decode_surface_bytes_as, decode_surface_path,
-    decode_surface_reader, encode, encode_into, encode_to_path, encode_with, probe_bytes,
-    probe_bytes_as, probe_path, probe_reader, AlphaSupport, CodecError, DecodedImage,
+    decode_surface_reader, encode, encode_into, encode_to_path, encode_with, icc_profile_space,
+    probe_bytes, probe_bytes_as, probe_path, probe_reader, AlphaSupport, CodecError, DecodedImage,
     DecodedSurface, EncodeOptions, EncodedPixels, ExportFormat, ImageInfo, ImportFormat,
     ImportLimits, SurfacePixels,
 };

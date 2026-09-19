@@ -397,6 +397,44 @@ impl MatrixShaper {
             self.trc[2].encode(lin_dev[2]),
         ]
     }
+
+    /// Whether this profile maps encoded RGB to linear sRGB the same way the
+    /// standard sRGB space does, sampled over primaries, secondaries and grey.
+    ///
+    /// Used to answer "is this tag worth keeping?": a profile that is
+    /// measurably sRGB needs no separate colour space — treating its pixels
+    /// as sRGB is exact, not an approximation. The comparison runs through
+    /// the profile's own decode, so primaries *and* tone curves are both
+    /// exercised (an sRGB-matrix profile with an identity curve is NOT
+    /// sRGB-equivalent and must not claim to be). The tolerance is a quarter
+    /// of an 8-bit step, far below anything an untagged-vs-tagged mistake
+    /// would produce.
+    pub fn is_srgb_equivalent(&self) -> bool {
+        const SAMPLES: [[f32; 3]; 9] = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [0.5, 0.5, 0.5],
+            [0.25, 0.75, 0.5],
+            [0.18, 0.18, 0.18],
+        ];
+        const TOLERANCE: f32 = 0.25 / 255.0;
+        for rgb in SAMPLES {
+            let got = self.to_linear_srgb(rgb);
+            let expected = crate::transfer::srgb_to_linear3(rgb);
+            if got
+                .iter()
+                .zip(expected)
+                .any(|(a, b)| (a - b).abs() > TOLERANCE)
+            {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 fn read_xyz(tag: &[u8]) -> Result<[f32; 3], IccError> {
@@ -598,6 +636,38 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A profile with sRGB primaries and the true sRGB tone curve — the
+    /// sample-table spelling of it. This is what "sRGB-equivalent" means.
+    fn srgb_profile(n: usize) -> Vec<u8> {
+        let mut b = gamma_profile(SRGB_PRIMARIES, 2.2, n);
+        // Patch the three TRC tables (they sit after the 60 bytes of
+        // colourant XYZ) with the real sRGB curve.
+        let trc_start = 128 + 4 + 7 * 12 + 60;
+        let trc_sz = 12 + n * 2;
+        for c in 0..3 {
+            let at = trc_start + c * trc_sz + 12;
+            for i in 0..n {
+                // An ICC `curv` table maps the ENCODED device value (the
+                // index) to linear, so the entries are the sRGB decode.
+                let enc = i as f32 / (n - 1) as f32;
+                let lin = crate::transfer::srgb_to_linear3([enc; 3])[0] * 65535.0;
+                let v = (lin.round() as u16).to_be_bytes();
+                b[at + i * 2..at + i * 2 + 2].copy_from_slice(&v);
+            }
+        }
+        b
+    }
+
+    #[test]
+    fn an_srgb_curve_with_srgb_primaries_is_srgb_equivalent_but_gamma_2_2_is_not() {
+        let srgb = MatrixShaper::parse(&srgb_profile(256)).unwrap();
+        assert!(srgb.is_srgb_equivalent());
+        // Same primaries, a 2.2 curve: measurably not the sRGB transfer, so
+        // equivalence must not be claimed.
+        let g22 = MatrixShaper::parse(&gamma_profile(SRGB_PRIMARIES, 2.2, 256)).unwrap();
+        assert!(!g22.is_srgb_equivalent());
     }
 
     #[test]

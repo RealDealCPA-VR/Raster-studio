@@ -696,11 +696,21 @@ impl ImportLimits {
 /// imported files collapse to one asset.
 fn color_space_for(profile: Option<&Vec<u8>>) -> ColorSpace {
     match profile {
-        Some(bytes) => ColorSpace::IccProfile {
-            asset_hash: blake3::hash(bytes).to_hex().to_string(),
-            profile: bytes.clone(),
-        },
+        Some(bytes) => icc_profile_space(bytes),
         None => ColorSpace::Srgb,
+    }
+}
+
+/// An [`ColorSpace::IccProfile`] carrying `profile`'s own bytes, hashed the
+/// way every other carrier of that space hashes them.
+///
+/// Public so importers that keep profiles the flat codecs never see — a `.psd`'s
+/// resource 1039 — record the space identically instead of inventing a second
+/// spelling of the same variant.
+pub fn icc_profile_space(profile: &[u8]) -> ColorSpace {
+    ColorSpace::IccProfile {
+        asset_hash: blake3::hash(profile).to_hex().to_string(),
+        profile: profile.to_vec(),
     }
 }
 

@@ -395,14 +395,30 @@ fn read_mask(cur: &mut Cursor<'_>, opts: &ReadOptions) -> PsdResult<Option<PsdMa
     let default_color = cur.u8()?;
     let flags = cur.u8()?;
 
+    let mut mask = PsdMask {
+        bounds,
+        default_color,
+        relative_to_layer: flags & 0b1 != 0,
+        disabled: flags & 0b10 != 0,
+        invert: flags & 0b100 != 0,
+        from_render: flags & 0b1000 != 0,
+        density: 255,
+        feather_px: 0.0,
+        data: Vec::new(),
+        real: None,
+    };
+
     if flags & 0b1_0000 != 0 {
-        // Mask parameters, present only when bit 4 says so.
+        // Mask parameters, present only when bit 4 says so. The user-mask
+        // density and feather parameterise *this* mask; the vector-mask pair
+        // parameterises the vector mask, which this model keeps only as the
+        // `real` record — skipped, not lost (the bytes stay in the section).
         let params = cur.u8()?;
         if params & 0b1 != 0 {
-            cur.skip(1)?; // user mask density
+            mask.density = cur.u8()?;
         }
         if params & 0b10 != 0 {
-            cur.skip(8)?; // user mask feather
+            mask.feather_px = cur.f64()?;
         }
         if params & 0b100 != 0 {
             cur.skip(1)?; // vector mask density
@@ -411,17 +427,6 @@ fn read_mask(cur: &mut Cursor<'_>, opts: &ReadOptions) -> PsdResult<Option<PsdMa
             cur.skip(8)?; // vector mask feather
         }
     }
-
-    let mut mask = PsdMask {
-        bounds,
-        default_color,
-        relative_to_layer: flags & 0b1 != 0,
-        disabled: flags & 0b10 != 0,
-        invert: flags & 0b100 != 0,
-        from_render: flags & 0b1000 != 0,
-        data: Vec::new(),
-        real: None,
-    };
 
     if cur.remaining() >= 18 {
         let real_flags = cur.u8()?;

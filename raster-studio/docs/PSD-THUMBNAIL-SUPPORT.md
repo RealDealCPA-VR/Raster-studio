@@ -33,9 +33,9 @@ byte slice, and opening a file writes nothing.
 | Layer name, bounds, visibility | **Editable** | |
 | Blend mode, opacity, fill opacity | **Editable** | Modelled on both sides (`psd::BlendMode` ↔ `BlendMode`). |
 | Clipping ("clipped to layer below") | **Editable** | `ClippingMode::ClipToBelow`. |
-| Raster layer pixels (8-bit, incl. RLE/ZIP channels) | **Editable** | Tiles stored at the layer's own bounds; part outside the canvas is dropped and named — "the part outside it was not kept". |
-| Layer masks (8-bit coverage) | **Editable** | Imported as raster mask coverage at the mask's bounds, honouring the default colour. |
-| Mask density / feather parameters | **Appearance fallback** | Coverage is kept; the parameters are not modelled — "the mask density or feather on … was not written". |
+| Raster layer pixels (8-bit, incl. RLE/ZIP channels) | **Editable** | Tiles stored at the layer's own bounds; **full extents preserved** — ink outside the canvas is kept in the tile store and moves into view with the layer (or shows in an extended-region composite) rather than being dropped at import. |
+| Layer masks (8-bit coverage) | **Editable** | Imported as raster mask coverage at the mask's bounds, honouring the default colour; the default-colour region extends past the canvas the same way the layer extents do. |
+| Mask density / feather parameters | **Editable** | Card 076: density (`0..=255`) maps onto the model's `0.0..=1.0`; feather is stored in pixels, already the model's `feather_px` unit (a `.psd` mask has no space of its own beyond its layer's). The import note only fires for values the model refuses — a non-finite feather. (Export still does not write the parameters — see the export matrix.) |
 | Vector masks | **Appearance fallback** | Written as their rasterised coverage — "the vector mask on … was written as its rasterised coverage". A second, vector-derived mask "was not imported" by name. |
 | Adjustment layers — **Invert** (`nvrt`) | **Editable** | The one adjustment whose whole definition is its name. |
 | Adjustment layers — everything else | **Unsupported (explicit)** | The payload survives in `psd`'s model but this build will not invent slider values: the layer is kept empty and named — "adjustment layer(s) … were kept as empty layers; their effect is in the flattened image but not editable". |
@@ -43,7 +43,7 @@ byte slice, and opening a file writes nothing.
 | Type layers — unparseable (`Txt ` missing or unreadable) | **Appearance fallback** | Pixels are imported; the text is not editable — "type layer(s) … were imported as pixels; the text is no longer editable". |
 | Layer effects — drop shadow, solid stroke, solid colour overlay, outer glow | **Editable** | Card 075: decoded from the `lfx2` descriptor into parameters (`crates/psd/src/effects.rs`): the enabled flag and master switch, blend mode, colour (stored gamma-encoded as document-space 0..1 — decoded to linear at render by the compositor, the same convention the 8-bit pixel path uses), opacity, radius/size, distance, angle and spread (stored as a fraction of size), and the block scale applied to every pixel length. An effect the file switches off stays absent — nothing is invented. The verbatim `lfx2` bytes are also retained on every layer, but **retention is not rendering**. |
 | Layer effects — everything else | **Unsupported (explicit)** | Inner shadow/glow, bevel, satin, gradient/pattern overlays, a gradient or pattern stroke, or any effect with required fields missing: named per effect kind — "the {kinds} effect(s) on {names} were not imported". A block that cannot be decoded at all keeps the blanket note — "layer effect(s) on {names} were not imported". |
-| Embedded ICC profile | **Unsupported (explicit)** | `psd::read` keeps resources as opaque bytes and the import leaves the profile behind by name — “… the colour profile — are not part of this document model and were left behind”. (Card 047's keep-and-retag contract is the generic raster-codec path, not `psd::read`.) |
+| Embedded ICC profile | **Retained (metadata)** | Card 076: resource 1039 is extracted (`psd::resource::icc_profile`) and its bytes ride in the document's colour space (`ColorSpace::IccProfile`, hashed like every other carrier of the variant). The pixels are NOT transformed at import — deliberate, documented: they load verbatim, the compositor converts matrix-shaper profiles at render, and a profile this engine cannot parse falls back to identity (`is_transform_supported`) rather than being silently reinterpreted. A profile that is measurably sRGB (`MatrixShaper::is_srgb_equivalent`, sampled over primaries and tone curves) is recorded as sRGB — exact, so the bytes are redundant. When a profile is retained, the resources note drops "the colour profile" from its list. |
 | Smart objects (cached composite pixels) | **Appearance fallback** | The cached pixels import as a raster layer; the placed-source identity does not survive the trip (a `.psd` stores a different structure). |
 | Layer transforms (arbitrary affines) | **Appearance fallback** | Where a `.psd` cannot express the stored transform, pixels are written where they are stored — "… their pixels were written where they are stored". |
 | Layer locks (composite/pixels, transparency protect) | **Editable** | Round-trip both directions (import `import.rs:899–905`, export `psd_layers_for`). A PSD never produces a blanket lock; the "no .psd equivalent" note is export-side only — a blanket lock authored here "has no .psd equivalent and was not written". |
@@ -77,7 +77,6 @@ honesty gate in `import.rs` asserts this file keeps quoting every one:
 - "layer effect(s) on {names} were not imported"
 - "the {kinds} effect(s) on {names} were not imported" ({kinds} names the unmapped effect kinds, e.g. "satin and inner shadow")
 - "{names} carried a second, vector-derived mask that was not imported"
-- "{names} extend past the canvas; the part outside it was not kept"
 - "{names} carry a transform a .psd cannot express; their pixels were written where they are stored"
 - "{names} are a kind a .psd has no home for and were written as empty layers"
 - "the mask density or feather on {names} was not written"
@@ -89,8 +88,12 @@ honesty gate in `import.rs` asserts this file keeps quoting every one:
 
 1. **Nothing silent.** Every fallback and refusal pushes a status note
    naming the affected layers (two shown, then "and N more"); resources
-   the document cannot carry (guides, paths, the colour profile) are
-   counted and named as left behind.
+   the document cannot carry are counted and named as left behind:
+   "{n} image resource(s) — guides, paths, the colour profile — are not part of this document model and were left behind".
+   When a profile is embedded and retained, "the colour profile" is
+   dropped from that list; when no profile is embedded, or the embedded
+   one is measurably sRGB (treated as sRGB, bytes redundant), the wording
+   above stands.
 2. **No invented numbers.** A payload this build cannot evaluate is
    never decoded into guessed parameters ("inventing one would put the
    wrong numbers behind a slider").

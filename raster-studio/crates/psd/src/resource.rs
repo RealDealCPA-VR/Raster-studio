@@ -25,6 +25,10 @@ pub const RESOURCE_SIGNATURE: [u8; 4] = *b"8BIM";
 /// Resource id 1005: pixels per inch for both axes, plus display units.
 pub const ID_RESOLUTION_INFO: u16 = 1005;
 
+/// Resource id 1039: the embedded ICC profile (an `icc` block, the raw bytes
+/// of the profile itself).
+pub const ID_ICC_PROFILE: u16 = 1039;
+
 /// Parse the whole section from a cursor bounded to it.
 pub fn read_resources(
     cur: &mut Cursor<'_>,
@@ -108,6 +112,20 @@ pub fn resolution_dpi(r: &ImageResource) -> Option<f64> {
     }
     let fixed = u32::from_be_bytes([r.data[0], r.data[1], r.data[2], r.data[3]]);
     Some(f64::from(fixed) / 65536.0)
+}
+
+/// The embedded ICC profile — resource 1039 — as the raw profile bytes.
+///
+/// Photoshop writes one profile per file; if several claim the id, the first
+/// wins, matching how a reader elsewhere treats single-instance resources.
+/// `None` when the file carries no profile (or an empty one, which carries no
+/// information either).
+pub fn icc_profile(resources: &[ImageResource]) -> Option<&[u8]> {
+    resources
+        .iter()
+        .find(|r| r.id == ID_ICC_PROFILE)
+        .map(|r| r.data.as_slice())
+        .filter(|d| !d.is_empty())
 }
 
 #[cfg(test)]

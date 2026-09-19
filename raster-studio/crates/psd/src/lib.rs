@@ -48,9 +48,11 @@
 //! * **PSB** (`.psb`, version 2) is refused with
 //!   [`PsdError::UnsupportedVersion`]; its 64-bit section lengths are a
 //!   different parse.
-//! * **Mask parameters** (per-mask density and feather, flag bit 4) are skipped
-//!   on read, and the writer never claims to have them. A file that had them
-//!   loses them on a save; nothing is misread.
+//! * **Vector-mask parameters** (the vector mask's own density and feather in
+//!   the parameter block) are skipped — the model keeps the vector mask only
+//!   as the `real` record. The raster mask's density and feather ARE parsed
+//!   ([`model::PsdMask::density`] / [`model::PsdMask::feather_px`]) and
+//!   written back.
 //! * **Adjustment payloads** are preserved but not decoded into
 //!   `layer_model::AdjustmentKind`; [`model::Adjustment::descriptor`] gives a
 //!   caller the parsed tree to do it from.

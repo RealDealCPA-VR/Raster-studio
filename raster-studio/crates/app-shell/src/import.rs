@@ -442,7 +442,6 @@ struct Tally {
     /// does not map — or lists with required fields missing.
     unmapped_effects: Vec<(String, String)>,
     second_masks: Vec<String>,
-    off_canvas: Vec<String>,
     transformed: Vec<String>,
     no_pixels: Vec<String>,
     mask_params: Vec<String>,
@@ -476,7 +475,7 @@ fn kinds_phrase(kinds: &[String]) -> String {
 
 impl Tally {
     fn record(&mut self, notes: &mut PsdNotes) {
-        let entries: [(&[String], &str); 13] = [
+        let entries: [(&[String], &str); 12] = [
             (
                 &self.color_labels,
                 "the colour label on {names} is not shown by this layers panel and was not kept",
@@ -502,10 +501,6 @@ impl Tally {
             (
                 &self.second_masks,
                 "{names} carried a second, vector-derived mask that was not imported",
-            ),
-            (
-                &self.off_canvas,
-                "{names} extend past the canvas; the part outside it was not kept",
             ),
             (
                 &self.transformed,
@@ -819,16 +814,18 @@ fn psd_merged_rgba(file: &psd::PsdFile) -> Option<Vec<u8>> {
 
 /// Cut an image that sits at `rect` in document space into level-0 tiles.
 ///
-/// Everything outside the canvas is dropped — a tile grid is addressed from the
-/// canvas origin, and a layer hanging off the left edge has no coordinates to
-/// live at. The caller reports that where it happens.
+/// Card 076: the FULL extent is kept — `rect` may reach past the canvas and
+/// the tiles outside it are stored anyway. A tile coordinate is a signed
+/// `(x, y, level)` pair, so a layer hanging off the left edge has real
+/// coordinates to live at, and the ink outside the canvas survives import:
+/// moving the layer (or compositing an extended region) brings it into view.
+/// Dropping it would be a destructive edit performed on open.
 ///
 /// A tile that comes out entirely zero is *not* stored: an absent tile already
 /// reads as fully transparent, so storing one would only cost a map entry.
 fn tile_edits_for_rgba(
     rgba: &[u8],
     rect: psd::Rect,
-    canvas: DocRect,
     tiles: &mut MemoryTileSource,
 ) -> Vec<TileEdit> {
     let source = DocRect::from_psd(rect);
@@ -836,7 +833,7 @@ fn tile_edits_for_rgba(
     if w == 0 || h == 0 || rgba.len() as u64 != (w as u64) * (h as u64) * 4 {
         return Vec::new();
     }
-    let area = source.clip(canvas);
+    let area = source;
     if area.is_empty() {
         return Vec::new();
     }
@@ -974,6 +971,20 @@ fn layer_common(source: &psd::PsdLayer, tally: &mut Tally) -> Layer {
         // A `.psd` mask flag says "position relative to layer", which is the
         // *un*chained state in the panel; `linked` here is the chained one.
         attached.linked = !mask.relative_to_layer;
+        // Card 076: the mask parameters travel too. Density is stored as a
+        // `0..=255` byte — the same 8-bit scale the rest of the format uses,
+        // mapped onto the model's `0.0..=1.0`; feather is an `f64` count of
+        // PIXELS, which is already the model's unit (`feather_px`, document
+        // pixels — a `.psd` mask has no space of its own beyond its layer's).
+        // The setters only refuse non-finite values, so that is the one case
+        // the mask_params note still names on import.
+        if attached
+            .set_density(f32::from(mask.density) / 255.0)
+            .is_err()
+            || attached.set_feather_px(mask.feather_px as f32).is_err()
+        {
+            tally.mask_params.push(source.name.clone());
+        }
         layer.set_mask(attached);
         if mask.real.is_some() {
             tally.second_masks.push(source.name.clone());
@@ -1010,24 +1021,55 @@ pub fn document_from_psd(
     if header.color_mode == psd::ColorMode::Grayscale {
         notes.push("a greyscale document was opened as RGB");
     }
+    // Card 076: the profile travels with the document. The pixels are NOT
+    // transformed at import — they load verbatim into the tiles, and the
+    // colour pipeline does the conversion at render, the same contract the
+    // flat codecs follow: a matrix-shaper profile is converted by the
+    // compositor, and a profile this engine cannot parse falls back to
+    // identity (documented on `ColorSpace::is_transform_supported`), i.e. the
+    // pixels are kept rather than silently reinterpreted. A profile that is
+    // measurably sRGB is recorded as sRGB — treating its pixels as sRGB is
+    // exact, so the bytes are redundant.
+    let profile = psd::resource::icc_profile(&file.resources);
+    let profile_space = match profile {
+        Some(bytes)
+            if color::icc::MatrixShaper::parse(bytes).is_ok_and(|p| p.is_srgb_equivalent()) =>
+        {
+            color::ColorSpace::Srgb
+        }
+        Some(bytes) => raster::icc_profile_space(bytes),
+        None => color::ColorSpace::Srgb,
+    };
     // The resolution resource is not content: every writer synthesises one, and
     // reporting it would put a note on the perfectly clean round trip of a file
     // this application wrote itself, which trains the user to ignore the notes.
+    // A retained ICC profile is content-adjacent too — it rides in the
+    // document's colour space, so it is no longer "left behind" and must not
+    // be counted (or named) as dropped.
+    let retained_profile = matches!(profile_space, color::ColorSpace::IccProfile { .. });
     let dropped_resources = file
         .resources
         .iter()
-        .filter(|r| r.id != psd::resource::ID_RESOLUTION_INFO)
+        .filter(|r| {
+            r.id != psd::resource::ID_RESOLUTION_INFO
+                && !(retained_profile && r.id == psd::resource::ID_ICC_PROFILE)
+        })
         .count();
     if dropped_resources > 0 {
+        let contents = if retained_profile {
+            "guides, paths"
+        } else {
+            "guides, paths, the colour profile"
+        };
         notes.push(format!(
-            "{dropped_resources} image resource(s) — guides, paths, the colour profile — are \
+            "{dropped_resources} image resource(s) — {contents} — are \
              not part of this document model and were left behind"
         ));
     }
 
     let mut document = Document::new(width, height, title);
+    document.meta.color_space = profile_space;
     let mut tiles = MemoryTileSource::new();
-    let canvas = DocRect::canvas(width, height);
 
     let mut stack = vec![Frame {
         parent: None,
@@ -1118,21 +1160,21 @@ pub fn document_from_psd(
         let mut placed = DocRect::EMPTY;
         if wants_pixels {
             if let Some(rgba) = psd_layer_rgba(source, &header) {
-                let edits = tile_edits_for_rgba(&rgba, source.bounds, canvas, &mut tiles);
+                let edits = tile_edits_for_rgba(&rgba, source.bounds, &mut tiles);
                 if !edits.is_empty() {
                     let delta = TileDelta::new(edits).map_err(editor_core::CommandError::from)?;
                     document.pixels.apply(PixelKey::Layer(id), &delta);
                 }
-                let whole = DocRect::from_psd(source.bounds);
-                placed = whole.clip(canvas);
-                if placed != whole {
-                    tally.off_canvas.push(source.name.clone());
-                }
+                // The full extent, off-canvas parts included: the tile store
+                // holds the ink wherever the file put it (card 076).
+                placed = DocRect::from_psd(source.bounds);
             }
         }
 
         if let Some(mask) = &source.mask {
-            let mask_area = DocRect::from_psd(mask.bounds).clip(canvas);
+            // Card 076: no canvas clip here either — the mask's own box and
+            // the layer's full extent can both reach past the canvas.
+            let mask_area = DocRect::from_psd(mask.bounds);
             // Where the mask's own box does not reach, its default colour
             // decides — and a default of 255 has to be written out over
             // everything the layer covers, or the absent tiles would read as
@@ -1140,8 +1182,7 @@ pub fn document_from_psd(
             let region = if mask.default_color == 0 {
                 mask_area
             } else {
-                let base = if placed.is_empty() { canvas } else { placed };
-                mask_area.union(base).clip(canvas)
+                mask_area.union(placed)
             };
             let coords = region.tiles();
             let coverage = psd_mask_coverage(mask, header.depth);
@@ -1182,8 +1223,7 @@ pub fn document_from_psd(
         };
         let layer = document.layers.push_root(Layer::raster(name))?;
         if let Some(rgba) = psd_merged_rgba(&file) {
-            let edits =
-                tile_edits_for_rgba(&rgba, psd::Rect::sized(width, height), canvas, &mut tiles);
+            let edits = tile_edits_for_rgba(&rgba, psd::Rect::sized(width, height), &mut tiles);
             if !edits.is_empty() {
                 let delta = TileDelta::new(edits).map_err(editor_core::CommandError::from)?;
                 document.pixels.apply(PixelKey::Layer(layer), &delta);
@@ -1968,6 +2008,33 @@ mod tests {
         [data[i], data[i + 1], data[i + 2], data[i + 3]]
     }
 
+    /// [`stored_pixel`] at signed coordinates — the off-canvas tiles that card
+    /// 076 now keeps live exactly here.
+    fn stored_pixel_signed(
+        doc: &Document,
+        src: &MemoryTileSource,
+        layer: LayerId,
+        x: i64,
+        y: i64,
+    ) -> [u8; 4] {
+        let Some(map) = doc.layer_tiles(layer) else {
+            return [0; 4];
+        };
+        let coord = TileCoord::new(
+            x.div_euclid(i64::from(TILE_SIZE)) as i32,
+            y.div_euclid(i64::from(TILE_SIZE)) as i32,
+            0,
+        );
+        let Some(hash) = map.get(coord) else {
+            return [0; 4];
+        };
+        let data = compositor::TileSource::tile(src, hash).expect("the hash resolves");
+        let lx = x.rem_euclid(i64::from(TILE_SIZE)) as usize;
+        let ly = y.rem_euclid(i64::from(TILE_SIZE)) as usize;
+        let i = (ly * TILE_SIZE as usize + lx) * 4;
+        [data[i], data[i + 1], data[i + 2], data[i + 3]]
+    }
+
     /// One stored mask coverage sample, in document coordinates. Absent tiles
     /// read as zero — the layer fully hidden.
     fn stored_coverage(
@@ -2491,8 +2558,11 @@ mod tests {
         );
     }
 
+    /// Card 076: a layer hanging off the canvas keeps its FULL extent — the
+    /// off-canvas ink is stored (negative tile coordinates) and nothing is
+    /// reported, because nothing was dropped.
     #[test]
-    fn a_psd_layer_hanging_off_the_canvas_is_clipped_and_reported() {
+    fn a_psd_layer_hanging_off_the_canvas_keeps_its_full_extent() {
         let mut file = psd::PsdFile::new(psd::PsdHeader::rgba8(64, 64));
         let rect = psd::Rect::new(-20, -20, 30, 30);
         let mut over = psd::PsdLayer::raster("Over the edge", rect);
@@ -2506,19 +2576,18 @@ mod tests {
         // The part inside the canvas landed at the right place...
         assert_eq!(stored_pixel(doc, &import.imported.tiles, id, 0, 0), GREEN);
         assert_eq!(stored_pixel(doc, &import.imported.tiles, id, 29, 29), GREEN);
+        // ...and the part outside it is STILL THERE — document x −20 exists
+        // in tile column −1, which the store addresses with signed coords.
         assert_eq!(
-            stored_pixel(doc, &import.imported.tiles, id, 30, 30),
-            [0; 4]
+            stored_pixel_signed(doc, &import.imported.tiles, id, -20, -20),
+            GREEN
         );
-        // ...and the part outside it is gone, which the user is told.
-        assert!(
-            import
-                .notes
-                .summary()
-                .is_some_and(|s| s.contains("past the canvas")),
-            "{:?}",
-            import.notes
+        assert_eq!(
+            stored_pixel_signed(doc, &import.imported.tiles, id, -1, -1),
+            GREEN
         );
+        // No note: nothing was dropped, so nothing is named.
+        assert!(import.notes.is_empty(), "{:?}", import.notes);
     }
 
     #[test]
@@ -2591,6 +2660,185 @@ mod tests {
         std::fs::write(&stub, b"8BP").unwrap();
         assert!(!looks_like_psd(&stub));
     }
+    /// Card 076 — ICC retention: an embedded profile that is NOT sRGB
+    /// (swapped primaries, identity tone curves — measurably not the sRGB
+    /// transfer) is retained with the document: the pixels load verbatim and
+    /// the profile bytes ride in `DocumentMeta::color_space`.
+    fn swapped_primaries_profile() -> Vec<u8> {
+        fn xyz(x: f64, y: f64, z: f64) -> Vec<u8> {
+            let mut t = b"XYZ ".to_vec();
+            t.extend_from_slice(&[0, 0, 0, 0]);
+            for v in [x, y, z] {
+                t.extend_from_slice(&((v * 65536.0).round() as i32).to_be_bytes());
+            }
+            t
+        }
+        fn identity_curve() -> Vec<u8> {
+            let mut t = b"curv".to_vec();
+            t.extend_from_slice(&[0, 0, 0, 0]);
+            t.extend_from_slice(&[0, 0, 0, 0]); // count 0 = identity
+            t
+        }
+        // sRGB's D50 primaries, red and green swapped: parses as a matrix
+        // shaper, but is chromatically rotated away from sRGB.
+        let sr = (0.4360, 0.2225, 0.0139);
+        let sg = (0.3851, 0.7169, 0.0971);
+        let sb = (0.1431, 0.0606, 0.7141);
+        let mut out = vec![0u8; 128];
+        out[4..8].copy_from_slice(b"acsp");
+        out[12..16].copy_from_slice(b"mntr");
+        out[16..20].copy_from_slice(b"RGB ");
+        out[20..24].copy_from_slice(b"XYZ ");
+        let tags: [(&[u8], Vec<u8>); 6] = [
+            (b"rXYZ", xyz(sg.0, sg.1, sg.2)),
+            (b"gXYZ", xyz(sr.0, sr.1, sr.2)),
+            (b"bXYZ", xyz(sb.0, sb.1, sb.2)),
+            (b"rTRC", identity_curve()),
+            (b"gTRC", identity_curve()),
+            (b"bTRC", identity_curve()),
+        ];
+        let mut offset: u32 = 132 + (tags.len() as u32) * 12;
+        let mut table = Vec::new();
+        for (sig, body) in &tags {
+            table.extend_from_slice(sig);
+            table.extend_from_slice(&offset.to_be_bytes());
+            table.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            out.extend_from_slice(body);
+            offset += body.len() as u32;
+        }
+        out.splice(128..128, table);
+        out[128..132].copy_from_slice(&(tags.len() as u32).to_be_bytes());
+        out
+    }
+
+    #[test]
+    fn an_embedded_non_srgb_profile_is_retained_with_the_document() {
+        let mut file = psd::PsdFile::new(psd::PsdHeader::rgba8(PW, PH));
+        let canvas = psd::Rect::sized(PW, PH);
+        let mut background = psd::PsdLayer::raster("Background", canvas);
+        background.set_rgba8(&solid(canvas, RED)).unwrap();
+        file.layers = vec![background];
+        let profile = swapped_primaries_profile();
+        file.resources.push(psd::ImageResource {
+            id: psd::resource::ID_ICC_PROFILE,
+            name: String::new(),
+            data: profile.clone(),
+        });
+        file.resources.push(psd::ImageResource {
+            id: 1069,
+            name: String::new(),
+            data: vec![1, 2, 3, 4],
+        });
+
+        let import = document_from_psd(&psd::write(&file).unwrap(), "tagged.psd", 50).unwrap();
+        let doc = &import.imported.document;
+        match &doc.meta.color_space {
+            color::ColorSpace::IccProfile { profile: kept, .. } => {
+                assert_eq!(kept, &profile, "the profile bytes ride with the document");
+            }
+            other => panic!("the profile must be retained, got {other:?}"),
+        }
+        // The profile is not among the resources named as left behind; the
+        // other resource still is.
+        let summary = import.notes.summary().unwrap();
+        assert!(summary.contains("1 image resource(s)"), "{summary}");
+        assert!(!summary.contains("the colour profile"), "{summary}");
+    }
+
+    #[test]
+    fn a_profileless_psd_stays_srgb_and_still_names_left_behind_resources() {
+        let import = document_from_psd(&layered_psd(), "plain.psd", 50).unwrap();
+        assert_eq!(
+            import.imported.document.meta.color_space,
+            color::ColorSpace::Srgb
+        );
+    }
+
+    /// Card 076 — full extents: a layer hanging off the left edge keeps its
+    /// off-canvas ink in the tile store, and moving the layer brings it into
+    /// view through the real transform path, instead of the import having
+    /// dropped it.
+    #[test]
+    fn off_canvas_ink_survives_import_and_moves_into_view() {
+        let mut file = psd::PsdFile::new(psd::PsdHeader::rgba8(PW, PH));
+        // Half on the canvas, half off the left edge.
+        let rect = psd::Rect::new(-64, 0, 64, 100);
+        let mut hanging = psd::PsdLayer::raster("Hanging", rect);
+        hanging.set_rgba8(&solid(rect, GREEN)).unwrap();
+        file.layers = vec![hanging];
+
+        let mut import = document_from_psd(&psd::write(&file).unwrap(), "hanging.psd", 50).unwrap();
+        let doc = &import.imported.document;
+        let id = doc.layers.root()[0];
+
+        // The off-canvas half is really in the store: tile column -1.
+        let map = doc.layer_tiles(id).unwrap();
+        let off_hash = map
+            .get(TileCoord::new(-1, 0, 0))
+            .expect("the off-canvas tile is stored");
+        let bytes = compositor::TileSource::tile(&import.imported.tiles, off_hash).unwrap();
+        assert_ne!(
+            bytes[192 * 4],
+            0,
+            "the off-canvas tile holds ink (tile-local x=192 = document x=-64)"
+        );
+
+        // The compositor deliberately clips its output to the canvas (an
+        // edge tile's padding is not part of the image), so the off-canvas
+        // ink proves it survived by RENDERING once the layer is moved into
+        // view — the transform path samples the tile map's own bounds, which
+        // include the negative column.
+        let mut history = History::with_limit(10);
+        history
+            .apply(
+                &mut import.imported.document,
+                Command::TransformLayer {
+                    layer_id: id,
+                    matrix: [1.0, 0.0, 0.0, 1.0, 64.0, 0.0],
+                },
+            )
+            .unwrap();
+        let moved = composite_region(
+            &import.imported.document,
+            &import.imported.tiles,
+            PixelRect::new(0, 0, 64, 100),
+            0,
+            CompositeOptions::default(),
+        )
+        .unwrap()
+        .to_rgba8(&import.imported.document.meta.color_space);
+        assert_eq!(
+            moved[0], GREEN[0],
+            "the former off-canvas ink moved into view"
+        );
+        // No note: nothing was dropped, so nothing is named.
+        assert!(import.notes.is_empty(), "{:?}", import.notes);
+    }
+
+    /// Card 076 — mask parameters: density and feather land on the imported
+    /// mask, in the model's units (density `0..=1`, feather document pixels).
+    #[test]
+    fn mask_density_and_feather_land_on_the_imported_mask() {
+        let mut file = psd::PsdFile::new(psd::PsdHeader::rgba8(PW, PH));
+        let rect = psd::Rect::sized(PW, PH);
+        let mut masked = psd::PsdLayer::raster("Masked", rect);
+        masked.set_rgba8(&solid(rect, BLUE)).unwrap();
+        let mut mask = psd::PsdMask::new(MASK_RECT, mask_ramp());
+        mask.density = 128; // → 128/255
+        mask.feather_px = 6.0; // already pixel units on both sides
+        masked.mask = Some(mask);
+        file.layers = vec![masked];
+
+        let import = document_from_psd(&psd::write(&file).unwrap(), "params.psd", 50).unwrap();
+        let doc = &import.imported.document;
+        let layer = doc.layers.get(doc.layers.root()[0]).unwrap();
+        let mask = layer.mask.as_ref().expect("the mask is attached");
+        assert!((mask.density() - 128.0 / 255.0).abs() < 1e-6);
+        assert!((mask.feather_px() - 6.0).abs() < 1e-5);
+        // The parameters mapped, so the mask_params note has nothing to say.
+        assert!(import.notes.is_empty(), "{:?}", import.notes);
+    }
+
     /// Card 072's honesty gate: the fidelity matrix
     /// (`docs/PSD-THUMBNAIL-SUPPORT.md`) must name every fallback note the
     /// import actually emits, the editable-preservation claims, and the
@@ -2614,7 +2862,6 @@ mod tests {
             "layer effect(s) on {names} were not imported",
             "the {kinds} effect(s) on {names} were not imported",
             "{names} carried a second, vector-derived mask that was not imported",
-            "{names} extend past the canvas; the part outside it was not kept",
             "{names} carry a transform a .psd cannot express; their pixels were written              where they are stored",
             "{names} are a kind a .psd has no home for and were written as empty layers",
             "the mask density or feather on {names} was not written",
@@ -2633,6 +2880,8 @@ mod tests {
         }
         // The editable-preservation claims, the failure policy, and the
         // ICC-drop note the matrix quotes (a false claim here failed review).
+        // Card 076 additions: the full-extents and ICC-retention claims, and
+        // the mask-parameter mapping.
         for phrase in [
             "ClipToBelow",
             "Invert",
@@ -2640,6 +2889,10 @@ mod tests {
             "Original PSD bytes are never modified on import",
             "Nothing silent",
             "the colour profile — are not part of this document model",
+            "full extents preserved",
+            "Retained (metadata)",
+            "The pixels are NOT transformed at import",
+            "feather is stored in pixels, already the model's `feather_px` unit",
         ] {
             assert!(doc.contains(phrase), "the matrix lost the claim {phrase:?}");
         }

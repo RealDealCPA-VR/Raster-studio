@@ -142,8 +142,12 @@ impl Protection {
 }
 
 /// A layer mask: its own rectangle, its default colour outside that rectangle,
-/// its flags, and its pixels.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// its flags, its parameters, and its pixels.
+///
+/// `PartialEq` but not `Eq`: the feather radius is an `f64`, and a NaN feather
+/// (unreadable, but possible in a hostile file) would otherwise violate the
+/// reflexive-`Eq` contract the derive would claim.
+#[derive(Debug, Clone, PartialEq)]
 pub struct PsdMask {
     pub bounds: Rect,
     /// The value the mask takes outside [`PsdMask::bounds`] — `0` (hidden) or
@@ -154,6 +158,14 @@ pub struct PsdMask {
     pub disabled: bool,
     pub invert: bool,
     pub from_render: bool,
+    /// The mask's density, `0..=255` (255 = fully dense), from the optional
+    /// mask-parameter block. Always present here — a mask record without the
+    /// block reads as 255, the format's own default — so a reader that ignores
+    /// the field still sees an unparameterised mask.
+    pub density: u8,
+    /// The mask's feather radius, in pixels. The format stores an `f64` double;
+    /// `0.0` is a hard edge.
+    pub feather_px: f64,
     /// Mask samples, `bounds.width() * bounds.height()` at the document depth.
     pub data: Vec<u8>,
     pub real: Option<RealMask>,
@@ -168,6 +180,8 @@ impl PsdMask {
             disabled: false,
             invert: false,
             from_render: false,
+            density: 255,
+            feather_px: 0.0,
             data,
             real: None,
         }

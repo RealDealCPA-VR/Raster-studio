@@ -16,7 +16,7 @@ use crate::model::{
     Adjustment, Channel, Effects, ImageResource, MergedImage, Protection, PsdFile, PsdLayer,
     PsdMask, RealMask, Rect, TaggedBlock, TextData, CHANNEL_ALPHA,
 };
-use crate::resource::{resolution_info, ID_RESOLUTION_INFO};
+use crate::resource::{icc_profile, resolution_info, ID_ICC_PROFILE, ID_RESOLUTION_INFO};
 use crate::{read, read_with, write, write_with};
 
 // ---------------------------------------------------------------- fixtures
@@ -351,6 +351,58 @@ fn a_layer_with_no_mask_writes_a_zero_length_mask_and_reads_back_without_one() {
     file.layers.push(raster("plain", Rect::sized(2, 2), 1));
     let back = read(&write(&file).unwrap()).unwrap();
     assert!(back.layers[0].mask.is_none());
+}
+
+/// Card 076: the mask-parameter block (flag bit 4) — density and feather —
+/// is parsed on the way in and written back on the way out, not skipped.
+#[test]
+fn mask_density_and_feather_round_trip_through_the_parameter_block() {
+    let mut file = PsdFile::new(PsdHeader::rgba8(4, 4));
+    let mut layer = raster("feathered", Rect::sized(4, 4), 1);
+    let mut mask = PsdMask::new(Rect::sized(4, 4), vec![128; 16]);
+    mask.density = 128;
+    mask.feather_px = 2.5;
+    layer.mask = Some(mask);
+    file.layers.push(layer);
+
+    let back = read(&write(&file).unwrap()).unwrap();
+    let mask = back.layers[0].mask.as_ref().expect("the mask survived");
+    assert_eq!(mask.density, 128);
+    assert!((mask.feather_px - 2.5).abs() < 1e-12);
+    assert_eq!(mask.data, vec![128; 16]);
+
+    // A mask without parameters keeps the defaults — and the writer must not
+    // emit a parameter block (bit 4) for it, so the 20-byte form stays exact.
+    let mut plain_file = PsdFile::new(PsdHeader::rgba8(4, 4));
+    let mut plain = raster("plain", Rect::sized(4, 4), 1);
+    plain.mask = Some(PsdMask::new(Rect::sized(4, 4), vec![200; 16]));
+    plain_file.layers.push(plain);
+    let plain_back = read(&write(&plain_file).unwrap()).unwrap();
+    let plain_mask = plain_back.layers[0].mask.as_ref().unwrap();
+    assert_eq!(plain_mask.density, 255);
+    assert_eq!(plain_mask.feather_px, 0.0);
+}
+
+/// Card 076: the embedded ICC profile — resource 1039 — is retrievable from
+/// the parsed resources, and a file without one reports `None`.
+#[test]
+fn the_embedded_icc_profile_is_retrievable_from_the_resources() {
+    let mut file = PsdFile::new(PsdHeader::rgba8(1, 1));
+    file.resources.push(ImageResource {
+        id: ID_ICC_PROFILE,
+        name: String::new(),
+        data: vec![9, 8, 7, 6, 5],
+    });
+    file.resources.push(ImageResource {
+        id: 1005,
+        name: String::new(),
+        data: vec![1; 16],
+    });
+    let back = read(&write(&file).unwrap()).unwrap();
+    assert_eq!(icc_profile(&back.resources), Some(&[9, 8, 7, 6, 5][..]));
+
+    let bare = read(&write(&PsdFile::new(PsdHeader::rgba8(1, 1))).unwrap()).unwrap();
+    assert_eq!(icc_profile(&bare.resources), None);
 }
 
 #[test]

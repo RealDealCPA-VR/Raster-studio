@@ -456,12 +456,33 @@ fn write_mask(sink: &mut Sink, mask: Option<&PsdMask>) {
     sink.i32(mask.bounds.bottom);
     sink.i32(mask.bounds.right);
     sink.u8(mask.default_color);
-    sink.u8(mask_flags(
+    // A non-finite feather is treated as default on write: a hostile file
+    // must not produce a parameter block the model then refuses.
+    let feather = if mask.feather_px.is_finite() {
+        mask.feather_px
+    } else {
+        0.0
+    };
+    let has_params = mask.density != 255 || feather != 0.0;
+    let flags = mask_flags(
         mask.relative_to_layer,
         mask.disabled,
         mask.invert,
         mask.from_render,
-    ));
+    ) | if has_params { 0b1_0000 } else { 0 };
+    sink.u8(flags);
+    if has_params {
+        // The writer emits only the user-mask pair: it never writes a vector
+        // mask (the vector-mask density/feather parameterise the `real`
+        // record this writer does not produce).
+        sink.u8(u8::from(mask.density != 255) | (u8::from(feather != 0.0) << 1));
+        if mask.density != 255 {
+            sink.u8(mask.density);
+        }
+        if feather != 0.0 {
+            sink.f64(feather);
+        }
+    }
     match &mask.real {
         Some(real) => {
             sink.u8(mask_flags(
@@ -482,9 +503,10 @@ fn write_mask(sink: &mut Sink, mask: Option<&PsdMask>) {
     sink.end_len(slot);
 }
 
-/// Bit 4 — "mask parameters follow" — is deliberately never set: this writer
-/// does not emit density or feather parameters, and a flag promising bytes that
-/// are not there desynchronises every reader that believes it.
+/// Bits 0–3 of the mask flags byte. Bit 4 — "mask parameters follow" — is set
+/// by [`write_mask`] itself, only when there are parameters to write: a flag
+/// promising bytes that are not there desynchronises every reader that
+/// believes it.
 fn mask_flags(relative: bool, disabled: bool, invert: bool, from_render: bool) -> u8 {
     u8::from(relative)
         | (u8::from(disabled) << 1)
