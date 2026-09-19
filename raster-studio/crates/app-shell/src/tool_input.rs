@@ -332,10 +332,15 @@ fn sample_to_mask_of(
 /// Card 058: the canvas rectangle expressed in the paint target's space —
 /// content paints in layer space (the canvas rect itself, matching card
 /// 040's semantics); a MASK paints in mask-local space, where the visible
-/// canvas is the canvas rect pre-imaged through the mask pose (bounding box
-/// of the transformed corners). This is the rect stroke dabs are clipped and
-/// rasterized against; `ctx.canvas` is document space and would clip a
-/// visible strip of a transformed mask.
+/// canvas is the canvas rect pre-imaged through the mask pose — a mask-local
+/// point `p` displays at `pose(p)`, so it is visible iff `p` lies in
+/// `pose⁻¹(canvas)` (bounding box of the INVERSE-mapped corners). This is the
+/// rect stroke dabs are clipped and rasterized against; `ctx.canvas` is
+/// document space and would clip a visible strip of a transformed mask.
+/// Card 063: the mapping is the pose's INVERSE — the forward pose answers
+/// "where does this mask-local point display", not "what mask-local region is
+/// visible", and with a translated mask its clip covered the mirror strip,
+/// silently discarding every dab painted over the displayed coverage.
 fn paint_space_canvas_of(
     doc: &editor_core::Document,
     layer: Option<layer_model::LayerId>,
@@ -356,7 +361,7 @@ fn paint_space_canvas_of(
                                 .map(|m| *m.transform),
                         )
                 })
-                .map(|(t, extra)| t * extra);
+                .map(|(t, extra)| (t * extra).inverse());
             match pose {
                 Some(pose) if !is_identity_pose(&pose) => {
                     let c0 =
@@ -2703,6 +2708,180 @@ mod tests {
             coverage[16 * 48 + 32],
             0,
             "the outside point stayed hidden — the selection constrained the stroke"
+        );
+    }
+
+    /// Card 063: a stroke at a mask whose document POSE is non-identity must
+    /// edit the stored coverage at the pose-mapped location, over EXISTING
+    /// coverage included. Pre-fix the mask-space clip was the canvas mapped
+    /// through the pose FORWARD instead of its inverse, so on a mask whose
+    /// layer had moved while linked the clip covered the mirror strip and
+    /// every dab over the displayed ink was silently discarded — a no-op
+    /// commit. The cycle here (move linked, unlink, move, relink) also pins
+    /// card 043's accumulated-transform preservation.
+    #[test]
+    fn a_stroke_on_a_non_identity_pose_mask_edits_the_pose_mapped_coverage() {
+        use compositor::TileSource as _;
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        let layer_id = editor.active().unwrap().document.active_layer().unwrap();
+        editor.set_tool(ToolId::Eraser);
+        attach_mask(&mut editor);
+
+        // Existing coverage: mask-local rows 0..16 of tile (0,0) are 255.
+        {
+            let doc = editor.active_mut().unwrap();
+            let mut bytes = vec![0u8; editor_core::MASK_TILE_BYTES];
+            for row in bytes.iter_mut().take(16 * raster::TILE_SIZE as usize) {
+                *row = 255;
+            }
+            let hash = doc.tiles.insert_bytes(bytes);
+            doc.apply(
+                Command::paint_tiles(
+                    editor_core::PixelTarget::Mask(layer_id),
+                    vec![editor_core::TileEdit::set(
+                        raster::TileCoord::new(0, 0, 0),
+                        hash,
+                    )],
+                )
+                .expect("distinct coords"),
+            )
+            .expect("the coverage prefills");
+        }
+        let store = |ed: &Editor, x: usize, y: usize| -> u8 {
+            let doc = ed.active().unwrap();
+            let hash = doc
+                .document
+                .mask_tiles(layer_id)
+                .unwrap()
+                .get(raster::TileCoord::new(0, 0, 0))
+                .expect("tile (0,0) stored");
+            doc.tiles.tile(hash).unwrap()[y * raster::TILE_SIZE as usize + x]
+        };
+        assert_eq!(store(&editor, 8, 8), 255, "prefill visible");
+
+        // Move the layer while the mask is LINKED (the mask rides: its pose
+        // grows +24), then unlink / move / relink — the relink preserves the
+        // accumulated transform, so mask.transform is non-identity and the
+        // pose stays +24. The displayed ink at mask-local (8,8) now shows at
+        // document (32,8).
+        let shift = glam::Affine2::from_translation(glam::Vec2::new(24.0, 0.0));
+        let set_mask_linked = |ed: &mut Editor, linked: bool| {
+            let doc = ed.active_mut().unwrap();
+            let mut mask = doc
+                .document
+                .layers
+                .get(layer_id)
+                .unwrap()
+                .mask
+                .clone()
+                .unwrap();
+            mask.linked = linked;
+            doc.apply(Command::SetLayerProperties {
+                layer_id,
+                patch: editor_core::LayerPatch {
+                    mask: editor_core::Patch::Set(mask),
+                    ..Default::default()
+                },
+            })
+            .expect("the link flag flips");
+        };
+        editor
+            .active_mut()
+            .unwrap()
+            .apply(Command::TransformLayer {
+                layer_id,
+                matrix: shift.to_cols_array(),
+            })
+            .expect("the linked mask rides");
+        set_mask_linked(&mut editor, false);
+        editor
+            .active_mut()
+            .unwrap()
+            .apply(Command::TransformLayer {
+                layer_id,
+                matrix: shift.to_cols_array(),
+            })
+            .expect("the unlinked mask holds its pose");
+        set_mask_linked(&mut editor, true);
+        {
+            let doc = editor.active().unwrap();
+            let l = doc.document.layers.get(layer_id).unwrap();
+            let pose = l.transform * *l.mask.as_ref().unwrap().transform;
+            assert_eq!(
+                pose.translation,
+                glam::Vec2::new(24.0, 0.0),
+                "the mask's document pose is non-identity"
+            );
+            assert_eq!(
+                l.mask.as_ref().unwrap().transform.translation,
+                glam::Vec2::new(-24.0, 0.0),
+                "the relink preserved the accumulated transform"
+            );
+        }
+
+        editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
+        // A 2px hard brush keeps the reach arithmetic exact.
+        let mut brush = *editor.brush();
+        brush.size = 2.0;
+        brush.hardness = 1.0;
+        editor.set_brush(brush);
+
+        let mask_map_before = editor
+            .active()
+            .unwrap()
+            .document
+            .mask_tiles(layer_id)
+            .cloned();
+
+        // Erase the DISPLAYED ink strip: document (32,8) is mask-local (8,8).
+        let mut pointer = ToolPointer::new();
+        let outcomes = stroke(&mut pointer, &mut editor, &[(32.5, 8.5), (33.5, 8.5)]);
+        assert!(
+            outcomes.iter().any(|o| o.reached_tool),
+            "the stroke reached the tool: {outcomes:?}"
+        );
+        assert_ne!(
+            editor
+                .active()
+                .unwrap()
+                .document
+                .mask_tiles(layer_id)
+                .cloned(),
+            mask_map_before,
+            "the eraser over displayed existing coverage changed the stored coverage"
+        );
+        assert_eq!(
+            store(&editor, 8, 8),
+            0,
+            "the eraser concealed the pose-mapped store pixel (mask-local (8,8) = displayed doc (32,8))"
+        );
+
+        // A BRUSH with black foreground over the same displayed strip conceals
+        // too — the colour path shares the clip and the mapping.
+        editor.set_tool(ToolId::Brush);
+        editor.set_foreground([0.0, 0.0, 0.0, 1.0]);
+        let mask_map_before = editor
+            .active()
+            .unwrap()
+            .document
+            .mask_tiles(layer_id)
+            .cloned();
+        let mut pointer = ToolPointer::new();
+        let outcomes = stroke(&mut pointer, &mut editor, &[(32.5, 8.5), (33.5, 8.5)]);
+        assert!(
+            outcomes.iter().any(|o| o.reached_tool),
+            "the brush stroke reached the tool: {outcomes:?}"
+        );
+        assert_ne!(
+            editor
+                .active()
+                .unwrap()
+                .document
+                .mask_tiles(layer_id)
+                .cloned(),
+            mask_map_before,
+            "the black brush over displayed coverage changed the stored coverage"
         );
     }
 

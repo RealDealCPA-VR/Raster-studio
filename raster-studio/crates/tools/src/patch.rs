@@ -560,11 +560,14 @@ impl CoveragePatch {
 
     /// Encode the touched tiles.
     ///
-    /// Unlike [`ColorPatch::commit`] an all-zero tile is stored explicitly
-    /// rather than removed: for a mask, zero coverage is a *meaningful* value —
-    /// the layer hidden — and removing the tile happens to mean the same thing,
-    /// but storing it keeps the delta's intent legible and avoids the caller
-    /// having to reason about which of the two it got.
+    /// Like [`ColorPatch::commit`], an all-zero tile is *removed* rather than
+    /// stored: absent coverage reads as zero ([`CoveragePatch::load`]), so a
+    /// tile whose bytes are all zero is indistinguishable from no tile — and
+    /// the two must stay indistinguishable. A dab's bounding box routinely
+    /// reaches tiles outside the mask's painted area (a transformed mask's
+    /// canvas rect extends into negative store coordinates), and storing a
+    /// zero tile there would make redo produce a tile map the first
+    /// application never had.
     pub fn commit(
         &self,
         access: &mut dyn TileAccess,
@@ -576,12 +579,21 @@ impl CoveragePatch {
                 continue;
             }
             let bytes = self.encode_tile(slot);
-            let after = TileHash::of(&bytes);
-            if Some(after) == access.tile_hash(key, coord) {
+            let after = if bytes.iter().all(|&b| b == 0) {
+                None
+            } else {
+                Some(TileHash::of(&bytes))
+            };
+            if after == access.tile_hash(key, coord) {
                 continue;
             }
-            let h = access.store(bytes);
-            edits.push(TileEdit::set(coord, h));
+            match after {
+                Some(_) => {
+                    let h = access.store(bytes);
+                    edits.push(TileEdit::set(coord, h));
+                }
+                None => edits.push(TileEdit::clear(coord)),
+            }
         }
         Ok(TileDelta::new(edits)?)
     }

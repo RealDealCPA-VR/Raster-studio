@@ -2244,6 +2244,391 @@ fn the_complete_transform_workflow_verifies_end_to_end() {
 /// stay in their `#[ignore]`d host-bound helpers (app-shell `clipboard.rs`,
 /// `menu_bridge::paste_takes_a_foreign_os_clipboard_image_through_real_placement`);
 /// this fake-service test never touches the OS clipboard.
+/// Card 063: the mask stays under the intended portrait edge through the
+/// whole cutout workflow — content transforms (linked riding, unlinked
+/// frozen, relink without a jump), density/feather parameter edits, further
+/// mask edits, undo/redo restoring pixel hashes + mask parameters +
+/// transforms TOGETHER, and native save/reopen. The mapping under test is
+/// the document↔mask-local one shared with the compositor
+/// (`interaction_geometry::document_transform_of` ∘ `mask.transform`):
+/// camera zoom is a presentation concern over the same document-space truth
+/// (pinned at cards 030/039), so alignment at identity zoom IS alignment at
+/// every zoom.
+#[test]
+fn the_masked_cutout_alignment_survives_transforms_relink_and_reopen() {
+    use editor_core::Command;
+    use integration_tests::app;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut ed = app::shell_editor(tmp.path(), 128, 128);
+
+    // The "portrait": an ink block x 8..40, y 8..40 on layer-local tile (0,0)
+    // with an identity transform. The LINKED mask reveals the TOP band
+    // (y < 16 in document space): the cutout edge is the horizontal line
+    // y = 16, and the probes below discriminate riding vs frozen poses.
+    let portrait = {
+        let layer = layer_model::Layer::raster("Portrait");
+        let id = layer.id;
+        let mut bytes = vec![0u8; (raster::TILE_SIZE * raster::TILE_SIZE * 4) as usize];
+        for y in 8..40usize {
+            for x in 8..40usize {
+                let i = (y * raster::TILE_SIZE as usize + x) * 4;
+                bytes[i..i + 4].copy_from_slice(&[10, 60, 10, 255]);
+            }
+        }
+        let hash = ed.active_mut().unwrap().tiles.insert_bytes(bytes);
+        ed.active_mut()
+            .unwrap()
+            .apply(Command::create_layer(layer))
+            .unwrap();
+        ed.active_mut()
+            .unwrap()
+            .apply(
+                Command::paint_tiles(
+                    editor_core::PixelTarget::Layer(id),
+                    vec![editor_core::TileEdit::set(
+                        raster::TileCoord::new(0, 0, 0),
+                        hash,
+                    )],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        // The mask: top band revealed.
+        let doc = ed.active_mut().unwrap();
+        let mask = layer_model::LayerMask::new(layer_model::MaskId::new());
+        let mut coverage = vec![0u8; editor_core::MASK_TILE_BYTES];
+        for y in 0..16usize {
+            for x in 0..raster::TILE_SIZE as usize {
+                coverage[y * raster::TILE_SIZE as usize + x] = 255;
+            }
+        }
+        let mhash = doc.tiles.insert_bytes(coverage);
+        doc.apply(Command::SetLayerProperties {
+            layer_id: id,
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Set(mask),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        doc.apply(
+            Command::paint_tiles(
+                editor_core::PixelTarget::Mask(id),
+                vec![editor_core::TileEdit::set(
+                    raster::TileCoord::new(0, 0, 0),
+                    mhash,
+                )],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        id
+    };
+    let region = raster::PixelRect::new(0, 0, 128, 128);
+    let composite = |ed: &mut app_shell::Editor| -> Vec<u8> {
+        ed.active_mut().unwrap().composite(region).unwrap()
+    };
+    let probe = |bytes: &[u8], x: usize, y: usize| -> [u8; 4] {
+        let i = (y * 128 + x) * 4;
+        [bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]
+    };
+    let visible = |b: &[u8]| b[1] < 150; // the green ink over the white backdrop
+    let backdrop = [255u8, 255, 255, 255];
+
+    let mask_transform = |ed: &app_shell::Editor, id: layer_model::LayerId| -> glam::Affine2 {
+        ed.active()
+            .unwrap()
+            .document
+            .layers
+            .get(id)
+            .unwrap()
+            .mask
+            .as_ref()
+            .map(|m| glam::Affine2::from_cols_array(&m.transform.to_cols_array()))
+            .unwrap_or(glam::Affine2::IDENTITY)
+    };
+    let set_mask =
+        |ed: &mut app_shell::Editor, id: layer_model::LayerId, mask: layer_model::LayerMask| {
+            ed.active_mut()
+                .unwrap()
+                .apply(Command::SetLayerProperties {
+                    layer_id: id,
+                    patch: editor_core::LayerPatch {
+                        mask: editor_core::Patch::Set(mask),
+                        ..Default::default()
+                    },
+                })
+                .unwrap();
+        };
+    let get_mask =
+        |ed: &app_shell::Editor, id: layer_model::LayerId| -> Option<layer_model::LayerMask> {
+            ed.active()
+                .unwrap()
+                .document
+                .layers
+                .get(id)
+                .unwrap()
+                .mask
+                .clone()
+        };
+    let move_by = |ed: &mut app_shell::Editor, id: layer_model::LayerId, dy: f32| {
+        ed.active_mut()
+            .unwrap()
+            .apply(Command::TransformLayer {
+                layer_id: id,
+                matrix: glam::Affine2::from_translation(glam::Vec2::new(0.0, dy)).to_cols_array(),
+            })
+            .unwrap();
+    };
+
+    // Baseline: edge at y=16. The band shows the ink; below the edge the
+    // backdrop shows through.
+    let baseline = composite(&mut ed);
+    assert!(visible(&probe(&baseline, 16, 12)));
+    assert_eq!(probe(&baseline, 16, 20), backdrop, "below the edge: hidden");
+
+    // 1. LINKED move: the mask RIDES the content (+16 down). Edge -> y=32.
+    move_by(&mut ed, portrait, 16.0);
+    let riding = composite(&mut ed);
+    assert!(
+        visible(&probe(&riding, 16, 28)),
+        "the band moved with the ink"
+    );
+    assert_eq!(
+        probe(&riding, 16, 40),
+        backdrop,
+        "below the moved edge: hidden"
+    );
+    assert_eq!(
+        probe(&riding, 16, 12),
+        backdrop,
+        "the ink left its old rows"
+    );
+    assert!(
+        mask_transform(&ed, portrait) == glam::Affine2::IDENTITY,
+        "linked keeps the mask transform at identity"
+    );
+
+    // 2. UNLINK and move back (−16): the mask's document pose is FROZEN —
+    //    the edge stays at y=32 while the ink returns to y 8..40.
+    let mut unlinked = get_mask(&ed, portrait).unwrap();
+    unlinked.linked = false;
+    set_mask(&mut ed, portrait, unlinked);
+    move_by(&mut ed, portrait, -16.0);
+    let frozen = composite(&mut ed);
+    assert!(
+        visible(&probe(&frozen, 16, 28)),
+        "the frozen band still covers y<32"
+    );
+    assert_eq!(
+        probe(&frozen, 16, 40),
+        backdrop,
+        "the edge did NOT ride: a riding mask would reveal y<48 and show this pixel"
+    );
+    assert!(
+        mask_transform(&ed, portrait) != glam::Affine2::IDENTITY,
+        "unlinked accumulates the counter-transform"
+    );
+
+    // 3. RELINK: card 043 preserves the accumulated transform — no jump.
+    let mut relinked_mask = get_mask(&ed, portrait).unwrap();
+    relinked_mask.linked = true;
+    set_mask(&mut ed, portrait, relinked_mask);
+    let relinked_bytes = composite(&mut ed);
+    assert_eq!(relinked_bytes, frozen, "relinking jumps nothing");
+
+    // 4. DENSITY: density scales how much the mask can HIDE — at half
+    //    density the CONCEALED region lets half the ink through (a revealed
+    //    pixel is unchanged, which is the documented semantics).
+    let mut half = get_mask(&ed, portrait).unwrap();
+    half.set_density(0.5).unwrap();
+    set_mask(&mut ed, portrait, half);
+    let density_bytes = composite(&mut ed);
+    let blended = probe(&density_bytes, 16, 36); // inside the ink, below the frozen edge
+    let revealed = probe(&density_bytes, 16, 28);
+    assert_eq!(
+        revealed,
+        [10, 60, 10, 255],
+        "a revealed pixel is untouched by density"
+    );
+    assert!(
+        blended[1] > 60 && blended[1] < 255,
+        "half density lets the concealed ink show through partially: {blended:?}"
+    );
+    // Undo restores the FULL density bytes exactly.
+    ed.active_mut().unwrap().undo().unwrap();
+    assert_eq!(composite(&mut ed), relinked_bytes, "undo restores density");
+    ed.active_mut().unwrap().redo().unwrap();
+
+    // 5. FEATHER: a 4px feather softens the edge — a probe ON the old edge
+    //    line (y=32) becomes partial, deep interior stays full.
+    let mut soft = get_mask(&ed, portrait).unwrap();
+    soft.set_feather_px(4.0).unwrap();
+    set_mask(&mut ed, portrait, soft);
+    let feathered = composite(&mut ed);
+    let on_edge = probe(&feathered, 16, 32);
+    let interior = probe(&feathered, 16, 28);
+    assert!(
+        on_edge[1] > interior[1] && on_edge[1] < 255,
+        "the feathered edge blends toward the backdrop: {on_edge:?} vs interior {interior:?}"
+    );
+    assert!(interior[1] < 100, "deep interior keeps the ink");
+    ed.active_mut().unwrap().undo().unwrap();
+    assert_eq!(
+        composite(&mut ed),
+        density_bytes,
+        "undo restores feather (the committed baseline after the density redo)"
+    );
+
+    // 6. EDIT AGAIN: an eraser stroke on the mask target punches a hole in
+    //    the band (a brush on a mask RAISES coverage — reveal — so
+    //    concealment is the eraser's op); undo restores the coverage.
+    // The stroke must aim at the PORTRAIT (the shell paints the ACTIVE
+    // layer's target; the canvas background layer is active after setup).
+    ed.set_layer_selection(vec![portrait], Some(portrait));
+    ed.set_tool(tools::ToolId::Eraser);
+    ed.set_edit_target_kind(app_shell::edit_target::EditTargetKind::Mask);
+    let coverage_before = app::mask_tile_map(&ed, portrait);
+    let mut pointer = app_shell::tool_input::ToolPointer::new();
+    app::shell_stroke(
+        &mut pointer,
+        &mut ed,
+        &[
+            glam::Vec2::new(12.0, 24.0),
+            glam::Vec2::new(16.0, 24.0),
+            glam::Vec2::new(20.0, 24.0),
+        ],
+    );
+    let holed = composite(&mut ed);
+    let holed_px = probe(&holed, 16, 24);
+    // The hole is punched through the coverage (store 0), but the DENSITY
+    // step (0.5, committed above) still lets half the ink through — the
+    // pixel sits strictly between the full ink and the backdrop.
+    assert!(
+        holed_px[1] > 60 && holed_px[1] < 255,
+        "the stroked hole removes the coverage at the stroked row: {holed_px:?}"
+    );
+    assert_ne!(app::mask_tile_map(&ed, portrait), coverage_before);
+    ed.active_mut().unwrap().undo().unwrap();
+    assert_eq!(
+        app::mask_tile_map(&ed, portrait),
+        coverage_before,
+        "undo restores the mask coverage"
+    );
+    // Put the eraser back on top of history: the walk below snapshots
+    // states[0] as the top of history, and it must be the post-stroke state
+    // the redo walk has to reproduce.
+    ed.active_mut().unwrap().redo().unwrap();
+    assert_ne!(
+        app::mask_tile_map(&ed, portrait),
+        coverage_before,
+        "redo replays the eraser onto the top of history"
+    );
+
+    // 7. UNDO walks the whole workflow back: pixel hashes, mask parameters,
+    //    and transforms move TOGETHER at every step.
+    /// The aligned state one history step restores: (mask tile map, mask
+    /// transform, layer pose, mask params).
+    type AlignedState = (
+        Option<editor_core::TileMap>,
+        glam::Affine2,
+        Option<glam::Affine2>,
+        Option<layer_model::LayerMask>,
+    );
+    let full_state = |ed: &app_shell::Editor| -> AlignedState {
+        let layer_pose = app_shell::interaction_geometry::document_transform_of(
+            &ed.active().unwrap().document,
+            portrait,
+            0,
+        )
+        .ok();
+        (
+            app::mask_tile_map(ed, portrait),
+            mask_transform(ed, portrait),
+            layer_pose,
+            get_mask(ed, portrait),
+        )
+    };
+    // Walk history back to the setup state and forward again; each step
+    // must restore the (hashes, mask transform, layer pose, mask params)
+    // tuple exactly — the card's "restores pixel hashes, mask parameters,
+    // and transforms together".
+    let mut states: Vec<AlignedState> = Vec::new();
+    loop {
+        // Stop at the document's floor: below the setup the layer itself
+        // no longer exists (undo walked past create_layer).
+        if ed.active().unwrap().document.layers.get(portrait).is_none() {
+            break;
+        }
+        states.push(full_state(&ed));
+        if !ed.active_mut().unwrap().undo().unwrap_or(false) {
+            break;
+        }
+    }
+    // Every undo step restores a UNIQUE prior state, and the FIRST entry is
+    // the top of history (post-stroke): the mask map never desyncs from the
+    // transform pair along the way.
+    assert!(
+        states.len() >= 6,
+        "the workflow made real history: {}",
+        states.len()
+    );
+    // Below the mask attachment the tuple is (no mask, identity, identity)
+    // for the setup's own commands — uniqueness is only meaningful while a
+    // mask exists.
+    let masked: Vec<_> = states.iter().take_while(|s| s.3.is_some()).collect();
+    assert!(
+        masked.len() >= 5,
+        "the masked workflow made real history: {}",
+        masked.len()
+    );
+    for pair in masked.windows(2) {
+        assert_ne!(pair[0], pair[1], "each undo step changes the aligned state");
+    }
+    // The oldest state is the setup: identity mask transform, linked, full
+    // density, edge at y=16.
+    // The deepest MASKED state (the walk continues below the attachment
+    // into the setup's own layer commands, where the mask is None).
+    let oldest = masked.last().unwrap();
+    assert!(
+        oldest.1 == glam::Affine2::IDENTITY,
+        "the setup mask transform is identity"
+    );
+    assert!(
+        oldest.3.as_ref().is_some_and(|m| m.linked),
+        "the setup mask is linked"
+    );
+    // Redo replays forward to the top exactly.
+    while ed.active_mut().unwrap().redo().unwrap_or(false) {}
+    assert_eq!(
+        full_state(&ed),
+        states[0],
+        "redo replays the whole workflow"
+    );
+
+    // 8. SAVE/REOPEN: the alignment (mask pose + coverage + transforms)
+    //    survives the native package — the probes compare byte-for-byte.
+    let pre_save = composite(&mut ed);
+    let package = tmp.path().join("alignment.rstudio");
+    ed.active_mut()
+        .unwrap()
+        .save_to(&package, app::APP_VERSION)
+        .unwrap();
+    let mut reopened = app::open_project(&package);
+    let after = reopened.composite(region).unwrap();
+    assert_eq!(
+        probe(&after, 16, 28),
+        probe(&pre_save, 16, 28),
+        "the cutout edge survives save/reopen"
+    );
+    assert_eq!(
+        probe(&after, 16, 40),
+        probe(&pre_save, 16, 40),
+        "the frozen-pose discriminator survives save/reopen"
+    );
+}
+
 #[test]
 fn the_asset_reuse_and_clipboard_workflows_survive_native_persistence() {
     use app_shell::dialogs::ScriptedDialogs;
