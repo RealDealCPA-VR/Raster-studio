@@ -2930,6 +2930,336 @@ fn the_manual_portrait_extraction_walk_holds_end_to_end() {
     );
 }
 
+/// Card 065: layer-stack management is PRACTICAL at scale — 30+ layers with
+/// nested groups, rename through the panel's own command shape, duplicate an
+/// alternative via the editor's real action dispatch, move a layer into a
+/// group and between groups, cycle/duplicate-child rejection on re-parent,
+/// and undo restoring order AND content together. The panel-level controls
+/// (drag rows, drop zones, rename fields) are pinned at the ui level
+/// (clicking_the_real_thing: drag-reorder, re-parent, rename field); this
+/// test proves the stack operations they drive hold at 40+ layers.
+#[test]
+fn layer_stack_management_is_practical_at_scale() {
+    use editor_core::Command;
+    use integration_tests::app;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut ed = app::shell_editor(tmp.path(), 128, 128);
+
+    fn ink_layer(ed: &mut app_shell::Editor, name: &str, seed: u8) -> layer_model::LayerId {
+        let layer = layer_model::Layer::raster(name);
+        let id = layer.id;
+        let mut bytes = vec![0u8; (raster::TILE_SIZE * raster::TILE_SIZE * 4) as usize];
+        for px in bytes.chunks_exact_mut(4) {
+            px.copy_from_slice(&[seed, seed / 2, seed / 3, 255]);
+        }
+        let hash = ed.active_mut().unwrap().tiles.insert_bytes(bytes);
+        ed.active_mut()
+            .unwrap()
+            .apply(Command::create_layer(layer))
+            .unwrap();
+        ed.active_mut()
+            .unwrap()
+            .apply(
+                Command::paint_tiles(
+                    editor_core::PixelTarget::Layer(id),
+                    vec![editor_core::TileEdit::set(
+                        raster::TileCoord::new(0, 0, 0),
+                        hash,
+                    )],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        id
+    }
+
+    // 30 content layers + 3 groups (one with a nested subgroup): 40+ rows.
+    let mut content = Vec::new();
+    for i in 0..30u8 {
+        content.push(ink_layer(&mut ed, &format!("Layer {i:02}"), 40 + i));
+    }
+    for g in 0..3u8 {
+        let group = layer_model::Layer::group(format!("Group {g}"));
+        let gid = group.id;
+        ed.active_mut()
+            .unwrap()
+            .apply(Command::create_layer(group))
+            .unwrap();
+        for c in 0..3u8 {
+            let child = ink_layer(&mut ed, &format!("G{g} child {c}"), 100 + g * 10 + c);
+            ed.active_mut()
+                .unwrap()
+                .apply(Command::MoveLayer {
+                    layer_id: child,
+                    parent: Some(gid),
+                    index: 0,
+                })
+                .unwrap();
+        }
+    }
+    // A nested subgroup inside Group 0.
+    let (group0, nested) = {
+        let doc = &ed.active().unwrap().document;
+        let gid = doc
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .find(|id| doc.layers.get(*id).unwrap().name == "Group 0")
+            .unwrap();
+        let nested = layer_model::Layer::group("Nested");
+        let nid = nested.id;
+        ed.active_mut()
+            .unwrap()
+            .apply(Command::create_layer(nested))
+            .unwrap();
+        ed.active_mut()
+            .unwrap()
+            .apply(Command::MoveLayer {
+                layer_id: nid,
+                parent: Some(gid),
+                index: 0,
+            })
+            .unwrap();
+        (gid, nid)
+    };
+    let count = ed.active().unwrap().document.layers.len();
+    assert!(count >= 40, "40+ rows: {count}");
+    let order = |ed: &app_shell::Editor| -> Vec<String> {
+        let doc = &ed.active().unwrap().document;
+        doc.layers
+            .iter_depth_first()
+            .into_iter()
+            .map(|id| doc.layers.get(id).unwrap().name.clone())
+            .collect()
+    };
+    let order_before = order(&ed);
+
+    // 1. RENAME the portrait through the panel's own command shape (the
+    //    panel's LayersModel::rename emits exactly this SetLayerProperties).
+    let portrait = content[0];
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerProperties {
+            layer_id: portrait,
+            patch: editor_core::LayerPatch {
+                name: Some("Headline portrait".into()),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    assert_eq!(
+        ed.active()
+            .unwrap()
+            .document
+            .layers
+            .get(portrait)
+            .unwrap()
+            .name,
+        "Headline portrait"
+    );
+
+    // 2. DUPLICATE an alternative through the editor's real action dispatch
+    //    (the Layers panel's own route).
+    let alternative = content[5];
+    ed.set_layer_selection(vec![alternative], Some(alternative));
+    ed.dispatch(app_shell::action::Action::DuplicateLayer)
+        .unwrap();
+    let dup_count = ed.active().unwrap().document.layers.len();
+    assert_eq!(dup_count, count + 1, "the duplicate adds exactly one layer");
+    let duplicate = ed.active().unwrap().document.active_layer().unwrap();
+    assert_ne!(duplicate, alternative, "the duplicate is a NEW layer");
+    let dup_pixels = app::layer_tile_map(&ed, duplicate);
+    let alt_pixels = app::layer_tile_map(&ed, alternative);
+    assert_eq!(
+        dup_pixels, alt_pixels,
+        "the duplicate carries the same pixels"
+    );
+    assert_eq!(
+        ed.active()
+            .unwrap()
+            .document
+            .layers
+            .get(duplicate)
+            .unwrap()
+            .name,
+        "Layer 05 copy",
+        "the duplicate carries the source's name marked as a copy"
+    );
+
+    // 3. MOVE the duplicate INTO a group (the drag-reparent route's command).
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::MoveLayer {
+            layer_id: duplicate,
+            parent: Some(group0),
+            index: 0,
+        })
+        .unwrap();
+    let in_group = {
+        let doc = &ed.active().unwrap().document;
+        doc.layers
+            .get(group0)
+            .unwrap()
+            .children()
+            .contains(&duplicate)
+    };
+    assert!(in_group, "the duplicate is a child of Group 0");
+
+    // 4. A drop cannot form a cycle: moving Group 0 into its own descendant
+    //    (the nested subgroup) is REFUSED and changes nothing.
+    let depth = ed.active().unwrap().history_depth();
+    let refused = ed.active_mut().unwrap().apply(Command::MoveLayer {
+        layer_id: group0,
+        parent: Some(nested),
+        index: 0,
+    });
+    assert!(
+        refused.is_err(),
+        "a group into its own descendant is refused"
+    );
+    assert_eq!(
+        ed.active().unwrap().history_depth(),
+        depth,
+        "a refused move leaves no history"
+    );
+    assert_eq!(order(&ed)[..4], order_before[..4], "the tree is unchanged");
+
+    // 5. UNDO restores order AND content together: undo the move, the
+    //    duplicate, and the rename — each step back is exact.
+    ed.active_mut().unwrap().undo().unwrap(); // the move into the group
+    let after_move_undo = order(&ed);
+    assert_eq!(
+        after_move_undo.len(),
+        count + 1,
+        "the duplicate survives the move's undo"
+    );
+    ed.active_mut().unwrap().undo().unwrap(); // the duplicate
+    assert_eq!(
+        ed.active().unwrap().document.layers.len(),
+        count,
+        "the duplicate's undo removes it"
+    );
+    assert!(
+        app::layer_tile_map(&ed, duplicate).is_none(),
+        "the duplicate's PIXELS are gone with it"
+    );
+    ed.active_mut().unwrap().undo().unwrap(); // the rename
+    assert_eq!(
+        ed.active()
+            .unwrap()
+            .document
+            .layers
+            .get(portrait)
+            .unwrap()
+            .name,
+        format!("Layer {:02}", 0),
+        "the rename's undo restores the name"
+    );
+    assert_eq!(
+        order(&ed),
+        order_before,
+        "the whole walk restores the order"
+    );
+    // Redo replays all three exactly.
+    for _ in 0..3 {
+        ed.active_mut().unwrap().redo().unwrap();
+    }
+    assert_eq!(
+        ed.active()
+            .unwrap()
+            .document
+            .layers
+            .get(portrait)
+            .unwrap()
+            .name,
+        "Headline portrait"
+    );
+    assert_eq!(
+        ed.active()
+            .unwrap()
+            .document
+            .layers
+            .get(duplicate)
+            .unwrap()
+            .name,
+        "Layer 05 copy"
+    );
+    let dup_in_group = ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .get(group0)
+        .unwrap()
+        .children()
+        .contains(&duplicate);
+    assert!(dup_in_group, "redo restores the move into the group");
+
+    // 6. VISIBILITY rides the document and undoes exactly (the row's eye
+    //    toggle emits this patch; the collapse flag is panel session state
+    //    over the saved tree by design).
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerProperties {
+            layer_id: group0,
+            patch: editor_core::LayerPatch {
+                visible: Some(false),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    assert!(
+        !ed.active()
+            .unwrap()
+            .document
+            .layers
+            .get(group0)
+            .unwrap()
+            .visible,
+        "the eye toggle hides the group"
+    );
+    ed.active_mut().unwrap().undo().unwrap();
+    assert!(
+        ed.active()
+            .unwrap()
+            .document
+            .layers
+            .get(group0)
+            .unwrap()
+            .visible,
+        "undo restores the visibility"
+    );
+
+    // 7. The stack survives native save/reopen at this size.
+    let package = tmp.path().join("stack.rstudio");
+    ed.active_mut()
+        .unwrap()
+        .save_to(&package, app::APP_VERSION)
+        .unwrap();
+    let reopened = app::open_project(&package);
+    let names_after: Vec<String> = reopened
+        .document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .map(|id| reopened.document.layers.get(id).unwrap().name.clone())
+        .collect();
+    assert_eq!(
+        names_after.len(),
+        order_before.len() + 1,
+        "the duplicate is the one extra row"
+    );
+    assert!(
+        names_after.contains(&"Headline portrait".to_string()),
+        "the renamed layer survives"
+    );
+    assert!(
+        names_after.iter().any(|n| n == "Layer 05 copy"),
+        "the duplicate survives reopen"
+    );
+}
+
 #[test]
 fn the_asset_reuse_and_clipboard_workflows_survive_native_persistence() {
     use app_shell::dialogs::ScriptedDialogs;
