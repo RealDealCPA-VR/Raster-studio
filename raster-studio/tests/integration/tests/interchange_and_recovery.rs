@@ -739,6 +739,27 @@ mod card073 {
         s.into_inner()
     }
 
+    /// A hand-crafted minimal `TySh` payload whose text descriptor carries no
+    /// `Txt ` key — the unparseable member of the editable-text subset.
+    pub fn tysh_without_text(transform: [f64; 6]) -> Vec<u8> {
+        let mut s = Sink::new();
+        s.u16(1);
+        for v in transform {
+            s.f64(v);
+        }
+        s.u16(50);
+        s.u32(16);
+        Descriptor::new("TxLr").write(&mut s).unwrap();
+        s.u16(1);
+        s.u32(16);
+        Descriptor::new("warp").write(&mut s).unwrap();
+        s.i32(0);
+        s.i32(0);
+        s.i32(120);
+        s.i32(28);
+        s.into_inner()
+    }
+
     /// A minimal `lfx2` drop-shadow block, retained verbatim by the model.
     pub fn drop_shadow() -> Vec<u8> {
         let mut s = Sink::new();
@@ -834,8 +855,10 @@ mod card073 {
 }
 
 /// E11: importing the card-073 fixture keeps the layer metadata and names
-/// every loss — styled type as pixels, effects not imported, the adjustment
-/// this build cannot evaluate kept as an empty layer with its tag named.
+/// every loss — the type layer's parseable subset imports editable with the
+/// reported default-font substitution, effects are not imported, and the
+/// adjustment this build cannot evaluate is kept as an empty layer with its
+/// tag named.
 ///
 /// The Invert adjustment is the one that maps exactly, the masked portrait
 /// keeps its coverage, and the nested groups keep their nesting and flags.
@@ -887,11 +910,28 @@ fn importing_the_card073_fixture_reports_every_loss_and_keeps_the_layer_metadata
     assert_eq!(headline.clipping, layer_model::ClippingMode::ClipToBelow);
     assert!(headline.visible);
 
-    // E11: the type layer became pixels — an editable-text claim would be a
-    // lie, and the note below is what says so.
-    assert!(
-        matches!(headline.kind, layer_model::LayerKind::Raster(_)),
-        "type imports as pixels, not as an editable text layer"
+    // The type layer's editable subset: the parseable `Txt ` string and the
+    // `TySh` transform import as an editable text layer — with the editor's
+    // default font, since the format does not name one outside the engine
+    // data. The substitution is reported below, not silent.
+    let layer_model::LayerKind::Text(text) = &headline.kind else {
+        panic!("a parseable type layer imports as editable text");
+    };
+    assert_eq!(text.text, "SELL NOW");
+    assert_eq!(
+        text.font_family,
+        tools::text::DEFAULT_FONT_FAMILY,
+        "the reported default family, not a silent guess"
+    );
+    assert_eq!(
+        headline.transform,
+        {
+            let [xx, xy, yx, yy, tx, ty] = card073::ROTATED;
+            glam::Affine2::from_cols_array(&[
+                xx as f32, xy as f32, yx as f32, yy as f32, tx as f32, ty as f32,
+            ])
+        },
+        "the TySh transform came across as the layer affine"
     );
 
     // The masked portrait keeps its coverage as a raster mask.
@@ -914,9 +954,11 @@ fn importing_the_card073_fixture_reports_every_loss_and_keeps_the_layer_metadata
             // E11, unsupported adjustment: the note names the tag.
             "adjustment layer(s) this build cannot evaluate (\u{201c}Hue/Sat 1 (hue2)\u{201d}) \
              were kept as empty layers; their effect is in the flattened image but not editable",
-            // E11, styled type.
-            "type layer(s) (\u{201c}Headline\u{201d}) were imported as pixels; the text is no \
-             longer editable",
+            // E11, styled type: the parseable subset imports editable, with
+            // the default-font substitution named.
+            "type layer(s) (\u{201c}Headline\u{201d}) were imported as editable text with the \
+             default font, size and fill — the source font is not in this build's supported \
+             subset",
             // E11, effects.
             "layer effect(s) on \u{201c}Headline\u{201d} were not imported",
         ],
@@ -1023,6 +1065,138 @@ fn a_truncated_card073_fixture_fails_loudly_through_the_import_path() {
     assert!(
         err.to_string().contains("Photoshop document"),
         "the refusal names what could not be read: {err}"
+    );
+}
+
+/// T074: the supported editable text subset. A type layer whose `TySh` block
+/// carries a parseable `Txt ` string imports as an editable `LayerKind::Text`
+/// under the block's own transform, with the unavoidable font/size/fill
+/// substitution reported by name. The layer stays a real text layer: a text
+/// edit applies, the text renders, and a project save/reopen keeps it.
+#[test]
+fn a_parseable_type_layer_imports_as_editable_text() {
+    const TEXT: &str = "Editable now";
+    let mut file = PsdFile::new(PsdHeader::rgba8(64, 48));
+    let mut headline = PsdLayer::raster("Headline", Rect::default());
+    headline.text = Some(TextData {
+        transform: card073::ROTATED,
+        text: Some(TEXT.to_owned()),
+        raw: card073::tysh(TEXT, card073::ROTATED),
+    });
+    file.layers.push(headline);
+    let bytes = psd::write(&file).unwrap();
+
+    let import = document_from_psd(&bytes, "type.psd", 10).unwrap();
+    // The substitution is the report — nothing about the defaulting is silent.
+    assert_eq!(
+        import.notes.notes(),
+        vec![
+            "type layer(s) (\u{201c}Headline\u{201d}) were imported as editable text with the \
+             default font, size and fill — the source font is not in this build's supported \
+             subset",
+        ],
+        "the default-font note, verbatim"
+    );
+
+    let mut doc = OpenDocument::from_import(app::next_id(), import.imported);
+    let layer = doc.document.active_layer().expect("the type layer");
+    let layer_model::LayerKind::Text(text) = &doc.document.layers.get(layer).unwrap().kind else {
+        panic!("a parseable type layer must import as an editable text layer");
+    };
+    assert_eq!(text.text, TEXT, "the exact string");
+    assert_eq!(
+        text.font_family,
+        tools::text::DEFAULT_FONT_FAMILY,
+        "the reported default family"
+    );
+    assert_eq!(text.size_px, tools::text::DEFAULT_SIZE_PX);
+    let expected = {
+        let [xx, xy, yx, yy, tx, ty] = card073::ROTATED;
+        glam::Affine2::from_cols_array(&[
+            xx as f32, xy as f32, yx as f32, yy as f32, tx as f32, ty as f32,
+        ])
+    };
+    assert_eq!(
+        doc.document.layers.get(layer).unwrap().transform,
+        expected,
+        "the TySh transform, as the layer affine"
+    );
+
+    // Editable for real: a text edit of the same class applies.
+    let edited = layer_model::TextLayer {
+        text: "EDITED".into(),
+        font_family: tools::text::DEFAULT_FONT_FAMILY.into(),
+        size_px: tools::text::DEFAULT_SIZE_PX,
+        ..layer_model::TextLayer::default()
+    };
+    doc.apply(Command::SetLayerKind {
+        layer_id: layer,
+        kind: Box::new(layer_model::LayerKind::Text(edited.clone())),
+    })
+    .expect("a text edit applies to an imported text layer");
+    let layer_model::LayerKind::Text(after) = &doc.document.layers.get(layer).unwrap().kind else {
+        panic!("the edit landed");
+    };
+    assert_eq!(after.text, "EDITED");
+
+    // And it renders: the composite has ink where the text sits, not a
+    // silently blank layer.
+    let composite = doc.composite_all();
+    assert!(
+        composite.chunks(4).any(|p| p[3] > 0),
+        "the imported text layer renders"
+    );
+
+    // A project save/reopen keeps the editable layer (a .psd export would not
+    // — it has no home for text and says so).
+    let tmp = tempfile::tempdir().unwrap();
+    let package = tmp.path().join("text-import.rstudio");
+    doc.save_to(&package, app::APP_VERSION).unwrap();
+    drop(doc);
+    let back = app::open_project(&package);
+    let layer_model::LayerKind::Text(reopened) = &back.document.layers.get(layer).unwrap().kind
+    else {
+        panic!("the text layer survives a save/reopen");
+    };
+    assert_eq!(reopened.text, "EDITED");
+    assert_eq!(back.document.layers.get(layer).unwrap().transform, expected);
+}
+
+/// T074: the other half of the subset. A `TySh` block whose descriptor has no
+/// `Txt ` key is unparseable — the pixels fallback, exactly as before: raster
+/// pixels plus the existing pixels note, and no editable claim.
+#[test]
+fn an_unparseable_type_layer_still_imports_as_pixels_with_the_pixels_note() {
+    let mut file = PsdFile::new(PsdHeader::rgba8(32, 32));
+    let mut headline = PsdLayer::raster("Headline", Rect::sized(32, 32));
+    headline.set_rgba8(&vec![120u8; 32 * 32 * 4]).unwrap();
+    headline.text = Some(TextData {
+        transform: card073::ROTATED,
+        text: None,
+        raw: card073::tysh_without_text(card073::ROTATED),
+    });
+    file.layers.push(headline);
+    let bytes = psd::write(&file).unwrap();
+
+    let import = document_from_psd(&bytes, "opaque-type.psd", 10).unwrap();
+    assert_eq!(
+        import.notes.notes(),
+        vec![
+            "type layer(s) (\u{201c}Headline\u{201d}) were imported as pixels; the text is no \
+             longer editable",
+        ],
+        "the pixels fallback keeps its note"
+    );
+    let layer = import.imported.document.active_layer().expect("the layer");
+    let l = import.imported.document.layers.get(layer).unwrap();
+    assert!(matches!(l.kind, layer_model::LayerKind::Raster(_)));
+    assert!(
+        import
+            .imported
+            .document
+            .layer_tiles(layer)
+            .is_some_and(|t| !t.is_empty()),
+        "the pixels really are the fallback"
     );
 }
 

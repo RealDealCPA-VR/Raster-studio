@@ -30,9 +30,12 @@ use editor_core::pixels::{PixelKey, PixelTarget, TileDelta, TileEdit, TileMap};
 use editor_core::{Command, Document, History, MASK_TILE_BYTES};
 use layer_model::{
     AdjustmentKind, BlendMode, ClippingMode, GroupBlending, GroupLayer, Layer, LayerId, LayerKind,
-    LayerMask, LockState, MaskId, MaskKind,
+    LayerMask, LockState, MaskId, MaskKind, TextLayer,
 };
 use raster::{PixelFormat, TileCoord, TileGrid, TILE_SIZE};
+use tools::text::{
+    DEFAULT_FONT_FAMILY as TEXT_DEFAULT_FAMILY, DEFAULT_SIZE_PX as TEXT_DEFAULT_SIZE,
+};
 
 /// A decoded image on its way into a document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -432,6 +435,7 @@ impl PsdNotes {
 struct Tally {
     adjustments: Vec<String>,
     type_layers: Vec<String>,
+    editable_text: Vec<String>,
     effects: Vec<String>,
     second_masks: Vec<String>,
     off_canvas: Vec<String>,
@@ -455,7 +459,7 @@ fn named(items: &[String]) -> String {
 
 impl Tally {
     fn record(&mut self, notes: &mut PsdNotes) {
-        let entries: [(&[String], &str); 12] = [
+        let entries: [(&[String], &str); 13] = [
             (
                 &self.color_labels,
                 "the colour label on {names} is not shown by this layers panel and was not kept",
@@ -468,6 +472,11 @@ impl Tally {
             (
                 &self.type_layers,
                 "type layer(s) ({names}) were imported as pixels; the text is no longer editable",
+            ),
+            (
+                &self.editable_text,
+                "type layer(s) ({names}) were imported as editable text with the default font, \
+                 size and fill — the source font is not in this build's supported subset",
             ),
             (
                 &self.effects,
@@ -1019,9 +1028,38 @@ pub fn document_from_psd(
                     ));
                 }
                 None => {
-                    wants_pixels = true;
-                    if source.text.is_some() {
-                        tally.type_layers.push(source.name.clone());
+                    // A type layer's editable subset: a parseable `Txt ` string
+                    // and a `TySh` transform (any affine). The string and the
+                    // transform import as a real text layer; the font, size and
+                    // fill do not — without the engine data the file does not
+                    // name them, so the editor's new-text defaults stand in and
+                    // the substitution is reported by name. The `TySh` bytes
+                    // themselves stay in the `psd` model and survive a save
+                    // verbatim (`psd::text` writes back what it read).
+                    let parsed = source
+                        .text
+                        .as_ref()
+                        .and_then(|t| t.text.clone().map(|text| (t.transform, text)));
+                    if let Some((transform, text)) = parsed {
+                        let [xx, xy, yx, yy, tx, ty] = transform;
+                        layer.kind = LayerKind::Text(TextLayer {
+                            text,
+                            font_family: TEXT_DEFAULT_FAMILY.to_string(),
+                            size_px: TEXT_DEFAULT_SIZE,
+                            ..TextLayer::default()
+                        });
+                        layer.transform = glam::Affine2::from_cols_array(&[
+                            xx as f32, xy as f32, yx as f32, yy as f32, tx as f32, ty as f32,
+                        ]);
+                        tally.editable_text.push(source.name.clone());
+                    } else {
+                        // No parseable string: everything editable about this
+                        // type layer is locked inside the engine data, so the
+                        // pixels are the only honest thing to keep.
+                        wants_pixels = true;
+                        if source.text.is_some() {
+                            tally.type_layers.push(source.name.clone());
+                        }
                     }
                 }
             },
@@ -2270,6 +2308,7 @@ mod tests {
             "the colour label on {names} is not shown by this layers panel and was not kept",
             "adjustment layer(s) this build cannot evaluate ({names}) were kept as empty              layers; their effect is in the flattened image but not editable",
             "type layer(s) ({names}) were imported as pixels; the text is no longer editable",
+            "type layer(s) ({names}) were imported as editable text with the default font, size and fill — the source font is not in this build's supported subset",
             "layer effect(s) on {names} were not imported",
             "{names} carried a second, vector-derived mask that was not imported",
             "{names} extend past the canvas; the part outside it was not kept",

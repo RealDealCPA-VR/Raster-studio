@@ -1854,6 +1854,45 @@ fn card073_tysh(text: &str, transform: [f64; 6]) -> Vec<u8> {
     s.into_inner()
 }
 
+/// The unparseable member of the editable-text subset: a `TySh` whose text
+/// descriptor carries no `Txt ` key. Nothing is extracted, and the block —
+/// transform included — survives a save verbatim, which is what lets the
+/// importer fall back to pixels honestly while the file keeps its bytes.
+#[test]
+fn a_tysh_without_a_text_key_is_kept_verbatim_with_no_string() {
+    let mut s = crate::bytes::Sink::new();
+    s.u16(1);
+    for v in CARD073_ROTATED {
+        s.f64(v);
+    }
+    s.u16(50);
+    s.u32(16);
+    crate::Descriptor::new("TxLr").write(&mut s).unwrap();
+    s.u16(1);
+    s.u32(16);
+    crate::Descriptor::new("warp").write(&mut s).unwrap();
+    s.i32(0);
+    s.i32(0);
+    s.i32(120);
+    s.i32(28);
+    let raw = s.into_inner();
+
+    let mut file = PsdFile::new(PsdHeader::rgba8(2, 2));
+    let mut typed = PsdLayer::raster("Type", Rect::default());
+    typed.text = Some(TextData {
+        transform: CARD073_ROTATED,
+        text: None,
+        raw: raw.clone(),
+    });
+    file.layers.push(typed);
+
+    let back = read(&write(&file).unwrap()).unwrap();
+    let text = back.layers[0].text.as_ref().unwrap();
+    assert_eq!(text.text, None, "no string is invented");
+    assert_eq!(text.transform, CARD073_ROTATED);
+    assert_eq!(text.raw, raw, "the block is preserved verbatim");
+}
+
 /// A minimal `lfx2` drop-shadow block: object version, descriptor version,
 /// then a descriptor naming the effect and switching it on.
 ///

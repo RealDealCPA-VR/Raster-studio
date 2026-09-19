@@ -39,7 +39,8 @@ byte slice, and opening a file writes nothing.
 | Vector masks | **Appearance fallback** | Written as their rasterised coverage — "the vector mask on … was written as its rasterised coverage". A second, vector-derived mask "was not imported" by name. |
 | Adjustment layers — **Invert** (`nvrt`) | **Editable** | The one adjustment whose whole definition is its name. |
 | Adjustment layers — everything else | **Unsupported (explicit)** | The payload survives in `psd`'s model but this build will not invent slider values: the layer is kept empty and named — "adjustment layer(s) … were kept as empty layers; their effect is in the flattened image but not editable". |
-| Type layers | **Appearance fallback** | Pixels are imported; the text is not editable — "type layer(s) … were imported as pixels; the text is no longer editable". |
+| Type layers — parseable `Txt ` string | **Editable (reported substitution)** | The string imports as an editable `LayerKind::Text` under the `TySh` transform (any affine). The format carries no font/size/fill outside the engine data, so the editor's new-text defaults are used and named — "type layer(s) … were imported as editable text with the default font, size and fill — the source font is not in this build's supported subset". The raw `TySh` bytes stay in the model and survive a save verbatim. |
+| Type layers — unparseable (`Txt ` missing or unreadable) | **Appearance fallback** | Pixels are imported; the text is not editable — "type layer(s) … were imported as pixels; the text is no longer editable". |
 | Layer effects (drop shadow, stroke, …) | **Unsupported (explicit)** | Not imported — "layer effect(s) on … were not imported". (This editor's own effects are card 066/067 features; PSD effect descriptors are a separate decoder.) |
 | Embedded ICC profile | **Unsupported (explicit)** | `psd::read` keeps resources as opaque bytes and the import leaves the profile behind by name — “… the colour profile — are not part of this document model and were left behind”. (Card 047's keep-and-retag contract is the generic raster-codec path, not `psd::read`.) |
 | Smart objects (cached composite pixels) | **Appearance fallback** | The cached pixels import as a raster layer; the placed-source identity does not survive the trip (a `.psd` stores a different structure). |
@@ -71,6 +72,7 @@ honesty gate in `import.rs` asserts this file keeps quoting every one:
 - "the colour label on {names} is not shown by this layers panel and was not kept"
 - "adjustment layer(s) this build cannot evaluate ({names}) were kept as empty layers; their effect is in the flattened image but not editable"
 - "type layer(s) ({names}) were imported as pixels; the text is no longer editable"
+- "type layer(s) ({names}) were imported as editable text with the default font, size and fill — the source font is not in this build's supported subset"
 - "layer effect(s) on {names} were not imported"
 - "{names} carried a second, vector-derived mask that was not imported"
 - "{names} extend past the canvas; the part outside it was not kept"
