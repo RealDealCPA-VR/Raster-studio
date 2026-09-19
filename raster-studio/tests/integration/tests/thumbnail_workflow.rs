@@ -3578,6 +3578,310 @@ fn thumbnail_effects_integration_holds_end_to_end() {
     );
 }
 
+/// Card 068: clipped adjustments scope to the layer they clip — a
+/// portrait-only tonal adjustment leaves the headline and background
+/// untouched; toggling (visibility, then clip release) restores prior
+/// pixels; the adjustment's own mask is editable separately and composes;
+/// parameters and clipping survive save/reopen. Uses the existing
+/// adjustment types (Curves, Invert) through the real command routes —
+/// repair only where a reproduced defect demands it (none found: the
+/// clipping commands, scoping, and mask targeting all behave).
+#[test]
+fn the_clipped_adjustment_scopes_to_the_portrait_and_survives_reload() {
+    use editor_core::Command;
+    use integration_tests::app;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut ed = app::shell_editor(tmp.path(), 128, 128);
+
+    // Headline (bottom, blue-ish) and Portrait (top, warm) content layers
+    // over the white canvas; the portrait is what the adjustment will clip
+    // to. NOTE: the shell stacks topmost-first, so the LAST created layer
+    // renders above.
+    let headline = {
+        let layer = layer_model::Layer::raster("Headline");
+        let id = layer.id;
+        let mut bytes = vec![0u8; (raster::TILE_SIZE * raster::TILE_SIZE * 4) as usize];
+        for y in 20..60usize {
+            for x in 16..112usize {
+                let i = (y * raster::TILE_SIZE as usize + x) * 4;
+                bytes[i..i + 4].copy_from_slice(&[30, 30, 160, 255]);
+            }
+        }
+        let hash = ed.active_mut().unwrap().tiles.insert_bytes(bytes);
+        ed.active_mut()
+            .unwrap()
+            .apply(Command::create_layer(layer))
+            .unwrap();
+        ed.active_mut()
+            .unwrap()
+            .apply(
+                Command::paint_tiles(
+                    editor_core::PixelTarget::Layer(id),
+                    vec![editor_core::TileEdit::set(
+                        raster::TileCoord::new(0, 0, 0),
+                        hash,
+                    )],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        id
+    };
+    let _portrait = {
+        let layer = layer_model::Layer::raster("Portrait");
+        let id = layer.id;
+        let mut bytes = vec![0u8; (raster::TILE_SIZE * raster::TILE_SIZE * 4) as usize];
+        for y in 68..100usize {
+            for x in 40..88usize {
+                let i = (y * raster::TILE_SIZE as usize + x) * 4;
+                bytes[i..i + 4].copy_from_slice(&[200, 120, 60, 255]);
+            }
+        }
+        let hash = ed.active_mut().unwrap().tiles.insert_bytes(bytes);
+        ed.active_mut()
+            .unwrap()
+            .apply(Command::create_layer(layer))
+            .unwrap();
+        ed.active_mut()
+            .unwrap()
+            .apply(
+                Command::paint_tiles(
+                    editor_core::PixelTarget::Layer(id),
+                    vec![editor_core::TileEdit::set(
+                        raster::TileCoord::new(0, 0, 0),
+                        hash,
+                    )],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        id
+    };
+    let region = raster::PixelRect::new(0, 0, 128, 128);
+    let composite = |ed: &mut app_shell::Editor| -> Vec<u8> {
+        ed.active_mut().unwrap().composite(region).unwrap()
+    };
+    let probe = |bytes: &[u8], x: usize, y: usize| -> [u8; 4] {
+        let i = (y * 128 + x) * 4;
+        [bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]
+    };
+    let baseline = composite(&mut ed);
+    let headline_px = probe(&baseline, 64, 40);
+    let portrait_px = probe(&baseline, 64, 84);
+    let backdrop = [255u8, 255, 255, 255];
+
+    // The clipped adjustment: a strong Curves darkening, created ABOVE the
+    // portrait (the active layer route) and clipped to it.
+    let adjustment = {
+        let layer = layer_model::Layer::with_kind(
+            "Tonal",
+            layer_model::LayerKind::Adjustment(layer_model::AdjustmentLayer {
+                kind: layer_model::AdjustmentKind::Curves {
+                    points: vec![[0.0, 0.0], [0.5, 0.15], [1.0, 0.55]],
+                },
+            }),
+        );
+        let id = layer.id;
+        ed.active_mut()
+            .unwrap()
+            .apply(Command::create_layer(layer))
+            .unwrap();
+        id
+    };
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerProperties {
+            layer_id: adjustment,
+            patch: editor_core::LayerPatch {
+                clipping: Some(layer_model::ClippingMode::ClipToBelow),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let clipped = composite(&mut ed);
+    // The portrait darkens; the headline and the backdrop are UNCHANGED.
+    let portrait_clipped = probe(&clipped, 64, 84);
+    assert!(
+        portrait_clipped[0] < portrait_px[0] && portrait_clipped[1] < portrait_px[1],
+        "the portrait darkens under the clipped curves: {portrait_clipped:?} vs {portrait_px:?}"
+    );
+    assert_eq!(
+        probe(&clipped, 64, 40),
+        headline_px,
+        "the headline is OUTSIDE the clip scope"
+    );
+    assert_eq!(
+        probe(&clipped, 8, 8),
+        backdrop,
+        "the backdrop is outside too"
+    );
+
+    // TOGGLING restores prior pixels: hide the adjustment...
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerProperties {
+            layer_id: adjustment,
+            patch: editor_core::LayerPatch {
+                visible: Some(false),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    assert_eq!(
+        composite(&mut ed),
+        baseline,
+        "hiding the adjustment restores prior pixels"
+    );
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerProperties {
+            layer_id: adjustment,
+            patch: editor_core::LayerPatch {
+                visible: Some(true),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    assert_eq!(
+        composite(&mut ed),
+        clipped,
+        "showing it again restores the scope"
+    );
+    // ...and releasing the clip makes it hit EVERYTHING (the scope check in
+    // reverse): the headline darkens too.
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerProperties {
+            layer_id: adjustment,
+            patch: editor_core::LayerPatch {
+                clipping: Some(layer_model::ClippingMode::None),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let released = composite(&mut ed);
+    assert_ne!(
+        probe(&released, 64, 40),
+        headline_px,
+        "released from the clip, the adjustment reaches the headline"
+    );
+    ed.active_mut().unwrap().undo().unwrap();
+    assert_eq!(composite(&mut ed), clipped, "undo restores the clip scope");
+
+    // EDIT ITS MASK SEPARATELY: a mask on the ADJUSTMENT reveals only the
+    // left QUARTER of the canvas (x 0..64 of the 256-wide store tile) —
+    // the darkening now covers only the portrait's left quarter.
+    {
+        let doc = ed.active_mut().unwrap();
+        let mask = layer_model::LayerMask::new(layer_model::MaskId::new());
+        doc.apply(Command::SetLayerProperties {
+            layer_id: adjustment,
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Set(mask),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        let mut coverage = vec![0u8; editor_core::MASK_TILE_BYTES];
+        for y in 0..raster::TILE_SIZE as usize {
+            for x in 0..64usize {
+                coverage[y * raster::TILE_SIZE as usize + x] = 255;
+            }
+        }
+        let mhash = doc.tiles.insert_bytes(coverage);
+        doc.apply(
+            Command::paint_tiles(
+                editor_core::PixelTarget::Mask(adjustment),
+                vec![editor_core::TileEdit::set(
+                    raster::TileCoord::new(0, 0, 0),
+                    mhash,
+                )],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    let masked_adjust = composite(&mut ed);
+    // The portrait's LEFT side stays darkened, its RIGHT side back to the
+    // original ink; the headline is untouched throughout.
+    assert!(
+        probe(&masked_adjust, 48, 84)[0] < portrait_px[0],
+        "the left portrait keeps the darkening"
+    );
+    assert_eq!(
+        probe(&masked_adjust, 80, 84),
+        portrait_px,
+        "the right portrait is outside the adjustment's own mask"
+    );
+    assert_eq!(
+        probe(&masked_adjust, 64, 40),
+        headline_px,
+        "the headline stays out"
+    );
+    // Undo removes the mask in TWO entries (the coverage paint, then the
+    // attach itself).
+    ed.active_mut().unwrap().undo().unwrap();
+    ed.active_mut().unwrap().undo().unwrap();
+    assert_eq!(
+        composite(&mut ed),
+        clipped,
+        "undo restores the unmasked clip"
+    );
+
+    // SWAP THE KIND: Invert hits only the portrait while clipped.
+    ed.active_mut()
+        .unwrap()
+        .apply(Command::SetLayerKind {
+            layer_id: adjustment,
+            kind: Box::new(layer_model::LayerKind::Adjustment(
+                layer_model::AdjustmentLayer {
+                    kind: layer_model::AdjustmentKind::Invert,
+                },
+            )),
+        })
+        .unwrap();
+    let inverted = composite(&mut ed);
+    let inverted_px = probe(&inverted, 64, 84);
+    assert!(
+        (inverted_px[0] as i32 - (255 - portrait_px[0] as i32)).abs() <= 2,
+        "the portrait inverts: {inverted_px:?} vs {portrait_px:?}"
+    );
+    assert_eq!(
+        probe(&inverted, 64, 40),
+        headline_px,
+        "the headline stays out"
+    );
+
+    // PARAMETERS SURVIVE RELOAD: save + reopen; the kind, clipping, and
+    // composite are byte-identical.
+    let pre_save = composite(&mut ed);
+    let package = tmp.path().join("clipped.rstudio");
+    ed.active_mut()
+        .unwrap()
+        .save_to(&package, app::APP_VERSION)
+        .unwrap();
+    let mut reopened = app::open_project(&package);
+    let doc = &reopened.document;
+    let adj = doc
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|id| doc.layers.get(*id).unwrap().name == "Tonal")
+        .unwrap();
+    let layer = doc.layers.get(adj).unwrap();
+    assert!(layer.clipping == layer_model::ClippingMode::ClipToBelow);
+    match &layer.kind {
+        layer_model::LayerKind::Adjustment(a) => {
+            assert!(matches!(a.kind, layer_model::AdjustmentKind::Invert))
+        }
+        other => panic!("the adjustment stays an adjustment: {other:?}"),
+    }
+    let after = reopened.composite(region).unwrap();
+    assert_eq!(after, pre_save, "the clipped composite survives reload");
+    let _ = headline;
+}
+
 #[test]
 fn the_asset_reuse_and_clipboard_workflows_survive_native_persistence() {
     use app_shell::dialogs::ScriptedDialogs;
