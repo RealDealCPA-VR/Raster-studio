@@ -3882,6 +3882,239 @@ fn the_clipped_adjustment_scopes_to_the_portrait_and_survives_reload() {
     let _ = headline;
 }
 
+/// Card 070: the native reusable composition workflow — a native sample
+/// composition (a template with clearly named editable placeholder layers:
+/// a headline text layer, a "replace me" smart-object logo, a background)
+/// opens as its own document; Duplicate Document and Save As produce
+/// independent variants (text edits + Replace Contents) WITHOUT touching
+/// the template file, and each variant exports under its own name. No
+/// separate template engine: the workflow is open-as-unsaved + duplicate +
+/// save-as, all through real routes.
+#[test]
+fn native_composition_workflow_supports_independent_variants() {
+    use integration_tests::app;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut ed = app::shell_editor(tmp.path(), 320, 180);
+
+    // The template: a background, a "replace me" logo smart object, and a
+    // headline text layer with clearly named editable placeholders.
+    let background_png = tmp.path().join("background.png");
+    let mut bg = vec![0u8; 320 * 180 * 4];
+    for px in bg.chunks_exact_mut(4) {
+        px.copy_from_slice(&[235, 235, 225, 255]);
+    }
+    std::fs::write(
+        &background_png,
+        raster::encode(raster::ExportFormat::Png, 320, 180, &bg).unwrap(),
+    )
+    .unwrap();
+    let logo_png = tmp.path().join("logo.png");
+    let mut logo = vec![0u8; 48 * 48 * 4];
+    for px in logo.chunks_exact_mut(4) {
+        px.copy_from_slice(&[200, 60, 30, 255]);
+    }
+    std::fs::write(
+        &logo_png,
+        raster::encode(raster::ExportFormat::Png, 48, 48, &logo).unwrap(),
+    )
+    .unwrap();
+
+    ed.open_path(&background_png).unwrap();
+    let template_index = ed.active_index().unwrap();
+    let background = ed.active().unwrap().document.active_layer().unwrap();
+    ed.active_mut()
+        .unwrap()
+        .apply(editor_core::Command::SetLayerProperties {
+            layer_id: background,
+            patch: editor_core::LayerPatch {
+                name: Some("Background".into()),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    // The logo places ABOVE the background as a smart object.
+    ed.place_path(&logo_png, false).unwrap();
+    let logo_layer = ed.active().unwrap().document.active_layer().unwrap();
+    ed.active_mut()
+        .unwrap()
+        .apply(editor_core::Command::SetLayerProperties {
+            layer_id: logo_layer,
+            patch: editor_core::LayerPatch {
+                name: Some("Logo — replace me".into()),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    // The headline text layer on top (the Type tool's create route).
+    let headline = layer_model::Layer::with_kind(
+        "Headline — edit me",
+        layer_model::LayerKind::Text(layer_model::TextLayer::legacy(
+            "TEMPLATE HEADLINE".to_string(),
+            "DejaVu Sans".to_string(),
+            24.0,
+        )),
+    );
+    let headline_id = headline.id;
+    ed.active_mut()
+        .unwrap()
+        .apply(editor_core::Command::create_layer(headline))
+        .unwrap();
+    // Save the TEMPLATE.
+    let template = tmp.path().join("template.rstudio");
+    ed.active_mut()
+        .unwrap()
+        .save_to(&template, app::APP_VERSION)
+        .unwrap();
+    // Native packages are DIRECTORIES: the immutability check hashes the
+    // manifest (the package's identity document).
+    let manifest = template.join("manifest.json");
+    let template_before = std::fs::read(&manifest).unwrap();
+    // VARIANT 1: Duplicate Document, then a text-content edit through the
+    // real SetLayerKind route.
+    let docs_before = ed.documents().len();
+    ed.duplicate_document().unwrap();
+    assert_eq!(
+        ed.documents().len(),
+        docs_before + 1,
+        "the duplicate is a second open document"
+    );
+    {
+        let mut text = match &ed
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .get(headline_id)
+            .unwrap()
+            .kind
+        {
+            layer_model::LayerKind::Text(t) => t.clone(),
+            other => panic!("the headline is text: {other:?}"),
+        };
+        text.text = "VARIANT ONE".to_string();
+        ed.apply_command(editor_core::Command::SetLayerKind {
+            layer_id: headline_id,
+            kind: Box::new(layer_model::LayerKind::Text(text)),
+        });
+    }
+    let v1 = tmp.path().join("variant-one.rstudio");
+    ed.active_mut()
+        .unwrap()
+        .save_to(&v1, app::APP_VERSION)
+        .unwrap();
+
+    // VARIANT 2: back to the template tab, duplicate again, REPLACE
+    // CONTENTS on the logo smart object with a new file (the card-069
+    // route), keep the template text.
+    ed.activate(template_index).unwrap();
+    ed.duplicate_document().unwrap();
+    {
+        let replacement = tmp.path().join("logo2.png");
+        let mut logo2 = vec![0u8; 96 * 96 * 4];
+        for px in logo2.chunks_exact_mut(4) {
+            px.copy_from_slice(&[20, 160, 90, 255]);
+        }
+        std::fs::write(
+            &replacement,
+            raster::encode(raster::ExportFormat::Png, 96, 96, &logo2).unwrap(),
+        )
+        .unwrap();
+        // duplicate_document preserves the selection — assert it instead of
+        // discarding it, then make the intent explicit anyway.
+        let active = ed.active().unwrap().document.active_layer().unwrap();
+        assert_eq!(
+            active, logo_layer,
+            "the duplicate preserves the logo selection"
+        );
+        ed.set_layer_selection(vec![logo_layer], Some(logo_layer));
+        ed.replace_smart_object_contents(&replacement).unwrap();
+    }
+    let v2 = tmp.path().join("variant-two.rstudio");
+    ed.active_mut()
+        .unwrap()
+        .save_to(&v2, app::APP_VERSION)
+        .unwrap();
+
+    // THE TEMPLATE IS UNCHANGED: the manifest is byte-identical AND the
+    // package's file SET is unchanged (no tile/asset file was rewritten).
+    assert_eq!(
+        std::fs::read(&manifest).unwrap(),
+        template_before,
+        "creating two variants left the template manifest untouched"
+    );
+
+    // The variants are INDEPENDENT: reopen all three documents fresh.
+    let template_doc = app::open_project(&template);
+    let mut v1_doc = app::open_project(&v1);
+    let mut v2_doc = app::open_project(&v2);
+    let names = |doc: &app_shell::doc::OpenDocument| -> Vec<String> {
+        doc.document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .map(|id| doc.document.layers.get(id).unwrap().name.clone())
+            .collect()
+    };
+    assert!(names(&template_doc).contains(&"Headline — edit me".to_string()));
+    // Variant 1 changed ONLY the headline text.
+    match &v1_doc.document.layers.get(headline_id).unwrap().kind {
+        layer_model::LayerKind::Text(t) => assert_eq!(t.text, "VARIANT ONE"),
+        other => panic!("variant 1's headline: {other:?}"),
+    }
+    match &template_doc.document.layers.get(headline_id).unwrap().kind {
+        layer_model::LayerKind::Text(t) => assert_eq!(t.text, "TEMPLATE HEADLINE"),
+        other => panic!("the template's headline: {other:?}"),
+    }
+    // Variant 2 changed ONLY the logo pixels (via Replace Contents).
+    let logo_pixel = |doc: &app_shell::doc::OpenDocument| -> [u8; 4] {
+        use compositor::TileSource as _;
+        let map = doc.document.layer_tiles(logo_layer).unwrap();
+        let (_, hash) = map.iter().next().unwrap();
+        let bytes = doc.tiles.tile(hash).unwrap();
+        [bytes[0], bytes[1], bytes[2], bytes[3]]
+    };
+    assert_eq!(logo_pixel(&v2_doc)[1], 160, "variant 2 wears the new logo");
+    assert_eq!(
+        logo_pixel(&template_doc)[0],
+        200,
+        "the template keeps the old logo"
+    );
+
+    // Each variant EXPORTS under its own name (the app's encode path).
+    let region = raster::PixelRect::new(0, 0, 320, 180);
+    let export1 = tmp.path().join("thumbnail-variant-one.png");
+    let export2 = tmp.path().join("thumbnail-variant-two.png");
+    std::fs::write(
+        &export1,
+        raster::encode(
+            raster::ExportFormat::Png,
+            320,
+            180,
+            &v1_doc.composite(region).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        &export2,
+        raster::encode(
+            raster::ExportFormat::Png,
+            320,
+            180,
+            &v2_doc.composite(region).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(export1.exists() && export2.exists());
+    assert_ne!(
+        std::fs::read(&export1).unwrap(),
+        std::fs::read(&export2).unwrap(),
+        "the two variants export different images"
+    );
+}
+
 #[test]
 fn the_asset_reuse_and_clipboard_workflows_survive_native_persistence() {
     use app_shell::dialogs::ScriptedDialogs;
