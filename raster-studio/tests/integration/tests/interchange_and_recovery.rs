@@ -8,16 +8,21 @@
 //! one stated exception, the PSD test, which is labelled where it sits.
 
 use app_shell::doc::OpenDocument;
+use app_shell::import::document_from_psd;
 use app_shell::session;
 use editor_core::{Command, History, LayerPatch};
 use integration_tests::app::{self, DocExt, APP_VERSION};
+use integration_tests::fixture::thumbnail::fnv1a64;
 use integration_tests::fixture::{
     max_channel_diff, mean_channel_diff, photo_rgba8, photo_rgba8_channels_cycled,
     photo_rgba8_with_alpha,
 };
 use layer_model::{BlendMode, Layer};
 use project_format::{CommandJournal, JOURNAL_FILE};
-use psd::{MergedImage, PsdFile, PsdHeader, PsdLayer, PsdMask, Rect};
+use psd::{
+    Adjustment, Descriptor, Effects, MergedImage, PsdFile, PsdHeader, PsdLayer, PsdMask, Rect,
+    TextData, Value,
+};
 use raster::{TileCoord, TILE_SIZE};
 
 // ---------------------------------------------------------------------------
@@ -663,4 +668,470 @@ fn a_v1_fixture_opens_through_the_migration_path() {
         loaded.document.width() == 64 && loaded.document.height() == 64,
         "the geometry survived the migration"
     );
+}
+
+// -------------------------------------------------------------------------
+// 8b. Card 073 fixtures — expected results, not interoperability evidence
+// -------------------------------------------------------------------------
+
+/// The card-073 fixture set, generated here by `psd::write`.
+///
+/// # What these fixtures are, and what they are not
+///
+/// Every byte comes from this workspace's own writer, so the fixtures below
+/// prove what the reader/writer carry and what the import reports — the E11/E12
+/// predictions of `docs/THUMBNAIL-BASELINE.md`. **Self-round-trip is not
+/// interoperability evidence**: no licensed independent-writer PSD is
+/// available locally (the plan forbids downloads), so per the card's own
+/// condition that interoperability gate REMAINS PENDING even with every
+/// assertion here green. The ignored materializer at the bottom of this
+/// section writes the set under `tests/project-fixtures/psd/` for the record,
+/// with provenance and hashes in its README.
+///
+/// `crates/psd/src/write.rs` deliberately has no `TySh` writer (see
+/// `psd::text`), so the type fixture's styled text is a hand-crafted minimal
+/// `TySh` block — the smallest payload `text::parse` accepts — carried in
+/// `TextData::raw`, which the writer emits verbatim.
+mod card073 {
+    use super::*;
+    use psd::bytes::Sink;
+
+    /// 90° rotation about the origin, translated to (40, 12). A `.psd` layer
+    /// rectangle cannot express the rotation; only a `TySh` transform can.
+    pub const ROTATED: [f64; 6] = [0.0, 1.0, -1.0, 0.0, 40.0, 12.0];
+
+    fn probe(width: u32, height: u32, salt: u8) -> Vec<u8> {
+        let n = width as usize * height as usize * 4;
+        (0..n)
+            .map(|i| ((i * 37 + usize::from(salt)) % 251) as u8)
+            .collect()
+    }
+
+    fn gray(width: u32, height: u32) -> Vec<u8> {
+        (0..width as usize * height as usize)
+            .map(|i| (i % 251) as u8)
+            .collect()
+    }
+
+    /// A hand-crafted minimal `TySh` payload: version, transform, a text
+    /// descriptor carrying `Txt ` and opaque `EngineData`, an empty warp
+    /// descriptor, a rectangle.
+    pub fn tysh(text: &str, transform: [f64; 6]) -> Vec<u8> {
+        let mut s = Sink::new();
+        s.u16(1);
+        for v in transform {
+            s.f64(v);
+        }
+        s.u16(50);
+        s.u32(16);
+        let mut d = Descriptor::new("TxLr");
+        d.push("Txt ", Value::from(text)).unwrap();
+        d.push("EngineData", Value::RawData(b"<< /x 1 >>".to_vec()))
+            .unwrap();
+        d.write(&mut s).unwrap();
+        s.u16(1);
+        s.u32(16);
+        Descriptor::new("warp").write(&mut s).unwrap();
+        s.i32(0);
+        s.i32(0);
+        s.i32(120);
+        s.i32(28);
+        s.into_inner()
+    }
+
+    /// A minimal `lfx2` drop-shadow block, retained verbatim by the model.
+    pub fn drop_shadow() -> Vec<u8> {
+        let mut s = Sink::new();
+        s.u32(1); // object version
+        s.u32(16); // descriptor version
+        let mut d = Descriptor::new("Lfx2");
+        d.push("Sdsw", Value::Bool(true)).unwrap();
+        d.write(&mut s).unwrap();
+        s.into_inner()
+    }
+
+    /// A minimal descriptor-shaped `hue2` payload.
+    pub fn hue_saturation() -> Vec<u8> {
+        let mut s = Sink::new();
+        s.u32(16); // version `Adjustment::descriptor` skips
+        let mut d = Descriptor::new("hue2");
+        d.push(
+            "PresetKind",
+            Value::Enumerated {
+                type_id: "PresetKind".into(),
+                value: "normal".into(),
+            },
+        )
+        .unwrap();
+        d.write(&mut s).unwrap();
+        s.into_inner()
+    }
+
+    /// The full scene, bottom-to-top: backdrop, masked portrait, unsupported
+    /// Hue-Saturation adjustment, Invert adjustment, and a nested `Title`
+    /// group holding a styled type layer (drop shadow, rotated, clipped) and
+    /// a collapsed group with translated, hidden content.
+    pub fn scene() -> PsdFile {
+        let mut file = PsdFile::new(PsdHeader::rgba8(128, 96));
+
+        let mut backdrop = PsdLayer::raster("Backdrop", Rect::sized(128, 96));
+        backdrop.set_rgba8(&probe(128, 96, 10)).unwrap();
+        backdrop.blend_mode = BlendMode::Multiply;
+
+        let mut portrait = PsdLayer::raster("Portrait (masked)", Rect::new(16, 16, 64, 80));
+        portrait.set_rgba8(&probe(48, 64, 20)).unwrap();
+        portrait.opacity = 220;
+        portrait.mask = Some(PsdMask::new(Rect::new(8, 8, 72, 88), gray(64, 80)));
+
+        let mut hue_sat = PsdLayer::raster("Hue/Sat 1", Rect::default());
+        hue_sat.pixel_data_irrelevant = true;
+        hue_sat.adjustment = Some(Adjustment {
+            key: *b"hue2",
+            data: hue_saturation(),
+        });
+
+        let mut invert = PsdLayer::raster("Invert 1", Rect::default());
+        invert.pixel_data_irrelevant = true;
+        invert.adjustment = Some(Adjustment {
+            key: *b"nvrt",
+            data: Vec::new(),
+        });
+
+        let mut headline = PsdLayer::raster("Headline", Rect::default());
+        headline.blend_mode = BlendMode::Multiply;
+        headline.opacity = 200;
+        headline.clipping = true;
+        headline.effects = Some(Effects {
+            key: *b"lfx2",
+            data: drop_shadow(),
+        });
+        headline.text = Some(TextData {
+            transform: ROTATED,
+            text: Some("SELL NOW".to_owned()),
+            raw: tysh("SELL NOW", ROTATED),
+        });
+
+        let mut sticker = PsdLayer::raster("Sticker", Rect::new(48, 8, 88, 40));
+        sticker.set_rgba8(&probe(40, 32, 40)).unwrap();
+        sticker.visible = false;
+
+        let mut effects_group = PsdLayer::group("Effects");
+        effects_group.group_data_mut().unwrap().open = false;
+        effects_group.push_child(sticker).unwrap();
+
+        let mut title = PsdLayer::group("Title");
+        title.push_child(headline).unwrap();
+        title.push_child(effects_group).unwrap();
+
+        file.layers.push(backdrop);
+        file.layers.push(portrait);
+        file.layers.push(hue_sat);
+        file.layers.push(invert);
+        file.layers.push(title);
+        file.merged = Some(MergedImage::from_rgba8(128, 96, &probe(128, 96, 50)).unwrap());
+        file
+    }
+}
+
+/// E11: importing the card-073 fixture keeps the layer metadata and names
+/// every loss — styled type as pixels, effects not imported, the adjustment
+/// this build cannot evaluate kept as an empty layer with its tag named.
+///
+/// The Invert adjustment is the one that maps exactly, the masked portrait
+/// keeps its coverage, and the nested groups keep their nesting and flags.
+#[test]
+fn importing_the_card073_fixture_reports_every_loss_and_keeps_the_layer_metadata() {
+    let bytes = psd::write(&card073::scene()).unwrap();
+    let import = document_from_psd(&bytes, "card073.psd", 50).unwrap();
+    let doc = &import.imported.document;
+
+    // --- the tree survived: nesting, order (top-most first here), names ---
+    let root = doc.layers.root();
+    assert_eq!(root.len(), 5, "the group's three flat siblings plus Title");
+    let names = |ids: &[layer_model::LayerId]| -> Vec<String> {
+        ids.iter()
+            .map(|&id| doc.layers.get(id).expect("reachable").name.clone())
+            .collect()
+    };
+    assert_eq!(
+        names(root),
+        vec![
+            "Title",
+            "Invert 1",
+            "Hue/Sat 1",
+            "Portrait (masked)",
+            "Backdrop"
+        ]
+    );
+    let title = doc.layers.get(root[0]).unwrap();
+    let layer_model::LayerKind::Group(group) = &title.kind else {
+        panic!("Title must import as a group");
+    };
+    assert!(!group.collapsed);
+    assert_eq!(names(&group.children), vec!["Effects", "Headline"]);
+    let effects_id = group.children[0];
+    let effects = doc.layers.get(effects_id).unwrap();
+    let layer_model::LayerKind::Group(inner) = &effects.kind else {
+        panic!("Effects must import as a group");
+    };
+    assert!(
+        inner.collapsed,
+        "the inner group's collapsed state survived"
+    );
+    assert_eq!(names(&inner.children), vec!["Sticker"]);
+
+    // --- the style metadata came back ---
+    let headline = doc.layers.get(group.children[1]).unwrap();
+    assert_eq!(headline.blend_mode, BlendMode::Multiply);
+    assert!((headline.opacity - 200.0 / 255.0).abs() < 1e-6);
+    assert_eq!(headline.clipping, layer_model::ClippingMode::ClipToBelow);
+    assert!(headline.visible);
+
+    // E11: the type layer became pixels — an editable-text claim would be a
+    // lie, and the note below is what says so.
+    assert!(
+        matches!(headline.kind, layer_model::LayerKind::Raster(_)),
+        "type imports as pixels, not as an editable text layer"
+    );
+
+    // The masked portrait keeps its coverage as a raster mask.
+    let portrait = doc.layers.get(root[3]).unwrap();
+    assert!(portrait.mask.is_some(), "the portrait's mask imports");
+
+    // Invert is the one adjustment whose definition is its name.
+    let invert = doc.layers.get(root[1]).unwrap();
+    assert!(matches!(
+        invert.kind,
+        layer_model::LayerKind::Adjustment(layer_model::AdjustmentLayer {
+            kind: layer_model::AdjustmentKind::Invert,
+        })
+    ));
+
+    // --- the honesty gate: the notes, verbatim and in the order recorded ---
+    assert_eq!(
+        import.notes.notes(),
+        vec![
+            // E11, unsupported adjustment: the note names the tag.
+            "adjustment layer(s) this build cannot evaluate (\u{201c}Hue/Sat 1 (hue2)\u{201d}) \
+             were kept as empty layers; their effect is in the flattened image but not editable",
+            // E11, styled type.
+            "type layer(s) (\u{201c}Headline\u{201d}) were imported as pixels; the text is no \
+             longer editable",
+            // E11, effects.
+            "layer effect(s) on \u{201c}Headline\u{201d} were not imported",
+        ],
+        "nothing silent, nothing invented: the fixture's losses, by name"
+    );
+}
+
+/// E12: exporting a document whose layers a `.psd` has no home for — and whose
+/// pixels sit under a rotation the format cannot express — produces a good
+/// merged preview *and* an honest report saying the layers did not survive as
+/// themselves. A correct preview alone is explicitly insufficient proof.
+#[test]
+fn exporting_homeless_and_transformed_layers_reports_what_the_psd_cannot_express() {
+    let mut doc = app::blank(64, 64, "Card 073");
+    let backdrop = doc
+        .document
+        .active_layer()
+        .expect("File ▸ New makes a layer");
+    doc.fill_layer(backdrop, [235, 235, 225, 255]);
+
+    // A raster with real pixels, under a rotation: pixels written where they
+    // are stored, and the note says so.
+    let portrait = doc.add_layer(Layer::raster("Portrait"));
+    doc.fill_layer(portrait, [200, 120, 60, 255]);
+    doc.apply(Command::TransformLayer {
+        layer_id: portrait,
+        matrix: [
+            std::f32::consts::FRAC_1_SQRT_2,
+            -std::f32::consts::FRAC_1_SQRT_2,
+            std::f32::consts::FRAC_1_SQRT_2,
+            std::f32::consts::FRAC_1_SQRT_2,
+            8.0,
+            3.0,
+        ],
+    })
+    .expect("the transform applies");
+
+    // A text layer: a .psd has no home for one, so it is written empty.
+    let _headline = doc.add_layer(Layer::with_kind(
+        "Headline",
+        layer_model::LayerKind::Text(layer_model::TextLayer {
+            text: "SELL NOW".into(),
+            ..Default::default()
+        }),
+    ));
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("card073-export.psd");
+    let notes = doc.export_psd_to(&out).expect("the export succeeds");
+    assert_eq!(
+        notes.notes(),
+        vec![
+            // E12, non-translation transform.
+            "\u{201c}Portrait\u{201d} carry a transform a .psd cannot express; their pixels \
+             were written where they are stored",
+            // E12, no-home kind.
+            "\u{201c}Headline\u{201d} are a kind a .psd has no home for and were written as \
+             empty layers",
+        ],
+        "the export notes are the honesty gate, verbatim"
+    );
+    assert_eq!(doc.psd_notes().notes(), notes.notes());
+
+    // What landed in the file: the text layer exists as a record — but as an
+    // empty one, exactly as the note said.
+    let bytes = std::fs::read(&out).unwrap();
+    let back = psd::read(&bytes).unwrap();
+    let all = back.all_layers();
+    let headline_record = all
+        .iter()
+        .find(|l| l.name == "Headline")
+        .expect("the text layer's record is in the file");
+    assert!(
+        headline_record.bounds.is_empty(),
+        "written as an empty layer, as the note says"
+    );
+    assert!(headline_record.text.is_none());
+    let portrait_record = all
+        .iter()
+        .find(|l| l.name == "Portrait")
+        .expect("the portrait's record is in the file");
+    assert!(
+        !portrait_record.bounds.is_empty(),
+        "the rotated layer's pixels are written where they are stored"
+    );
+}
+
+/// The malformed member of the card-073 set: a truncated fixture fails loudly
+/// through `ImportError::Psd` carrying the reader's byte offset, and a file
+/// that is not a `.psd` at all is refused rather than guessed at.
+#[test]
+fn a_truncated_card073_fixture_fails_loudly_through_the_import_path() {
+    let bytes = psd::write(&card073::scene()).unwrap();
+    let err = document_from_psd(&bytes[..bytes.len() / 3], "cut.psd", 10).unwrap_err();
+    match err {
+        app_shell::import::ImportError::Psd(psd::PsdError::Truncated { at, needed, .. }) => {
+            assert!(needed > 0);
+            assert!(at > 0, "the offset is absolute and meaningful, not a stub");
+            assert!(at <= bytes.len() / 3);
+        }
+        other => panic!("expected a loud Psd truncation, got: {other}"),
+    }
+    let err = document_from_psd(b"not a psd at all", "junk.psd", 10).unwrap_err();
+    assert!(
+        err.to_string().contains("Photoshop document"),
+        "the refusal names what could not be read: {err}"
+    );
+}
+
+/// Materializes the card-073 fixture set under `tests/project-fixtures/psd/`.
+///
+/// The fixtures themselves are generated in-test by `psd::write` — nothing is
+/// committed — but the card asks for a kept copy with recorded provenance and
+/// hashes for the record. Run explicitly:
+/// `cargo test -p integration-tests --test interchange_and_recovery the_card073_fixtures -- --ignored`
+#[test]
+#[ignore = "writes card-073 fixture artifacts; run explicitly when the record needs them on disk"]
+fn the_card073_fixtures_can_be_materialized_for_the_record() {
+    let out_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("project-fixtures")
+        .join("psd");
+    std::fs::create_dir_all(&out_dir).unwrap();
+
+    let mut hashes: Vec<(String, u64)> = Vec::new();
+    let mut write_fixture = |name: &str, bytes: Vec<u8>| {
+        std::fs::write(out_dir.join(name), &bytes).unwrap();
+        hashes.push((name.to_owned(), fnv1a64(&bytes)));
+    };
+
+    write_fixture("card073-scene.psd", psd::write(&card073::scene()).unwrap());
+
+    // The type fixture on its own: a styled type layer whose `TySh` block is
+    // hand-crafted bytes (this writer deliberately has no TySh of its own).
+    let mut type_file = PsdFile::new(PsdHeader::rgba8(128, 96));
+    let mut headline = PsdLayer::raster("Headline", Rect::default());
+    headline.text = Some(TextData {
+        transform: card073::ROTATED,
+        text: Some("SELL NOW".to_owned()),
+        raw: card073::tysh("SELL NOW", card073::ROTATED),
+    });
+    type_file.layers.push(headline);
+    write_fixture("card073-type.psd", psd::write(&type_file).unwrap());
+
+    // The effect fixture on its own: a layer carrying a drop shadow as a
+    // retained `lfx2` block.
+    let mut shadow_file = PsdFile::new(PsdHeader::rgba8(64, 64));
+    let mut shadowed = PsdLayer::raster("Shadowed", Rect::sized(64, 64));
+    shadowed.set_rgba8(&vec![90u8; 64 * 64 * 4]).unwrap();
+    shadowed.effects = Some(Effects {
+        key: *b"lfx2",
+        data: card073::drop_shadow(),
+    });
+    shadow_file.layers.push(shadowed);
+    write_fixture("card073-shadow.psd", psd::write(&shadow_file).unwrap());
+
+    // The adjustment fixture on its own: Curves, Hue-Saturation and Invert.
+    // `hue2` is the intentionally unsupported descriptor — the document model
+    // cannot evaluate it, and import names the tag in a note.
+    let mut adj_file = PsdFile::new(PsdHeader::rgba8(2, 2));
+    for (name, key, data) in [
+        ("Curves 1", *b"curv", vec![0u8, 1, 0, 0, 0, 0, 0, 0]),
+        ("Hue/Sat 1", *b"hue2", card073::hue_saturation()),
+        ("Invert 1", *b"nvrt", Vec::new()),
+    ] {
+        let mut adj = PsdLayer::raster(name, Rect::default());
+        adj.pixel_data_irrelevant = true;
+        adj.adjustment = Some(Adjustment { key, data });
+        adj_file.layers.push(adj);
+    }
+    write_fixture("card073-adjustments.psd", psd::write(&adj_file).unwrap());
+
+    // The malformed member: the scene truncated part-way through its layer
+    // records. Reading it must fail loudly through `PsdError`.
+    let scene_bytes = psd::write(&card073::scene()).unwrap();
+    let cut = scene_bytes.len() / 2;
+    write_fixture(
+        "card073-malformed-truncated.psd",
+        scene_bytes[..cut].to_vec(),
+    );
+
+    let mut readme = String::new();
+    readme.push_str("# Card 073 PSD fixtures\n\n");
+    readme.push_str(
+        "The card-073 fixture set (styled type, translated/rotated content, drop \
+         shadow, masked portrait, Curves/Hue-Saturation/Invert, nested groups, one \
+         intentionally unsupported descriptor, malformed input), generated \
+         deterministically by `crates/psd::write` in the tests of \
+         `tests/integration/tests/interchange_and_recovery.rs`. Nothing here is \
+         committed by hand; re-materialize with\n\n\
+         ```\n\
+         cargo test -p integration-tests --test interchange_and_recovery \
+         the_card073_fixtures -- --ignored\n\
+         ```\n\n\
+         ## Provenance\n\n\
+         **Generated by `crates/psd::write`; independent-writer provenance \
+         PENDING.** No licensed independent-writer PSD was available (the plan \
+         forbids downloads), so per the card's own condition the \
+         independent-writer interoperability gate REMAINS PENDING. \
+         Self-round-trip is not interoperability evidence; independent-writer \
+         fixtures pending.\n\n\
+         The type fixture's `TySh` block is hand-crafted bytes: \
+         `crates/psd/src/write.rs` deliberately has no `TySh` writer (see \
+         `crates/psd/src/text.rs`), so the block is the smallest payload \
+         `text::parse` accepts, carried in `TextData::raw`.\n\n\
+         ## Expected results\n\n\
+         The expected layer metadata and the exact `PsdNotes` (E11: type to \
+         pixels, effects not imported, unsupported adjustment named by tag; E12: \
+         no-home empty layers, non-translation transforms) are pinned by the \
+         tests above. The malformed fixture fails with `PsdError::Truncated` \
+         carrying a byte offset.\n\n\
+         ## Files (fnv1a64)\n\n",
+    );
+    for (name, hash) in &hashes {
+        readme.push_str(&format!("- `{name}`: {hash:016x}\n"));
+    }
+    std::fs::write(out_dir.join("README.md"), readme).unwrap();
 }

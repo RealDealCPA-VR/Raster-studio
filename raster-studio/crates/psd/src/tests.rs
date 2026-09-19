@@ -1800,3 +1800,334 @@ fn the_first_channel_length_helper_points_at_a_plausible_length() {
     // Two bytes of compression code plus a PackBits encoding of four pixels.
     assert!((3..64).contains(&len), "length looked wrong: {len}");
 }
+
+// ------------------------------------------------------- card 073 fixtures
+//
+// The card-073 fixture set: deterministic documents that expose the E11/E12
+// predictions of `docs/THUMBNAIL-BASELINE.md` — styled type, translated and
+// rotated content, a drop shadow, a masked portrait, Curves / Hue-Saturation /
+// Invert adjustments, and nested groups. Every one is generated here by
+// `crate::write`, so its provenance is trivially recorded: *this* writer.
+//
+// **Self-round-trip is not interoperability evidence.** No licensed
+// independent-writer PSD is available locally (the plan forbids downloads), so
+// per the card's own condition the independent-writer interoperability gate
+// REMAINS PENDING even when every assertion below passes. These fixtures pin
+// what the reader/writer carry and what the importer must report; they say
+// nothing about files produced by another tool.
+
+/// A rotation-plus-translation affine: 90° clockwise about the origin, moved
+/// to (40, 12). A `.psd` layer record cannot express the rotation — only a
+/// `TySh` transform can carry it, which is the point of using it here.
+const CARD073_ROTATED: [f64; 6] = [0.0, 1.0, -1.0, 0.0, 40.0, 12.0];
+
+/// A hand-crafted minimal `TySh` payload with an arbitrary transform.
+///
+/// `crates/psd/src/write.rs` deliberately has no `TySh` writer (see
+/// `text.rs`: a synthesised block Photoshop discards would be worse than none),
+/// so the type fixture is built as bytes: the smallest block
+/// `text::parse` accepts — version, six transform doubles, a text descriptor
+/// carrying `Txt ` and opaque `EngineData`, an empty warp descriptor, a
+/// rectangle — written through the same [`crate::bytes::Sink`] and
+/// [`crate::Descriptor`] serialisers the rest of the crate uses. It reaches
+/// the file through `TextData::raw`, which the writer emits verbatim.
+fn card073_tysh(text: &str, transform: [f64; 6]) -> Vec<u8> {
+    let mut s = crate::bytes::Sink::new();
+    s.u16(1);
+    for v in transform {
+        s.f64(v);
+    }
+    s.u16(50);
+    s.u32(16);
+    let mut d = crate::Descriptor::new("TxLr");
+    d.push("Txt ", crate::Value::from(text)).unwrap();
+    d.push("EngineData", crate::Value::RawData(b"<< /x 1 >>".to_vec()))
+        .unwrap();
+    d.write(&mut s).unwrap();
+    s.u16(1);
+    s.u32(16);
+    crate::Descriptor::new("warp").write(&mut s).unwrap();
+    s.i32(0);
+    s.i32(0);
+    s.i32(120);
+    s.i32(28);
+    s.into_inner()
+}
+
+/// A minimal `lfx2` drop-shadow block: object version, descriptor version,
+/// then a descriptor naming the effect and switching it on.
+///
+/// Like the `TySh`, this is hand-crafted bytes — the crate preserves effects
+/// verbatim rather than modelling their parameters.
+fn card073_drop_shadow() -> Vec<u8> {
+    let mut s = crate::bytes::Sink::new();
+    s.u32(1); // object version
+    s.u32(16); // descriptor version
+    let mut d = crate::Descriptor::new("Lfx2");
+    d.push("Sdsw", crate::Value::Bool(true)).unwrap();
+    d.write(&mut s).unwrap();
+    s.into_inner()
+}
+
+/// A minimal descriptor-shaped adjustment payload for `hue2`.
+fn card073_hue_saturation() -> Vec<u8> {
+    let mut s = crate::bytes::Sink::new();
+    s.u32(16); // version `Adjustment::descriptor` skips
+    let mut d = crate::Descriptor::new("hue2");
+    d.push(
+        "PresetKind",
+        crate::Value::Enumerated {
+            type_id: "PresetKind".into(),
+            value: "normal".into(),
+        },
+    )
+    .unwrap();
+    d.write(&mut s).unwrap();
+    s.into_inner()
+}
+
+/// The full card-073 scene. Bottom-to-top, the order the file itself uses:
+///
+/// 1. `Backdrop` — full-canvas raster.
+/// 2. `Portrait (masked)` — offset raster with a layer mask larger than it is.
+/// 3. `Hue/Sat 1` — descriptor adjustment this build cannot evaluate.
+/// 4. `Invert 1` — the one adjustment whose definition is its name.
+/// 5. `Title` — an open group holding the type layer and a nested group.
+fn card073_scene() -> PsdFile {
+    let mut file = PsdFile::new(PsdHeader::rgba8(128, 96));
+
+    let mut backdrop = PsdLayer::raster("Backdrop", Rect::sized(128, 96));
+    backdrop.set_rgba8(&image(128, 96, 10)).unwrap();
+    backdrop.blend_mode = BlendMode::Multiply;
+
+    let mut portrait = PsdLayer::raster("Portrait (masked)", Rect::new(16, 16, 64, 80));
+    portrait.set_rgba8(&image(48, 64, 20)).unwrap();
+    portrait.opacity = 220;
+    // A mask is one byte per pixel, unlike a layer's four.
+    let coverage: Vec<u8> = (0..64 * 80).map(|i| (i % 251) as u8).collect();
+    portrait.mask = Some(PsdMask::new(Rect::new(8, 8, 72, 88), coverage));
+
+    let mut hue_sat = PsdLayer::raster("Hue/Sat 1", Rect::default());
+    hue_sat.pixel_data_irrelevant = true;
+    hue_sat.adjustment = Some(Adjustment {
+        key: *b"hue2",
+        data: card073_hue_saturation(),
+    });
+
+    let mut invert = PsdLayer::raster("Invert 1", Rect::default());
+    invert.pixel_data_irrelevant = true;
+    invert.adjustment = Some(Adjustment {
+        key: *b"nvrt",
+        data: Vec::new(),
+    });
+
+    let mut headline = PsdLayer::raster("Headline", Rect::default());
+    headline.blend_mode = BlendMode::Multiply;
+    headline.opacity = 200;
+    headline.clipping = true;
+    headline.effects = Some(Effects {
+        key: *b"lfx2",
+        data: card073_drop_shadow(),
+    });
+    headline.text = Some(TextData {
+        transform: CARD073_ROTATED,
+        text: Some("SELL NOW".to_owned()),
+        raw: card073_tysh("SELL NOW", CARD073_ROTATED),
+    });
+
+    // Translated (not rotated) content: a pure integer translation folds into
+    // the layer rectangle exactly, and this fixture keeps one to show the
+    // difference between the two E12 shapes.
+    let mut sticker = PsdLayer::raster("Sticker", Rect::new(48, 8, 88, 40));
+    sticker.set_rgba8(&image(40, 32, 40)).unwrap();
+    sticker.visible = false;
+
+    let mut effects_group = PsdLayer::group("Effects");
+    effects_group.group_data_mut().unwrap().open = false;
+    effects_group.push_child(sticker).unwrap();
+
+    let mut title = PsdLayer::group("Title");
+    // Bottom-to-top inside the group: the type layer sits beneath the group.
+    title.push_child(headline).unwrap();
+    title.push_child(effects_group).unwrap();
+
+    file.layers.push(backdrop);
+    file.layers.push(portrait);
+    file.layers.push(hue_sat);
+    file.layers.push(invert);
+    file.layers.push(title);
+    file.merged = Some(MergedImage::from_rgba8(128, 96, &image(128, 96, 50)).unwrap());
+    file
+}
+
+/// The scene's expected layer tree, bottom-to-top, for the metadata test.
+fn card073_expected_names(file: &PsdFile) -> Vec<&str> {
+    file.all_layers().iter().map(|l| l.name.as_str()).collect()
+}
+
+#[test]
+fn the_card073_fixture_round_trips_with_its_recorded_layer_metadata() {
+    let scene = card073_scene();
+    let bytes = write(&scene).unwrap();
+    let back = read(&bytes).unwrap();
+    assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+
+    // The tree, bottom-to-top, exactly as recorded above.
+    assert_eq!(
+        card073_expected_names(&back),
+        vec![
+            "Backdrop",
+            "Portrait (masked)",
+            "Hue/Sat 1",
+            "Invert 1",
+            "Title",
+            "Headline",
+            "Effects",
+            "Sticker",
+        ]
+    );
+
+    let backdrop = &back.layers[0];
+    assert_eq!(backdrop.bounds, Rect::sized(128, 96));
+    assert_eq!(backdrop.blend_mode, BlendMode::Multiply);
+    assert_eq!(backdrop.opacity, 255);
+    assert!(backdrop.visible);
+    assert!(!backdrop.clipping);
+
+    let portrait = &back.layers[1];
+    assert_eq!(portrait.bounds, Rect::new(16, 16, 64, 80));
+    assert_eq!(portrait.opacity, 220);
+    let mask = portrait.mask.as_ref().expect("the portrait keeps its mask");
+    assert_eq!(mask.bounds, Rect::new(8, 8, 72, 88));
+    assert_eq!(mask.default_color, 0);
+    assert_eq!(
+        mask.data,
+        (0..64 * 80)
+            .map(|i: usize| (i % 251) as u8)
+            .collect::<Vec<u8>>(),
+        "the masked-portrait fixture's coverage survives"
+    );
+    assert_eq!(
+        portrait.rgba8().unwrap(),
+        image(48, 64, 20),
+        "and so do its pixels"
+    );
+
+    // Both adjustment layers keep their payloads; the reader recognises both
+    // keys, and the descriptor-shaped one still parses.
+    let hue_sat = &back.layers[2];
+
+    let adj = hue_sat.adjustment.as_ref().unwrap();
+    assert_eq!(adj.key, *b"hue2");
+    assert!(
+        adj.descriptor(&ReadOptions::default()).is_some(),
+        "the hue2 descriptor payload parses back"
+    );
+    let invert = &back.layers[3];
+    assert_eq!(
+        invert.adjustment.as_ref().unwrap().key,
+        *b"nvrt",
+        "Invert keeps its empty payload"
+    );
+
+    // The group carries its nesting and the per-layer style metadata.
+    let title = &back.layers[4];
+    assert!(title.is_group());
+    assert_eq!(title.children().len(), 2);
+    let headline = &title.children()[0];
+    assert_eq!(headline.name, "Headline");
+    assert_eq!(headline.blend_mode, BlendMode::Multiply);
+    assert_eq!(headline.opacity, 200);
+    assert!(headline.clipping, "the headline clips to the layer below");
+    assert!(headline.visible);
+
+    // E11: the styled type came back — string, *rotated* transform, and the
+    // block bytes verbatim (the writer has no TySh of its own to substitute).
+    let text = headline.text.as_ref().expect("the TySh block survived");
+    assert_eq!(text.text.as_deref(), Some("SELL NOW"));
+    assert_eq!(text.transform, CARD073_ROTATED);
+    assert_eq!(text.raw, card073_tysh("SELL NOW", CARD073_ROTATED));
+
+    // E11: the drop shadow survives as retained bytes, not as parameters.
+    let fx = headline.effects.as_ref().expect("the lfx2 block survived");
+    assert_eq!(fx.key, *b"lfx2");
+    assert_eq!(fx.data, card073_drop_shadow());
+
+    // E12's other shape: translated content keeps its offset rectangle and
+    // its visibility, with no transform block involved.
+    let effects_group = &title.children()[1];
+    assert!(effects_group.is_group());
+    assert!(
+        !effects_group.group_data().unwrap().open,
+        "the inner group's collapsed state survives"
+    );
+    let sticker = &effects_group.children()[0];
+    assert_eq!(sticker.bounds, Rect::new(48, 8, 88, 40));
+    assert!(!sticker.visible);
+
+    // The composite is there for every other reader.
+    assert!(back.merged.is_some());
+
+    // A round trip is byte-stable: nothing above was repaired on the way in.
+    assert_eq!(write(&back).unwrap(), bytes);
+}
+
+#[test]
+fn an_adjustment_key_the_document_model_does_not_map_is_retained_verbatim() {
+    // A tagged block carrying a key outside `AdjustmentKey::ALL` does not land
+    // in the adjustment slot at all — it is retained as an unmodelled block and
+    // written back byte for byte. The *document model* (`app-shell`'s import)
+    // maps only `nvrt`; the note it emits for recognised-but-unevaluable keys
+    // names the tag via `error::tag_name`, which the interchange tests pin.
+    let mut file = PsdFile::new(PsdHeader::rgba8(2, 2));
+    let mut layer = PsdLayer::raster("mystery", Rect::default());
+    layer.pixel_data_irrelevant = true;
+    let payload = b"an intentionally unsupported descriptor";
+    layer
+        .extra
+        .push(TaggedBlock::new(*b"zzzh", payload.to_vec()));
+    file.layers.push(layer);
+
+    let bytes = write(&file).unwrap();
+    let back = read(&bytes).unwrap();
+    let layer = &back.layers[0];
+    assert!(
+        layer.adjustment.is_none(),
+        "an unknown key is not an adjustment"
+    );
+    assert_eq!(layer.extra.len(), 1);
+    assert_eq!(layer.extra[0].key, *b"zzzh");
+    assert_eq!(layer.extra[0].data, payload);
+    assert_eq!(write(&back).unwrap(), bytes, "retained means retained");
+}
+
+/// The malformed/bounded member of the card-073 set: every truncation of the
+/// fixture fails loudly through `PsdError` with a byte offset, never a panic
+/// and never a partial document presented as success.
+#[test]
+fn card073_truncations_fail_loudly_through_psderror_with_offsets() {
+    let bytes = write(&card073_scene()).unwrap();
+    // Structurally interesting cut points: inside the header, inside the
+    // resource section, inside the layer records, inside channel data, and
+    // inside the merged composite.
+    let mut cuts: Vec<usize> = vec![0, 5, 26, 40, 100, 400, bytes.len() / 2, bytes.len() - 9];
+    cuts.sort_unstable();
+    for cut in cuts {
+        let err = read(&bytes[..cut]).expect_err("a truncated file must not read");
+        assert!(
+            err.is_file_fault(),
+            "cut at {cut}: {err:?} blames the caller, not the file"
+        );
+        let message = err.to_string();
+        match err {
+            PsdError::Truncated { at, needed, .. } => {
+                assert!(needed > 0, "cut at {cut}");
+                // `at` is an absolute file offset for the read that ran out; it
+                // cannot sit after the bytes that existed.
+                assert!(at <= cut, "cut at {cut}, failure reported at {at}");
+                assert!(message.contains("offset"), "{message}");
+            }
+            _ => assert!(!message.is_empty(), "cut at {cut} failed without a word"),
+        }
+    }
+}
