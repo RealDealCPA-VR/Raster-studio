@@ -116,9 +116,9 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Vector paths, pen tool, shape layers | ✅ | Bézier pen and shape layers reachable from the UI |
 | Filters: blur family | ✅ | separable Gaussian; every filter in the Filter menu applies against the live document |
 | Filters: sharpen, noise, distort, stylize, pixelate, render | ✅ | the whole library is reachable from the Filter menu |
-| Smart objects | ⬜ | the layer kind exists; nothing renders it |
-| PSD import | ✅ | groups, masks, blend modes, all four channel encodings; a `Document` is built from the layer section |
-| PSD export | 🔶 | reopens correctly in Photoshop and Photopea |
+| Smart objects | ✅ | placed raster sources with editable transforms, embedded + linked origins, replace-contents refresh, full-extent storage; verified through real routes (cards 044–050, interchange tests) |
+| PSD import | ✅ | groups, masks (with density/feather), blend modes, all four channel encodings, editable-text subset, the four mapped effects, ICC retention, full layer extents; a per-layer fidelity report (`PsdNotes`) names exactly what did not map — see `docs/PSD-THUMBNAIL-SUPPORT.md` |
+| PSD export | 🔶 | layered export verified by independent re-read (structure, masks, effects as editable lfx2 descriptors, appearance-preserving text/shape/smart-object fallback pixels, merged preview matching the composite at ≤1/255); NOT yet verified in Photoshop/Photopea (card 081's manual step is pending) and editable text export (TySh) is blocked on an independently verified engine-data payload — see `docs/PSD-THUMBNAIL-SUPPORT.md` |
 | Channels panel | 🔶 | isolation is real and changes the canvas; per-channel *editing* is still not implemented — see the gaps list |
 | Paths panel | 🔶 | |
 | Colour management | ✅ | sRGB and Display P3 are real; an embedded ICC profile is carried, composites through its profile and re-tags on export — `a_tagged_image_composites_through_its_profile_and_retags_on_export` |
