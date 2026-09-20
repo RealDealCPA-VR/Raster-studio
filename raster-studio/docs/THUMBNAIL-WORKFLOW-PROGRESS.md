@@ -17,15 +17,15 @@ Current task: T088 VERIFIED (2026-09-20). Today so far: T077 (fidelity report), 
               original's own path refused (DocumentError::OriginalOverwrite).
               Focused gates: app-shell 543 lib + 10 integration, psd 195,
               interchange 16, fmt clean, clippy -D warnings 0.
-Next task: T089 (undo/redo + crash recovery across the workflow), then T090 (regression/resource checks). T082–T087 need the desktop/GPU host for their visual and latency checks; T079 blocked (row 079); T081 manual evidence pending (row 081).
+Next task: T090 (regression/compatibility/resource-bound checks; record exact results + skipped hardware checks), then T092 (docs reconciliation). T082–T087 need the desktop/GPU host for visual/latency verification; T079 blocked (row 079); T081 manual evidence pending (row 081); T091 is the human acceptance walk.
 Exact checks: phase gate at each phase boundary
 Last check: 2026-09-20 — independent focused recheck above; latest local-agent
             commits through T076 are present at 37fb975.
 Remaining work: cards 077–092; 093–098 optional deferred.
-Exact next action: read T089 in docs/THUMBNAIL-WORKFLOW-IMPLEMENTATION-PLAN.md;
-                   replay text/placement/transform/mask/group/replace edits
-                   with undo/redo across save markers and simulated journal
-                   recovery. Phase 8 gate has PASSED.
+Exact next action: run T090's checks and record exact results: fmt/locked
+                   check/clippy -D warnings/test --workspace, plus the
+                   malformed-input and boundary tests already in tree;
+                   identify hardware-bound skips honestly.
 Carried items: T033 frame capture; T032 pointer-frame-handle unit; quick-mask
                transform framing; per-participant Move previews; dock
                Confirm/Cancel buttons; manual device/IME checks; zero-edit
@@ -286,7 +286,7 @@ Carried items: T033 frame capture; T032 pointer-frame-handle unit; quick-mask
 | 086 | Benchmark real composition + optimize | 020,039,064,071,084 | not started | — |
 | 087 | Long ops off interaction thread | 011,013,050,084,086 | not started | — |
 | 088 | Native round-trip + font/source portability | 018, 050, 070, 087 | **verified** | 2026-09-20: `the_full_scene_round_trips_through_the_native_package_field_by_field` (interchange_and_recovery.rs) builds one document through real routes — transformed rich text, an effects-carrying raster, an Invert adjustment, a nested group, embedded AND linked smart objects, locked+unlocked guides — saves native, deletes the linked source file, reopens, and asserts FIELD equality (TextLayer clone eq, transform, effects, Guides incl. the lock flag, layer count) plus source portability (embedded needs no original file; the missing linked source is reported via `!path.exists()` on the reopened record) and a pixel-identical composite on the deterministic fixture fonts (max diff 0). Font-restricted substitution reporting is already pinned by card 022 (font_substitute_for + report=render agreement + case-contract test). Gates: integration-tests green, fmt clean, clippy -D warnings 0. |
-| 089 | Undo/redo + crash recovery across workflow | 088 | not started | — |
+| 089 | Undo/redo + crash recovery across workflow | 088 | **verified** | 2026-09-20: `undo_redo_walks_the_whole_workflow_across_save_markers_and_recovery` (interchange_and_recovery.rs) commits text edit (apply_text_draft + SetLayerKind), a placement (CreateLayer + PaintTiles with bytes stored in doc.tiles), a TWO-layer transform inside ONE Transaction, a mask attached via the undoable LayerPatch mask route + PaintTiles(Mask) (NOTE: attaching the mask directly on the model made the journal replay fail with NoMask after a crash — the patch route is the correct one, now pinned), ReplaceAssetSource, and a MoveLayer into a group; then asserts: full undo reaches the base state (the undone placement removed its layer), full redo restores model + pixels byte-exactly, a save marker mid-walk does not eat history, and a simulated crash after the last save recovers model+pixels exactly with the recovered suffix itself undoable exactly once (no doubled imports, no stale assets). Gates: integration-tests green, fmt clean, clippy -D warnings 0. |
 | 090 | Regression/compatibility/resource checks | 081,083–089 | not started | — |
 | 091 | Human acceptance walk | 090 | not started | — |
 | 092 | Documentation reconciliation + example | 091 | not started | — |

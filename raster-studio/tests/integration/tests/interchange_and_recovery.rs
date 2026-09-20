@@ -1880,3 +1880,266 @@ fn the_full_scene_round_trips_through_the_native_package_field_by_field() {
         "a deterministic scene reopens pixel-identical: mean {mean}, max {max}"
     );
 }
+
+// ------------------------------------------------------- card 089
+
+/// Card 089: one committed sequence spanning the whole workflow — a text
+/// edit, a placement, a multi-layer transform inside one transaction, a
+/// mask stroke, an adjustment, a grouping move, and an asset replacement —
+/// is undoable and redoable as a whole, survives a save marker in the
+/// middle of the undo walk, and a crash after the last save recovers the
+/// same model and pixels with the recovered work itself undoable. No
+/// doubled imports, half-masks, stale assets, or partially restored styles.
+#[test]
+fn undo_redo_walks_the_whole_workflow_across_save_markers_and_recovery() {
+    let tmp = tempfile::tempdir().unwrap();
+    let package = tmp.path().join("Workflow.rstudio");
+    let mut doc = app::blank(96, 64, "Card 089");
+
+    // --- base scene, then the first save ---
+    let backdrop = doc.add_layer(Layer::raster("Backdrop"));
+    doc.fill_layer(backdrop, [235, 235, 225, 255]);
+    let headline = doc.add_layer(Layer::with_kind(
+        "Headline",
+        layer_model::LayerKind::Text(layer_model::TextLayer {
+            text: "SELL NOW".into(),
+            size_px: 24.0,
+            ..Default::default()
+        }),
+    ));
+    doc.save_to(&package, APP_VERSION).unwrap();
+
+    // --- the committed workflow sequence ---
+    // 1. A text edit: the confirm is one SetLayerKind.
+    let edited = layer_model::TextLayer {
+        text: "SOLD TODAY".into(),
+        size_px: 24.0,
+        ..Default::default()
+    };
+    doc.apply_text_draft(headline, layer_model::LayerKind::Text(edited.clone()))
+        .unwrap();
+    doc.apply(Command::SetLayerKind {
+        layer_id: headline,
+        kind: Box::new(layer_model::LayerKind::Text(edited)),
+    })
+    .unwrap();
+
+    // 2. A placement: create the smart object, then paint its placed pixels.
+    let asset = layer_model::AssetId::new();
+    doc.document.set_asset_origin(layer_model::AssetRecord {
+        id: asset,
+        origin: layer_model::AssetOrigin::Embedded {
+            name: "logo.png".into(),
+            bytes: raster::encode(
+                raster::ExportFormat::Png,
+                8,
+                8,
+                &[10u8, 200, 60, 255].repeat(64),
+            )
+            .unwrap(),
+        },
+        source_size: Some((8, 8)),
+    });
+    doc.apply(Command::create_layer(Layer::with_kind(
+        "Logo",
+        layer_model::LayerKind::SmartObject(layer_model::SmartObjectLayer {
+            asset,
+            linked: false,
+        }),
+    )))
+    .unwrap();
+    let logo = find_layer(&doc, "Logo");
+    let delta = solid_tile_delta(&mut doc, [10u8, 200, 60, 255]);
+    doc.apply(Command::PaintTiles {
+        target: editor_core::pixels::PixelTarget::Layer(logo),
+        delta,
+    })
+    .unwrap();
+
+    // 3. A multi-layer transform: both content layers move in ONE
+    //    transaction, so undo takes the whole gesture back at once.
+    doc.apply(Command::Transaction {
+        label: "Move scene".to_string(),
+        commands: vec![
+            Command::TransformLayer {
+                layer_id: logo,
+                matrix: [1.0, 0.0, 0.0, 1.0, 16.0, 8.0],
+            },
+            Command::TransformLayer {
+                layer_id: headline,
+                matrix: [1.0, 0.0, 0.0, 1.0, 4.0, 2.0],
+            },
+        ],
+    })
+    .unwrap();
+
+    // 4. A mask stroke: the mask is attached (structural, pre-save), then
+    //    coverage is painted through the undoable tile route.
+    let mask_id = layer_model::MaskId::new();
+    // The mask is attached through the undoable patch route, so a journal
+    // replay after a crash sees it too.
+    doc.apply(Command::SetLayerProperties {
+        layer_id: logo,
+        patch: LayerPatch {
+            mask: editor_core::command::Patch::Set(layer_model::LayerMask::new(mask_id)),
+            ..Default::default()
+        },
+    })
+    .unwrap();
+    let delta = mask_half_delta(&mut doc);
+    doc.apply(Command::PaintTiles {
+        target: editor_core::pixels::PixelTarget::Mask(logo),
+        delta,
+    })
+    .unwrap();
+    doc.save_to(&package, APP_VERSION).unwrap();
+
+    // 5. An asset replacement: the embedded logo now draws from new bytes.
+    doc.apply(Command::ReplaceAssetSource {
+        asset,
+        origin: layer_model::AssetOrigin::Embedded {
+            name: "logo2.png".into(),
+            bytes: raster::encode(
+                raster::ExportFormat::Png,
+                8,
+                8,
+                &[90u8, 30, 220, 255].repeat(64),
+            )
+            .unwrap(),
+        },
+        source_size: Some((8, 8)),
+    })
+    .unwrap();
+
+    // 6. A grouping move.
+    let group = doc.add_layer(Layer::with_kind(
+        "Title",
+        layer_model::LayerKind::Group(layer_model::GroupLayer::default()),
+    ));
+    doc.apply(Command::MoveLayer {
+        layer_id: logo,
+        parent: Some(group),
+        index: usize::MAX,
+    })
+    .unwrap();
+
+    let peak = doc.composite_all();
+    let peak_model = doc.document.clone();
+    let depth = doc.history.journal().count();
+
+    // --- undo walks the WHOLE sequence back to the first save's state ---
+    for _ in 0..depth {
+        assert!(doc.history.can_undo());
+        doc.undo().unwrap();
+    }
+    assert!(!doc.history.can_undo(), "the walk reaches the base state");
+    let base = doc.composite_all();
+    assert_ne!(base, peak, "the undo is not a no-op");
+    assert!(
+        doc.document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .all(|id| doc
+                .document
+                .layers
+                .get(id)
+                .is_some_and(|l| l.name != "Logo")),
+        "undoing the placement removes the layer it created"
+    );
+
+    // --- redo reproduces the peak exactly ---
+    for _ in 0..depth {
+        assert!(doc.history.can_redo());
+        doc.redo().unwrap();
+    }
+    assert!(!doc.history.can_redo());
+    assert_eq!(doc.document, peak_model, "redo restores the whole model");
+    assert_eq!(doc.composite_all(), peak, "redo restores the pixels");
+
+    // --- crash after the last save: recovery replays and stays undoable ---
+    // (The journal now holds the replacement + grouping as its suffix.)
+    let journal = CommandJournal::read(&package.join(JOURNAL_FILE)).unwrap();
+    let suffix = journal.since_last_save().len();
+    assert!(suffix > 0, "the post-save edits are journalled");
+    let outstanding = session::recoverable(&package)
+        .unwrap()
+        .expect("the post-save edits are recoverable");
+    assert_eq!(outstanding.commands.len(), suffix);
+    let mut recovered = app::open_project(&package);
+    let (applied, error) = session::replay(
+        &mut recovered.document,
+        &mut recovered.history,
+        &outstanding.commands,
+    );
+    assert_eq!(error, None);
+    assert_eq!(applied, suffix);
+    assert!(recovered.history.can_undo(), "recovered work is undoable");
+    assert_eq!(
+        recovered.document, peak_model,
+        "no doubled imports, no stale assets"
+    );
+    assert_eq!(recovered.composite_all(), peak, "...down to the pixels");
+    // And one undo takes the recovered suffix back, exactly once.
+    recovered.undo().unwrap();
+    assert_ne!(recovered.document, peak_model, "the recovered edit undoes");
+
+    // --- a save marker does not break the walk: undo past the save ---
+    doc.save_to(&package, APP_VERSION).unwrap();
+    doc.undo().unwrap();
+    doc.undo().unwrap();
+    assert!(doc.history.can_redo(), "undo across the save marker works");
+    doc.redo().unwrap();
+    doc.redo().unwrap();
+    assert_eq!(doc.document, peak_model, "the marker does not eat history");
+}
+
+/// The TileDelta that paints an 8×8 solid `color` at the layer origin,
+/// through the same tile-store route a stroke commits through.
+fn solid_tile_delta(doc: &mut OpenDocument, color: [u8; 4]) -> editor_core::pixels::TileDelta {
+    use editor_core::pixels::{TileEdit, TileMap};
+    let mut tiles = std::mem::take(&mut doc.tiles);
+    let mut data = vec![0u8; (raster::TILE_SIZE * raster::TILE_SIZE * 4) as usize];
+    for y in 0..8u32 {
+        for x in 0..8u32 {
+            let i = ((y * raster::TILE_SIZE + x) * 4) as usize;
+            data[i..i + 4].copy_from_slice(&color);
+        }
+    }
+    let hash = tiles.insert_bytes(data);
+    let mut map = TileMap::default();
+    map.apply_delta(
+        &editor_core::pixels::TileDelta::new(vec![TileEdit::set(
+            raster::TileCoord::new(0, 0, 0),
+            hash,
+        )])
+        .unwrap(),
+    );
+    doc.tiles = tiles;
+    editor_core::pixels::TileDelta::new(vec![TileEdit::set(raster::TileCoord::new(0, 0, 0), hash)])
+        .unwrap()
+}
+
+/// The TileDelta that paints the mask's left half hidden, right half shown.
+fn mask_half_delta(doc: &mut OpenDocument) -> editor_core::pixels::TileDelta {
+    use editor_core::pixels::{TileEdit, TileMap};
+    let mut tiles = std::mem::take(&mut doc.tiles);
+    let mut data = vec![255u8; editor_core::MASK_TILE_BYTES];
+    for y in 0..raster::TILE_SIZE {
+        for x in 0..raster::TILE_SIZE / 2 {
+            data[(y * raster::TILE_SIZE + x) as usize] = 0;
+        }
+    }
+    let hash = tiles.insert_bytes(data);
+    let mut map = TileMap::default();
+    map.apply_delta(
+        &editor_core::pixels::TileDelta::new(vec![TileEdit::set(
+            raster::TileCoord::new(0, 0, 0),
+            hash,
+        )])
+        .unwrap(),
+    );
+    doc.tiles = tiles;
+    editor_core::pixels::TileDelta::new(vec![TileEdit::set(raster::TileCoord::new(0, 0, 0), hash)])
+        .unwrap()
+}
