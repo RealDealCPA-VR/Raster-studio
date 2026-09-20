@@ -1,11 +1,12 @@
 # Raster Studio — Task List
 
-> Restart checkpoint (2026-09-09): this is the older wave backlog. Current work
-> is tracked in [Thumbnail workflow progress](raster-studio/docs/THUMBNAIL-WORKFLOW-PROGRESS.md)
-> and [Active goal](.pi/goals/ACTIVE.md). Resume **T004** (shell-route regression
-> harness); T001–T003 are recorded complete, and T003's fixture tests passed again
-> after the restart (5 passed, 1 ignored). Historical wave labels below have not
-> been re-audited. Separate hardware verification remains open as C14 in
+> Current checkpoint (2026-09-20): cards T001–T076 are recorded verified at
+> `37fb975`; independent focused verification of the T072–T076 PSD/import work
+> passes. Current work is tracked in [Thumbnail workflow progress](raster-studio/docs/THUMBNAIL-WORKFLOW-PROGRESS.md)
+> and [Active goal](.pi/goals/ACTIVE.md). Resume **T078** (appearance-preserving PSD layer
+> export), then T079–T081 before the Phase 8 gate. T077 (import fidelity report) is
+> verified 2026-09-20. Historical wave labels
+> below have not been re-audited. Separate hardware verification remains open as C14 in
 > [Corrections TODO](raster-studio/docs/CORRECTIONS-TODO.md).
 
 Derived from `raster-studio/docs/PLAN.md`. Every task is scoped to **one crate**,

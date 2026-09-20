@@ -3559,6 +3559,13 @@ impl Editor {
         self.recent.record(path);
         let _ = self.recent.save(&self.paths.recent_file());
         self.status = Some(format!("Opened {}", path.display()));
+        // Card 077: a PSD that did not map exactly shows its fidelity report
+        // right away — visible, not buried in a status bar. A fully supported
+        // file has nothing to say and shows nothing.
+        let notes = self.docs[self.active.unwrap()].psd_notes().clone();
+        if let Some(report) = notes.report(Some(path)) {
+            self.dialogs.report_notice("PSD import report", &report);
+        }
         self.touch();
         Ok(id)
     }

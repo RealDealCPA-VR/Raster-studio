@@ -400,6 +400,40 @@ pub const MAX_PSD_GROUP_DEPTH: usize = 64;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PsdNotes {
     notes: Vec<String>,
+    layers: Vec<PsdLayerReport>,
+}
+
+/// What became of one imported layer (card 077).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PsdLayerOutcome {
+    /// The layer mapped with nothing lost worth reporting.
+    Editable,
+    /// The layer's pixels came through but part of it (text, a vector mask,
+    /// an effect, a flag) was replaced by a raster or dropped.
+    RasterFallback,
+    /// The layer arrived empty — a kind this build has no home for, or an
+    /// adjustment it cannot evaluate.
+    Unsupported,
+}
+
+impl PsdLayerOutcome {
+    /// The report's word for the outcome.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Editable => "editable",
+            Self::RasterFallback => "raster fallback",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+/// One layer's import outcome with a human-readable reason (card 077).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PsdLayerReport {
+    pub name: String,
+    pub outcome: PsdLayerOutcome,
+    /// What changed on this layer, empty when nothing did.
+    pub detail: String,
 }
 
 impl PsdNotes {
@@ -408,8 +442,45 @@ impl PsdNotes {
         &self.notes
     }
 
+    /// Per-layer outcomes, in import (bottom-to-top) order (card 077).
+    pub fn layers(&self) -> &[PsdLayerReport] {
+        &self.layers
+    }
+
     pub fn is_empty(&self) -> bool {
         self.notes.is_empty()
+    }
+
+    /// The actionable report (card 077): what changed, per layer, and what
+    /// the user should do about it. `None` when everything mapped — a fully
+    /// supported file never sees this report.
+    pub fn report(&self, source: Option<&Path>) -> Option<String> {
+        if self.notes.is_empty() {
+            return None;
+        }
+        let mut out = String::from("Some parts of this file did not map exactly:\n");
+        for note in &self.notes {
+            out.push_str("\n• ");
+            out.push_str(note);
+        }
+        if !self.layers.is_empty() {
+            out.push_str("\n\nPer layer:");
+            for layer in &self.layers {
+                out.push_str(&format!("\n• {} — {}", layer.name, layer.outcome.as_str()));
+                if !layer.detail.is_empty() {
+                    out.push_str(": ");
+                    out.push_str(&layer.detail);
+                }
+            }
+        }
+        let origin = source
+            .map(|p| format!("{}", p.display()))
+            .unwrap_or_else(|| "file".into());
+        out.push_str(&format!(
+            "\n\nThe original file {origin} was not modified. Use File > Save As \
+             with the native .rstudio format to keep working without further loss."
+        ));
+        Some(out)
     }
 
     /// The whole report as one sentence, for a status line. `None` when
@@ -474,6 +545,78 @@ fn kinds_phrase(kinds: &[String]) -> String {
 }
 
 impl Tally {
+    /// Per-category lengths, in a fixed order — the diff between two of these
+    /// says which categories a single layer's import grew (card 077).
+    const CATEGORIES: usize = 13;
+
+    fn signature(&self) -> [usize; Self::CATEGORIES] {
+        [
+            self.color_labels.len(),
+            self.adjustments.len(),
+            self.type_layers.len(),
+            self.editable_text.len(),
+            self.effects.len(),
+            self.second_masks.len(),
+            self.transformed.len(),
+            self.no_pixels.len(),
+            self.mask_params.len(),
+            self.vector_masks.len(),
+            self.locked_all.len(),
+            self.pass_through_blend.len(),
+            self.unmapped_effects.len(),
+        ]
+    }
+
+    /// What became of the layer whose import grew the tally from `before` to
+    /// now: an outcome class plus the short labels of everything that moved.
+    fn classify(&self, before: &[usize; Tally::CATEGORIES]) -> (PsdLayerOutcome, String) {
+        const LABELS: [&str; Tally::CATEGORIES] = [
+            "colour label dropped",
+            "adjustment kept as an empty layer",
+            "text imported as pixels",
+            "editable text with a substituted font",
+            "effects not imported",
+            "second mask not imported",
+            "transform baked into pixels",
+            "kind with no .psd home (empty layer)",
+            "mask density/feather dropped",
+            "vector mask rasterised",
+            "lock dropped",
+            "blend mode dropped for pass-through",
+            "named effects not imported",
+        ];
+        let after = self.signature();
+        let mut outcome = PsdLayerOutcome::Editable;
+        let mut details: Vec<String> = Vec::new();
+        for (i, (b, a)) in before.iter().zip(after.iter()).enumerate() {
+            if a > b {
+                // The unmapped-effects category names its kinds, so the
+                // report says what was dropped, not just that something was.
+                details.push(if i == 12 {
+                    let kinds: Vec<&str> = self.unmapped_effects[*b..]
+                        .iter()
+                        .map(|(_, k)| k.as_str())
+                        .collect();
+                    format!("{} ({})", LABELS[i], kinds.join(", "))
+                } else {
+                    LABELS[i].to_string()
+                });
+                match i {
+                    // A layer that arrives empty cannot be edited back into
+                    // what it was.
+                    1 | 7 => outcome = PsdLayerOutcome::Unsupported,
+                    // Text that became pixels and a vector mask that became
+                    // coverage are raster fallbacks by name.
+                    2 | 9 if outcome == PsdLayerOutcome::Editable => {
+                        outcome = PsdLayerOutcome::RasterFallback;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        (outcome, details.join(", "))
+    }
+
     fn record(&mut self, notes: &mut PsdNotes) {
         let entries: [(&[String], &str); 12] = [
             (
@@ -766,6 +909,65 @@ pub fn read_psd_bytes(path: &Path) -> Result<Vec<u8>, ImportError> {
 pub struct PsdImport {
     pub imported: ImportedDocument,
     pub notes: PsdNotes,
+    /// The file's own flattened composite as RGBA8, when it carries one
+    /// (card 077). Kept so a caller may compare it against the reconstructed
+    /// document — see [`PsdImport::compare_merged_preview`]. Not an authority:
+    /// the preview is whatever wrote the file rendered, crude flatteners
+    /// included.
+    pub merged_preview: Option<Vec<u8>>,
+}
+
+/// How far this reconstruction is from the file's flattened preview
+/// (card 077).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MergedPreviewDiff {
+    /// Pixels compared (canvas area).
+    pub pixels: usize,
+    /// Pixels where any channel differs by more than the tolerance.
+    pub differing: usize,
+    /// Largest per-channel difference seen, 0–255.
+    pub max_delta: u8,
+}
+
+impl PsdImport {
+    /// Compare the file's flattened preview against this document's own
+    /// composite. `None` when the file carries no preview (or is empty).
+    /// The comparison is offered, not asserted: a preview written by a crude
+    /// flattener legitimately differs from a correct reconstruction, so the
+    /// numbers are evidence for a human, never a verdict on their own.
+    pub fn compare_merged_preview(&self, tolerance: u8) -> Option<MergedPreviewDiff> {
+        let rgba = self.merged_preview.as_ref()?;
+        let doc = &self.imported.document;
+        let canvas = compositor::composite_region(
+            doc,
+            &self.imported.tiles,
+            raster::PixelRect::new(0, 0, doc.width(), doc.height()),
+            0,
+            compositor::CompositeOptions::default(),
+        )
+        .ok()?;
+        let rendered = canvas.to_rgba8(&doc.meta.color_space);
+        let differing = rgba
+            .chunks_exact(4)
+            .zip(rendered.chunks_exact(4))
+            .filter(|(a, b)| {
+                a.iter()
+                    .zip(b.iter())
+                    .any(|(x, y)| x.abs_diff(*y) > tolerance)
+            })
+            .count();
+        let max_delta = rgba
+            .chunks_exact(4)
+            .zip(rendered.chunks_exact(4))
+            .flat_map(|(a, b)| a.iter().zip(b.iter()).map(|(x, y)| x.abs_diff(*y)))
+            .max()
+            .unwrap_or(0);
+        Some(MergedPreviewDiff {
+            pixels: (doc.width() as usize) * (doc.height() as usize),
+            differing,
+            max_delta,
+        })
+    }
 }
 
 /// One PSD layer's colour and alpha, packed into the editor's RGBA8.
@@ -1085,6 +1287,7 @@ pub fn document_from_psd(
         let index = frame.index;
         frame.index += 1;
 
+        let before = tally.signature();
         let mut layer = layer_common(source, &mut tally);
         let mut wants_pixels = false;
         match &source.kind {
@@ -1204,6 +1407,15 @@ pub fn document_from_psd(
             }
         }
 
+        // Card 077: every layer lands in the report, classified by what its
+        // import grew in the tally — editable, raster fallback, or unsupported.
+        let (outcome, detail) = tally.classify(&before);
+        notes.layers.push(PsdLayerReport {
+            name: source.name.clone(),
+            outcome,
+            detail,
+        });
+
         if let Some(group) = source.group_data() {
             stack.push(Frame {
                 parent: Some(id),
@@ -1257,6 +1469,7 @@ pub fn document_from_psd(
             layer: active,
         },
         notes,
+        merged_preview: psd_merged_rgba(&file),
     })
 }
 
@@ -2354,6 +2567,117 @@ mod tests {
         // user can see it is there rather than wonder where it went.
         assert!(doc.layers.get(find(doc, "Curves 1")).is_some());
         assert_eq!(doc.layers.len(), 4);
+    }
+
+    // ------------------------------------------------------- card 077
+
+    /// Card 077's acceptance fixture: one clean layer, one adjustment this
+    /// build cannot evaluate, one exact mapping, and one layer whose named
+    /// effect is dropped.
+    fn mixed_fidelity_psd() -> Vec<u8> {
+        let mut file = psd::PsdFile::new(psd::PsdHeader::rgba8(64, 64));
+        let canvas = psd::Rect::sized(64, 64);
+
+        let mut base = psd::PsdLayer::raster("Base", canvas);
+        base.set_rgba8(&solid(canvas, RED)).unwrap();
+
+        let mut curves = psd::PsdLayer::raster("Curves 1", psd::Rect::default());
+        curves.adjustment = Some(psd::Adjustment {
+            key: *b"curv",
+            data: vec![0; 8],
+        });
+        curves.pixel_data_irrelevant = true;
+
+        let mut styled = psd::PsdLayer::raster("Styled", canvas);
+        styled.set_rgba8(&solid(canvas, GREEN)).unwrap();
+        styled.effects = Some(psd::Effects {
+            key: *b"lfx2",
+            data: card075_lfx2(),
+        });
+
+        file.layers = vec![base, curves, styled];
+        psd::write(&file).expect("the fixture must be writable")
+    }
+
+    #[test]
+    fn the_fidelity_report_classifies_every_layer_and_says_what_to_do() {
+        let import = document_from_psd(&mixed_fidelity_psd(), "mixed.psd", 10).unwrap();
+
+        // Per-layer outcomes; the walk is bottom-to-top, so index by name.
+        let layers = import.notes.layers();
+        assert_eq!(layers.len(), 3, "every layer is in the report: {layers:?}");
+        let of = |name: &str| layers.iter().find(|l| l.name == name).unwrap();
+        let base = of("Base");
+        assert_eq!(base.outcome, PsdLayerOutcome::Editable);
+        assert!(base.detail.is_empty());
+        let curves = of("Curves 1");
+        assert_eq!(curves.outcome, PsdLayerOutcome::Unsupported);
+        assert!(curves.detail.contains("empty layer"), "{layers:?}");
+        let styled = of("Styled");
+        assert!(styled.detail.contains("satin"), "{layers:?}");
+
+        // The whole report: names the source, encourages native Save As.
+        let report = import
+            .notes
+            .report(Some(Path::new("C:/art/mixed.psd")))
+            .expect("a lossy import must produce a report");
+        assert!(report.contains("C:/art/mixed.psd"), "{report}");
+        assert!(report.contains(".rstudio"), "{report}");
+        assert!(report.contains("Save As"), "{report}");
+        assert!(report.contains("Base — editable"), "{report}");
+        assert!(report.contains("Curves 1 — unsupported"), "{report}");
+        assert!(report.contains("sat"), "{report}");
+    }
+
+    #[test]
+    fn the_raster_fallback_is_actually_visible_not_a_report_about_nothing() {
+        // The layer the report calls a fallback still carries its pixels:
+        // the report explains a visual difference, it must be a real one.
+        let import = document_from_psd(&mixed_fidelity_psd(), "mixed.psd", 10).unwrap();
+        let doc = &import.imported.document;
+        let tiles = &import.imported.tiles;
+        let styled = find(doc, "Styled");
+        assert_eq!(stored_pixel(doc, tiles, styled, 30, 30), GREEN);
+
+        // The unsupported adjustment layer is honestly empty — and the report
+        // says why, so the emptiness is explained rather than mysterious.
+        let curves = find(doc, "Curves 1");
+        assert!(matches!(
+            &doc.layers.get(curves).unwrap().kind,
+            LayerKind::Raster(_)
+        ));
+        assert_eq!(stored_pixel(doc, tiles, curves, 30, 30), [0; 4]);
+    }
+
+    #[test]
+    fn a_fully_supported_file_is_quiet_and_every_layer_reads_editable() {
+        let import = document_from_psd(&layered_psd(), "clean.psd", 50).unwrap();
+        assert!(import.notes.is_empty(), "{:?}", import.notes);
+        assert!(import.notes.report(None).is_none());
+        for layer in import.notes.layers() {
+            assert_eq!(layer.outcome, PsdLayerOutcome::Editable, "{layer:?}");
+            assert!(layer.detail.is_empty(), "{layer:?}");
+        }
+    }
+
+    #[test]
+    fn the_merged_preview_is_kept_so_the_reconstruction_can_be_compared() {
+        let import = document_from_psd(&layered_psd(), "preview.psd", 50).unwrap();
+        let preview = import
+            .merged_preview
+            .as_ref()
+            .expect("the file has a merged image");
+        assert_eq!(preview.len(), PW as usize * PH as usize * 4);
+        let diff = import
+            .compare_merged_preview(8)
+            .expect("a preview exists, so the comparison is offered");
+        assert_eq!(diff.pixels, PW as usize * PH as usize);
+        assert!(diff.differing <= diff.pixels);
+
+        // A file with no composite offers no comparison at all.
+        let mut import = import;
+        import.merged_preview = None;
+        assert!(import.compare_merged_preview(8).is_none());
     }
 
     #[test]

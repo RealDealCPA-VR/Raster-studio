@@ -82,6 +82,16 @@ pub enum DocumentError {
     Pixel(#[from] editor_core::PixelError),
     #[error("writing print output failed: {0}")]
     Io(String),
+    /// Card 077: exporting over the imported original would replace a file
+    /// from another application with this build's reduced representation of
+    /// it. Refused loudly; the user picks another name (or saves native
+    /// first).
+    #[error(
+        "refusing to overwrite the imported original `{0}` — exporting here \
+         would replace it with a reduced representation; choose a different \
+         file name, or use File > Save As with the native .rstudio format first"
+    )]
+    OriginalOverwrite(PathBuf),
     #[error("this document has never been saved, so it has no location to save to")]
     NoPath,
 }
@@ -137,6 +147,17 @@ pub fn exports_as_psd(path: &Path) -> bool {
     path.extension()
         .map(|e| e.eq_ignore_ascii_case("psd"))
         .unwrap_or(false)
+}
+
+/// `true` when two paths name the same file — canonically when both resolve,
+/// case-insensitively otherwise (this build's primary host is Windows).
+fn same_path(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy()),
+    }
 }
 
 /// Write `bytes` to `path` without destroying what is already there if the
@@ -1341,6 +1362,15 @@ impl OpenDocument {
     /// Returns what the document could not express in the format; the same
     /// report is left on [`OpenDocument::psd_notes`].
     pub fn export_psd_to(&mut self, path: &Path) -> Result<crate::import::PsdNotes, DocumentError> {
+        // Card 077: the original `.psd` this document was opened from is never
+        // silently overwritten with this build's (necessarily reduced) export
+        // of it. Path equality is checked canonically when the files exist,
+        // case-insensitively otherwise (Windows).
+        if let Some(source) = self.source_path.as_deref() {
+            if exports_as_psd(source) && same_path(source, path) {
+                return Err(DocumentError::OriginalOverwrite(source.to_path_buf()));
+            }
+        }
         let rgba8 = self.composite(self.canvas_rect())?;
         let (bytes, notes) = crate::import::psd_from_document(&self.document, &self.tiles, &rgba8)?;
         write_atomically(path, &bytes).map_err(crate::import::ImportError::from)?;
@@ -2945,6 +2975,33 @@ mod tests {
         );
         // Save As next to it still suggests the project package.
         assert_eq!(d.suggested_save_path(), dir.path().join("artwork.rstudio"));
+    }
+
+    #[test]
+    fn exporting_over_the_imported_original_is_refused_loudly() {
+        // Card 077: the original .psd this document was opened from is never
+        // silently replaced by this build's reduced export of it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("artwork.psd");
+        std::fs::write(&path, layered_psd_bytes()).unwrap();
+        let mut d = OpenDocument::open_image(DocumentId(11), &path, 100).unwrap();
+
+        let err = d.export_psd_to(&path).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("refusing to overwrite"),
+            "the refusal must say why: {message}"
+        );
+        assert!(
+            message.contains("Save As"),
+            "the refusal says what to do instead: {message}"
+        );
+        // The original is intact after the refusal.
+        assert_eq!(std::fs::read(&path).unwrap(), layered_psd_bytes());
+
+        // A different name is not the original: that export is allowed.
+        let other = dir.path().join("export.psd");
+        assert!(d.export_psd_to(&other).is_ok());
     }
 
     #[test]

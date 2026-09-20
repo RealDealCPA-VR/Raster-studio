@@ -106,6 +106,36 @@ honesty gate in `import.rs` asserts this file keeps quoting every one:
    and writer carry today; compatibility with a PSD produced by an
    unseen tool version is asserted only by the fixtures of card 073.
 
+## The fidelity report (card 077)
+
+A `.psd` whose import loses anything shows an actionable report right
+away — an information notice, not an error, because the document did
+open. The report contains:
+
+- the fallback notes above, verbatim, with the affected layers named;
+- one line per layer from the per-layer outcome list
+  (`PsdNotes::layers`): *editable* (mapped exactly, or editable text
+  with a substituted font), *raster fallback* (text became pixels, a
+  vector mask became coverage), or *unsupported* (the layer arrived
+  empty — a kind with no home here, or an adjustment this build cannot
+  evaluate) — each with the reason;
+- the original file's path, a statement that the original was not
+  modified, and the encouragement to continue in the native `.rstudio`
+  format via File ▸ Save As.
+
+A file whose import loses nothing produces **no report at all** — no
+generic warnings unrelated to its data. The file's own flattened
+preview is retained on the import (`PsdImport::merged_preview`), and
+`PsdImport::compare_merged_preview(tolerance)` offers the comparison
+against the reconstructed document when a caller wants it; it is
+offered, never asserted, because a preview written by a crude
+flattener legitimately differs from a correct reconstruction.
+
+Exporting a `.psd` back over the imported original's own path is
+refused (`DocumentError::OriginalOverwrite`): the original is never
+silently replaced by this build's reduced representation of it. Choose
+another name, or Save As a native `.rstudio` first.
+
 ## What would change rows
 
 The rows move only with code: an editable row becomes possible when the

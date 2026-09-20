@@ -3904,3 +3904,111 @@ fn replacing_without_a_recorded_source_size_keeps_the_transform() {
         "the new size IS recorded for the next replacement"
     );
 }
+
+// ------------------------------------------------------ card 077 tests
+
+/// A [`ScriptedDialogs`] wrapper the test can read back: the editor owns the
+/// `Box<dyn FileDialogs>`, so the spy records notices behind an `Rc`.
+#[derive(Default, Clone)]
+struct DialogSpy {
+    notices: std::rc::Rc<std::cell::RefCell<Vec<(String, String)>>>,
+}
+
+impl DialogSpy {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl crate::dialogs::FileDialogs for DialogSpy {
+    fn pick_open_file(&mut self) -> Option<PathBuf> {
+        None
+    }
+    fn pick_place_file(&mut self) -> Option<PathBuf> {
+        None
+    }
+    fn pick_replace_file(&mut self) -> Option<PathBuf> {
+        None
+    }
+    fn pick_open_project(&mut self) -> Option<PathBuf> {
+        None
+    }
+    fn pick_save_path(&mut self, _suggested: &Path) -> Option<PathBuf> {
+        None
+    }
+    fn pick_export_path(&mut self, _suggested: &Path) -> Option<PathBuf> {
+        None
+    }
+    fn pick_export_folder(&mut self) -> Option<PathBuf> {
+        None
+    }
+    fn confirm_close(&mut self, _document: &str) -> crate::dialogs::CloseChoice {
+        crate::dialogs::CloseChoice::Cancel
+    }
+    fn confirm_recover(&mut self, _document: &str) -> bool {
+        false
+    }
+    fn report_error(&mut self, _title: &str, _message: &str) {}
+    fn report_notice(&mut self, title: &str, message: &str) {
+        self.notices
+            .borrow_mut()
+            .push((title.to_string(), message.to_string()));
+    }
+}
+
+/// A PSD this build cannot fully map: a clean raster layer plus a `curv`
+/// adjustment whose payload has no vocabulary here.
+fn lossy_psd_bytes() -> Vec<u8> {
+    let mut file = psd::PsdFile::new(psd::PsdHeader::rgba8(16, 16));
+    let canvas = psd::Rect::sized(16, 16);
+    let mut base = psd::PsdLayer::raster("Base", canvas);
+    base.set_rgba8(&[10u8, 20, 30, 255].repeat(16 * 16))
+        .unwrap();
+    let mut curves = psd::PsdLayer::raster("Curves 1", psd::Rect::default());
+    curves.adjustment = Some(psd::Adjustment {
+        key: *b"curv",
+        data: vec![0; 8],
+    });
+    curves.pixel_data_irrelevant = true;
+    file.layers = vec![base, curves];
+    psd::write(&file).expect("the fixture must be writable")
+}
+
+#[test]
+fn opening_a_lossy_psd_shows_its_fidelity_report_and_a_clean_one_shows_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let lossy = dir.path().join("lossy.psd");
+    std::fs::write(&lossy, lossy_psd_bytes()).unwrap();
+    let spy = DialogSpy::new();
+    let mut ed = Editor::with_state(
+        AppPaths::rooted(dir.path().join("config")),
+        Preferences::default(),
+        RecentFiles::new(),
+        Box::new(spy.clone()),
+    );
+    ed.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+    ed.open_path(&lossy).unwrap();
+    let notices = spy.notices.borrow();
+    assert_eq!(
+        notices.len(),
+        1,
+        "one lossy import, one notice: {notices:?}"
+    );
+    let (title, message) = &notices[0];
+    assert_eq!(title, "PSD import report");
+    assert!(message.contains("Curves 1"), "{message}");
+    assert!(message.contains(".rstudio"), "{message}");
+
+    // A clean file says nothing: no notice is trained-into-ignoring material.
+    let clean = dir.path().join("clean.psd");
+    let mut file = psd::PsdFile::new(psd::PsdHeader::rgba8(16, 16));
+    let canvas = psd::Rect::sized(16, 16);
+    let mut only = psd::PsdLayer::raster("Base", canvas);
+    only.set_rgba8(&[10u8, 20, 30, 255].repeat(16 * 16))
+        .unwrap();
+    file.layers = vec![only];
+    std::fs::write(&clean, psd::write(&file).unwrap()).unwrap();
+    ed.open_path(&clean).unwrap();
+    assert_eq!(spy.notices.borrow().len(), 1, "the clean file stayed quiet");
+}

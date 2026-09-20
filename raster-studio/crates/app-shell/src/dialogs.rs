@@ -55,6 +55,9 @@ pub trait FileDialogs {
     /// Something failed and the user has to be told. This is the path that
     /// exists so a GPU failure is a dialog rather than a silent abort.
     fn report_error(&mut self, title: &str, message: &str);
+    /// Card 077: a non-fatal notice after an operation succeeded — the PSD
+    /// import fidelity report. Information, not an error.
+    fn report_notice(&mut self, title: &str, message: &str);
 }
 
 /// Opens a Help destination in the user's browser.
@@ -215,6 +218,15 @@ impl FileDialogs for NativeDialogs {
             .set_buttons(rfd::MessageButtons::Ok)
             .show();
     }
+
+    fn report_notice(&mut self, title: &str, message: &str) {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Info)
+            .set_title(title)
+            .set_description(message)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
+    }
 }
 
 /// Pre-programmed answers, for tests and for headless runs.
@@ -234,6 +246,8 @@ pub struct ScriptedDialogs {
     pub recover_answers: Vec<bool>,
     /// Every error the editor reported, in order: `(title, message)`.
     pub errors: Vec<(String, String)>,
+    /// Card 077: every notice the editor reported, in order: `(title, message)`.
+    pub notices: Vec<(String, String)>,
     /// Every `suggested` path a save/export dialog was opened at.
     pub suggested: Vec<PathBuf>,
     /// Answers for the picker behind "Place Embedded…"/"Place Linked…".
@@ -340,6 +354,10 @@ impl FileDialogs for ScriptedDialogs {
 
     fn report_error(&mut self, title: &str, message: &str) {
         self.errors.push((title.to_string(), message.to_string()));
+    }
+
+    fn report_notice(&mut self, title: &str, message: &str) {
+        self.notices.push((title.to_string(), message.to_string()));
     }
 }
 
