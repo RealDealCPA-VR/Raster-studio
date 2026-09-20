@@ -5838,6 +5838,7 @@ mod tests {
     /// top-most wins.
     #[test]
     fn the_overlap_policy_is_top_most_text_and_rasters_never_block() {
+        compositor::load_font(dejavu::sans::regular().to_vec());
         let dir = tempfile::tempdir().unwrap();
         let mut editor = editor(dir.path());
         editor.set_tool(ToolId::Type);
@@ -5881,10 +5882,24 @@ mod tests {
         };
         let _ = portrait;
 
-        // The click lands where BOTH headlines' ink overlaps. The top-most
-        // TEXT candidate is the subhead (created after the headline), and the
-        // raster above them does not block.
-        stroke(&mut pointer, &mut editor, &[(10.0, 16.0)]);
+        let subhead_run = text_engine::TextRun::from(&layer_model::TextLayer {
+            text: "SUB".to_string(),
+            font_family: "DejaVu Sans".to_string(),
+            size_px: 32.0,
+            ..layer_model::TextLayer::default()
+        });
+        let start = compositor::text_caret_rect(&subhead_run, 0);
+        let after_first = compositor::text_caret_rect(&subhead_run, 1);
+        let click = (
+            after_first.x - (after_first.x - start.x) * 0.25,
+            after_first.y + after_first.height * 0.5,
+        );
+
+        // The click lands where BOTH headlines' ink overlaps, deliberately
+        // closer to the caret after the first character than to the start. The
+        // top-most TEXT candidate is the subhead (created after the headline),
+        // and the raster above them does not block.
+        stroke(&mut pointer, &mut editor, &[click]);
         assert!(
             pointer.is_text_editing(),
             "the text under the portrait is entered"
@@ -5895,9 +5910,8 @@ mod tests {
         else {
             panic!("the subhead is text");
         };
-        // The click's caret was mid-glyph (10px into a 32px "S"), so the
-        // insertion sits inside the word — mid-string placement through the
-        // transform is the point being proven.
+        // The click's caret is deliberately after the first character, so
+        // insertion proves that the top-most text received the shaped hit.
         assert_eq!(sub.text, "S!UB", "the TOP-MOST text won at the hit caret");
         let layer_model::LayerKind::Text(head) = &doc.document.layers.get(headline).unwrap().kind
         else {

@@ -197,6 +197,7 @@ dependencies = [
  "asset-store",
  "color",
  "compositor",
+ "dejavu",
  "design",
  "dirs",
  "editor-core",

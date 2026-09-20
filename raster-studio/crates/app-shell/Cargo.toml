@@ -69,6 +69,7 @@ windows-sys = { version = "0.59", features = [
 libc = "0.2"
 
 [dev-dependencies]
+dejavu = "2.37"
 tempfile = "3"
 # Test-only: `the_mask_covers_every_component_the_panel_lists` names every
 # colour space so the channel mask cannot silently outgrow its three bools.
