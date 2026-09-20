@@ -3,7 +3,7 @@
 Status: ACTIVE
 Goal: "go through the implementation plan and do every task in the list systematically until fully completed" (the plan: `raster-studio/docs/THUMBNAIL-WORKFLOW-IMPLEMENTATION-PLAN.md`, 92 main cards 001–092 + 6 optional cards 093–098; execution guidance: `raster-studio/docs/GLM-THUMBNAIL-START-HERE.md`)
 Started: 2026-09-07
-Last updated: 2026-09-20 (cards 001–077 verified; T077 landed this session — per-layer fidelity report, notice surface, merged-preview comparison, export-overwrite guard; next T078)
+Last updated: 2026-09-20 (cards 001–078 verified; T077 + T078 landed this session — fidelity report, then appearance-preserving text/shape/smart-object export; next T079)
 
 ## Historical restart recovery checkpoint — 2026-09-09
 
@@ -110,6 +110,8 @@ Last updated: 2026-09-20 (cards 001–077 verified; T077 landed this session —
 
 - 2026-09-20 (T077): landed and verified — see progress ledger row 077 and PSD-THUMBNAIL-SUPPORT.md "The fidelity report (card 077)". Design decision: the merged-preview comparison is offered via `PsdImport::compare_merged_preview`, NOT auto-asserted as a note — an auto note would cry wolf on fully supported fixtures because the `psd` crate's own flattener writes fixture previews (demonstrated: 5 tests failed with max Δ 255 before the switch). Checks: app-shell 543+10, psd 195, interchange 16, fmt clean, clippy -D warnings 0.
 
+- 2026-09-20 (T078): landed and verified — see progress ledger row 078. Design decisions: fallback pixels render through `composite_subtree` with the mask detached (no double application); unsupported adjustments stay empty layers + notes (no invented pixels); `no_pixels` tally retired for `raster_fallback`. Full workspace gate green.
+
 ## T022 design decisions (2026-09-09)
 - Substitution is OUR documented policy, not cosmic-text's fallback: `FontLibrary::substitute_for(requested)` — None when family present/empty/library empty; otherwise the library's pinned default sans family. `attrs_for` applies the same rule (missing → Family::SansSerif) so renderer and report agree by construction; the requested name stays in the document. Rationale: cosmic-text 0.17's own missing-family pick sorts FontMatchKey ascending and prefers emoji faces (derived Ord on not_emoji) — not mirrorable honestly.
 - Face selection is real: `FontStretch` (9-variant usWidthClass mirror of fontdb Stretch=ttf_parser::Width) added to CharStyle/BaseStyle + spans, serde-defaulted, hashed in compositor RunKey.content, selectable in the Character panel; dejavu fixture ships `sans_condensed` so condensed tests are deterministic.
@@ -119,8 +121,8 @@ Last updated: 2026-09-20 (cards 001–077 verified; T077 landed this session —
 ## Handoff
 - Current checkpoint: T076 is verified at `37fb975`; Phase 7 (cards 066–071) is complete, and Phase 8 starts at T077.
 - Independent check (2026-09-20): `cargo test --locked -p psd` (195 passed), `cargo test --locked -p app-shell import::` (30 passed), `cargo test --locked -p integration-tests --test interchange_and_recovery` (16 passed, 1 explicit fixture-materialization test ignored), `cargo fmt --all --check`, and `cargo clippy --locked -p psd -p app-shell --all-targets -- -D warnings` all passed.
-- In progress: none (T077 verified).
-- Next exact action: read card T078 (appearance-preserving PSD layer export) in `THUMBNAIL-WORKFLOW-IMPLEMENTATION-PLAN.md`; export rendered pixel records for layer kinds that currently produce `tally.no_pixels`, with correct transforms/bounds. Then T079–T081; run the Phase 8 workspace gate after T081.
+- In progress: none (T078 verified).
+- Next exact action: read card T079 (export the supported editable text subset) in `THUMBNAIL-WORKFLOW-IMPLEMENTATION-PLAN.md`; serialize the card-072 text subset with styled native fields, transform, and valid fallback pixels. Then T080–T081; run the Phase 8 workspace gate after T081.
 - Preserve the untracked root scratch files (`shot-baseline-start.png`, `t045_test_fragment.rs`, `t047_tests.rs`, `t048_tests.rs`, `t049_tests.rs`, `t050_*.py`/`.rs`, `t057_fixes.py`, `t058_invert.py`, `t061_brushtest2.py`, `t061_pins.py`) unless their owner explicitly asks to remove them.
 - Blockers/risks: no code blocker found in this check. T077–T092 remain; retain the doer/reviewer ledger discipline and run a full workspace gate at the end of each phase.
 - Historical context note: the following older checkpoints are retained as implementation history only. They are superseded by the T076/T077 handoff above and must not be used as a resume instruction.

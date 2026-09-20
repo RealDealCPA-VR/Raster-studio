@@ -114,6 +114,10 @@ pub enum ImportError {
     PsdTooDeep { max: usize },
     #[error("the layer tree could not be built: {0}")]
     Tree(#[from] layer_model::TreeError),
+    /// Card 078: rendering a text/shape/smart-object layer's fallback pixels
+    /// through the compositor failed.
+    #[error(transparent)]
+    Composite(#[from] compositor::CompositeError),
 }
 
 /// A document, its history, and the tile bytes its pixels live in.
@@ -514,7 +518,10 @@ struct Tally {
     unmapped_effects: Vec<(String, String)>,
     second_masks: Vec<String>,
     transformed: Vec<String>,
-    no_pixels: Vec<String>,
+    /// Card 078: text/shape/smart-object layers whose rendered appearance was
+    /// written as a raster layer's pixels (a .psd cannot carry them
+    /// editably).
+    raster_fallback: Vec<String>,
     mask_params: Vec<String>,
     vector_masks: Vec<String>,
     locked_all: Vec<String>,
@@ -558,7 +565,7 @@ impl Tally {
             self.effects.len(),
             self.second_masks.len(),
             self.transformed.len(),
-            self.no_pixels.len(),
+            self.raster_fallback.len(),
             self.mask_params.len(),
             self.vector_masks.len(),
             self.locked_all.len(),
@@ -578,7 +585,7 @@ impl Tally {
             "effects not imported",
             "second mask not imported",
             "transform baked into pixels",
-            "kind with no .psd home (empty layer)",
+            "text/shape/smart-object content written as raster pixels",
             "mask density/feather dropped",
             "vector mask rasterised",
             "lock dropped",
@@ -604,10 +611,11 @@ impl Tally {
                 match i {
                     // A layer that arrives empty cannot be edited back into
                     // what it was.
-                    1 | 7 => outcome = PsdLayerOutcome::Unsupported,
-                    // Text that became pixels and a vector mask that became
-                    // coverage are raster fallbacks by name.
-                    2 | 9 if outcome == PsdLayerOutcome::Editable => {
+                    1 => outcome = PsdLayerOutcome::Unsupported,
+                    // Text that became pixels, a vector mask that became
+                    // coverage, and a rendered text/shape/smart-object
+                    // fallback are raster fallbacks by name.
+                    2 | 7 | 9 if outcome == PsdLayerOutcome::Editable => {
                         outcome = PsdLayerOutcome::RasterFallback;
                     }
                     _ => {}
@@ -651,8 +659,9 @@ impl Tally {
                  where they are stored",
             ),
             (
-                &self.no_pixels,
-                "{names} are a kind a .psd has no home for and were written as empty layers",
+                &self.raster_fallback,
+                "text, shape and smart-object layer(s) ({names}) cannot stay editable in a .psd; \
+                 their rendered appearance was written as a raster layer's pixels",
             ),
             (
                 &self.mask_params,
@@ -1643,6 +1652,7 @@ fn psd_layers_for(
 
         let (dx, dy, expressible) = translation_of(layer.transform);
         let mut wants_pixels = false;
+        let mut render_fallback = false;
         match &layer.kind {
             LayerKind::Group(group) => {
                 let children =
@@ -1665,27 +1675,63 @@ fn psd_layers_for(
                         data: Vec::new(),
                     });
                 } else {
+                    // Card 078: an adjustment whose payload cannot be written
+                    // gets NO invented pixels — an empty layer plus the note
+                    // beats pixels that look evaluated but are not. Its
+                    // appearance survives in the file's flattened preview.
                     tally.adjustments.push(layer.name.clone());
                 }
             }
             LayerKind::Raster(_) | LayerKind::Generator(_) => wants_pixels = true,
             LayerKind::Text(_) | LayerKind::Shape(_) | LayerKind::SmartObject(_) => {
-                tally.no_pixels.push(layer.name.clone());
+                // Card 078: these kinds carry editable content a .psd cannot
+                // hold, but they can still LOOK right: the record's channels
+                // get the layer's rendered appearance, with its real
+                // transform, from the one compositor. (Card 079 adds the
+                // editable text subset on top of this fallback.)
+                tally.raster_fallback.push(layer.name.clone());
+                wants_pixels = true;
+                render_fallback = true;
             }
         }
 
         if wants_pixels {
-            if let Some(map) = document.layer_tiles(id) {
-                if !expressible {
-                    tally.transformed.push(layer.name.clone());
+            if render_fallback {
+                // The record's channels must be the layer's CONTENT, not the
+                // mask's result — the mask travels in its own channel below,
+                // and writing both would make every reader apply it twice.
+                // Render from a staged copy with the mask detached.
+                let mut staged = document.clone();
+                if let Some(stripped) = staged.layers.get_mut(id) {
+                    stripped.mask = None;
                 }
-                let doc_area = tile_map_rect(map).offset(dx, dy).clip(canvas);
-                if !doc_area.is_empty() {
-                    let source = doc_area.offset(-dx, -dy);
-                    let rgba = rgba_from_tiles(map, tiles, source);
-                    if let Some((bounds, cropped)) = crop_to_content(&rgba, doc_area) {
-                        record.bounds = bounds.to_psd();
-                        record.set_rgba8(&cropped)?;
+                let canvas_rect = raster::PixelRect::new(0, 0, document.width(), document.height());
+                let rendered = compositor::composite_subtree(
+                    &staged,
+                    tiles,
+                    id,
+                    canvas_rect,
+                    0,
+                    compositor::CompositeOptions::default(),
+                )?;
+                let rgba = rendered.to_rgba8(&document.meta.color_space);
+                if let Some((bounds, cropped)) = crop_to_content(&rgba, canvas) {
+                    record.bounds = bounds.to_psd();
+                    record.set_rgba8(&cropped)?;
+                }
+            } else {
+                if let Some(map) = document.layer_tiles(id) {
+                    if !expressible {
+                        tally.transformed.push(layer.name.clone());
+                    }
+                    let doc_area = tile_map_rect(map).offset(dx, dy).clip(canvas);
+                    if !doc_area.is_empty() {
+                        let source = doc_area.offset(-dx, -dy);
+                        let rgba = rgba_from_tiles(map, tiles, source);
+                        if let Some((bounds, cropped)) = crop_to_content(&rgba, doc_area) {
+                            record.bounds = bounds.to_psd();
+                            record.set_rgba8(&cropped)?;
+                        }
                     }
                 }
             }
@@ -3187,7 +3233,7 @@ mod tests {
             "the {kinds} effect(s) on {names} were not imported",
             "{names} carried a second, vector-derived mask that was not imported",
             "{names} carry a transform a .psd cannot express; their pixels were written              where they are stored",
-            "{names} are a kind a .psd has no home for and were written as empty layers",
+            "text, shape and smart-object layer(s) ({names}) cannot stay editable in a .psd;               their rendered appearance was written as a raster layer's pixels",
             "the mask density or feather on {names} was not written",
             "the vector mask on {names} was written as its rasterised coverage",
             "the blanket lock on {names} has no .psd equivalent and was not written",
@@ -3220,5 +3266,178 @@ mod tests {
         ] {
             assert!(doc.contains(phrase), "the matrix lost the claim {phrase:?}");
         }
+    }
+    // ------------------------------------------------------- card 078
+
+    /// A document with one shape layer — the fallback-render kind whose
+    /// pixels come from the compositor, not the tile store.
+    fn shape_document() -> (Document, MemoryTileSource, layer_model::LayerId) {
+        let mut doc = Document::new(96, 64, "shapes");
+        let tiles = MemoryTileSource::new();
+        let layer = doc
+            .layers
+            .push_root(Layer::with_kind(
+                "Badge",
+                LayerKind::Shape(layer_model::ShapeLayer {
+                    path_svg: "M 8 8 h 24 v 16 h -24 Z".into(),
+                    fill: Some([1.0, 0.0, 0.0, 1.0]),
+                    fill_rule: layer_model::ShapeFillRule::NonZero,
+                    stroke: None,
+                }),
+            ))
+            .unwrap();
+        doc.layers.get_mut(layer).unwrap().transform =
+            glam::Affine2::from_translation(glam::vec2(12.0, 10.0));
+        (doc, tiles, layer)
+    }
+
+    /// Ink bounds of an independently decoded PSD layer's RGBA, in CANVAS
+    /// coordinates (bounds.x0/y0 + the crop's own ink).
+    fn decoded_ink_bounds(file: &psd::PsdFile, name: &str) -> Option<(i32, i32, i32, i32)> {
+        let layer = file.layers.iter().find(|l| l.name == name)?;
+        let rgba = psd_layer_rgba(layer, &file.header)?;
+        let (w, h) = (layer.bounds.width(), layer.bounds.height());
+        let mut bounds: Option<(i64, i64, i64, i64)> = None;
+        for y in 0..h as i64 {
+            for x in 0..w as i64 {
+                if rgba[((y * w as i64 + x) * 4 + 3) as usize] != 0 {
+                    let (gx, gy) = (
+                        i64::from(layer.bounds.left) + x,
+                        i64::from(layer.bounds.top) + y,
+                    );
+                    bounds = Some(match bounds {
+                        None => (gx, gy, gx, gy),
+                        Some((x0, y0, x1, y1)) => (x0, y0, x1.max(gx), y1.max(gy)),
+                    });
+                }
+            }
+        }
+        bounds.map(|(x0, y0, x1, y1)| (x0 as i32, y0 as i32, x1 as i32, y1 as i32))
+    }
+
+    #[test]
+    fn a_shape_layer_exports_its_rendered_appearance_at_its_transform() {
+        let (doc, tiles, _) = shape_document();
+        let composite = vec![0u8; 96 * 64 * 4];
+        let (bytes, notes) = psd_from_document(&doc, &tiles, &composite).unwrap();
+
+        // The fallback is named, not silent.
+        let told = notes.summary().expect("the fallback must be named");
+        assert!(told.contains("Badge"), "{told}");
+        assert!(told.contains("raster layer's pixels"), "{told}");
+
+        // An independent reader sees real pixels, at the transformed spot:
+        // the 24x16 shape sits at (12+8, 10+8) .. (12+32, 10+24).
+        let file = psd::read(&bytes).unwrap();
+        let (x0, y0, x1, y1) =
+            decoded_ink_bounds(&file, "Badge").expect("the shape's fallback pixels are visible");
+        assert_eq!(
+            (x0, y0),
+            (20, 18),
+            "the transform travelled into the pixels"
+        );
+        assert_eq!((x1, y1), (43, 33));
+    }
+
+    #[test]
+    fn a_smart_object_exports_its_placed_appearance_through_its_transform(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // An 8x8 embedded source placed at 2x scale: the compositor renders
+        // a smart object from the layer's stored tiles through the layer
+        // transform, so the exported channels must show the scaled and
+        // translated appearance, not the raw stored tiles.
+        let source_rgba = [200u8, 10, 10, 255].repeat(64);
+        let mut doc = Document::new(64, 64, "placed");
+        let mut tiles = MemoryTileSource::new();
+        let asset = layer_model::AssetId::new();
+        doc.set_asset_origin(layer_model::AssetRecord {
+            id: asset,
+            origin: layer_model::AssetOrigin::Embedded {
+                name: "logo.png".into(),
+                bytes: raster::encode(raster::ExportFormat::Png, 8, 8, &source_rgba).unwrap(),
+            },
+            source_size: Some((8, 8)),
+        });
+        let layer = doc
+            .layers
+            .push_root(Layer::with_kind(
+                "Logo",
+                LayerKind::SmartObject(layer_model::SmartObjectLayer {
+                    asset,
+                    linked: false,
+                }),
+            ))
+            .unwrap();
+        doc.layers.get_mut(layer).unwrap().transform =
+            glam::Affine2::from_scale(glam::Vec2::new(2.0, 2.0))
+                * glam::Affine2::from_translation(glam::vec2(4.0, 4.0));
+        // The placed source's pixels, stored as the layer's tiles (what
+        // placement does).
+        let edits = tile_edits_for_rgba(&source_rgba, psd::Rect::new(0, 0, 8, 8), &mut tiles);
+        let delta = TileDelta::new(edits)?;
+        doc.pixels.apply(PixelKey::Layer(layer), &delta);
+
+        let composite = vec![0u8; 64 * 64 * 4];
+        let (bytes, _) = psd_from_document(&doc, &tiles, &composite).unwrap();
+        let file = psd::read(&bytes).unwrap();
+        let (x0, y0, x1, y1) =
+            decoded_ink_bounds(&file, "Logo").expect("the smart object's fallback is visible");
+        // 8x8 source at 2x from (4,4): the compositor's pixel-center
+        // convention puts the solid span at (8,8)..(23,23) with the bilinear
+        // edge falloff one pixel wider each way — 7..24 inclusive.
+        assert_eq!((x0, y0), (7, 7));
+        assert_eq!((x1 - x0 + 1, y1 - y0 + 1), (18, 18), "scaled ~2x");
+        Ok(())
+    }
+
+    #[test]
+    fn the_mask_travels_separately_so_the_fallback_is_not_double_masked(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (mut doc, mut tiles, layer) = shape_document();
+        // A mask that hides the shape's left half.
+        let mask_id = layer_model::MaskId::new();
+        let mut c = vec![0u8; 96 * 64];
+        for y in 0..64 {
+            for x in 0..96 {
+                c[y * 96 + x] = if x >= 48 { 255 } else { 0 };
+            }
+        }
+        let edits = tile_edits_for_coverage(
+            Some(&c),
+            psd::Rect::sized(96, 64),
+            0,
+            &DocRect::canvas(96, 64).tiles(),
+            &mut tiles,
+        );
+        let delta = TileDelta::new(edits)?;
+        doc.pixels.apply(PixelKey::Mask(mask_id), &delta);
+        doc.layers.get_mut(layer).unwrap().mask = Some(layer_model::LayerMask::new(mask_id));
+
+        let composite = vec![0u8; 96 * 64 * 4];
+        let (bytes, _) = psd_from_document(&doc, &tiles, &composite).unwrap();
+        let file = psd::read(&bytes).unwrap();
+        let record = file.layers.iter().find(|l| l.name == "Badge").unwrap();
+        // The channels still hold ink where the mask hides it: the mask is
+        // its own channel, not pre-applied.
+        let rgba = psd_layer_rgba(record, &file.header).expect("channels exist");
+        let shape_x_in_hidden_half = 20 - i64::from(record.bounds.left); // canvas x=20 is inside the shape, left of the mask edge
+        assert!(
+            (0..record.bounds.width() as i64).contains(&shape_x_in_hidden_half),
+            "sanity: the hidden-side probe is inside the record"
+        );
+        let h = record.bounds.height() as i64;
+        assert!(
+            (0..h).any(|y| rgba
+                [((y * record.bounds.width() as i64 + shape_x_in_hidden_half) * 4 + 3) as usize]
+                != 0),
+            "the fallback channels keep the ink the mask hides"
+        );
+        // ...and the mask channel really does hide that half.
+        let mask = record.mask.as_ref().expect("the mask block travels");
+        let cov = psd_mask_coverage(mask, file.header.depth).expect("mask samples decode");
+        let probe = ((i64::from(18) - i64::from(mask.bounds.top)) * mask.bounds.width() as i64
+            + (i64::from(20) - i64::from(mask.bounds.left))) as usize;
+        assert_eq!(cov[probe], 0, "the mask hides the left half");
+        Ok(())
     }
 }

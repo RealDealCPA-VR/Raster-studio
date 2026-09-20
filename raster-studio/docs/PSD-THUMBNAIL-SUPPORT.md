@@ -59,7 +59,7 @@ byte slice, and opening a file writes nothing.
 | Blend mode, opacity, fill opacity, clipping | **Editable** | |
 | Raster pixels, layer masks (8-bit coverage) | **Editable** | |
 | Invert adjustment | **Editable** | |
-| This editor's Text / Shape / SmartObject layers | **Appearance fallback** | Written as their pixels — "… were written as empty layers" when there is nothing to write (the same no-home note). |
+| This editor's Text / Shape / SmartObject layers | **Appearance fallback** | Card 078: the layer is rendered alone through the compositor (its real transform, mask detached so the mask channel cannot double-apply) and the rendered pixels are written as the record's channels — an independent reader shows the layer. The note names the fallback. |
 | Effects this editor authored | **Unsupported (explicit)** | Not written; the note names the layers. |
 | Mask density/feather authored here | **Unsupported (explicit)** | Not written; named. |
 | Arbitrary per-layer affines | **Appearance fallback** | Pixels are written at their stored locations (the note above). |
@@ -78,7 +78,7 @@ honesty gate in `import.rs` asserts this file keeps quoting every one:
 - "the {kinds} effect(s) on {names} were not imported" ({kinds} names the unmapped effect kinds, e.g. "satin and inner shadow")
 - "{names} carried a second, vector-derived mask that was not imported"
 - "{names} carry a transform a .psd cannot express; their pixels were written where they are stored"
-- "{names} are a kind a .psd has no home for and were written as empty layers"
+- "text, shape and smart-object layer(s) ({names}) cannot stay editable in a .psd; their rendered appearance was written as a raster layer's pixels"
 - "the mask density or feather on {names} was not written"
 - "the vector mask on {names} was written as its rasterised coverage"
 - "the blanket lock on {names} has no .psd equivalent and was not written"

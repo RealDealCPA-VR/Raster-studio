@@ -1176,7 +1176,8 @@ fn exporting_homeless_and_transformed_layers_reports_what_the_psd_cannot_express
     })
     .expect("the transform applies");
 
-    // A text layer: a .psd has no home for one, so it is written empty.
+    // A text layer: card 078 renders its appearance as fallback pixels and
+    // the note says the text did not stay editable.
     let _headline = doc.add_layer(Layer::with_kind(
         "Headline",
         layer_model::LayerKind::Text(layer_model::TextLayer {
@@ -1194,16 +1195,18 @@ fn exporting_homeless_and_transformed_layers_reports_what_the_psd_cannot_express
             // E12, non-translation transform.
             "\u{201c}Portrait\u{201d} carry a transform a .psd cannot express; their pixels \
              were written where they are stored",
-            // E12, no-home kind.
-            "\u{201c}Headline\u{201d} are a kind a .psd has no home for and were written as \
-             empty layers",
+            // Card 078: the text layer's appearance fallback, named.
+            "text, shape and smart-object layer(s) (\u{201c}Headline\u{201d}) cannot stay \
+             editable in a .psd; their rendered appearance was written as a raster layer's \
+             pixels",
         ],
         "the export notes are the honesty gate, verbatim"
     );
     assert_eq!(doc.psd_notes().notes(), notes.notes());
 
-    // What landed in the file: the text layer exists as a record — but as an
-    // empty one, exactly as the note said.
+    // What landed in the file: the text layer exists as a record WITH its
+    // rendered fallback pixels — not an empty layer — though the text
+    // metadata itself is not written (card 079 adds the editable subset).
     let bytes = std::fs::read(&out).unwrap();
     let back = psd::read(&bytes).unwrap();
     let all = back.all_layers();
@@ -1212,8 +1215,8 @@ fn exporting_homeless_and_transformed_layers_reports_what_the_psd_cannot_express
         .find(|l| l.name == "Headline")
         .expect("the text layer's record is in the file");
     assert!(
-        headline_record.bounds.is_empty(),
-        "written as an empty layer, as the note says"
+        !headline_record.bounds.is_empty(),
+        "the text layer's fallback imagery is in the file"
     );
     assert!(headline_record.text.is_none());
     let portrait_record = all
