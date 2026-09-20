@@ -3,7 +3,7 @@
 Status: ACTIVE
 Goal: "go through the implementation plan and do every task in the list systematically until fully completed" (the plan: `raster-studio/docs/THUMBNAIL-WORKFLOW-IMPLEMENTATION-PLAN.md`, 92 main cards 001–092 + 6 optional cards 093–098; execution guidance: `raster-studio/docs/GLM-THUMBNAIL-START-HERE.md`)
 Started: 2026-09-07
-Last updated: 2026-09-20 (T077–T081 + Phase 8 gate, T088–T090, T092 verified; T079 BLOCKED on external evidence; T082–T087 + T091 need the desktop/GPU host and a human walk; optional 093–098 deferred)
+Last updated: 2026-09-20 (second wave: T079 also verified — editable text subset export with synthesized complete TySh engine data; independent-editor confirmation recorded pending. T077–T081 + Phase 8 gate, T088–T090, T092 verified. T082–T087 + T091 need the desktop/GPU host and a human walk; optional 093–098 deferred)
 
 ## Historical restart recovery checkpoint — 2026-09-09
 
@@ -122,6 +122,8 @@ Last updated: 2026-09-20 (T077–T081 + Phase 8 gate, T088–T090, T092 verified
 
 - 2026-09-20 (T090 + T092): exact gate results recorded (fmt PASS; check 0 errors; clippy -D warnings 0; test --locked --workspace 3,715 passed / 0 failed; audit 2 allowed warnings); parity matrix reconciled (smart objects ✅, PSD rows state verified vs pending evidence). Remaining cards are host/human-bound or blocked, recorded in the ledgers.
 
+- 2026-09-20 (T079, second wave): editable text export landed — psd::text::build synthesizes a COMPLETE TySh (engine data with a style run and run array covering every character, so the Photoshop-drops-the-layer failure mode is avoided by construction); the layer's affine becomes the TySh transform and the fallback pixels stay underneath. Round-trip validated through the independent psd::read AND our card-072 re-import (editable TextLayer back out).
+
 ## T022 design decisions (2026-09-09)
 - Substitution is OUR documented policy, not cosmic-text's fallback: `FontLibrary::substitute_for(requested)` — None when family present/empty/library empty; otherwise the library's pinned default sans family. `attrs_for` applies the same rule (missing → Family::SansSerif) so renderer and report agree by construction; the requested name stays in the document. Rationale: cosmic-text 0.17's own missing-family pick sorts FontMatchKey ascending and prefers emoji faces (derived Ord on not_emoji) — not mirrorable honestly.
 - Face selection is real: `FontStretch` (9-variant usWidthClass mirror of fontdb Stretch=ttf_parser::Width) added to CharStyle/BaseStyle + spans, serde-defaulted, hashed in compositor RunKey.content, selectable in the Character panel; dejavu fixture ships `sans_condensed` so condensed tests are deterministic.
@@ -131,7 +133,7 @@ Last updated: 2026-09-20 (T077–T081 + Phase 8 gate, T088–T090, T092 verified
 ## Handoff
 - Current checkpoint: T076 is verified at `37fb975`; Phase 7 (cards 066–071) is complete, and Phase 8 starts at T077.
 - Independent check (2026-09-20): `cargo test --locked -p psd` (195 passed), `cargo test --locked -p app-shell import::` (30 passed), `cargo test --locked -p integration-tests --test interchange_and_recovery` (16 passed, 1 explicit fixture-materialization test ignored), `cargo fmt --all --check`, and `cargo clippy --locked -p psd -p app-shell --all-targets -- -D warnings` all passed.
-- In progress: none — all locally verifiable cards are verified. Remaining cards are host/human-bound or explicitly blocked (T082–T087 desktop/GPU visual + latency verification, T091 human acceptance walk, T079 external-editor evidence, T093–T098 optional deferred).
+- In progress: none — T079 unblocked and verified this wave. Remaining cards are host/human-bound or pending external evidence (T082–T087 desktop/GPU visual + latency verification, T091 human acceptance walk, T081 manual evidence, T079 independent-editor confirmation, T093–T098 optional deferred).
 - Next exact action: on a desktop/GPU host, run T082 (workspace tuning) using the --shot pipeline for visual verification, then T083–T087 and the T091 human walk. Engine-side cards 001–081, 088–090, 092 are verified and pushed.
 - Preserve the untracked root scratch files (`shot-baseline-start.png`, `t045_test_fragment.rs`, `t047_tests.rs`, `t048_tests.rs`, `t049_tests.rs`, `t050_*.py`/`.rs`, `t057_fixes.py`, `t058_invert.py`, `t061_brushtest2.py`, `t061_pins.py`) unless their owner explicitly asks to remove them.
 - Blockers/risks: no code blocker found in this check. T077–T092 remain; retain the doer/reviewer ledger discipline and run a full workspace gate at the end of each phase.

@@ -518,10 +518,13 @@ struct Tally {
     unmapped_effects: Vec<(String, String)>,
     second_masks: Vec<String>,
     transformed: Vec<String>,
-    /// Card 078: text/shape/smart-object layers whose rendered appearance was
+    /// Card 078: shape/smart-object layers whose rendered appearance was
     /// written as a raster layer's pixels (a .psd cannot carry them
     /// editably).
     raster_fallback: Vec<String>,
+    /// Card 079: type layers exported with the editable text subset (their
+    /// styling beyond the subset is covered by the raster fallback).
+    text_subset: Vec<String>,
     mask_params: Vec<String>,
     vector_masks: Vec<String>,
     locked_all: Vec<String>,
@@ -554,7 +557,7 @@ fn kinds_phrase(kinds: &[String]) -> String {
 impl Tally {
     /// Per-category lengths, in a fixed order — the diff between two of these
     /// says which categories a single layer's import grew (card 077).
-    const CATEGORIES: usize = 13;
+    const CATEGORIES: usize = 14;
 
     fn signature(&self) -> [usize; Self::CATEGORIES] {
         [
@@ -566,6 +569,7 @@ impl Tally {
             self.second_masks.len(),
             self.transformed.len(),
             self.raster_fallback.len(),
+            self.text_subset.len(),
             self.mask_params.len(),
             self.vector_masks.len(),
             self.locked_all.len(),
@@ -585,7 +589,8 @@ impl Tally {
             "effects not imported",
             "second mask not imported",
             "transform baked into pixels",
-            "text/shape/smart-object content written as raster pixels",
+            "shape/smart-object content written as raster pixels",
+            "text exported with the editable subset",
             "mask density/feather dropped",
             "vector mask rasterised",
             "lock dropped",
@@ -599,7 +604,7 @@ impl Tally {
             if a > b {
                 // The unmapped-effects category names its kinds, so the
                 // report says what was dropped, not just that something was.
-                details.push(if i == 12 {
+                details.push(if i == 13 {
                     let kinds: Vec<&str> = self.unmapped_effects[*b..]
                         .iter()
                         .map(|(_, k)| k.as_str())
@@ -626,7 +631,7 @@ impl Tally {
     }
 
     fn record(&mut self, notes: &mut PsdNotes) {
-        let entries: [(&[String], &str); 12] = [
+        let entries: [(&[String], &str); 13] = [
             (
                 &self.color_labels,
                 "the colour label on {names} is not shown by this layers panel and was not kept",
@@ -660,8 +665,13 @@ impl Tally {
             ),
             (
                 &self.raster_fallback,
-                "text, shape and smart-object layer(s) ({names}) cannot stay editable in a .psd; \
+                "shape and smart-object layer(s) ({names}) cannot stay editable in a .psd; \
                  their rendered appearance was written as a raster layer's pixels",
+            ),
+            (
+                &self.text_subset,
+                "type layer(s) ({names}) were exported with the editable text subset; \
+                 styling beyond it is covered by the layer's raster fallback",
             ),
             (
                 &self.mask_params,
@@ -1697,13 +1707,21 @@ fn psd_layers_for(
                 }
             }
             LayerKind::Raster(_) | LayerKind::Generator(_) => wants_pixels = true,
-            LayerKind::Text(_) | LayerKind::Shape(_) | LayerKind::SmartObject(_) => {
+            LayerKind::Shape(_) | LayerKind::SmartObject(_) => {
                 // Card 078: these kinds carry editable content a .psd cannot
                 // hold, but they can still LOOK right: the record's channels
                 // get the layer's rendered appearance, with its real
-                // transform, from the one compositor. (Card 079 adds the
-                // editable text subset on top of this fallback.)
+                // transform, from the one compositor.
                 tally.raster_fallback.push(layer.name.clone());
+                wants_pixels = true;
+                render_fallback = true;
+            }
+            LayerKind::Text(_) => {
+                // Card 079: the supported text subset is exported EDITABLY —
+                // a complete TySh block with a full engine-data payload — and
+                // the rendered appearance rides underneath as valid fallback
+                // pixels. The subset limitation is named in the report.
+                tally.text_subset.push(layer.name.clone());
                 wants_pixels = true;
                 render_fallback = true;
             }
@@ -1736,6 +1754,37 @@ fn psd_layers_for(
                 if let Some((bounds, cropped)) = crop_to_content(&rgba, canvas) {
                     record.bounds = bounds.to_psd();
                     record.set_rgba8(&cropped)?;
+                }
+                // Card 079: the editable text subset rides on top of the
+                // fallback pixels. The TySh transform is the layer's own
+                // affine in the format's [xx xy yx yy tx ty] spelling (glam
+                // stores the matrix column-major: x_axis, y_axis).
+                if let LayerKind::Text(text) = &layer.kind {
+                    let affine = layer.transform;
+                    let tf = [
+                        f64::from(affine.x_axis.x),
+                        f64::from(affine.x_axis.y),
+                        f64::from(affine.y_axis.x),
+                        f64::from(affine.y_axis.y),
+                        f64::from(affine.translation.x),
+                        f64::from(affine.translation.y),
+                    ];
+                    let b = record.bounds;
+                    record.text = Some(psd::TextData {
+                        transform: tf,
+                        text: Some(text.text.clone()),
+                        raw: psd::text::build(
+                            &text.text,
+                            tf,
+                            (b.left, b.top, b.right, b.bottom),
+                            if text.font_family.is_empty() {
+                                "RasterStudioSans"
+                            } else {
+                                &text.font_family
+                            },
+                            f64::from(text.size_px),
+                        ),
+                    });
                 }
             } else {
                 if let Some(map) = document.layer_tiles(id) {
@@ -3251,7 +3300,8 @@ mod tests {
             "the {kinds} effect(s) on {names} were not imported",
             "{names} carried a second, vector-derived mask that was not imported",
             "{names} carry a transform a .psd cannot express; their pixels were written              where they are stored",
-            "text, shape and smart-object layer(s) ({names}) cannot stay editable in a .psd;               their rendered appearance was written as a raster layer's pixels",
+            "shape and smart-object layer(s) ({names}) cannot stay editable in a .psd;               their rendered appearance was written as a raster layer's pixels",
+            "type layer(s) ({names}) were exported with the editable text subset;               styling beyond it is covered by the layer's raster fallback",
             "the mask density or feather on {names} was not written",
             "the vector mask on {names} was written as its rasterised coverage",
             "the blanket lock on {names} has no .psd equivalent and was not written",

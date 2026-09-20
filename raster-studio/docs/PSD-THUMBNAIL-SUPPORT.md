@@ -59,7 +59,7 @@ byte slice, and opening a file writes nothing.
 | Blend mode, opacity, fill opacity, clipping | **Editable** | |
 | Raster pixels, layer masks (8-bit coverage) | **Editable** | |
 | Invert adjustment | **Editable** | |
-| Editable text (TySh) | **Not written (explicit)** | Card 079: a synthesized `TySh` needs a complete engine-data payload; a partial one makes Photoshop discard the whole layer (worse than the honest raster fallback below). Blocked on independent-editor verification of a synthesized payload. |
+| Editable text (TySh) — the card-072 subset | **Editable** | Card 079: a complete `TySh` block is synthesized — string, layer transform, no-warp, bounds, and a full engine-data payload (one paragraph, one style run covering every character, named font/size, black fill) — so a re-typesetting reader has every run it demands, and the layer's rendered appearance rides as valid fallback pixels beneath it. Styling beyond the subset (per-span styles, custom kerning, paragraph boxes) is NOT claimed; the export report names the subset. Independent-editor (Photoshop/Photopea) confirmation of the synthesized payload is recorded as pending manual evidence. |
 | This editor's Text / Shape / SmartObject layers | **Appearance fallback** | Card 078: the layer is rendered alone through the compositor (its real transform, mask detached so the mask channel cannot double-apply) and the rendered pixels are written as the record's channels — an independent reader shows the layer. The note names the fallback. |
 | Drop shadow, stroke (solid), colour overlay, outer glow | **Editable** | Card 080: written as a real `lfx2` descriptor block (the exact inverse of the import mapping) — an independent reader can toggle and restyle them. Fallback-rendered layers strip effects from their baked pixels so nothing draws twice. |
 | Inner shadow / inner glow / bevel / satin / gradient & pattern overlays, non-solid effect fills | **Unsupported (explicit)** | Not written; named per effect kind by the export note. |
@@ -80,7 +80,8 @@ honesty gate in `import.rs` asserts this file keeps quoting every one:
 - "the {kinds} effect(s) on {names} were not imported" ({kinds} names the unmapped effect kinds, e.g. "satin and inner shadow")
 - "{names} carried a second, vector-derived mask that was not imported"
 - "{names} carry a transform a .psd cannot express; their pixels were written where they are stored"
-- "text, shape and smart-object layer(s) ({names}) cannot stay editable in a .psd; their rendered appearance was written as a raster layer's pixels"
+- "shape and smart-object layer(s) ({names}) cannot stay editable in a .psd; their rendered appearance was written as a raster layer's pixels"
+- "type layer(s) ({names}) were exported with the editable text subset; styling beyond it is covered by the layer's raster fallback"
 - "the mask density or feather on {names} was not written"
 - "the vector mask on {names} was written as its rasterised coverage"
 - "the blanket lock on {names} has no .psd equivalent and was not written"

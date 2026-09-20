@@ -1196,9 +1196,9 @@ fn exporting_homeless_and_transformed_layers_reports_what_the_psd_cannot_express
             "\u{201c}Portrait\u{201d} carry a transform a .psd cannot express; their pixels \
              were written where they are stored",
             // Card 078: the text layer's appearance fallback, named.
-            "text, shape and smart-object layer(s) (\u{201c}Headline\u{201d}) cannot stay \
-             editable in a .psd; their rendered appearance was written as a raster layer's \
-             pixels",
+            // Card 079: the text layer's editable subset, named.
+            "type layer(s) (\u{201c}Headline\u{201d}) were exported with the editable text subset; \
+             styling beyond it is covered by the layer's raster fallback"
         ],
         "the export notes are the honesty gate, verbatim"
     );
@@ -1206,7 +1206,7 @@ fn exporting_homeless_and_transformed_layers_reports_what_the_psd_cannot_express
 
     // What landed in the file: the text layer exists as a record WITH its
     // rendered fallback pixels — not an empty layer — though the text
-    // metadata itself is not written (card 079 adds the editable subset).
+    // TySh block travels too (card 079's editable subset).
     let bytes = std::fs::read(&out).unwrap();
     let back = psd::read(&bytes).unwrap();
     let all = back.all_layers();
@@ -1218,7 +1218,14 @@ fn exporting_homeless_and_transformed_layers_reports_what_the_psd_cannot_express
         !headline_record.bounds.is_empty(),
         "the text layer's fallback imagery is in the file"
     );
-    assert!(headline_record.text.is_none());
+    assert_eq!(
+        headline_record
+            .text
+            .as_ref()
+            .and_then(|t| t.text.as_deref()),
+        Some("SELL NOW"),
+        "the editable text subset is in the file"
+    );
     let portrait_record = all
         .iter()
         .find(|l| l.name == "Portrait")
@@ -1632,6 +1639,79 @@ fn the_interchange_workflow_imports_edits_saves_exports_and_reopens() {
         max <= 1 && mean < 0.01,
         "the exported appearance matches: mean {mean}, max {max}"
     );
+}
+
+#[test]
+fn a_text_layer_exports_the_editable_subset_and_its_fallback_pixels() {
+    // Card 079's acceptance walk, locally verifiable half: the exported
+    // type layer carries a complete TySh block (string, transform,
+    // engine data covering every character) AND valid fallback pixels,
+    // and re-importing the file brings the text back as an EDITABLE
+    // text layer — not pixels pretending.
+    let mut doc = app::blank(96, 64, "Card 079");
+    let headline = doc.add_layer(Layer::with_kind(
+        "Headline",
+        layer_model::LayerKind::Text(layer_model::TextLayer {
+            text: "SOLD TODAY".into(),
+            size_px: 18.0,
+            font_family: "Montserrat".into(),
+            ..Default::default()
+        }),
+    ));
+    doc.apply(Command::TransformLayer {
+        layer_id: headline,
+        matrix: [1.0, 0.0, 0.0, 1.0, 6.0, 10.0],
+    })
+    .unwrap();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("card079.psd");
+    let notes = doc.export_psd_to(&out).expect("the export succeeds");
+    let bytes = std::fs::read(&out).unwrap();
+
+    // The subset limitation is named, not silent.
+    let told = notes.summary().expect("the subset limitation is named");
+    assert!(told.contains("Headline"), "{told}");
+    assert!(told.contains("editable text subset"), "{told}");
+
+    // Independent read: the TySh block carries the string and the
+    // layer's transform, and the fallback pixels are in the channels.
+    let file = psd::read(&bytes).unwrap();
+    let record = file
+        .layers
+        .iter()
+        .find(|l| l.name == "Headline")
+        .expect("the type layer is in the file");
+    let text = record.text.as_ref().expect("the TySh block travels");
+    assert_eq!(text.text.as_deref(), Some("SOLD TODAY"));
+    assert_eq!(text.transform[4], 6.0);
+    assert_eq!(text.transform[5], 10.0);
+    let engine = String::from_utf8_lossy(&text.raw);
+    assert!(engine.contains("/Name (Montserrat)"), "{engine}");
+    assert!(engine.contains("/FontSize 18"), "{engine}");
+    assert!(engine.contains("/RunLength 10"), "{engine}");
+    assert!(
+        !record.bounds.is_empty(),
+        "the fallback pixels are in the file too"
+    );
+
+    // Re-import: the type layer comes back EDITABLE with the same
+    // string — the round trip through our own card-072 reader.
+    let again = document_from_psd(&bytes, "again.psd", 10).unwrap();
+    let back = &again.imported.document;
+    let id = back
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|id| back.layers.get(*id).is_some_and(|l| l.name == "Headline"))
+        .unwrap();
+    let layer_model::LayerKind::Text(t) = &back.layers.get(id).unwrap().kind else {
+        panic!("the exported text re-imports as editable text");
+    };
+    assert_eq!(t.text, "SOLD TODAY");
+    // ...and the report on re-import names the substituted font as
+    // before: the subset claims only the string, size and transform.
+    assert!(again.notes.summary().is_some());
 }
 
 // ------------------------------------------------------- card 088

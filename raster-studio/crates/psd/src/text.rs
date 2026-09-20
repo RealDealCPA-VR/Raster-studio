@@ -22,8 +22,8 @@
 //! than not writing one. [`crate::write`] therefore writes back the bytes that
 //! were read, which round-trips a text layer exactly.
 
-use crate::bytes::Cursor;
-use crate::descriptor::Descriptor;
+use crate::bytes::{Cursor, Sink};
+use crate::descriptor::{Descriptor, Value};
 use crate::limits::ReadOptions;
 use crate::model::TextData;
 
@@ -78,6 +78,134 @@ pub fn warp(raw: &[u8], opts: &ReadOptions) -> Option<Descriptor> {
     cur.u16().ok()?;
     cur.u32().ok()?;
     Descriptor::read(&mut cur, opts).ok()
+}
+
+// -------------------------------------------------- card 079: synthesis
+
+/// Escape a string for a PostScript literal inside engine data: backslashes
+/// and parens are quoted, and every byte outside printable ASCII becomes a
+/// `\ooo` octal escape. The engine data is a private textual format, so the
+/// bytes the reader sees are exactly the bytes the writer meant.
+fn ps_literal(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 8);
+    for b in text.as_bytes() {
+        match b {
+            b'\\' => out.push_str("\\\\"),
+            b'(' => out.push_str("\\("),
+            b')' => out.push_str("\\)"),
+            0x20..=0x7e => out.push(*b as char),
+            _ => out.push_str(&format!("\\{:03o}", b)),
+        }
+    }
+    out
+}
+
+/// The engine-data payload for the supported subset (card 079): one default
+/// paragraph sheet, one style run spanning the whole string, the font and
+/// size named, black fill. This is the shape Photoshop's own engine data
+/// takes for a simple single-run point-text layer; a reader that re-typesets
+/// the string needs the run array to cover every character, so the run
+/// length is the string's character count.
+fn engine_data(text: &str, font: &str, size_px: f64, transform: [f64; 6]) -> Vec<u8> {
+    let chars = text.chars().count();
+    let mut s = String::with_capacity(2048);
+    let t = format!(
+        "{} {} {} {} {} {}",
+        transform[0], transform[1], transform[2], transform[3], transform[4], transform[5]
+    );
+    s.push_str("/EngineDict\n/Editor\n/Text (");
+    s.push_str(&ps_literal(text));
+    s.push_str(")\n/ParagraphRun\n<<\n/DefaultRunData\n<</ParagraphSheet\n<</DefaultStyleSheet\n<</Font\n/Name (");
+    s.push_str(&ps_literal(font));
+    s.push_str(")\n/Script 0\n/FontType 1\n>\n/FontSize ");
+    s.push_str(&size_px.to_string());
+    s.push_str("\n/FillColor\n<</Type 1\n/Values [ 0 0 0 ]\n>\n>\n/Justification 0\n/FirstLineIndent 0\n/StartIndent 0\n/EndIndent 0\n/SpaceBefore 0\n/SpaceAfter 0\n/LineSpacing ");
+    s.push_str(&size_px.to_string());
+    s.push_str("\n/AutoLeading 1\n/LeadingType 0\n/Tracking 0\n/HorizontalScale 100\n/Direction 2\n/CharacterDirection 0\n/LinkAlignment 2\n>\n>\n/StyleRun\n<</RunLength ");
+    s.push_str(&chars.to_string());
+    s.push_str("\n/RunData\n<</StyleSheet\n<</StyleSheetData\n<</Font\n/Name (");
+    s.push_str(&ps_literal(font));
+    s.push_str(")\n/Script 0\n/FontType 1\n>\n/FontSize ");
+    s.push_str(&size_px.to_string());
+    s.push_str(
+        "\n/FillColor\n<</Type 1\n/Values [ 0 0 0 ]\n>\n>\n>\n>\n>\n>\n/RunArray\n<</RunLength ",
+    );
+    s.push_str(&chars.to_string());
+    s.push_str("\n/RunData\n<</StyleSheet\n<</StyleSheetData\n<</Font\n/Name (");
+    s.push_str(&ps_literal(font));
+    s.push_str(")\n/Script 0\n/FontType 1\n>\n/FontSize ");
+    s.push_str(&size_px.to_string());
+    s.push_str(
+        "\n/FillColor\n<</Type 1\n/Values [ 0 0 0 ]\n>\n>\n>\n>\n>\n>\n>\n/Render\n<</Transform (",
+    );
+    s.push_str(&t);
+    s.push_str(")\n/FontSize ");
+    s.push_str(&size_px.to_string());
+    s.push_str("\n>\n");
+    s.into_bytes()
+}
+
+/// Build a complete `TySh` block for the supported text subset (card 079):
+/// the string in the text descriptor, the layer's transform, a no-warp
+/// block, the layer rectangle, and a complete engine-data payload — one
+/// paragraph, one style run covering every character, the named font at the
+/// named size with a black fill.
+///
+/// This is what makes a type layer this build writes *editable* in another
+/// application rather than merely present: the engine data describes every
+/// character run, which is what a re-typesetting reader demands (a partial
+/// payload makes Photoshop discard the layer — see the module doc).
+///
+/// Only the subset is claimed. Styling this build does not encode here
+/// (per-span styles, custom kerning, paragraph boxes) stays covered by the
+/// layer's raster fallback pixels, and the export report names the subset.
+pub fn build(
+    text: &str,
+    transform: [f64; 6],
+    bounds: (i32, i32, i32, i32),
+    font: &str,
+    size_px: f64,
+) -> Vec<u8> {
+    let mut s = Sink::new();
+    s.u16(1);
+    for v in transform {
+        s.f64(v);
+    }
+    s.u16(50);
+    s.u32(16);
+    let mut d = Descriptor::new("TxLr");
+    d.push("Txt ", Value::from(text)).unwrap();
+    d.push(
+        "textGridding",
+        Value::Enumerated {
+            type_id: "textGridding".into(),
+            value: "None".into(),
+        },
+    )
+    .unwrap();
+    d.push(
+        "EngineData",
+        Value::RawData(engine_data(text, font, size_px, transform)),
+    )
+    .unwrap();
+    d.write(&mut s).unwrap();
+    s.u16(1);
+    s.u32(16);
+    let mut warp = Descriptor::new("warp");
+    warp.push(
+        "warpStyle",
+        Value::Enumerated {
+            type_id: "warpStyle".into(),
+            value: "warpNone".into(),
+        },
+    )
+    .unwrap();
+    warp.write(&mut s).unwrap();
+    s.i32(bounds.0);
+    s.i32(bounds.1);
+    s.i32(bounds.2);
+    s.i32(bounds.3);
+    s.into_inner()
 }
 
 #[cfg(test)]
@@ -198,5 +326,41 @@ mod tests {
         let parsed = parse(&raw, &ReadOptions::default());
         assert_eq!(parsed.text, None);
         assert_eq!(parsed.transform, IDENTITY);
+    }
+}
+
+#[cfg(test)]
+mod build_tests {
+    use super::*;
+
+    /// Card 079: the synthesized block round-trips through the parser — the
+    /// string, the transform and the bounds come back exactly, and the
+    /// engine data names the font and covers every character.
+    #[test]
+    fn the_built_type_block_round_trips_through_the_parser() {
+        let t = [1.0, 0.0, 0.0, 1.0, 12.0, 34.0];
+        let raw = build("SOLD TODAY", t, (5, 6, 105, 46), "Montserrat", 24.0);
+        let parsed = parse(&raw, &ReadOptions::default());
+        assert_eq!(parsed.text.as_deref(), Some("SOLD TODAY"));
+        assert_eq!(parsed.transform, t);
+        assert!(String::from_utf8_lossy(&parsed.raw).contains("/Name (Montserrat)"));
+        assert!(String::from_utf8_lossy(&parsed.raw).contains("/FontSize 24"));
+        assert!(String::from_utf8_lossy(&parsed.raw).contains("/RunLength 10"));
+        // A reader that re-typesets needs every character covered: the style
+        // run and the run array agree on the length, and the text is there.
+        let engine = String::from_utf8_lossy(&parsed.raw);
+        assert_eq!(engine.matches("/RunLength 10").count(), 2);
+        assert!(engine.contains("/Text (SOLD TODAY)"));
+    }
+
+    /// Non-ASCII survives: the engine data escapes the bytes, the descriptor
+    /// carries UTF-16.
+    #[test]
+    fn the_built_block_survives_non_ascii_text() {
+        let raw = build("Ελλάδα", IDENTITY, (0, 0, 10, 10), "Sans", 12.0);
+        let parsed = parse(&raw, &ReadOptions::default());
+        assert_eq!(parsed.text.as_deref(), Some("Ελλάδα"));
+        let engine = String::from_utf8_lossy(&parsed.raw);
+        assert!(engine.contains("/RunLength 6"));
     }
 }
