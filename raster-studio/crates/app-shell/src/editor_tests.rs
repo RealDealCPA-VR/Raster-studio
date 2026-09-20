@@ -3911,6 +3911,7 @@ fn replacing_without_a_recorded_source_size_keeps_the_transform() {
 /// `Box<dyn FileDialogs>`, so the spy records notices behind an `Rc`.
 #[derive(Default, Clone)]
 struct DialogSpy {
+    inner: std::rc::Rc<std::cell::RefCell<crate::dialogs::ScriptedDialogs>>,
     notices: std::rc::Rc<std::cell::RefCell<Vec<(String, String)>>>,
 }
 
@@ -3918,29 +3919,36 @@ impl DialogSpy {
     fn new() -> Self {
         Self::default()
     }
+
+    /// Prime the wrapped queue the way [`crate::dialogs::ScriptedDialogs`]
+    /// builder methods do.
+    fn opening(self, path: PathBuf) -> Self {
+        self.inner.borrow_mut().open_files.push(path);
+        self
+    }
 }
 
 impl crate::dialogs::FileDialogs for DialogSpy {
     fn pick_open_file(&mut self) -> Option<PathBuf> {
-        None
+        self.inner.borrow_mut().pick_open_file()
     }
     fn pick_place_file(&mut self) -> Option<PathBuf> {
-        None
+        self.inner.borrow_mut().pick_place_file()
     }
     fn pick_replace_file(&mut self) -> Option<PathBuf> {
-        None
+        self.inner.borrow_mut().pick_replace_file()
     }
     fn pick_open_project(&mut self) -> Option<PathBuf> {
-        None
+        self.inner.borrow_mut().pick_open_project()
     }
-    fn pick_save_path(&mut self, _suggested: &Path) -> Option<PathBuf> {
-        None
+    fn pick_save_path(&mut self, suggested: &Path) -> Option<PathBuf> {
+        self.inner.borrow_mut().pick_save_path(suggested)
     }
-    fn pick_export_path(&mut self, _suggested: &Path) -> Option<PathBuf> {
-        None
+    fn pick_export_path(&mut self, suggested: &Path) -> Option<PathBuf> {
+        self.inner.borrow_mut().pick_export_path(suggested)
     }
     fn pick_export_folder(&mut self) -> Option<PathBuf> {
-        None
+        self.inner.borrow_mut().pick_export_folder()
     }
     fn confirm_close(&mut self, _document: &str) -> crate::dialogs::CloseChoice {
         crate::dialogs::CloseChoice::Cancel
@@ -3988,13 +3996,32 @@ fn opening_a_lossy_psd_shows_its_fidelity_report_and_a_clean_one_shows_nothing()
         Box::new(spy.clone()),
     );
     ed.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
-    ed.open_path(&lossy).unwrap();
+    // The report belongs to the user-initiated route: File ▸ Open (the job
+    // route since card 087) shows it when the job lands; a programmatic
+    // open_path never blocks on the modal.
+    let mut ed2 = Editor::with_state(
+        AppPaths::rooted(dir.path().join("config2")),
+        Preferences::default(),
+        RecentFiles::new(),
+        Box::new(spy.clone().opening(lossy.clone())),
+    );
+    ed2.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+    ed2.dispatch(Action::Open).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while ed2.imports_pending() && std::time::Instant::now() < deadline {
+        ed2.poll_imports();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     let notices = spy.notices.borrow();
     assert_eq!(
         notices.len(),
         1,
         "one lossy import, one notice: {notices:?}"
     );
+    // The programmatic route (open_path) shows NO modal: a CLI/launch open
+    // must never block on a notice.
+    ed.open_path(&lossy).unwrap();
+    assert!(spy.notices.borrow().len() == 1, "open_path added no notice");
     let (title, message) = &notices[0];
     assert_eq!(title, "PSD import report");
     assert!(message.contains("Curves 1"), "{message}");

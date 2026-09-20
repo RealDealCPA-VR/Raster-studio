@@ -3566,13 +3566,9 @@ impl Editor {
         self.recent.record(path);
         let _ = self.recent.save(&self.paths.recent_file());
         self.status = Some(format!("Opened {}", path.display()));
-        // Card 077: a PSD that did not map exactly shows its fidelity report
-        // right away — visible, not buried in a status bar. A fully supported
-        // file has nothing to say and shows nothing.
-        let notes = self.docs[self.active.unwrap()].psd_notes().clone();
-        if let Some(report) = notes.report(Some(path)) {
-            self.dialogs.report_notice("PSD import report", &report);
-        }
+        // Card 077's fidelity report is shown on the DIALOG-initiated route
+        // (see `apply_import`): a programmatic/CLI open must never block on a
+        // modal notice. A fully supported file has nothing to say either way.
         self.touch();
         Ok(id)
     }
@@ -4292,11 +4288,19 @@ impl Editor {
     }
 
     fn install_opened(&mut self, doc: OpenDocument, path: &Path) {
+        let notes = doc.psd_notes().clone();
         self.docs.push(doc);
         self.active = Some(self.docs.len() - 1);
         self.recent.record(path);
         let _ = self.recent.save(&self.paths.recent_file());
         self.status = Some(format!("Opened {}", path.display()));
+        // Card 077: a PSD that did not map exactly shows its fidelity report
+        // right away on this user-initiated route — visible, not buried in a
+        // status bar. A fully supported file has nothing to say and shows
+        // nothing.
+        if let Some(report) = notes.report(Some(path)) {
+            self.dialogs.report_notice("PSD import report", &report);
+        }
         self.touch();
     }
 
