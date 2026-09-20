@@ -2223,3 +2223,55 @@ fn mask_half_delta(doc: &mut OpenDocument) -> editor_core::pixels::TileDelta {
     editor_core::pixels::TileDelta::new(vec![TileEdit::set(raster::TileCoord::new(0, 0, 0), hash)])
         .unwrap()
 }
+
+// ------------------------------------------ independent-reader evidence helper
+
+/// Repeatable evidence helper (host-invoked, like the clipboard probes):
+/// writes a deterministic layered export of the card-073 acceptance scene to
+/// `docs/evidence/card091-export.psd` so an INDEPENDENT reader (psd-tools,
+/// Photoshop, Photopea — anything not this codebase) can be run against it.
+/// Ignored by default; run with `cargo test --release -p integration-tests
+/// --test interchange_and_recovery -- --ignored export_independent_reader_evidence`.
+#[test]
+#[ignore = "host-invoked evidence exporter: writes docs/evidence/card091-export.psd"]
+fn export_independent_reader_evidence() {
+    let bytes = psd::write(&card073::scene()).unwrap();
+    let import = document_from_psd(&bytes, "card073.psd", 50).unwrap();
+    let mut doc = OpenDocument::from_import(app::next_id(), import.imported);
+
+    // Edit the headline through the real confirm route, so the exported file
+    // carries a string the fixture never had.
+    let headline = find_layer(&doc, "Headline");
+    let edited = layer_model::TextLayer {
+        text: "SOLD TODAY".into(),
+        size_px: 18.0,
+        font_family: "Montserrat".into(),
+        ..Default::default()
+    };
+    doc.apply_text_draft(headline, layer_model::LayerKind::Text(edited.clone()))
+        .unwrap();
+    doc.apply(Command::SetLayerKind {
+        layer_id: headline,
+        kind: Box::new(layer_model::LayerKind::Text(edited)),
+    })
+    .unwrap();
+
+    let path = std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/evidence/card091-export.psd"
+    ));
+    doc.export_psd_to(path).expect("the export succeeds");
+    // The composited appearance as this build rendered it, for an
+    // independent decoder to compare against the file's merged section.
+    let png = path.with_extension("png");
+    raster::encode_to_path(
+        &png,
+        raster::ExportFormat::Png,
+        doc.document.width(),
+        doc.document.height(),
+        raster::EncodedPixels::Rgba8(&doc.composite_all()),
+        &raster::EncodeOptions::default(),
+    )
+    .expect("the composite reference renders");
+    println!("exported {} (+ composite reference png)", path.display());
+}

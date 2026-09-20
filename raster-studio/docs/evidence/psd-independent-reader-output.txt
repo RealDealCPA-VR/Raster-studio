@@ -1,0 +1,13 @@
+Independent-reader verification of card091-export.psd (written by this application)
+Readers: psd-tools 1.19.0 and Pillow 12.1.0 — both codebases fully independent of this project
+
+psd-tools: canvas 128 x 96
+psd-tools: layers ['Backdrop', 'Portrait (masked)', 'Hue/Sat 1', 'Invert 1', 'Title', 'Headline', 'Effects', 'Sticker']
+psd-tools: headline is a TYPE layer; text = 'SOLD TODAY'
+psd-tools: headline transform = (0.0, 1.0, -1.0, 0.0, 40.0, 12.0)
+psd-tools: portrait mask decoded, (128, 96)
+psd-tools: effects descriptor decoded — DrSh blur 24.0 distance 12.0 opacity 75.0 ; FrFX/SoFi present; master switch on
+Pillow: independent decode of the file's flattened image vs the application's composite: max 0 mean 0.0
+
+RESULT: PASS — layer structure, editable text (string/transform), mask, effects
+parameters, and the rendered appearance are all verified by independent readers.

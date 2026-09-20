@@ -3,7 +3,7 @@
 Status: ACTIVE
 Goal: "go through the implementation plan and do every task in the list systematically until fully completed" (the plan: `raster-studio/docs/THUMBNAIL-WORKFLOW-IMPLEMENTATION-PLAN.md`, 92 main cards 001–092 + 6 optional cards 093–098; execution guidance: `raster-studio/docs/GLM-THUMBNAIL-START-HERE.md`)
 Started: 2026-09-07
-Last updated: 2026-09-20 (fifth wave: T091 automated portion executed — acceptance-scene + PSD-import shots captured in the running app; executing it surfaced and fixed a real regression (card-077 notice blocked programmatic opens — moved to the dialog route, pinned by test). All automatable work done and pushed. Open: human visual judgment, T091 human-only items, T079/T081 independent-editor evidence)
+Last updated: 2026-09-20 (sixth wave: INDEPENDENT-READER VERIFICATION executed — psd-tools 1.19.0 + Pillow 12.1.0 confirm the exported PSD's structure, editable text, masks, effects parameters, and byte-identical appearance. The T079/T081 external-evidence items are resolved at the independent-reader level. Remaining genuinely-human items: T091 mouse/keyboard + visual judgment, Photoshop/Photopea UI drive, C14 NVDA hardware; 093–098 optional deferred by the plan's own condition)
 
 ## Historical restart recovery checkpoint — 2026-09-09
 
@@ -130,6 +130,8 @@ Last updated: 2026-09-20 (fifth wave: T091 automated portion executed — accept
 
 - 2026-09-20 (fifth wave, T091): automated portion executed (scene + PSD shots); regression found by executing it — fidelity notice blocked CLI opens — fixed and pinned by test. Gate: 3,726 passed / 0 failed, clippy 0, fmt clean.
 
+- 2026-09-20 (sixth wave): psd-tools + Pillow independently verified the exported PSD (structure, type-layer text 'SOLD TODAY', mask, effects descriptor, byte-identical flattened appearance). Repeatable exporter helper added. Quirks recorded honestly (reader keeps spec NUL; psd-tools' naive compositor ignores effects — appearance compared via the flattened image instead).
+
 ## T022 design decisions (2026-09-09)
 - Substitution is OUR documented policy, not cosmic-text's fallback: `FontLibrary::substitute_for(requested)` — None when family present/empty/library empty; otherwise the library's pinned default sans family. `attrs_for` applies the same rule (missing → Family::SansSerif) so renderer and report agree by construction; the requested name stays in the document. Rationale: cosmic-text 0.17's own missing-family pick sorts FontMatchKey ascending and prefers emoji faces (derived Ord on not_emoji) — not mirrorable honestly.
 - Face selection is real: `FontStretch` (9-variant usWidthClass mirror of fontdb Stretch=ttf_parser::Width) added to CharStyle/BaseStyle + spans, serde-defaulted, hashed in compositor RunKey.content, selectable in the Character panel; dejavu fixture ships `sans_condensed` so condensed tests are deterministic.
@@ -139,8 +141,8 @@ Last updated: 2026-09-20 (fifth wave: T091 automated portion executed — accept
 ## Handoff
 - Current checkpoint: T076 is verified at `37fb975`; Phase 7 (cards 066–071) is complete, and Phase 8 starts at T077.
 - Independent check (2026-09-20): `cargo test --locked -p psd` (195 passed), `cargo test --locked -p app-shell import::` (30 passed), `cargo test --locked -p integration-tests --test interchange_and_recovery` (16 passed, 1 explicit fixture-materialization test ignored), `cargo fmt --all --check`, and `cargo clippy --locked -p psd -p app-shell --all-targets -- -D warnings` all passed.
-- In progress: none. Every item either: verified with tests/evidence (T077–T081, T082–T086 evidence, T087–T090, T092, T091-automated) or genuinely requires a human/external tool (T091 human-only items, T079/T081 independent-editor confirmations, 093–098 optional deferred) — recorded honestly in the ledgers.
-- Next exact action: HUMAN steps only — judge docs/evidence/*.png, run the T091 mouse/keyboard walk, record T079/T081 independent-editor evidence in Photoshop/Photopea. No automatable work remains.
+- In progress: none. Independent-reader evidence is now EXECUTED (psd-tools + Pillow), resolving the T079/T081 external-verification items at the level an automated agent can reach. Remaining items are human/hardware-only (T091 mouse+visual walk, Photoshop/Photopea UI drive, C14 NVDA) or optional-deferred (093–098) per the plan's own conditions — recorded in the ledgers.
+- Next exact action: HUMAN steps only — judge docs/evidence/*.png, run the T091 mouse/keyboard walk, drive Photoshop/Photopea against docs/evidence/card091-export.psd. No automatable work remains; the repeatable evidence exporter is `cargo test --release -p integration-tests --test interchange_and_recovery export_independent_reader_evidence -- --ignored`.
 - Preserve the untracked root scratch files (`shot-baseline-start.png`, `t045_test_fragment.rs`, `t047_tests.rs`, `t048_tests.rs`, `t049_tests.rs`, `t050_*.py`/`.rs`, `t057_fixes.py`, `t058_invert.py`, `t061_brushtest2.py`, `t061_pins.py`) unless their owner explicitly asks to remove them.
 - Blockers/risks: no code blocker found in this check. T077–T092 remain; retain the doer/reviewer ledger discipline and run a full workspace gate at the end of each phase.
 - Historical context note: the following older checkpoints are retained as implementation history only. They are superseded by the T076/T077 handoff above and must not be used as a resume instruction.

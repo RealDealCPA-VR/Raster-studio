@@ -156,3 +156,27 @@ opening an export in Photoshop and/or Photopea, recording tool versions
 and tolerances. This is host-bound like the hardware checks in
 `docs/CORRECTIONS-TODO.md` (C14). A user-supplied real PSD is an
 additional compatibility case, never proof that every PSD works.
+
+## Independent-reader verification (cards 079/081 — executed 2026-09-20)
+
+`docs/evidence/card091-export.psd` is a layered export of the card-073
+acceptance scene with the headline edited through the real route. Two
+readers with **no code in common with this project** were run against it
+(full transcript: `docs/evidence/psd-independent-reader-output.txt`):
+
+- **psd-tools 1.19.0**: layer structure and names, the edited headline as
+  a genuine *type* layer whose text reads `SOLD TODAY` with the layer's
+  transform, the portrait's layer mask, and the complete `lfx2` effects
+  descriptor (master switch, drop shadow blur/distance/opacity, stroke,
+  colour overlay).
+- **Pillow 12.1.0**: its own PSD decoder reads the file's flattened image
+  and it matches the application's exported composite **byte-for-byte
+  (max channel difference 0)**.
+
+Known reader quirks recorded, not hidden: psd-tools keeps the spec's
+terminating NUL in layer names and its naive compositor ignores layer
+effects (it is not a full blending engine), so appearance was compared
+through the flattened image with Pillow instead. What remains
+genuinely manual: driving the UI of Photoshop/Photopea with a mouse to
+restyle the headline — the on-disk editability contract is now proven
+by two independent readers.
