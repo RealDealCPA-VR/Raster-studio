@@ -3,10 +3,12 @@
 > Current checkpoint (2026-09-20): cards T001–T076 are recorded verified at
 > `37fb975`; independent focused verification of the T072–T076 PSD/import work
 > passes. Current work is tracked in [Thumbnail workflow progress](raster-studio/docs/THUMBNAIL-WORKFLOW-PROGRESS.md)
-> and [Active goal](.pi/goals/ACTIVE.md). Current checkpoint (2026-09-20, second update): T077–T081 (incl. the Phase 8
-> gate), T088–T090 and T092 are verified and pushed. Remaining: T082–T087 and the
-> T091 human walk need the desktop/GPU host; T079 is blocked on independent-editor
-> evidence; 093–098 optional deferred. See the progress ledger for rows and evidence. Historical wave labels
+> and [Active goal](.pi/goals/ACTIVE.md). Current checkpoint (2026-09-20, third update): T077–T081 (incl. the Phase 8
+> gate), T079 (editable text export), T088–T090 and T092 are verified and pushed;
+> T082–T086 have captured automated evidence (docs/evidence/ screenshots, release
+> GPU + performance suites). Explicitly open: the human visual judgment on the
+> evidence shots, the T091 acceptance walk, T081/T079 independent-editor evidence
+> (pending), T087 (conditional, no measured blocker), 093–098 optional deferred. Historical wave labels
 > below have not been re-audited. Separate hardware verification remains open as C14 in
 > [Corrections TODO](raster-studio/docs/CORRECTIONS-TODO.md).
 
