@@ -368,6 +368,221 @@ fn outer_glow(d: &Descriptor, scale: f32) -> Option<GlowEffect> {
     })
 }
 
+// ------------------------------------------------------- card 080: writing
+
+/// The `BlnM` code for a blend mode — the inverse of [`blend_from_blnm`],
+/// spelling the short four-character codes Photoshop itself writes.
+fn blnm(mode: BlendMode) -> &'static str {
+    match mode {
+        BlendMode::Normal => "Nrml",
+        BlendMode::Dissolve => "Dslv",
+        BlendMode::Darken => "Drkn",
+        BlendMode::Multiply => "Mltp",
+        BlendMode::ColorBurn => "CBrn",
+        BlendMode::LinearBurn => "Lmbs",
+        BlendMode::DarkerColor => "dkCl",
+        BlendMode::Lighten => "Lghn",
+        BlendMode::Screen => "Scrn",
+        BlendMode::ColorDodge => "CDdg",
+        BlendMode::LinearDodge => "lddg",
+        BlendMode::LighterColor => "lgCl",
+        BlendMode::Overlay => "Ovrl",
+        BlendMode::SoftLight => "SftL",
+        BlendMode::HardLight => "HrdL",
+        BlendMode::VividLight => "vLit",
+        BlendMode::LinearLight => "lLit",
+        BlendMode::PinLight => "pLit",
+        BlendMode::HardMix => "HrdM",
+        BlendMode::Difference => "Dfrn",
+        BlendMode::Exclusion => "Xclu",
+        BlendMode::Subtract => "Sbtr",
+        BlendMode::Divide => "blendDivide",
+        BlendMode::Hue => "H   ",
+        BlendMode::Saturation => "Strt",
+        BlendMode::Color => "Clr ",
+        BlendMode::Luminosity => "Lmns",
+    }
+}
+
+/// A document-space straight RGBA as the descriptor's `RGBC` sub-descriptor:
+/// 8-bit sRGB, exactly inverting [`srgb_channel`].
+fn rgbc(color: Rgba) -> Value {
+    let mut c = crate::Descriptor::new("RGBC");
+    let _ = c.push("Rd  ", Value::Double(f64::from(color[0]) * 255.0));
+    let _ = c.push("Grn ", Value::Double(f64::from(color[1]) * 255.0));
+    let _ = c.push("Bl  ", Value::Double(f64::from(color[2]) * 255.0));
+    Value::Descriptor(c)
+}
+
+fn percent_value(fraction: f32) -> Value {
+    Value::UnitFloat {
+        unit: *b"#Prc",
+        value: f64::from(fraction) * 100.0,
+    }
+}
+
+fn px_value(px: f32) -> Value {
+    Value::UnitFloat {
+        unit: *b"#Pxl",
+        value: f64::from(px),
+    }
+}
+
+fn angle_value(deg: f32) -> Value {
+    Value::UnitFloat {
+        unit: *b"#Ang",
+        value: f64::from(deg),
+    }
+}
+
+fn enumerated_value(type_id: &str, value: &str) -> Value {
+    Value::Enumerated {
+        type_id: type_id.into(),
+        value: value.into(),
+    }
+}
+
+/// Encode the model's layer effects as an `lfx2` descriptor payload (card
+/// 080) — the exact inverse of [`import_effects`] for the four kinds this
+/// build maps, with the same keys and units its parsers read.
+///
+/// Returns the bytes plus the human kind names that could NOT be written
+/// (an effect the model carries but whose descriptor form this writer does
+/// not produce, e.g. a gradient-filled glow). An all-unmapped result
+/// returns `None` so the caller keeps its existing "not imported" note
+/// instead of writing a meaningless block.
+pub fn export_effects(effects: &LayerEffects) -> Option<(Vec<u8>, Vec<String>)> {
+    let mut top = crate::Descriptor::new("Lfx2");
+    let _ = top.push("masterFXSwitch", Value::Bool(effects.enabled));
+    let _ = top.push("Scl ", percent_value(1.0));
+    let mut unmapped: Vec<String> = Vec::new();
+    let mut wrote = false;
+
+    if let Some(s) = &effects.drop_shadow {
+        let mut d = crate::Descriptor::new("DrSh");
+        let _ = d.push("enab", Value::Bool(true));
+        let _ = d.push("Md  ", enumerated_value("BlnM", blnm(s.blend_mode)));
+        let _ = d.push("Clr ", rgbc(s.color));
+        let _ = d.push("opacity", percent_value(s.opacity));
+        let _ = d.push("lagl", angle_value(s.angle_deg));
+        let _ = d.push("uglg", Value::Bool(s.use_global_light));
+        let _ = d.push("Dstn", px_value(s.distance_px));
+        let _ = d.push("blur", px_value(s.size_px));
+        let _ = d.push("Ckmt", px_value(s.spread * s.size_px));
+        let _ = d.push("Nose", percent_value(s.noise));
+        let _ = d.push("layerConceals", Value::Bool(s.knockout));
+        let _ = top.push("DrSh", Value::Descriptor(d));
+        wrote = true;
+    }
+    if effects.inner_shadow.is_some() {
+        unmapped.push("inner shadow".into());
+    }
+    if let Some(s) = &effects.stroke {
+        match &s.fill {
+            FillStyle::Solid(color) => {
+                let mut d = crate::Descriptor::new("FrFX");
+                let _ = d.push("enab", Value::Bool(true));
+                let _ = d.push("Md  ", enumerated_value("BlnM", blnm(s.blend_mode)));
+                let _ = d.push("Clr ", rgbc(*color));
+                let _ = d.push("Opct", percent_value(s.opacity));
+                let _ = d.push("Sz  ", px_value(s.size_px));
+                let _ = d.push("PntT", enumerated_value("FrFl", "SClr"));
+                let _ = d.push(
+                    "Styl",
+                    enumerated_value(
+                        "FStl",
+                        match s.position {
+                            StrokePosition::Inside => "InsF",
+                            StrokePosition::Center => "CtrF",
+                            StrokePosition::Outside => "OutF",
+                        },
+                    ),
+                );
+                let _ = d.push("overprint", Value::Bool(s.overprint));
+                let _ = top.push("FrFX", Value::Descriptor(d));
+                wrote = true;
+            }
+            FillStyle::Gradient(_) | FillStyle::Pattern(_) => {
+                unmapped.push("stroke".into());
+            }
+        }
+    }
+    if let Some(s) = &effects.color_overlay {
+        let mut d = crate::Descriptor::new("SoFi");
+        let _ = d.push("enab", Value::Bool(true));
+        let _ = d.push("Md  ", enumerated_value("BlnM", blnm(s.blend_mode)));
+        let _ = d.push("Clr ", rgbc(s.color));
+        let _ = d.push("Opct", percent_value(s.opacity));
+        let _ = top.push("SoFi", Value::Descriptor(d));
+        wrote = true;
+    }
+    if let Some(s) = &effects.outer_glow {
+        match &s.fill {
+            FillStyle::Solid(color) => {
+                let mut d = crate::Descriptor::new("OrGl");
+                let _ = d.push("enab", Value::Bool(true));
+                let _ = d.push("Md  ", enumerated_value("BlnM", blnm(s.blend_mode)));
+                let _ = d.push("Clr ", rgbc(*color));
+                let _ = d.push("Opct", percent_value(s.opacity));
+                let _ = d.push("blur", px_value(s.size_px));
+                let _ = d.push("Ckmt", px_value(s.spread * s.size_px));
+                let _ = d.push("Nose", percent_value(s.noise));
+                let _ = d.push(
+                    "GlwT",
+                    enumerated_value(
+                        "BETE",
+                        match s.technique {
+                            GlowTechnique::Precise => "PrBL",
+                            GlowTechnique::Softer => "SfBL",
+                        },
+                    ),
+                );
+                let _ = d.push("RngL", percent_value(s.range));
+                let _ = d.push("Jitter", percent_value(s.jitter));
+                let _ = d.push(
+                    "Slct",
+                    enumerated_value(
+                        "BESl",
+                        match s.source {
+                            GlowSource::Center => "Ctr ",
+                            GlowSource::Edge => "Edgs",
+                        },
+                    ),
+                );
+                let _ = top.push("OrGl", Value::Descriptor(d));
+                wrote = true;
+            }
+            FillStyle::Gradient(_) | FillStyle::Pattern(_) => {
+                unmapped.push("outer glow".into());
+            }
+        }
+    }
+    if effects.inner_glow.is_some() {
+        unmapped.push("inner glow".into());
+    }
+    if effects.bevel_emboss.is_some() {
+        unmapped.push("bevel and emboss".into());
+    }
+    if effects.satin.is_some() {
+        unmapped.push("satin".into());
+    }
+    if effects.gradient_overlay.is_some() {
+        unmapped.push("gradient overlay".into());
+    }
+    if effects.pattern_overlay.is_some() {
+        unmapped.push("pattern overlay".into());
+    }
+
+    if !wrote {
+        return None;
+    }
+    let mut s = crate::bytes::Sink::new();
+    s.u32(1); // object version
+    s.u32(16); // descriptor version
+    top.write(&mut s).ok()?;
+    Some((s.into_inner(), unmapped))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;

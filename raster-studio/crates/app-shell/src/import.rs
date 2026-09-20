@@ -1647,7 +1647,21 @@ fn psd_layers_for(
             tally.locked_all.push(layer.name.clone());
         }
         if !layer.effects.is_empty() {
-            tally.effects.push(layer.name.clone());
+            // Card 080: the four supported effects are written as real lfx2
+            // descriptors — an independent reader can toggle and restyle
+            // them. Kinds this writer cannot produce are named, as before.
+            match psd::effects::export_effects(&layer.effects) {
+                Some((data, unmapped)) => {
+                    record.effects = Some(psd::Effects {
+                        key: *b"lfx2",
+                        data,
+                    });
+                    for kind in unmapped {
+                        tally.unmapped_effects.push((layer.name.clone(), kind));
+                    }
+                }
+                None => tally.effects.push(layer.name.clone()),
+            }
         }
 
         let (dx, dy, expressible) = translation_of(layer.transform);
@@ -1704,6 +1718,10 @@ fn psd_layers_for(
                 let mut staged = document.clone();
                 if let Some(stripped) = staged.layers.get_mut(id) {
                     stripped.mask = None;
+                    // Card 080: the effects ride in the lfx2 descriptor, so
+                    // the fallback pixels must not bake them too — a reader
+                    // would draw every effect twice.
+                    stripped.effects = layer_model::LayerEffects::default();
                 }
                 let canvas_rect = raster::PixelRect::new(0, 0, document.width(), document.height());
                 let rendered = compositor::composite_subtree(
@@ -3439,5 +3457,97 @@ mod tests {
             + (i64::from(20) - i64::from(mask.bounds.left))) as usize;
         assert_eq!(cov[probe], 0, "the mask hides the left half");
         Ok(())
+    }
+
+    #[test]
+    fn supported_effects_export_as_editable_descriptors_and_the_rest_is_named(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut doc = Document::new(64, 64, "fx");
+        let mut tiles = MemoryTileSource::new();
+        let layer = doc.layers.push_root(Layer::raster("Shadowed")).unwrap();
+        let rgba = [90u8, 30, 200, 255].repeat(16 * 16);
+        let edits = tile_edits_for_rgba(&rgba, psd::Rect::new(0, 0, 16, 16), &mut tiles);
+        let delta = TileDelta::new(edits)?;
+        doc.pixels.apply(PixelKey::Layer(layer), &delta);
+        doc.layers.get_mut(layer).unwrap().effects = layer_model::LayerEffects {
+            drop_shadow: Some(layer_model::ShadowEffect {
+                opacity: 0.75,
+                ..Default::default()
+            }),
+            color_overlay: Some(layer_model::ColorOverlayEffect {
+                blend_mode: BlendMode::Color,
+                color: [220.0 / 255.0, 60.0 / 255.0, 30.0 / 255.0, 1.0],
+                opacity: 0.5,
+            }),
+            satin: Some(layer_model::SatinEffect::default()),
+            ..Default::default()
+        };
+
+        let composite = vec![0u8; 64 * 64 * 4];
+        let (bytes, notes) = psd_from_document(&doc, &tiles, &composite).unwrap();
+        // The kind this writer cannot produce is named, not silently dropped.
+        let told = notes.summary().expect("the satin must be named");
+        assert!(told.contains("satin"), "{told}");
+
+        // An independent reader decodes the block back into editable
+        // parameters through the same parser the import path uses.
+        let file = psd::read(&bytes).unwrap();
+        let record = file
+            .layers
+            .iter()
+            .find(|l| l.name == "Shadowed")
+            .expect("the layer is in the file");
+        let fx = record.effects.as_ref().expect("the lfx2 block travels");
+        let decoded = psd::effects::import_effects(fx, &psd::ReadOptions::default())
+            .expect("the block decodes")
+            .effects;
+        let shadow = decoded
+            .drop_shadow
+            .as_ref()
+            .expect("the shadow round-trips");
+        assert!((shadow.opacity - 0.75).abs() < 1e-6);
+        let overlay = decoded
+            .color_overlay
+            .as_ref()
+            .expect("the overlay round-trips");
+        assert_eq!(overlay.blend_mode, BlendMode::Color);
+        assert!(decoded.satin.is_none(), "only the written kinds decode");
+        Ok(())
+    }
+
+    #[test]
+    fn the_fallback_pixels_do_not_bake_the_effects_the_descriptor_carries() {
+        // Card 080's double-application guard: a rendered fallback carries
+        // the layer's shape only; the shadow lives in the descriptor.
+        let (mut doc, tiles, layer) = shape_document();
+        doc.layers.get_mut(layer).unwrap().effects = layer_model::LayerEffects {
+            drop_shadow: Some(layer_model::ShadowEffect {
+                size_px: 16.0,
+                distance_px: 8.0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let composite = vec![0u8; 96 * 64 * 4];
+        let (bytes, notes) = psd_from_document(&doc, &tiles, &composite).unwrap();
+        // The descriptor is written: the only note is the shape's own
+        // appearance fallback, never an effects note.
+        assert!(
+            notes
+                .summary()
+                .is_none_or(|t| t.contains("raster layer's pixels")),
+            "{notes:?}"
+        );
+        let file = psd::read(&bytes).unwrap();
+        assert!(file
+            .layers
+            .iter()
+            .find(|l| l.name == "Badge")
+            .unwrap()
+            .effects
+            .is_some());
+        // ...and the channels hold exactly the shape's ink, no shadow reach.
+        let (x0, y0, x1, y1) = decoded_ink_bounds(&file, "Badge").unwrap();
+        assert_eq!((x0, y0, x1, y1), (20, 18, 43, 33));
     }
 }

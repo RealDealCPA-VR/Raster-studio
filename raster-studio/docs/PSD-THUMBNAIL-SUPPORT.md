@@ -59,8 +59,10 @@ byte slice, and opening a file writes nothing.
 | Blend mode, opacity, fill opacity, clipping | **Editable** | |
 | Raster pixels, layer masks (8-bit coverage) | **Editable** | |
 | Invert adjustment | **Editable** | |
+| Editable text (TySh) | **Not written (explicit)** | Card 079: a synthesized `TySh` needs a complete engine-data payload; a partial one makes Photoshop discard the whole layer (worse than the honest raster fallback below). Blocked on independent-editor verification of a synthesized payload. |
 | This editor's Text / Shape / SmartObject layers | **Appearance fallback** | Card 078: the layer is rendered alone through the compositor (its real transform, mask detached so the mask channel cannot double-apply) and the rendered pixels are written as the record's channels — an independent reader shows the layer. The note names the fallback. |
-| Effects this editor authored | **Unsupported (explicit)** | Not written; the note names the layers. |
+| Drop shadow, stroke (solid), colour overlay, outer glow | **Editable** | Card 080: written as a real `lfx2` descriptor block (the exact inverse of the import mapping) — an independent reader can toggle and restyle them. Fallback-rendered layers strip effects from their baked pixels so nothing draws twice. |
+| Inner shadow / inner glow / bevel / satin / gradient & pattern overlays, non-solid effect fills | **Unsupported (explicit)** | Not written; named per effect kind by the export note. |
 | Mask density/feather authored here | **Unsupported (explicit)** | Not written; named. |
 | Arbitrary per-layer affines | **Appearance fallback** | Pixels are written at their stored locations (the note above). |
 
