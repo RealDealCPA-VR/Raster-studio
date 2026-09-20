@@ -144,3 +144,14 @@ The rows move only with code: an editable row becomes possible when the
 document model grows the vocabulary (e.g. effect descriptors, a type
 decoder); a fallback becomes explicit only when the status note names
 it. Update this file in the same commit that changes either side.
+
+## Card 081 — external evidence status
+
+The locally runnable acceptance workflow (import independently authored
+bytes → edit through the real routes → save native → export PSD → reopen
+through the independent `psd::read`) passes with editability and
+appearance compared separately. **Pending manual external evidence:**
+opening an export in Photoshop and/or Photopea, recording tool versions
+and tolerances. This is host-bound like the hardware checks in
+`docs/CORRECTIONS-TODO.md` (C14). A user-supplied real PSD is an
+additional compatibility case, never proof that every PSD works.

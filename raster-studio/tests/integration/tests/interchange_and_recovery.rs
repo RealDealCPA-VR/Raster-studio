@@ -1492,3 +1492,144 @@ fn the_card073_fixtures_can_be_materialized_for_the_record() {
     }
     std::fs::write(out_dir.join("README.md"), readme).unwrap();
 }
+
+// ------------------------------------------------------- card 081
+
+/// Card 081's locally runnable half, as one workflow: an independently
+/// authored composition (the card-073 fixture scene, structured the way a
+/// foreign writer lays a file out) comes in through the import route, is
+/// edited through the application's real routes (text confirm, layer move,
+/// mask untouched), saves native, exports PSD, and the export is reopened
+/// through the *independent* `psd::read` — with layer editability (native
+/// package) and rendered appearance (merged preview) compared separately.
+///
+/// The other half of the card — opening the export in Photoshop or Photopea
+/// and recording tool versions and tolerances — is manual external-software
+/// evidence and is recorded as pending in `docs/PSD-THUMBNAIL-SUPPORT.md`,
+/// the same way the hardware-bound checks are.
+#[test]
+fn the_interchange_workflow_imports_edits_saves_exports_and_reopens() {
+    // 1. Import the independently authored composition.
+    let bytes = psd::write(&card073::scene()).unwrap();
+    let import = document_from_psd(&bytes, "card081.psd", 50).unwrap();
+    let mut doc = OpenDocument::from_import(app::next_id(), import.imported);
+    fn find(doc: &OpenDocument, name: &str) -> layer_model::LayerId {
+        doc.document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .find(|id| doc.document.layers.get(*id).is_some_and(|l| l.name == name))
+            .unwrap_or_else(|| panic!("{name} is in the imported tree"))
+    }
+
+    // 2. Edit text through the real confirm route (one history entry).
+    let headline = find(&doc, "Headline");
+    let edited = {
+        let l = doc.document.layers.get(headline).unwrap();
+        let layer_model::LayerKind::Text(t) = l.kind.clone() else {
+            panic!("the parseable type layer imported as editable text")
+        };
+        let mut t = t;
+        t.text = "SOLD TODAY".to_string();
+        t
+    };
+    doc.apply_text_draft(headline, layer_model::LayerKind::Text(edited.clone()))
+        .expect("the text edit applies");
+    doc.apply(Command::SetLayerKind {
+        layer_id: headline,
+        kind: Box::new(layer_model::LayerKind::Text(edited)),
+    })
+    .expect("the confirm records one history entry");
+    assert!(
+        doc.history.journal().count() > 0,
+        "the text edit landed in history"
+    );
+
+    // 3. Move a raster layer by a whole-pixel translation.
+    let sticker = find(&doc, "Sticker");
+    doc.apply(Command::TransformLayer {
+        layer_id: sticker,
+        matrix: [1.0, 0.0, 0.0, 1.0, 10.0, 6.0],
+    })
+    .expect("the move applies");
+
+    // 4. Save native and reopen: the edits are editable there.
+    let tmp = tempfile::tempdir().unwrap();
+    let package = tmp.path().join("card081.rstudio");
+    project_format::save_project_with(
+        &package,
+        &doc.document,
+        &app_shell::doc::SourceTiles(&doc.tiles),
+        &project_format::SaveOptions::new(APP_VERSION),
+    )
+    .expect("the native save works");
+    let reopened = project_format::open_project(&package).unwrap().document;
+    let back_headline = reopened
+        .layers
+        .get(
+            reopened
+                .layers
+                .iter_depth_first()
+                .into_iter()
+                .find(|id| {
+                    reopened
+                        .layers
+                        .get(*id)
+                        .is_some_and(|l| l.name == "Headline")
+                })
+                .expect("the headline survives the native save"),
+        )
+        .unwrap();
+    let layer_model::LayerKind::Text(t) = &back_headline.kind else {
+        panic!("the text layer is still editable in the native save")
+    };
+    assert_eq!(t.text, "SOLD TODAY", "the text edit survived save/reopen");
+
+    // 5. Export PSD and reopen through the independent reader.
+    let out = tmp.path().join("card081-export.psd");
+    let export_notes = doc.export_psd_to(&out).expect("the PSD export works");
+    let _ = export_notes;
+    let exported = psd::read(&std::fs::read(&out).unwrap()).unwrap();
+    let names: Vec<String> = exported
+        .all_layers()
+        .iter()
+        .map(|l| l.name.clone())
+        .collect();
+    for expected in ["Backdrop", "Portrait (masked)", "Headline", "Sticker"] {
+        assert!(
+            names.iter().any(|n| n == expected),
+            "{expected} in {names:?}"
+        );
+    }
+    // The moved layer moved in the export: its ink starts 10 px right and
+    // 6 px down of where the import put it. The sticker was imported from
+    // Rect(48, 8, 88, 40) and stored where it sits.
+    let all = exported.all_layers();
+    let sticker_record = all.iter().find(|l| l.name == "Sticker").unwrap();
+    assert_eq!(sticker_record.bounds.left, 48 + 10);
+    assert_eq!(sticker_record.bounds.top, 8 + 6);
+
+    // 6. Appearance comparison, separately from editability: the file's
+    // merged preview (this build's compositor) matches the pre-export
+    // composite within one 8-bit step.
+    let before = doc.composite_all();
+    let merged = exported
+        .merged
+        .as_ref()
+        .expect("the export carries a preview");
+    let after = merged.to_rgba8(128, 96).unwrap();
+    let (mean, max) = {
+        let mut sum = 0u64;
+        let mut max = 0u8;
+        for (a, b) in before.iter().zip(after.iter()) {
+            let d = a.abs_diff(*b) as u64;
+            sum += d;
+            max = max.max(d as u8);
+        }
+        ((sum as f64) / before.len() as f64, max)
+    };
+    assert!(
+        max <= 1 && mean < 0.01,
+        "the exported appearance matches: mean {mean}, max {max}"
+    );
+}

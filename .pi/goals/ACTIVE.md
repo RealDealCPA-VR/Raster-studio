@@ -3,7 +3,7 @@
 Status: ACTIVE
 Goal: "go through the implementation plan and do every task in the list systematically until fully completed" (the plan: `raster-studio/docs/THUMBNAIL-WORKFLOW-IMPLEMENTATION-PLAN.md`, 92 main cards 001–092 + 6 optional cards 093–098; execution guidance: `raster-studio/docs/GLM-THUMBNAIL-START-HERE.md`)
 Started: 2026-09-07
-Last updated: 2026-09-20 (cards 001–078 + T080 verified; T079 recorded BLOCKED on independent-editor verification of synthesized TySh engine data; next T081)
+Last updated: 2026-09-20 (cards 001–078, T080, T081 verified; T079 recorded BLOCKED on independent-editor verification; **Phase 8 gate PASS**; next T082, Phase 9)
 
 ## Historical restart recovery checkpoint — 2026-09-09
 
@@ -114,6 +114,8 @@ Last updated: 2026-09-20 (cards 001–078 + T080 verified; T079 recorded BLOCKED
 
 - 2026-09-20 (T080): landed and verified — effects export as real lfx2 descriptors via `psd::effects::export_effects` (exact inverse of the import parser), double-application guard strips effects from fallback-rendered pixels, unmapped kinds named. Curves/Hue-Sat payload writing remains the recorded 076 subcard (no independent fixture). T079 recorded BLOCKED: synthesized TySh engine data without independent-editor verification would make Photoshop drop text layers (psd crate's own documented failure mode); card 078's raster fallback preserves appearance meanwhile.
 
+- 2026-09-20 (T081): local acceptance workflow verified end-to-end (interchange_and_recovery.rs::the_interchange_workflow_imports_edits_saves_exports_and_reopens); manual Photoshop/Photopea evidence recorded as pending in the support doc. **Phase 8 gate PASS** (full workspace test green, fmt, clippy -D warnings).
+
 ## T022 design decisions (2026-09-09)
 - Substitution is OUR documented policy, not cosmic-text's fallback: `FontLibrary::substitute_for(requested)` — None when family present/empty/library empty; otherwise the library's pinned default sans family. `attrs_for` applies the same rule (missing → Family::SansSerif) so renderer and report agree by construction; the requested name stays in the document. Rationale: cosmic-text 0.17's own missing-family pick sorts FontMatchKey ascending and prefers emoji faces (derived Ord on not_emoji) — not mirrorable honestly.
 - Face selection is real: `FontStretch` (9-variant usWidthClass mirror of fontdb Stretch=ttf_parser::Width) added to CharStyle/BaseStyle + spans, serde-defaulted, hashed in compositor RunKey.content, selectable in the Character panel; dejavu fixture ships `sans_condensed` so condensed tests are deterministic.
@@ -123,8 +125,8 @@ Last updated: 2026-09-20 (cards 001–078 + T080 verified; T079 recorded BLOCKED
 ## Handoff
 - Current checkpoint: T076 is verified at `37fb975`; Phase 7 (cards 066–071) is complete, and Phase 8 starts at T077.
 - Independent check (2026-09-20): `cargo test --locked -p psd` (195 passed), `cargo test --locked -p app-shell import::` (30 passed), `cargo test --locked -p integration-tests --test interchange_and_recovery` (16 passed, 1 explicit fixture-materialization test ignored), `cargo fmt --all --check`, and `cargo clippy --locked -p psd -p app-shell --all-targets -- -D warnings` all passed.
-- In progress: none (T080 verified; T079 recorded blocked — see ledger row 079).
-- Next exact action: T081 PSD interchange acceptance matrix (needs manual independent-editor evidence — record honestly what cannot run here), then the Phase 8 workspace gate and the Phase 9 cards (082–092).
+- In progress: none (T081 verified with pending manual external evidence).
+- Next exact action: read card T082 (tune the workspace for thumbnail composition) in `THUMBNAIL-WORKFLOW-IMPLEMENTATION-PLAN.md`; targets `crates/design` tokens, `ui/src/view` + dock layout, `app-shell/src/prefs.rs`. Phase 8 gate has PASSED.
 - Preserve the untracked root scratch files (`shot-baseline-start.png`, `t045_test_fragment.rs`, `t047_tests.rs`, `t048_tests.rs`, `t049_tests.rs`, `t050_*.py`/`.rs`, `t057_fixes.py`, `t058_invert.py`, `t061_brushtest2.py`, `t061_pins.py`) unless their owner explicitly asks to remove them.
 - Blockers/risks: no code blocker found in this check. T077–T092 remain; retain the doer/reviewer ledger discipline and run a full workspace gate at the end of each phase.
 - Historical context note: the following older checkpoints are retained as implementation history only. They are superseded by the T076/T077 handoff above and must not be used as a resume instruction.
