@@ -387,18 +387,34 @@ impl OpenDocument {
             return OpenDocument::open_psd(id, path, history_depth);
         }
         let image = DecodedImage::decode_path(path)?;
+        let sixteen_bit = {
+            // A 16-bit-capable export destination can carry more than eight
+            // bits; record the depth the file actually arrived in so the
+            // export route below can choose to honor it.
+            let surface = raster::decode_surface_path(path, raster::ImportLimits::default())?;
+            surface.format() == raster::PixelFormat::Rgba16
+        };
+        Self::open_image_decoded(id, path, image, history_depth).map(|mut open| {
+            open.source_sixteen_bit = sixteen_bit;
+            open.document.meta.bit_depth = if sixteen_bit { 16 } else { 8 };
+            open
+        })
+    }
+
+    /// Card 087: build the document an off-thread import job decoded. The
+    /// pixels and the title arrive as pure data; the tile construction (the
+    /// part that touches the editor's caches) stays on the interaction
+    /// thread.
+    pub fn open_image_decoded(
+        id: DocumentId,
+        path: &Path,
+        image: DecodedImage,
+        history_depth: usize,
+    ) -> Result<Self, DocumentError> {
         let title = DecodedImage::title_for(path);
         let imported = crate::import::document_from_image(&image, &title, history_depth)?;
         let mut open = OpenDocument::from_import(id, imported);
         open.source_path = Some(path.to_path_buf());
-        // A 16-bit-capable export destination can carry more than eight bits;
-        // record the depth the file actually arrived in so the export route
-        // below can choose to honor it.
-        let surface = raster::decode_surface_path(path, raster::ImportLimits::default())?;
-        open.source_sixteen_bit = surface.format() == raster::PixelFormat::Rgba16;
-        // The document's own record of its working depth, carried in the
-        // serialized form: a 16-bit source reopens as a 16-bit document.
-        open.document.meta.bit_depth = if open.source_sixteen_bit { 16 } else { 8 };
         Ok(open)
     }
 
@@ -413,8 +429,20 @@ impl OpenDocument {
         history_depth: usize,
     ) -> Result<Self, DocumentError> {
         let bytes = crate::import::read_psd_bytes(path)?;
+        Self::open_psd_bytes(id, path, &bytes, history_depth)
+    }
+
+    /// Card 087: build the layered document from bytes an off-thread job
+    /// already read (bounded by the same ceiling the synchronous read
+    /// applies); the layered parse stays on the interaction thread.
+    pub fn open_psd_bytes(
+        id: DocumentId,
+        path: &Path,
+        bytes: &[u8],
+        history_depth: usize,
+    ) -> Result<Self, DocumentError> {
         let title = DecodedImage::title_for(path);
-        let import = crate::import::document_from_psd(&bytes, &title, history_depth)?;
+        let import = crate::import::document_from_psd(bytes, &title, history_depth)?;
         let mut open = OpenDocument::from_import(id, import.imported);
         open.source_path = Some(path.to_path_buf());
         open.psd_notes = import.notes;

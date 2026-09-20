@@ -107,6 +107,7 @@ pub mod error;
 pub mod hit_testing;
 pub mod import;
 pub mod interaction_geometry;
+pub mod jobs;
 pub mod keymap;
 pub mod menu_bridge;
 pub mod placement;

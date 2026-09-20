@@ -65,6 +65,19 @@ impl DecodedImage {
         })
     }
 
+    /// Card 087: decode an in-memory buffer (the bytes an off-thread import
+    /// job read), through the same codec facade [`Self::decode_path`] uses.
+    pub fn decode_bytes(bytes: &[u8]) -> Result<DecodedImage, ImportError> {
+        let decoded = raster::decode_bytes(bytes)?;
+        Ok(DecodedImage {
+            width: decoded.width,
+            height: decoded.height,
+            rgba8: decoded.rgba8,
+            color_space: decoded.color_space,
+            icc_profile: decoded.icc_profile,
+        })
+    }
+
     /// The name to give the layer and the document, taken from the file name.
     pub fn title_for(path: &Path) -> String {
         path.file_name()

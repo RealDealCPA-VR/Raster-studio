@@ -468,6 +468,11 @@ pub struct Editor {
     /// boundary. The OS clipboard by construction, a
     /// [`crate::clipboard::FakeClipboard`] in tests.
     image_clipboard: Box<dyn crate::clipboard::ImageClipboard>,
+    /// Card 087: off-thread import jobs in flight, each with its receiver.
+    import_jobs: Vec<std::sync::mpsc::Receiver<crate::jobs::ImportOutcome>>,
+    /// The import generation: bumped when pending imports are cancelled, so
+    /// a stale completion can never apply.
+    import_generation: u64,
     /// Fingerprint of what Edit ▸ Copy last wrote to the OS image clipboard
     /// (card 052's ownership policy): paste compares the OS payload against
     /// it, so the editor's OWN copy pastes through the internal route (same
@@ -700,6 +705,8 @@ impl Editor {
             dialogs,
             urls: Box::new(BrowserUrls),
             image_clipboard: Box::new(crate::clipboard::OsClipboard),
+            import_jobs: Vec::new(),
+            import_generation: 0,
             os_copy_fingerprint: None,
             os_image_probe: None,
             app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -4164,9 +4171,146 @@ impl Editor {
         let Some(path) = self.dialogs.pick_open_file() else {
             return Err(ActionError::Cancelled(Action::Open));
         };
-        self.open_path(&path)
-            .map_err(|e| ActionError::failed(Action::Open, e))?;
+        // Card 087: the read and decode run off the interaction thread; the
+        // document appears (or the failure is reported) when the shell polls
+        // the finished job. The picker itself stays on this thread — native
+        // file dialogs must be.
+        self.request_open(&path);
         Ok(Effect::DocumentSet)
+    }
+
+    /// Card 087: start reading and decoding `path` on a worker thread.
+    ///
+    /// The interaction thread stays responsive while the disk and the codecs
+    /// work; [`Self::poll_imports`] applies the finished job.
+    pub fn request_open(&mut self, path: &Path) {
+        let rx = crate::jobs::spawn_import(path.to_path_buf(), self.import_generation);
+        self.import_jobs.push(rx);
+        self.status = Some(format!("Opening {}…", path.display()));
+        self.touch();
+    }
+
+    /// `true` while at least one import job is in flight.
+    pub fn imports_pending(&self) -> bool {
+        !self.import_jobs.is_empty()
+    }
+
+    /// Card 087: cancel every pending import. Completions from the cancelled
+    /// generation are dropped unread at poll time — a finished job can never
+    /// apply after the user took the cancellation.
+    pub fn cancel_pending_imports(&mut self) {
+        self.import_generation += 1;
+        self.import_jobs.clear();
+        self.status = Some("Cancelled pending imports".to_string());
+        self.touch();
+    }
+
+    /// Card 087: apply whatever import jobs finished, in completion order.
+    ///
+    /// A stale completion (cancelled generation) is dropped unread; a failure
+    /// is reported through the same dialog route [`Self::open_paths`] uses.
+    /// The document a completed job becomes is minted fresh here, on this
+    /// thread — a completed import can never mutate the wrong document.
+    pub fn poll_imports(&mut self) {
+        if self.import_jobs.is_empty() {
+            return;
+        }
+        let generation = self.import_generation;
+        let jobs = std::mem::take(&mut self.import_jobs);
+        self.import_jobs = Vec::new();
+        for rx in jobs {
+            loop {
+                match rx.try_recv() {
+                    Ok(outcome) => {
+                        if outcome.is_stale(generation) {
+                            continue;
+                        }
+                        self.apply_import(outcome);
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        self.import_jobs.push(rx);
+                        break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                }
+            }
+        }
+    }
+
+    /// Build and open the document a finished import job delivered.
+    fn apply_import(&mut self, outcome: crate::jobs::ImportOutcome) {
+        let depth = self.prefs.history_depth;
+        let path = outcome.path().clone();
+        match outcome {
+            crate::jobs::ImportOutcome::Image { decoded, .. } => match decoded {
+                Ok(image) => {
+                    let id = self.mint_id();
+                    match OpenDocument::open_image_decoded(id, &path, image, depth) {
+                        Ok(doc) => self.install_opened(doc, &path),
+                        Err(e) => self.report_failed_open(&path, e),
+                    }
+                }
+                Err(e) => {
+                    self.dialogs.report_error(
+                        "Cannot open this file",
+                        &format!(
+                            "{}
+
+{e}",
+                            path.display()
+                        ),
+                    );
+                    self.recent.forget(&path);
+                    self.status = Some(format!("Could not open {}", path.display()));
+                    self.touch();
+                }
+            },
+            crate::jobs::ImportOutcome::Psd { bytes, .. } => match bytes {
+                Ok(bytes) => {
+                    let id = self.mint_id();
+                    match OpenDocument::open_psd_bytes(id, &path, &bytes, depth) {
+                        Ok(doc) => self.install_opened(doc, &path),
+                        Err(e) => self.report_failed_open(&path, e),
+                    }
+                }
+                Err(e) => {
+                    self.dialogs.report_error(
+                        "Cannot open this file",
+                        &format!(
+                            "{}
+
+{e}",
+                            path.display()
+                        ),
+                    );
+                    self.recent.forget(&path);
+                    self.status = Some(format!("Could not open {}", path.display()));
+                    self.touch();
+                }
+            },
+        }
+    }
+
+    fn install_opened(&mut self, doc: OpenDocument, path: &Path) {
+        self.docs.push(doc);
+        self.active = Some(self.docs.len() - 1);
+        self.recent.record(path);
+        let _ = self.recent.save(&self.paths.recent_file());
+        self.status = Some(format!("Opened {}", path.display()));
+        self.touch();
+    }
+
+    fn report_failed_open(&mut self, path: &Path, e: DocumentError) {
+        let message = format!(
+            "{}
+
+{e}",
+            path.display()
+        );
+        self.dialogs.report_error("Cannot open this file", &message);
+        self.recent.forget(path);
+        self.status = Some(format!("Could not open {}", path.display()));
+        self.touch();
     }
 
     /// File ▸ Open Project…, through the platform's *folder* picker.

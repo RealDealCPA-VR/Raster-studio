@@ -3,7 +3,7 @@
 Status: ACTIVE
 Goal: "go through the implementation plan and do every task in the list systematically until fully completed" (the plan: `raster-studio/docs/THUMBNAIL-WORKFLOW-IMPLEMENTATION-PLAN.md`, 92 main cards 001–092 + 6 optional cards 093–098; execution guidance: `raster-studio/docs/GLM-THUMBNAIL-START-HERE.md`)
 Started: 2026-09-07
-Last updated: 2026-09-20 (third wave: T082–T086 automated evidence captured and recorded — real-GPU screenshots at all three acceptance sizes in docs/evidence/, release GPU + performance suites green. T077–T081, T088–T090, T092 verified. Remaining: HUMAN visual judgment on the evidence shots + the T091 walk; T087 recorded conditional-not-started; optional 093–098 deferred)
+Last updated: 2026-09-20 (fourth wave: T087 IMPLEMENTED — off-thread imports with generation guards, wired through File ▸ Open + the shell frame poll. All automatable cards verified: T077–T081 + Phase 8 gate, T082–T086 evidence, T087–T090, T092. Remaining: T091 human walk + independent-editor confirmations)
 
 ## Historical restart recovery checkpoint — 2026-09-09
 
@@ -126,6 +126,8 @@ Last updated: 2026-09-20 (third wave: T082–T086 automated evidence captured an
 
 - 2026-09-20 (third wave, T082–T086): release desktop binary + --shot pipeline captured the real workspace at 1440×900/1280×720/1920×1080 (docs/evidence/); release GPU suite 10/10; release performance suite 6/6 (incl. the 8000×6000 wall-clock budget). T087 recorded conditional (no measured blocker). Note: a corrupted thiserror release build-script output on this host was repaired manually (out/private.rs) — environmental, not a code issue.
 
+- 2026-09-20 (fourth wave, T087): off-thread imports landed and wired (jobs.rs + act_open + about_to_wait poll); generation-guarded stale completions; workspace gate 3,726 passed / 0 failed.
+
 ## T022 design decisions (2026-09-09)
 - Substitution is OUR documented policy, not cosmic-text's fallback: `FontLibrary::substitute_for(requested)` — None when family present/empty/library empty; otherwise the library's pinned default sans family. `attrs_for` applies the same rule (missing → Family::SansSerif) so renderer and report agree by construction; the requested name stays in the document. Rationale: cosmic-text 0.17's own missing-family pick sorts FontMatchKey ascending and prefers emoji faces (derived Ord on not_emoji) — not mirrorable honestly.
 - Face selection is real: `FontStretch` (9-variant usWidthClass mirror of fontdb Stretch=ttf_parser::Width) added to CharStyle/BaseStyle + spans, serde-defaulted, hashed in compositor RunKey.content, selectable in the Character panel; dejavu fixture ships `sans_condensed` so condensed tests are deterministic.
@@ -135,8 +137,8 @@ Last updated: 2026-09-20 (third wave: T082–T086 automated evidence captured an
 ## Handoff
 - Current checkpoint: T076 is verified at `37fb975`; Phase 7 (cards 066–071) is complete, and Phase 8 starts at T077.
 - Independent check (2026-09-20): `cargo test --locked -p psd` (195 passed), `cargo test --locked -p app-shell import::` (30 passed), `cargo test --locked -p integration-tests --test interchange_and_recovery` (16 passed, 1 explicit fixture-materialization test ignored), `cargo fmt --all --check`, and `cargo clippy --locked -p psd -p app-shell --all-targets -- -D warnings` all passed.
-- In progress: none — every automatable card is verified; evidence screenshots captured.
-- Next exact action: HUMAN step — review docs/evidence/t082-workspace-*.png for clipped controls and run the T091 acceptance walk. Everything automatable is done, green, and pushed (workspace gate: 3,715+ passed, 0 failed).
+- In progress: none — T087 landed this wave. Remaining: T091 human walk, human visual judgment on the evidence shots, independent-editor confirmations (T079/T081), optional 093–098.
+- Next exact action: HUMAN step — review docs/evidence/t082-workspace-*.png and run the T091 acceptance walk; record the T079/T081 independent-editor evidence when Photoshop/Photopea is available. Everything automatable is implemented, validated, and pushed (workspace gate: 3,726 passed, 0 failed).
 - Preserve the untracked root scratch files (`shot-baseline-start.png`, `t045_test_fragment.rs`, `t047_tests.rs`, `t048_tests.rs`, `t049_tests.rs`, `t050_*.py`/`.rs`, `t057_fixes.py`, `t058_invert.py`, `t061_brushtest2.py`, `t061_pins.py`) unless their owner explicitly asks to remove them.
 - Blockers/risks: no code blocker found in this check. T077–T092 remain; retain the doer/reviewer ledger discipline and run a full workspace gate at the end of each phase.
 - Historical context note: the following older checkpoints are retained as implementation history only. They are superseded by the T076/T077 handoff above and must not be used as a resume instruction.

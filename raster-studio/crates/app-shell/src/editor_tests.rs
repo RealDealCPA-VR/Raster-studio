@@ -4012,3 +4012,99 @@ fn opening_a_lossy_psd_shows_its_fidelity_report_and_a_clean_one_shows_nothing()
     ed.open_path(&clean).unwrap();
     assert_eq!(spy.notices.borrow().len(), 1, "the clean file stayed quiet");
 }
+
+// ------------------------------------------------------ card 087 tests
+
+#[test]
+fn file_open_runs_off_thread_and_applies_on_poll() {
+    let dir = tempfile::tempdir().unwrap();
+    let png = write_png(dir.path(), "imported.png", 16, 12, 60);
+    let scripted = crate::dialogs::ScriptedDialogs::new().opening(png.clone());
+    let mut ed = Editor::with_state(
+        AppPaths::rooted(dir.path().join("config")),
+        Preferences::default(),
+        RecentFiles::new(),
+        Box::new(scripted),
+    );
+    ed.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+
+    // File ▸ Open with the picker primed: the job is queued, not blocking.
+    assert_eq!(ed.dispatch(Action::Open), Ok(Effect::DocumentSet));
+    assert!(ed.imports_pending(), "the job is in flight");
+    assert!(
+        ed.docs.is_empty(),
+        "the file has not been read on this thread yet"
+    );
+
+    // The shell polls once per frame until the job lands (bounded wait: the
+    // worker is a real thread).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while ed.imports_pending() && std::time::Instant::now() < deadline {
+        ed.poll_imports();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!ed.imports_pending(), "the import job completes");
+    assert_eq!(ed.docs.len(), 1);
+    assert_eq!(ed.active().unwrap().title(), "imported.png");
+    assert_eq!(ed.active().unwrap().source_path(), Some(png.as_path()));
+    assert!(
+        ed.status().is_some_and(|s| s.starts_with("Opened")),
+        "{:?}",
+        ed.status()
+    );
+
+    // Opening is not an edit: the history is fresh.
+    assert_eq!(ed.active().unwrap().history.journal().count(), 0);
+}
+
+#[test]
+fn a_failed_import_is_reported_not_silent() {
+    let dir = tempfile::tempdir().unwrap();
+    let scripted = crate::dialogs::ScriptedDialogs::new().opening(dir.path().join("gone.png"));
+    let mut ed = Editor::with_state(
+        AppPaths::rooted(dir.path().join("config")),
+        Preferences::default(),
+        RecentFiles::new(),
+        Box::new(scripted),
+    );
+    ed.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+    ed.dispatch(Action::Open).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while ed.imports_pending() && std::time::Instant::now() < deadline {
+        ed.poll_imports();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        ed.status().is_some_and(|s| s.starts_with("Could not open")),
+        "{:?}",
+        ed.status()
+    );
+    assert!(ed.docs.is_empty(), "no half-opened document appears");
+}
+
+#[test]
+fn cancelling_pending_imports_drops_their_completions() {
+    let dir = tempfile::tempdir().unwrap();
+    let png = write_png(dir.path(), "late.png", 8, 8, 9);
+    let scripted = crate::dialogs::ScriptedDialogs::new().opening(png.clone());
+    let mut ed = Editor::with_state(
+        AppPaths::rooted(dir.path().join("config")),
+        Preferences::default(),
+        RecentFiles::new(),
+        Box::new(scripted),
+    );
+    ed.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+    ed.dispatch(Action::Open).unwrap();
+    ed.cancel_pending_imports();
+    assert!(!ed.imports_pending());
+
+    // The job may still complete on its thread; the stale generation makes
+    // the completion unread at poll time.
+    ed.poll_imports();
+    assert!(ed.docs.is_empty(), "a cancelled import cannot apply");
+    assert!(
+        ed.status().is_some_and(|s| s.contains("Cancelled")),
+        "{:?}",
+        ed.status()
+    );
+}

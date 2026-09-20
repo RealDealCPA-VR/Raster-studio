@@ -2127,6 +2127,17 @@ impl ApplicationHandler<crate::shell::AppEvent> for Shell {
         if self.state.is_none() {
             return;
         }
+        // Card 087: apply finished import jobs. A completion redraws; while
+        // jobs are in flight the loop polls instead of sleeping, or a slow
+        // import on a worker thread would never be noticed.
+        if self.editor.imports_pending() {
+            self.editor.poll_imports();
+            if let Some(state) = &self.state {
+                state.window.request_redraw();
+            }
+            event_loop.set_control_flow(ControlFlow::Poll);
+            return;
+        }
         // C1: keep redrawing until the shot's warm-up frames have all rendered
         // — an idle window under `ControlFlow::Wait` would otherwise never
         // produce them.
