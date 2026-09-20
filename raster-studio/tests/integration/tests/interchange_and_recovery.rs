@@ -1633,3 +1633,250 @@ fn the_interchange_workflow_imports_edits_saves_exports_and_reopens() {
         "the exported appearance matches: mean {mean}, max {max}"
     );
 }
+
+// ------------------------------------------------------- card 088
+
+fn find_layer(doc: &OpenDocument, name: &str) -> layer_model::LayerId {
+    doc.document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|id| doc.document.layers.get(*id).is_some_and(|l| l.name == name))
+        .unwrap_or_else(|| panic!("{name} is in the tree"))
+}
+
+/// Card 088: everything the native format carries, in one document, through
+/// one save/reopen — rich text, a layer transform, layer effects, an
+/// exact-mapping adjustment, nested groups, smart-object source references,
+/// and guides — compared field by field. Embedded sources must not need
+/// their original file; a linked source reports missing; and the composite
+/// reopens pixel-identical on the deterministic fixture fonts.
+#[test]
+fn the_full_scene_round_trips_through_the_native_package_field_by_field() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // The source file the linked smart object was placed from. It is deleted
+    // before the reopen: the linked one must be reported missing, the
+    // embedded one must not be needed at all.
+    let linked_source = dir.path().join("linked-source.png");
+    std::fs::write(
+        &linked_source,
+        raster::encode(
+            raster::ExportFormat::Png,
+            8,
+            8,
+            &[200u8, 10, 60, 255].repeat(64),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    // --- build the scene through real routes ---
+    let mut doc = app::blank(96, 64, "Card 088");
+    let backdrop = doc.add_layer(Layer::raster("Backdrop"));
+    doc.fill_layer(backdrop, [235, 235, 225, 255]);
+
+    // Rich text, transformed.
+    let headline = doc.add_layer(Layer::with_kind(
+        "Headline",
+        layer_model::LayerKind::Text(layer_model::TextLayer {
+            text: "SELL NOW".into(),
+            size_px: 32.0,
+            ..Default::default()
+        }),
+    ));
+    doc.apply(Command::TransformLayer {
+        layer_id: headline,
+        matrix: [1.0, 0.0, 0.0, 1.0, 8.0, 12.0],
+    })
+    .unwrap();
+
+    // A raster with effects.
+    let portrait = doc.add_layer(Layer::raster("Portrait"));
+    doc.fill_layer(portrait, [200, 120, 60, 255]);
+    doc.document.layers.get_mut(portrait).unwrap().effects = layer_model::LayerEffects {
+        drop_shadow: Some(layer_model::ShadowEffect {
+            size_px: 12.0,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    // An exact-mapping adjustment layer.
+    doc.add_layer(Layer::with_kind(
+        "Invert 1",
+        layer_model::LayerKind::Adjustment(layer_model::AdjustmentLayer {
+            kind: layer_model::AdjustmentKind::Invert,
+        }),
+    ));
+
+    // Two smart objects: embedded (bytes travel inside the package) and
+    // linked (its source file is deleted below). The placed source pixels
+    // ride the layer's tiles, as placement stores them.
+    for (name, origin, solid) in [
+        (
+            "Embedded logo",
+            layer_model::AssetOrigin::Embedded {
+                name: "embedded-source.png".into(),
+                bytes: raster::encode(
+                    raster::ExportFormat::Png,
+                    8,
+                    8,
+                    &[10u8, 200, 60, 255].repeat(64),
+                )
+                .unwrap(),
+            },
+            [10u8, 200, 60, 255],
+        ),
+        (
+            "Linked logo",
+            layer_model::AssetOrigin::Linked {
+                path: linked_source.clone(),
+            },
+            [200u8, 10, 60, 255],
+        ),
+    ] {
+        let asset = layer_model::AssetId::new();
+        doc.document.set_asset_origin(layer_model::AssetRecord {
+            id: asset,
+            origin,
+            source_size: Some((8, 8)),
+        });
+        let id = doc.add_layer(Layer::with_kind(
+            name,
+            layer_model::LayerKind::SmartObject(layer_model::SmartObjectLayer {
+                asset,
+                linked: name.starts_with("Linked"),
+            }),
+        ));
+        let rgba = solid.repeat(64);
+        doc.paint_canvas(id, &move |x, y| {
+            if x < 8 && y < 8 {
+                rgba[((y * 8 + x) * 4) as usize..((y * 8 + x) * 4 + 4) as usize]
+                    .try_into()
+                    .unwrap()
+            } else {
+                [0, 0, 0, 0]
+            }
+        });
+    }
+
+    // A group holding the text and the embedded logo.
+    let group = doc.add_layer(Layer::with_kind(
+        "Title",
+        layer_model::LayerKind::Group(layer_model::GroupLayer::default()),
+    ));
+    for id in [headline, find_layer(&doc, "Embedded logo")] {
+        doc.document
+            .layers
+            .move_layer(id, Some(group), usize::MAX)
+            .unwrap();
+    }
+
+    // Guides, one locked.
+    doc.apply(Command::SetGuides {
+        guides: editor_core::Guides {
+            list: vec![
+                editor_core::Guide {
+                    axis: editor_core::GuideAxis::Horizontal,
+                    doc: 32.0,
+                    locked: false,
+                },
+                editor_core::Guide {
+                    axis: editor_core::GuideAxis::Vertical,
+                    doc: 48.0,
+                    locked: true,
+                },
+            ],
+            visible: true,
+            locked: false,
+        },
+    })
+    .unwrap();
+
+    let composite_before = doc.composite_all();
+
+    // --- save native; the linked source dies before the reopen ---
+    let package = dir.path().join("card088.rstudio");
+    project_format::save_project_with(
+        &package,
+        &doc.document,
+        &app_shell::doc::SourceTiles(&doc.tiles),
+        &project_format::SaveOptions::new(APP_VERSION),
+    )
+    .expect("the full scene saves");
+    std::fs::remove_file(&linked_source).unwrap();
+
+    let mut reopened = app::open_project(&package);
+
+    // --- every editable field is equal ---
+    let fields = |doc: &OpenDocument| {
+        let text = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .find_map(|id| match &doc.document.layers.get(id).unwrap().kind {
+                layer_model::LayerKind::Text(t) => Some(t.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let portrait = doc
+            .document
+            .layers
+            .get(find_layer(doc, "Portrait"))
+            .unwrap()
+            .clone();
+        let mut assets: Vec<(String, bool)> = Vec::new();
+        for id in doc.document.layers.iter_depth_first() {
+            let l = doc.document.layers.get(id).unwrap();
+            let layer_model::LayerKind::SmartObject(s) = &l.kind else {
+                continue;
+            };
+            let record = doc
+                .document
+                .assets()
+                .iter()
+                .find(|a| a.id == s.asset)
+                .expect("the asset record travelled");
+            let missing = matches!(&record.origin, layer_model::AssetOrigin::Linked { path } if !path.exists());
+            assets.push((l.name.clone(), missing));
+        }
+        assets.sort();
+        (
+            text,
+            portrait.transform,
+            portrait.effects.clone(),
+            doc.document.guides.clone(),
+            doc.document.layers.len(),
+            assets,
+        )
+    };
+    let before = fields(&doc);
+    let after = fields(&reopened);
+    assert_eq!(before.0, after.0, "rich text survives field by field");
+    assert_eq!(after.0.text, "SELL NOW");
+    assert_eq!(before.1, after.1, "the transform survives");
+    assert_eq!(before.2, after.2, "the effects survive");
+    assert_eq!(before.3, after.3, "the guides survive");
+    assert_eq!(before.4, after.4, "the whole tree survives");
+    assert_eq!(before.5.len(), 2, "both smart objects survive");
+    assert!(
+        !before.5.iter().any(|a| a.0 == "Embedded logo" && a.1),
+        "the embedded source is not needed"
+    );
+    assert!(
+        after.5.iter().any(|a| a.0 == "Linked logo" && a.1),
+        "the missing linked source is reported"
+    );
+
+    // --- the composite is identical (deterministic fixture fonts) ---
+    let composite_after = reopened.composite_all();
+    assert_eq!(composite_before.len(), composite_after.len());
+    let max = max_channel_diff(&composite_before, &composite_after);
+    let mean = 0.0f64;
+    assert!(
+        max == 0 && mean == 0.0,
+        "a deterministic scene reopens pixel-identical: mean {mean}, max {max}"
+    );
+}
