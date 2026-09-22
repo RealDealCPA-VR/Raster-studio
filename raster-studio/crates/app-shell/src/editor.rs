@@ -527,6 +527,12 @@ pub struct Editor {
     /// [`crate::tool_input::ToolPointer`] can thread it into the tool's
     /// context, the same road the foreground colour travels.
     gradient_ramp: layer_model::Gradient,
+    /// W1-C: the pattern the pattern-driven tools (Pattern Stamp, Pattern
+    /// Fill) paint with, by preset name. `None` means "the most recently
+    /// defined preset", which is what Edit ▸ Define Pattern leaves active;
+    /// [`Self::set_active_pattern`] picks another. Threaded into the tool
+    /// context per gesture like the ramp and the colours.
+    active_pattern: Option<String>,
 
     panels_visible: bool,
     preferences_open: bool,
@@ -723,6 +729,7 @@ impl Editor {
             content_color_backups: std::collections::HashMap::new(),
             doc_colors: std::collections::HashMap::new(),
             gradient_ramp: layer_model::Gradient::default(),
+            active_pattern: None,
             panels_visible: true,
             preferences_open: false,
             file_info_open: false,
@@ -2784,6 +2791,9 @@ impl Editor {
                 height: ph as u32,
                 rgba8,
             });
+        // The pattern just defined is the one the pattern tools paint with,
+        // as in Photoshop: defining selects.
+        self.active_pattern = Some(name.clone());
         Ok(format!(
             "Defined pattern “{name}” from {} {} — the active layer's pixels{}",
             pw,
@@ -3422,6 +3432,38 @@ impl Editor {
     /// The ramp the gradient tools paint with.
     pub fn gradient_ramp(&self) -> &layer_model::Gradient {
         &self.gradient_ramp
+    }
+
+    /// W1-C: the pattern preset the pattern-driven tools paint with — the
+    /// one [`Self::set_active_pattern`] chose if it still exists, otherwise
+    /// the most recently defined one. `None` until a pattern is defined.
+    pub fn active_pattern(&self) -> Option<&asset_store::presets::PatternPreset> {
+        self.active_pattern
+            .as_deref()
+            .and_then(|name| self.presets.pattern(name))
+            .or_else(|| self.presets.latest_pattern())
+    }
+
+    /// W1-C: choose the pattern the pattern-driven tools paint with, by
+    /// preset name. Refused (and left unchanged) when no preset has that
+    /// name, so a stale picker entry cannot silently fall back.
+    pub fn set_active_pattern(&mut self, name: &str) -> Result<(), String> {
+        if self.presets.pattern(name).is_none() {
+            return Err(format!("No pattern named “{name}” is defined"));
+        }
+        self.active_pattern = Some(name.to_string());
+        self.touch();
+        Ok(())
+    }
+
+    /// W1-C: the active pattern as the tools crate's [`tools::Pattern`]
+    /// (straight-alpha sRGB8, the same encoding the preset stores), for
+    /// [`crate::tool_input::ToolPointer`] to hand to every tool context.
+    /// `None` when no pattern is defined or the stored preset is malformed
+    /// (a zero side or a byte count that does not match its size).
+    pub fn active_tool_pattern(&self) -> Option<tools::Pattern> {
+        let preset = self.active_pattern()?;
+        tools::Pattern::new(preset.width, preset.height, preset.rgba8.clone()).ok()
     }
 
     pub fn set_background(&mut self, rgba: [f32; 4]) {

@@ -792,8 +792,9 @@ fn ceil_char_boundary(text: &str, index: usize) -> usize {
 /// metrics.
 ///
 /// Card 022's substitution rule lives here, not in the shaping stack's own
-/// fallback: an installed family (or the empty generic-sans request) shapes
-/// as requested; a family that is not installed is replaced **up front** by
+/// fallback: an installed family, the empty generic-sans request or one of
+/// the three generic names ([`crate::font::generic_family`]) shapes as
+/// requested; a family that is not installed is replaced **up front** by
 /// [`Family::SansSerif`] — exactly the family [`FontLibrary::substitute_for`]
 /// reports to the user — instead of the stack's opaque nearest-match pick,
 /// which can even prefer an emoji face. The requested name stays in the
@@ -812,12 +813,16 @@ fn attrs_for<'a>(
     if !style.kerning {
         features.disable(FeatureTag::KERNING);
     }
-    let family = if style.family.is_empty() || !library.has_family(&style.family) {
-        // Generic sans (empty request) or the documented substitute for a
-        // missing family — the database's pinned sans-serif default.
-        Family::SansSerif
-    } else {
-        Family::Name(style.family.as_str())
+    let family = match crate::font::generic_family(&style.family) {
+        // The three CSS generic names (`sans-serif`, `serif`, `monospace`,
+        // the Type tool's Font choices) and the empty request resolve to the
+        // families `FontLibrary::repair_generic_families` pinned — not to an
+        // installed family called literally "serif", which nothing ships.
+        Some(generic) => generic,
+        None if library.has_family(&style.family) => Family::Name(style.family.as_str()),
+        // The documented substitute for a missing family — the database's
+        // pinned sans-serif default.
+        None => Family::SansSerif,
     };
     let mut attrs = Attrs::new()
         .family(family)

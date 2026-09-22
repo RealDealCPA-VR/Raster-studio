@@ -1241,7 +1241,7 @@ fn the_styled_headline_workflow_verifies_end_to_end() {
     // Absolute colour pins, not comparative: the white fill must actually
     // reach a fully white pixel somewhere in the glyph cores.
     assert!(
-        white.chunks_exact(4).any(|p| p == [255, 255, 255, 255]),
+        white.as_chunks::<4>().0.contains(&[255, 255, 255, 255]),
         "the headline carries a fully white pixel"
     );
     ed.set_layer_selection(vec![secondary], Some(secondary));
@@ -1252,7 +1252,9 @@ fn the_styled_headline_workflow_verifies_end_to_end() {
     assert_ne!(green, white, "the colour change rewrites the subhead");
     assert!(
         green
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|p| p[3] == 255 && p[1] > p[0] && p[1] > p[2]),
         "the subhead carries a green-dominant pixel"
     );
@@ -2846,7 +2848,7 @@ fn the_manual_portrait_extraction_walk_holds_end_to_end() {
     ] {
         let path = tmp.path().join(format!("{name}.png"));
         let mut flat = vec![0u8; 128 * 128 * 4];
-        for px in flat.chunks_exact_mut(4) {
+        for px in flat.as_chunks_mut::<4>().0 {
             px.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
         }
         std::fs::write(
@@ -3015,7 +3017,7 @@ fn layer_stack_management_is_practical_at_scale() {
         let layer = layer_model::Layer::raster(name);
         let id = layer.id;
         let mut bytes = vec![0u8; (raster::TILE_SIZE * raster::TILE_SIZE * 4) as usize];
-        for px in bytes.chunks_exact_mut(4) {
+        for px in bytes.as_chunks_mut::<4>().0 {
             px.copy_from_slice(&[seed, seed / 2, seed / 3, 255]);
         }
         let hash = ed.active_mut().unwrap().tiles.insert_bytes(bytes);
@@ -3966,7 +3968,7 @@ fn native_composition_workflow_supports_independent_variants() {
     // headline text layer with clearly named editable placeholders.
     let background_png = tmp.path().join("background.png");
     let mut bg = vec![0u8; 320 * 180 * 4];
-    for px in bg.chunks_exact_mut(4) {
+    for px in bg.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&[235, 235, 225, 255]);
     }
     std::fs::write(
@@ -3976,7 +3978,7 @@ fn native_composition_workflow_supports_independent_variants() {
     .unwrap();
     let logo_png = tmp.path().join("logo.png");
     let mut logo = vec![0u8; 48 * 48 * 4];
-    for px in logo.chunks_exact_mut(4) {
+    for px in logo.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&[200, 60, 30, 255]);
     }
     std::fs::write(
@@ -4077,7 +4079,7 @@ fn native_composition_workflow_supports_independent_variants() {
     {
         let replacement = tmp.path().join("logo2.png");
         let mut logo2 = vec![0u8; 96 * 96 * 4];
-        for px in logo2.chunks_exact_mut(4) {
+        for px in logo2.as_chunks_mut::<4>().0 {
             px.copy_from_slice(&[20, 160, 90, 255]);
         }
         std::fs::write(
@@ -4212,7 +4214,7 @@ fn the_native_thumbnail_milestone_is_delivered_end_to_end() {
     //    concerns), placed through the editor's place route.
     let background_png = tmp.path().join("background.png");
     let mut bg = vec![0u8; 320 * 180 * 4];
-    for px in bg.chunks_exact_mut(4) {
+    for px in bg.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&[235, 235, 225, 255]);
     }
     std::fs::write(
@@ -4518,7 +4520,7 @@ fn the_asset_reuse_and_clipboard_workflows_survive_native_persistence() {
 
     let solid = |w: u32, h: u32, c: [u8; 4]| {
         let mut v = vec![0u8; (w * h * 4) as usize];
-        for px in v.chunks_exact_mut(4) {
+        for px in v.as_chunks_mut::<4>().0 {
             px.copy_from_slice(&c);
         }
         v
@@ -4548,7 +4550,7 @@ fn the_asset_reuse_and_clipboard_workflows_survive_native_persistence() {
 
     let logo_rgba = {
         let mut v = vec![0u8; 16 * 12 * 4];
-        for px in v.chunks_exact_mut(4) {
+        for px in v.as_chunks_mut::<4>().0 {
             px.copy_from_slice(&[0, 200, 90, 255]);
         }
         v

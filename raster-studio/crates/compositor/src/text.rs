@@ -443,7 +443,10 @@ mod tests {
         };
         let img = run_image(&layer, 0).expect("ink");
         assert!(img.width > 0 && img.height > 0);
-        assert!(img.data.chunks_exact(4).any(|p| p[3] > 0.5), "real ink");
+        assert!(
+            img.data.as_chunks::<4>().0.iter().any(|p| p[3] > 0.5),
+            "real ink"
+        );
     }
 
     #[test]
@@ -549,7 +552,9 @@ mod styled_tests {
 
     fn ink(img: &LinearImage) -> Vec<[f32; 4]> {
         img.data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] > 0.5)
             .map(|p| [p[0], p[1], p[2], p[3]])
             .collect()
@@ -671,12 +676,16 @@ mod styled_tests {
         let img = run_image(&layer, 0).expect("ink");
         let reds = img
             .data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] > 0.5 && p[0] > 0.5)
             .count();
         let blacks = img
             .data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] > 0.5 && p[0] <= f32::EPSILON)
             .count();
         assert!(reds > 0, "the red span painted its bytes");
@@ -693,7 +702,9 @@ mod styled_tests {
         let img = run_image(&layer, 0).expect("ink");
         let partial = img
             .data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] > 0.0 && p[3] < 1.0)
             .count();
         assert!(partial > 0, "antialiased edges exist in the ink");

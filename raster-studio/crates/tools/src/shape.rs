@@ -26,7 +26,7 @@ use vector::{
 use crate::error::ToolError;
 use crate::gradient::constrain_45;
 use crate::patch::{mask_coverage_of, ColorPatch, CoveragePatch};
-use crate::tool::{PaintTarget, PointerEvent, Tool, ToolContext, ToolId};
+use crate::tool::{PaintTarget, PointerEvent, Tool, ToolContext, ToolId, ToolSetting};
 
 /// The shapes the tool can draw.
 #[derive(Debug, Clone, PartialEq)]
@@ -75,6 +75,19 @@ pub enum ShapeMode {
     VectorLayer,
     /// Coverage filled into the active layer's pixels.
     Rasterize,
+}
+
+impl ShapeMode {
+    /// The mode a registry `mode` choice index names: `0` is "Shape Layer",
+    /// anything else is "Rasterize" — the registry's two-entry list, in its
+    /// order.
+    pub fn from_choice(index: usize) -> Self {
+        if index == 0 {
+            ShapeMode::VectorLayer
+        } else {
+            ShapeMode::Rasterize
+        }
+    }
 }
 
 /// Build the path a drag from `a` to `b` describes.
@@ -370,6 +383,65 @@ impl Tool for ShapeTool {
 
     fn is_active(&self) -> bool {
         self.anchor.is_some()
+    }
+
+    /// Every option the registry declares for a shape tool reaches the tool:
+    /// `mode` (Shape Layer / Rasterize) and `from_center` for all seven, and
+    /// the geometry each kind owns — the rounded rectangle's `radius`, the
+    /// polygon's `sides`, the star's `points` and `inner_ratio`, the line's
+    /// `width`. A geometry key on the wrong kind is unknown (the registry
+    /// never offers it there); a known key with the wrong kind of value is a
+    /// mismatch. Nothing here is a silent no-op: before this the whole set
+    /// fell through the trait default, which accepted a Choice and dropped
+    /// it and refused everything else.
+    fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        let mismatch = || {
+            Err(ToolError::OptionKindMismatch {
+                key: key.to_owned(),
+            })
+        };
+        match (key, setting, &mut self.kind) {
+            ("mode", ToolSetting::Choice(index), _) => {
+                self.mode = ShapeMode::from_choice(index);
+                Ok(())
+            }
+            ("mode", _, _) => mismatch(),
+            ("from_center", ToolSetting::Bool(v), _) => {
+                self.from_center = v;
+                Ok(())
+            }
+            ("from_center", _, _) => mismatch(),
+            ("radius", ToolSetting::Float(v), ShapeKind::RoundedRectangle { radius }) => {
+                crate::error::finite("corner radius", v)?;
+                *radius = f64::from(v.max(0.0));
+                Ok(())
+            }
+            ("radius", _, ShapeKind::RoundedRectangle { .. }) => mismatch(),
+            ("sides", ToolSetting::Int(v), ShapeKind::Polygon { sides }) => {
+                *sides = u32::try_from(v.max(3)).unwrap_or(3);
+                Ok(())
+            }
+            ("sides", _, ShapeKind::Polygon { .. }) => mismatch(),
+            ("points", ToolSetting::Int(v), ShapeKind::Star { points, .. }) => {
+                *points = u32::try_from(v.max(3)).unwrap_or(3);
+                Ok(())
+            }
+            ("inner_ratio", ToolSetting::Float(v), ShapeKind::Star { inner_ratio, .. }) => {
+                crate::error::finite("star indent", v)?;
+                *inner_ratio = f64::from(v.clamp(0.01, 1.0));
+                Ok(())
+            }
+            ("points" | "inner_ratio", _, ShapeKind::Star { .. }) => mismatch(),
+            ("width", ToolSetting::Float(v), ShapeKind::Line { width }) => {
+                crate::error::finite("line weight", v)?;
+                *width = f64::from(v.max(0.1));
+                Ok(())
+            }
+            ("width", _, ShapeKind::Line { .. }) => mismatch(),
+            _ => Err(ToolError::UnknownOption {
+                key: key.to_owned(),
+            }),
+        }
     }
 }
 

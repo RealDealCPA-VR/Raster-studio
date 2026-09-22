@@ -287,7 +287,7 @@ impl ChannelMask {
         if self.is_identity() {
             return;
         }
-        for pixel in rgba8.chunks_exact_mut(4) {
+        for pixel in rgba8.as_chunks_mut::<4>().0 {
             for (component, visible) in pixel.iter_mut().zip(self.components) {
                 if !visible {
                     *component = 0;
@@ -1516,7 +1516,12 @@ mod tests {
         }
         .apply(&mut isolated);
         assert_ne!(isolated, full, "hiding red changed nothing");
-        for (px, was) in isolated.chunks_exact(4).zip(full.chunks_exact(4)) {
+        for (px, was) in isolated
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(full.as_chunks::<4>().0)
+        {
             assert_eq!(px[0], 0, "red survived");
             assert_eq!(px[1], was[1], "green was not the channel that was hidden");
             assert_eq!(px[2], was[2], "blue was not the channel that was hidden");
@@ -1679,7 +1684,7 @@ mod tests {
         };
         let rgba = presenter.composite_fitted(&mut doc, fit).unwrap();
         assert_eq!(rgba.len(), 8 * 4, "one column of eight texels");
-        for (i, px) in rgba.chunks_exact(4).enumerate() {
+        for (i, px) in rgba.as_chunks::<4>().0.iter().enumerate() {
             assert_eq!(px[3], 255, "texel {i} lost coverage the document has");
             assert!(
                 px[0].abs_diff(200) <= 1 && px[1].abs_diff(120) <= 1 && px[2].abs_diff(40) <= 1,
@@ -1759,7 +1764,7 @@ mod tests {
         // through: rounding bias would show up here first.
         let flat = vec![119u8; 16 * 16 * 4];
         let mut flat: Vec<u8> = flat;
-        for px in flat.chunks_exact_mut(4) {
+        for px in flat.as_chunks_mut::<4>().0 {
             px[3] = 255;
         }
         let (out, w, h) = downscale_levels(&flat, 16, 16, 4).unwrap();

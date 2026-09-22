@@ -512,25 +512,13 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
         // commit-time resample that bends the interior.
 
         // ---- Image ---------------------------------------------------------
-        // An adjustment whose stored starting parameters are the identity has
-        // nothing to bake until the user has moved a control, and there is no
-        // control to move without the dialog. Rather than offer an item that
-        // silently changes no pixel, this names the route that *does* work —
-        // the adjustment layer, whose parameters the Properties panel edits.
-        // The four that are defined as changing every pixel (Invert, Threshold,
-        // Black & White, Posterize) and Gradient Map fall through and are
-        // wired; which ones those are is decided by asking `adjustments`, not
-        // by a list here that could drift from it.
-        MenuAction::ApplyAdjustment(id)
-            if adjustments::PreparedAdjustment::new(&adjustments::Adjustment::from(
-                &id.identity_kind(),
-            ))
-            .is_identity() =>
-        {
-            "This adjustment starts at its identity setting and the shell hosts \
-             no dialog to change it in; add it through Layer > New Adjustment \
-             Layer and edit it in the Properties panel"
-        }
+        // Every Image ▸ Adjustments row opens its parameter dialog now
+        // (`DialogHost::open_for_menu_action`, `ui::dialogs::AdjustmentDialog`),
+        // including the ten whose starting parameters are the identity — a
+        // dialog is exactly what they were waiting for. The confirmed
+        // parameters arrive at [`perform`]'s `ApplyAdjustment` arm through
+        // `dialog_host::take_confirmed_adjustment`; the only refusal left is
+        // the menu's own "no document / no pixel layer" gate.
         // Everything that changes the canvas *rectangle* is hosted now:
         // `ImageSize`, `CanvasSize` and `RotateCanvas(Arbitrary)` open real
         // dialogs whose confirmed specs land as one undoable step each (right-
@@ -1370,8 +1358,14 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::Filter(id) => run_filter(editor, id),
 
         // ---- Image ▸ Adjustments -------------------------------------------
+        // The parameters are the dialog's when one was just confirmed (the
+        // pick and the parameters leave `DialogHost::ui` in the same frame);
+        // otherwise the adjustment's starting parameters, which is what a
+        // click that opened no dialog — no pixel layer to preview — or a
+        // chord asked for.
         MenuAction::ApplyAdjustment(id) => {
-            let kind = id.identity_kind();
+            let kind = crate::dialog_host::take_confirmed_adjustment(id)
+                .unwrap_or_else(|| id.identity_kind());
             run_adjustment(
                 editor,
                 &adjustments::Adjustment::from(&kind),
@@ -1594,9 +1588,12 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
             "https://github.com/RealDealCPA-VR/Raster-studio/issues/new",
             "File issues at",
         ),
+        // The version is the executable's stamp (package version + short
+        // commit, set by `studio-desktop` before launch), not this library's
+        // own `CARGO_PKG_VERSION` — see `crate::version`.
         MenuAction::About => Ok(format!(
-            "Raster Studio {} — a layered raster editor",
-            env!("CARGO_PKG_VERSION")
+            "{} — a layered raster editor",
+            crate::version::about_line()
         )),
 
         // Anything else must have been refused during enablement. Reaching here
@@ -1783,9 +1780,9 @@ fn run_adjustment(
     let prepared = adjustments::PreparedAdjustment::new(adjustment);
     if prepared.is_identity() {
         return Err(format!(
-            "{label} starts at its identity setting, so applying it here would \
-             change nothing; add it as an adjustment layer and edit it in the \
-             Properties panel instead"
+            "{label} is at its identity setting, so applying it would change \
+             nothing; open it from Image > Adjustments and move a control in \
+             its dialog first"
         ));
     }
     edit_active_pixels(editor, label, |buffer, space| {
@@ -4791,7 +4788,7 @@ mod tests {
         let mut ed = {
             let png = dir.path().join("wide.png");
             let mut rgba = vec![0u8; (300 * 64 * 4) as usize];
-            for px in rgba.chunks_exact_mut(4) {
+            for px in rgba.as_chunks_mut::<4>().0 {
                 px.copy_from_slice(&[120, 40, 200, 255]);
             }
             std::fs::write(
@@ -5034,7 +5031,7 @@ mod tests {
         let mut ed = {
             let png = dir.path().join("wide.png");
             let mut rgba = vec![0u8; (300 * 64 * 4) as usize];
-            for px in rgba.chunks_exact_mut(4) {
+            for px in rgba.as_chunks_mut::<4>().0 {
                 px.copy_from_slice(&[120, 40, 200, 255]);
             }
             std::fs::write(
@@ -5753,6 +5750,290 @@ mod tests {
         assert!(worst <= 2, "invert twice moved a channel by {worst}");
     }
 
+    fn raw_input(events: Vec<egui::Event>) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        }
+    }
+
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+
+    /// The whole composite of the active document, straight-alpha RGBA8.
+    fn composite(ed: &mut Editor) -> Vec<u8> {
+        let doc = ed.active_mut().unwrap();
+        let rect = doc.canvas_rect();
+        doc.composite(rect).unwrap()
+    }
+
+    /// Open `id`'s dialog from the menu bar exactly as a click does, then run
+    /// the frames a user would: one to settle, one with `key`, through the
+    /// real `Chrome::ui`. Returns that frame's output; the caller performs
+    /// `out.menu` the way the shell does.
+    fn drive_adjustment_dialog(
+        ed: &mut Editor,
+        id: ui::menu::AdjustmentId,
+        edit: impl FnOnce(&mut ui::dialogs::AdjustmentDialog),
+        key_pressed: egui::Key,
+    ) -> ChromeOutput {
+        let mut chrome = crate::chrome::Chrome::new();
+        let menu_ctx = context(ed, chrome.workspace());
+        let intent =
+            resolve_intent(MenuAction::ApplyAdjustment(id), &menu_ctx, ed).expect("enabled");
+        let mut out = ChromeOutput::default();
+        chrome.menu_click(intent, ed, &mut out);
+        assert!(chrome.dialog_open(), "{id:?} opened no dialog");
+        assert!(out.is_empty(), "opening {id:?} produced {out:?}");
+        edit(
+            chrome
+                .dialogs_for_test()
+                .active_adjustment_dialog_for_test(),
+        );
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            let _ = chrome.ui(ctx, ed);
+        });
+        assert!(
+            chrome.dialog_open(),
+            "the dialog closed on a frame with no key"
+        );
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(raw_input(vec![key(key_pressed)]), |ctx| {
+            out = chrome.ui(ctx, ed);
+        });
+        assert!(
+            !chrome.dialog_open(),
+            "{key_pressed:?} did not close the dialog"
+        );
+        out
+    }
+
+    #[test]
+    fn every_adjustment_row_is_enabled_with_a_document_and_needs_one() {
+        // The finding: `unavailable_reason` greyed ten of the fifteen. With a
+        // pixel layer under the pointer every row resolves; with no document
+        // the menu's own gate is the one refusal left.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = with_two_layers(dir.path());
+        let menu_ctx = context(&mut ed, &Workspace::new());
+        for id in ui::menu::AdjustmentId::ALL {
+            let action = MenuAction::ApplyAdjustment(*id);
+            assert_eq!(unavailable_reason(action), None, "{id:?} is still greyed");
+            assert!(
+                resolve_intent(action, &menu_ctx, &ed).is_ok(),
+                "{id:?} does not resolve with a pixel layer active"
+            );
+        }
+        let mut empty = editor(dir.path());
+        let menu_ctx = context(&mut empty, &Workspace::new());
+        for id in ui::menu::AdjustmentId::ALL {
+            let action = MenuAction::ApplyAdjustment(*id);
+            assert!(
+                resolve_intent(action, &menu_ctx, &empty).is_err(),
+                "{id:?} resolved with no document open"
+            );
+        }
+    }
+
+    #[test]
+    fn every_adjustment_row_opens_its_dialog_from_the_menu_bar_over_two_layers() {
+        let dir = tempfile::tempdir().unwrap();
+        for id in ui::menu::AdjustmentId::ALL {
+            let mut ed = with_two_layers(dir.path());
+            let before = digest(&ed);
+            let mut chrome = crate::chrome::Chrome::new();
+            let menu_ctx = context(&mut ed, chrome.workspace());
+            let intent = resolve_intent(MenuAction::ApplyAdjustment(*id), &menu_ctx, &ed)
+                .expect("enabled above");
+            let mut out = ChromeOutput::default();
+            chrome.menu_click(intent, &ed, &mut out);
+            assert!(
+                chrome.dialog_open(),
+                "{id:?} opened no dialog from the menu bar"
+            );
+            assert!(
+                out.is_empty(),
+                "{id:?} did something besides opening: {out:?}"
+            );
+            // And the opened dialog draws, in both themes, without panicking.
+            for theme in design::Theme::ALL {
+                let ctx = egui::Context::default();
+                design::apply_theme(&ctx, *theme);
+                let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+                    let _ = chrome.ui(ctx, &mut ed);
+                });
+            }
+            assert!(chrome.dialog_open(), "{id:?} closed itself while drawing");
+            assert_eq!(digest(&ed), before, "{id:?}: opening touched the document");
+        }
+    }
+
+    #[test]
+    fn a_confirmed_brightness_contrast_dialog_bakes_one_undoable_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = with_two_layers(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let before_pixels = pixels::read_layer(ed.active().unwrap(), layer);
+        let before_composite = composite(&mut ed);
+        let depth = ed.active().unwrap().history_depth();
+
+        let out = drive_adjustment_dialog(
+            &mut ed,
+            ui::menu::AdjustmentId::BrightnessContrast,
+            |dialog| {
+                assert!(
+                    dialog.set_kind(layer_model::AdjustmentKind::BrightnessContrast {
+                        brightness: 0.5,
+                        contrast: 0.0,
+                    })
+                );
+            },
+            egui::Key::Enter,
+        );
+        assert_eq!(
+            out.menu,
+            vec![MenuAction::ApplyAdjustment(
+                ui::menu::AdjustmentId::BrightnessContrast
+            )],
+            "the confirmation did not ride the menu channel: {out:?}"
+        );
+        assert!(out.commands.is_empty() && out.dialog.is_none());
+        // The shell's loop: every menu pick is performed.
+        for action in out.menu {
+            perform(action, &mut ed).expect("the bake applies");
+        }
+        assert_ne!(
+            pixels::read_layer(ed.active().unwrap(), layer),
+            before_pixels,
+            "brightness +50 changed no layer pixel"
+        );
+        assert_ne!(
+            composite(&mut ed),
+            before_composite,
+            "brightness +50 changed no composite pixel"
+        );
+        assert_eq!(
+            ed.active().unwrap().history_depth(),
+            depth + 1,
+            "the bake is not exactly one history entry"
+        );
+        // Nothing is left parked for a later click to pick up.
+        assert_eq!(
+            crate::dialog_host::take_confirmed_adjustment(
+                ui::menu::AdjustmentId::BrightnessContrast
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn cancelling_an_adjustment_dialog_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = with_two_layers(dir.path());
+        let before = digest(&ed);
+        let depth = ed.active().unwrap().history_depth();
+        let out = drive_adjustment_dialog(
+            &mut ed,
+            ui::menu::AdjustmentId::BrightnessContrast,
+            |dialog| {
+                assert!(
+                    dialog.set_kind(layer_model::AdjustmentKind::BrightnessContrast {
+                        brightness: 0.5,
+                        contrast: 0.0,
+                    })
+                );
+            },
+            egui::Key::Escape,
+        );
+        assert!(out.menu.is_empty(), "cancel performed something: {out:?}");
+        assert!(out.commands.is_empty() && out.dialog.is_none());
+        assert_eq!(digest(&ed), before, "cancel changed the document");
+        assert_eq!(ed.active().unwrap().history_depth(), depth);
+        // A later Image ▸ Adjustments pick finds nothing parked either: it
+        // runs at the starting parameters, which for Brightness/Contrast is
+        // the identity and is refused loudly.
+        let reason = perform(
+            MenuAction::ApplyAdjustment(ui::menu::AdjustmentId::BrightnessContrast),
+            &mut ed,
+        )
+        .unwrap_err();
+        assert!(reason.contains("identity"), "{reason}");
+        assert_eq!(digest(&ed), before);
+    }
+
+    #[test]
+    fn threshold_confirmed_at_a_fifth_differs_from_four_fifths() {
+        let dir = tempfile::tempdir().unwrap();
+        let bake = |level: f32| -> (Vec<u8>, usize) {
+            let mut ed = with_two_layers(dir.path());
+            let layer = ed.active().unwrap().document.active_layer().unwrap();
+            let depth = ed.active().unwrap().history_depth();
+            let out = drive_adjustment_dialog(
+                &mut ed,
+                ui::menu::AdjustmentId::Threshold,
+                |dialog| {
+                    assert!(dialog.set_kind(layer_model::AdjustmentKind::Threshold { level }));
+                },
+                egui::Key::Enter,
+            );
+            for action in out.menu {
+                perform(action, &mut ed).expect("the bake applies");
+            }
+            (
+                pixels::read_layer(ed.active().unwrap(), layer),
+                ed.active().unwrap().history_depth() - depth,
+            )
+        };
+        let (low, low_steps) = bake(0.2);
+        let (high, high_steps) = bake(0.8);
+        assert_ne!(low, high, "Threshold at 0.2 and 0.8 baked identical pixels");
+        assert_eq!((low_steps, high_steps), (1, 1));
+        // And the two are real thresholds: every opaque pixel is black or white.
+        for (name, image) in [("0.2", &low), ("0.8", &high)] {
+            for px in image.as_chunks::<4>().0.iter().filter(|px| px[3] > 0) {
+                assert!(
+                    (px[0] == 0 && px[1] == 0 && px[2] == 0)
+                        || (px[0] == 255 && px[1] == 255 && px[2] == 255),
+                    "Threshold {name} left {px:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_identity_adjustment_reaching_perform_is_refused_loudly() {
+        // A pick with no dialog behind it — no parameters parked — runs the
+        // adjustment at its start. For the ten that start at the identity that
+        // is a refusal naming the dialog, never a silent no-op; for the five
+        // that never are, it applies.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = with_two_layers(dir.path());
+        let reason = perform(
+            MenuAction::ApplyAdjustment(ui::menu::AdjustmentId::Curves),
+            &mut ed,
+        )
+        .unwrap_err();
+        assert!(reason.contains("Image > Adjustments"), "{reason}");
+        assert!(invoke(
+            &mut ed,
+            MenuAction::ApplyAdjustment(ui::menu::AdjustmentId::Posterize)
+        )
+        .unwrap());
+    }
+
     #[test]
     fn no_enabled_menu_item_resolves_to_a_no_op() {
         // The bar this whole wave is measured against: an item that is *not*
@@ -6016,8 +6297,10 @@ mod tests {
         );
         // The rows whose whole point is a question: with a document open every
         // one of them has to open its dialog from the menu bar, not run at its
-        // defaults and not refuse.
-        for asked in [
+        // defaults and not refuse. Every Image ▸ Adjustments row is one of
+        // them now — the ten that used to be greyed and the five that used to
+        // bake their defaults on the click.
+        let mut asked = vec![
             MenuAction::ImageSize,
             MenuAction::CanvasSize,
             MenuAction::RotateCanvas(ui::menu::CanvasRotation::Arbitrary),
@@ -6030,7 +6313,14 @@ mod tests {
             MenuAction::FillDialog,
             MenuAction::StrokeDialog,
             MenuAction::NewDocument,
-        ] {
+        ];
+        asked.extend(
+            ui::menu::AdjustmentId::ALL
+                .iter()
+                .copied()
+                .map(MenuAction::ApplyAdjustment),
+        );
+        for asked in asked {
             assert!(
                 opened.contains(&asked),
                 "{asked:?} did not open its dialog from the menu bar; the rows that did: {opened:?}"

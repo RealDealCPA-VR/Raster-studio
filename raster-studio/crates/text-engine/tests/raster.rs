@@ -530,7 +530,7 @@ fn each_style_run_is_filled_with_its_own_colour() {
 
     let mut black = 0;
     let mut red = 0;
-    for pixel in image.data.chunks_exact(4) {
+    for pixel in image.data.as_chunks::<4>().0 {
         if pixel[3] < 0.9 {
             continue;
         }
@@ -544,7 +544,7 @@ fn each_style_run_is_filled_with_its_own_colour() {
     assert!(red > 0, "the B must be filled red");
 
     // Alpha never exceeds one, and premultiplied channels never exceed alpha.
-    for pixel in image.data.chunks_exact(4) {
+    for pixel in image.data.as_chunks::<4>().0 {
         assert!(pixel[3] <= 1.0 + 1e-6);
         for channel in &pixel[..3] {
             assert!(*channel <= pixel[3] + 1e-6);
@@ -563,7 +563,7 @@ fn overlapping_glyphs_of_one_colour_do_not_double_darken() {
     let image = render_linear(&mut library, &mut cache, &shaped);
 
     assert!(!image.is_empty());
-    for pixel in image.data.chunks_exact(4) {
+    for pixel in image.data.as_chunks::<4>().0 {
         assert!(
             pixel[3] <= 1.0 + 1e-6,
             "coverage must saturate at one, got {}",

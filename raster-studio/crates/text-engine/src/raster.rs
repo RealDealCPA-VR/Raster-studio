@@ -549,7 +549,13 @@ impl LinearImage {
         {
             return;
         }
-        for (dst, src) in self.data.chunks_exact_mut(4).zip(src.data.chunks_exact(4)) {
+        for (dst, src) in self
+            .data
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(src.data.as_chunks::<4>().0)
+        {
             let inv = 1.0 - src[3];
             for channel in 0..4 {
                 dst[channel] = src[channel] + dst[channel] * inv;
@@ -566,7 +572,13 @@ impl LinearImage {
 #[must_use]
 pub fn fill_linear(mask: &CoverageMask, color: [f32; 4]) -> LinearImage {
     let mut out = LinearImage::new(mask.origin_x, mask.origin_y, mask.width, mask.height);
-    for (pixel, &value) in out.data.chunks_exact_mut(4).zip(mask.data.iter()) {
+    for (pixel, &value) in out
+        .data
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(mask.data.iter())
+    {
         let alpha = f32::from(value) / 255.0 * color[3];
         pixel[0] = color[0] * alpha;
         pixel[1] = color[1] * alpha;
@@ -686,7 +698,9 @@ fn convert(image: &SwashImage) -> Option<GlyphImage> {
             }
             image
                 .data
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .take(expected)
                 .map(|p| p[3])
                 .collect()
@@ -697,7 +711,9 @@ fn convert(image: &SwashImage) -> Option<GlyphImage> {
             }
             image
                 .data
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .take(expected)
                 .map(|p| {
                     let sum = u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2]);

@@ -6,12 +6,25 @@
 //! opens each file as a document.
 //!
 //! ```text
-//! studio-desktop [FILE ...]
+//! studio-desktop [--shot OUT.png] [FILE ...]
 //! ```
 //!
 //! `FILE` is an image (`png`, `jpg`, `webp`, `tif`, `gif`, `bmp`, …) or a
 //! `.rstudio` project package. With no arguments the editor starts with no
 //! document open — File ▸ New, File ▸ Open, or a drag-and-drop fills it.
+//!
+//! # Windows: a GUI program that still talks to its terminal
+//!
+//! On Windows the executable is linked with the `windows` subsystem, so
+//! double-clicking it (or launching it from the Start menu) opens the editor
+//! and nothing else — no console window behind it. A GUI-subsystem process
+//! starts with no console at all, which would also silence the log a
+//! terminal user expects from `studio-desktop --shot out.png`. So the first
+//! thing `main` does on Windows is attach to the parent's console when one
+//! exists ([`console::attach_to_parent`]): launched from a terminal, tracing
+//! and the panic message print there as before; double-clicked, the attach
+//! finds no console and the process carries on silently. The test harness is
+//! a console program (`cfg(test)`), so `cargo test` output is unaffected.
 //!
 //! # Exit code
 //!
@@ -19,20 +32,28 @@
 //! *and* returned here, so a run from a terminal or a CI script still sees a
 //! non-zero exit rather than a silent one.
 
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
+
 use std::path::PathBuf;
 
 use anyhow::Result;
 
 fn main() -> Result<()> {
+    #[cfg(windows)]
+    console::attach_to_parent();
+
+    // The shell's Help ▸ About and the startup line report *this* build's
+    // stamp: the package version plus the short commit `build.rs` recorded.
+    app_shell::set_version_stamp(build_version());
     telemetry::init_tracing();
-    tracing::info!("Raster Studio {}", env!("CARGO_PKG_VERSION"));
+    tracing::info!("{}", app_shell::about_line());
 
     // A panic writes a crash bundle into the scratch dir (next to whatever
     // the periodic autosave already saved) before the process dies, so the
     // next launch's recovery scan finds both the work and the why.
     telemetry::install_panic_hook(
         app_shell::AppPaths::discover().default_scratch_dir(),
-        env!("CARGO_PKG_VERSION"),
+        env!("RASTER_VERSION_STAMP"),
     );
 
     // `--shot <path>` captures a literal GUI screenshot of the first frame to a
@@ -54,6 +75,18 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// What `build.rs` recorded about this build: the package version, and the
+/// short git commit when the build machine had one (`None` otherwise — a
+/// tarball or offline build). This is the one place the two compile-time
+/// stamps are read; everything downstream goes through `app_shell::version`.
+fn build_version() -> app_shell::Version {
+    let git = env!("RASTER_GIT_COMMIT");
+    app_shell::Version {
+        semver: env!("CARGO_PKG_VERSION"),
+        git: (!git.is_empty()).then_some(git),
+    }
+}
+
 /// Split a leading `--shot <path>` pair off the argument list, if present.
 fn take_shot_flag(mut args: Vec<std::ffi::OsString>) -> (Option<PathBuf>, Vec<std::ffi::OsString>) {
     if let Some(first) = args.first() {
@@ -65,17 +98,6 @@ fn take_shot_flag(mut args: Vec<std::ffi::OsString>) -> (Option<PathBuf>, Vec<st
         }
     }
     (None, args)
-}
-
-/// The full product name and the build version stamp.
-///
-/// The stamp is [`env!("RASTER_VERSION_STAMP")`] set by `build.rs` — the plain
-/// package version, or `version+git<short-hash>` when git was available at
-/// build time — so a user or a bug report can say exactly which build they are
-/// on. The `+git` suffix must not leak into a filename or a path; it is a
-/// rendezvous between the About text and the log only.
-pub fn about() -> String {
-    format!("Raster Studio {}", env!("RASTER_VERSION_STAMP"))
 }
 
 /// Turn the command line into a list of paths to open.
@@ -97,28 +119,118 @@ fn collect_files(args: impl Iterator<Item = std::ffi::OsString>) -> Vec<PathBuf>
         .collect()
 }
 
+/// Re-attach a GUI-subsystem process to the console it was launched from.
+#[cfg(windows)]
+mod console {
+    use windows_sys::Win32::Foundation::{GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::Console::{
+        AttachConsole, GetStdHandle, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE,
+        STD_OUTPUT_HANDLE,
+    };
+
+    /// Attach to the parent process's console, if it has one, and point the
+    /// standard output and error handles at it when they are not already
+    /// set — a parent that redirected them (`cargo run`, `2> log.txt`, a CI
+    /// step) passed valid handles in, and those are left alone.
+    ///
+    /// Without a console parent (double-click, Start menu) this is a no-op:
+    /// `AttachConsole` fails and the process keeps running with no console,
+    /// which is the whole point of the `windows` subsystem. Rust's `stdout`
+    /// and `stderr` treat a missing handle as a sink, so logging without a
+    /// console neither panics nor blocks.
+    pub fn attach_to_parent() {
+        // SAFETY: plain Win32 calls with valid arguments. `AttachConsole` and
+        // `SetStdHandle` change process-wide console state only; this runs
+        // first thing in `main`, before any other thread exists, and the
+        // CONOUT$ handle is intentionally leaked for the life of the process.
+        unsafe {
+            if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+                return;
+            }
+            for which in [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+                let current = GetStdHandle(which);
+                if !current.is_null() && current != INVALID_HANDLE_VALUE {
+                    continue;
+                }
+                let name: Vec<u16> = "CONOUT$".encode_utf16().chain(std::iter::once(0)).collect();
+                let handle = CreateFileW(
+                    name.as_ptr(),
+                    GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL,
+                    std::ptr::null_mut(),
+                );
+                if handle != INVALID_HANDLE_VALUE {
+                    SetStdHandle(which, handle);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::ffi::OsString;
 
+    /// The version stamp the executable hands the shell is the package
+    /// version and, when git was available at build time, a short hex hash.
     #[test]
-    fn the_about_line_names_the_product_and_the_version() {
-        let line = about();
-        assert!(line.starts_with("Raster Studio "), "{line}");
-        // A stamp is either the bare version or version+git<hash> — never empty.
-        let rest = line.trim_start_matches("Raster Studio ");
-        assert!(!rest.is_empty(), "{line}");
-        assert!(rest.starts_with("0.1.0"), "unexpected version: {line}");
-        // The +git suffix, when present, is `git` + 7 hex chars.
-        if let Some(suffix) = rest.strip_prefix("0.1.0+") {
-            assert!(suffix.starts_with("git"), "{line}");
-            let hash = suffix.trim_start_matches("git");
-            assert!(
-                !hash.is_empty() && hash.chars().all(|c| c.is_ascii_hexdigit()),
-                "{line}"
+    fn the_build_version_is_the_package_version_and_a_hex_commit() {
+        let v = build_version();
+        assert_eq!(v.semver, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            v.semver, "0.1.0",
+            "the version the installer scripts expect"
+        );
+        if let Some(git) = v.git {
+            assert!(git.len() >= 7, "a short hash is at least 7 chars: {git}");
+            assert!(git.chars().all(|c| c.is_ascii_hexdigit()), "{git}");
+            assert_eq!(
+                env!("RASTER_VERSION_STAMP"),
+                format!("{}+git{git}", v.semver),
+                "the two stamps build.rs writes agree"
             );
+        } else {
+            assert_eq!(env!("RASTER_VERSION_STAMP"), v.semver);
         }
+    }
+
+    /// Help ▸ About, driven through the real menu bridge, names the
+    /// *executable's* build — `Raster Studio 0.1.0 (<short git>)` — not the
+    /// shell library's own package version.
+    #[test]
+    fn help_about_names_the_executable_version_and_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = app_shell::Editor::new(
+            app_shell::AppPaths::rooted(dir.path()),
+            Box::new(app_shell::ScriptedDialogs::new()),
+        );
+        let stamped = app_shell::set_version_stamp(build_version());
+        assert_eq!(stamped, build_version(), "the stamp is this build's");
+
+        let line = app_shell::menu_bridge::perform(ui::MenuAction::About, &mut editor)
+            .expect("About is informational and never refuses");
+        let expected_version = match build_version().git {
+            Some(git) => format!("Raster Studio {} ({git})", env!("CARGO_PKG_VERSION")),
+            None => format!("Raster Studio {}", env!("CARGO_PKG_VERSION")),
+        };
+        assert_eq!(
+            line,
+            format!("{expected_version} — a layered raster editor")
+        );
+        assert_eq!(
+            editor.status(),
+            Some(line.as_str()),
+            "About lands on the status line, where the user reads it"
+        );
+        // Quoted in the report: the exact line the menu produced.
+        println!("Help ▸ About: {line}");
     }
 
     #[test]

@@ -67,19 +67,66 @@ const MAX_IMPORT_BYTES: u64 = 2 << 30;
 /// Spawn a worker that reads (and, for a flat image, decodes) `path`,
 /// reporting one [`ImportOutcome`] tagged with `generation`. The receiver is
 /// the only channel back; dropping it simply discards the result.
+///
+/// When the OS refuses the thread (out of handles, out of address space —
+/// rare, but a live process can hit it), no worker runs and the *failure*
+/// arrives on the receiver instead, shaped like the import it would have
+/// been: the caller's poll reports it through the same route as a decode
+/// error, and the interaction thread never panics over it.
 pub fn spawn_import(path: PathBuf, generation: u64) -> Receiver<ImportOutcome> {
+    spawn_import_with(path, generation, |name, body| {
+        std::thread::Builder::new()
+            .name(name)
+            .spawn(body)
+            .map(|_handle| ())
+    })
+}
+
+/// A way to start a worker: given a thread name and its body, either run the
+/// body on another thread or say why not. Injected so the refusal route can
+/// be exercised without exhausting the machine's threads.
+pub type Spawner = fn(String, Box<dyn FnOnce() + Send>) -> std::io::Result<()>;
+
+/// [`spawn_import`] with the thread spawner injected.
+pub fn spawn_import_with(
+    path: PathBuf,
+    generation: u64,
+    spawn: Spawner,
+) -> Receiver<ImportOutcome> {
     let (tx, rx) = channel();
-    std::thread::Builder::new()
-        .name(format!("import:{}", path.display()))
-        .spawn(move || {
-            let outcome = run(path, generation);
-            // A send fails only when the receiver is gone — the user quit or
-            // the job was superseded. That is not an error; the result is
-            // simply not needed any more.
-            let _ = tx.send(outcome);
-        })
-        .expect("spawning the import worker cannot fail on a live process");
+    let name = format!("import:{}", path.display());
+    let worker_path = path.clone();
+    let worker_tx = tx.clone();
+    let body: Box<dyn FnOnce() + Send> = Box::new(move || {
+        let outcome = run(worker_path, generation);
+        // A send fails only when the receiver is gone — the user quit or
+        // the job was superseded. That is not an error; the result is
+        // simply not needed any more.
+        let _ = worker_tx.send(outcome);
+    });
+    if let Err(e) = spawn(name, body) {
+        let reason = format!("could not start the import worker: {e}");
+        let _ = tx.send(failed_outcome(path, generation, reason));
+    }
     rx
+}
+
+/// The outcome an import that never ran reports: the same variant a real
+/// worker would have produced for `path`, carrying `reason` as its error.
+fn failed_outcome(path: PathBuf, generation: u64, reason: String) -> ImportOutcome {
+    if crate::import::looks_like_psd(&path) {
+        ImportOutcome::Psd {
+            path,
+            generation,
+            bytes: Err(reason),
+        }
+    } else {
+        ImportOutcome::Image {
+            path,
+            generation,
+            decoded: Err(reason),
+        }
+    }
 }
 
 /// The worker's body: read, and decode what a flat image decodes.
@@ -228,6 +275,42 @@ mod tests {
                 assert!(e.contains("more than the"), "{e}");
             }
             _ => panic!("expected an image outcome"),
+        }
+    }
+
+    #[test]
+    fn a_refused_thread_is_reported_on_the_receiver_not_panicked() {
+        fn refuse(_name: String, _body: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "no more threads",
+            ))
+        }
+        let rx = spawn_import_with(PathBuf::from("photo.png"), 4, refuse);
+        match rx.recv().expect("the refusal arrives on the receiver") {
+            ImportOutcome::Image {
+                path,
+                generation,
+                decoded,
+            } => {
+                assert_eq!(path, PathBuf::from("photo.png"));
+                assert_eq!(generation, 4);
+                let e = decoded.expect_err("an import that never ran is a failure");
+                assert!(e.contains("import worker"), "{e}");
+                assert!(e.contains("no more threads"), "{e}");
+            }
+            _ => panic!("expected an image outcome"),
+        }
+        // A .psd that never ran fails in the .psd shape, so the poller's
+        // existing failure route applies unchanged. (`looks_like_psd` goes by
+        // content, so the file has to exist and open with the signature.)
+        let dir = tempfile::tempdir().unwrap();
+        let psd = dir.path().join("layers.psd");
+        std::fs::write(&psd, b"8BPS\0\x01 not a whole document").unwrap();
+        let rx = spawn_import_with(psd, 4, refuse);
+        match rx.recv().unwrap() {
+            ImportOutcome::Psd { bytes, .. } => assert!(bytes.is_err()),
+            _ => panic!("expected a psd outcome"),
         }
     }
 

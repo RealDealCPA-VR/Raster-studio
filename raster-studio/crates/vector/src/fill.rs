@@ -233,7 +233,7 @@ pub fn fill_polylines(polys: &[Polyline], opts: &FillOptions) -> Result<Coverage
                     }
                 }
                 FillRule::EvenOdd => {
-                    for pair in crossings.chunks_exact(2) {
+                    for pair in crossings.as_chunks::<2>().0 {
                         add_span(&mut acc, origin_x, pair[0].0, pair[1].0, weight);
                     }
                 }

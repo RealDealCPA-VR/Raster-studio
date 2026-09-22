@@ -1,6 +1,7 @@
 //! The Phase-0 canvas renderer: draws one image texture as a fullscreen quad
-//! with a pan/zoom camera, over a transparency checkerboard that shows through
-//! both outside the image bounds and behind transparent pixels inside them.
+//! with a pan/zoom camera. Outside the image bounds the quad paints the flat
+//! pasteboard (the host's `BackgroundCanvas` token, see [`Canvas::set_backdrop`]);
+//! inside them a transparency checkerboard shows through transparent pixels.
 
 use bytemuck::{Pod, Zeroable};
 
@@ -14,6 +15,8 @@ use crate::texture::GpuTexture;
 struct CameraUniform {
     m0: [f32; 4],
     m1: [f32; 4],
+    /// The pasteboard, linear light, `[r, g, b, unused]`.
+    m2: [f32; 4],
 }
 
 /// The backdrop a canvas starts with, as an 8-bit sRGB display value.
@@ -24,6 +27,12 @@ struct CameraUniform {
 /// calling it when the theme changes; `app-shell` hands it
 /// `design::ColorRole::BackgroundCanvas`, which is why the surround around an
 /// open image follows light and dark like every other surface.
+///
+/// The same value reaches the pixels by two routes: the pass clears to it (the
+/// empty-window path) and `quad.wgsl` paints it outside the document (the
+/// open-document path, through the pasteboard row of the camera uniform). The
+/// shader used to carry its own 0x3C literal for the second route, which is
+/// how the pasteboard came out lighter than the panels around it.
 pub const DEFAULT_BACKDROP_SRGB: [u8; 3] = [26, 26, 26];
 
 /// One 8-bit sRGB channel as a linear-light value in `0.0..=1.0`.
@@ -224,11 +233,13 @@ impl Canvas {
         })
     }
 
-    /// Set the colour the canvas clears to, as an 8-bit sRGB display value.
+    /// Set the colour the canvas clears to and paints outside the document —
+    /// the pasteboard — as an 8-bit sRGB display value.
     ///
-    /// This is the area around and behind the image. It is a parameter rather
-    /// than a constant so the backdrop can come from the host's design tokens
-    /// and follow its theme; see [`DEFAULT_BACKDROP_SRGB`].
+    /// It is a parameter rather than a constant so the backdrop can come from
+    /// the host's design tokens and follow its theme; see
+    /// [`DEFAULT_BACKDROP_SRGB`]. The quad reads it from the camera uniform, so
+    /// it takes effect at the next [`Canvas::update_camera`].
     pub fn set_backdrop(&mut self, srgb: [u8; 3]) {
         self.backdrop = srgb;
     }
@@ -269,13 +280,34 @@ impl Canvas {
     ///
     /// Also carries the target's color-space flag in `m1[2]`, which the camera
     /// itself knows nothing about: 1.0 asks `quad.wgsl` to apply the sRGB encode
-    /// because the target format will not.
+    /// because the target format will not. `m2` carries the pasteboard in
+    /// linear light — the shader shades linear and encodes (or lets the
+    /// hardware encode) on the way out, so the same row is right for both
+    /// target encodings. Call after [`Canvas::set_backdrop`] for the new
+    /// backdrop to reach the quad; a host that uploads the camera every frame
+    /// gets that for free.
     pub fn update_camera(&self, gpu: &GpuContext, camera: &Camera) {
         let (m0, mut m1) = camera.clip_to_uv();
         m1[2] = if self.format.is_srgb() { 0.0 } else { 1.0 };
-        let u = CameraUniform { m0, m1 };
+        let u = CameraUniform {
+            m0,
+            m1,
+            m2: self.pasteboard_linear(),
+        };
         gpu.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&u));
+    }
+
+    /// The backdrop as the pasteboard row of the camera uniform: linear light,
+    /// opaque (so straight and premultiplied coincide), fourth lane unused.
+    fn pasteboard_linear(&self) -> [f32; 4] {
+        let [r, g, b] = self.backdrop;
+        [
+            srgb_to_linear(r) as f32,
+            srgb_to_linear(g) as f32,
+            srgb_to_linear(b) as f32,
+            0.0,
+        ]
     }
 
     /// Record a render pass drawing the quad into `target`.

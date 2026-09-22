@@ -129,7 +129,7 @@ pub(crate) fn working_space_pixels(
         });
     }
     let mut converted = image.rgba8.clone();
-    for px in converted.chunks_exact_mut(4) {
+    for px in converted.as_chunks_mut::<4>().0 {
         let rgb = [
             px[0] as f32 / 255.0,
             px[1] as f32 / 255.0,
@@ -300,7 +300,7 @@ pub fn place_source_fit(
     // copy. Alpha is color-agnostic and rides unchanged.
     let mut converted = image.rgba8.clone();
     if image.color_space != *working {
-        for px in converted.chunks_exact_mut(4) {
+        for px in converted.as_chunks_mut::<4>().0 {
             let rgb = [
                 px[0] as f32 / 255.0,
                 px[1] as f32 / 255.0,

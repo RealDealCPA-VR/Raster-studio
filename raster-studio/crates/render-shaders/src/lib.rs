@@ -54,10 +54,6 @@ pub const CHECKER_LIGHT_SRGB_U8: u8 = 191;
 /// (sRGB 0.60).
 pub const CHECKER_DARK_SRGB_U8: u8 = 153;
 
-/// The flat pasteboard outside the document, as it appears in an 8-bit sRGB
-/// framebuffer (sRGB 0x3C — a neutral grey just above the dark panels).
-pub const PASTEBOARD_SRGB_U8: u8 = 60;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,10 +73,6 @@ mod tests {
             QUAD_WGSL.contains("const CHECKER_CELL_PX: f32 = 8.0;"),
             "quad.wgsl cell size no longer matches CHECKER_CELL_PX = {CHECKER_CELL_PX}"
         );
-        assert!(
-            QUAD_WGSL.contains("const PASTEBOARD: f32 = 0.045031;"),
-            "quad.wgsl pasteboard grey no longer matches PASTEBOARD_SRGB_U8 = {PASTEBOARD_SRGB_U8}"
-        );
         // sRGB 0.60 and 0.75 pre-linearized; see the sRGB EOTF.
         assert!(
             QUAD_WGSL.contains("const CHECKER_DARK: f32 = 0.318546;"),
@@ -89,6 +81,28 @@ mod tests {
         assert!(
             QUAD_WGSL.contains("const CHECKER_LIGHT: f32 = 0.522527;"),
             "quad.wgsl light cell is no longer linearized sRGB 0.75"
+        );
+    }
+
+    /// The pasteboard outside the document is a uniform the host fills from its
+    /// theme, never a literal in the shader. The literal it replaced (sRGB
+    /// 0x3C) ignored the `BackgroundCanvas` token and sat *above* the dark
+    /// panels — the inverse of Photopea. Behaviour is pinned by `render`'s
+    /// `the_pasteboard_is_the_colour_the_host_passes_in`.
+    #[test]
+    fn pasteboard_is_a_uniform_not_a_literal() {
+        let code = strip_line_comments(QUAD_WGSL);
+        assert!(
+            !code.contains("PASTEBOARD"),
+            "quad.wgsl grew a pasteboard literal again"
+        );
+        assert!(
+            code.contains("m2: vec4<f32>"),
+            "quad.wgsl's Camera uniform lost its pasteboard row"
+        );
+        assert!(
+            code.contains("camera.m2.rgb"),
+            "quad.wgsl does not read the pasteboard from the uniform"
         );
     }
 

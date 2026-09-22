@@ -117,6 +117,7 @@ pub mod recent;
 pub mod session;
 pub mod shell;
 pub mod tool_input;
+pub mod version;
 
 pub use action::{Action, Category, ToolKey};
 pub use chrome::{Chrome, ChromeOutput, Rebind, ShortcutRow};
@@ -137,6 +138,7 @@ pub use recent::{RecentFiles, MAX_RECENT_FILES};
 pub use session::{SessionMarker, SessionRecord};
 pub use shell::Shell;
 pub use tool_input::{PointerOutcome, Refusal, ToolPointer};
+pub use version::{about_line, set_version_stamp, version, Version};
 
 use std::path::PathBuf;
 

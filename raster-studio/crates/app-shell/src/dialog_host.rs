@@ -27,13 +27,59 @@
 //!   document state, so closing one loses nothing but the edits the user
 //!   chose to lose.
 
+use std::cell::RefCell;
+
 use crate::chrome::ChromeOutput;
 use tools::ToolId;
 use ui::dialogs::{
-    ArbitraryRotationDialog, BrushEditorDialog, CanvasSizeDialog, ColorPickerDialog, DialogAction,
-    DialogOutcome, ExportAsDialog, FilterDialog, GradientEditorDialog, ImageSizeDialog,
-    LayerStyleDialog, NewDocumentDialog, PreferencesDialog, ScreenSampler,
+    AdjustmentDialog, AdjustmentInvocation, ArbitraryRotationDialog, BrushEditorDialog,
+    CanvasSizeDialog, ColorPickerDialog, DialogAction, DialogOutcome, ExportAsDialog, FilterDialog,
+    GradientEditorDialog, ImageSizeDialog, LayerStyleDialog, NewDocumentDialog, PreferencesDialog,
+    ScreenSampler,
 };
+use ui::menu::AdjustmentId;
+
+thread_local! {
+    /// The parameters the Adjustments dialog confirmed, waiting for the
+    /// [`ui::menu::MenuAction::ApplyAdjustment`] pick that rides
+    /// [`ChromeOutput::menu`] out of the same frame.
+    ///
+    /// The menu action carries only the adjustment's *id* — it is the menu's
+    /// vocabulary, and a menu row has no parameters — while the bake itself
+    /// needs `&mut Editor`, which only [`crate::menu_bridge::perform`] holds.
+    /// The confirmed parameters are therefore parked here by
+    /// [`DialogHost::ui`] and taken by `perform` when it reaches the arm, on
+    /// the same thread in the same frame. Thread-local rather than global so
+    /// two windows' worth of tests cannot hand each other their settings, and
+    /// keyed by id so a stale entry can never be applied as another
+    /// adjustment. `perform` with nothing parked runs the adjustment at its
+    /// starting parameters, which is what a keyboard chord with no dialog
+    /// asked for.
+    static CONFIRMED_ADJUSTMENT: RefCell<Option<AdjustmentInvocation>> = const { RefCell::new(None) };
+}
+
+/// Park the parameters an Adjustments dialog confirmed for the `perform` arm
+/// that applies them.
+fn stage_confirmed_adjustment(invocation: AdjustmentInvocation) {
+    CONFIRMED_ADJUSTMENT.with(|slot| *slot.borrow_mut() = Some(invocation));
+}
+
+/// The parameters a dialog confirmed for `id`, if one did since the last take.
+///
+/// Consumed on read, so a confirmation is applied exactly once. A parked
+/// invocation for *another* id is left in place: it belongs to a pick that
+/// has not been performed yet, and answering `None` here means the caller
+/// runs `id` at its own starting parameters rather than somebody else's.
+pub(crate) fn take_confirmed_adjustment(id: AdjustmentId) -> Option<layer_model::AdjustmentKind> {
+    CONFIRMED_ADJUSTMENT.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.as_ref().is_some_and(|parked| parked.id == id) {
+            slot.take().map(|parked| parked.kind)
+        } else {
+            None
+        }
+    })
+}
 
 /// A dialog that is open, holding its live state.
 ///
@@ -66,6 +112,8 @@ pub enum ActiveDialog {
     /// Layer ▸ Remove Color Fringe… — the edge colour cleanup dialog
     /// (card 062).
     Defringe(Box<ui::dialogs::defringe::DefringeDialog>),
+    /// Image ▸ Adjustments ▸ <adjustment>… — one dialog for all fifteen.
+    Adjustment(Box<AdjustmentDialog>),
 }
 
 impl ActiveDialog {
@@ -97,6 +145,7 @@ impl ActiveDialog {
             Self::Stroke(dialog) => dialog.show(ctx),
             Self::RefineMask(dialog) => dialog.show(ctx),
             Self::Defringe(dialog) => dialog.show(ctx),
+            Self::Adjustment(dialog) => dialog.show(ctx, sampler),
         }
     }
 }
@@ -227,6 +276,19 @@ impl DialogHost {
             // with no schema (none today — the catalogue is checked against
             // the menu in both directions) falls through to the bridge.
             ui::menu::MenuAction::Filter(id) => match filter_dialog_for(editor, *id) {
+                Some(dialog) => {
+                    self.open(dialog);
+                    true
+                }
+                None => false,
+            },
+            // Image ▸ Adjustments ▸ <adjustment>… opens the parameter dialog
+            // over the active pixel layer, for all fifteen — the ten that used
+            // to be greyed for want of exactly this, and the five that used
+            // to bake their defaults on the click. With no pixel layer to
+            // preview it falls through to the bridge, whose message names the
+            // reason.
+            ui::menu::MenuAction::ApplyAdjustment(id) => match adjustment_dialog(editor, *id) {
                 Some(dialog) => {
                     self.open(dialog);
                     true
@@ -410,6 +472,15 @@ impl DialogHost {
         }
     }
 
+    /// The open Adjustments dialog, for tests that drive its parameters.
+    #[cfg(test)]
+    pub(crate) fn active_adjustment_dialog_for_test(&mut self) -> &mut AdjustmentDialog {
+        match self.active_for_test() {
+            ActiveDialog::Adjustment(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the adjustment dialog"),
+        }
+    }
+
     /// Swap the Export As dialog's placeholder preview for a real composite.
     ///
     /// Opening the dialog happens from a harvest that holds only `&Editor`, so
@@ -451,6 +522,26 @@ impl DialogHost {
         let Some(active) = self.active.as_mut() else {
             return;
         };
+        // The Adjustments dialog is applied through the menu's own route, not
+        // through its `DialogAction`: the confirmed parameters are parked for
+        // `menu_bridge::perform`, and the pick that reaches that arm rides
+        // `out.menu` like the click used to. So the confirmed value travels
+        // the road Image ▸ Adjustments already had, with the dialog's numbers
+        // in place of the defaults, and lands as the same single undo step.
+        if let ActiveDialog::Adjustment(dialog) = active {
+            match dialog.show(ctx, sampler) {
+                DialogOutcome::Open => {}
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(_) => {
+                    let invocation = dialog.invocation();
+                    let id = invocation.id;
+                    stage_confirmed_adjustment(invocation);
+                    out.menu.push(ui::menu::MenuAction::ApplyAdjustment(id));
+                    self.active = None;
+                }
+            }
+            return;
+        }
         match active.show(ctx, sampler) {
             DialogOutcome::Open => {}
             DialogOutcome::Cancelled => {
@@ -633,6 +724,22 @@ fn filter_dialog_for(editor: &crate::Editor, id: ui::menu::FilterId) -> Option<A
     let source = crate::menu_bridge::filter_source(editor)?;
     Some(ActiveDialog::Filter(Box::new(FilterDialog::new(
         spec, source,
+    ))))
+}
+
+/// An [`AdjustmentDialog`] over the active pixel layer, previewing in the
+/// document's colour space.
+///
+/// Gated the way [`crate::menu_bridge::perform`]'s adjustment arm is — the
+/// active layer must own pixels — so the dialog never opens over a layer its
+/// confirmation could not edit. The preview source is the same buffer the
+/// filter dialogs preview against; the dialog bounds it itself.
+fn adjustment_dialog(editor: &crate::Editor, id: AdjustmentId) -> Option<ActiveDialog> {
+    pixel_layer_available(editor)?;
+    let source = crate::menu_bridge::filter_source(editor)?;
+    let space = editor.active()?.document.meta.color_space.clone();
+    Some(ActiveDialog::Adjustment(Box::new(AdjustmentDialog::new(
+        id, source, space,
     ))))
 }
 
@@ -849,6 +956,188 @@ mod tests {
         }
     }
 
+    fn raw_input(events: Vec<egui::Event>) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        }
+    }
+
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+
+    /// One document with two pixel layers, the topmost active — the fixture
+    /// the menu-bridge gates use.
+    fn two_layers(dir: &std::path::Path) -> Editor {
+        let p = png(dir, "two.png");
+        let mut ed = editor(&dir.join("config"));
+        ed.open_path(&p).unwrap();
+        let second = layer_model::Layer::raster("Second");
+        let id = second.id;
+        ed.apply_command(editor_core::Command::create_layer(second));
+        ed.set_active_layer(id);
+        ed
+    }
+
+    #[test]
+    fn levels_opens_its_dialog_from_the_menu_action_and_every_adjustment_does() {
+        // The finding: ten of the fifteen Image ▸ Adjustments rows were
+        // greyed because no dialog existed, and the other five ran at their
+        // defaults. Every one opens a dialog now, and opening moves no
+        // history.
+        let dir = tempfile::tempdir().unwrap();
+        let ed = two_layers(dir.path());
+        let history = history_len(&ed);
+        let mut host = DialogHost::default();
+        assert!(host.open_for_menu_action(
+            &ui::menu::MenuAction::ApplyAdjustment(AdjustmentId::Levels),
+            &ed
+        ));
+        assert!(host.is_open(), "Levels did not open a dialog");
+        assert_eq!(
+            host.active_adjustment_dialog_for_test().id(),
+            AdjustmentId::Levels
+        );
+        assert!(
+            host.active_adjustment_dialog_for_test()
+                .histogram()
+                .is_some(),
+            "Levels opened without its histogram"
+        );
+        for id in AdjustmentId::ALL {
+            host.close();
+            assert!(
+                host.open_for_menu_action(&ui::menu::MenuAction::ApplyAdjustment(*id), &ed),
+                "{id:?} opened no dialog"
+            );
+            assert_eq!(host.active_adjustment_dialog_for_test().id(), *id);
+            // The preview source is the layer, bounded: an 8x8 probe stays 8x8.
+            assert_eq!(
+                host.active_adjustment_dialog_for_test()
+                    .source()
+                    .dimensions(),
+                (8, 8)
+            );
+        }
+        assert_eq!(
+            history,
+            history_len(&ed),
+            "opening dialogs touched the document"
+        );
+    }
+
+    #[test]
+    fn a_confirmed_adjustment_travels_as_the_menu_pick_with_its_parameters_parked() {
+        // The confirmation channel this host owns: Enter on a moved dialog
+        // puts exactly one `ApplyAdjustment` pick in `out.menu` — the road
+        // the click used to take — and parks the parameters for the arm that
+        // performs it. Nothing rides `out.commands` or `out.dialog`.
+        let dir = tempfile::tempdir().unwrap();
+        let ed = two_layers(dir.path());
+        let mut host = DialogHost::default();
+        assert!(host.open_for_menu_action(
+            &ui::menu::MenuAction::ApplyAdjustment(AdjustmentId::BrightnessContrast),
+            &ed
+        ));
+        let moved = layer_model::AdjustmentKind::BrightnessContrast {
+            brightness: 0.5,
+            contrast: 0.0,
+        };
+        assert!(host
+            .active_adjustment_dialog_for_test()
+            .set_kind(moved.clone()));
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut out = ChromeOutput::default();
+        // A settle frame so the dialog exists before the key arrives, then Enter.
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| host.ui(ctx, None, &mut out));
+        assert!(host.is_open() && out.is_empty());
+        let _ = ctx.run(raw_input(vec![key(egui::Key::Enter)]), |ctx| {
+            host.ui(ctx, None, &mut out)
+        });
+        assert!(!host.is_open(), "Enter did not close the dialog");
+        assert_eq!(
+            out.menu,
+            vec![ui::menu::MenuAction::ApplyAdjustment(
+                AdjustmentId::BrightnessContrast
+            )]
+        );
+        assert!(out.commands.is_empty(), "the confirmation leaked a command");
+        assert!(
+            out.dialog.is_none(),
+            "the confirmation leaked a dialog action"
+        );
+        // Another id cannot take the parked parameters; the right one takes
+        // them exactly once.
+        assert_eq!(take_confirmed_adjustment(AdjustmentId::Levels), None);
+        assert_eq!(
+            take_confirmed_adjustment(AdjustmentId::BrightnessContrast),
+            Some(moved)
+        );
+        assert_eq!(
+            take_confirmed_adjustment(AdjustmentId::BrightnessContrast),
+            None,
+            "a confirmation applied twice"
+        );
+    }
+
+    #[test]
+    fn cancelling_an_adjustment_dialog_parks_and_emits_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let ed = two_layers(dir.path());
+        let mut host = DialogHost::default();
+        assert!(host.open_for_menu_action(
+            &ui::menu::MenuAction::ApplyAdjustment(AdjustmentId::Threshold),
+            &ed
+        ));
+        host.active_adjustment_dialog_for_test()
+            .set_kind(layer_model::AdjustmentKind::Threshold { level: 0.2 });
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| host.ui(ctx, None, &mut out));
+        let _ = ctx.run(raw_input(vec![key(egui::Key::Escape)]), |ctx| {
+            host.ui(ctx, None, &mut out)
+        });
+        assert!(!host.is_open(), "Escape did not close the dialog");
+        assert!(out.is_empty(), "cancelling produced {out:?}");
+        assert_eq!(take_confirmed_adjustment(AdjustmentId::Threshold), None);
+    }
+
+    #[test]
+    fn an_identity_adjustment_does_not_confirm_on_enter() {
+        // Ten adjustments open at their identity. Enter on one leaves it open
+        // with its reason showing rather than parking a no-op.
+        let dir = tempfile::tempdir().unwrap();
+        let ed = two_layers(dir.path());
+        let mut host = DialogHost::default();
+        assert!(host.open_for_menu_action(
+            &ui::menu::MenuAction::ApplyAdjustment(AdjustmentId::Curves),
+            &ed
+        ));
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| host.ui(ctx, None, &mut out));
+        let _ = ctx.run(raw_input(vec![key(egui::Key::Enter)]), |ctx| {
+            host.ui(ctx, None, &mut out)
+        });
+        assert!(host.is_open(), "an untouched Curves confirmed");
+        assert!(out.is_empty());
+        assert_eq!(take_confirmed_adjustment(AdjustmentId::Curves), None);
+    }
+
     #[test]
     fn without_a_document_no_dialog_opens_and_the_intent_falls_through() {
         let dir = tempfile::tempdir().unwrap();
@@ -860,6 +1149,14 @@ mod tests {
                 &ed
             ),
             "there is no active layer to style"
+        );
+        assert!(!host.is_open());
+        assert!(
+            !host.open_for_menu_action(
+                &ui::menu::MenuAction::ApplyAdjustment(AdjustmentId::Levels),
+                &ed
+            ),
+            "there is no pixel layer to adjust"
         );
         assert!(!host.is_open());
     }

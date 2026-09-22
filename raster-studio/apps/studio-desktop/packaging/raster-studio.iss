@@ -1,11 +1,19 @@
 ; Raster Studio — Inno Setup script (Windows installer).
 ;
-; Build: run from the repository root after `cargo build --release -p studio-desktop`:
-;   iscc raster-studio/apps/studio-desktop/packaging/raster-studio.iss
+; Build after `cargo build --release -p studio-desktop`. Every path below is
+; relative to this file, so the script runs from any directory; release CI
+; runs it from the cargo workspace (raster-studio/):
+;   iscc /DAppVersion=<version> apps\studio-desktop\packaging\raster-studio.iss
 ;
-; Produces a slim installer that drops the binary, a Start-menu shortcut and an
-; uninstaller. The version is read from the script constant below; bump it when
-; the crate version changes so installs stay distinguishable.
+; `/DAppVersion` is the crate version from Cargo (`cargo metadata`), which is
+; what CI passes. Without it the fallback below is used — keep that in step
+; with apps/studio-desktop/Cargo.toml so a hand-built installer is still
+; distinguishable from the last one.
+;
+; Produces a slim installer that drops the binary, the third-party licence
+; notices, a Start-menu shortcut and an uninstaller. The executable already
+; carries its icon and VERSIONINFO (embedded by apps/studio-desktop/build.rs),
+; so Explorer, the taskbar and Add/Remove Programs show the right face.
 
 #ifndef AppVersion
   #define AppVersion "0.1.0"
@@ -24,15 +32,19 @@ DefaultGroupName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
 Compression=lzma2
 SolidCompression=yes
+; ..\..\.. from packaging/ is the cargo workspace root (raster-studio/), where
+; target/, assets/ and LICENSES/ live.
 OutputDir=..\..\..\target\installer
 OutputBaseFilename=RasterStudio-{#AppVersion}-Setup
-SetupIconFile=..\..\assets\raster-studio.ico
+SetupIconFile=..\..\..\assets\raster-studio.ico
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
 
 [Files]
 Source: "..\..\..\target\release\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
+; The third-party notices ship next to the binary they describe.
+Source: "..\..\..\LICENSES\*"; DestDir: "{app}\LICENSES"; Flags: ignoreversion recursesubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"

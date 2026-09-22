@@ -20,7 +20,7 @@ fn write_png(dir: &Path, name: &str, w: u32, h: u32, value: u8) -> PathBuf {
 fn ink_bounds(buf: &[u8], width: u32) -> (u32, u32, u32, u32) {
     assert_eq!(buf.len() % 4, 0);
     let mut bounds: Option<(u32, u32, u32, u32)> = None;
-    for (i, px) in buf.chunks_exact(4).enumerate() {
+    for (i, px) in buf.as_chunks::<4>().0.iter().enumerate() {
         if px.iter().any(|&c| c != 0) {
             let (x, y) = ((i as u32) % width, (i as u32) / width);
             bounds = Some(match bounds {
@@ -3369,7 +3369,7 @@ fn a_shrinking_refresh_clears_the_tiles_the_new_source_loses() {
     // A large linked source: 600x500 spans tiles (0..3, 0..2).
     let (w, h) = (600u32, 500u32);
     let mut rgba = vec![0u8; (w * h * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&[90, 120, 150, 255]);
     }
     let source = dir.path().join("big.png");

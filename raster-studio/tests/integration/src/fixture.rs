@@ -55,7 +55,7 @@ pub fn photo_rgba8_with_alpha(width: u32, height: u32) -> Vec<u8> {
 /// about a container that has no alpha channel.
 pub fn photo_rgba8_channels_cycled(width: u32, height: u32) -> Vec<u8> {
     let mut out = photo_rgba8(width, height);
-    for px in out.chunks_exact_mut(4) {
+    for px in out.as_chunks_mut::<4>().0 {
         let (r, g, b) = (px[0], px[1], px[2]);
         px[0] = b;
         px[1] = r;
@@ -95,7 +95,13 @@ pub fn pixel_at(buf: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
 pub fn differing_pixels(a: &[u8], b: &[u8], width: u32) -> Vec<(u32, u32)> {
     assert_eq!(a.len(), b.len(), "buffers must be the same size to compare");
     let mut out = Vec::new();
-    for (i, (pa, pb)) in a.chunks_exact(4).zip(b.chunks_exact(4)).enumerate() {
+    for (i, (pa, pb)) in a
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
+        .enumerate()
+    {
         if pa != pb {
             out.push(((i as u32) % width, (i as u32) / width));
         }

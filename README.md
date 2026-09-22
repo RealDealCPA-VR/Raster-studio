@@ -111,9 +111,43 @@ has the row-by-row detail. Nothing there is marked done unless it is
 implemented, tested and reachable from the UI — and where that bar is not
 met, it says so.
 
-## Building
+## Install
 
-Requires a Rust toolchain (1.82 or newer) and, on Windows, the MSVC build tools.
+Nothing has been tagged yet, so there is no download to point at. The
+workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) starts on
+a `v*` tag push (`on.push.tags`) as well as on `main`, and on a tag its
+`release` job builds three installers and uploads them as artifacts of that
+workflow run (Actions tab, GitHub's default artifact retention). It does not
+create a GitHub Release: attaching the installers under
+[Releases](https://github.com/RealDealCPA-VR/Raster-studio/releases) is a
+manual step until that is wired.
+
+| Platform | Artifact | Installs |
+| --- | --- | --- |
+| Windows 10/11, x64 | `RasterStudio-<version>-Setup.exe` (Inno Setup) | the editor, a Start-menu shortcut, the third-party licence notices |
+| macOS 11+ | `RasterStudio-<version>.dmg` | `RasterStudio.app`, ad-hoc signed — Gatekeeper will warn until notarisation is configured |
+| Debian/Ubuntu, amd64 | `raster-studio_<version>_amd64.deb` | `/usr/bin/raster-studio`, a desktop entry, notices under `/usr/share/doc/raster-studio` |
+
+The same job can be exercised without a tag: run the workflow by hand
+(`workflow_dispatch`) with `release_dry_run` ticked. Until a tag exists,
+build from source:
+
+```bash
+git clone https://github.com/RealDealCPA-VR/Raster-studio
+cd Raster-studio/raster-studio
+cargo build --release -p studio-desktop
+# the binary is target/release/studio-desktop(.exe)
+```
+
+`raster-studio/rust-toolchain.toml` pins the compiler (currently 1.98.1);
+`rustup` installs it on the first `cargo` command. The oldest compiler that
+can build the lockfile — the MSRV, `rust-version` in
+`raster-studio/Cargo.toml` — is **1.89**, and CI checks that number with
+`cargo +1.89 check`. Windows needs the MSVC build tools (and `rc.exe` from
+the Windows SDK for the release build's icon and version resource); Linux
+needs the X11/Wayland development headers listed in the workflow.
+
+## Building
 
 ```bash
 cd raster-studio
@@ -123,8 +157,8 @@ cargo run   -p studio-desktop           # launch
 ```
 
 On Linux you need a Vulkan- or GL-capable environment for the window. GPU-backed
-tests detect the absence of an adapter and skip themselves, so a headless CI
-runner stays green.
+tests detect the absence of an adapter and skip themselves rather than fail, so
+they can run on a runner without a GPU.
 
 Want a screenshot of the running app? The desktop binary can capture one of
 its own frames: `studio-desktop --shot out.png image.png` renders a frame,
@@ -173,8 +207,12 @@ Two rules carry most of the weight here:
    editor that did not compile. Documentation is a claim, and claims get
    checked.
 
-CI runs `cargo fmt --check`, `cargo clippy --workspace --all-targets` with
-`-D warnings`, `cargo test --workspace` on Linux and Windows, and `cargo audit`.
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs
+`cargo fmt --check`, `cargo clippy --workspace --all-targets` with
+`-D warnings`, `cargo test --workspace --no-fail-fast` on Linux, Windows and
+macOS, an MSRV check (`cargo +1.89 check`), and `cargo audit`. Whether the
+current commit passes is what the Actions tab says, not this paragraph.
+[`CHANGELOG.md`](CHANGELOG.md) records what each wave changed.
 
 ## Licence
 

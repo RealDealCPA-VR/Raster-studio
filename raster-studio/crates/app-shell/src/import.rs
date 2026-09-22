@@ -980,8 +980,10 @@ impl PsdImport {
         .ok()?;
         let rendered = canvas.to_rgba8(&doc.meta.color_space);
         let differing = rgba
-            .chunks_exact(4)
-            .zip(rendered.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(rendered.as_chunks::<4>().0)
             .filter(|(a, b)| {
                 a.iter()
                     .zip(b.iter())
@@ -989,8 +991,10 @@ impl PsdImport {
             })
             .count();
         let max_delta = rgba
-            .chunks_exact(4)
-            .zip(rendered.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(rendered.as_chunks::<4>().0)
             .flat_map(|(a, b)| a.iter().zip(b.iter()).map(|(x, y)| x.abs_diff(*y)))
             .max()
             .unwrap_or(0);

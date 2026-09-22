@@ -11,9 +11,14 @@ cargo run   -p studio-desktop           # launch
 cargo run   -p studio-desktop -- img.png
 ```
 
-Requires Rust 1.82 or newer and, on Windows, the MSVC build tools. On Linux you
-need a Vulkan- or GL-capable environment for the window; GPU-backed tests detect
-the absence of an adapter and skip themselves, so headless CI stays green.
+`rust-toolchain.toml` pins the compiler this workspace builds with (1.98.1;
+`rustup` fetches it on the first `cargo` command). The MSRV — the oldest
+compiler that can build the lockfile, `rust-version` in `Cargo.toml` — is 1.89,
+and CI checks it with `cargo +1.89 check`. Windows needs the MSVC build tools
+(and the Windows SDK's `rc.exe` for the release build's icon and version
+resource). On Linux you need a Vulkan- or GL-capable environment for the
+window; GPU-backed tests detect the absence of an adapter and skip themselves
+rather than fail, so they can run on a runner without a GPU.
 
 ## Where things are
 
@@ -38,6 +43,10 @@ the absence of an adapter and skip themselves, so headless CI stays green.
    editor that did not compile.
 
 CI runs `cargo fmt --check`, `cargo clippy --workspace --all-targets` with
-`-D warnings`, `cargo test --workspace` on Linux and Windows, and `cargo audit`.
-Note that a warning is an error there, and that an item used only under
-`#[cfg(windows)]` is dead code on Linux.
+`-D warnings`, `cargo test --workspace --no-fail-fast` on Linux, Windows and
+macOS, `cargo +1.89 check` (the MSRV), and `cargo audit`. Note that a warning
+is an error there, and that an item used only under `#[cfg(windows)]` is dead
+code on Linux. The workflow also starts on a `v*` tag push (`on.push.tags`),
+and on a tag — or on a manual run with `release_dry_run` ticked — its `release`
+job builds the three installers as workflow-run artifacts (no GitHub Release
+is created) — see `apps/studio-desktop/packaging/README.md`.

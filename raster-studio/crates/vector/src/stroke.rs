@@ -299,7 +299,7 @@ pub fn dash(path: &Path, d: &Dash, tolerance: f64) -> Result<Path, VectorError> 
             idx = (idx + 1) % len;
         }
         let mut remaining = pattern[idx] - phase;
-        let mut on = idx % 2 == 0;
+        let mut on = idx.is_multiple_of(2);
 
         // Whether the pattern was already "on" *at* `pts[0]`. Only then is the
         // run that ends at the closing vertex continuous with the run that

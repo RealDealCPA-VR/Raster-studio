@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [[bin]]
 name = "studio-desktop"
@@ -15,5 +16,26 @@ tracing.workspace = true
 app-shell.workspace = true
 telemetry.workspace = true
 
+# The executable is a GUI-subsystem program on Windows (no console window
+# flashes open behind the editor); these calls re-attach the parent's console
+# when there is one, so `studio-desktop --shot out.png` run from a terminal
+# still prints its log there. See `console` in `src/main.rs`.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_System_Console",
+  "Win32_Storage_FileSystem",
+  # CreateFileW's SECURITY_ATTRIBUTES parameter lives behind this feature.
+  "Win32_Security",
+] }
+
+[build-dependencies]
+# Compiles the Windows resource (icon + VERSIONINFO) `build.rs` generates and
+# links it into the executable. A no-op when the target is not Windows.
+embed-resource = "3"
+
 [dev-dependencies]
 tempfile = "3"
+# Help ▸ About is driven end to end in `main.rs`'s tests through the real menu
+# bridge, so the test names the menu action the way the menu bar does.
+ui.workspace = true

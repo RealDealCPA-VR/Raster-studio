@@ -10,15 +10,25 @@
 //! Both are added by *capability*, never by tool identity, so a new tool
 //! inherits them or does not on the same rule as every existing one:
 //!
-//! * **Paint blend mode.** Every stamping tool composites its stroke through a
-//!   blend mode, and the registry schema has no slot for it. It is offered to
-//!   the [`ToolGroup::Paint`] and [`ToolGroup::Retouch`] groups.
+//! * **Paint blend mode.** A tool that lays a source colour over the layer
+//!   composites it through a blend mode, and the registry schema has no slot
+//!   for it. It is offered to exactly the tools that answer it
+//!   (`tools::composites_strokes`: Brush, Pencil, Clone Stamp and Pattern
+//!   Stamp). The retouching strokes mix toward a computed target or erase
+//!   and have no source colour to blend; they, the fills, the gradient, the
+//!   magic eraser, Patch and Red Eye refuse the key and get no combo.
 //! * **Gradient stops.** A ramp is not expressible as a `Float`/`Choice`, so
 //!   the stop editor is offered to any tool whose schema declares a `shape`
 //!   choice — see [`wants_gradient_stops`].
 //!
 //! The blend mode is a `Choice` like any other, so it lives in the same
-//! [`ToolOptions`] map and travels on the same [`crate::Intent::SetToolOption`].
+//! [`ToolOptions`] map, travels on the same [`crate::Intent::SetToolOption`],
+//! and forwards to the tool with the rest of the touched set ([`ToolOptions::held`])
+//! under [`BLEND_MODE_KEY`] — the key the tools crate answers it by
+//! (`tools::BLEND_MODE_KEY`; the four source-over stroke tools composite
+//! their dabs through it). It used to be filtered out of the forward set as
+//! a key "no tool could answer", which is what made the Mode combo a dead
+//! control.
 //! A ramp cannot: it is a list of stops rather than a scalar, so it is stored
 //! in its own map here and travels as [`crate::Intent::SetToolGradient`]. The
 //! options bar's Reset is a third: it clears both maps for one tool at once and
@@ -30,7 +40,7 @@ use std::collections::HashMap;
 
 use layer_model::{BlendMode, Gradient, GradientStop};
 use selection::BooleanOp;
-use tools::{BrushSettings, OptionKind, OptionSpec, ToolGroup, ToolId, ToolInfo};
+use tools::{BrushSettings, OptionKind, OptionSpec, ToolId, ToolInfo};
 
 /// The value behind one option key.
 ///
@@ -157,10 +167,11 @@ pub const BLEND_MODE_LABELS: [&str; BlendMode::ALL.len()] = {
 };
 
 /// Key of the UI-supplied paint blend mode. Not a registry key — see the
-/// module note.
-pub const BLEND_MODE_KEY: &str = "ui.blend_mode";
+/// module note — but the tools crate's own constant, so the options bar and
+/// `StrokeTool::set_setting` agree on it by construction.
+pub const BLEND_MODE_KEY: &str = tools::BLEND_MODE_KEY;
 
-/// The blend-mode option, offered to the painting and retouching groups.
+/// The blend-mode option, offered to the source-over stroke tools.
 pub fn blend_mode_spec() -> OptionSpec {
     OptionSpec {
         key: BLEND_MODE_KEY,
@@ -172,9 +183,17 @@ pub fn blend_mode_spec() -> OptionSpec {
     }
 }
 
-/// `true` when a tool composites a stroke and therefore wants a blend mode.
+/// `true` when a tool composites a source colour over the layer and
+/// therefore wants a blend mode.
+///
+/// The tools crate owns the answer ([`tools::composites_strokes`]): Brush,
+/// Pencil, Clone Stamp and Pattern Stamp, whose dabs are composited through
+/// the mode. The retouching strokes, the fills, the gradient, the magic
+/// eraser, Patch and Red Eye refuse the key, so the combo is offered to
+/// exactly the tools whose `set_setting` answers it: a touched Mode is never
+/// a refusal at the press and never a control that does nothing.
 pub fn wants_blend_mode(info: &ToolInfo) -> bool {
-    matches!(info.group, ToolGroup::Paint | ToolGroup::Retouch)
+    tools::composites_strokes(info.id)
 }
 
 /// `true` when a tool draws a ramp and therefore wants a stop editor.
@@ -265,21 +284,19 @@ impl ToolOptions {
     }
 
     /// The options the user has actually TOUCHED for one tool, as
-    /// `(key, value)` pairs — the forward-to-tool set. Two things are
-    /// deliberately absent:
+    /// `(key, value)` pairs — the forward-to-tool set. Untouched options are
+    /// deliberately absent: they keep their schema defaults, and forwarding
+    /// them would demand `set_setting` answers for keys no tool implements.
     ///
-    /// * untouched options (they keep their schema defaults; forwarding them
-    ///   would demand `set_setting` answers for keys no tool implements), and
-    /// * UI-supplied keys like [`BLEND_MODE_KEY`] (they persist for the
-    ///   options bar's own rendering but name no registry option a tool
-    ///   could answer — forwarding them turned the blend-mode combo into a
-    ///   per-press status-bar error on every stroke tool).
+    /// The UI-supplied paint blend mode ([`BLEND_MODE_KEY`]) forwards like
+    /// any other touched Choice: the source-over stroke tools answer it (a
+    /// Multiply brush composites its dabs with Multiply), and a tool that
+    /// does not lay colour over the layer is never offered the control, so
+    /// it never holds the key.
     pub fn held(&self, tool: ToolId) -> Vec<(String, OptionValue)> {
         self.values
             .iter()
-            .filter(|((t, key), _)| {
-                *t == tool && !key.starts_with("ui.") && Self::spec(*t, key).is_some()
-            })
+            .filter(|((t, key), _)| *t == tool && Self::spec(*t, key).is_some())
             .map(|((_, key), value)| ((*key).to_string(), *value))
             .collect()
     }
@@ -802,23 +819,18 @@ mod tests {
 #[cfg(test)]
 mod held_tests {
     use super::*;
-    use tools::ToolId;
+    use tools::{ToolGroup, ToolId};
 
-    /// Card 061 (review round 4): `held` is the forward-to-tool set —
-    /// only touched REGISTRY keys for THAT tool. Untouched options stay
-    /// absent, ui-supplied keys (the blend mode) stay absent, and another
-    /// tool's touches stay absent.
+    /// Card 061 (review round 4), amended by W1-B2: `held` is the
+    /// forward-to-tool set — the touched keys for THAT tool, the paint blend
+    /// mode included now that the source-over stroke tools answer it. Untouched options
+    /// stay absent, and another tool's touches stay absent.
     #[test]
-    fn held_returns_only_touched_registry_keys_for_the_tool() {
+    fn held_returns_only_touched_keys_for_the_tool() {
         // A non-default strength (setting a value equal to the schema
         // default is a deliberate no-op: nothing is "held" to forward).
         let mut options = ToolOptions::default();
         assert!(options.set(ToolId::RefineBoundary, "strength", OptionValue::Float(0.7)));
-        options.set(
-            ToolId::RefineBoundary,
-            BLEND_MODE_KEY,
-            OptionValue::Choice(1),
-        );
         options.set(ToolId::Move, "auto_select", OptionValue::Bool(true));
 
         let held = options.held(ToolId::RefineBoundary);
@@ -830,6 +842,250 @@ mod held_tests {
         assert!(
             options.held(ToolId::Brush).is_empty(),
             "another tool's touches do not leak"
+        );
+    }
+
+    /// W1-B2: a touched Mode combo FORWARDS. It used to be filtered out of
+    /// the forward set as a "UI-supplied key no tool could answer", which is
+    /// the whole reason the paint blend mode never reached a brush.
+    #[test]
+    fn a_touched_blend_mode_is_in_the_forward_set_under_the_tools_key() {
+        let mut options = ToolOptions::default();
+        let multiply = BlendMode::ALL
+            .iter()
+            .position(|m| *m == BlendMode::Multiply)
+            .unwrap();
+        assert!(options.set(ToolId::Brush, BLEND_MODE_KEY, OptionValue::Choice(multiply)));
+
+        let held = options.held(ToolId::Brush);
+        assert_eq!(
+            held,
+            vec![(
+                tools::BLEND_MODE_KEY.to_string(),
+                OptionValue::Choice(multiply)
+            )],
+            "the touched blend mode forwards under the key the tools crate answers"
+        );
+        // The key the options bar stores under IS the tools crate's key.
+        assert_eq!(BLEND_MODE_KEY, tools::BLEND_MODE_KEY);
+        // ...and the index it forwards names the mode the tools crate reads.
+        assert_eq!(
+            tools::blend_mode_from_choice(multiply),
+            Some(BlendMode::Multiply)
+        );
+    }
+
+    /// W1-B2 (rounds 2-3): the Mode combo is offered to exactly the tools
+    /// whose `set_setting` answers it. A forwarded key a tool refuses is a
+    /// status-bar error on every press, and a key a tool accepts but never
+    /// composites through is a dead control, so the offer set and the
+    /// answer set must be the same set: the four source-over stroke tools
+    /// (Brush, Pencil, Clone Stamp, Pattern Stamp) get the combo and accept
+    /// the key; the retouching strokes, Patch, Red Eye, the fills, the
+    /// gradient and the magic eraser refuse the key and get no combo.
+    #[test]
+    fn the_mode_combo_is_offered_to_exactly_the_tools_that_answer_it() {
+        let multiply = BlendMode::ALL
+            .iter()
+            .position(|m| *m == BlendMode::Multiply)
+            .unwrap();
+        let mut mismatched = Vec::new();
+        let mut offered = 0usize;
+        for info in tools::registry::all() {
+            let is_offered = ToolOptions::spec_for_test(info.id, BLEND_MODE_KEY).is_some();
+            let answers = tools::registry::make(info.id)
+                .set_setting(BLEND_MODE_KEY, tools::ToolSetting::Choice(multiply))
+                .is_ok();
+            // Outside the two groups the trait default accepts any Choice,
+            // so the equivalence is pinned where the combo could be offered.
+            let in_groups = matches!(info.group, ToolGroup::Paint | ToolGroup::Retouch);
+            if in_groups && is_offered != answers {
+                mismatched.push(format!(
+                    "{:?}: offered={is_offered} answers={answers}",
+                    info.id
+                ));
+            }
+            if !in_groups && is_offered {
+                mismatched.push(format!("{:?}: offered outside paint/retouch", info.id));
+            }
+            offered += usize::from(is_offered);
+        }
+        assert!(mismatched.is_empty(), "{mismatched:?}");
+        assert_eq!(
+            offered, 4,
+            "exactly the four source-over stroke tools get the combo: {offered}"
+        );
+        // The retouching tools that do not lay a source colour over the
+        // layer are not offered it: neither the two that do not stamp dabs
+        // nor the strokes whose dabs mix toward a target or erase.
+        assert!(ToolOptions::spec_for_test(ToolId::Patch, BLEND_MODE_KEY).is_none());
+        assert!(ToolOptions::spec_for_test(ToolId::RedEye, BLEND_MODE_KEY).is_none());
+        assert!(ToolOptions::spec_for_test(ToolId::Sponge, BLEND_MODE_KEY).is_none());
+        assert!(ToolOptions::spec_for_test(ToolId::Blur, BLEND_MODE_KEY).is_none());
+        assert!(ToolOptions::spec_for_test(ToolId::Eraser, BLEND_MODE_KEY).is_none());
+        assert!(ToolOptions::spec_for_test(ToolId::RefineBoundary, BLEND_MODE_KEY).is_none());
+        assert_eq!(ToolOptions::new().blend_mode(ToolId::Patch), None);
+        assert_eq!(ToolOptions::new().blend_mode(ToolId::Dodge), None);
+        // ...and the source-over tools in the same groups are.
+        assert!(ToolOptions::spec_for_test(ToolId::CloneStamp, BLEND_MODE_KEY).is_some());
+        assert!(ToolOptions::spec_for_test(ToolId::PatternStamp, BLEND_MODE_KEY).is_some());
+        assert!(ToolOptions::spec_for_test(ToolId::Pencil, BLEND_MODE_KEY).is_some());
+        // A Mode set for a tool that is not offered it is not held, so the
+        // press never forwards a key the tool would refuse.
+        let mut options = ToolOptions::default();
+        assert!(!options.set(
+            ToolId::Sponge,
+            BLEND_MODE_KEY,
+            OptionValue::Choice(multiply)
+        ));
+        assert!(options.held(ToolId::Sponge).is_empty());
+    }
+}
+
+/// W1-B2 (round 3): the Type options reach the TEXT ENGINE, not only the
+/// `TextLayer` payload. The options bar holds a size and a font family for
+/// the Type tool, the held set forwards to the tool through `set_setting`
+/// exactly as the shell forwards it, a click creates the layer, and the layer
+/// is shaped by the real engine: a 48px layer lays out taller than a 12px
+/// one, and the three Font choices resolve to three families the engine knows.
+#[cfg(test)]
+mod type_reaches_the_engine_tests {
+    use super::*;
+    use editor_core::Command;
+    use layer_model::LayerKind;
+    use raster::PixelRect;
+    use tools::tool::{PointerEvent, ToolContext};
+    use tools::ToolSetting;
+
+    /// The shell's boundary conversion (shell.rs), verbatim.
+    fn to_setting(value: OptionValue) -> ToolSetting {
+        match value {
+            OptionValue::Float(v) => ToolSetting::Float(v),
+            OptionValue::Int(v) => ToolSetting::Int(v),
+            OptionValue::Bool(v) => ToolSetting::Bool(v),
+            OptionValue::Choice(v) => ToolSetting::Choice(v),
+            OptionValue::Color(v) => ToolSetting::Color(v),
+        }
+    }
+
+    /// Options bar -> held set -> `set_setting` -> click -> the created
+    /// text layer, carrying `text` as what the user then typed.
+    fn text_layer_from_options(options: &ToolOptions, text: &str) -> layer_model::TextLayer {
+        let mut tool = tools::registry::make(ToolId::Type);
+        for (key, value) in options.held(ToolId::Type) {
+            tool.set_setting(&key, to_setting(value))
+                .unwrap_or_else(|e| panic!("Type/{key}: {e}"));
+        }
+        let mut tiles = tools::MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 256, 256));
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(10.0, 10.0))
+            .unwrap();
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(10.0, 10.0))
+            .unwrap();
+        let cmds = ctx.drain();
+        let Some(Command::CreateLayer { layer }) = cmds.first() else {
+            panic!("a Type click creates a layer: {cmds:?}");
+        };
+        let LayerKind::Text(layer) = &layer.kind else {
+            panic!("a Type click creates a TEXT layer: {:?}", layer.kind);
+        };
+        let mut layer = layer.clone();
+        layer.text = text.to_owned();
+        layer
+    }
+
+    fn shaped_height(
+        library: &mut text_engine::FontLibrary,
+        layer: &layer_model::TextLayer,
+    ) -> f32 {
+        let shaped = text_engine::shape(library, &text_engine::TextRun::from(layer));
+        shaped.bounds.height
+    }
+
+    #[test]
+    fn a_held_size_of_48_lays_out_a_taller_layer_than_12_in_the_real_engine() {
+        let mut big = ToolOptions::default();
+        assert!(big.set(ToolId::Type, "size_px", OptionValue::Float(48.0)));
+        let mut small = ToolOptions::default();
+        assert!(small.set(ToolId::Type, "size_px", OptionValue::Float(12.0)));
+
+        // The fontless engine still lays out one `line_height`-tall line per
+        // paragraph, so the assertion holds on a runner with no fonts at all
+        // and on a machine with system fonts alike.
+        for mut library in [
+            text_engine::FontLibrary::empty(),
+            text_engine::FontLibrary::with_system_fonts(),
+        ] {
+            let tall = shaped_height(&mut library, &text_layer_from_options(&big, "Hg"));
+            let short = shaped_height(&mut library, &text_layer_from_options(&small, "Hg"));
+            assert!(
+                tall > short * 3.0,
+                "48px must lay out about four times as tall as 12px (fontless={}): {tall} vs {short}",
+                library.is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn the_three_font_choices_reach_three_families_the_engine_resolves() {
+        let mut library = text_engine::FontLibrary::with_system_fonts();
+        if library.is_empty() {
+            // A runner with no fonts has nothing to resolve a generic to; the
+            // engine's own `generic_family_names_b2` test pins the resolution
+            // against embedded faces.
+            return;
+        }
+        let mut families = Vec::new();
+        for choice in 0..3 {
+            let mut options = ToolOptions::default();
+            // Choice 0 is the schema default and is deliberately not "held";
+            // the tool's own default is that same family.
+            options.set(ToolId::Type, "font_family", OptionValue::Choice(choice));
+            let layer = text_layer_from_options(&options, "iiWW");
+            // None of the three is a "missing family" to the engine.
+            assert_eq!(
+                library.substitute_for(&layer.font_family),
+                None,
+                "{:?} is a generic name the engine resolves, not substitutes",
+                layer.font_family
+            );
+            let shaped = text_engine::shape(&mut library, &text_engine::TextRun::from(&layer));
+            assert!(
+                !shaped.glyphs.is_empty(),
+                "{:?} shaped nothing",
+                layer.font_family
+            );
+            let used: std::collections::BTreeSet<String> = shaped
+                .glyphs
+                .iter()
+                .filter_map(|g| library.face(g.font).map(|f| f.family))
+                .collect();
+            families.push((layer.font_family.clone(), used, shaped));
+        }
+        // Monospace is the choice a user can SEE: every glyph advances the
+        // same distance, where the sans `i` is narrower than its `W`.
+        let mono = &families[2].2;
+        let advances: Vec<i32> = mono
+            .glyphs
+            .iter()
+            .map(|g| (g.advance * 100.0).round() as i32)
+            .collect();
+        assert!(
+            advances.iter().all(|a| *a == advances[0]),
+            "monospace choice: equal advances, got {advances:?} ({:?})",
+            families[2].1
+        );
+        let sans = &families[0].2;
+        assert!(
+            sans.glyphs[0].advance < sans.glyphs[2].advance,
+            "sans choice: i narrower than W ({:?})",
+            families[0].1
+        );
+        // And serif is a different family from sans on any machine that has
+        // a serif installed (the engine pins one when it can).
+        assert_ne!(
+            families[1].1, families[0].1,
+            "serif choice resolves to a different family than sans"
         );
     }
 }

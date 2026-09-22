@@ -19,9 +19,10 @@ use selection::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::error::ToolError;
+use crate::brush::BrushSettings;
+use crate::error::{finite, ToolError};
 use crate::patch::{mask_coverage_of, read_mask_rgba8, read_rgba8, ColorPatch, CoveragePatch};
-use crate::tool::{PaintTarget, Pattern, PointerEvent, Tool, ToolContext, ToolId};
+use crate::tool::{PaintTarget, Pattern, PointerEvent, Tool, ToolContext, ToolId, ToolSetting};
 
 /// What a fill lays down.
 #[derive(Debug, Clone, PartialEq)]
@@ -63,6 +64,42 @@ impl Default for FillSettings {
 }
 
 impl FillSettings {
+    /// Adopt one options-bar value by the registry's `FILL_OPTS` key. Each
+    /// key lands on the field the flood ([`FillSettings::wand`]) or the
+    /// composite reads.
+    pub fn set(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        match (key, setting) {
+            ("tolerance", ToolSetting::Float(v)) => {
+                self.tolerance = finite("tolerance", v)?.clamp(0.0, 1.0);
+                Ok(())
+            }
+            ("contiguous", ToolSetting::Bool(v)) => {
+                self.contiguous = v;
+                Ok(())
+            }
+            ("antialias", ToolSetting::Bool(v)) => {
+                self.antialias = v;
+                Ok(())
+            }
+            ("opacity", ToolSetting::Float(v)) => {
+                self.opacity = finite("opacity", v)?.clamp(0.0, 1.0);
+                Ok(())
+            }
+            ("sample_merged", ToolSetting::Bool(v)) => {
+                self.sample_merged = v;
+                Ok(())
+            }
+            ("tolerance" | "contiguous" | "antialias" | "opacity" | "sample_merged", _) => {
+                Err(ToolError::OptionKindMismatch {
+                    key: key.to_owned(),
+                })
+            }
+            _ => Err(ToolError::UnknownOption {
+                key: key.to_owned(),
+            }),
+        }
+    }
+
     fn wand(&self) -> WandOptions {
         WandOptions {
             tolerance: self.tolerance.clamp(0.0, 1.0),
@@ -348,6 +385,21 @@ impl Tool for PaintBucketTool {
         self.seed = None;
     }
 
+    /// The registry's `FILL_OPTS`, straight onto [`PaintBucketTool::settings`].
+    fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        self.settings.set(key, setting)
+    }
+
+    /// `opacity` is one of the brush-shared keys, so the shell carries it in
+    /// the brush it hands every tool at pointer-down rather than through
+    /// `set_setting`. Adopting it here is what makes the options bar's
+    /// Opacity reach the fill in the running app.
+    fn set_brush(&mut self, brush: BrushSettings) {
+        if brush.opacity.is_finite() {
+            self.settings.opacity = brush.opacity.clamp(0.0, 1.0);
+        }
+    }
+
     fn is_active(&self) -> bool {
         self.seed.is_some()
     }
@@ -452,7 +504,207 @@ impl Tool for PatternFillTool {
         self.armed = false;
     }
 
+    /// The registry declares one option for Pattern Fill: `opacity`.
+    fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        match (key, setting) {
+            ("opacity", ToolSetting::Float(v)) => {
+                self.opacity = finite("opacity", v)?.clamp(0.0, 1.0);
+                Ok(())
+            }
+            ("opacity", _) => Err(ToolError::OptionKindMismatch {
+                key: key.to_owned(),
+            }),
+            _ => Err(ToolError::UnknownOption {
+                key: key.to_owned(),
+            }),
+        }
+    }
+
+    /// See [`PaintBucketTool::set_brush`]: the shell delivers `opacity`
+    /// through the brush, so it is adopted from there too.
+    fn set_brush(&mut self, brush: BrushSettings) {
+        if brush.opacity.is_finite() {
+            self.opacity = brush.opacity.clamp(0.0, 1.0);
+        }
+    }
+
     fn is_active(&self) -> bool {
         self.armed
+    }
+}
+
+#[cfg(test)]
+mod option_tests {
+    use super::*;
+    use crate::tiles::MemoryTiles;
+    use editor_core::PixelKey;
+    use layer_model::LayerId;
+
+    const W: u32 = 64;
+    const H: u32 = 64;
+
+    fn paint(tiles: &mut MemoryTiles, key: PixelKey, color: impl Fn(usize) -> u8) {
+        let ts = raster::TILE_SIZE as usize;
+        let mut data = vec![0u8; ts * ts * 4];
+        for y in 0..H as usize {
+            for x in 0..W as usize {
+                let g = color(x);
+                let i = (y * ts + x) * 4;
+                data[i..i + 4].copy_from_slice(&[g, g, g, 255]);
+            }
+        }
+        tiles.put(key, raster::TileCoord::new(0, 0, 0), data);
+    }
+
+    fn bands(x: usize) -> u8 {
+        if (16..32).contains(&x) {
+            220
+        } else {
+            40
+        }
+    }
+
+    fn covered(mask: &SelectionMask) -> usize {
+        mask.coverage().iter().filter(|&&v| v > 0).count()
+    }
+
+    fn partial(mask: &SelectionMask) -> usize {
+        mask.coverage()
+            .iter()
+            .filter(|&&v| v > 0 && v < 255)
+            .count()
+    }
+
+    #[test]
+    fn bucket_tolerance_contiguous_sample_merged_and_antialias_reach_the_flood() {
+        let mut tiles = MemoryTiles::new();
+        let layer = LayerId::new();
+        let composite = LayerId::new();
+        paint(&mut tiles, PixelKey::Layer(layer), bands);
+        paint(&mut tiles, PixelKey::Layer(composite), |_| 40);
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, W, H)).with_layer(layer);
+        ctx.sample_from = Some(PixelKey::Layer(composite));
+        let seed = IVec2::new(4, 8);
+        let mut tool = PaintBucketTool::default();
+        tool.set_setting("antialias", ToolSetting::Bool(false))
+            .unwrap();
+
+        tool.set_setting("tolerance", ToolSetting::Float(0.0))
+            .unwrap();
+        assert_eq!(
+            covered(&flood(&ctx, seed, &tool.settings).unwrap()),
+            16 * H as usize
+        );
+        tool.set_setting("tolerance", ToolSetting::Float(1.0))
+            .unwrap();
+        assert_eq!(
+            covered(&flood(&ctx, seed, &tool.settings).unwrap()),
+            (W * H) as usize
+        );
+
+        tool.set_setting("tolerance", ToolSetting::Float(0.0))
+            .unwrap();
+        tool.set_setting("contiguous", ToolSetting::Bool(false))
+            .unwrap();
+        assert_eq!(
+            covered(&flood(&ctx, seed, &tool.settings).unwrap()),
+            48 * H as usize
+        );
+
+        tool.set_setting("contiguous", ToolSetting::Bool(true))
+            .unwrap();
+        tool.set_setting("sample_merged", ToolSetting::Bool(true))
+            .unwrap();
+        assert_eq!(
+            covered(&flood(&ctx, seed, &tool.settings).unwrap()),
+            (W * H) as usize,
+            "judged against the flat composite"
+        );
+
+        // Anti-alias: a tolerance straddling the band difference ramps the
+        // rim when on and snaps it when off.
+        tool.set_setting("sample_merged", ToolSetting::Bool(false))
+            .unwrap();
+        tool.set_setting("tolerance", ToolSetting::Float(0.75))
+            .unwrap();
+        tool.set_setting("antialias", ToolSetting::Bool(true))
+            .unwrap();
+        let aa = flood(&ctx, seed, &tool.settings).unwrap();
+        tool.set_setting("antialias", ToolSetting::Bool(false))
+            .unwrap();
+        let hard = flood(&ctx, seed, &tool.settings).unwrap();
+        assert!(partial(&aa) > 0);
+        assert_eq!(partial(&hard), 0);
+
+        assert!(matches!(
+            tool.set_setting("tolerance", ToolSetting::Bool(true)),
+            Err(ToolError::OptionKindMismatch { .. })
+        ));
+        assert!(matches!(
+            tool.set_setting("radius", ToolSetting::Float(1.0)),
+            Err(ToolError::UnknownOption { .. })
+        ));
+    }
+
+    #[test]
+    fn opacity_reaches_the_fill_through_set_setting_and_through_the_brush() {
+        // An empty layer: the flood covers the whole canvas, and the fill
+        // alpha is the opacity.
+        let alpha_after = |opacity_via: &dyn Fn(&mut PaintBucketTool)| {
+            let mut tiles = MemoryTiles::new();
+            let layer = LayerId::new();
+            let key = PixelKey::Layer(layer);
+            let mut tool = PaintBucketTool::default();
+            opacity_via(&mut tool);
+            let delta = {
+                let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, W, H))
+                    .with_layer(layer)
+                    .with_foreground([1.0, 0.0, 0.0, 1.0]);
+                tool.on_pointer_down(&mut ctx, PointerEvent::at(4.0, 4.0))
+                    .unwrap();
+                tool.on_pointer_up(&mut ctx, PointerEvent::at(4.0, 4.0))
+                    .unwrap();
+                match ctx.drain().pop() {
+                    Some(Command::PaintTiles { delta, .. }) => delta,
+                    other => panic!("expected a paint: {other:?}"),
+                }
+            };
+            tiles.apply_delta(key, &delta);
+            tiles.pixel(key, 10, 10)[3]
+        };
+        assert_eq!(alpha_after(&|_| {}), 255);
+        let half = alpha_after(&|t| {
+            t.set_setting("opacity", ToolSetting::Float(0.5)).unwrap();
+        });
+        assert!(
+            (126..=129).contains(&half),
+            "set_setting opacity 0.5 -> alpha {half}"
+        );
+        // The shell carries `opacity` in the brush it hands the tool at
+        // pointer-down, so the brush route must land in the same place.
+        let quarter = alpha_after(&|t| {
+            t.set_brush(BrushSettings {
+                opacity: 0.25,
+                ..BrushSettings::default()
+            })
+        });
+        assert!(
+            (62..=65).contains(&quarter),
+            "brush opacity 0.25 -> alpha {quarter}"
+        );
+
+        // Pattern Fill: the same two routes onto its one option.
+        let mut pf = PatternFillTool::default();
+        pf.set_setting("opacity", ToolSetting::Float(0.3)).unwrap();
+        assert_eq!(pf.opacity, 0.3);
+        pf.set_brush(BrushSettings {
+            opacity: 0.6,
+            ..BrushSettings::default()
+        });
+        assert_eq!(pf.opacity, 0.6);
+        assert!(matches!(
+            pf.set_setting("tolerance", ToolSetting::Float(0.5)),
+            Err(ToolError::UnknownOption { .. })
+        ));
     }
 }

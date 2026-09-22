@@ -21,6 +21,7 @@ use color::{linear_srgb_luminance, linear_to_srgb, premultiply, unpremultiply};
 use editor_core::{Command, PixelKey, Selection};
 use filters::{blur::gaussian_blur, sharpen::unsharp_mask, EdgeMode, FilterBuffer};
 use glam::{IVec2, Vec2};
+use layer_model::BlendMode;
 use raster::PixelRect;
 use serde::{Deserialize, Serialize};
 
@@ -144,6 +145,21 @@ impl StrokeOp {
     /// `true` when this op reads pixels from a second location.
     pub fn needs_source(&self) -> bool {
         matches!(self, StrokeOp::CloneStamp | StrokeOp::Healing { .. })
+    }
+
+    /// `true` when this op lays a source colour *over* the layer — the
+    /// [`Blend::Over`] preparations: painting, the clone stamp and the
+    /// pattern stamp — and therefore has a colour a paint blend mode can act
+    /// on. The retouching ops mix toward a computed target ([`Blend::Lerp`])
+    /// or take coverage away ([`Blend::Erase`]); there is no source colour
+    /// to blend, so [`crate::BLEND_MODE_KEY`] is refused for them rather than
+    /// accepted and ignored. The options bar offers the Mode combo by this
+    /// same predicate ([`crate::composites_strokes`]).
+    pub fn composites_source(&self) -> bool {
+        matches!(
+            self,
+            StrokeOp::Paint { .. } | StrokeOp::CloneStamp | StrokeOp::PatternStamp
+        )
     }
 
     /// `true` when this op is meaningful on an 8-bit coverage mask.
@@ -634,6 +650,58 @@ fn collect_gate(patch: &ColorPatch, f: impl Fn([f32; 4]) -> f32) -> Vec<f32> {
     patch.buffer().pixels().iter().map(|p| f(*p)).collect()
 }
 
+/// The source pixel a source-over dab lays down once the paint blend mode
+/// has had its say: the W3C model's `Cs' = (1 − αb)·Cs + αb·B(Cb, Cs)`,
+/// evaluated in straight linear colour and handed back premultiplied so the
+/// `Over` arm below composites it exactly as it would an unblended one.
+///
+/// Where the destination is transparent the source shows unblended (there
+/// is nothing to blend with), which is what makes Multiply over an empty
+/// layer paint the colour rather than nothing. `Normal` is the identity and
+/// is short-circuited by the caller, so an untouched Mode combo leaves the
+/// paint path byte-identical to what it was.
+fn blended_source(mode: BlendMode, src: [f32; 4], dst: [f32; 4]) -> [f32; 4] {
+    if src[3] <= 0.0 {
+        return src;
+    }
+    let s = unpremultiply(src);
+    let d = unpremultiply(dst);
+    let ab = dst[3].clamp(0.0, 1.0);
+    let b = mode.blend_rgb([d[0], d[1], d[2]], [s[0], s[1], s[2]]);
+    premultiply([
+        (1.0 - ab) * s[0] + ab * b[0],
+        (1.0 - ab) * s[1] + ab * b[1],
+        (1.0 - ab) * s[2] + ab * b[2],
+        s[3],
+    ])
+}
+
+/// How a whole stroke lands on the layer: its opacity ceiling and the paint
+/// blend mode the options bar's Mode combo holds.
+///
+/// The mode acts on the source-over ops — painting, the clone stamp and the
+/// pattern stamp — which are the ones that lay a colour *on top*; the
+/// retouching ops mix toward a computed target and have no source colour to
+/// blend, so they read only the opacity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StrokeBlend {
+    /// Ceiling on the whole stroke's coverage, `0..=1`.
+    pub opacity: f32,
+    /// The paint blend mode; `Normal` is source-over exactly as before.
+    pub mode: BlendMode,
+}
+
+impl StrokeBlend {
+    /// Source-over at `opacity`, the stroke every tool painted before the
+    /// Mode combo reached one.
+    pub fn normal(opacity: f32) -> Self {
+        Self {
+            opacity,
+            mode: BlendMode::Normal,
+        }
+    }
+}
+
 /// Composite a stroke's coverage plane onto a layer patch, once.
 pub fn apply_stroke(
     patch: &mut ColorPatch,
@@ -641,13 +709,14 @@ pub fn apply_stroke(
     op: &StrokeOp,
     sources: &StrokeSources<'_>,
     base_color: [f32; 4],
-    opacity: f32,
+    blend: StrokeBlend,
     selection: &Selection,
 ) -> Result<(), ToolError> {
     let covered = coverage_over(patch, buf);
     let prep = prepare(op, patch, &covered, sources, base_color)?;
     let rect = buf.rect();
-    let opacity = opacity.clamp(0.0, 1.0);
+    let opacity = blend.opacity.clamp(0.0, 1.0);
+    let blend_mode = blend.mode;
     for y in rect.y..rect.bottom() {
         for x in rect.x..rect.right() {
             let p = IVec2::new(x as i32, y as i32);
@@ -673,6 +742,11 @@ pub fn apply_stroke(
                 ],
                 Blend::Over => {
                     let s = prep.aux.as_ref().map(|b| b.pixels()[i]).unwrap_or([0.0; 4]);
+                    let s = if blend_mode == BlendMode::Normal {
+                        s
+                    } else {
+                        blended_source(blend_mode, s, dst)
+                    };
                     let sa = s[3] * a;
                     [
                         s[0] * a + dst[0] * (1.0 - sa),
@@ -1133,6 +1207,10 @@ pub struct StrokeTool {
     /// than from whatever is baked into `op`. On for the palette's tools,
     /// which is why picking a colour changes what the brush paints.
     pub use_foreground: bool,
+    /// The paint blend mode the options bar's Mode combo holds — how a
+    /// source-over dab combines with the pixels under it. Reaches the tool
+    /// through [`Tool::set_setting`] under [`crate::BLEND_MODE_KEY`].
+    pub blend_mode: BlendMode,
     emitter: Option<DabEmitter>,
     /// The colour under the first sample, for the tolerance-driven ops.
     base_color: [f32; 4],
@@ -1147,6 +1225,7 @@ impl StrokeTool {
             op,
             clone: CloneSource::default(),
             use_foreground: true,
+            blend_mode: BlendMode::Normal,
             emitter: None,
             base_color: [0.0; 4],
             offset: IVec2::ZERO,
@@ -1273,7 +1352,10 @@ impl StrokeTool {
                         &self.op,
                         &sources,
                         self.base_color,
-                        self.settings.opacity,
+                        StrokeBlend {
+                            opacity: self.settings.opacity,
+                            mode: self.blend_mode,
+                        },
                         &ctx.selection,
                     )?;
                 }
@@ -1384,68 +1466,174 @@ impl Tool for StrokeTool {
         Some(self.settings)
     }
 
-    /// Card 061: the tool-specific float options reach the op — the registry
-    /// declares them, and a refused value is surfaced by the shell rather
-    /// than silently ignored (an options-bar control that did nothing was the
-    /// defect this seam exists to prevent). The brush-shared keys (size,
-    /// hardness, spacing, opacity, ...) travel through `set_brush` instead.
+    /// Every option the registry declares for a stroke tool reaches the tool
+    /// here, whatever its kind — a refused value is surfaced by the shell
+    /// rather than silently ignored (an options-bar control that did nothing
+    /// was the defect this seam exists to prevent), and a key whose value
+    /// arrives as the wrong kind is [`ToolError::OptionKindMismatch`] rather
+    /// than [`ToolError::UnknownOption`], so the two failures read apart.
     ///
-    /// RECORDED dead controls (pre-existing, Choice/Bool keys): Dodge/Burn
-    /// `range` and Sponge `mode` (Choice — the trait's default `set_choice`
-    /// accepts and drops), CloneStamp/HealingBrush `aligned` (Bool —
-    /// refused), and the selection tools' `mode`, Gradient `shape`, Type
-    /// `font_family` (Choice no-ops). Wiring them is follow-up work; the
-    /// registry contract test below keeps the float set from regrowing
-    /// silently.
+    /// Four families:
+    ///
+    /// * the brush-shared keys ([`crate::registry::BRUSH_OPTION_KEYS`]) write
+    ///   the brush, with the same never-mid-stroke rule as [`Tool::set_brush`]
+    ///   — a shell that routes them through `set_brush` instead loses nothing;
+    /// * the op's own floats (`exposure`, `radius`, `tolerance`, …) write the
+    ///   op;
+    /// * the op's own choices and flags — Dodge/Burn `range` (Shadows,
+    ///   Midtones, Highlights), Sponge `mode` (Desaturate, Saturate), the
+    ///   clone stamp's and healing brush's `aligned` — write the op or the
+    ///   clone source;
+    /// * the options bar's paint blend mode ([`crate::BLEND_MODE_KEY`], a
+    ///   Choice indexing [`BlendMode::ALL`]) writes [`Self::blend_mode`] —
+    ///   for the ops that composite a source colour
+    ///   ([`StrokeOp::composites_source`]: Brush, Pencil, Clone Stamp,
+    ///   Pattern Stamp); the retouching ops refuse it as unknown, because
+    ///   [`apply_stroke`] has no colour of theirs to blend and an accepted
+    ///   key that changed nothing would be the dead control this seam
+    ///   exists to prevent.
+    ///
+    /// A choice index past the end of its list is clamped to the last entry,
+    /// the same rule the options bar's own `conform` applies.
     fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
-        let v = match setting {
-            ToolSetting::Float(v) => v,
-            _ => {
-                return Err(ToolError::UnknownOption {
-                    key: key.to_owned(),
-                })
-            }
+        let mismatch = || {
+            Err(ToolError::OptionKindMismatch {
+                key: key.to_owned(),
+            })
         };
-        match (key, &mut self.op) {
-            ("strength", StrokeOp::RefineBoundary { strength }) => {
+        let unknown = || {
+            Err(ToolError::UnknownOption {
+                key: key.to_owned(),
+            })
+        };
+
+        // The paint blend mode: answered only where `apply_stroke` will
+        // read it — the `Blend::Over` ops. A Lerp/Erase op accepting the key
+        // would hold a mode its compositing never consults.
+        if key == crate::BLEND_MODE_KEY {
+            if !self.op.composites_source() {
+                return unknown();
+            }
+            return match setting {
+                ToolSetting::Choice(index) => {
+                    let last = BlendMode::ALL.len() - 1;
+                    self.blend_mode =
+                        crate::blend_mode_from_choice(index.min(last)).unwrap_or(BlendMode::Normal);
+                    Ok(())
+                }
+                _ => mismatch(),
+            };
+        }
+
+        // The brush-shared keys: the brush is part of what a stroke tool is,
+        // so the tool answers them directly as well as through `set_brush`.
+        if crate::registry::BRUSH_OPTION_KEYS.contains(&key) {
+            let mut brush = self.settings;
+            match (key, setting) {
+                ("size", ToolSetting::Float(v)) => brush.size = v,
+                ("hardness", ToolSetting::Float(v)) => brush.hardness = v,
+                ("spacing", ToolSetting::Float(v)) => brush.spacing = v,
+                ("angle", ToolSetting::Float(v)) => brush.angle = v,
+                ("roundness", ToolSetting::Float(v)) => brush.roundness = v,
+                ("opacity", ToolSetting::Float(v)) => brush.opacity = v,
+                ("flow", ToolSetting::Float(v)) => brush.flow = v,
+                ("smoothing", ToolSetting::Float(v)) => brush.smoothing = v,
+                ("size_pressure", ToolSetting::Bool(v)) => brush.size_pressure = v,
+                ("flow_pressure", ToolSetting::Bool(v)) => brush.flow_pressure = v,
+                _ => return mismatch(),
+            }
+            // Validated the way `DabEmitter::begin` would validate it: a
+            // NaN size or a zero spacing is refused here rather than at the
+            // press, where it would abort the stroke.
+            let brush = brush.validated()?;
+            self.set_brush(brush);
+            return Ok(());
+        }
+
+        match (key, setting, &mut self.op) {
+            // ----- the op's own floats ------------------------------------
+            (
+                "strength",
+                ToolSetting::Float(v),
+                StrokeOp::RefineBoundary { strength } | StrokeOp::Smudge { strength },
+            ) => {
                 *strength = v.clamp(0.0, 1.0);
                 Ok(())
             }
-            ("radius", StrokeOp::Blur { radius }) => {
+            ("radius", ToolSetting::Float(v), StrokeOp::Blur { radius }) => {
                 *radius = v.clamp(0.1, 64.0);
                 Ok(())
             }
-            ("amount", StrokeOp::Sharpen { amount, .. }) => {
+            ("amount", ToolSetting::Float(v), StrokeOp::Sharpen { amount, .. }) => {
                 *amount = v.clamp(0.0, 4.0);
                 Ok(())
             }
-            ("tolerance", StrokeOp::ColorReplacement { tolerance, .. })
-            | ("tolerance", StrokeOp::BackgroundErase { tolerance, .. }) => {
+            (
+                "tolerance",
+                ToolSetting::Float(v),
+                StrokeOp::ColorReplacement { tolerance, .. }
+                | StrokeOp::BackgroundErase { tolerance, .. },
+            ) => {
                 *tolerance = v.clamp(0.0, 1.0);
                 Ok(())
             }
-            ("softness", StrokeOp::Healing { softness }) => {
+            ("softness", ToolSetting::Float(v), StrokeOp::Healing { softness }) => {
                 // The registry's Softness is a Gaussian sigma in PIXELS
                 // (0.5..64, default 4) — not a 0..1 strength.
                 *softness = v.clamp(0.5, 64.0);
                 Ok(())
             }
-            ("strength", StrokeOp::Smudge { strength }) => {
-                *strength = v.clamp(0.0, 1.0);
-                Ok(())
-            }
-            ("exposure", StrokeOp::Dodge { exposure, .. })
-            | ("exposure", StrokeOp::Burn { exposure, .. }) => {
+            (
+                "exposure",
+                ToolSetting::Float(v),
+                StrokeOp::Dodge { exposure, .. } | StrokeOp::Burn { exposure, .. },
+            ) => {
                 *exposure = v.clamp(0.0, 1.0);
                 Ok(())
             }
-            ("amount", StrokeOp::Sponge { amount, .. }) => {
+            ("amount", ToolSetting::Float(v), StrokeOp::Sponge { amount, .. }) => {
                 *amount = v.clamp(0.0, 1.0);
                 Ok(())
             }
-            _ => Err(ToolError::UnknownOption {
-                key: key.to_owned(),
-            }),
+            // ----- the op's own choices and flags -------------------------
+            (
+                "range",
+                ToolSetting::Choice(index),
+                StrokeOp::Dodge { range, .. } | StrokeOp::Burn { range, .. },
+            ) => {
+                *range = match index {
+                    0 => ToneRange::Shadows,
+                    1 => ToneRange::Midtones,
+                    _ => ToneRange::Highlights,
+                };
+                Ok(())
+            }
+            ("mode", ToolSetting::Choice(index), StrokeOp::Sponge { mode, .. }) => {
+                *mode = if index == 0 {
+                    SpongeMode::Desaturate
+                } else {
+                    SpongeMode::Saturate
+                };
+                Ok(())
+            }
+            ("aligned", ToolSetting::Bool(v), StrokeOp::CloneStamp | StrokeOp::Healing { .. }) => {
+                self.clone.aligned = v;
+                Ok(())
+            }
+            // ----- a known key with the wrong kind of value ---------------
+            ("strength", _, StrokeOp::RefineBoundary { .. } | StrokeOp::Smudge { .. })
+            | ("radius", _, StrokeOp::Blur { .. })
+            | ("amount", _, StrokeOp::Sharpen { .. } | StrokeOp::Sponge { .. })
+            | (
+                "tolerance",
+                _,
+                StrokeOp::ColorReplacement { .. } | StrokeOp::BackgroundErase { .. },
+            )
+            | ("softness", _, StrokeOp::Healing { .. })
+            | ("exposure" | "range", _, StrokeOp::Dodge { .. } | StrokeOp::Burn { .. })
+            | ("mode", _, StrokeOp::Sponge { .. })
+            | ("aligned", _, StrokeOp::CloneStamp | StrokeOp::Healing { .. }) => mismatch(),
+            _ => unknown(),
         }
     }
 }

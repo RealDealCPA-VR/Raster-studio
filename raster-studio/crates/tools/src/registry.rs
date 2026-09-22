@@ -1016,134 +1016,101 @@ mod tests {
     use crate::tool::{PointerEvent, ToolContext};
     use raster::PixelRect;
 
-    /// Card 061 (review round 3): the registry-to-tool contract. Every
-    /// declared Float/Int option at its schema default goes through the built
-    /// tool's `set_setting`; a refusal is legal ONLY for the recorded
-    /// DEAD_KEYS set (tools whose options are consumed through ToolContext
-    /// rather than the tool object, or not wired yet). This keeps the float
-    /// set from regrowing silently — the round-2 critical was a dead
-    /// Strength slider nobody could see. Choice keys are out of scope (the
-    /// trait's default `set_choice` accepts and drops, recorded in
-    /// StrokeTool::set_setting's doc); the brush-shared keys travel through
-    /// `set_brush`.
-    #[test]
-    fn every_float_option_reaches_its_tool_or_is_recorded_dead() {
-        // The brush-shared keys travel through `set_brush` by design; a
-        // refusal there is the boundary filter's job, not the tool's.
-        const DEAD_KEYS: &[(&str, &str)] = &[
-            // Consumed through ToolContext per gesture, or not wired yet:
-            // recorded so the set cannot grow silently.
-            ("Crop", "aspect"),
-            ("Crop", "straighten"),
-            ("Elliptical Marquee", "feather"),
-            ("Eyedropper", "sample_radius"),
-            ("Lasso", "feather"),
-            ("Line", "width"),
-            ("Magic Eraser", "tolerance"),
-            ("Magic Wand", "tolerance"),
-            ("Magnetic Lasso", "edge_weight"),
-            ("Magnetic Lasso", "search_radius"),
-            ("Paint Bucket", "tolerance"),
-            ("Patch", "softness"),
-            ("Polygon", "sides"),
-            ("Polygonal Lasso", "feather"),
-            ("Quick Selection", "radius"),
-            ("Quick Selection", "tolerance"),
-            ("Rectangular Marquee", "feather"),
-            ("Red Eye", "darken"),
-            ("Red Eye", "threshold"),
-            ("Rounded Rectangle", "radius"),
-            ("Single Column Marquee", "feather"),
-            ("Single Row Marquee", "feather"),
-            ("Star", "inner_ratio"),
-            ("Star", "points"),
-            ("Type", "size_px"),
-        ];
-        let mut dead = Vec::new();
-        for info in TOOLS {
-            let mut tool = make(info.id);
-            for spec in info.options {
-                if BRUSH_OPTION_KEYS.contains(&spec.key) {
-                    continue;
-                }
-                let value = match spec.kind {
-                    OptionKind::Float { default, .. } => ToolSetting::Float(default),
-                    OptionKind::Int { default, .. } => ToolSetting::Int(default),
-                    _ => continue,
-                };
-                if tool.set_setting(spec.key, value).is_err() {
-                    dead.push((info.name, spec.key));
-                }
+    /// W1-B1: the tools whose option wiring belongs to the OTHER doer in
+    /// this wave (W1-B2 owns stroke.rs / brush.rs / shape.rs / pen.rs /
+    /// text.rs / patch.rs / transform.rs). Their refusals are tolerated by
+    /// [`every_declared_option_reaches_its_tool`] until B2 lands, at which
+    /// point this list shrinks to empty and the test covers every tool.
+    /// Every tool NOT listed here must answer every one of its spec'd keys.
+    pub(super) const W1_B2_PENDING: &[ToolId] = &[
+        // StrokeTool (stroke.rs, W1-B2)
+        ToolId::SpotHealing,
+        ToolId::HealingBrush,
+        ToolId::Brush,
+        ToolId::Pencil,
+        ToolId::ColorReplacement,
+        ToolId::CloneStamp,
+        ToolId::PatternStamp,
+        ToolId::Eraser,
+        ToolId::BackgroundEraser,
+        ToolId::Blur,
+        ToolId::Sharpen,
+        ToolId::RefineBoundary,
+        ToolId::Smudge,
+        ToolId::Dodge,
+        ToolId::Burn,
+        ToolId::Sponge,
+        // ShapeTool (shape.rs, W1-B2)
+        ToolId::Rectangle,
+        ToolId::RoundedRectangle,
+        ToolId::Ellipse,
+        ToolId::Polygon,
+        ToolId::Star,
+        ToolId::Line,
+        ToolId::CustomShape,
+        // TypeTool (text.rs, W1-B2)
+        ToolId::Type,
+        // TransformTool (transform.rs, W1-B2)
+        ToolId::FreeTransform,
+    ];
+
+    /// A value of the spec's kind that is NOT its default, inside its range —
+    /// so a `set_setting` that quietly drops the value cannot pass by
+    /// coincidence, and a kind-mismatch refusal cannot hide behind a wrong
+    /// variant.
+    fn non_default_setting(kind: OptionKind) -> ToolSetting {
+        match kind {
+            OptionKind::Float { min, max, default } => {
+                ToolSetting::Float(if default < max { max } else { min })
+            }
+            OptionKind::Int { min, max, default } => {
+                ToolSetting::Int(if default < max { max } else { min })
+            }
+            OptionKind::Bool { default } => ToolSetting::Bool(!default),
+            OptionKind::Choice { choices, default } => {
+                ToolSetting::Choice((default + 1) % choices.len().max(1))
+            }
+            OptionKind::Color { default } => {
+                ToolSetting::Color([1.0 - default[0], default[1], default[2], default[3]])
             }
         }
-        dead.sort();
-        let recorded: Vec<(&str, &str)> =
-            DEAD_KEYS.iter().map(|(name, key)| (*name, *key)).collect();
-        assert_eq!(
-            dead, recorded,
-            "a declared float/int option was refused by its own tool — wire it in set_setting or record it in DEAD_KEYS"
-        );
     }
 
-    /// Card 061 (review round 4): the same contract for the DEAD BOOL
-    /// options — touched Bools forward (they are registry keys), and the
-    /// tools that do not answer them refuse per press. Surfaced honestly by
-    /// the shell, but pinned so the set cannot grow silently either. The
-    /// recorded set is the un-wired Bool checkboxes; `Move`'s Bools and the
-    /// brush-family Bools (size_pressure/flow_pressure, which ride
-    /// `set_brush`) are answered or filtered and must NOT appear here.
-    /// (`Quick Selection` answers its own sample_merged/contiguous through
-    /// `QuickSelectOptions`; `Polygon` shares the Rectangle shape struct.)
+    /// W1-B1: the registry-to-tool contract, for EVERY option kind. For
+    /// every tool in [`all`], for every [`OptionSpec`] it declares, the
+    /// tool [`make`] builds must accept a non-default value of the spec's
+    /// kind through `Tool::set_setting`. An option the bar draws that its
+    /// tool refuses is a control that does nothing while looking like it
+    /// does — the defect this test exists to prevent. The brush-shared keys
+    /// travel through `set_brush` by design and are skipped; the tools in
+    /// [`W1_B2_PENDING`] are tolerated until their owner lands.
     #[test]
-    fn every_bool_refusal_is_the_recorded_dead_set() {
-        const DEAD_KEYS: &[(&str, &str)] = &[
-            ("Clone Stamp", "aligned"),
-            ("Crop", "delete_cropped"),
-            ("Custom Shape", "from_center"),
-            ("Ellipse", "from_center"),
-            ("Elliptical Marquee", "antialias"),
-            ("Eyedropper", "sample_all_layers"),
-            ("Gradient", "dither"),
-            ("Gradient", "reverse"),
-            ("Healing Brush", "aligned"),
-            ("Lasso", "antialias"),
-            ("Magic Eraser", "antialias"),
-            ("Magic Eraser", "contiguous"),
-            ("Magic Eraser", "sample_merged"),
-            ("Magic Wand", "antialias"),
-            ("Magic Wand", "contiguous"),
-            ("Magic Wand", "sample_merged"),
-            ("Paint Bucket", "antialias"),
-            ("Paint Bucket", "contiguous"),
-            ("Paint Bucket", "sample_merged"),
-            ("Polygonal Lasso", "antialias"),
-            ("Rectangle", "from_center"),
-            ("Rectangular Marquee", "antialias"),
-            ("Single Column Marquee", "antialias"),
-            ("Single Row Marquee", "antialias"),
-        ];
-        let mut dead = Vec::new();
-        for info in TOOLS {
+    fn every_declared_option_reaches_its_tool() {
+        let mut refused = Vec::new();
+        let mut pending_still_refusing = Vec::new();
+        for info in all() {
             let mut tool = make(info.id);
             for spec in info.options {
                 if BRUSH_OPTION_KEYS.contains(&spec.key) {
                     continue;
                 }
-                let value = match spec.kind {
-                    OptionKind::Bool { default } => ToolSetting::Bool(default),
-                    _ => continue,
-                };
-                if tool.set_setting(spec.key, value).is_err() {
-                    dead.push((info.name, spec.key));
+                let value = non_default_setting(spec.kind);
+                if let Err(e) = tool.set_setting(spec.key, value) {
+                    if W1_B2_PENDING.contains(&info.id) {
+                        pending_still_refusing.push((info.name, spec.key, e.to_string()));
+                    } else {
+                        refused.push((info.name, spec.key, e.to_string()));
+                    }
                 }
             }
         }
-        dead.sort();
-        let recorded: Vec<(&str, &str)> =
-            DEAD_KEYS.iter().map(|(name, key)| (*name, *key)).collect();
-        assert_eq!(
-            dead, recorded,
-            "a declared Bool option was refused by its own tool — wire it or record it in DEAD_KEYS"
+        // Informational only: what the allow-list is still covering.
+        for (name, key, why) in &pending_still_refusing {
+            eprintln!("W1-B2 pending: {name}.{key}: {why}");
+        }
+        assert!(
+            refused.is_empty(),
+            "a declared option was refused by its own tool — wire it in set_setting: {refused:#?}"
         );
     }
 

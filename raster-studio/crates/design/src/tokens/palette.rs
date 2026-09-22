@@ -18,9 +18,14 @@ pub enum ColorRole {
     // ---- background layers, back to front -------------------------------
     /// Wells and insets that read as cut *into* the surface.
     SurfaceSunken,
-    /// The document backdrop the image floats on. The hero area.
+    /// The pasteboard: the flat backdrop the open document floats on. The
+    /// darkest chrome-adjacent layer in dark mode so the image is what glows.
     BackgroundCanvas,
-    /// Tool panels, inspectors, sidebars.
+    /// Bands that frame a panel body: the menu bar, the options bar, the
+    /// document-tab strip, panel title rows and the status bar. Sits between
+    /// the pasteboard and the panel body so each band reads as its own step.
+    SurfaceHeader,
+    /// Tool panels, inspectors, sidebars — the body colour of the chrome.
     SurfacePanel,
     /// Cards and floating bars sitting on a panel.
     SurfaceElevated,
@@ -82,6 +87,7 @@ impl ColorRole {
     pub const ALL: &'static [ColorRole] = &[
         Self::SurfaceSunken,
         Self::BackgroundCanvas,
+        Self::SurfaceHeader,
         Self::SurfacePanel,
         Self::SurfaceElevated,
         Self::SurfaceOverlay,
@@ -122,6 +128,8 @@ impl ColorRole {
 pub enum SurfaceRole {
     Sunken,
     Canvas,
+    /// Menu / options / tab / status bands and panel title rows.
+    Header,
     Panel,
     Elevated,
     Overlay,
@@ -132,6 +140,7 @@ impl SurfaceRole {
     pub const ALL: &'static [SurfaceRole] = &[
         Self::Sunken,
         Self::Canvas,
+        Self::Header,
         Self::Panel,
         Self::Elevated,
         Self::Overlay,
@@ -142,6 +151,7 @@ impl SurfaceRole {
         match self {
             Self::Sunken => ColorRole::SurfaceSunken,
             Self::Canvas => ColorRole::BackgroundCanvas,
+            Self::Header => ColorRole::SurfaceHeader,
             Self::Panel => ColorRole::SurfacePanel,
             Self::Elevated => ColorRole::SurfaceElevated,
             Self::Overlay => ColorRole::SurfaceOverlay,
@@ -227,7 +237,8 @@ impl Palette {
         Self::from_pairs(false, LIGHT_ROLES)
     }
 
-    /// The dark palette — the shipped default, tuned to Photopea’s neutral greys.
+    /// The dark palette — the shipped default, tuned to Photopea’s neutral greys:
+    /// mid-grey chrome standing off a darker pasteboard.
     pub fn dark() -> Self {
         Self::from_pairs(true, DARK_ROLES)
     }
@@ -277,24 +288,27 @@ impl Palette {
     }
 }
 
-/// Light appearance. Surfaces climb from a soft grey canvas to pure white so
-/// panels read as *above* the document, never as boxes drawn on it.
+/// Light appearance — Photopea's light theme: a #F0F0F0 chrome around a
+/// #D8D8D8 pasteboard, so the document sits in a recess and the panels stand
+/// off it. Surfaces climb from the sunken wells to near-white cards.
 pub const LIGHT_ROLES: &[(ColorRole, Srgba)] = &[
-    (ColorRole::SurfaceSunken, Srgba::hex(0xDCDCE1)),
-    (ColorRole::BackgroundCanvas, Srgba::hex(0xE9E9EE)),
-    (ColorRole::SurfacePanel, Srgba::hex(0xF4F4F6)),
-    (ColorRole::SurfaceElevated, Srgba::hex(0xFFFFFF)),
-    (ColorRole::SurfaceOverlay, Srgba::hex(0xFAFAFC)),
+    (ColorRole::SurfaceSunken, Srgba::hex(0xCCCCCC)),
+    (ColorRole::BackgroundCanvas, Srgba::hex(0xD8D8D8)),
+    (ColorRole::SurfaceHeader, Srgba::hex(0xE2E2E2)),
+    (ColorRole::SurfacePanel, Srgba::hex(0xF0F0F0)),
+    (ColorRole::SurfaceElevated, Srgba::hex(0xFAFAFA)),
+    (ColorRole::SurfaceOverlay, Srgba::hex(0xF6F6F6)),
     (ColorRole::SeparatorHairline, Srgba::hexa(0x00000022)),
-    (ColorRole::SeparatorStrong, Srgba::hex(0xC6C6CB)),
+    (ColorRole::SeparatorStrong, Srgba::hex(0xB8B8B8)),
     (ColorRole::TextPrimary, Srgba::hex(0x16161A)),
-    (ColorRole::TextSecondary, Srgba::hex(0x4E4E56)),
+    (ColorRole::TextSecondary, Srgba::hex(0x4A4A50)),
     // Dark enough to clear 4.5:1 on Sunken, the lowest surface it lands on:
     // Tertiary is rendered at 11pt, which WCAG gives no size discount for.
-    (ColorRole::TextTertiary, Srgba::hex(0x595961)),
-    (ColorRole::TextDisabled, Srgba::hex(0xA8A8B0)),
+    (ColorRole::TextTertiary, Srgba::hex(0x555555)),
+    (ColorRole::TextDisabled, Srgba::hex(0x9A9A9A)),
     (ColorRole::TextOnAccent, Srgba::hex(0xFFFFFF)),
-    (ColorRole::TextLink, Srgba::hex(0x0B57B4)),
+    // Deep enough for 4.5:1 on the #CCCCCC well.
+    (ColorRole::TextLink, Srgba::hex(0x0A50A8)),
     (ColorRole::Accent, Srgba::hex(0x0B62CE)),
     (ColorRole::AccentHovered, Srgba::hex(0x0A57B8)),
     (ColorRole::AccentPressed, Srgba::hex(0x094CA1)),
@@ -307,9 +321,9 @@ pub const LIGHT_ROLES: &[(ColorRole, Srgba)] = &[
     (ColorRole::Danger, Srgba::hex(0xC0261F)),
     (ColorRole::DangerSubtle, Srgba::hexa(0xC0261F1F)),
     (ColorRole::ControlFill, Srgba::hex(0xFFFFFF)),
-    (ColorRole::ControlFillHovered, Srgba::hex(0xF0F0F3)),
-    (ColorRole::ControlFillActive, Srgba::hex(0xE4E4E9)),
-    (ColorRole::ControlFillDisabled, Srgba::hex(0xEFEFF2)),
+    (ColorRole::ControlFillHovered, Srgba::hex(0xE8E8E8)),
+    (ColorRole::ControlFillActive, Srgba::hex(0xDCDCDC)),
+    (ColorRole::ControlFillDisabled, Srgba::hex(0xEAEAEA)),
     (ColorRole::ControlStroke, Srgba::hexa(0x00000026)),
     (ColorRole::ControlStrokeStrong, Srgba::hexa(0x0000003D)),
     (ColorRole::SelectionFill, Srgba::hexa(0x0B62CE3D)),
@@ -318,51 +332,53 @@ pub const LIGHT_ROLES: &[(ColorRole, Srgba)] = &[
     (ColorRole::ShadowColor, Srgba::hexa(0x0000002E)),
 ];
 
-/// Dark appearance. Near-black rather than black, so the image is the
-/// brightest thing on screen and panels recede.
+/// Dark appearance — Photopea's: a mid-grey chrome (#474747 panel bodies,
+/// #3A3A3A header bands) around a DARKER pasteboard (#2B2B2B), so the panels
+/// stand off the document area instead of sinking below it. The previous ramp
+/// had this inverted (#282828 chrome over a #3C pasteboard).
 pub const DARK_ROLES: &[(ColorRole, Srgba)] = &[
-    // The ramp is Photopea's: neutral greys (R = G = B — the previous ramp
-    // carried a faint blue cast). The accent and the text floors pin how light
-    // the surfaces may go: the accent needs 3:1 on Panel while white needs
-    // 4.5:1 on the accent, which together cap Panel near #282828 — so the
-    // chrome sits there and the hero canvas area sits darker than it.
-    (ColorRole::SurfaceSunken, Srgba::hex(0x1C1C1C)),
-    (ColorRole::BackgroundCanvas, Srgba::hex(0x202020)),
-    (ColorRole::SurfacePanel, Srgba::hex(0x282828)),
-    (ColorRole::SurfaceElevated, Srgba::hex(0x303030)),
-    (ColorRole::SurfaceOverlay, Srgba::hex(0x383838)),
+    // Neutral greys throughout (R = G = B).
+    (ColorRole::SurfaceSunken, Srgba::hex(0x232323)),
+    (ColorRole::BackgroundCanvas, Srgba::hex(0x2B2B2B)),
+    (ColorRole::SurfaceHeader, Srgba::hex(0x3A3A3A)),
+    (ColorRole::SurfacePanel, Srgba::hex(0x474747)),
+    (ColorRole::SurfaceElevated, Srgba::hex(0x505050)),
+    (ColorRole::SurfaceOverlay, Srgba::hex(0x4A4A4A)),
     (ColorRole::SeparatorHairline, Srgba::hexa(0xFFFFFF1F)),
-    (ColorRole::SeparatorStrong, Srgba::hex(0x3F3F3F)),
+    (ColorRole::SeparatorStrong, Srgba::hex(0x5C5C5C)),
     (ColorRole::TextPrimary, Srgba::hex(0xF2F2F2)),
-    (ColorRole::TextSecondary, Srgba::hex(0xC0C0C0)),
-    // Light enough to clear 4.5:1 on Overlay, the highest surface it lands on.
-    (ColorRole::TextTertiary, Srgba::hex(0xB4B4B4)),
-    (ColorRole::TextDisabled, Srgba::hex(0x606060)),
-    (ColorRole::TextOnAccent, Srgba::hex(0xFFFFFF)),
-    (ColorRole::TextLink, Srgba::hex(0x6FB2FF)),
-    // The accent deepens on hover and press in *both* appearances rather than
-    // brightening in dark mode. A brighter dark-mode hover pushed white label
-    // text below 4.5:1, and the contrast gate outranks the convention.
-    (ColorRole::Accent, Srgba::hex(0x2A6FD4)),
-    (ColorRole::AccentHovered, Srgba::hex(0x2664C2)),
-    (ColorRole::AccentPressed, Srgba::hex(0x1F5AAF)),
-    (ColorRole::AccentSubtle, Srgba::hexa(0x2A6FD433)),
-    (ColorRole::AccentMuted, Srgba::hex(0x3A567F)),
-    (ColorRole::Success, Srgba::hex(0x2E9E52)),
-    (ColorRole::SuccessSubtle, Srgba::hexa(0x2E9E5233)),
-    (ColorRole::Warning, Srgba::hex(0xD08A00)),
-    (ColorRole::WarningSubtle, Srgba::hexa(0xD08A0033)),
-    (ColorRole::Danger, Srgba::hex(0xE5544B)),
-    (ColorRole::DangerSubtle, Srgba::hexa(0xE5544B33)),
-    (ColorRole::ControlFill, Srgba::hex(0x474747)),
-    (ColorRole::ControlFillHovered, Srgba::hex(0x515151)),
-    (ColorRole::ControlFillActive, Srgba::hex(0x5B5B5B)),
-    (ColorRole::ControlFillDisabled, Srgba::hex(0x3A3A3A)),
+    (ColorRole::TextSecondary, Srgba::hex(0xD6D6D6)),
+    // Light enough to clear 4.5:1 on Elevated (#505050), the highest surface
+    // it lands on, at the 11pt it is rendered at.
+    (ColorRole::TextTertiary, Srgba::hex(0xC4C4C4)),
+    (ColorRole::TextDisabled, Srgba::hex(0x808080)),
+    // A #474747 panel needs the accent at 3:1 over it (SC 1.4.11), which puts
+    // the accent's luminance above what white text can clear 4.5:1 on. The
+    // arithmetic leaves one way through: a brighter blue with DARK text on it.
+    // The contrast gate outranks the white-on-blue convention.
+    (ColorRole::TextOnAccent, Srgba::hex(0x0B1526)),
+    (ColorRole::TextLink, Srgba::hex(0x9CCBFF)),
+    (ColorRole::Accent, Srgba::hex(0x5B9BF0)),
+    (ColorRole::AccentHovered, Srgba::hex(0x4A8CE4)),
+    (ColorRole::AccentPressed, Srgba::hex(0x4385DC)),
+    (ColorRole::AccentSubtle, Srgba::hexa(0x5B9BF033)),
+    (ColorRole::AccentMuted, Srgba::hex(0x4A6A94)),
+    (ColorRole::Success, Srgba::hex(0x4DBE70)),
+    (ColorRole::SuccessSubtle, Srgba::hexa(0x4DBE7033)),
+    (ColorRole::Warning, Srgba::hex(0xE0A020)),
+    (ColorRole::WarningSubtle, Srgba::hexa(0xE0A02033)),
+    (ColorRole::Danger, Srgba::hex(0xF27068)),
+    (ColorRole::DangerSubtle, Srgba::hexa(0xF2706833)),
+    // Controls sit a step above the panel body they are drawn on.
+    (ColorRole::ControlFill, Srgba::hex(0x555555)),
+    (ColorRole::ControlFillHovered, Srgba::hex(0x606060)),
+    (ColorRole::ControlFillActive, Srgba::hex(0x6A6A6A)),
+    (ColorRole::ControlFillDisabled, Srgba::hex(0x4C4C4C)),
     (ColorRole::ControlStroke, Srgba::hexa(0xFFFFFF1F)),
     (ColorRole::ControlStrokeStrong, Srgba::hexa(0xFFFFFF3D)),
-    (ColorRole::SelectionFill, Srgba::hexa(0x2A6FD466)),
-    (ColorRole::SelectionStroke, Srgba::hex(0x4C8FEA)),
-    (ColorRole::FocusRing, Srgba::hexa(0x4C8FEAB3)),
+    (ColorRole::SelectionFill, Srgba::hexa(0x5B9BF066)),
+    (ColorRole::SelectionStroke, Srgba::hex(0x7FB3F5)),
+    (ColorRole::FocusRing, Srgba::hexa(0x7FB3F5B3)),
     (ColorRole::ShadowColor, Srgba::hexa(0x00000080)),
 ];
 

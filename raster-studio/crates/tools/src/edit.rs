@@ -19,11 +19,24 @@ use selection::{
     ImageView,
 };
 
-use crate::error::ToolError;
+use crate::brush::BrushSettings;
+use crate::error::{finite, ToolError};
 use crate::patch::{read_rgba8, ColorPatch};
 use crate::tool::{
     CropRequest, PointerEvent, Slice, Tool, ToolContext, ToolId, ToolRequest, ToolSetting,
 };
+
+fn unknown_option(key: &str) -> ToolError {
+    ToolError::UnknownOption {
+        key: key.to_owned(),
+    }
+}
+
+fn kind_mismatch(key: &str) -> ToolError {
+    ToolError::OptionKindMismatch {
+        key: key.to_owned(),
+    }
+}
 
 // ---------------------------------------------------------------- move ----
 
@@ -550,6 +563,29 @@ impl Tool for CropTool {
         self.box_rect = None;
     }
 
+    /// The registry's three Crop options. `aspect` is the bar's width/height
+    /// ratio, where `0` means unconstrained; `straighten` and
+    /// `delete_cropped` ride into the emitted [`CropRequest`].
+    fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        match (key, setting) {
+            ("aspect", ToolSetting::Float(v)) => {
+                let v = finite("aspect ratio", v)?;
+                self.aspect = (v > 0.0).then_some(v.min(100.0));
+                Ok(())
+            }
+            ("straighten", ToolSetting::Float(v)) => {
+                self.straighten = finite("straighten angle", v)?.clamp(-3.15, 3.15);
+                Ok(())
+            }
+            ("delete_cropped", ToolSetting::Bool(v)) => {
+                self.delete_cropped = v;
+                Ok(())
+            }
+            ("aspect" | "straighten" | "delete_cropped", _) => Err(kind_mismatch(key)),
+            _ => Err(unknown_option(key)),
+        }
+    }
+
     fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
         CropTool::commit(self, ctx)
     }
@@ -782,6 +818,24 @@ impl Tool for EyedropperTool {
         self.active = false;
     }
 
+    /// The registry's two Eyedropper options: `sample_radius` (the bar's
+    /// Sample Size, the half-width of the averaged square) and
+    /// `sample_all_layers`. Both are read by [`EyedropperTool::sample`].
+    fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        match (key, setting) {
+            ("sample_radius", ToolSetting::Int(v)) => {
+                self.sample_radius = v.clamp(0, 64) as u32;
+                Ok(())
+            }
+            ("sample_all_layers", ToolSetting::Bool(v)) => {
+                self.sample_all_layers = v;
+                Ok(())
+            }
+            ("sample_radius" | "sample_all_layers", _) => Err(kind_mismatch(key)),
+            _ => Err(unknown_option(key)),
+        }
+    }
+
     fn is_active(&self) -> bool {
         self.active
     }
@@ -894,6 +948,22 @@ impl Tool for RedEyeTool {
 
     fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {
         self.anchor = None;
+    }
+
+    /// The registry's two Red Eye options, both read by the fix on release.
+    fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        match (key, setting) {
+            ("threshold", ToolSetting::Float(v)) => {
+                self.threshold = finite("pupil threshold", v)?.clamp(1.0, 4.0);
+                Ok(())
+            }
+            ("darken", ToolSetting::Float(v)) => {
+                self.darken = finite("darken amount", v)?.clamp(0.0, 1.0);
+                Ok(())
+            }
+            ("threshold" | "darken", _) => Err(kind_mismatch(key)),
+            _ => Err(unknown_option(key)),
+        }
     }
 
     fn is_active(&self) -> bool {
@@ -1088,6 +1158,19 @@ impl Tool for PatchTool {
         self.drawing = false;
     }
 
+    /// The registry's one Patch option: `softness`, the Gaussian sigma in
+    /// pixels (0.5..64) the heal's frequency split uses.
+    fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        match (key, setting) {
+            ("softness", ToolSetting::Float(v)) => {
+                self.softness = finite("softness", v)?.clamp(0.5, 64.0);
+                Ok(())
+            }
+            ("softness", _) => Err(kind_mismatch(key)),
+            _ => Err(unknown_option(key)),
+        }
+    }
+
     fn is_active(&self) -> bool {
         self.drawing || self.mask.is_some()
     }
@@ -1101,6 +1184,9 @@ pub struct MagicEraserTool {
     pub contiguous: bool,
     pub antialias: bool,
     pub opacity: f32,
+    /// Judge tolerance against the flattened composite (the context's
+    /// `sample_from`) rather than the layer being erased.
+    pub sample_merged: bool,
     seed: Option<IVec2>,
 }
 
@@ -1111,6 +1197,7 @@ impl Default for MagicEraserTool {
             contiguous: true,
             antialias: true,
             opacity: 1.0,
+            sample_merged: false,
             seed: None,
         }
     }
@@ -1167,7 +1254,14 @@ impl Tool for MagicEraserTool {
         }
         let target = ctx.pixel_target()?;
         let key = ctx.pixel_key()?;
-        let pixels = read_rgba8(ctx.tiles, key, canvas)?;
+        // Sample All Layers judges the tolerance against the composite; the
+        // erase itself always lands on the active layer.
+        let read_key = if self.sample_merged {
+            ctx.sample_key()?
+        } else {
+            key
+        };
+        let pixels = read_rgba8(ctx.tiles, read_key, canvas)?;
         let view = ImageView::new(
             IVec2::new(canvas.x as i32, canvas.y as i32),
             canvas.width,
@@ -1228,6 +1322,45 @@ impl Tool for MagicEraserTool {
 
     fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {
         self.seed = None;
+    }
+
+    /// The registry's `FILL_OPTS` (shared with the paint bucket), each onto
+    /// the field the flood and the erase read.
+    fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        match (key, setting) {
+            ("tolerance", ToolSetting::Float(v)) => {
+                self.tolerance = finite("tolerance", v)?.clamp(0.0, 1.0);
+                Ok(())
+            }
+            ("contiguous", ToolSetting::Bool(v)) => {
+                self.contiguous = v;
+                Ok(())
+            }
+            ("antialias", ToolSetting::Bool(v)) => {
+                self.antialias = v;
+                Ok(())
+            }
+            ("opacity", ToolSetting::Float(v)) => {
+                self.opacity = finite("opacity", v)?.clamp(0.0, 1.0);
+                Ok(())
+            }
+            ("sample_merged", ToolSetting::Bool(v)) => {
+                self.sample_merged = v;
+                Ok(())
+            }
+            ("tolerance" | "contiguous" | "antialias" | "opacity" | "sample_merged", _) => {
+                Err(kind_mismatch(key))
+            }
+            _ => Err(unknown_option(key)),
+        }
+    }
+
+    /// `opacity` is a brush-shared key the shell delivers through the brush
+    /// it hands every tool at pointer-down, never through `set_setting`.
+    fn set_brush(&mut self, brush: BrushSettings) {
+        if brush.opacity.is_finite() {
+            self.opacity = brush.opacity.clamp(0.0, 1.0);
+        }
     }
 
     fn is_active(&self) -> bool {
@@ -1605,5 +1738,255 @@ mod tests {
             let raw = crate::snap_delta(base, Vec2::new(31.0, 0.0), &candidates, 8.0);
             assert!((raw.x - 31.0).abs() < 1e-4, "beyond the threshold no snap");
         }
+    }
+}
+
+#[cfg(test)]
+mod option_tests {
+    use super::*;
+    use crate::tiles::MemoryTiles;
+    use layer_model::LayerId;
+
+    const W: u32 = 64;
+    const H: u32 = 64;
+
+    fn paint(tiles: &mut MemoryTiles, key: PixelKey, color: impl Fn(usize, usize) -> [u8; 4]) {
+        let ts = raster::TILE_SIZE as usize;
+        let mut data = vec![0u8; ts * ts * 4];
+        for y in 0..H as usize {
+            for x in 0..W as usize {
+                let i = (y * ts + x) * 4;
+                data[i..i + 4].copy_from_slice(&color(x, y));
+            }
+        }
+        tiles.put(key, raster::TileCoord::new(0, 0, 0), data);
+    }
+
+    #[test]
+    fn eyedropper_sample_size_averages_the_square_and_sample_all_layers_picks_the_source() {
+        let mut tiles = MemoryTiles::new();
+        let layer = LayerId::new();
+        let composite = LayerId::new();
+        // The layer: black with one white pixel at (31, 31). The composite:
+        // white everywhere.
+        paint(&mut tiles, PixelKey::Layer(layer), |x, y| {
+            if (x, y) == (31, 31) {
+                [255, 255, 255, 255]
+            } else {
+                [0, 0, 0, 255]
+            }
+        });
+        paint(&mut tiles, PixelKey::Layer(composite), |_, _| {
+            [255, 255, 255, 255]
+        });
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, W, H)).with_layer(layer);
+        ctx.sample_from = Some(PixelKey::Layer(composite));
+
+        let mut tool = EyedropperTool::default();
+        tool.set_setting("sample_all_layers", ToolSetting::Bool(false))
+            .unwrap();
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(31.0, 31.0))
+            .unwrap();
+        assert!(
+            ctx.picked().unwrap()[0] > 0.99,
+            "a point sample of the layer white pixel"
+        );
+
+        // Sample Size 2 = a 5x5 square: one white pixel in 25, in linear light.
+        tool.set_setting("sample_radius", ToolSetting::Int(2))
+            .unwrap();
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(31.0, 31.0))
+            .unwrap();
+        let avg = ctx.picked().unwrap()[0];
+        assert!((avg - 1.0 / 25.0).abs() < 1e-3, "5x5 average was {avg}");
+
+        // Sample All Layers reads the composite instead: white.
+        tool.set_setting("sample_all_layers", ToolSetting::Bool(true))
+            .unwrap();
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(31.0, 31.0))
+            .unwrap();
+        assert!(
+            ctx.picked().unwrap()[0] > 0.99,
+            "the composite is white everywhere"
+        );
+
+        assert!(matches!(
+            tool.set_setting("sample_radius", ToolSetting::Float(2.0)),
+            Err(ToolError::OptionKindMismatch { .. })
+        ));
+        assert!(matches!(
+            tool.set_setting("tolerance", ToolSetting::Float(2.0)),
+            Err(ToolError::UnknownOption { .. })
+        ));
+    }
+
+    #[test]
+    fn crop_aspect_constrains_the_box_and_straighten_delete_ride_the_request() {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 128, 128));
+        let mut tool = CropTool::default();
+        tool.set_setting("aspect", ToolSetting::Float(2.0)).unwrap();
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(0.0, 0.0))
+            .unwrap();
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(40.0, 40.0))
+            .unwrap();
+        let rect = tool.box_rect.expect("a box after release");
+        // A square drag under a 2:1 lock keeps the dragged height (the
+        // extent the ratio makes dominant) and derives the width from it.
+        assert_eq!(
+            (rect.width, rect.height),
+            (80, 40),
+            "aspect 2:1 constrains the box to twice as wide as tall"
+        );
+
+        tool.set_setting("straighten", ToolSetting::Float(0.5))
+            .unwrap();
+        tool.set_setting("delete_cropped", ToolSetting::Bool(true))
+            .unwrap();
+        Tool::commit(&mut tool, &mut ctx).unwrap();
+        match ctx.drain_requests().pop() {
+            Some(ToolRequest::Crop(req)) => {
+                assert_eq!(req.rect, rect);
+                assert_eq!(req.straighten, 0.5);
+                assert!(req.delete_cropped);
+            }
+            other => panic!("expected a crop request: {other:?}"),
+        }
+
+        // Aspect 0 is the bar's "unconstrained".
+        tool.set_setting("aspect", ToolSetting::Float(0.0)).unwrap();
+        assert_eq!(tool.aspect, None);
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(0.0, 0.0))
+            .unwrap();
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(40.0, 40.0))
+            .unwrap();
+        assert_eq!(tool.box_rect.unwrap().height, 40);
+        assert!(matches!(
+            tool.set_setting("aspect", ToolSetting::Bool(true)),
+            Err(ToolError::OptionKindMismatch { .. })
+        ));
+        assert!(matches!(
+            tool.set_setting("straighten", ToolSetting::Float(f32::INFINITY)),
+            Err(ToolError::NotFinite { .. })
+        ));
+    }
+
+    #[test]
+    fn magic_eraser_tolerance_sample_merged_and_opacity_reach_the_erase() {
+        let bands = |x: usize, _y: usize| -> [u8; 4] {
+            let g = if (16..32).contains(&x) { 220 } else { 40 };
+            [g, g, g, 255]
+        };
+        // Run one click at (4, 4) and report how many pixels went fully
+        // transparent, plus the alpha left at the seed.
+        let run = |configure: &dyn Fn(&mut MagicEraserTool)| -> (usize, u8) {
+            let mut tiles = MemoryTiles::new();
+            let layer = LayerId::new();
+            let composite = LayerId::new();
+            let key = PixelKey::Layer(layer);
+            paint(&mut tiles, key, bands);
+            paint(&mut tiles, PixelKey::Layer(composite), |_, _| {
+                [40, 40, 40, 255]
+            });
+            let mut tool = MagicEraserTool {
+                antialias: false,
+                ..MagicEraserTool::default()
+            };
+            configure(&mut tool);
+            let delta = {
+                let mut ctx =
+                    ToolContext::new(&mut tiles, PixelRect::new(0, 0, W, H)).with_layer(layer);
+                ctx.sample_from = Some(PixelKey::Layer(composite));
+                tool.on_pointer_down(&mut ctx, PointerEvent::at(4.0, 4.0))
+                    .unwrap();
+                tool.on_pointer_up(&mut ctx, PointerEvent::at(4.0, 4.0))
+                    .unwrap();
+                match ctx.drain().pop() {
+                    Some(Command::PaintTiles { delta, .. }) => delta,
+                    other => panic!("expected a paint: {other:?}"),
+                }
+            };
+            tiles.apply_delta(key, &delta);
+            let mut cleared = 0;
+            for y in 0..H as i64 {
+                for x in 0..W as i64 {
+                    if tiles.pixel(key, x, y)[3] == 0 {
+                        cleared += 1;
+                    }
+                }
+            }
+            (cleared, tiles.pixel(key, 4, 4)[3])
+        };
+        let (tight, _) = run(&|t| {
+            t.set_setting("tolerance", ToolSetting::Float(0.0)).unwrap();
+        });
+        assert_eq!(
+            tight,
+            16 * H as usize,
+            "tolerance 0 erases the seed band only"
+        );
+        let (loose, _) = run(&|t| {
+            t.set_setting("tolerance", ToolSetting::Float(1.0)).unwrap();
+        });
+        assert_eq!(loose, (W * H) as usize, "tolerance 1 erases everything");
+        let (global, _) = run(&|t| {
+            t.set_setting("tolerance", ToolSetting::Float(0.0)).unwrap();
+            t.set_setting("contiguous", ToolSetting::Bool(false))
+                .unwrap();
+        });
+        assert_eq!(
+            global,
+            48 * H as usize,
+            "non-contiguous reaches the far dark band"
+        );
+        let (merged, _) = run(&|t| {
+            t.set_setting("tolerance", ToolSetting::Float(0.0)).unwrap();
+            t.set_setting("sample_merged", ToolSetting::Bool(true))
+                .unwrap();
+        });
+        assert_eq!(
+            merged,
+            (W * H) as usize,
+            "judged against the flat composite, everything matches"
+        );
+        let (_, half) = run(&|t| {
+            t.set_setting("opacity", ToolSetting::Float(0.5)).unwrap();
+        });
+        assert!(
+            (126..=129).contains(&half),
+            "opacity 0.5 leaves half the alpha: {half}"
+        );
+        let (_, quarter) = run(&|t| {
+            t.set_brush(BrushSettings {
+                opacity: 0.75,
+                ..BrushSettings::default()
+            })
+        });
+        assert!(
+            (62..=65).contains(&quarter),
+            "brush opacity 0.75 erases three quarters: {quarter}"
+        );
+    }
+
+    #[test]
+    fn red_eye_and_patch_answer_their_declared_options() {
+        let mut red = RedEyeTool::default();
+        red.set_setting("threshold", ToolSetting::Float(2.5))
+            .unwrap();
+        red.set_setting("darken", ToolSetting::Float(0.9)).unwrap();
+        assert_eq!((red.threshold, red.darken), (2.5, 0.9));
+        assert!(matches!(
+            red.set_setting("darken", ToolSetting::Bool(true)),
+            Err(ToolError::OptionKindMismatch { .. })
+        ));
+        let mut patch = PatchTool::default();
+        patch
+            .set_setting("softness", ToolSetting::Float(12.0))
+            .unwrap();
+        assert_eq!(patch.softness, 12.0);
+        assert!(matches!(
+            patch.set_setting("size", ToolSetting::Float(12.0)),
+            Err(ToolError::UnknownOption { .. })
+        ));
     }
 }

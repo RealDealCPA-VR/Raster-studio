@@ -1,8 +1,11 @@
 [toolchain]
 # Pin the toolchain so every developer and CI runner builds identically.
-# The design doc targets 1.85+/edition 2024; we build on stable here and the
-# scaffold is edition-2021 clean. Bump `channel` to "1.85" (or later) and flip
-# the workspace edition to 2024 once your CI image ships it.
-channel = "stable"
+# A fixed version rather than "stable": CI compiles with `-D warnings`, and a
+# new stable's new lints would otherwise turn the suite red on the day it
+# ships, with no change in this tree. Bump this deliberately (and the
+# `toolchain` step in .github/workflows/ci.yml reads it, so bumping here is
+# enough). The MSRV — the oldest compiler that can build the lockfile — is
+# `rust-version` in Cargo.toml, checked separately by CI's `msrv` job.
+channel = "1.98.1"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

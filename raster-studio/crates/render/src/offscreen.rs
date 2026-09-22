@@ -238,7 +238,7 @@ pub fn read_texture_rgba8(
     staging.unmap();
 
     if swizzle_bgra {
-        for px in pixels.chunks_exact_mut(4) {
+        for px in pixels.as_chunks_mut::<4>().0 {
             px.swap(0, 2);
         }
     }

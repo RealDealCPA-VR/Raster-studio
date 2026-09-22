@@ -26,7 +26,7 @@ pub(crate) fn from_hex(s: &str) -> Option<[u8; 32]> {
         return None;
     }
     let mut out = [0u8; 32];
-    for (i, chunk) in b.chunks_exact(2).enumerate() {
+    for (i, chunk) in b.as_chunks::<2>().0.iter().enumerate() {
         let hi = digit(chunk[0])?;
         let lo = digit(chunk[1])?;
         out[i] = (hi << 4) | lo;

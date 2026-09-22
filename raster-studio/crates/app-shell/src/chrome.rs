@@ -66,6 +66,15 @@ use crate::editor::Editor;
 use crate::keymap::{Chord, Key};
 use crate::prefs::Preferences;
 
+/// The Layers panel thumbnail's longest edge, in texels.
+const THUMB_EDGE: u32 = 64;
+
+/// How many layer/mask thumbnails one frame may recomposite. The rest wait
+/// for the next frame (which [`Chrome::refresh_layer_thumbs`] requests), so
+/// a tall stack whose every layer changed — an import, a canvas resize —
+/// spreads its cost over frames instead of freezing one.
+const THUMBS_PER_FRAME: usize = 2;
+
 /// Install `theme` on an egui context so it survives the platform changing its
 /// mind about light and dark.
 ///
@@ -482,6 +491,11 @@ pub struct Chrome {
     /// The modal dialog host: at most one [`ui::dialogs`] surface open, drawn
     /// after the docks. See [`crate::dialog_host`].
     dialogs: crate::dialog_host::DialogHost,
+    /// The Layers panel's thumbnail cache — see [`Chrome::refresh_layer_thumbs`].
+    thumbs: crate::doc::LayerThumbCache,
+    /// The document `thumbs` and the workspace's thumbnail textures belong
+    /// to; a switch of active document drops both.
+    thumbs_document: Option<crate::doc::DocumentId>,
 }
 
 /// Where this frame's window is, and where the part of it the user can see the
@@ -632,45 +646,125 @@ impl Chrome {
         &mut self.dialogs
     }
 
-    /// Upload a fitted thumbnail per layer into the workspace, so the Layers
-    /// panel draws real pixels instead of a kind glyph. The composite is read
-    /// through the immutable [`Editor`] (free compositor) and uploaded as an
-    /// egui texture; the small set is rebuilt each frame, so a layer edit shows
-    /// on the next repaint.
+    /// The thumbnail cache, for tests that count what one frame composited.
+    #[cfg(test)]
+    pub(crate) fn thumb_cache_for_test(&self) -> &crate::doc::LayerThumbCache {
+        &self.thumbs
+    }
+
+    /// Keep one fitted thumbnail per layer (and per mask) uploaded in the
+    /// workspace, so the Layers panel draws real pixels instead of a kind
+    /// glyph.
+    ///
+    /// Called every frame, and cheap on a frame where nothing changed: each
+    /// layer's [`crate::doc::LayerThumbCache::layer_fingerprint`] is compared
+    /// with the stored thumbnail's and the compositor runs only for the
+    /// layers whose fingerprint moved (a paint, a parameter, an effect, a
+    /// mask). At most [`THUMBS_PER_FRAME`] thumbnails are recomposited per
+    /// frame — a ten-layer stack never stalls one frame, the rest catch up
+    /// over the next frames, and a repaint is requested while any is owed.
+    /// A changed thumbnail is written into its existing egui texture with
+    /// `set`; a texture is created only for a layer that has none yet.
     fn refresh_layer_thumbs(&mut self, ctx: &egui::Context, editor: &Editor) {
-        self.workspace.layer_thumbs.clear();
-        self.workspace.mask_thumbs.clear();
         let Some(open) = editor.active() else {
+            self.workspace.layer_thumbs.clear();
+            self.workspace.mask_thumbs.clear();
+            self.thumbs.clear();
+            self.thumbs_document = None;
             return;
         };
-        for id in open.document.layers.iter_depth_first() {
-            if let Ok((w, h, rgba)) = open.layer_thumbnail(id, 64) {
-                let img = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
-                let tex = ctx.load_texture(
-                    format!("layer-thumb-{}", id),
-                    img,
-                    egui::TextureOptions::NEAREST,
-                );
-                self.workspace.layer_thumbs.insert(id, tex);
+        if self.thumbs_document != Some(open.id()) {
+            self.workspace.layer_thumbs.clear();
+            self.workspace.mask_thumbs.clear();
+            self.thumbs.clear();
+            self.thumbs_document = Some(open.id());
+        }
+        let ids = open.document.layers.iter_depth_first();
+        let live: std::collections::HashSet<LayerId> = ids.iter().copied().collect();
+        self.workspace
+            .layer_thumbs
+            .retain(|id, _| live.contains(id));
+        self.workspace.mask_thumbs.retain(|id, _| live.contains(id));
+        self.thumbs.retain(&live);
+
+        let mut budget = THUMBS_PER_FRAME;
+        let mut owed = false;
+        for id in ids {
+            // The layer's own pixels.
+            let current = self.thumbs.layer_is_current(open, id, THUMB_EDGE)
+                && self.workspace.layer_thumbs.contains_key(&id);
+            if !current {
+                if budget == 0 {
+                    owed = true;
+                } else if let Ok(thumb) = self.thumbs.layer_thumbnail(open, id, THUMB_EDGE) {
+                    if thumb.fresh {
+                        budget -= 1;
+                    }
+                    let img = egui::ColorImage::from_rgba_unmultiplied(
+                        [thumb.width as usize, thumb.height as usize],
+                        thumb.rgba,
+                    );
+                    Self::upload_thumb(
+                        ctx,
+                        &mut self.workspace.layer_thumbs,
+                        id,
+                        "layer-thumb",
+                        img,
+                    );
+                }
             }
             // Card 059: the mask's real coverage thumbnail, for layers that
             // have a mask. The well falls back to the glyph without it.
-            if open
+            let has_mask = open
                 .document
                 .layers
                 .get(id)
-                .is_some_and(|l| l.mask.is_some())
-            {
-                if let Ok((w, h, rgba)) = open.mask_thumbnail(id, 64) {
-                    let img =
-                        egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
-                    let tex = ctx.load_texture(
-                        format!("mask-thumb-{}", id),
-                        img,
-                        egui::TextureOptions::NEAREST,
+                .is_some_and(|l| l.mask.is_some());
+            if !has_mask {
+                self.workspace.mask_thumbs.remove(&id);
+                self.thumbs.forget_mask(id);
+                continue;
+            }
+            let current = self.thumbs.mask_is_current(open, id, THUMB_EDGE)
+                && self.workspace.mask_thumbs.contains_key(&id);
+            if !current {
+                if budget == 0 {
+                    owed = true;
+                } else if let Ok(thumb) = self.thumbs.mask_thumbnail(open, id, THUMB_EDGE) {
+                    if thumb.fresh {
+                        budget -= 1;
+                    }
+                    let img = egui::ColorImage::from_rgba_unmultiplied(
+                        [thumb.width as usize, thumb.height as usize],
+                        thumb.rgba,
                     );
-                    self.workspace.mask_thumbs.insert(id, tex);
+                    Self::upload_thumb(ctx, &mut self.workspace.mask_thumbs, id, "mask-thumb", img);
                 }
+            }
+        }
+        if owed {
+            // Thumbnails still to recomposite: the next frame takes the next
+            // batch, without waiting for the user to move the pointer.
+            ctx.request_repaint();
+        }
+    }
+
+    /// Put `img` in the layer's texture: written in place when the layer
+    /// already has one (the panel keeps drawing the same texture id), created
+    /// otherwise.
+    fn upload_thumb(
+        ctx: &egui::Context,
+        slot: &mut std::collections::HashMap<LayerId, egui::TextureHandle>,
+        id: LayerId,
+        kind: &str,
+        img: egui::ColorImage,
+    ) {
+        match slot.get_mut(&id) {
+            Some(tex) => tex.set(img, egui::TextureOptions::NEAREST),
+            None => {
+                let tex =
+                    ctx.load_texture(format!("{kind}-{id}"), img, egui::TextureOptions::NEAREST);
+                slot.insert(id, tex);
             }
         }
     }
@@ -3923,40 +4017,49 @@ mod tests {
     }
 
     #[test]
-    fn an_intent_the_bridge_cannot_answer_is_reported_rather_than_dropped() {
+    fn an_intent_nothing_can_perform_is_still_reported_to_the_user() {
         // `harvest` used to be `if let Some(pick) = pick(..)` with no `else`,
         // so an intent nothing could perform produced no edit, no status line
         // and no log record. That silence is why an entirely inert Properties
         // panel survived a whole wave of review: on screen, a control that does
         // nothing looks exactly like a control that works.
+        //
+        // Every menu action has a route now (the dialog host or `perform`), so
+        // there is no intent `pick` answers with `None` any more; the property
+        // this test guards is the same one, one step further down: an action
+        // that cannot run *here* (no document is open) must still reach the
+        // user as a specific refusal, never vanish. Brightness/Contrast with
+        // no document is the case: the dialog host declines (nothing to
+        // preview), the bridge hands the action to `perform`, and `perform`
+        // refuses by name.
         let dir = tempfile::tempdir().unwrap();
-        let ed = editor(dir.path());
+        let mut ed = editor(dir.path());
         let mut chrome = Chrome::new();
 
-        // C7: Place Embedded is routable now (P2.4), so the orphan here is an
-        // action that still genuinely has no route: an adjustment at its
-        // identity, which the shell hosts no dialog for (its reason says to
-        // add it as an adjustment layer instead).
-        let orphan = ui::Intent::Action(ui::menu::MenuAction::ApplyAdjustment(
-            ui::menu::AdjustmentId::BrightnessContrast,
-        ));
-        chrome.workspace.emit(orphan.clone());
+        let action =
+            ui::menu::MenuAction::ApplyAdjustment(ui::menu::AdjustmentId::BrightnessContrast);
+        chrome.workspace.emit(ui::Intent::Action(action));
         let mut out = ChromeOutput::default();
         chrome.harvest_workspace_for_test(&mut out, &ed);
 
-        assert_eq!(
-            out.unrouted,
-            vec![orphan.clone()],
-            "the intent went nowhere and said nothing"
-        );
-        let said = crate::menu_bridge::unrouted_message(&orphan);
-        // The refusal names the missing piece rather than the generic
-        // fallback. What matters here is that the user is *told* — the
-        // reporting path this test guards — so assert the message is the
-        // real, specific one and not an empty or generic string.
         assert!(
-            said.contains("adjustment"),
-            "the refusal named nothing actionable: {said}"
+            out.unrouted.is_empty(),
+            "the action has a route; it must not be reported as unrouted: {:?}",
+            out.unrouted
+        );
+        assert_eq!(
+            out.menu,
+            vec![action],
+            "with no document the dialog host declines and the bridge hands the action on"
+        );
+        let refusal = crate::menu_bridge::perform(action, &mut ed)
+            .expect_err("nothing can apply an adjustment with no document open");
+        // The refusal names the missing piece rather than a generic fallback.
+        // What matters here is that the user is *told* — the reporting path
+        // this test guards — so assert the message is the real, specific one.
+        assert!(
+            refusal.contains("Brightness/Contrast") && refusal.contains("Adjustments"),
+            "the refusal named nothing actionable: {refusal}"
         );
     }
 
@@ -4873,5 +4976,226 @@ mod tests {
             out.commands.is_empty() && out.actions.is_empty() && out.dialog.is_none(),
             "cancelling produced {out:?}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // W1-A: Layers-panel thumbnails are cached, throttled and updated in place
+    // -----------------------------------------------------------------------
+
+    /// One opaque grey tile at the canvas origin of `id`, through the real
+    /// command route — the edit that must (and the only edit that must)
+    /// recomposite that layer's thumbnail.
+    fn paint_grey(open: &mut crate::doc::OpenDocument, id: LayerId, v: u8) {
+        let ts = raster::TILE_SIZE;
+        let mut bytes = Vec::with_capacity((ts * ts * 4) as usize);
+        for _ in 0..ts * ts {
+            bytes.extend_from_slice(&[v, v, v, 255]);
+        }
+        let hash = open.tiles.insert_bytes(bytes);
+        open.apply(
+            Command::paint_tiles(
+                editor_core::PixelTarget::Layer(id),
+                vec![editor_core::TileEdit::set(
+                    raster::TileCoord::new(0, 0, 0),
+                    hash,
+                )],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// An editor whose active document is a 300x200 image under `n - 1`
+    /// further raster layers, every layer holding real pixels.
+    fn editor_with_layers(dir: &std::path::Path, n: usize) -> (Editor, Vec<LayerId>) {
+        let mut ed = editor(dir);
+        let path = dir.join("stack.png");
+        std::fs::write(
+            &path,
+            raster::encode(raster::ExportFormat::Png, 300, 200, &[120u8; 300 * 200 * 4]).unwrap(),
+        )
+        .unwrap();
+        ed.open_path(&path).unwrap();
+        let open = ed.active_mut().unwrap();
+        let mut ids = vec![open.document.active_layer().unwrap()];
+        for i in 1..n {
+            let layer = layer_model::Layer::raster(format!("layer {i}"));
+            let id = layer.id;
+            open.apply(Command::create_layer(layer)).unwrap();
+            paint_grey(open, id, 20 * i as u8);
+            ids.push(id);
+        }
+        (ed, ids)
+    }
+
+    /// Draw one frame through the real chrome and hand back what it painted.
+    fn thumb_frame(
+        ctx: &egui::Context,
+        chrome: &mut Chrome,
+        editor: &mut Editor,
+    ) -> Vec<egui::Shape> {
+        ctx.run(raw_input(Vec::new()), |ctx| {
+            chrome.ui(ctx, editor);
+        })
+        .shapes
+        .into_iter()
+        .map(|clipped| clipped.shape)
+        .collect()
+    }
+
+    /// The texture ids of every textured mesh one frame painted (an image is
+    /// a textured quad mesh in epaint).
+    fn painted_texture_ids(shapes: &[egui::Shape]) -> Vec<egui::TextureId> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<egui::TextureId>) {
+            match shape {
+                egui::Shape::Mesh(mesh) => out.push(mesh.texture_id),
+                egui::Shape::Vec(inner) => inner.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        shapes.iter().for_each(|s| walk(s, &mut out));
+        out
+    }
+
+    #[test]
+    fn layer_thumbnails_are_recomposited_only_for_the_layer_that_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, ids) = editor_with_layers(dir.path(), 6);
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+
+        // The first pass is throttled: THUMBS_PER_FRAME per frame, so six
+        // layers take three frames and no frame composites more than two.
+        let mut frames = 0;
+        while chrome.workspace().layer_thumbs.len() < ids.len() {
+            let before = chrome.thumb_cache_for_test().recomposites();
+            thumb_frame(&ctx, &mut chrome, &mut ed);
+            frames += 1;
+            let done = chrome.thumb_cache_for_test().recomposites() - before;
+            assert!(
+                done <= THUMBS_PER_FRAME as u64,
+                "frame {frames} recomposited {done} thumbnails"
+            );
+            assert!(frames <= ids.len(), "the pass never completes");
+        }
+        assert_eq!(frames, ids.len().div_ceil(THUMBS_PER_FRAME));
+        let full_pass = chrome.thumb_cache_for_test().recomposites();
+        assert_eq!(full_pass, ids.len() as u64, "one composite per layer");
+        let texture_ids: Vec<egui::TextureId> = ids
+            .iter()
+            .map(|id| chrome.workspace().layer_thumbs[id].id())
+            .collect();
+
+        // Three more frames with nothing changed: zero recomposites.
+        let mut shapes = Vec::new();
+        for _ in 0..3 {
+            shapes = thumb_frame(&ctx, &mut chrome, &mut ed);
+        }
+        assert_eq!(
+            chrome.thumb_cache_for_test().recomposites(),
+            full_pass,
+            "an unchanged stack recomposites nothing"
+        );
+
+        // The thumbnails reach the screen: the Layers panel painted every
+        // layer's texture this frame.
+        let painted = painted_texture_ids(&shapes);
+        for (id, tex) in ids.iter().zip(&texture_ids) {
+            assert!(
+                painted.contains(tex),
+                "layer {id}'s thumbnail texture was not painted; painted {painted:?}"
+            );
+        }
+
+        // Edit one layer: exactly one recompute, written into the SAME
+        // texture (the panel keeps drawing the id it had).
+        paint_grey(ed.active_mut().unwrap(), ids[3], 240);
+        thumb_frame(&ctx, &mut chrome, &mut ed);
+        assert_eq!(
+            chrome.thumb_cache_for_test().recomposites(),
+            full_pass + 1,
+            "one edited layer is one recompute"
+        );
+        for (id, tex) in ids.iter().zip(&texture_ids) {
+            assert_eq!(
+                chrome.workspace().layer_thumbs[id].id(),
+                *tex,
+                "the texture handle is updated in place, never recreated"
+            );
+        }
+        // And nothing more on the frame after.
+        thumb_frame(&ctx, &mut chrome, &mut ed);
+        assert_eq!(chrome.thumb_cache_for_test().recomposites(), full_pass + 1);
+    }
+
+    #[test]
+    fn cached_thumbnails_cost_a_fraction_of_the_compositor_calls_of_the_per_frame_rebuild() {
+        // A ratio on the same machine and the same fixture, in compositor
+        // calls — never wall clock. The old policy recomposited every layer
+        // every frame; the cache composites each layer once.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, ids) = editor_with_layers(dir.path(), 6);
+        const FRAMES: usize = 30;
+
+        // Baseline: the pre-cache policy, one `layer_thumbnail` per layer
+        // per frame, counted in compositor calls.
+        let before = crate::doc::thumbnail_composites();
+        for _ in 0..FRAMES {
+            let open = ed.active().unwrap();
+            for &id in &ids {
+                open.layer_thumbnail(id, THUMB_EDGE).unwrap();
+            }
+        }
+        let uncached = crate::doc::thumbnail_composites() - before;
+        assert!(uncached >= (FRAMES * ids.len()) as u64, "{uncached}");
+
+        // The real route: thirty frames of the chrome.
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        let before = crate::doc::thumbnail_composites();
+        for _ in 0..FRAMES {
+            thumb_frame(&ctx, &mut chrome, &mut ed);
+        }
+        let cached = crate::doc::thumbnail_composites() - before;
+        assert!(cached > 0, "the cached path composited nothing at all");
+        assert_eq!(
+            chrome.workspace().layer_thumbs.len(),
+            ids.len(),
+            "every layer has a thumbnail by frame {FRAMES}"
+        );
+        assert!(
+            uncached >= 5 * cached,
+            "cached path is not 5x cheaper: {uncached} vs {cached} compositor calls"
+        );
+    }
+
+    #[test]
+    fn switching_documents_drops_the_other_documents_thumbnails() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, ids) = editor_with_layers(dir.path(), 3);
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        for _ in 0..3 {
+            thumb_frame(&ctx, &mut chrome, &mut ed);
+        }
+        assert_eq!(chrome.workspace().layer_thumbs.len(), ids.len());
+
+        // A second document becomes active: the first stack's textures go,
+        // the second's arrive.
+        let p = png(dir.path(), "second.png");
+        ed.open_path(&p).unwrap();
+        thumb_frame(&ctx, &mut chrome, &mut ed);
+        let second = ed.active().unwrap().document.active_layer().unwrap();
+        assert!(chrome.workspace().layer_thumbs.contains_key(&second));
+        for id in &ids {
+            assert!(
+                !chrome.workspace().layer_thumbs.contains_key(id),
+                "layer {id} of the first document is still uploaded"
+            );
+        }
     }
 }

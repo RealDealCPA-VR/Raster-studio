@@ -192,6 +192,7 @@ fn surfaces_are_ordered_from_recessed_to_elevated() {
     let order = [
         SurfaceRole::Sunken,
         SurfaceRole::Canvas,
+        SurfaceRole::Header,
         SurfaceRole::Panel,
         SurfaceRole::Elevated,
     ];
@@ -207,6 +208,42 @@ fn surfaces_are_ordered_from_recessed_to_elevated() {
                 pair[1]
             );
         }
+    }
+}
+
+/// Photopea's chrome stands off the pasteboard: the panel body is lighter than
+/// the document backdrop in the dark theme (#474747 over #2B2B2B) AND in the
+/// light theme (#F0F0F0 over #D8D8D8), with the header bands one step between.
+///
+/// The ordering gate above only asks for *some* difference; this one asks for
+/// the difference to be visible. The previous dark ramp put the chrome at
+/// #282828 over a #202020 token (1.10:1 — a gap nobody could see) while the
+/// shader painted the pasteboard a hard-coded #3C, so what reached the screen
+/// was the inverse of Photopea. The tokens are held to the relationship here;
+/// `render`'s GPU tests hold the shader to the token.
+#[test]
+fn the_pasteboard_recedes_behind_the_panels_like_photopea() {
+    for theme in Theme::ALL {
+        let p = theme.palette();
+        let pasteboard = p.surface(SurfaceRole::Canvas);
+        let header = p.surface(SurfaceRole::Header);
+        let panel = p.surface(SurfaceRole::Panel);
+        assert!(
+            pasteboard.relative_luminance() < header.relative_luminance(),
+            "{theme:?}: the header band is not lighter than the pasteboard"
+        );
+        assert!(
+            header.relative_luminance() < panel.relative_luminance(),
+            "{theme:?}: the panel body is not lighter than the header band"
+        );
+        // Dark mode is where the inversion lived and where the step has to be
+        // unmistakable; the light theme keeps Photopea's gentler recess.
+        let floor = if theme.is_dark() { 1.4 } else { 1.2 };
+        let step = contrast_ratio_over(panel, pasteboard);
+        assert!(
+            step >= floor,
+            "{theme:?}: panel over pasteboard = {step:.2}:1, needs {floor:.1}:1 to read as a step"
+        );
     }
 }
 

@@ -207,7 +207,7 @@ impl Kernel {
     /// one rather than dividing by zero.
     pub fn new(size: u32, weights: Vec<f32>) -> Result<Self, FilterError> {
         let expected = (size as usize).saturating_mul(size as usize);
-        if size == 0 || size % 2 == 0 || weights.len() != expected {
+        if size == 0 || size.is_multiple_of(2) || weights.len() != expected {
             return Err(FilterError::BadKernel {
                 size,
                 len: weights.len(),
@@ -273,7 +273,7 @@ impl Kernel {
     /// The kernel that leaves an image alone.
     pub fn identity(size: u32) -> Result<Self, FilterError> {
         let expected = (size as usize).saturating_mul(size as usize);
-        if size == 0 || size % 2 == 0 {
+        if size == 0 || size.is_multiple_of(2) {
             return Err(FilterError::BadKernel { size, len: 0 });
         }
         let mut weights = vec![0.0f32; expected];

@@ -105,7 +105,7 @@ fn axis_taps(d: u32, src_extent: u32, dst_extent: u32) -> ([(u32, f32); 3], usiz
     if src_extent == 1 {
         return ([(0, 1.0), (0, 0.0), (0, 0.0)], 1);
     }
-    if src_extent % 2 == 0 {
+    if src_extent.is_multiple_of(2) {
         return ([(d * 2, 0.5), (d * 2 + 1, 0.5), (0, 0.0)], 2);
     }
     let n = dst_extent as f32;
@@ -623,8 +623,8 @@ mod tests {
                 src.extend_from_slice(&[70, 140, 210, 255]);
             }
             let (out, _, _) = downsample_rgba8_2x(&src, w, h).unwrap();
-            for p in out.chunks_exact(4) {
-                assert_eq!(p, [70, 140, 210, 255], "flat color drifted at {w}x{h}");
+            for p in out.as_chunks::<4>().0 {
+                assert_eq!(*p, [70, 140, 210, 255], "flat color drifted at {w}x{h}");
             }
         }
     }
@@ -679,9 +679,9 @@ mod tests {
         }
         let chain = MipChain::build(&src, w, h).unwrap();
         for l in chain.levels() {
-            for p in l.rgba8.chunks_exact(4) {
+            for p in l.rgba8.as_chunks::<4>().0 {
                 assert_eq!(
-                    p,
+                    *p,
                     [30, 90, 200, 255],
                     "flat color drifted at {}x{}",
                     l.width,

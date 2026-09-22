@@ -919,43 +919,124 @@ impl OpenDocument {
     }
 
     /// A small (fitted to `max_edge`) RGBA8 preview of the canvas a *single*
-    /// layer draws on its own — every other layer hidden — with its effects
-    /// and blending honoured by the real compositor. This is the engine half
-    /// of the Layers/History pixel thumbnails: the panel asks for a cached
-    /// thumbnail per layer rather than re-tracing a glyph. Returns
-    /// `(width, height, rgba8)`, both reduced to keep `width,height <= max_edge`
-    /// (box-sampled, never upscaled). `&self` (free compositor, not the cache)
-    /// so a frame with only an immutable borrow can upload one per layer.
+    /// layer draws on its own — every layer that is not this one or one of
+    /// its ancestors hidden, this one forced visible — with its effects and
+    /// blending honoured by the real compositor. Returns `(width, height,
+    /// rgba8)`, both reduced to keep `width,height <= max_edge` (box-sampled,
+    /// never upscaled). `&self` (free compositor, not the cache) so a frame
+    /// with only an immutable borrow can upload one per layer.
+    ///
+    /// **This call is not cached.** It composites, and the Layers panel must
+    /// not call it every frame: the panel goes through
+    /// [`LayerThumbCache::layer_thumbnail`], which serves a stored thumbnail
+    /// until the layer's [`LayerThumbCache::layer_fingerprint`] changes and
+    /// calls this only then.
+    ///
+    /// What is composited is the layer's *styled bounds* clipped to the
+    /// canvas, in tile-row bands, each band folded into the thumbnail as it
+    /// comes — never the whole canvas as one level-0 buffer (a 4000x3000
+    /// document is 192 MB of f32 canvas that way). Pixels outside the bounds
+    /// are transparent by construction, so the result is what a whole-canvas
+    /// composite followed by [`OpenDocument::box_downscale`] gives (pinned by
+    /// `a_content_bounded_thumbnail_matches_the_whole_canvas_downscale`). The
+    /// tile store holds level-0 tiles only (`import` emits level 0, the
+    /// presenter minifies on the CPU), so a composite at a mip level would
+    /// draw every raster layer empty; bands are how the cost is bounded.
     pub fn layer_thumbnail(
         &self,
         layer_id: layer_model::LayerId,
         max_edge: u32,
     ) -> Result<(u32, u32, Vec<u8>), DocumentError> {
-        let mut staged = self.document.clone();
-        for other in staged.layers.iter_depth_first() {
-            if other != layer_id {
-                if let Some(l) = staged.layers.get_mut(other) {
-                    l.visible = false;
-                }
-            }
-        }
-        let rect = self.canvas_rect();
-        let canvas = compositor::composite_region(
+        let staged = self.staged_for_thumbnail(layer_id);
+        let (w, h) = (self.document.width(), self.document.height());
+        let (tw, th) = Self::thumb_extent(w, h, max_edge);
+        let mut acc = ThumbAccumulator::new(w, h, tw, th);
+        let canvas = self.canvas_rect();
+        let bounds = compositor::bounds::styled_bounds(
             &staged,
             &self.tiles,
-            rect,
+            layer_id,
             0,
             CompositeOptions::default(),
-        )?;
-        let rgba8 = canvas.to_rgba8(&self.document.meta.color_space);
-        let (w, h) = (self.document.width(), self.document.height());
-        Ok(Self::box_downscale(&rgba8, w, h, max_edge))
+        )?
+        .and_then(|b| intersect_rects(b, canvas));
+        if let Some(bounds) = bounds {
+            let band = i64::from(TILE_SIZE);
+            let mut y = bounds.y;
+            let y_end = y + i64::from(bounds.height);
+            while y < y_end {
+                let rows = band.min(y_end - y);
+                let region = PixelRect::new(bounds.x, y, bounds.width, rows as u32);
+                THUMB_COMPOSITES.with(|c| c.set(c.get() + 1));
+                let canvas = compositor::composite_region(
+                    &staged,
+                    &self.tiles,
+                    region,
+                    0,
+                    CompositeOptions::default(),
+                )?;
+                let rgba8 = canvas.to_rgba8(&self.document.meta.color_space);
+                acc.add_region(&rgba8, region);
+                y += rows;
+            }
+        }
+        Ok((tw, th, acc.finish()))
+    }
+
+    /// The document with `layer_id` and its ancestors visible and every other
+    /// layer hidden: what a thumbnail of that layer alone composites. The
+    /// ancestors are shown because a hidden group hides its children; the
+    /// layer itself because the panel shows what a layer *holds*, not whether
+    /// it is currently shown. Descendants keep their own visibility.
+    fn staged_for_thumbnail(&self, layer_id: layer_model::LayerId) -> Document {
+        let mut staged = self.document.clone();
+        let mut keep = std::collections::HashSet::new();
+        let mut cursor = Some(layer_id);
+        while let Some(id) = cursor {
+            keep.insert(id);
+            cursor = staged.layers.parent_of(id);
+        }
+        // The subtree under the layer is left alone: a group's thumbnail is
+        // its children as the user has them.
+        let mut subtree = std::collections::HashSet::new();
+        let mut stack = vec![layer_id];
+        while let Some(id) = stack.pop() {
+            if let Some(l) = staged.layers.get(id) {
+                stack.extend(l.children().iter().copied());
+            }
+            subtree.insert(id);
+        }
+        for other in staged.layers.iter_depth_first() {
+            if other != layer_id && subtree.contains(&other) {
+                continue;
+            }
+            if let Some(l) = staged.layers.get_mut(other) {
+                l.visible = keep.contains(&other);
+            }
+        }
+        staged
+    }
+
+    /// The thumbnail extent [`OpenDocument::box_downscale`] would settle on
+    /// for a `w`x`h` source under `max_edge`: same rounding, so the two paths
+    /// agree pixel for pixel.
+    fn thumb_extent(w: u32, h: u32, max_edge: u32) -> (u32, u32) {
+        let m = w.max(h);
+        if max_edge == 0 || m <= max_edge || w == 0 || h == 0 {
+            return (w, h);
+        }
+        let scale = max_edge as f64 / m as f64;
+        (
+            ((w as f64 * scale).round() as u32).max(1),
+            ((h as f64 * scale).round() as u32).max(1),
+        )
     }
 
     /// Card 059: the layer's MASK coverage as a grayscale thumbnail — the
     /// pose-sampled store read (card 058's read_mask_coverage), black hidden
     /// to white revealed, opaque, downscaled like
-    /// [`OpenDocument::layer_thumbnail`] takes.
+    /// [`OpenDocument::layer_thumbnail`] takes. Not cached here either; the
+    /// panel goes through [`LayerThumbCache::mask_thumbnail`].
     pub fn mask_thumbnail(
         &self,
         layer_id: layer_model::LayerId,
@@ -1903,6 +1984,441 @@ impl OpenDocument {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Layer thumbnails: the cache the Layers panel reads through
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// How many times [`OpenDocument::layer_thumbnail`] has asked the
+    /// compositor for a band, on this thread. The measure the throttling
+    /// tests count with (compositor calls, never wall clock): a cached frame
+    /// adds nothing here. Per thread so parallel tests do not count each
+    /// other's work.
+    static THUMB_COMPOSITES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The calling thread's thumbnail compositor-call count so far.
+pub fn thumbnail_composites() -> u64 {
+    THUMB_COMPOSITES.with(|c| c.get())
+}
+
+/// `a ∩ b`, or `None` when they do not overlap.
+fn intersect_rects(a: PixelRect, b: PixelRect) -> Option<PixelRect> {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = a.right().min(b.right());
+    let y1 = a.bottom().min(b.bottom());
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some(PixelRect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
+}
+
+/// A `tw`x`th` thumbnail of a `w`x`h` canvas being filled one region at a
+/// time. Every thumbnail pixel is the mean of the canvas pixels it covers —
+/// the same footprint rule as [`OpenDocument::box_downscale`] (the integer
+/// source pixels in `[ox*w/tw, (ox+1)*w/tw)`) — and canvas pixels no region
+/// ever supplied count as transparent, which is exactly what they are
+/// outside a layer's styled bounds.
+struct ThumbAccumulator {
+    w: u32,
+    h: u32,
+    tw: u32,
+    th: u32,
+    acc: Vec<[f64; 4]>,
+}
+
+impl ThumbAccumulator {
+    fn new(w: u32, h: u32, tw: u32, th: u32) -> Self {
+        Self {
+            w,
+            h,
+            tw,
+            th,
+            acc: vec![[0.0; 4]; (tw as usize) * (th as usize)],
+        }
+    }
+
+    /// The canvas footprint `[lo, hi)` of thumbnail row/column `o` along an
+    /// axis of `n` thumbnail pixels over `len` canvas pixels.
+    fn footprint(o: u32, n: u32, len: u32) -> (f64, f64) {
+        let lo = (o as f64 / n as f64) * len as f64;
+        let hi = ((o + 1) as f64 / n as f64) * len as f64;
+        (lo, hi.max(lo + 1.0))
+    }
+
+    /// How many integer positions lie in `[lo, hi)`.
+    fn count(lo: f64, hi: f64) -> usize {
+        (hi.ceil() - lo.ceil()).max(1.0) as usize
+    }
+
+    /// Which thumbnail index along an axis covers canvas position `s`.
+    fn index_of(s: i64, n: u32, len: u32) -> u32 {
+        // The footprint of index `o` is `[o*len/n, (o+1)*len/n)`, so the
+        // index for `s` is `floor((s+1)*n/len)` corrected for rounding.
+        let mut o = (((s as f64 + 1.0) * n as f64) / len as f64).floor() as i64;
+        o = o.clamp(0, n as i64 - 1);
+        // Correct off-by-one at footprint edges either way.
+        while o > 0 && (s as f64) < Self::footprint(o as u32, n, len).0 {
+            o -= 1;
+        }
+        while o + 1 < n as i64 && (s as f64) >= Self::footprint(o as u32, n, len).1 {
+            o += 1;
+        }
+        o as u32
+    }
+
+    /// Which thumbnail index covers canvas position `s`, or `None` when `s`
+    /// is off the canvas.
+    fn slot(s: i64, n: u32, len: u32) -> Option<u32> {
+        if s < 0 || s >= i64::from(len) {
+            return None;
+        }
+        Some(Self::index_of(s, n, len))
+    }
+
+    /// Fold a straight-alpha RGBA8 `region` of the canvas into the sums.
+    fn add_region(&mut self, rgba8: &[u8], region: PixelRect) {
+        if self.w == 0 || self.h == 0 || self.tw == 0 || self.th == 0 {
+            return;
+        }
+        // One lookup per column, not one per pixel.
+        let cols: Vec<Option<u32>> = (0..region.width)
+            .map(|rx| Self::slot(region.x + i64::from(rx), self.tw, self.w))
+            .collect();
+        for ry in 0..region.height {
+            let Some(oy) = Self::slot(region.y + i64::from(ry), self.th, self.h) else {
+                continue;
+            };
+            let row = (ry * region.width * 4) as usize;
+            for (rx, ox) in cols.iter().enumerate() {
+                let Some(ox) = ox else {
+                    continue;
+                };
+                let i = row + rx * 4;
+                let oi = (oy * self.tw + *ox) as usize;
+                for c in 0..4 {
+                    self.acc[oi][c] += rgba8[i + c] as f64;
+                }
+            }
+        }
+    }
+
+    /// The thumbnail: every sum divided by its footprint's pixel count.
+    fn finish(self) -> Vec<u8> {
+        let mut out = vec![0u8; (self.tw as usize) * (self.th as usize) * 4];
+        for oy in 0..self.th {
+            let (ylo, yhi) = Self::footprint(oy, self.th, self.h);
+            let ny = Self::count(ylo, yhi);
+            for ox in 0..self.tw {
+                let (xlo, xhi) = Self::footprint(ox, self.tw, self.w);
+                let n = (ny * Self::count(xlo, xhi)) as f64;
+                let oi = (oy * self.tw + ox) as usize;
+                for c in 0..4 {
+                    out[oi * 4 + c] = (self.acc[oi][c] / n).round().clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+        out
+    }
+}
+
+/// One stored thumbnail and the fingerprint of what it was made from.
+#[derive(Debug, Clone)]
+pub struct ThumbEntry {
+    fingerprint: u64,
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// What a cache lookup handed back.
+#[derive(Debug)]
+pub struct Thumb<'a> {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: &'a [u8],
+    /// `true` when this call composited; `false` when the stored thumbnail
+    /// was still current and is what you got.
+    pub fresh: bool,
+}
+
+/// The Layers panel's thumbnail cache: one entry per layer (and one per
+/// mask), keyed by a fingerprint of everything the thumbnail depends on.
+///
+/// The fingerprint is cheap to take every frame — it hashes the layer's
+/// serialized parameters (visibility normalised, since the thumbnail shows
+/// the layer's content whether or not it is shown), its descendants', every
+/// tile hash under their pixel and mask keys, the canvas size, the colour
+/// space and the requested edge — and the compositor runs only when it
+/// changes. Painting one layer therefore recomposites that layer's
+/// thumbnail and no other's. Owned by the chrome, not the document: it is
+/// view state, like the textures it feeds.
+#[derive(Debug, Default)]
+pub struct LayerThumbCache {
+    layers: std::collections::HashMap<LayerId, ThumbEntry>,
+    masks: std::collections::HashMap<LayerId, ThumbEntry>,
+    recomposites: u64,
+    hits: u64,
+}
+
+impl LayerThumbCache {
+    /// Everything the thumbnail of `layer_id` at `max_edge` depends on, as
+    /// one hash. Two documents whose fingerprints agree draw the same
+    /// thumbnail; a changed pixel, parameter, effect, mask or canvas size
+    /// changes it.
+    pub fn layer_fingerprint(open: &OpenDocument, layer_id: LayerId, max_edge: u32) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        let doc = &open.document;
+        doc.layers.get(layer_id)?;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        0x54_48_55_4d_u32.hash(&mut h); // "THUM": the layer flavour
+        max_edge.hash(&mut h);
+        doc.width().hash(&mut h);
+        doc.height().hash(&mut h);
+        format!("{:?}", doc.meta.color_space).hash(&mut h);
+        // The layer and its whole subtree (a group's thumbnail is its
+        // children's), in tree order. The layer's own visibility is
+        // normalised: the thumbnail shows it whether or not it is shown.
+        let mut stack = vec![layer_id];
+        while let Some(id) = stack.pop() {
+            let Some(layer) = doc.layers.get(id) else {
+                continue;
+            };
+            id.hash(&mut h);
+            if id == layer_id {
+                let mut shown = layer.clone();
+                shown.visible = true;
+                Self::hash_layer(&shown, &mut h);
+            } else {
+                Self::hash_layer(layer, &mut h);
+            }
+            Self::hash_tiles(doc.layer_tiles(id), &mut h);
+            Self::hash_tiles(doc.mask_tiles(id), &mut h);
+            stack.extend(layer.children().iter().rev().copied());
+        }
+        // The ancestors: a group's opacity, blend, mask and transform reach
+        // its children's composite. Visibility normalised, as the composite
+        // forces them shown.
+        let mut cursor = doc.layers.parent_of(layer_id);
+        while let Some(id) = cursor {
+            let Some(group) = doc.layers.get(id) else {
+                break;
+            };
+            id.hash(&mut h);
+            let mut shown = group.clone();
+            shown.visible = true;
+            // The children list is the subtree's business, hashed above.
+            if let LayerKind::Group(g) = &mut shown.kind {
+                g.children.clear();
+            }
+            Self::hash_layer(&shown, &mut h);
+            Self::hash_tiles(doc.mask_tiles(id), &mut h);
+            cursor = doc.layers.parent_of(id);
+        }
+        Some(h.finish())
+    }
+
+    /// Everything the mask thumbnail of `layer_id` depends on: the mask's
+    /// parameters (pose, inversion), its tiles, the canvas and the edge.
+    /// `None` when the layer has no mask.
+    pub fn mask_fingerprint(open: &OpenDocument, layer_id: LayerId, max_edge: u32) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        let doc = &open.document;
+        let layer = doc.layers.get(layer_id)?;
+        let mask = layer.mask.as_ref()?;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        0x4d_41_53_4b_u32.hash(&mut h); // "MASK": the mask flavour
+        max_edge.hash(&mut h);
+        doc.width().hash(&mut h);
+        doc.height().hash(&mut h);
+        // The mask is read through the layer's document pose (card 058), so
+        // the layer's transform and its ancestors' are part of the key.
+        let mut cursor = Some(layer_id);
+        while let Some(id) = cursor {
+            if let Some(l) = doc.layers.get(id) {
+                l.transform
+                    .to_cols_array()
+                    .iter()
+                    .for_each(|v| v.to_bits().hash(&mut h));
+            }
+            cursor = doc.layers.parent_of(id);
+        }
+        Self::hash_bytes(&rmp_serde::to_vec(mask).unwrap_or_default(), &mut h);
+        Self::hash_tiles(doc.mask_tiles(layer_id), &mut h);
+        Some(h.finish())
+    }
+
+    fn hash_layer(layer: &layer_model::Layer, h: &mut impl std::hash::Hasher) {
+        Self::hash_bytes(&rmp_serde::to_vec(layer).unwrap_or_default(), h);
+    }
+
+    fn hash_bytes(bytes: &[u8], h: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        bytes.hash(h);
+    }
+
+    fn hash_tiles(map: Option<&editor_core::TileMap>, h: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        match map {
+            None => 0u8.hash(h),
+            Some(map) => {
+                1u8.hash(h);
+                map.len().hash(h);
+                for (coord, hash) in map.iter() {
+                    coord.x.hash(h);
+                    coord.y.hash(h);
+                    coord.level.hash(h);
+                    hash.0.hash(h);
+                }
+            }
+        }
+    }
+
+    /// Whether the stored layer thumbnail (if any) still matches the
+    /// document. Cheap — a fingerprint, no compositing — so the panel can
+    /// decide what to spend its per-frame budget on.
+    pub fn layer_is_current(&self, open: &OpenDocument, layer_id: LayerId, max_edge: u32) -> bool {
+        match (
+            self.layers.get(&layer_id),
+            Self::layer_fingerprint(open, layer_id, max_edge),
+        ) {
+            (Some(e), Some(fp)) => e.fingerprint == fp,
+            _ => false,
+        }
+    }
+
+    /// Whether the stored mask thumbnail (if any) still matches the document.
+    pub fn mask_is_current(&self, open: &OpenDocument, layer_id: LayerId, max_edge: u32) -> bool {
+        match (
+            self.masks.get(&layer_id),
+            Self::mask_fingerprint(open, layer_id, max_edge),
+        ) {
+            (Some(e), Some(fp)) => e.fingerprint == fp,
+            _ => false,
+        }
+    }
+
+    /// The layer's thumbnail: stored when its fingerprint is unchanged,
+    /// recomposited (through [`OpenDocument::layer_thumbnail`]) otherwise.
+    pub fn layer_thumbnail(
+        &mut self,
+        open: &OpenDocument,
+        layer_id: LayerId,
+        max_edge: u32,
+    ) -> Result<Thumb<'_>, DocumentError> {
+        let fp = Self::layer_fingerprint(open, layer_id, max_edge).ok_or(
+            DocumentError::Command(CommandError::LayerNotFound(layer_id)),
+        )?;
+        let fresh = match self.layers.get(&layer_id) {
+            Some(e) if e.fingerprint == fp => false,
+            _ => {
+                let (width, height, rgba) = open.layer_thumbnail(layer_id, max_edge)?;
+                self.layers.insert(
+                    layer_id,
+                    ThumbEntry {
+                        fingerprint: fp,
+                        width,
+                        height,
+                        rgba,
+                    },
+                );
+                true
+            }
+        };
+        if fresh {
+            self.recomposites += 1;
+        } else {
+            self.hits += 1;
+        }
+        let e = &self.layers[&layer_id];
+        Ok(Thumb {
+            width: e.width,
+            height: e.height,
+            rgba: &e.rgba,
+            fresh,
+        })
+    }
+
+    /// The mask's thumbnail, cached the same way. `Err` for a layer without
+    /// a mask.
+    pub fn mask_thumbnail(
+        &mut self,
+        open: &OpenDocument,
+        layer_id: LayerId,
+        max_edge: u32,
+    ) -> Result<Thumb<'_>, DocumentError> {
+        let fp = Self::mask_fingerprint(open, layer_id, max_edge).ok_or(DocumentError::Command(
+            CommandError::LayerNotFound(layer_id),
+        ))?;
+        let fresh = match self.masks.get(&layer_id) {
+            Some(e) if e.fingerprint == fp => false,
+            _ => {
+                let (width, height, rgba) = open.mask_thumbnail(layer_id, max_edge)?;
+                self.masks.insert(
+                    layer_id,
+                    ThumbEntry {
+                        fingerprint: fp,
+                        width,
+                        height,
+                        rgba,
+                    },
+                );
+                true
+            }
+        };
+        if fresh {
+            self.recomposites += 1;
+        } else {
+            self.hits += 1;
+        }
+        let e = &self.masks[&layer_id];
+        Ok(Thumb {
+            width: e.width,
+            height: e.height,
+            rgba: &e.rgba,
+            fresh,
+        })
+    }
+
+    /// Drop the entries of layers that are no longer in the stack.
+    pub fn retain(&mut self, live: &std::collections::HashSet<LayerId>) {
+        self.layers.retain(|id, _| live.contains(id));
+        self.masks.retain(|id, _| live.contains(id));
+    }
+
+    /// Drop the mask entry of one layer (its mask was removed).
+    pub fn forget_mask(&mut self, layer_id: LayerId) {
+        self.masks.remove(&layer_id);
+    }
+
+    /// Forget everything (the active document changed).
+    pub fn clear(&mut self) {
+        self.layers.clear();
+        self.masks.clear();
+    }
+
+    /// How many thumbnails this cache has composited since it was created.
+    pub fn recomposites(&self) -> u64 {
+        self.recomposites
+    }
+
+    /// How many lookups were served from a stored thumbnail.
+    pub fn hits(&self) -> u64 {
+        self.hits
+    }
+
+    /// How many layer entries are stored.
+    pub fn len(&self) -> usize {
+        self.layers.len()
+    }
+
+    /// Whether no layer entry is stored.
+    pub fn is_empty(&self) -> bool {
+        self.layers.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2435,7 +2951,11 @@ mod tests {
         d.history.apply(&mut d.document, command).unwrap();
         let exposed = d.composite(PixelRect::new(150, 150, 50, 50)).unwrap();
         assert!(
-            exposed.chunks_exact(4).all(|p| p == [255, 255, 255, 255]),
+            exposed
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [255, 255, 255, 255]),
             "the exposed area was not filled white"
         );
         // The original pixels survived beside the fill.
@@ -2561,7 +3081,10 @@ mod tests {
         assert!(tw <= 64 && th <= 64, "fits max_edge: {tw}x{th}");
         assert_eq!(tw as usize * th as usize * 4, rgba.len());
         assert!(
-            rgba.chunks_exact(4).all(|p| *p == [128, 128, 128, 128]),
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [128, 128, 128, 128]),
             "uniform source stays uniform (first px: {:?})",
             &rgba[0..4]
         );
@@ -3157,5 +3680,198 @@ mod tests {
         assert!(told.contains("blanket lock"), "{told}");
         assert!(out.is_file(), "the file is still written");
         assert_eq!(d.psd_notes().summary(), Some(told));
+    }
+
+    // -----------------------------------------------------------------------
+    // W1-A: the Layers panel's thumbnail cache
+    // -----------------------------------------------------------------------
+
+    /// One opaque `[v, v, v, 255]` tile at `coord` of `id`, through the real
+    /// command route.
+    fn paint_tile(d: &mut OpenDocument, id: LayerId, coord: raster::TileCoord, v: u8) {
+        let mut bytes = Vec::with_capacity((TILE_SIZE * TILE_SIZE * 4) as usize);
+        for _ in 0..TILE_SIZE * TILE_SIZE {
+            bytes.extend_from_slice(&[v, v, v, 255]);
+        }
+        let hash = d.tiles.insert_bytes(bytes);
+        d.apply(
+            Command::paint_tiles(PixelTarget::Layer(id), vec![TileEdit::set(coord, hash)]).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// A raster layer with one opaque grey tile at the canvas origin.
+    fn inked_layer(d: &mut OpenDocument, name: &str, v: u8) -> LayerId {
+        let layer = layer_model::Layer::raster(name);
+        let id = layer.id;
+        d.apply(Command::create_layer(layer)).unwrap();
+        paint_tile(d, id, raster::TileCoord::new(0, 0, 0), v);
+        id
+    }
+
+    #[test]
+    fn a_layer_thumbnail_is_served_from_the_cache_until_that_layer_changes() {
+        let mut d = OpenDocument::blank(DocumentId(7001), 600, 400, "stack", 32).unwrap();
+        let a = inked_layer(&mut d, "a", 40);
+        let b = inked_layer(&mut d, "b", 90);
+        let mut cache = LayerThumbCache::default();
+
+        // First ask: composited.
+        let before = thumbnail_composites();
+        let first = cache.layer_thumbnail(&d, a, 64).unwrap();
+        assert!(first.fresh, "the first lookup composites");
+        let (fw, fh, first_px) = (first.width, first.height, first.rgba.to_vec());
+        assert!(thumbnail_composites() > before, "the compositor ran");
+        assert_eq!((cache.recomposites(), cache.hits()), (1, 0));
+
+        // Second ask, nothing changed: the stored pixels, no compositor call.
+        let mid = thumbnail_composites();
+        let again = cache.layer_thumbnail(&d, a, 64).unwrap();
+        assert!(!again.fresh, "the second lookup is a cache hit");
+        assert_eq!(
+            (again.width, again.height, again.rgba),
+            (fw, fh, &first_px[..])
+        );
+        assert_eq!(thumbnail_composites(), mid, "a hit never composites");
+        assert_eq!((cache.recomposites(), cache.hits()), (1, 1));
+
+        // The other layer has its own entry.
+        assert!(cache.layer_thumbnail(&d, b, 64).unwrap().fresh);
+        assert_eq!(cache.recomposites(), 2);
+        assert!(cache.layer_is_current(&d, a, 64) && cache.layer_is_current(&d, b, 64));
+
+        // Painting `b` invalidates exactly `b`.
+        paint_tile(&mut d, b, raster::TileCoord::new(1, 0, 0), 200);
+        assert!(
+            cache.layer_is_current(&d, a, 64),
+            "a's pixels did not change"
+        );
+        assert!(!cache.layer_is_current(&d, b, 64), "b's pixels did");
+        assert!(!cache.layer_thumbnail(&d, a, 64).unwrap().fresh);
+        assert!(cache.layer_thumbnail(&d, b, 64).unwrap().fresh);
+        assert_eq!(cache.recomposites(), 3);
+
+        // The thumbnail shows the layer's content whether or not the layer is
+        // shown, so toggling visibility is not a change to it...
+        d.document.layers.get_mut(a).unwrap().visible = false;
+        assert!(
+            cache.layer_is_current(&d, a, 64),
+            "visibility is not content"
+        );
+        // ...while a parameter the composite honours is.
+        d.document.layers.get_mut(a).unwrap().opacity = 0.5;
+        assert!(
+            !cache.layer_is_current(&d, a, 64),
+            "opacity changes the thumbnail"
+        );
+        // A different edge is a different thumbnail.
+        assert!(!cache.layer_is_current(&d, b, 32));
+    }
+
+    #[test]
+    fn a_content_bounded_thumbnail_matches_the_whole_canvas_downscale() {
+        // Ink in one tile away from the origin; the rest of the canvas is
+        // transparent. The thumbnail composites the layer's bounds only and
+        // must still equal "composite the whole canvas, then box-downscale".
+        let mut d = OpenDocument::blank(DocumentId(7002), 700, 500, "corner", 32).unwrap();
+        let layer = d.document.active_layer().unwrap();
+        let mut bytes = Vec::with_capacity((TILE_SIZE * TILE_SIZE * 4) as usize);
+        let mut state = 0x9e37_79b9u32;
+        for _ in 0..TILE_SIZE * TILE_SIZE {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            bytes.extend_from_slice(&[
+                (state >> 24) as u8,
+                (state >> 16) as u8,
+                (state >> 8) as u8,
+                255,
+            ]);
+        }
+        let hash = d.tiles.insert_bytes(bytes);
+        d.apply(
+            Command::paint_tiles(
+                PixelTarget::Layer(layer),
+                vec![TileEdit::set(raster::TileCoord::new(1, 1, 0), hash)],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let whole = d.composite(d.canvas_rect()).unwrap();
+        let reference = OpenDocument::box_downscale(&whole, 700, 500, 64);
+        let thumb = d.layer_thumbnail(layer, 64).unwrap();
+        assert_eq!(
+            (thumb.0, thumb.1),
+            (reference.0, reference.1),
+            "same extent"
+        );
+        assert_eq!(
+            thumb.2, reference.2,
+            "same pixels as the whole-canvas downscale"
+        );
+        // And it is a real picture: ink where the tile is, nothing elsewhere.
+        let (tw, th) = (thumb.0 as usize, thumb.1 as usize);
+        let px = |x: usize, y: usize| &thumb.2[(y * tw + x) * 4..(y * tw + x) * 4 + 4];
+        assert_eq!(px(0, 0)[3], 0, "the empty corner is transparent");
+        assert_eq!(px(tw - 1, th - 1)[3], 0, "the far corner is transparent");
+        // Tile (1,1) covers canvas 256..512 on both axes: about 0.37..0.73 of the way.
+        let (cx, cy) = ((tw as f32 * 0.55) as usize, (th as f32 * 0.55) as usize);
+        assert_eq!(
+            px(cx, cy)[3],
+            255,
+            "the inked tile is opaque in the thumbnail"
+        );
+    }
+
+    #[test]
+    fn a_hidden_layer_and_a_layer_in_a_hidden_group_still_thumbnail_their_content() {
+        let mut d = OpenDocument::blank(DocumentId(7003), 300, 300, "hidden", 32).unwrap();
+        let a = inked_layer(&mut d, "a", 77);
+        d.document.layers.get_mut(a).unwrap().visible = false;
+        let (_, _, px) = d.layer_thumbnail(a, 64).unwrap();
+        assert_eq!(
+            &px[0..4],
+            &[77, 77, 77, 255],
+            "a hidden layer shows its pixels"
+        );
+
+        // A child of a hidden group: the group is an ancestor, so it stays
+        // visible for the child's thumbnail.
+        let b = inked_layer(&mut d, "b", 33);
+        let group = layer_model::Layer::group("g");
+        let gid = group.id;
+        d.apply(Command::create_layer(group)).unwrap();
+        d.document.layers.move_layer(b, Some(gid), 0).unwrap();
+        d.document.layers.get_mut(gid).unwrap().visible = false;
+        let (_, _, px) = d.layer_thumbnail(b, 64).unwrap();
+        assert_eq!(
+            &px[0..4],
+            &[33, 33, 33, 255],
+            "a child of a hidden group shows its pixels"
+        );
+        // And the group's own thumbnail is its children.
+        let (_, _, px) = d.layer_thumbnail(gid, 64).unwrap();
+        assert_eq!(&px[0..4], &[33, 33, 33, 255], "a group shows its children");
+    }
+
+    #[test]
+    fn the_thumbnail_accumulator_agrees_with_box_downscale_on_split_regions() {
+        // Two regions that together cover the canvas, fed in bands, equal the
+        // one-shot downscale of the whole buffer.
+        let (w, h) = (37u32, 23u32);
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for i in 0..w * h {
+            let v = (i * 37 % 251) as u8;
+            rgba.extend_from_slice(&[v, v.wrapping_mul(3), v.wrapping_add(9), 255 - v / 2]);
+        }
+        let (tw, th, reference) = OpenDocument::box_downscale(&rgba, w, h, 10);
+        assert_eq!((tw, th), OpenDocument::thumb_extent(w, h, 10));
+        let mut acc = ThumbAccumulator::new(w, h, tw, th);
+        // Top band rows 0..9, bottom band rows 9..23, each a sub-buffer.
+        for (y0, rows) in [(0u32, 9u32), (9, 14)] {
+            let band: Vec<u8> =
+                rgba[(y0 * w * 4) as usize..((y0 + rows) * w * 4) as usize].to_vec();
+            acc.add_region(&band, PixelRect::new(0, i64::from(y0), w, rows));
+        }
+        assert_eq!(acc.finish(), reference);
     }
 }

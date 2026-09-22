@@ -486,6 +486,39 @@ mod tests {
         }
     }
 
+    /// egui draws a checkbox as a `RectShape` with the widget state's
+    /// `rounding`, so the corner every 14pt checkbox and 20pt field gets IS the
+    /// medium radius. Photopea's are square; a 7pt radius made them circles
+    /// and pills.
+    #[test]
+    fn widgets_are_square_cornered() {
+        for theme in Theme::ALL {
+            let w = widgets_for(*theme);
+            for (name, state) in [
+                ("noninteractive", &w.noninteractive),
+                ("inactive", &w.inactive),
+                ("hovered", &w.hovered),
+                ("active", &w.active),
+                ("open", &w.open),
+            ] {
+                for corner in [
+                    state.rounding.nw,
+                    state.rounding.ne,
+                    state.rounding.sw,
+                    state.rounding.se,
+                ] {
+                    assert!(
+                        corner <= 2.0,
+                        "{theme:?} {name}: corner radius {corner} rounds a checkbox off"
+                    );
+                }
+            }
+            let v = visuals_for(*theme);
+            assert!(v.menu_rounding.nw <= 2.0, "{theme:?} menu_rounding");
+            assert!(v.window_rounding.nw <= 4.0, "{theme:?} window_rounding");
+        }
+    }
+
     #[test]
     fn every_interaction_state_has_a_distinct_fill() {
         for theme in Theme::ALL {

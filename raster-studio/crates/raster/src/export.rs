@@ -208,7 +208,7 @@ impl LinearImage {
         height: u32,
         mut pixels: Vec<f32>,
     ) -> Result<Self, ExportError> {
-        for px in pixels.chunks_exact_mut(4) {
+        for px in pixels.as_chunks_mut::<4>().0 {
             let out = premultiply([px[0], px[1], px[2], px[3]]);
             px.copy_from_slice(&out);
         }
@@ -348,7 +348,7 @@ impl<'a> Transform<'a> {
 
 fn to_rgba8_with(image: &LinearImage, transform: Transform<'_>) -> Vec<u8> {
     let mut out = Vec::with_capacity(image.pixels.len());
-    for px in image.pixels.chunks_exact(4) {
+    for px in image.pixels.as_chunks::<4>().0 {
         let straight = unpremultiply([px[0], px[1], px[2], px[3]]);
         let encoded = transform.encode([straight[0], straight[1], straight[2]]);
         out.push(quantize8(encoded[0]));
@@ -361,7 +361,7 @@ fn to_rgba8_with(image: &LinearImage, transform: Transform<'_>) -> Vec<u8> {
 
 fn to_rgba16_with(image: &LinearImage, transform: Transform<'_>) -> Vec<u16> {
     let mut out = Vec::with_capacity(image.pixels.len());
-    for px in image.pixels.chunks_exact(4) {
+    for px in image.pixels.as_chunks::<4>().0 {
         let straight = unpremultiply([px[0], px[1], px[2], px[3]]);
         let encoded = transform.encode([straight[0], straight[1], straight[2]]);
         out.push(quantize16(encoded[0]));
@@ -379,7 +379,7 @@ fn from_rgba8_with(
     transform: Transform<'_>,
 ) -> Result<LinearImage, ExportError> {
     let mut pixels = Vec::with_capacity(rgba8.len());
-    for px in rgba8.chunks_exact(4) {
+    for px in rgba8.as_chunks::<4>().0 {
         let encoded = [
             f32::from(px[0]) / 255.0,
             f32::from(px[1]) / 255.0,
@@ -399,7 +399,7 @@ fn from_rgba16_with(
     transform: Transform<'_>,
 ) -> Result<LinearImage, ExportError> {
     let mut pixels = Vec::with_capacity(rgba16.len());
-    for px in rgba16.chunks_exact(4) {
+    for px in rgba16.as_chunks::<4>().0 {
         let encoded = [
             f32::from(px[0]) / 65_535.0,
             f32::from(px[1]) / 65_535.0,
@@ -529,7 +529,7 @@ fn flatten_with(
         f32::from(background[2]) / 255.0,
     ]);
     let mut pixels = Vec::with_capacity(image.pixels.len());
-    for px in image.pixels.chunks_exact(4) {
+    for px in image.pixels.as_chunks::<4>().0 {
         if matches!(mode, FlattenMode::PartialOnly { depth } if depth.writes_transparent(px[3])) {
             // A pixel the encoder would have written as fully transparent keeps
             // the container's transparent index rather than becoming an opaque
@@ -1776,8 +1776,10 @@ mod tests {
 
         let back = rgba8_from_linear(&linear, &ColorSpace::Srgb).unwrap();
         for (i, (got, want)) in back
-            .chunks_exact(4)
-            .zip(straight.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(straight.as_chunks::<4>().0)
             .enumerate()
         {
             assert_eq!(got[3], want[3], "alpha changed at {i}");
@@ -2230,7 +2232,7 @@ mod tests {
         // And `FlattenMode::All` is unaffected: a container with no alpha at
         // all still composites every pixel, however transparent.
         let flat = flatten_onto(&image, background, &ColorSpace::Srgb, FlattenMode::All).unwrap();
-        for p in flat.pixels().chunks_exact(4) {
+        for p in flat.pixels().as_chunks::<4>().0 {
             assert_eq!(p[3], 1.0);
         }
     }
@@ -2405,7 +2407,7 @@ mod tests {
             for (w, h) in [(5u32, 7u32), (16, 16), (40, 3)] {
                 let out = resample(&image, w, h, filter).unwrap();
                 assert_eq!((out.width(), out.height()), (w, h));
-                for px in out.pixels().chunks_exact(4) {
+                for px in out.pixels().as_chunks::<4>().0 {
                     for (got, want) in px.iter().zip([0.3, 0.4, 0.5, 0.6]) {
                         assert!(
                             (got - want).abs() < 1e-4,

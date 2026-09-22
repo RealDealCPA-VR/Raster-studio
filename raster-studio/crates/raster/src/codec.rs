@@ -1133,7 +1133,7 @@ fn depth_error(format: ExportFormat) -> CodecError {
 /// RGB8 with the alpha channel dropped, for containers without alpha.
 fn rgb8_from(rgba: &[u8]) -> Vec<u8> {
     let mut rgb = Vec::with_capacity(rgba.len() / 4 * 3);
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         rgb.extend_from_slice(&px[..3]);
     }
     rgb
@@ -1534,7 +1534,13 @@ mod tests {
                 }
                 // Lossy and alpha-free.
                 ExportFormat::Jpeg(_) => {
-                    for (got, want) in decoded.rgba8.chunks_exact(4).zip(px.chunks_exact(4)) {
+                    for (got, want) in decoded
+                        .rgba8
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .zip(px.as_chunks::<4>().0)
+                    {
                         for c in 0..3 {
                             let delta = got[c] as i32 - want[c] as i32;
                             assert!(
@@ -1759,7 +1765,11 @@ mod tests {
         }
         let out = rgba8_from_planes(4, 1, &[&f], None, 32).unwrap();
         assert_eq!(
-            out.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(),
+            out.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p[0])
+                .collect::<Vec<_>>(),
             vec![0, 255, 255, 0]
         );
         let nan = f32::NAN.to_be_bytes();
@@ -2541,14 +2551,20 @@ mod tests {
     fn decode_to_linear_premultiplied_is_the_inverse_of_export() {
         // Alpha varies, so the premultiply half of the trip is exercised too.
         let mut px = checker_rgba8(4, 4);
-        for (i, chunk) in px.chunks_exact_mut(4).enumerate() {
+        for (i, chunk) in px.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             chunk[3] = (i * 17) as u8;
         }
         let bytes = encode(ExportFormat::Png, 4, 4, &px).unwrap();
         let surface = decode_surface_bytes(&bytes, ImportLimits::default()).unwrap();
         let linear = surface.to_linear_premultiplied().unwrap();
         let back = export::rgba8_from_linear(&linear, &ColorSpace::Srgb).unwrap();
-        for (i, (got, want)) in back.chunks_exact(4).zip(px.chunks_exact(4)).enumerate() {
+        for (i, (got, want)) in back
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(px.as_chunks::<4>().0)
+            .enumerate()
+        {
             assert_eq!(got[3], want[3], "alpha changed at pixel {i}");
             if want[3] == 0 {
                 continue; // a transparent pixel carries no colour to recover

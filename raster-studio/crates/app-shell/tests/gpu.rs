@@ -131,7 +131,7 @@ fn an_edit_uploads_only_the_tile_it_touched_and_the_texture_shows_it() {
 
     // Repaint exactly one interior tile a flat colour.
     let mut tile = Tile::transparent(PixelFormat::Rgba8);
-    for px in tile.data_mut().chunks_exact_mut(4) {
+    for px in tile.data_mut().as_chunks_mut::<4>().0 {
         px.copy_from_slice(&[10, 200, 30, 255]);
     }
     let hash = doc.tiles.insert_tile(&tile);
@@ -182,7 +182,7 @@ fn switching_documents_replaces_the_texture_even_at_the_same_size() {
     let mut second_image = probe(128, 96);
     // Same dimensions, different content — the case where a stale texture is
     // invisible to a size check.
-    for px in second_image.rgba8.chunks_exact_mut(4) {
+    for px in second_image.rgba8.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&[240, 20, 60, 255]);
     }
 
@@ -288,7 +288,12 @@ fn hiding_a_channel_changes_the_texture_the_canvas_samples() {
         worst_diff(&isolated, &full) > 1,
         "hiding two channels did not change a single pixel on the GPU"
     );
-    for (px, was) in isolated.chunks_exact(4).zip(full.chunks_exact(4)) {
+    for (px, was) in isolated
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(full.as_chunks::<4>().0)
+    {
         assert_eq!(px[0], was[0], "red is the channel that was kept");
         assert_eq!(px[1], 0, "green survived isolation");
         assert_eq!(px[2], 0, "blue survived isolation");
@@ -432,7 +437,7 @@ fn an_edit_to_a_downscaled_document_uploads_only_the_tile_it_touched() {
         .pixel(tw - 5, 4);
 
     let mut tile = Tile::transparent(PixelFormat::Rgba8);
-    for px in tile.data_mut().chunks_exact_mut(4) {
+    for px in tile.data_mut().as_chunks_mut::<4>().0 {
         px.copy_from_slice(&[10, 200, 30, 255]);
     }
     let hash = doc.tiles.insert_tile(&tile);
@@ -513,7 +518,13 @@ fn a_downscaled_edit_lands_where_the_whole_document_path_would_put_it() {
     assert!(!presenter.fit().is_exact());
 
     let mut tile = Tile::transparent(PixelFormat::Rgba8);
-    for (i, px) in tile.data_mut().chunks_exact_mut(4).enumerate() {
+    for (i, px) in tile
+        .data_mut()
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .enumerate()
+    {
         px.copy_from_slice(&[(i % 251) as u8, (i % 199) as u8, (i % 173) as u8, 255]);
     }
     let hash = doc.tiles.insert_tile(&tile);

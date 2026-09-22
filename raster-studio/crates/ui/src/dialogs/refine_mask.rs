@@ -423,7 +423,7 @@ pub fn composite_preview(
         let (br, bg, bb) = (backdrop[0], backdrop[1], backdrop[2]);
         // The checkerboard: two-tone under the mask so transparency reads.
         let (br, bg, bb) = if background == PreviewBackground::Checker
-            && ((i as u32 / width.max(1) + i as u32 % width.max(1)) % 2 == 0)
+            && (i as u32 / width.max(1) + i as u32 % width.max(1)).is_multiple_of(2)
         {
             (
                 br.saturating_sub(40),
@@ -555,7 +555,7 @@ mod tests {
         // coverage: expected r = ink*c + backdrop*(1-c) at each ramp pixel.
         let blend = |x: usize, cov: u8| -> i32 {
             let c = cov as f32 / 255.0;
-            let backdrop = if (x as u32 + 8) % 2 == 0 {
+            let backdrop = if (x as u32 + 8).is_multiple_of(2) {
                 160.0
             } else {
                 200.0

@@ -521,7 +521,7 @@ fn adjustment_effects_and_type_data_are_preserved_and_recognised() {
 fn a_writer_that_was_given_no_composite_synthesises_one() {
     let mut file = PsdFile::new(PsdHeader::rgba8(3, 2));
     let mut rgba = image(3, 2, 9);
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px[3] = 255;
     }
     let mut layer = PsdLayer::raster("only", Rect::sized(3, 2));

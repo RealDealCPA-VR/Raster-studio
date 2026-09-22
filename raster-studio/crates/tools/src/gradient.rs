@@ -23,9 +23,10 @@ use glam::{IVec2, Vec2};
 use raster::PixelRect;
 use serde::{Deserialize, Serialize};
 
+use crate::brush::BrushSettings;
 use crate::error::{finite, ToolError};
 use crate::patch::{mask_coverage_of, ColorPatch, CoveragePatch};
-use crate::tool::{PaintTarget, PointerEvent, Tool, ToolContext, ToolId};
+use crate::tool::{PaintTarget, PointerEvent, Tool, ToolContext, ToolId, ToolSetting};
 
 /// A colour stop, positioned in `0..=1` along the ramp.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -296,6 +297,16 @@ pub enum GradientShape {
 }
 
 impl GradientShape {
+    /// The options bar's Style choices, in the registry's order (Linear,
+    /// Radial, Angle, Reflected, Diamond). A choice index is looked up here.
+    pub const ALL: [GradientShape; 5] = [
+        GradientShape::Linear,
+        GradientShape::Radial,
+        GradientShape::Angle,
+        GradientShape::Reflected,
+        GradientShape::Diamond,
+    ];
+
     /// The ramp parameter at `p` for a drag from `start` to `end`.
     ///
     /// Always finite and always in `0..=1`: a zero-length drag is refused
@@ -602,6 +613,55 @@ impl Tool for GradientTool {
         self.current = None;
     }
 
+    /// The registry's four Gradient options — `shape` (Style), `dither`,
+    /// `reverse`, `opacity` — each landing on the [`GradientSettings`] field
+    /// `ramp_at` and the renderers read.
+    fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        match (key, setting) {
+            ("shape", ToolSetting::Choice(i)) => {
+                self.settings.shape =
+                    *GradientShape::ALL
+                        .get(i)
+                        .ok_or_else(|| ToolError::OptionKindMismatch {
+                            key: key.to_owned(),
+                        })?;
+                Ok(())
+            }
+            ("dither", ToolSetting::Bool(v)) => {
+                self.settings.dither = v;
+                Ok(())
+            }
+            ("reverse", ToolSetting::Bool(v)) => {
+                self.settings.reverse = v;
+                Ok(())
+            }
+            ("opacity", ToolSetting::Float(v)) => {
+                self.settings.opacity = finite("opacity", v)?.clamp(0.0, 1.0);
+                Ok(())
+            }
+            ("shape" | "dither" | "reverse" | "opacity", _) => Err(ToolError::OptionKindMismatch {
+                key: key.to_owned(),
+            }),
+            _ => Err(ToolError::UnknownOption {
+                key: key.to_owned(),
+            }),
+        }
+    }
+
+    fn set_choice(&mut self, key: &str, index: usize) {
+        let _ = self.set_setting(key, ToolSetting::Choice(index));
+    }
+
+    /// `opacity` is a brush-shared key: the shell folds it into the brush it
+    /// hands every tool at pointer-down and never sends it through
+    /// `set_setting`. Reading it off the brush is what lets the options bar's
+    /// Opacity reach the ramp in the running app.
+    fn set_brush(&mut self, brush: BrushSettings) {
+        if brush.opacity.is_finite() {
+            self.settings.opacity = brush.opacity.clamp(0.0, 1.0);
+        }
+    }
+
     fn is_active(&self) -> bool {
         self.start.is_some()
     }
@@ -808,5 +868,116 @@ mod tests {
             (q.x - q.y).abs() < 1e-2,
             "should have snapped to 45°: {q:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod option_tests {
+    use super::*;
+    use crate::tiles::MemoryTiles;
+    use editor_core::PixelKey;
+    use layer_model::LayerId;
+
+    fn undithered(settings: &GradientSettings, p: IVec2, start: Vec2, end: Vec2) -> [f32; 4] {
+        let pt = Vec2::new(p.x as f32 + 0.5, p.y as f32 + 0.5);
+        settings
+            .ramp
+            .sample(settings.shape.parameter(pt, start, end))
+    }
+
+    #[test]
+    fn style_reverse_dither_and_opacity_reach_the_ramp_evaluation() {
+        let mut tool = GradientTool::default();
+        let start = Vec2::new(0.0, 8.0);
+        let end = Vec2::new(64.0, 8.0);
+        // A pixel just past the start: black on the default ramp.
+        let near = IVec2::new(1, 8);
+        tool.set_setting("dither", ToolSetting::Bool(false))
+            .unwrap();
+        assert!(ramp_at(&tool.settings, near, start, end)[0] < 0.05);
+        tool.set_setting("reverse", ToolSetting::Bool(true))
+            .unwrap();
+        assert!(
+            ramp_at(&tool.settings, near, start, end)[0] > 0.95,
+            "reverse flips the ramp end for end"
+        );
+        tool.set_setting("reverse", ToolSetting::Bool(false))
+            .unwrap();
+
+        // Dither: off gives exactly the ramp sample; on perturbs at least one
+        // pixel of a 4x4 Bayer cell away from it.
+        let mid = IVec2::new(32, 8);
+        assert_eq!(
+            ramp_at(&tool.settings, mid, start, end),
+            undithered(&tool.settings, mid, start, end)
+        );
+        tool.set_setting("dither", ToolSetting::Bool(true)).unwrap();
+        let perturbed = (0..4)
+            .flat_map(|y| (0..4).map(move |x| IVec2::new(32 + x, 8 + y)))
+            .any(|p| {
+                ramp_at(&tool.settings, p, start, end) != undithered(&tool.settings, p, start, end)
+            });
+        assert!(perturbed, "dither on changes the output");
+
+        // Style: every choice index maps to its shape, in the registry order,
+        // and an off-axis pixel evaluates differently under Radial.
+        tool.set_setting("dither", ToolSetting::Bool(false))
+            .unwrap();
+        let off_axis = IVec2::new(8, 40);
+        let linear = ramp_at(&tool.settings, off_axis, start, end)[0];
+        for (i, shape) in GradientShape::ALL.iter().enumerate() {
+            tool.set_setting("shape", ToolSetting::Choice(i)).unwrap();
+            assert_eq!(tool.settings.shape, *shape);
+        }
+        tool.set_setting("shape", ToolSetting::Choice(1)).unwrap();
+        let radial = ramp_at(&tool.settings, off_axis, start, end)[0];
+        assert!(
+            (linear - radial).abs() > 0.05,
+            "radial {radial} vs linear {linear}"
+        );
+        assert!(matches!(
+            tool.set_setting("shape", ToolSetting::Choice(5)),
+            Err(ToolError::OptionKindMismatch { .. })
+        ));
+        assert!(matches!(
+            tool.set_setting("shape", ToolSetting::Float(1.0)),
+            Err(ToolError::OptionKindMismatch { .. })
+        ));
+        assert!(matches!(
+            tool.set_setting("feather", ToolSetting::Float(1.0)),
+            Err(ToolError::UnknownOption { .. })
+        ));
+
+        // Opacity, by both routes: `set_setting`, and the brush the shell
+        // hands the tool at pointer-down (opacity is a brush-shared key).
+        tool.set_setting("opacity", ToolSetting::Float(0.5))
+            .unwrap();
+        assert_eq!(tool.settings.opacity, 0.5);
+        tool.set_brush(BrushSettings {
+            opacity: 0.25,
+            ..BrushSettings::default()
+        });
+        assert_eq!(tool.settings.opacity, 0.25);
+        // ...and it scales what lands: a full drag on an empty layer leaves
+        // alpha 0.25 where the ramp is opaque.
+        tool.set_setting("shape", ToolSetting::Choice(0)).unwrap();
+        let mut tiles = MemoryTiles::new();
+        let layer = LayerId::new();
+        let key = PixelKey::Layer(layer);
+        let delta = {
+            let mut ctx =
+                ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64)).with_layer(layer);
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(0.0, 8.0))
+                .unwrap();
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(64.0, 8.0))
+                .unwrap();
+            match ctx.drain().pop() {
+                Some(Command::PaintTiles { delta, .. }) => delta,
+                other => panic!("expected a paint: {other:?}"),
+            }
+        };
+        tiles.apply_delta(key, &delta);
+        let a = tiles.pixel(key, 32, 8)[3];
+        assert!((62..=65).contains(&a), "opacity 0.25 -> alpha {a}");
     }
 }

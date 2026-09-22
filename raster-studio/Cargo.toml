@@ -27,16 +27,17 @@ members = [
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.89"
 license = "Proprietary"
 authors = ["Raster Studio"]
 repository = "https://github.com/RealDealCPA-VR/Raster-studio"
 
-# NOTE on edition/rust-version:
-# The design doc specifies edition 2024 / rust 1.85. We pin edition 2021 /
-# rust 1.82 here so the scaffold compiles on the broadest stable toolchain
-# available today. Bump both once your CI toolchain is >= 1.85 and you want
-# the 2024 idioms — nothing in this scaffold depends on 2024-only features.
+# NOTE on rust-version (the MSRV):
+# 1.89 is the highest `rust-version` any package in Cargo.lock declares
+# (cosmic-text 0.17 and smol_str 0.3 at the time of writing), so nothing
+# older can build this lockfile. CI's `msrv` job runs `cargo +1.89 check`
+# to keep this number honest; the everyday toolchain is pinned in
+# rust-toolchain.toml. The edition stays 2021: nothing here needs 2024.
 
 [workspace.dependencies]
 # Error handling

@@ -593,7 +593,7 @@ impl PsdLayer {
         }
         let n = expected / 4;
         let mut planes = vec![vec![0u8; n]; 4];
-        for (i, px) in rgba.chunks_exact(4).enumerate() {
+        for (i, px) in rgba.as_chunks::<4>().0.iter().enumerate() {
             for (p, plane) in planes.iter_mut().enumerate() {
                 plane[i] = px[p];
             }
@@ -695,7 +695,7 @@ impl MergedImage {
         }
         let n = expected / 4;
         let mut channels = vec![vec![0u8; n]; 4];
-        for (i, px) in rgba.chunks_exact(4).enumerate() {
+        for (i, px) in rgba.as_chunks::<4>().0.iter().enumerate() {
             for (c, plane) in channels.iter_mut().enumerate() {
                 plane[i] = px[c];
             }

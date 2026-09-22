@@ -54,8 +54,16 @@
 //! and the Filter menu are one list checked in both directions: every menu
 //! entry has a dialog, and no dialog exists for something the menu cannot
 //! reach.
+//!
+//! # Adjustments too
+//!
+//! Image ▸ Adjustments has one dialog for all fifteen entries as well — see
+//! [`adjustment_dialog`]. It is keyed by [`crate::menu::AdjustmentId`] the same
+//! way, and the registry below carries one instance per id so the confirm and
+//! cancel contract is checked for every adjustment, not for a representative.
 
 pub mod action;
+pub mod adjustment_dialog;
 pub mod brush_editor;
 pub mod canvas_rotation;
 pub mod canvas_size;
@@ -79,6 +87,7 @@ pub mod sizes;
 pub mod units;
 
 pub use action::DialogAction;
+pub use adjustment_dialog::{AdjustmentDialog, AdjustmentInvocation};
 pub use brush_editor::BrushEditorDialog;
 pub use canvas_rotation::ArbitraryRotationDialog;
 pub use canvas_size::{Anchor, CanvasSizeDialog, CanvasSizeSpec, Change, EdgeChange, Side};
@@ -175,7 +184,86 @@ pub(crate) mod tests_support {
         for filter in filter_dialog::FILTERS {
             dialogs.push(Box::new(FilterDialog::with_placeholder(filter)));
         }
+        // One per adjustment, each with a control moved off its start: ten of
+        // the fifteen open at the identity and refuse to confirm it, and the
+        // registry test requires Enter to confirm.
+        for id in crate::menu::AdjustmentId::ALL {
+            let mut dialog = AdjustmentDialog::with_placeholder(*id);
+            assert!(
+                dialog.set_kind(adjusted_kind(*id)),
+                "{id:?} refused its own kind"
+            );
+            dialogs.push(Box::new(dialog));
+        }
         dialogs
+    }
+
+    /// `id`'s parameters with one control moved visibly off the start, for the
+    /// registry and for tests that need an adjustment that changes pixels.
+    pub fn adjusted_kind(id: crate::menu::AdjustmentId) -> layer_model::AdjustmentKind {
+        use crate::menu::AdjustmentId as I;
+        use layer_model::AdjustmentKind as K;
+        match id {
+            I::BrightnessContrast => K::BrightnessContrast {
+                brightness: 0.5,
+                contrast: 0.0,
+            },
+            I::Levels => K::Levels {
+                black: 0.2,
+                white: 1.0,
+                gamma: 1.0,
+            },
+            I::Curves => K::Curves {
+                points: vec![[0.0, 0.0], [0.25, 0.4], [0.5, 0.7], [0.75, 0.9], [1.0, 1.0]],
+            },
+            I::Exposure => K::Exposure { stops: 1.5 },
+            I::Vibrance => K::Vibrance {
+                vibrance: 0.0,
+                saturation: -0.8,
+            },
+            I::HueSaturation => K::HueSaturation {
+                hue: 120.0,
+                saturation: 0.0,
+                lightness: 0.0,
+            },
+            I::ColorBalance => K::ColorBalance {
+                shadows: [0.0; 3],
+                midtones: [0.6, 0.0, 0.0],
+                highlights: [0.0; 3],
+            },
+            I::BlackAndWhite => K::BlackAndWhite {
+                weights: [2.0, 0.6, 0.4, 0.6, 0.2, 0.8],
+                tint: None,
+            },
+            I::PhotoFilter => K::PhotoFilter {
+                color_srgb: [1.0, 0.5, 0.1],
+                density: 0.8,
+                preserve_luminosity: true,
+            },
+            I::ChannelMixer => K::ChannelMixer {
+                rows: [
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                ],
+                monochrome: false,
+            },
+            I::Invert => K::Invert,
+            I::Posterize => K::Posterize { levels: 2 },
+            I::Threshold => K::Threshold { level: 0.2 },
+            I::GradientMap => K::GradientMap {
+                stops: vec![(0.0, [0.0, 0.0, 0.5]), (1.0, [1.0, 1.0, 0.0])],
+                reverse: false,
+            },
+            I::SelectiveColor => {
+                let mut ranges = [[0.0; 4]; 9];
+                ranges[4] = [0.9, 0.0, 0.0, 0.0];
+                K::SelectiveColor {
+                    ranges,
+                    relative: false,
+                }
+            }
+        }
     }
 
     /// One [`DialogAction`] of every variant.
@@ -399,15 +487,19 @@ mod tests {
         // `9 + FILTERS.len()` — could only catch an entry being *deleted* from
         // the registry, which is the direction that already fails to compile.
         let impls = dialog_impls_in_source();
-        let expected = impls.len() - 1 + filter_dialog::FILTERS.len();
+        // `FilterDialog` stands in for every filter and `AdjustmentDialog` for
+        // every adjustment, so those two impls are counted by their sets.
+        let expected =
+            impls.len() - 2 + filter_dialog::FILTERS.len() + crate::menu::AdjustmentId::ALL.len();
         assert_eq!(
             all_dialogs().len(),
             expected,
             "`impl Dialog for` exists for {impls:?}, but all_dialogs() has {} entries \
              (expected {expected}: one per impl, with FilterDialog standing in for all \
-             {} generated filter dialogs)",
+             {} generated filter dialogs and AdjustmentDialog for all {} adjustments)",
             all_dialogs().len(),
-            filter_dialog::FILTERS.len()
+            filter_dialog::FILTERS.len(),
+            crate::menu::AdjustmentId::ALL.len()
         );
     }
 

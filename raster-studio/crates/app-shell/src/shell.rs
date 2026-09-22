@@ -4252,7 +4252,10 @@ mod tests {
         // 300×300 crosses one tile boundary, so the edge-tile zeroing ran too.
         let (_, _, rgba) = open.layer_thumbnail(layer, 32).unwrap();
         assert!(
-            rgba.chunks_exact(4).all(|p| p == [255, 255, 255, 255]),
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [255, 255, 255, 255]),
             "the white background did not composite as white"
         );
     }

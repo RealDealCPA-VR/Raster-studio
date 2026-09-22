@@ -128,6 +128,60 @@ pub mod view;
 
 pub use brush::{BrushSettings, Dab, DabEmitter};
 pub use error::ToolError;
+/// The blend mode a paint stroke composites through.
+///
+/// Re-exported from `layer-model` rather than declared here so the options
+/// bar, the layer panel and the stroke compositor speak the same 27 modes —
+/// a paint "Multiply" is the layer panel's "Multiply". The options bar offers
+/// it under [`BLEND_MODE_KEY`] and it reaches a [`StrokeTool`] as a
+/// [`ToolSetting::Choice`] indexing [`BlendMode::ALL`] — see
+/// [`blend_mode_from_choice`].
+pub use layer_model::BlendMode;
+
+/// The options-bar key the paint blend mode travels under.
+///
+/// Not a registry key: the registry schema has no slot for a blend mode, so
+/// the UI adds the control by capability (painting and retouching tools) and
+/// forwards it like any other touched option. The `ui.` prefix is history —
+/// the key is now answered by [`StrokeTool::set_setting`] and must be
+/// forwarded, not filtered.
+pub const BLEND_MODE_KEY: &str = "ui.blend_mode";
+
+/// The blend mode a [`ToolSetting::Choice`] index under [`BLEND_MODE_KEY`]
+/// names: the position in [`BlendMode::ALL`], which is the order the options
+/// bar lists them in. `None` when the index is out of range.
+pub fn blend_mode_from_choice(index: usize) -> Option<BlendMode> {
+    BlendMode::ALL.get(index).copied()
+}
+
+/// `true` when the tool the registry builds for `id` lays a source colour
+/// over the layer and composites it through a blend mode, and therefore
+/// answers [`BLEND_MODE_KEY`]: the four [`StrokeTool`]s whose op is a
+/// source-over one (`StrokeOp::composites_source`) — Brush, Pencil, Clone
+/// Stamp and Pattern Stamp.
+///
+/// This is the capability the options bar offers the Mode combo by. The
+/// other twelve stroke tools mix toward a computed target (Blur, Sharpen,
+/// Smudge, Dodge, Burn, Sponge, Healing Brush, Spot Healing, Color
+/// Replacement) or take coverage away (Eraser, Background Eraser) — there
+/// is no source colour of theirs for a mode to act on, and Refine Boundary
+/// never composites at all — so their `set_setting` refuses the key as
+/// unknown and they are not offered the combo. Patch, Red Eye, the two
+/// fills, the gradient and the magic eraser have no dab step either.
+/// Offering any of them the combo would make a touched Mode a control that
+/// does nothing (or a refusal on every press), which is the defect this
+/// predicate exists to prevent.
+///
+/// Pinned against construction by
+/// `composites_strokes_is_exactly_the_set_that_answers_the_mode_key` in
+/// `tests/options_reach_the_tools_b2.rs`: inside the paint/retouch groups
+/// this predicate must equal "`set_setting(BLEND_MODE_KEY, ..)` is `Ok`".
+pub fn composites_strokes(id: ToolId) -> bool {
+    matches!(
+        id,
+        ToolId::Brush | ToolId::Pencil | ToolId::CloneStamp | ToolId::PatternStamp
+    )
+}
 pub use patch::{ColorPatch, CoveragePatch, TileBox};
 pub use pen::PenTool;
 pub use registry::{Cursor, OptionKind, OptionSpec, ToolGroup, ToolInfo};

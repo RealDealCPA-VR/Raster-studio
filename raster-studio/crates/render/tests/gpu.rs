@@ -209,32 +209,117 @@ fn transparent_pixels_inside_the_image_show_the_checkerboard() {
     assert_eq!(img.pixel(2, 2)[3], 255, "canvas output must be opaque");
 }
 
-/// Photopea's pasteboard: OUTSIDE the document the backdrop is a flat neutral
-/// grey, and the checkerboard shows only through transparent pixels INSIDE it.
-#[test]
-fn the_pasteboard_is_flat_outside_the_document_and_checkered_inside() {
-    let gpu = gpu_or_skip!();
+/// As [`render_canvas`], with the host's backdrop set before the camera upload,
+/// the way `app-shell` does it (`set_backdrop` at start-up and on every theme
+/// change, `update_camera` every frame).
+fn render_canvas_with_backdrop(
+    gpu: &GpuContext,
+    source: &GpuTexture,
+    camera: &Camera,
+    size: u32,
+    backdrop: [u8; 3],
+    format: wgpu::TextureFormat,
+) -> anyhow::Result<Readback> {
+    let target = OffscreenTarget::new(gpu, size, size, format)?;
+    let mut canvas = Canvas::new(gpu, format);
+    canvas.set_source(gpu, source);
+    canvas.set_backdrop(backdrop);
+    canvas.update_camera(gpu, camera);
+
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    canvas.render(&mut encoder, target.view());
+    gpu.queue.submit(Some(encoder.finish()));
+    target.read_rgba8(gpu)
+}
+
+/// A transparent 8px document zoomed to the middle half of a 64px target, so
+/// flat pasteboard bands frame it on every side.
+fn pasteboard_scene(gpu: &GpuContext) -> (GpuTexture, Camera) {
     let pixels = vec![0u8; 8 * 8 * 4]; // fully transparent document
-    let source = GpuTexture::from_rgba8(&gpu, 8, 8, &pixels, "pasteboard-src").expect("texture");
+    let source = GpuTexture::from_rgba8(gpu, 8, 8, &pixels, "pasteboard-src").expect("texture");
     // Fit, then zoom out around the viewport centre: the 8px image now
     // occupies the middle half, leaving flat pasteboard bands either side.
     let mut camera = fitted_camera(8, 64);
     camera.zoom_at(Vec2::splat(32.0), 0.5);
-    let img = render_canvas(&gpu, &source, &camera, 64).expect("render");
+    (source, camera)
+}
 
-    let pasteboard = render_shaders::PASTEBOARD_SRGB_U8;
+/// Photopea's pasteboard: OUTSIDE the document the backdrop is a flat colour,
+/// and the checkerboard shows only through transparent pixels INSIDE it.
+///
+/// The flat colour is the one the host passed to [`Canvas::set_backdrop`] —
+/// not a literal in the shader. `quad.wgsl` used to paint a hard-coded sRGB
+/// 0x3C there whatever the host set, so with a document open the pasteboard
+/// ignored the theme and sat *lighter* than the #282828 panels around it.
+#[test]
+fn the_pasteboard_is_the_colour_the_host_passes_in() {
+    let gpu = gpu_or_skip!();
+    let (source, camera) = pasteboard_scene(&gpu);
+
+    // A neutral dark-theme value and a deliberately non-grey one: the second
+    // proves each channel travels on its own lane (a grey cannot tell a
+    // swizzle from a straight copy), and both are far from the old 0x3C.
+    for backdrop in [[0x2B, 0x2B, 0x2B], [30, 60, 90]] {
+        for format in [SRGB, wgpu::TextureFormat::Rgba8Unorm] {
+            let img = render_canvas_with_backdrop(&gpu, &source, &camera, 64, backdrop, format)
+                .expect("render");
+            let label = format!("{backdrop:?} on {format:?}");
+            // Far left / far right / top / bottom, well outside the document.
+            assert_near(
+                &format!("{label}: pasteboard far left"),
+                img.pixel(1, 32),
+                backdrop,
+                2,
+            );
+            assert_near(
+                &format!("{label}: pasteboard far right"),
+                img.pixel(62, 32),
+                backdrop,
+                2,
+            );
+            assert_near(
+                &format!("{label}: pasteboard top"),
+                img.pixel(32, 1),
+                backdrop,
+                2,
+            );
+            assert_near(
+                &format!("{label}: pasteboard bottom"),
+                img.pixel(32, 62),
+                backdrop,
+                2,
+            );
+            // Just outside the document edge (the image spans 16..48 at half
+            // zoom) is still the pasteboard, not a checker cell.
+            assert_near(
+                &format!("{label}: just outside the left edge"),
+                img.pixel(14, 32),
+                backdrop,
+                2,
+            );
+        }
+    }
+}
+
+/// The checkerboard is confined to the document's transparent interior: the
+/// seam between pasteboard and checker falls exactly on the document edge.
+#[test]
+fn the_pasteboard_is_flat_outside_the_document_and_checkered_inside() {
+    let gpu = gpu_or_skip!();
+    let (source, camera) = pasteboard_scene(&gpu);
+    let backdrop = [0x2B, 0x2B, 0x2B];
+    let img =
+        render_canvas_with_backdrop(&gpu, &source, &camera, 64, backdrop, SRGB).expect("render");
+
     let light = render_shaders::CHECKER_LIGHT_SRGB_U8;
     let dark = render_shaders::CHECKER_DARK_SRGB_U8;
     let cell = render_shaders::CHECKER_CELL_PX;
 
     // Far left, well outside the document: flat pasteboard, no checker.
-    assert_near("pasteboard far left", img.pixel(1, 32), [pasteboard; 3], 2);
-    assert_near(
-        "pasteboard far right",
-        img.pixel(62, 32),
-        [pasteboard; 3],
-        2,
-    );
+    assert_near("pasteboard far left", img.pixel(1, 32), backdrop, 2);
+    assert_near("pasteboard far right", img.pixel(62, 32), backdrop, 2);
     // Inside the document (spanning 16..48 at half zoom): the checkerboard,
     // unchanged — cell (2,2) is light, (3,2) dark.
     assert_near("checker inside (0,0)", img.pixel(18, 18), [light; 3], 2);
@@ -246,13 +331,7 @@ fn the_pasteboard_is_flat_outside_the_document_and_checkered_inside() {
     );
     // The seam: the pixel just outside the document edge is pasteboard, the
     // one just inside is a checker cell — not two shades of the same thing.
-    // Half zoom: the image spans 16..48 in the 64px viewport.
-    assert_near(
-        "just outside the left edge",
-        img.pixel(14, 32),
-        [pasteboard; 3],
-        2,
-    );
+    assert_near("just outside the left edge", img.pixel(14, 32), backdrop, 2);
     assert_near(
         "just inside the left edge",
         img.pixel(18, 32),

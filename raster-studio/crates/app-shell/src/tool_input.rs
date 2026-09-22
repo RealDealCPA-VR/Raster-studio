@@ -925,8 +925,10 @@ impl ToolPointer {
         };
         let foreground = editor.foreground();
         let background = editor.background();
-        let ramp = tools::gradient::GradientRamp::from_ui_gradient(editor.gradient_ramp())
-            .unwrap_or_else(|_| tools::gradient::GradientRamp::black_to_white());
+        // W1-C: the ramp and the pattern travel the same road as the colours,
+        // through the ONE conversion both routes share (`tool_ramp_of`).
+        let ramp = tool_ramp_of(editor);
+        let pattern = editor.active_tool_pattern();
         let quick_mask = editor.quick_mask();
         let quick_mask_layer = editor.quick_mask_layer();
         // Card 055: the off-pointer route resolves the target through the
@@ -1085,6 +1087,7 @@ impl ToolPointer {
         ctx.foreground = foreground;
         ctx.background = background;
         ctx.ramp = ramp;
+        ctx.pattern = pattern;
         ctx.layer_stack = layer_stack;
         let result = action(tool.as_mut(), &mut ctx);
         let drained = (result, ctx.drain(), ctx.drain_requests());
@@ -1607,6 +1610,13 @@ impl ToolPointer {
         let effective = editor.effective_tool();
         let foreground = editor.foreground();
         let background = editor.background();
+        // W1-C: the gradient editor's ramp and the active pattern ride every
+        // pointer sample, the Up's commit included — a gradient commits at
+        // pointer-up, so a ramp only the off-pointer route carried never
+        // reached a pixel, and a pattern nobody handed over left Pattern
+        // Stamp and Pattern Fill refusing with Degenerate on every gesture.
+        let ramp = tool_ramp_of(editor);
+        let pattern = editor.active_tool_pattern();
         // Card 055: the validated edit target, read once per event before the
         // document borrow. The gesture pins it (see the ctx build below).
         let edit_target_is_mask = editor.edit_target_is_mask();
@@ -1682,14 +1692,15 @@ impl ToolPointer {
             // is surfaced, not swallowed — an options-bar control that
             // silently did nothing is the defect this seam exists to prevent.
             for (key, setting) in settings {
-                // Two keys never reach `set_setting` here: the
-                // brush-shared ones already travelled through `set_brush`
-                // (the chrome's brush_from_options reads them out of the
-                // same options map), and the UI-supplied keys (the paint
-                // blend mode) name no registry option a tool could answer.
-                // Both would burn the refusal channel on every
-                // pointer-down.
-                if crate::chrome::BRUSH_KEYS.contains(&key.as_str()) || key.starts_with("ui.") {
+                // The brush-shared keys never reach `set_setting` here:
+                // they already travelled through `set_brush` (the chrome's
+                // brush_from_options reads them out of the same options
+                // map) and would burn the refusal channel on every
+                // pointer-down. Everything else the options bar holds is
+                // forwarded, the paint blend mode (`tools::BLEND_MODE_KEY`)
+                // included: the source-over stroke tools answer it, and the options bar
+                // offers it only to the tools that do (W1-B2).
+                if crate::chrome::BRUSH_KEYS.contains(&key.as_str()) {
                     continue;
                 }
                 if let Err(e) = tool.set_setting(key, *setting) {
@@ -1881,6 +1892,8 @@ impl ToolPointer {
             ctx.selection = selection;
             ctx.foreground = foreground;
             ctx.background = background;
+            ctx.ramp = ramp;
+            ctx.pattern = pattern;
             ctx.view = view;
             ctx.layer_stack = layer_stack;
 
@@ -2053,6 +2066,16 @@ impl ToolPointer {
     }
 }
 
+/// W1-C: the ramp a gradient tool paints with, converted from the editor's
+/// UI gradient model exactly once for both the pointer route and the
+/// off-pointer route — the two cannot disagree about what the stops mean. A
+/// ramp the tools crate refuses (no stops survive) falls back to the tool's
+/// own default, black to white, rather than aborting the gesture.
+fn tool_ramp_of(editor: &Editor) -> tools::gradient::GradientRamp {
+    tools::gradient::GradientRamp::from_ui_gradient(editor.gradient_ramp())
+        .unwrap_or_else(|_| tools::gradient::GradientRamp::black_to_white())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2183,6 +2206,206 @@ mod tests {
             }
         }
         out
+    }
+
+    /// W1-C fixtures: the two colours of the checker pattern the tests below
+    /// define. 0 and 255 survive the sRGB8 -> linear -> sRGB8 round trip
+    /// exactly, so a painted pattern pixel can be compared byte for byte.
+    const CHECKER_RED: [u8; 4] = [255, 0, 0, 255];
+    const CHECKER_BLUE: [u8; 4] = [0, 0, 255, 255];
+
+    /// The composited RGBA8 at a document pixel.
+    fn pixel_at(composite: &[u8], x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * W + x) * 4) as usize;
+        [
+            composite[i],
+            composite[i + 1],
+            composite[i + 2],
+            composite[i + 3],
+        ]
+    }
+
+    /// W1-C: bake a 2x2 red/blue checker into the top-left corner of the
+    /// canvas layer through the real command route, select exactly those
+    /// four pixels and run Edit > Define Pattern -- the road the menu item
+    /// takes. Leaves no selection behind, so a later fill covers the canvas.
+    fn define_checker_pattern(editor: &mut Editor) {
+        let mut bytes = Vec::with_capacity(256 * 256 * 4);
+        for y in 0..256u32 {
+            for x in 0..256u32 {
+                bytes.extend_from_slice(&if x < 2 && y < 2 {
+                    if (x + y) % 2 == 0 {
+                        CHECKER_RED
+                    } else {
+                        CHECKER_BLUE
+                    }
+                } else {
+                    [255, 255, 255, 255]
+                });
+            }
+        }
+        {
+            let doc = editor.active_mut().unwrap();
+            let layer = doc.document.active_layer().unwrap();
+            let hash = doc.tiles.insert_bytes(bytes);
+            doc.apply(
+                Command::paint_tiles(
+                    editor_core::PixelTarget::Layer(layer),
+                    vec![editor_core::TileEdit::set(TileCoord::new(0, 0, 0), hash)],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            doc.document.selection = Selection::Rect {
+                min: glam::IVec2::new(0, 0),
+                max: glam::IVec2::new(2, 2),
+            };
+        }
+        let status = editor.define_pattern_from_selection().unwrap();
+        assert!(status.contains("2 2"), "{status}");
+        editor.active_mut().unwrap().document.selection = Selection::None;
+        let preset = editor
+            .active_pattern()
+            .expect("Define Pattern stored a preset");
+        assert_eq!((preset.width, preset.height), (2, 2));
+        assert_eq!(preset.pixel(0, 0), CHECKER_RED);
+        assert_eq!(preset.pixel(1, 0), CHECKER_BLUE);
+        assert!(
+            editor.active_tool_pattern().is_some(),
+            "the preset converts to a tools::Pattern"
+        );
+    }
+
+    /// W1-C: the ramp the gradient editor holds is what a gradient drag
+    /// paints. The gradient commits at pointer-up, on the POINTER route, so
+    /// a ramp threaded only through the off-pointer route left every drag
+    /// painting the tool's black-to-white default.
+    #[test]
+    fn a_gradient_drag_paints_the_editors_ramp_not_black_to_white() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Gradient);
+        let stop = |position: f32, color: [f32; 4]| layer_model::GradientStop {
+            position,
+            color,
+            midpoint: 0.5,
+        };
+        editor.set_gradient_ramp(layer_model::Gradient {
+            stops: vec![
+                stop(0.0, [1.0, 0.0, 0.0, 1.0]),
+                stop(1.0, [0.0, 0.0, 1.0, 1.0]),
+            ],
+            alpha_stops: Vec::new(),
+            smoothness: 1.0,
+        });
+        let mut pointer = ToolPointer::new();
+        let outcomes = stroke(
+            &mut pointer,
+            &mut editor,
+            &[(8.0, 32.0), (32.0, 32.0), (56.0, 32.0)],
+        );
+        for out in &outcomes {
+            assert!(out.reached_tool && out.failed.is_none(), "{out:?}");
+        }
+        let after = composite(&mut editor);
+        let start = pixel_at(&after, 0, 32);
+        let end = pixel_at(&after, 63, 32);
+        // The gradient's ordered dither and the composite's own quantisation
+        // nudge each channel by a few 8-bit levels, so the ramp's ends are
+        // read with that much slack. The tool's black-to-white default would
+        // put ~[0, 0, 0] at the start and ~[255, 255, 255] at the end, far
+        // outside it.
+        assert!(
+            start[0] >= 240 && start[1] <= 16 && start[2] <= 16,
+            "the start of the drag is not the ramp's red: {start:?}"
+        );
+        assert!(
+            end[2] >= 240 && end[0] <= 16 && end[1] <= 16,
+            "the end of the drag is not the ramp's blue: {end:?}"
+        );
+    }
+
+    /// W1-C: a Pattern Fill click after Edit > Define Pattern tiles the
+    /// defined pattern over the canvas. Without a pattern in the context the
+    /// tool refuses with Degenerate and nothing changes.
+    #[test]
+    fn a_pattern_fill_click_paints_the_defined_pattern() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        define_checker_pattern(&mut editor);
+        editor.set_tool(ToolId::PatternFill);
+        let mut pointer = ToolPointer::new();
+        let before = composite(&mut editor);
+        // Far from the 2x2 seed in the corner: white before the click.
+        assert_eq!(pixel_at(&before, 32, 32), [255, 255, 255, 255]);
+        let outcomes = stroke(&mut pointer, &mut editor, &[(32.0, 32.0)]);
+        for out in &outcomes {
+            assert!(out.reached_tool && out.failed.is_none(), "{out:?}");
+        }
+        let after = composite(&mut editor);
+        // The pattern tiles from the document origin: (x + y) even is red.
+        assert_eq!(
+            pixel_at(&after, 32, 32),
+            CHECKER_RED,
+            "the fill did not paint the pattern"
+        );
+        assert_eq!(
+            pixel_at(&after, 33, 32),
+            CHECKER_BLUE,
+            "the fill painted a solid, not the pattern"
+        );
+        assert_eq!(
+            pixel_at(&after, 63, 63),
+            CHECKER_RED,
+            "the fill did not reach the far corner"
+        );
+    }
+
+    /// W1-C: a Pattern Stamp stroke after Edit > Define Pattern paints the
+    /// pattern along the stroke and nowhere else.
+    #[test]
+    fn a_pattern_stamp_stroke_paints_the_defined_pattern() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        define_checker_pattern(&mut editor);
+        editor.set_tool(ToolId::PatternStamp);
+        let mut pointer = ToolPointer::new();
+        let before = composite(&mut editor);
+        let outcomes = stroke(
+            &mut pointer,
+            &mut editor,
+            &[
+                (16.0, 32.0),
+                (24.0, 32.0),
+                (32.0, 32.0),
+                (40.0, 32.0),
+                (48.0, 32.0),
+            ],
+        );
+        for out in &outcomes {
+            assert!(out.reached_tool && out.failed.is_none(), "{out:?}");
+        }
+        let after = composite(&mut editor);
+        let changed = changed_pixels(&before, &after);
+        assert!(!changed.is_empty(), "the stamp painted nothing");
+        // Under the stroke's centre the dab is fully covering, so the pattern
+        // lands byte for byte: (x + y) even is red, odd is blue.
+        assert_eq!(
+            pixel_at(&after, 32, 32),
+            CHECKER_RED,
+            "the stamp did not paint the pattern"
+        );
+        assert_eq!(
+            pixel_at(&after, 33, 32),
+            CHECKER_BLUE,
+            "the stamp painted a solid, not the pattern"
+        );
+        // A 40px brush along row 32 never reaches row 60.
+        assert_eq!(
+            pixel_at(&after, 32, 60),
+            [255, 255, 255, 255],
+            "the stamp painted off its stroke"
+        );
     }
 
     /// Card 010: the typed settings channel. The Auto-Select boolean rides
@@ -2889,13 +3112,17 @@ mod tests {
     /// target (card 055's resolver), one undo step, and only the painted band
     /// moves.
     /// Card 061 (review round 4): the FULL forward boundary, chrome to
-    /// tool. The options bar holds a brush key (size), the UI-supplied
-    /// blend mode, and a real tool option (strength); the chrome derives
-    /// the forward set and the shell's conversion feeds a real press. Two
-    /// invariants: nothing refused (no spurious status-bar error from keys
-    /// the tool cannot answer — the blend mode must never reach
-    /// `set_setting`), and the tool still receives what it does implement
-    /// (the strength the op answers).
+    /// tool. The options bar holds a brush key (size), a paint blend mode
+    /// write, and a real tool option (strength); the chrome derives the
+    /// forward set and the shell's conversion feeds a real press. Two
+    /// invariants: nothing refused (no spurious status-bar error), and the
+    /// tool still receives what it does implement (the strength the op
+    /// answers). W1-B2 (round 3): Refine Boundary never composites a source
+    /// colour, so it is NOT offered the Mode combo and its `set_setting`
+    /// refuses the key — the chrome therefore does not hold a Mode for it,
+    /// which is what keeps the press clean. (Round 2 had the key forwarded
+    /// and accepted-then-ignored by every stroke tool; the brush test below
+    /// is where the Mode is now proven live.)
     #[test]
     fn a_touched_blend_mode_presses_clean_through_the_chrome_boundary() {
         use tools::ToolId;
@@ -2908,8 +3135,9 @@ mod tests {
         editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
 
         // What a user's options bar holds after touching three controls:
-        // the brush size (a brush key), the paint blend mode (a UI-supplied
-        // key with no registry answer), and the refine strength (real).
+        // the brush size (a brush key), the paint blend mode (a control
+        // Refine Boundary is not offered, so the write lands nowhere), and
+        // the refine strength (real).
         let mut chrome = crate::chrome::Chrome::new();
         chrome.set_tool_option(ToolId::RefineBoundary, "size", OptionValue::Float(8.0));
         chrome.set_tool_option(
@@ -2920,11 +3148,16 @@ mod tests {
         // Non-default: setting the schema default is a deliberate no-op in
         // ToolOptions::set, and this test needs the strength actually held.
         chrome.set_tool_option(ToolId::RefineBoundary, "strength", OptionValue::Float(0.7));
-        // The chrome's forward set already excludes the ui-supplied key.
+        // The chrome's forward set does NOT carry a Mode for a tool whose
+        // compositing never reads one: offer set == answer set.
         let held = chrome.tool_options(ToolId::RefineBoundary);
         assert!(
-            !held.iter().any(|(k, _)| k.starts_with("ui.")),
-            "ui-supplied keys never forward: {held:?}"
+            !held.iter().any(|(k, _)| k == tools::BLEND_MODE_KEY),
+            "a Mode is never held for a tool that is not offered the combo: {held:?}"
+        );
+        assert!(
+            held.iter().any(|(k, _)| k == "strength"),
+            "the real option is held: {held:?}"
         );
         // The shell's boundary conversion (shell.rs), verbatim.
         let settings: Vec<(String, tools::ToolSetting)> = held
@@ -2960,6 +3193,100 @@ mod tests {
             sample(PointerPhase::Up, screen(17.0, 16.0)),
             false,
             &settings,
+        );
+    }
+
+    /// W1-B2 (round 2): the Mode combo reaches the brush FROM THE CHROME.
+    /// The options bar holds a blend mode for the Brush, the shell's
+    /// boundary conversion carries it to a real press, and the stroke
+    /// composites through it. Screen with a black foreground is the
+    /// identity, so the white canvas stays white under the stroke, where
+    /// the same stroke with nothing held paints it dark. Until this round
+    /// the shell dropped every `ui.` key before `set_setting`, so the combo
+    /// was dead in the running app however the tools answered it.
+    #[test]
+    fn a_held_blend_mode_reaches_the_brush_through_the_real_press() {
+        use tools::ToolId;
+        use ui::OptionValue;
+
+        let screen_mode = tools::BlendMode::ALL
+            .iter()
+            .position(|m| *m == tools::BlendMode::Screen)
+            .unwrap();
+        let mut chrome = crate::chrome::Chrome::new();
+        chrome.set_tool_option(
+            ToolId::Brush,
+            ui::tool_options::BLEND_MODE_KEY,
+            OptionValue::Choice(screen_mode),
+        );
+        let held = chrome.tool_options(ToolId::Brush);
+        assert!(
+            held.iter().any(|(k, _)| k == tools::BLEND_MODE_KEY),
+            "the touched Mode is in the forward set: {held:?}"
+        );
+        // The shell's boundary conversion (shell.rs), verbatim.
+        let settings: Vec<(String, tools::ToolSetting)> = held
+            .into_iter()
+            .map(|(key, value)| {
+                let setting = match value {
+                    ui::OptionValue::Float(v) => tools::ToolSetting::Float(v),
+                    ui::OptionValue::Int(v) => tools::ToolSetting::Int(v),
+                    ui::OptionValue::Bool(v) => tools::ToolSetting::Bool(v),
+                    ui::OptionValue::Choice(v) => tools::ToolSetting::Choice(v),
+                    ui::OptionValue::Color(v) => tools::ToolSetting::Color(v),
+                };
+                (key, setting)
+            })
+            .collect();
+
+        // One black brush stroke across the white canvas, the held settings
+        // applied at the press; the composited pixel under its middle.
+        let paint = |settings: &[(String, tools::ToolSetting)]| -> [u8; 4] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut editor = editor(dir.path());
+            editor.set_tool(ToolId::Brush);
+            editor.set_foreground([0.0, 0.0, 0.0, 1.0]);
+            let mut pointer = ToolPointer::new();
+            let out = pointer.handle(
+                &mut editor,
+                sample(PointerPhase::Down, screen(16.0, 32.0)),
+                false,
+                settings,
+            );
+            assert!(
+                out.failed.is_none(),
+                "a held blend mode must not refuse: {:?}",
+                out.failed
+            );
+            for x in [20.0, 24.0, 28.0, 32.0, 36.0, 40.0, 44.0] {
+                pointer.handle(
+                    &mut editor,
+                    sample(PointerPhase::Move, screen(x, 32.0)),
+                    false,
+                    settings,
+                );
+            }
+            pointer.handle(
+                &mut editor,
+                sample(PointerPhase::Up, screen(48.0, 32.0)),
+                false,
+                settings,
+            );
+            pixel_at(&composite(&mut editor), 32, 32)
+        };
+
+        // Control: nothing held, the brush paints Normal and darkens white.
+        let normal = paint(&[]);
+        assert!(
+            normal[0] < 200 && normal[1] < 200 && normal[2] < 200,
+            "control: a black Normal brush darkens the white canvas: {normal:?}"
+        );
+        // Held Screen: black is the identity, the canvas stays white.
+        let screened = paint(&settings);
+        assert_eq!(
+            screened,
+            [255, 255, 255, 255],
+            "Screen with black leaves white where Normal painted {normal:?}"
         );
     }
 

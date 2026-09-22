@@ -114,7 +114,9 @@ impl FilterBuffer {
             });
         }
         let pixels = src
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| {
                 premultiply([
                     srgb8_to_linear(p[0]),

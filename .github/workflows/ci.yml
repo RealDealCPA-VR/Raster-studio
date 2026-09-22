@@ -3,8 +3,19 @@ name: CI
 on:
   push:
     branches: [main]
+    # Without this filter a `v*` tag push never starts the workflow at all,
+    # and the release job's `startsWith(github.ref, 'refs/tags/v')` gate can
+    # never be true — which is how that job went unrun.
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_dry_run:
+        description: >-
+          Also run the release job (build the three installers and upload them
+          as workflow artifacts) without a tag. Nothing is published.
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,8 +31,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - id: toolchain
+        # rust-toolchain.toml is the one place the pinned channel is written;
+        # the install step below reads it from there rather than repeating it.
+        shell: bash
+        run: echo "channel=$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           components: rustfmt
       - run: cargo fmt --all --check
 
@@ -30,8 +47,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - id: toolchain
+        # rust-toolchain.toml is the one place the pinned channel is written;
+        # the install step below reads it from there rather than repeating it.
+        shell: bash
+        run: echo "channel=$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
@@ -54,7 +77,14 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - id: toolchain
+        # rust-toolchain.toml is the one place the pinned channel is written;
+        # the install step below reads it from there rather than repeating it.
+        shell: bash
+        run: echo "channel=$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: raster-studio
@@ -67,14 +97,60 @@ jobs:
       - run: cargo check --workspace --all-targets
       # GPU-backed tests detect the absence of an adapter and skip themselves,
       # so this stays green on runners without one.
-      - run: cargo test --workspace
+      #
+      # --no-fail-fast: run every test binary even after one fails. Without
+      # it cargo stops at the first failing binary, and a second failure in
+      # a later crate stays hidden until the first is fixed (that cost three
+      # days on the fontless-runner bug: the ubuntu leg showed one red
+      # binary while another was also red behind it).
+      - run: cargo test --workspace --no-fail-fast
+
+  # The MSRV is `rust-version` in raster-studio/Cargo.toml. This job keeps it
+  # honest: `cargo +1.89 check` fails the moment the code or a locked
+  # dependency needs a newer compiler than the manifest promises. It checks
+  # compilation only — RUSTFLAGS is cleared because an older compiler's lint
+  # set differs from the pinned toolchain's, and lints are the clippy job's.
+  msrv:
+    name: MSRV (cargo +1.89 check)
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: raster-studio
+          key: msrv-1.89
+      - name: Install Linux GUI/GPU build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxrandr-dev \
+            libxi-dev libxcursor-dev libx11-dev pkg-config
+      - name: The manifest's rust-version is the one this job checks
+        shell: bash
+        run: |
+          declared=$(sed -n 's/^rust-version = "\([^"]*\)"/\1/p' Cargo.toml)
+          test "$declared" = "1.89" || {
+            echo "::error::Cargo.toml declares rust-version = $declared but this job checks 1.89; update both together"
+            exit 1
+          }
+      # `+1.89` beats rust-toolchain.toml's pin, which is what we want here.
+      - run: cargo +1.89 check --workspace --all-targets
 
   audit:
     name: cargo audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - id: toolchain
+        # rust-toolchain.toml is the one place the pinned channel is written;
+        # the install step below reads it from there rather than repeating it.
+        shell: bash
+        run: echo "channel=$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
       # Run the binary rather than rustsec/audit-check: that action is a
       # JavaScript action, so it ignores `defaults.run.working-directory` and
       # looks for ./Cargo.lock at the repository root — which is one level above
@@ -83,30 +159,38 @@ jobs:
         run: cargo install cargo-audit --locked
       - run: cargo audit
 
-  # A tag push builds the installers for all three platforms and uploads them
-  # as workflow artifacts (P3.5). Signing (P3.6) runs when the signing
-  # secrets are configured on the repo; without them the artifacts are
-  # unsigned and the job says so in its summary rather than lying by omission.
+  # A tag push (v*) builds the installers for all three platforms and uploads
+  # them as workflow artifacts (P3.5); a manual run with `release_dry_run`
+  # does the same without a tag, so the job can be exercised before anyone
+  # tags. Signing (P3.6) runs when the platform's secret is configured on the
+  # repo; without it the artifact is unsigned and the step summary says so
+  # in as many words rather than lying by omission.
   release:
     name: release (${{ matrix.os }})
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_dry_run)
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
-            script: iscc apps\studio-desktop\packaging\raster-studio.iss
-            artifact: target/installer/*.exe
+            artifact: raster-studio/target/installer/*.exe
           - os: macos-latest
-            script: apps/studio-desktop/packaging/macos/build-app.sh
-            artifact: target/packaging/*.dmg
+            artifact: raster-studio/target/packaging/*.dmg
           - os: ubuntu-latest
-            script: apps/studio-desktop/packaging/linux/build-deb.sh
-            artifact: target/packaging/*.deb
+            artifact: raster-studio/target/packaging/*.deb
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - id: toolchain
+        # rust-toolchain.toml is the one place the pinned channel is written;
+        # the install step below reads it from there rather than repeating it.
+        shell: bash
+        run: echo "channel=$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: raster-studio
@@ -117,20 +201,78 @@ jobs:
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libxrandr-dev \
             libxi-dev libxcursor-dev libx11-dev pkg-config
       - run: cargo build --release -p studio-desktop
-      - name: Package
-        run: ${{ matrix.script }}
-      # Signing is secret-driven: the steps only exist where the platform's
-      # secret is set, so a fork without them still ships unsigned artifacts.
+
+      # One source of truth for the version: the desktop crate's Cargo.toml.
+      # The installer scripts read it the same way (by package name).
+      - name: Read the crate version
+        id: version
+        shell: bash
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "studio-desktop") | .version')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "studio-desktop $version" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package (Windows installer)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: iscc /DAppVersion=${{ steps.version.outputs.version }} apps\studio-desktop\packaging\raster-studio.iss
+      - name: Package (macOS .app + .dmg)
+        if: runner.os == 'macOS'
+        run: apps/studio-desktop/packaging/macos/build-app.sh
+      - name: Package (Debian .deb)
+        if: runner.os == 'Linux'
+        run: apps/studio-desktop/packaging/linux/build-deb.sh
+
+      # Signing is secret-driven. A step-level `env:` cannot be read by that
+      # step's own `if:`, and the `secrets` context is not available in `if:`
+      # at all, so the check happens inside the script: no secret, a clear
+      # "unsigned" line in the summary and a green step; secret present, the
+      # real signing command runs and its verification gates the step.
       - name: Sign (Authenticode)
-        if: runner.os == 'Windows' && env.WINDOWS_CERT != ''
+        if: runner.os == 'Windows'
+        shell: pwsh
         env:
           WINDOWS_CERT: ${{ secrets.WINDOWS_CERT }}
-        run: echo "Authenticode signing runs here when WINDOWS_CERT is configured"
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $installer = Get-ChildItem target/installer/*.exe | Select-Object -First 1
+          if (-not $env:WINDOWS_CERT) {
+            "**Windows: UNSIGNED.** The WINDOWS_CERT secret (base64 .pfx) is not configured; $($installer.Name) ships without an Authenticode signature." | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            Write-Host "::notice::unsigned installer: WINDOWS_CERT is not configured"
+            exit 0
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP "signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          & $signtool.FullName sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /f $pfx /p $env:WINDOWS_CERT_PASSWORD $installer.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $signtool.FullName verify /pa /v $installer.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item $pfx
+          "**Windows: signed** ($($installer.Name), Authenticode, timestamped)." | Out-File -Append $env:GITHUB_STEP_SUMMARY
       - name: Sign (Apple notarisation)
-        if: runner.os == 'macOS' && env.APPLE_ID != ''
+        if: runner.os == 'macOS'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
-        run: echo "codesign + notarytool run here when APPLE_ID is configured"
+        run: |
+          dmg=$(ls target/packaging/*.dmg | head -n 1)
+          if [ -z "$APPLE_ID" ]; then
+            echo "**macOS: UNSIGNED (ad-hoc signature only).** The APPLE_ID secret is not configured; $(basename "$dmg") is not notarised and Gatekeeper will warn." >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::unsigned dmg: APPLE_ID is not configured"
+            exit 0
+          fi
+          # Developer ID signing + notarytool need a certificate imported into
+          # a keychain and a team id as well as APPLE_ID; that sequence is
+          # written out in apps/studio-desktop/packaging/README.md and has not
+          # been wired here yet. Fail rather than upload a dmg that looks
+          # signed but is not.
+          echo "::error::APPLE_ID is configured but notarisation is not wired in this workflow yet (see packaging/README.md)"
+          exit 1
+
+      # `path` here is resolved from the repository root: upload-artifact is a
+      # JavaScript action, so `defaults.run.working-directory` does not apply
+      # to it — the paths carry the raster-studio/ prefix for that reason.
       - uses: actions/upload-artifact@v4
         with:
           name: installer-${{ matrix.os }}

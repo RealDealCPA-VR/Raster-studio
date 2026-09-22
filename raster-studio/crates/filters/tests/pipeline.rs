@@ -54,7 +54,7 @@ fn a_filter_chain_round_trips_through_the_tile_grid() {
     assert_eq!(bytes.len(), (W * H * 4) as usize);
     // The chain must have done something, and must have kept the image opaque.
     assert_ne!(bytes, source_bytes());
-    assert!(bytes.chunks_exact(4).all(|p| p[3] == 255));
+    assert!(bytes.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
 }
 
 #[test]

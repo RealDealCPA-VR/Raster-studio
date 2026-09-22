@@ -564,7 +564,7 @@ fn the_persistence_fixture_is_multi_tile_srgb_and_is_not_flat() {
     // ...and the composite that comes out of it is a picture, not a wash.
     let frame = l.doc.composite_all();
     assert_eq!(frame.len(), (PHOTO_W * PHOTO_H * 4) as usize);
-    let distinct: std::collections::BTreeSet<&[u8]> = frame.chunks_exact(4).collect();
+    let distinct: std::collections::BTreeSet<&[u8; 4]> = frame.as_chunks::<4>().0.iter().collect();
     assert!(
         distinct.len() > 10_000,
         "the composite collapsed to {} distinct colours",

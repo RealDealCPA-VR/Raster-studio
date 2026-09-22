@@ -134,7 +134,7 @@ fn a_jpeg_export_decodes_back_to_the_composite_within_the_formats_tolerance() {
     // bound there. Today this reads 79.4, against 1.532 for the decoded file.
     let rgb_only = |a: &[u8], b: &[u8]| -> f64 {
         let (mut total, mut n) = (0u64, 0u64);
-        for (pa, pb) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+        for (pa, pb) in a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0) {
             for c in 0..3 {
                 total += u64::from(pa[c].abs_diff(pb[c]));
                 n += 1;

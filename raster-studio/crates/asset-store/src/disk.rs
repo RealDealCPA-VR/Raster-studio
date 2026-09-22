@@ -429,7 +429,7 @@ impl Disk {
         let body = &buf[INDEX_HEADER_LEN..];
         let full = body.len() / INDEX_RECORD_LEN;
         let mut out = Vec::with_capacity(full);
-        for rec in body.chunks_exact(INDEX_RECORD_LEN) {
+        for rec in body.as_chunks::<INDEX_RECORD_LEN>().0 {
             let mut h = [0u8; 32];
             h.copy_from_slice(&rec[0..32]);
             let mut c = [0u8; 4];

@@ -832,7 +832,7 @@ mod tests {
         );
         let red = FillColor([255, 0, 0, 255]);
         let mut manual = Tile::transparent(PixelFormat::Rgba8);
-        for px in manual.data_mut().chunks_exact_mut(4) {
+        for px in manual.data_mut().as_chunks_mut::<4>().0 {
             px.copy_from_slice(&[255, 0, 0, 255]);
         }
         assert_eq!(red.solid_tile_hash(), manual.hash());

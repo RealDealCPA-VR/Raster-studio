@@ -12,11 +12,15 @@ pub struct Radii {
 }
 
 impl Default for Radii {
+    /// Photopea's corners: essentially square. A 2pt radius on a 20pt control
+    /// reads as a crisp rectangle with the aliasing taken off; 4/7/12 (the
+    /// previous ramp) turned 20pt fields into pills and checkboxes into
+    /// circles. Only `large` — panels, cards, popovers — gets a visible curve.
     fn default() -> Self {
         Self {
-            small: 4.0,
-            medium: 7.0,
-            large: 12.0,
+            small: 2.0,
+            medium: 2.0,
+            large: 4.0,
         }
     }
 }
@@ -108,8 +112,36 @@ mod tests {
     #[test]
     fn radii_are_ordered() {
         let r = Radii::default();
-        assert!(r.small < r.medium);
+        assert!(r.small <= r.medium);
         assert!(r.medium < r.large);
+    }
+
+    /// Photopea's corners are ~2px. Anything a control (20pt) is drawn with
+    /// must stay at or under 2pt, or a 20pt field is a pill and a 14pt
+    /// checkbox a circle; only the panel/popover radius may show a curve, and
+    /// even that stays under a quarter of a control's height.
+    #[test]
+    fn controls_are_square_cornered_like_photopea() {
+        let r = Radii::default();
+        assert!(
+            r.small <= 2.0,
+            "small radius {} makes checkboxes round",
+            r.small
+        );
+        assert!(
+            r.medium <= 2.0,
+            "medium radius {} makes fields pills",
+            r.medium
+        );
+        assert!(
+            r.large <= 4.0,
+            "large radius {} is a macOS card, not Photopea",
+            r.large
+        );
+        // A 14pt checkbox keeps straight edges: the two corner arcs of one side
+        // must cover well under half of it.
+        let checkbox = 14.0;
+        assert!(Radius::Medium.resolve(&r, checkbox) * 2.0 < checkbox * 0.5);
     }
 
     #[test]
@@ -119,8 +151,13 @@ mod tests {
         for pair in Radius::ALL.windows(2) {
             let lo = pair[0].resolve(&r, side);
             let hi = pair[1].resolve(&r, side);
-            assert!(hi > lo, "{:?} ({lo}) !< {:?} ({hi})", pair[0], pair[1]);
+            assert!(hi >= lo, "{:?} ({lo}) !<= {:?} ({hi})", pair[0], pair[1]);
         }
+        // The ends of the ramp are strict: a token must never be *smaller*
+        // than a lower one, and None/Continuous stay distinct from the rest.
+        assert!(Radius::Small.resolve(&r, side) > Radius::None.resolve(&r, side));
+        assert!(Radius::Large.resolve(&r, side) > Radius::Medium.resolve(&r, side));
+        assert!(Radius::Continuous.resolve(&r, side) > Radius::Large.resolve(&r, side));
     }
 
     #[test]
@@ -139,6 +176,9 @@ mod tests {
     fn continuous_is_a_capsule() {
         let r = Radii::default();
         assert_eq!(Radius::Continuous.resolve(&r, 24.0), 12.0);
+        // ...and it is the only token that ever gets there: the largest fixed
+        // radius stays well short of a capsule on a control-sized shape.
+        assert!(Radius::Large.resolve(&r, 24.0) < 12.0);
     }
 
     #[test]

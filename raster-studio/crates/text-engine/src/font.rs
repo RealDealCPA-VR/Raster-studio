@@ -131,10 +131,32 @@ pub struct FontLibrary {
     /// is empty. Remembered because the database has no getter, and because
     /// [`Self::substitute_for`] must name exactly what shaping falls back to.
     generic_sans: String,
-    /// The family [`Family::Serif`] resolves to; empty while unused.
+    /// The family [`Family::Serif`] resolves to (a `"serif"` request);
+    /// empty while the database is empty.
     generic_serif: String,
-    /// The family [`Family::Monospace`] resolves to; empty while unused.
+    /// The family [`Family::Monospace`] resolves to (a `"monospace"`
+    /// request); empty while the database is empty.
     generic_mono: String,
+}
+
+/// The generic family a CSS generic name requests, or `None` for a concrete
+/// family name.
+///
+/// These are the three names the Type tool's Font choice offers
+/// (`tools::registry`: `sans-serif`, `serif`, `monospace`), and the empty
+/// string, which the engine has always read as the generic sans. Shaping
+/// resolves each through the database's pinned generic
+/// ([`FontLibrary::repair_generic_families`]) rather than looking for an
+/// installed family with that literal name, which nothing ships — before
+/// this, `serif` and `monospace` fell through the missing-family path and
+/// shaped as sans, so two of the Font combo's three choices drew the same.
+pub(crate) fn generic_family(name: &str) -> Option<Family<'static>> {
+    match name {
+        "" | "sans-serif" => Some(Family::SansSerif),
+        "serif" => Some(Family::Serif),
+        "monospace" => Some(Family::Monospace),
+        _ => None,
+    }
 }
 
 impl FontLibrary {
@@ -278,13 +300,14 @@ impl FontLibrary {
     /// through this rule — a missing family shapes with the library's default
     /// sans face ([`Family::SansSerif`], pinned by
     /// [`Self::repair_generic_families`]). `None` means there is nothing to
-    /// report: the family is installed, the request is the generic sans
-    /// (empty name), or the library has no faces at all so nothing can shape.
+    /// report: the family is installed, the request is a generic one (the empty
+    /// name or a CSS generic name, [`generic_family`]) that resolves through the
+    /// pinned generics, or the library has no faces at all so nothing can shape.
     /// The requested name always stays in the document; only shaping sees the
     /// substitute.
     #[must_use]
     pub fn substitute_for(&self, requested: &str) -> Option<String> {
-        if requested.is_empty() || self.has_family(requested) || self.is_empty() {
+        if generic_family(requested).is_some() || self.has_family(requested) || self.is_empty() {
             return None;
         }
         (!self.generic_sans.is_empty()).then(|| self.generic_sans.clone())

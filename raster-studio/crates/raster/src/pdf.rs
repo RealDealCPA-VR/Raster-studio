@@ -99,7 +99,7 @@ pub fn encode_pdf(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
 /// bytes of `DeviceRGB`.
 fn composite_onto_white(rgba: &[u8], w: usize, h: usize) -> Vec<u8> {
     let mut rgb = Vec::with_capacity(w * h * 3);
-    for px in rgba.chunks_exact(4).take(w * h) {
+    for px in rgba.as_chunks::<4>().0.iter().take(w * h) {
         let a = px[3] as f32 / 255.0;
         let blend = |c: u8| (c as f32 * a + 255.0 * (1.0 - a)).round().clamp(0.0, 255.0) as u8;
         rgb.push(blend(px[0]));

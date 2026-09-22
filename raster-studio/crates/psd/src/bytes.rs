@@ -244,7 +244,9 @@ impl<'a> Cursor<'a> {
             what: "unicode string byte length",
         })?)?;
         let units: Vec<u16> = bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| u16::from_be_bytes([c[0], c[1]]))
             .collect();
         let mut s = String::from_utf16_lossy(&units);

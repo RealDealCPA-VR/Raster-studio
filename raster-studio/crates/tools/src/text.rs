@@ -46,6 +46,24 @@ use crate::tool::{PointerEvent, TextEdit, Tool, ToolContext, ToolId, ToolRequest
 /// machine.
 pub const DEFAULT_FONT_FAMILY: &str = "sans-serif";
 pub const DEFAULT_SIZE_PX: f32 = 24.0;
+/// The registry's `size_px` range, which [`Tool::set_setting`] clamps into.
+pub const MIN_SIZE_PX: f32 = 4.0;
+pub const MAX_SIZE_PX: f32 = 512.0;
+
+/// The family name the registry's `font_family` choice `index` names, read
+/// from the registry's own spec so the list has exactly one home. An index
+/// past the end clamps to the last entry, the options bar's own `conform`
+/// rule; `None` only when the registry declares no such choice at all.
+pub fn font_family_choice(index: usize) -> Option<&'static str> {
+    let info = crate::registry::info(ToolId::Type)?;
+    let spec = info.options.iter().find(|o| o.key == "font_family")?;
+    let crate::registry::OptionKind::Choice { choices, .. } = spec.kind else {
+        return None;
+    };
+    choices
+        .get(index.min(choices.len().checked_sub(1)?))
+        .copied()
+}
 
 /// Live IME preedit (card 025 stores the state; card 029 routes the events).
 #[derive(Debug, Clone, PartialEq)]
@@ -695,6 +713,47 @@ impl Tool for TypeTool {
 
     fn has_pending_commit(&self) -> bool {
         self.session.is_some()
+    }
+
+    /// The two options the registry declares for Type reach the tool and,
+    /// through [`Self::on_pointer_up`], the text layer the next click
+    /// creates: `size_px` (a Float, the registry's 4..512 range) and
+    /// `font_family` (a Choice indexing the registry's family list, so the
+    /// tool and the options bar cannot disagree about which name index 1
+    /// is). A live session keeps the payload it opened with — the draft is
+    /// what the user is typing into, and re-sizing it from under them rides
+    /// the shell's text-edit route, not an options seed.
+    ///
+    /// Before this, `size_px` was refused and `font_family` was accepted by
+    /// the trait default and dropped: every layer came out 24px sans.
+    fn set_setting(
+        &mut self,
+        key: &str,
+        setting: crate::tool::ToolSetting,
+    ) -> Result<(), ToolError> {
+        use crate::tool::ToolSetting;
+        match (key, setting) {
+            ("size_px", ToolSetting::Float(v)) => {
+                crate::error::finite("type size", v)?;
+                self.size_px = v.clamp(MIN_SIZE_PX, MAX_SIZE_PX);
+                Ok(())
+            }
+            ("font_family", ToolSetting::Choice(index)) => {
+                let Some(family) = font_family_choice(index) else {
+                    return Err(ToolError::UnknownOption {
+                        key: key.to_owned(),
+                    });
+                };
+                self.font_family = family.to_owned();
+                Ok(())
+            }
+            ("size_px", _) | ("font_family", _) => Err(ToolError::OptionKindMismatch {
+                key: key.to_owned(),
+            }),
+            _ => Err(ToolError::UnknownOption {
+                key: key.to_owned(),
+            }),
+        }
     }
 
     fn is_text_editing(&self) -> bool {

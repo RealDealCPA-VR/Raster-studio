@@ -13,6 +13,7 @@
 
 use egui::Id;
 
+use super::adjustment_dialog::ColorTarget;
 use super::gradient_editor::{StopKey, StopKind, StopRef};
 use super::layer_style::EffectKind;
 
@@ -102,6 +103,22 @@ pub fn filter_param_color(key: &'static str) -> Id {
     Id::new((ROOT, "filter-param-color", key))
 }
 
+/// A colour swatch in the Adjustments dialog: Photo Filter's colour, or one
+/// Gradient Map stop.
+pub fn adjustment_color(target: ColorTarget) -> Id {
+    Id::new((ROOT, "adjustment-color", target))
+}
+
+/// The Adjustments dialog's preview image (or its off-state well).
+pub fn adjustment_preview() -> Id {
+    Id::new((ROOT, "adjustment-preview"))
+}
+
+/// The Levels dialog's histogram well.
+pub fn adjustment_histogram() -> Id {
+    Id::new((ROOT, "adjustment-histogram"))
+}
+
 /// One chip in the colour picker's recent list.
 pub fn recent_color(index: usize) -> Id {
     Id::new((ROOT, "recent-color", index))
@@ -128,6 +145,11 @@ mod tests {
             recent_color(1),
             compare_swatch(false),
             compare_swatch(true),
+            adjustment_color(ColorTarget::PhotoFilter),
+            adjustment_color(ColorTarget::GradientStop(0)),
+            adjustment_color(ColorTarget::GradientStop(1)),
+            adjustment_preview(),
+            adjustment_histogram(),
             gradient_stop_color(StopRef {
                 kind: StopKind::Color,
                 index: 0,

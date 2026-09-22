@@ -39,7 +39,7 @@ pub(crate) fn decode32(s: &str) -> Option<[u8; 32]> {
         return None;
     }
     let mut out = [0u8; 32];
-    for (dst, pair) in out.iter_mut().zip(src.chunks_exact(2)) {
+    for (dst, pair) in out.iter_mut().zip(src.as_chunks::<2>().0) {
         *dst = (nibble(pair[0])? << 4) | nibble(pair[1])?;
     }
     Some(out)
