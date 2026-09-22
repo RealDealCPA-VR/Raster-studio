@@ -3,7 +3,7 @@
 > Current checkpoint (2026-09-20): cards T001–T076 are recorded verified at
 > `37fb975`; independent focused verification of the T072–T076 PSD/import work
 > passes. Current work is tracked in [Thumbnail workflow progress](raster-studio/docs/THUMBNAIL-WORKFLOW-PROGRESS.md)
-> and [Active goal](.pi/goals/ACTIVE.md). Current checkpoint (2026-09-20, third update): T077–T081 (incl. the Phase 8
+> (the agent goal ledger formerly kept under `.pi/` is no longer tracked). Current checkpoint (2026-09-20, third update): T077–T081 (incl. the Phase 8
 > gate), T079 (editable text export), T088–T090 and T092 are verified and pushed;
 > T082–T086 have captured automated evidence (docs/evidence/ screenshots, release
 > GPU + performance suites). Explicitly open: the human visual judgment on the

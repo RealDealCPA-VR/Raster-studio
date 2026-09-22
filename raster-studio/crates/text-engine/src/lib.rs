@@ -90,7 +90,9 @@ mod raster;
 mod style;
 
 pub use edit::CaretStop;
-pub use font::{FaceMatch, FaceMetrics, FaceRecord, FamilyRecord, FontId, FontLibrary};
+pub use font::{
+    FaceMatch, FaceMetrics, FaceRecord, FamilyRecord, FontId, FontLibrary, FONT_DIRS_ENV,
+};
 pub use layout::{
     shape, Decoration, DecorationKind, Rect, ShapedGlyph, ShapedLine, ShapedText, MIN_FONT_SIZE_PX,
 };

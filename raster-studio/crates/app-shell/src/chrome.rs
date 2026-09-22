@@ -522,6 +522,16 @@ impl Chrome {
         &self.workspace
     }
 
+    /// Post an intent exactly as a clicked control would.
+    ///
+    /// The shell's door for a key chord only the menu bar paints
+    /// ([`crate::keymap::Resolved::Menu`]): the intent joins this frame's
+    /// outbox and [`Chrome::harvest`] decides dialog-versus-perform for it, so
+    /// the chord and the menu item cannot mean two different things.
+    pub fn emit(&mut self, intent: ui::Intent) {
+        self.workspace.emit(intent);
+    }
+
     /// The choice index the options bar holds for the active tool's named
     /// mode — the transform tool's Scale/Rotate/Skew/… — fed to the live tool
     /// at each press.
@@ -1180,25 +1190,55 @@ impl Chrome {
         self.harvest(editor, out);
     }
 
+    /// Route one intent into the frame's output — the one road every intent
+    /// travels, whether a docked panel posted it or a menu row was clicked.
+    ///
+    /// A menu action the dialog host answers opens its dialog instead of
+    /// being performed. The intent is consumed here — the confirmed value
+    /// arrives through [`ChromeOutput::dialog`] or a dedicated channel once
+    /// the dialog is confirmed, one or more frames later. Everything else is
+    /// picked by the bridge and recorded; what the bridge cannot answer is
+    /// reported, never dropped.
+    fn route(&mut self, intent: ui::Intent, editor: &Editor, out: &mut ChromeOutput) {
+        if let ui::Intent::Action(action) = &intent {
+            if self.dialogs.open_for_menu_action(action, editor) {
+                return;
+            }
+        }
+        match crate::menu_bridge::pick(&intent, editor) {
+            Some(pick) => crate::menu_bridge::record(pick, out),
+            // Loud, not silent. This `else` used to be absent, so a control
+            // whose intent the bridge could not answer produced no edit, no
+            // status message and no log line — indistinguishable from a
+            // control that worked. See `ChromeOutput::unrouted`.
+            None => out.unrouted.push(intent),
+        }
+    }
+
+    /// What a click on an enabled menu-bar row does: [`Self::route`] its
+    /// intent, exactly as a panel control's intent is routed.
+    ///
+    /// This used to be `menu_bridge::record` straight into the output, which
+    /// skipped the dialog host: Image Size, Canvas Size, Arbitrary rotation,
+    /// Layer Style, the Filter Gallery and every Filter row went to
+    /// `menu_bridge::perform` — which has no arm for a question only a dialog
+    /// can answer — while the same rows in the context menu, arriving as
+    /// workspace intents, opened their dialogs. One handler, so the two
+    /// surfaces cannot disagree again;
+    /// `menu_bridge::tests::every_enabled_menu_item_really_does_something`
+    /// drives every enabled row through it.
+    pub(crate) fn menu_click(
+        &mut self,
+        intent: ui::Intent,
+        editor: &Editor,
+        out: &mut ChromeOutput,
+    ) {
+        self.route(intent, editor, out);
+    }
+
     fn harvest(&mut self, editor: &Editor, out: &mut ChromeOutput) {
         for intent in self.workspace.drain_intents() {
-            // A menu action the dialog host answers opens its dialog instead of
-            // being performed. The intent is consumed here — the confirmed
-            // value arrives through [`ChromeOutput::dialog`] or a dedicated
-            // channel once the dialog is confirmed, one or more frames later.
-            if let ui::Intent::Action(action) = &intent {
-                if self.dialogs.open_for_menu_action(action, editor) {
-                    continue;
-                }
-            }
-            match crate::menu_bridge::pick(&intent, editor) {
-                Some(pick) => crate::menu_bridge::record(pick, out),
-                // Loud, not silent. This `else` used to be absent, so a control
-                // whose intent the bridge could not answer produced no edit, no
-                // status message and no log line — indistinguishable from a
-                // control that worked. See `ChromeOutput::unrouted`.
-                None => out.unrouted.push(intent),
-            }
+            self.route(intent, editor, out);
         }
         // Which drag an edit belongs to is the *window's* knowledge: a slider
         // emits the value it now holds and has no idea whether the button is
@@ -1267,8 +1307,12 @@ impl Chrome {
     /// menus, their labels, their shortcut hints and their enablement all come
     /// from the shared model in the `ui` crate; the bridge is the one place
     /// that says which of them this build can actually perform.
-    fn menu_bar(&self, ctx: &egui::Context, editor: &mut Editor, out: &mut ChromeOutput) {
-        crate::menu_bridge::draw(ctx, editor, &self.workspace, out);
+    fn menu_bar(&mut self, ctx: &egui::Context, editor: &mut Editor, out: &mut ChromeOutput) {
+        let context = crate::menu_bridge::context(editor, &self.workspace);
+        let editor: &Editor = editor;
+        crate::menu_bridge::draw(ctx, editor, &context, &mut |intent| {
+            self.menu_click(intent, editor, out)
+        });
     }
 
     /// The id of the close control on tab `index`.
@@ -2868,6 +2912,50 @@ mod tests {
                 .collect()
         }
 
+        /// Click the centre of the first galley painted with exactly `label`
+        /// — a menu-bar title or a menu row, which have no stable ids — and
+        /// return what that frame meant. One frame is drawn first so egui
+        /// knows the rectangle the press lands in.
+        fn click_text(&mut self, editor: &mut Editor, label: &str) -> ChromeOutput {
+            let mut out = ChromeOutput::default();
+            let chrome = &mut self.chrome;
+            let full = self.ctx.run(raw_input(Vec::new()), |ctx| {
+                out = chrome.ui(ctx, editor);
+            });
+            let rect = full
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{label:?} was never painted"));
+            let pos = rect.center();
+            let events = vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                },
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ];
+            let mut out = ChromeOutput::default();
+            let chrome = &mut self.chrome;
+            let _ = self.ctx.run(raw_input(events), |ctx| {
+                out = chrome.ui(ctx, editor);
+            });
+            out
+        }
+
         /// Click a widget by id and return what that frame meant.
         fn click(&mut self, editor: &mut Editor, id: egui::Id) -> ChromeOutput {
             let pos = self
@@ -3233,6 +3321,55 @@ mod tests {
         ed.dispatch(Action::CloseOthers).unwrap();
         assert_eq!(ed.documents().len(), 1);
         assert_eq!(ed.documents()[0].tab_label(), "two.png");
+    }
+
+    #[test]
+    fn a_real_click_on_image_size_in_the_menu_bar_opens_its_dialog() {
+        // The route a user takes, with a real pointer: press "Image" in the
+        // drawn menu bar, then press the "Image Size…" row in the popup it
+        // opened. The row's click hands its intent to `Chrome::menu_click`,
+        // which asks the dialog host first — so the dialog is open at the end
+        // of that frame and *nothing* was recorded for `perform`, which has
+        // no arm for Image Size and used to answer "no implementation".
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+        let mut window = Window::new(&mut ed);
+        assert!(!window.chrome.dialog_open());
+
+        let out = window.click_text(&mut ed, "Image");
+        assert!(
+            out.menu.is_empty(),
+            "opening the menu performed something: {out:?}"
+        );
+        assert!(
+            !window.chrome.dialog_open(),
+            "opening the menu opened a dialog"
+        );
+
+        let out = window.click_text(&mut ed, "Image Size…");
+        assert!(
+            window.chrome.dialog_open(),
+            "the Image Size row was clicked and no dialog opened: {out:?}"
+        );
+        assert!(
+            out.dialog_open,
+            "the frame did not report the modal to the shell"
+        );
+        assert!(
+            out.menu.is_empty(),
+            "the row was also sent to perform, which has no arm for it: {:?}",
+            out.menu
+        );
+        assert!(out.unrouted.is_empty(), "{:?}", out.unrouted);
+
+        // ...and the next frame really draws it.
+        let painted = window.painted_texts(&mut ed);
+        assert!(
+            painted.iter().any(|t| t.contains("Image Size")),
+            "the dialog never appeared: {painted:?}"
+        );
     }
 
     #[test]

@@ -32,3 +32,10 @@ tests/golden-images/*.actual.png
 
 # Local machine scaffolding, not project source
 kortix.toml
+
+# Agent scratch that must never land in the repo (root-level fragments, shots, ledgers)
+/t[0-9][0-9][0-9]*
+/*shot*.png
+/*-shot.png
+/t0*.png
+/.pi/

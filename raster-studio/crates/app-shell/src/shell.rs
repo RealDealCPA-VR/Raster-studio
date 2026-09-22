@@ -85,25 +85,74 @@ use crate::action::Action;
 use crate::chrome::Chrome;
 use crate::editor::{ActionError, Editor};
 use crate::error::ShellError;
-use crate::keymap::{Chord, Key};
+use crate::keymap::{Chord, Key, Resolved};
 use crate::prefs::WindowGeometry;
 use crate::presenter::{ants_segments, selection_ants, CanvasPresenter, SelectionOutline};
 use crate::session::SessionMarker;
 use crate::tool_input::ToolPointer;
 use ui::canvas::{PointerButton, PointerInput, PointerPhase};
 
+/// The key under a shifted glyph on the US layout, or `None` when the glyph is
+/// not one Shift produces there.
+///
+/// winit's `logical_key` is the character the press *typed*, so with Shift
+/// held the `0` key arrives as `)`, `6` as `^`, `;` as `:` and `]` as `}`. A
+/// chord is named by the key, not by what the key printed — the menu bar
+/// paints `Ctrl+Shift+0`, never `Ctrl+Shift+)` — so [`chord_from_key`] folds
+/// the glyph back to its key whenever Shift is down. Letters need no table:
+/// [`Key::character`] lowercases them.
+///
+/// This is the US layout's fold, the one the painted chords assume. On a
+/// layout whose shifted glyphs differ the glyph is kept as typed, which is what
+/// happened before for every key.
+pub fn unshifted_us_glyph(c: char) -> Option<char> {
+    Some(match c {
+        ')' => '0',
+        '!' => '1',
+        '@' => '2',
+        '#' => '3',
+        '$' => '4',
+        '%' => '5',
+        '^' => '6',
+        '&' => '7',
+        '*' => '8',
+        '(' => '9',
+        '_' => '-',
+        '+' => '=',
+        '{' => '[',
+        '}' => ']',
+        '|' => '\\',
+        ':' => ';',
+        '"' => '\'',
+        '<' => ',',
+        '>' => '.',
+        '?' => '/',
+        '~' => '`',
+        _ => return None,
+    })
+}
+
 /// Translate a winit key event into a [`Chord`].
 ///
 /// `None` for keys that cannot form a shortcut on their own (a bare modifier,
 /// dead keys, IME composition). Letter case is normalised by [`Key::character`],
 /// so `Shift+B` and `B` name the same key with the shift flag telling them
-/// apart.
+/// apart; a shifted punctuation or digit glyph is folded back to its key by
+/// [`unshifted_us_glyph`] for the same reason, so `Ctrl+Shift+0` is the chord
+/// the menu paints and not a `Ctrl+Shift+)` nothing binds.
 pub fn chord_from_key(logical: &winit::keyboard::Key, mods: ModifiersState) -> Option<Chord> {
     let key = match logical {
         winit::keyboard::Key::Character(s) => {
             let mut chars = s.chars();
             match (chars.next(), chars.next()) {
-                (Some(c), None) => Key::character(c),
+                (Some(c), None) => {
+                    let c = if mods.shift_key() {
+                        unshifted_us_glyph(c).unwrap_or(c)
+                    } else {
+                        c
+                    };
+                    Key::character(c)
+                }
                 _ => return None,
             }
         }
@@ -1846,8 +1895,10 @@ impl Shell {
                         return;
                     }
                 }
-                if let Some(action) = self.editor.keymap().resolve(&chord) {
-                    self.perform(action);
+                match self.editor.keymap().resolve_any(&chord) {
+                    Some(Resolved::App(action)) => self.perform(action),
+                    Some(Resolved::Menu(action)) => self.perform_menu_chord(action),
+                    None => {}
                 }
             }
             KeyOutcome::ReleaseTemporaryHand => {
@@ -1856,6 +1907,18 @@ impl Shell {
             }
             KeyOutcome::Ignore => {}
         }
+    }
+
+    /// A chord only the menu bar paints: Ctrl+E Merge Down, Ctrl+A Select All,
+    /// F7 the Layers panel. Posted into the chrome's workspace as
+    /// `ui::Intent::Action`, which is the door a click on the menu item goes
+    /// through — `Chrome::harvest` then decides whether the action opens a
+    /// dialog or is performed, exactly as it would for the click. Before this
+    /// the shell consulted only its own keymap, so every one of these chords
+    /// was painted and dead.
+    fn perform_menu_chord(&mut self, action: ui::MenuAction) {
+        self.chrome.emit(ui::Intent::Action(action));
+        self.repaint_at = Some(Instant::now());
     }
 
     /// Abandon whatever gesture is running: Escape, or the window losing focus.
@@ -3326,6 +3389,319 @@ mod tests {
         assert_eq!(
             crate::keymap::Keymap::default().resolve(&chord),
             Some(Action::NewLayer)
+        );
+    }
+
+    /// The chords the menu bar paints and the application's own keymap does
+    /// not claim reach the chrome's workspace as the very intent a click on
+    /// the item would post — the door `Chrome::harvest` drains.
+    ///
+    /// RED before `Shell::on_key` consulted the menu table: every press here
+    /// left the outbox empty, and Ctrl+Shift+I / Ctrl+Shift+E / Ctrl+J ran
+    /// File Info / Export / Duplicate Layer instead.
+    #[test]
+    fn a_chord_only_the_menu_paints_goes_through_the_menu_door() {
+        use ui::menu::MenuAction as M;
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        let free = KeyboardOwner::default();
+        shell.chrome.workspace_for_test().drain_intents();
+        let ctrl_shift = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        let cases: [(WKey, ModifiersState, M); 9] = [
+            (WKey::Character("I".into()), ctrl_shift, M::InverseSelection),
+            (WKey::Character("E".into()), ctrl_shift, M::MergeVisible),
+            (
+                WKey::Character("j".into()),
+                ModifiersState::CONTROL,
+                M::LayerViaCopy,
+            ),
+            (WKey::Character("J".into()), ctrl_shift, M::LayerViaCut),
+            (
+                WKey::Character("e".into()),
+                ModifiersState::CONTROL,
+                M::MergeDown,
+            ),
+            (
+                WKey::Character("a".into()),
+                ModifiersState::CONTROL,
+                M::SelectAll,
+            ),
+            (
+                WKey::Character("t".into()),
+                ModifiersState::CONTROL,
+                M::FreeTransform,
+            ),
+            (
+                WKey::Named(NamedKey::F7),
+                ModifiersState::empty(),
+                M::TogglePanel(ui::PanelId::Layers),
+            ),
+            (
+                WKey::Named(NamedKey::Delete),
+                ModifiersState::empty(),
+                M::ClearPixels,
+            ),
+        ];
+        for (key, mods, expected) in cases {
+            shell.repaint_at = None;
+            press(&mut shell, free, key.clone(), mods);
+            let intents = shell.chrome.workspace_for_test().drain_intents();
+            assert_eq!(
+                intents,
+                vec![ui::Intent::Action(expected)],
+                "{key:?} with {mods:?}"
+            );
+            assert!(shell.repaint_at.is_some(), "{key:?} owed a frame");
+        }
+    }
+
+    /// The character winit's `logical_key` carries for a chord on a US
+    /// keyboard: the glyph the key *types* with those modifiers held, which
+    /// with Shift is the upper glyph — `)` for the `0` key, `}` for `]`.
+    fn us_logical_glyph(chord: &Chord) -> Option<WKey> {
+        let Key::Char(base) = chord.key else {
+            return None;
+        };
+        let typed = if chord.shift {
+            if base.is_ascii_alphabetic() {
+                base.to_ascii_uppercase()
+            } else {
+                // The inverse of `unshifted_us_glyph`, looked up rather than
+                // written twice so the test cannot agree with itself by copy.
+                (0x20u8..0x7f)
+                    .map(char::from)
+                    .find(|g| unshifted_us_glyph(*g) == Some(base))
+                    .unwrap_or(base)
+            }
+        } else {
+            base
+        };
+        Some(WKey::Character(typed.to_string().into()))
+    }
+
+    /// A shifted digit or punctuation glyph names the key under it, so the
+    /// chord is the one the menu bar paints. Without Shift the glyph is kept:
+    /// a layout where `)` is unshifted has a `)` key.
+    #[test]
+    fn a_shifted_glyph_folds_back_to_the_key_the_menu_names() {
+        let ctrl_shift = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        assert_eq!(
+            chord_from_key(&WKey::Character(")".into()), ctrl_shift),
+            Some(Chord::ctrl_shift(Key::Char('0')))
+        );
+        assert_eq!(
+            chord_from_key(&WKey::Character("^".into()), ModifiersState::SHIFT),
+            Some(Chord {
+                ctrl_or_cmd: false,
+                alt: false,
+                shift: true,
+                key: Key::Char('6'),
+            })
+        );
+        assert_eq!(
+            chord_from_key(&WKey::Character(":".into()), ctrl_shift),
+            Some(Chord::ctrl_shift(Key::Char(';')))
+        );
+        assert_eq!(
+            chord_from_key(&WKey::Character("}".into()), ctrl_shift),
+            Some(Chord::ctrl_shift(Key::Char(']')))
+        );
+        assert_eq!(
+            chord_from_key(&WKey::Character("{".into()), ctrl_shift),
+            Some(Chord::ctrl_shift(Key::Char('[')))
+        );
+        assert_eq!(
+            chord_from_key(&WKey::Character("|".into()), ctrl_shift),
+            Some(Chord::ctrl_shift(Key::Char('\\')))
+        );
+        // Zoom In on the `=`/`+` key: Ctrl+Shift+= types `+`, and the keymap
+        // binds Ctrl+Shift+= — the fold must not lose it.
+        assert_eq!(
+            crate::keymap::Keymap::default()
+                .resolve(&chord_from_key(&WKey::Character("+".into()), ctrl_shift).unwrap()),
+            Some(Action::ZoomIn)
+        );
+        // No Shift, no fold.
+        assert_eq!(
+            chord_from_key(&WKey::Character(")".into()), ModifiersState::CONTROL),
+            Some(Chord::ctrl(Key::Char(')')))
+        );
+    }
+
+    /// The table gate the keymap's own test cannot be: every painted menu
+    /// chord, spelled as winit's `logical_key` delivers it from a US keyboard
+    /// with the chord's modifiers held, goes through [`chord_from_key`] and
+    /// comes out as its own menu action.
+    ///
+    /// RED before the shifted-glyph fold: Ctrl+Shift+0 (Fill Screen), Shift+6
+    /// (Feather), Ctrl+Shift+; (Snap), Ctrl+Shift+] (Bring to Front) and
+    /// Ctrl+Shift+[ (Send to Back) arrived as `)` `^` `:` `}` `{` and
+    /// resolved to nothing.
+    #[test]
+    fn every_painted_menu_chord_is_reachable_from_the_key_winit_reports() {
+        use crate::keymap::{chord_of_shortcut, menu_twin, Keymap, Resolved};
+        use ui::menu::MenuAction;
+        let map = Keymap::default();
+        let mut dead = Vec::new();
+        let mut through_glyph = 0;
+        for action in MenuAction::all() {
+            let Some(shortcut) = action.shortcut() else {
+                continue;
+            };
+            let painted = chord_of_shortcut(shortcut).unwrap();
+            let Some(logical) = us_logical_glyph(&painted) else {
+                // Named keys (F7, Delete, …) carry no glyph to fold.
+                continue;
+            };
+            let mut mods = ModifiersState::empty();
+            mods.set(ModifiersState::CONTROL, painted.ctrl_or_cmd);
+            mods.set(ModifiersState::ALT, painted.alt);
+            mods.set(ModifiersState::SHIFT, painted.shift);
+            let got = chord_from_key(&logical, mods).and_then(|c| map.resolve_any(&c));
+            let agrees = match got {
+                Some(Resolved::Menu(menu)) => menu == action,
+                Some(Resolved::App(app)) => menu_twin(app) == Some(action),
+                None => false,
+            };
+            if !agrees {
+                dead.push(format!(
+                    "{painted} paints {action:?}; the key arrives as {logical:?} and resolves to {got:?}"
+                ));
+            }
+            through_glyph += 1;
+        }
+        assert!(
+            through_glyph > 40,
+            "the menu bar lost its shortcuts ({through_glyph})"
+        );
+        assert!(
+            dead.is_empty(),
+            "{} painted chord(s) cannot be pressed on a US keyboard:\n{}",
+            dead.len(),
+            dead.join("\n")
+        );
+    }
+
+    /// The five chords the audit's second pass found dead at the window, each
+    /// pressed as the platform delivers it — the *shifted* glyph — and each
+    /// arriving in the chrome's outbox as the menu item's own intent.
+    ///
+    /// RED before the shifted-glyph fold: every press left the outbox empty.
+    #[test]
+    fn the_shifted_punctuation_chords_the_menu_paints_reach_the_menu_door() {
+        use ui::menu::{Arrange, MenuAction as M, ModifySelection, ZoomCommand};
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        let free = KeyboardOwner::default();
+        shell.chrome.workspace_for_test().drain_intents();
+        let ctrl_shift = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        let cases: [(WKey, ModifiersState, M); 5] = [
+            (
+                WKey::Character(")".into()),
+                ctrl_shift,
+                M::Zoom(ZoomCommand::FillScreen),
+            ),
+            (
+                WKey::Character("^".into()),
+                ModifiersState::SHIFT,
+                M::Modify(ModifySelection::Feather),
+            ),
+            (
+                WKey::Character(":".into()),
+                ctrl_shift,
+                M::ToggleView(ui::ViewFlag::Snap),
+            ),
+            (
+                WKey::Character("}".into()),
+                ctrl_shift,
+                M::ArrangeLayer(Arrange::BringToFront),
+            ),
+            (
+                WKey::Character("{".into()),
+                ctrl_shift,
+                M::ArrangeLayer(Arrange::SendToBack),
+            ),
+        ];
+        for (key, mods, expected) in cases {
+            shell.repaint_at = None;
+            press(&mut shell, free, key.clone(), mods);
+            let intents = shell.chrome.workspace_for_test().drain_intents();
+            assert_eq!(
+                intents,
+                vec![ui::Intent::Action(expected)],
+                "{key:?} with {mods:?}"
+            );
+            assert!(shell.repaint_at.is_some(), "{key:?} owed a frame");
+        }
+    }
+
+    #[test]
+    fn a_menu_chord_is_not_fired_while_typing_recording_or_under_a_modal() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        shell.chrome.workspace_for_test().drain_intents();
+        let ctrl_shift = ModifiersState::CONTROL | ModifiersState::SHIFT;
+
+        let typing = KeyboardOwner {
+            egui_text_focus: true,
+            recording_shortcut: false,
+        };
+        press(&mut shell, typing, WKey::Character("I".into()), ctrl_shift);
+        let recording = KeyboardOwner {
+            egui_text_focus: false,
+            recording_shortcut: true,
+        };
+        press(
+            &mut shell,
+            recording,
+            WKey::Character("I".into()),
+            ctrl_shift,
+        );
+        assert!(
+            shell.chrome.workspace_for_test().drain_intents().is_empty(),
+            "a chord typed into a field or recorded as a shortcut must not fire"
+        );
+
+        shell.chrome.open_new_document_dialog();
+        assert!(shell.chrome.dialog_open());
+        press(
+            &mut shell,
+            KeyboardOwner::default(),
+            WKey::Character("I".into()),
+            ctrl_shift,
+        );
+        assert!(
+            shell.chrome.workspace_for_test().drain_intents().is_empty(),
+            "a modal owns the keyboard"
+        );
+    }
+
+    #[test]
+    fn the_users_own_binding_wins_over_the_menu_table_at_the_key_handler() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        shell.chrome.workspace_for_test().drain_intents();
+        // Ctrl+E is Merge Down in the menu; the user makes it Fit on Screen.
+        let ctrl_e = Chord::ctrl(Key::character('e'));
+        shell
+            .editor
+            .keymap_mut()
+            .force_bind(ctrl_e, Action::ZoomFit);
+        shell.editor.active_mut().unwrap().camera.zoom = 4.0;
+        press(
+            &mut shell,
+            KeyboardOwner::default(),
+            WKey::Character("e".into()),
+            ModifiersState::CONTROL,
+        );
+        assert!(
+            shell.chrome.workspace_for_test().drain_intents().is_empty(),
+            "the menu door must not also open"
+        );
+        assert_ne!(
+            shell.editor.active().unwrap().camera.zoom,
+            4.0,
+            "the user's Fit on Screen ran"
         );
     }
 

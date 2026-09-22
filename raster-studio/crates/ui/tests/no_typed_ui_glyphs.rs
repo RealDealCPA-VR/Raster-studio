@@ -700,7 +700,10 @@ fn offending(src: &str) -> Vec<(usize, char)> {
 const KEY_TAKERS: &[(&str, usize)] = &[
     ("icon_toggle", 1),
     ("icon_toggle_id", 1),
+    ("icon_action", 1),
+    ("icon_action_id", 1),
     ("icon_button_id", 1),
+    ("paint_panel_icon", 2),
     ("ui_icon_button", 1),
     ("ui_icon_button_id", 1),
     ("paint_icon", 2),

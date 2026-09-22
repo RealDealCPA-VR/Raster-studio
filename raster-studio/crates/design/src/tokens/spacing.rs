@@ -66,6 +66,17 @@ pub struct Metrics {
     pub control_height: f32,
     /// Edge length of a square toolbar button.
     pub toolbar_button: f32,
+    /// Edge length of one slot in the left-hand tool palette.
+    ///
+    /// Larger than [`Metrics::toolbar_button`]: the palette is the first
+    /// thing on screen and its glyphs must read at a glance, so a slot gets a
+    /// 28 pt square with a [`Space::XSmall`] inset (a 20 pt glyph). 28 is the
+    /// largest grid rung at which twenty slots still fit a 1280x720 window
+    /// above the colour footer; the rest scroll.
+    pub tool_palette_button: f32,
+    /// Edge length of one foreground/background colour well in the palette
+    /// footer.
+    pub color_well: f32,
     /// Height of the toolbar strip.
     pub toolbar_height: f32,
     /// Height of one row in a layers/assets list.
@@ -88,6 +99,8 @@ impl Default for Metrics {
         Self {
             control_height: 20.0,
             toolbar_button: 24.0,
+            tool_palette_button: 28.0,
+            color_well: 20.0,
             toolbar_height: 28.0,
             list_row_height: 20.0,
             panel_padding: 4.0,
@@ -100,10 +113,12 @@ impl Default for Metrics {
 
 impl Metrics {
     /// Every metric, for invariant checks.
-    pub fn all(&self) -> [(&'static str, f32); 8] {
+    pub fn all(&self) -> [(&'static str, f32); 10] {
         [
             ("control_height", self.control_height),
             ("toolbar_button", self.toolbar_button),
+            ("tool_palette_button", self.tool_palette_button),
+            ("color_well", self.color_well),
             ("toolbar_height", self.toolbar_height),
             ("list_row_height", self.list_row_height),
             ("panel_padding", self.panel_padding),
@@ -151,6 +166,21 @@ mod tests {
         let m = Metrics::default();
         assert!(m.control_height >= m.min_hit_target);
         assert!(m.toolbar_button >= m.min_hit_target);
+        assert!(m.tool_palette_button >= m.min_hit_target);
+        assert!(m.color_well >= m.min_hit_target);
         assert!(m.list_row_height >= m.min_hit_target);
+    }
+
+    #[test]
+    fn a_palette_slot_leaves_a_legible_glyph_after_its_inset() {
+        // The C2 follow-up: a 24 pt button shrunk by Space::Small on each side
+        // left an 8 pt glyph. The palette slot minus its XSmall inset must
+        // leave at least the minimum hit target as glyph.
+        let m = Metrics::default();
+        let glyph = m.tool_palette_button - Space::XSmall.pt() * 2.0;
+        assert!(
+            glyph >= m.min_hit_target,
+            "palette glyph is only {glyph} pt"
+        );
     }
 }

@@ -825,6 +825,15 @@ fn font_selection_reports_substitution_and_keeps_the_requested_family() {
     let before = ui_text_width(&ctx);
     load_fixture_font();
     compositor::load_font(dejavu::sans_condensed::bold().to_vec());
+    // The embedded serif face is step 2's control: a face that is never the
+    // library's generic sans, so it is guaranteed to draw differently from
+    // whatever the substitution resolves to on this machine.
+    let control_family = "DejaVu Serif";
+    compositor::load_font(dejavu::serif::bold().to_vec());
+    assert!(
+        !compositor::font_family_faces(control_family).is_empty(),
+        "the serif control face joins the library"
+    );
     assert_eq!(
         ui_text_width(&ctx),
         before,
@@ -900,16 +909,38 @@ fn font_selection_reports_substitution_and_keeps_the_requested_family() {
 
     // 2. A family the machine does not have is reported, with an installed
     //    substitute — and the requested name stays in the document.
+    //
+    //    What the substitution changes on screen depends on the machine: the
+    //    substitute is the library's pinned generic sans (`SANS_PREFERENCES`
+    //    in text-engine — Segoe UI on Windows, Helvetica Neue/Arial on macOS).
+    //    On a bare Linux runner none of those is installed, so the generic sans
+    //    IS the fixture family "DejaVu Sans", and a run already set to DejaVu
+    //    Sans Bold SemiCondensed shapes with the very same face after the
+    //    substitution: identical pixels. That is why `assert_ne!(substituted,
+    //    condensed_pixels)` was red on ubuntu-latest for ~30 pushes and green
+    //    everywhere else. So the pixel contract is pinned against what the
+    //    substitution actually does — draw with exactly the face it reports —
+    //    and against a deterministic control face (DejaVu Serif, embedded)
+    //    that is never the generic sans. Reproduce the runner locally with
+    //    `RASTER_STUDIO_FONT_DIRS=` (set, empty: no system fonts).
     let missing = "Raster Test Missing Family";
-    assert!(text_panel::substitution(missing).is_some());
-    {
+    let substitute = text_panel::substitution(missing).expect("a missing family is reported");
+    assert!(
+        !compositor::font_family_faces(&substitute).is_empty(),
+        "the reported substitute {substitute:?} is an installed family"
+    );
+    assert_ne!(
+        substitute, control_family,
+        "the generic sans is never the serif control face"
+    );
+    fn set_family(ed: &mut app_shell::Editor, family: &str) {
         let doc = ed.active().unwrap();
         let (layer, mut run) = text_panel::active_text(&doc.document, doc.document.active_layer())
             .expect("still a text layer");
-        assert!(text_panel::Character::set_family(&mut run, missing));
+        assert!(text_panel::Character::set_family(&mut run, family));
         let intent = text_panel::commit(&doc.document, layer, &run).expect("an edit was made");
         let Some(app_shell::menu_bridge::Pick::Kind { layer, kind }) =
-            menu_bridge::pick(&intent, &ed)
+            menu_bridge::pick(&intent, ed)
         else {
             panic!("the kind edit is routed");
         };
@@ -919,6 +950,7 @@ fn font_selection_reports_substitution_and_keeps_the_requested_family() {
             gesture: None,
         });
     }
+    set_family(&mut ed, missing);
     {
         let doc = ed.active().unwrap();
         let Some(LayerKind::Text(t)) = doc.document.layers.get(id).map(|l| &l.kind) else {
@@ -929,11 +961,44 @@ fn font_selection_reports_substitution_and_keeps_the_requested_family() {
             "the requested name is retained, not rewritten"
         );
     }
-    // The substituted run still draws: pixels exist above nothing.
     let substituted = ed.active_mut().unwrap().composite(region).unwrap();
+    // The substituted run draws with exactly the face the report names: asking
+    // for that family by name, in the same bold condensed style, is the same
+    // picture.
+    set_family(&mut ed, &substitute);
+    let explicit = ed.active_mut().unwrap().composite(region).unwrap();
+    assert_eq!(
+        substituted, explicit,
+        "the substituted run draws with the reported substitute {substitute:?}"
+    );
+    // And it is a real render of that face, not a blank or a stale cache: the
+    // embedded serif control draws differently.
+    set_family(&mut ed, control_family);
+    let control = ed.active_mut().unwrap().composite(region).unwrap();
     assert_ne!(
-        substituted, condensed_pixels,
-        "the substitution is visible in the composite"
+        substituted, control,
+        "the substitute {substitute:?} and the {control_family} control differ on screen"
+    );
+    // Whether the substitution is visible against the DejaVu Sans run follows
+    // from the substitute's identity — both ways are asserted, neither assumed.
+    if substitute == thumbnail::FONT_FAMILY {
+        assert_eq!(
+            substituted, condensed_pixels,
+            "the generic sans is the fixture family here, so the same face draws"
+        );
+    } else {
+        assert_ne!(
+            substituted, condensed_pixels,
+            "a different generic sans {substitute:?} changes the picture"
+        );
+    }
+    // Back to the missing family for the round trip; the same request yields
+    // the same picture.
+    set_family(&mut ed, missing);
+    assert_eq!(
+        ed.active_mut().unwrap().composite(region).unwrap(),
+        substituted,
+        "the substitution renders deterministically"
     );
 
     // 3. Save/reopen retains the requested (missing) family and the adopted

@@ -169,10 +169,10 @@ impl DialogHost {
                 ));
                 true
             }
-            // File ▸ Export As… — the per-format rows all open the one dialog;
-            // the format a row names is just the row the user came in through,
-            // and the dialog's list is where the choices live.
-            ui::menu::MenuAction::Export(_) => match export_as_dialog(editor) {
+            // File ▸ Export As… — the per-format rows all open the one dialog,
+            // seeded with the format the row names; the dialog's list is where
+            // the choice can still be changed.
+            ui::menu::MenuAction::Export(format) => match export_as_dialog(editor, *format) {
                 Some(dialog) => {
                     self.open(dialog);
                     true
@@ -359,6 +359,16 @@ impl DialogHost {
         match self.active_for_test() {
             ActiveDialog::Defringe(dialog) => dialog,
             other => panic!("the active dialog is {other:?}, not the defringe dialog"),
+        }
+    }
+
+    /// The open Export As dialog, for tests that read the row it was seeded
+    /// with.
+    #[cfg(test)]
+    pub(crate) fn active_export_dialog_for_test(&mut self) -> &mut ExportAsDialog {
+        match self.active_for_test() {
+            ActiveDialog::ExportAs(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the export dialog"),
         }
     }
 
@@ -701,12 +711,14 @@ fn canvas_size_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
 }
 
 /// An [`ExportAsDialog`] over the active document: its size, its title as the
-/// base file name, and a placeholder proxy for the live preview.
+/// base file name, a placeholder proxy for the live preview, and its one row
+/// set to `format` — the format the menu row the user came in through names.
+/// A JPEG row keeps the dialog's default quality rather than inventing one.
 ///
 /// The real preview is a downscaled *composite*, which needs `&mut` to run the
 /// compositor — [`crate::chrome::Chrome::ui`] swaps it in on the frame after
 /// the dialog opens, through [`DialogHost::refresh_preview`].
-fn export_as_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
+fn export_as_dialog(editor: &crate::Editor, format: raster::ExportFormat) -> Option<ActiveDialog> {
     let open = editor.active()?;
     let (w, h) = (open.document.width(), open.document.height());
     let name = open.title().to_string();
@@ -714,9 +726,9 @@ fn export_as_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
         ui::dialogs::export_as::MAX_PROXY_SIDE.min(w.max(1)),
         ui::dialogs::export_as::MAX_PROXY_SIDE.min(h.max(1)),
     );
-    Some(ActiveDialog::ExportAs(Box::new(
-        ui::dialogs::ExportAsDialog::new(w, h, name, proxy),
-    )))
+    let mut dialog = ui::dialogs::ExportAsDialog::new(w, h, name, proxy);
+    dialog.set_format(format);
+    Some(ActiveDialog::ExportAs(Box::new(dialog)))
 }
 
 #[cfg(test)]
@@ -806,6 +818,35 @@ mod tests {
             history_len(&ed),
             "opening, replacing and closing dialogs never touched the document"
         );
+    }
+
+    #[test]
+    fn the_export_row_seeds_the_dialog_with_the_format_it_names() {
+        // Six rows, one dialog: the row is the way in, and the dialog opens on
+        // that row's format rather than always on PNG. A JPEG row keeps the
+        // dialog's own default quality.
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+        let mut host = DialogHost::default();
+        for format in raster::ExportFormat::ALL.iter().copied() {
+            assert!(
+                host.open_for_menu_action(&ui::menu::MenuAction::Export(format), &ed),
+                "{format:?} opened the dialog"
+            );
+            let seeded = host.active_export_dialog_for_test().format();
+            match format {
+                raster::ExportFormat::Jpeg(_) => {
+                    assert!(
+                        matches!(seeded, raster::ExportFormat::Jpeg(_)),
+                        "the JPEG row opened on {seeded:?}"
+                    );
+                }
+                other => assert_eq!(seeded, other, "the row opened on another format"),
+            }
+            host.close();
+        }
     }
 
     #[test]

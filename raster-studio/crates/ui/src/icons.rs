@@ -877,6 +877,22 @@ const COLORS_DEFAULT: &[Prim] = &[
     ),
 ];
 
+/// The palette footer's "default colours" (D) mark: Photoshop's and Photopea's
+/// two overlapping swatches, the back one hollow (white) and the front one
+/// solid (black). Distinct from [`COLORS_DEFAULT`], the Color panel's
+/// outline-only pair, so `no_two_chrome_controls_share_a_drawing` holds.
+const RESET_COLORS: &[Prim] = &[
+    Prim::Poly(
+        &[[0.36, 0.12], [0.88, 0.12], [0.88, 0.64], [0.36, 0.64]],
+        true,
+    ),
+    Prim::Fill(&[[0.12, 0.36], [0.64, 0.36], [0.64, 0.88], [0.12, 0.88]]),
+    Prim::Poly(
+        &[[0.12, 0.36], [0.64, 0.36], [0.64, 0.88], [0.12, 0.88]],
+        true,
+    ),
+];
+
 const CLIPPING: &[Prim] = &[
     Prim::Poly(&[[0.28, 0.16], [0.28, 0.66], [0.80, 0.66]], false),
     Prim::Poly(&[[0.64, 0.52], [0.80, 0.66], [0.64, 0.80]], false),
@@ -1295,6 +1311,7 @@ pub fn ui_icon(key: &str) -> Icon {
         "target" => TARGET,
         "swap" => SWAP,
         "colors-default" => COLORS_DEFAULT,
+        "reset-colors" => RESET_COLORS,
         "clipping" => CLIPPING,
         "new-group" => NEW_GROUP,
         "link" => LINK,
@@ -1367,6 +1384,7 @@ pub const CHROME_ICON_KEYS: &[&str] = &[
     "target",
     "swap",
     "colors-default",
+    "reset-colors",
     "clipping",
     "new-group",
     "link",
@@ -1390,6 +1408,23 @@ pub fn icon_stroke_width(t: &design::Tokens) -> f32 {
 }
 
 pub fn paint_ui_icon(ui: &egui::Ui, rect: Rect, key: &str, role: design::TextRole) {
+    paint_ui_icon_inset(ui, rect, design::Space::XSmall, key, role);
+}
+
+/// [`paint_ui_icon`] with the inset chosen by the caller.
+///
+/// The default [`design::Space::XSmall`] inset suits a hit-target-sized well
+/// with nothing else around it. A control that has already carved its rect
+/// out of a tight footer wants a [`design::Space::Hair`] inset instead — the
+/// C2 follow-up found the palette footer shrinking its 18 pt controls by
+/// hand *and* through here, leaving a 4 pt glyph.
+pub fn paint_ui_icon_inset(
+    ui: &egui::Ui,
+    rect: Rect,
+    inset: design::Space,
+    key: &str,
+    role: design::TextRole,
+) {
     let t = design::current_tokens(ui);
     let icon = ui_icon(key);
     let color = if icon.is_unknown() {
@@ -1399,7 +1434,7 @@ pub fn paint_ui_icon(ui: &egui::Ui, rect: Rect, key: &str, role: design::TextRol
     };
     icon.paint(
         &ui.painter_at(rect),
-        rect.shrink(design::Space::XSmall.pt()),
+        rect.shrink(inset.pt()),
         color,
         icon_stroke_width(t),
     );

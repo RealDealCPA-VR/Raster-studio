@@ -312,6 +312,11 @@ pub mod ids {
     pub fn history_snapshot(index: usize) -> egui::Id {
         egui::Id::new(("raster-history-snapshot", index))
     }
+
+    /// The History panel footer's "new snapshot" action.
+    pub fn history_new_snapshot() -> egui::Id {
+        egui::Id::new("raster-history-new-snapshot")
+    }
 }
 
 /// The icon key for a layer class, drawn in the Layers panel's thumbnail well.
@@ -709,6 +714,190 @@ pub(crate) fn icon_toggle_id(
 /// drawings and the unknown-key rule live.
 pub(crate) fn paint_icon(ui: &Ui, rect: egui::Rect, key: &str, role: TextRole) {
     crate::icons::paint_ui_icon(ui, rect, key, role);
+}
+
+/// The state an [`icon_action`] button is drawn in.
+///
+/// Distinct from a toggle's `on`/`off`: an action button has no "off". It is
+/// either ready (`Idle`), currently applied (`Selected` — the one kind-filter
+/// that is on, the panel whose overflow menu is open), or not available
+/// (`Disabled`), and only the last of those may look disabled.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ActionState {
+    Idle,
+    Selected,
+    Disabled,
+}
+
+impl ActionState {
+    /// `Selected` when `on`, else `Idle` — for the few actions that carry a
+    /// current-choice highlight.
+    pub const fn selected_if(on: bool) -> Self {
+        if on {
+            Self::Selected
+        } else {
+            Self::Idle
+        }
+    }
+
+    /// `Idle` when `enabled`, else `Disabled`.
+    pub const fn enabled_if(enabled: bool) -> Self {
+        if enabled {
+            Self::Idle
+        } else {
+            Self::Disabled
+        }
+    }
+}
+
+/// The side of a panel's icon button: a hit target one control tall.
+///
+/// The 16pt `min_hit_target` that [`icon_toggle`] uses is a floor for a
+/// toggle sitting inside a 20pt list row. A panel's own buttons — header,
+/// footer, filter and lock rows — are not inside a row, so they get the full
+/// control height, and a glyph that reads at the size Photopea's do.
+pub(crate) fn panel_icon_side(t: &design::Tokens) -> f32 {
+    t.metrics.control_height
+}
+
+/// Draw the panel-sized glyph `key` inside `rect`, in `role`'s colour.
+///
+/// The glyph box is the target less a hairline of breathing room per side,
+/// rather than the [`Space::XSmall`] that [`paint_icon`] insets by: at 16pt
+/// that inset left an 8pt drawing, which is the "panel icons are tiny"
+/// finding. The unknown-key rule is kept — a key with no drawing paints in
+/// the danger colour rather than hiding behind a hollow square.
+pub(crate) fn paint_panel_icon(ui: &Ui, rect: egui::Rect, key: &str, role: TextRole) {
+    let t = current_tokens(ui);
+    let icon = crate::icons::ui_icon(key);
+    let color = if icon.is_unknown() {
+        color32(t.palette.color(ColorRole::Danger))
+    } else {
+        color32(t.palette.text(role))
+    };
+    icon.paint(
+        &ui.painter_at(rect),
+        rect.shrink(Space::Hair.pt()),
+        color,
+        crate::icons::icon_stroke_width(t),
+    );
+}
+
+/// A panel's stateless action button: a picture that does something when
+/// clicked, with no on/off of its own.
+///
+/// This is the shape the Layers footer, the kind-filter row, the panel header's
+/// close and overflow, the lock row and the collapsed rail are built from.
+/// They used to be [`icon_toggle`]s with `on = false`, which painted every one
+/// of them in `TextRole::Disabled` — so a working button looked like one that
+/// was not. Here the glyph idles in `TextRole::Secondary`, lifts to
+/// `TextRole::Primary` under the pointer, and takes the accent wash when
+/// [`ActionState::Selected`]. Only [`ActionState::Disabled`] paints disabled,
+/// and it senses hover alone so the button is inert as well as grey.
+pub(crate) fn icon_action(ui: &mut Ui, key: &str, tooltip: &str, state: ActionState) -> Response {
+    icon_action_id(ui, key, tooltip, state, None)
+}
+
+/// [`icon_action`] with an explicit id, for the buttons a headless test has to
+/// click by name. See [`ids`].
+pub(crate) fn icon_action_id(
+    ui: &mut Ui,
+    key: &str,
+    tooltip: &str,
+    state: ActionState,
+    id: Option<egui::Id>,
+) -> Response {
+    let t = current_tokens(ui);
+    let side = panel_icon_side(t);
+    let enabled = state != ActionState::Disabled;
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let (rect, auto) = ui.allocate_exact_size(Vec2::splat(side), sense);
+    let response = match id {
+        Some(id) => ui.interact(rect, id, sense),
+        None => auto,
+    };
+    if ui.is_rect_visible(rect) {
+        let radius = Radius::Small.resolve(&t.radii, side);
+        let fill = match state {
+            ActionState::Selected => Some(ColorRole::AccentSubtle),
+            ActionState::Idle if response.hovered() => Some(ColorRole::ControlFillHovered),
+            _ => None,
+        };
+        if let Some(fill) = fill {
+            ui.painter()
+                .rect_filled(rect, rounding(radius), color32(t.palette.color(fill)));
+        }
+        if state == ActionState::Selected {
+            ui.painter().rect_stroke(
+                rect,
+                rounding(radius),
+                Stroke::new(
+                    t.borders.hairline,
+                    color32(t.palette.color(ColorRole::Accent)),
+                ),
+            );
+        }
+        let role = match state {
+            ActionState::Disabled => TextRole::Disabled,
+            ActionState::Selected => TextRole::Primary,
+            ActionState::Idle if response.hovered() => TextRole::Primary,
+            ActionState::Idle => TextRole::Secondary,
+        };
+        paint_panel_icon(ui, rect, key, role);
+    }
+    if tooltip.is_empty() {
+        response
+    } else if enabled {
+        response.on_hover_text(tooltip)
+    } else {
+        response.on_disabled_hover_text(tooltip)
+    }
+}
+
+/// A full-width list row that owns its whole rectangle.
+///
+/// [`row_layout`] hands back the rect its *contents* used, so a History row's
+/// highlight and click target shrank to the label — a pill around "Open" with
+/// the rest of the row dead. This allocates the full width at one list row
+/// tall, interacts on all of it under `id`, and paints the selection or hover
+/// fill *before* `add_contents` lays the label over it, so the text keeps its
+/// own colour instead of being tinted by a fill painted on top.
+pub(crate) fn list_row_layout<R>(
+    ui: &mut Ui,
+    id: egui::Id,
+    selected: bool,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> egui::InnerResponse<R> {
+    let t = current_tokens(ui);
+    let width = ui.available_width().max(t.metrics.min_hit_target);
+    let (rect, _) =
+        ui.allocate_exact_size(Vec2::new(width, t.metrics.list_row_height), Sense::hover());
+    let response = ui.interact(rect, id, Sense::click());
+    if ui.is_rect_visible(rect) {
+        let fill = if selected {
+            Some(ColorRole::SelectionFill)
+        } else if response.hovered() {
+            Some(ColorRole::ControlFillHovered)
+        } else {
+            None
+        };
+        if let Some(fill) = fill {
+            let radius = Radius::Medium.resolve(&t.radii, rect.height());
+            ui.painter()
+                .rect_filled(rect, rounding(radius), color32(t.palette.color(fill)));
+        }
+    }
+    let mut content = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    let inner = add_contents(&mut content);
+    egui::InnerResponse::new(inner, response)
 }
 
 /// A compact icon button with an explicit id and a painted disabled state — the

@@ -81,7 +81,7 @@ written below.
 
 ---
 
-### C2 — The tool column renders no tool buttons — **DONE 2026-09-02**
+### C2 — The tool column renders no tool buttons — **DONE 2026-09-22** (the 2026-09-02 tick was wrong)
 **Why.** In a live `--shot`, the left column contains **only the
 foreground/background wells** — none of the 47 tools. Reproduced independently
 and pixel-identical to the project's own committed `docs/main-window.png`, which
@@ -125,6 +125,24 @@ the palette out flat with the finding documented in place; the
 `the_palette_shows_its_tool_icons_across_the_warmup_frames` (1440×900, ≥ 20
 icon shapes — red with the old zero-height expression, re-verified); the
 post-C1 `--shot` shows ink in all 20 sampled column bands (was 2).
+
+**Re-opened and fixed 2026-09-22 (the true root cause).** The 2026-09-02
+theory — a `ScrollArea` batch the renderer failed to rasterize — was wrong: the
+mesh was fine and was painted over. `footer()` ran *after* the slots in the
+same layer and opened with `rect_filled(ui.max_rect(), SurfacePanel)`, an
+opaque rectangle over the whole column, then placed the wells at that rect's
+top — exactly what every shot (`docs/main-window.png`, `docs/shot-c2.png`,
+`docs/evidence/t082-*.png`, `t091-*.png`) shows. Fixed in
+`crates/ui/src/view/toolbar.rs` by laying the footer out first as a bottom
+panel inside the side panel (it paints only in its reserved rect) and putting
+the slots in a vertical `ScrollArea` so they also fit 1280×720; slots are now
+`Metrics::tool_palette_button` (28 pt) with an XSmall inset (20 pt glyphs, was
+8 pt), the footer's swap/reset glyphs are 12 pt (was 4 pt), and the missing
+`"reset-colors"` drawing was added so the danger-red fallback is gone. The
+headless test `no_opaque_rect_is_painted_over_a_visible_tool_slot_at_either_viewport`
+walks `FullOutput::shapes` in paint order and fails on any opaque rect emitted
+after a slot's icon that intersects the slot — red against the pre-fix file,
+verified by restoring it.
 ---
 
 ### C3 — The start screen never appears — **DONE 2026-09-02**

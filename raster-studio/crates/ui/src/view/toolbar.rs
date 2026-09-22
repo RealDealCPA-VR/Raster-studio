@@ -15,10 +15,25 @@ use crate::Workspace;
 use super::{body, hint, overlay_frame, rgba_to_color32, swatch, text};
 
 /// The vertical strip of tools down the left edge.
+///
+/// Two regions share the panel: the colour footer, pinned to the bottom, and
+/// the slot column above it, which scrolls when the window is shorter than
+/// the registry (twenty-three slots at 28 pt overflow a 720 pt window). The
+/// footer is laid out *first*, as a bottom panel inside the side panel, so the
+/// column is given exactly the height that is left rather than the two
+/// fighting over the flow.
+///
+/// History, so nobody re-learns it: for a year the footer was drawn after the
+/// slots and opened with a `rect_filled(ui.max_rect(), ..)` — an opaque panel
+/// colour over the whole column, on top of every icon already painted, with
+/// the wells then placed at the top of that rect. Every product shot showed
+/// two wells over an empty column, and the emptiness was blamed on the
+/// renderer failing to rasterise a `ScrollArea` batch. The mesh was fine; it
+/// was painted over. The footer now paints only inside its own reserved rect.
 pub fn tool_palette(w: &mut Workspace, ctx: &egui::Context) {
     let model = PaletteModel::build();
     let t = design::current_theme(ctx).tokens();
-    let strip = t.metrics.toolbar_button + Space::Small.pt() * 2.0;
+    let strip = t.metrics.tool_palette_button + Space::Small.pt() * 2.0;
     egui::SidePanel::left("raster-tools")
         .resizable(false)
         .exact_width(strip)
@@ -31,62 +46,63 @@ pub fn tool_palette(w: &mut Workspace, ctx: &egui::Context) {
                 )),
         )
         .show(ctx, |ui| {
-            // The footer follows the palette in the flow: egui's ScrollArea
-            // expands past a max_height when auto_shrink is false, which put
-            // every pinned-footer attempt below the window. Shrinking
-            // vertically keeps the footer on screen where its clicks work.
-            // The palette body is laid out flat (no ScrollArea). The registry's
-            // eight groups fill ~700 logical px, which fits the column at the
-            // design window height; the ScrollArea's tessellated batch fails
-            // to rasterize under this renderer setup (its mesh reaches the
-            // GPU with correct vertices and colors — 1264 verts of opaque
-            // #C0C0C0 — yet the surface shows nothing beneath the first two
-            // slots), so the plain layout is the honest path until the
-            // renderer is revisited. Clicks and hover hit-testing are
-            // unchanged either way.
-            let palette_body = |ui: &mut egui::Ui, w: &mut Workspace, model: &PaletteModel| {
-                ui.spacing_mut().item_spacing.y = Space::Hair.pt();
-                // One divider per group run, so the palette reads as the
-                // registry's own grouping rather than as one long column.
-                for (_, members) in model.groups() {
-                    for slot in members {
-                        slot_button(w, ui, model, slot);
+            egui::TopBottomPanel::bottom("raster-tools-footer")
+                .resizable(false)
+                .show_separator_line(false)
+                .exact_height(footer_height(t))
+                .frame(egui::Frame::none())
+                .show_inside(ui, |ui| footer(w, ui));
+            egui::ScrollArea::vertical()
+                .id_salt("raster-tools-slots")
+                .auto_shrink([false, false])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .show(ui, |ui| {
+                    // Slots sit flush, as Photopea's do; a group ends with a
+                    // hairline so the column reads as the registry's grouping
+                    // rather than as one long run.
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for (_, members) in model.groups() {
+                        for slot in members {
+                            slot_button(w, ui, &model, slot);
+                        }
+                        ui.add_space(Space::Hair.pt());
+                        super::hairline(ui);
+                        ui.add_space(Space::Hair.pt());
                     }
-                    ui.add_space(Space::XSmall.pt());
-                    super::hairline(ui);
-                    ui.add_space(Space::XSmall.pt());
-                }
-            };
-            palette_body(ui, w, &model);
-            // The footer follows the palette in the flow: egui's ScrollArea
-            // expands past a max_height when auto_shrink is false, which put
-            // every pinned-footer attempt below the window. Shrinking
-            // vertically keeps the footer on screen where its clicks work.
-            footer(w, ui);
+                });
         });
     flyout(w, ctx, &model);
+}
+
+/// The footer's reserved height: the overlapping well pair, a gap, and the
+/// swap/reset row.
+fn footer_height(t: &design::Tokens) -> f32 {
+    well_pair_height(t) + Space::XSmall.pt() + t.metrics.min_hit_target
+}
+
+/// The height of the two wells drawn overlapping — the front one is offset
+/// down by [`Space::Small`].
+fn well_pair_height(t: &design::Tokens) -> f32 {
+    t.metrics.color_well + Space::Small.pt()
 }
 
 /// Photopea's bottom-of-column controls: the foreground/background swatch
 /// pair, with swap (X) and reset (D) beneath it.
 ///
-/// Everything is placed at absolute offsets inside the footer area rather
+/// Everything is placed at absolute offsets inside the footer's rect rather
 /// than through egui's layout: the footer must be exactly the column wide and
-/// a known height, and fighting the cursor for that cost three attempts.
+/// a known height ([`footer_height`]), and its caller has already reserved
+/// that rect. It paints nothing outside it — see [`tool_palette`] for why that
+/// sentence has to be written down.
 /// Quick-mask (Q) and screen-mode (F) are deferred, not deferred-and-drawn: a
-/// 40pt column cannot hold four more controls, and the features behind them
+/// 48 pt column cannot hold four more controls, and the features behind them
 /// (a mask editing mode; the full-screen chrome) do not exist yet — when they
 /// do, this footer is where they land.
 fn footer(w: &mut Workspace, ui: &mut Ui) {
     let tokens = design::current_theme(ui.ctx()).tokens();
-    // The caller laid out the flow so this rect is exactly the footer's: the
-    // scroll above was capped to leave this much room.
     let area = ui.max_rect();
-    ui.painter().rect_filled(
-        area,
-        egui::Rounding::ZERO,
-        color32(tokens.palette.color(ColorRole::SurfacePanel)),
-    );
+    let well = tokens.metrics.color_well;
+    let hit = tokens.metrics.min_hit_target;
 
     let fg = w.color.well(crate::panels::color::ColorWell::Foreground);
     let bg = w.color.well(crate::panels::color::ColorWell::Background);
@@ -96,21 +112,23 @@ fn footer(w: &mut Workspace, ui: &mut Ui) {
             .hairline_for_scale(ui.ctx().pixels_per_point()),
         color32(tokens.palette.text(design::TextRole::Tertiary)),
     );
-    let rounding = design::egui_theme::rounding(design::Radius::Small.resolve(&tokens.radii, 18.0));
+    let rounding = design::egui_theme::rounding(design::Radius::Small.resolve(&tokens.radii, well));
     let well_color = |c: [f32; 4]| -> egui::Color32 {
         let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         egui::Color32::from_rgba_unmultiplied(to8(c[0]), to8(c[1]), to8(c[2]), to8(c[3]))
     };
 
     // Row 1: the swatch pair overlaps the way Photopea draws it — background
-    // behind and offset up-right, foreground in front.
+    // behind and offset up-right, foreground in front and down-left. The pair
+    // is as wide as the column's content, so it is flush with both edges.
+    let offset = (area.width() - well).max(0.0);
     let bg_rect = egui::Rect::from_min_size(
-        egui::pos2(area.left() + 12.0, area.top() + 3.0),
-        egui::vec2(18.0, 18.0),
+        egui::pos2(area.left() + offset, area.top()),
+        egui::vec2(well, well),
     );
     let fg_rect = egui::Rect::from_min_size(
-        egui::pos2(area.left() + 2.0, area.top() + 7.0),
-        egui::vec2(18.0, 18.0),
+        egui::pos2(area.left(), area.top() + Space::Small.pt()),
+        egui::vec2(well, well),
     );
     ui.painter().rect_filled(bg_rect, rounding, well_color(bg));
     ui.painter()
@@ -121,31 +139,36 @@ fn footer(w: &mut Workspace, ui: &mut Ui) {
 
     // A small square icon control at an absolute offset, with hover fill.
     // Placed by hand, because `icon_button_id` allocates through the layout
-    // this footer deliberately avoids.
-    let icon_control =
-        |ui: &mut Ui, left: f32, top: f32, id: egui::Id, key: &str, tooltip: &str| {
-            let rect = egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(18.0, 18.0));
-            let response = ui.interact(rect, id, egui::Sense::click());
-            if response.hovered() {
-                ui.painter().rect_filled(
-                    rect,
-                    design::egui_theme::rounding(
-                        design::Radius::Small.resolve(&tokens.radii, 18.0),
-                    ),
-                    color32(tokens.palette.color(ColorRole::ControlFillHovered)),
-                );
-            }
-            super::paint_icon(ui, rect.shrink(3.0), key, design::TextRole::Secondary);
-            response.on_hover_text(tooltip)
-        };
+    // this footer deliberately avoids. The glyph is inset by a hair only: the
+    // control is already hit-target sized, and the old `shrink(3.0)` on top
+    // of `paint_ui_icon`'s own inset left a 4 pt glyph.
+    let icon_control = |ui: &mut Ui,
+                        left: f32,
+                        top: f32,
+                        id: egui::Id,
+                        key: &str,
+                        tooltip: &str| {
+        let rect = egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(hit, hit));
+        let response = ui.interact(rect, id, egui::Sense::click());
+        if response.hovered() {
+            ui.painter().rect_filled(
+                rect,
+                design::egui_theme::rounding(design::Radius::Small.resolve(&tokens.radii, hit)),
+                color32(tokens.palette.color(ColorRole::ControlFillHovered)),
+            );
+        }
+        crate::icons::paint_ui_icon_inset(ui, rect, Space::Hair, key, design::TextRole::Secondary);
+        response.on_hover_text(tooltip)
+    };
 
-    // Row 2: swap (X) then reset (D), centred as a pair.
-    let pair_w = 18.0 * 2.0 + 4.0;
+    // Row 2: swap (X) then reset (D), centred as a pair under the wells.
+    let pair_w = hit * 2.0;
     let row2_left = area.left() + (area.width() - pair_w) * 0.5;
+    let row2_top = area.top() + well_pair_height(tokens) + Space::XSmall.pt();
     let swap = icon_control(
         ui,
         row2_left,
-        area.top() + 27.0,
+        row2_top,
         super::ids::color_swap(),
         "swap",
         crate::strings::tr("ui.toolbar.swap.foreground.and.background.x"),
@@ -156,8 +179,8 @@ fn footer(w: &mut Workspace, ui: &mut Ui) {
     }
     let reset = icon_control(
         ui,
-        row2_left + 22.0,
-        area.top() + 27.0,
+        row2_left + hit,
+        row2_top,
         super::ids::color_reset(),
         "reset-colors",
         crate::strings::tr("ui.toolbar.default.colours.d"),
@@ -255,7 +278,7 @@ fn icon_button(
     id: Option<egui::Id>,
 ) -> Response {
     let t = current_tokens(ui);
-    let side = t.metrics.toolbar_button;
+    let side = t.metrics.tool_palette_button;
     // Variant slots also sense drags: the press-and-hold that opens their
     // fly-out is a drag-shaped gesture.
     let sense = if has_variants {
@@ -303,9 +326,12 @@ fn icon_button(
         let icon = crate::palette::info(tool)
             .map(|i| icon_for(i.icon))
             .unwrap_or(crate::icons::Icon::UNKNOWN);
+        // An XSmall inset on a 28 pt slot leaves a 20 pt glyph. The old
+        // Small inset on a 24 pt button left 8 pt, which is why the icons
+        // read as specks in every shot that did show them.
         icon.paint(
             painter,
-            rect.shrink(Space::Small.pt()),
+            rect.shrink(Space::XSmall.pt()),
             glyph_color,
             crate::icons::icon_stroke_width(t),
         );

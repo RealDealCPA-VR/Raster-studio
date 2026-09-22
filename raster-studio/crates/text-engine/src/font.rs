@@ -112,6 +112,16 @@ const MONO_PREFERENCES: &[&str] = &[
     "Liberation Mono",
 ];
 
+/// Environment variable that replaces the system font scan in
+/// [`FontLibrary::with_system_fonts`] with a fixed list of directories.
+///
+/// The value is a `PATH`-style list (`;` on Windows, `:` elsewhere) of
+/// directories to scan instead of the machine's font folders. Set but empty
+/// means "no system fonts": the library then holds only what callers load
+/// through [`FontLibrary::load_bytes`], which is exactly the shape of a bare
+/// CI runner and lets that condition be reproduced on any developer machine.
+pub const FONT_DIRS_ENV: &str = "RASTER_STUDIO_FONT_DIRS";
+
 /// Owns the font database and the shaping context built on top of it.
 #[derive(Debug)]
 pub struct FontLibrary {
@@ -147,10 +157,51 @@ impl FontLibrary {
     ///
     /// Scanning the system font directories takes a noticeable amount of time;
     /// build one library per application and share it.
+    ///
+    /// When the environment variable [`FONT_DIRS_ENV`] is set, the system scan
+    /// is replaced by [`Self::from_font_dirs`] over the directories it lists
+    /// (separated the way `PATH` is on this platform; an empty value means no
+    /// directories at all). This is the seam that lets a test process stand
+    /// in for a machine with a different — or no — font installation, such as
+    /// a CI runner that has only a handful of families.
     #[must_use]
     pub fn with_system_fonts() -> Self {
+        if let Some(dirs) = std::env::var_os(FONT_DIRS_ENV) {
+            return Self::from_font_dirs(std::env::split_paths(&dirs));
+        }
         let mut this = Self {
             system: FontSystem::new(),
+            generic_sans: String::new(),
+            generic_serif: String::new(),
+            generic_mono: String::new(),
+        };
+        this.repair_generic_families();
+        this
+    }
+
+    /// A library holding only the font files found in `dirs` (scanned
+    /// recursively), and nothing from the machine's own installation.
+    ///
+    /// Directories that do not exist or cannot be read contribute nothing; an
+    /// empty iterator yields the same fontless library as [`Self::empty`].
+    /// This is what [`Self::with_system_fonts`] builds when [`FONT_DIRS_ENV`]
+    /// is set.
+    #[must_use]
+    pub fn from_font_dirs<I, P>(dirs: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: AsRef<std::path::Path>,
+    {
+        let mut db = Database::new();
+        for dir in dirs {
+            let dir = dir.as_ref();
+            if dir.as_os_str().is_empty() {
+                continue;
+            }
+            db.load_fonts_dir(dir);
+        }
+        let mut this = Self {
+            system: FontSystem::new_with_locale_and_db("en-US".to_string(), db),
             generic_sans: String::new(),
             generic_serif: String::new(),
             generic_mono: String::new(),
@@ -418,5 +469,56 @@ pub(crate) const fn db_stretch(stretch: FontStretch) -> Stretch {
         FontStretch::Expanded => Stretch::Expanded,
         FontStretch::ExtraExpanded => Stretch::ExtraExpanded,
         FontStretch::UltraExpanded => Stretch::UltraExpanded,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh directory under the OS temp folder, unique to this call.
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let dir = std::env::temp_dir().join(format!(
+            "raster-studio-font-dirs-{tag}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    #[test]
+    fn no_directories_is_a_fontless_library_that_names_no_substitute() {
+        let library = FontLibrary::from_font_dirs(std::iter::empty::<&str>());
+        assert!(
+            library.is_empty(),
+            "nothing was scanned, nothing is present"
+        );
+        assert_eq!(library.substitute_for("Anything"), None);
+        // An empty entry (what `PATH`-splitting an empty value can yield) and
+        // a directory that does not exist both contribute nothing.
+        let missing = scratch_dir("missing").join("does-not-exist");
+        let library = FontLibrary::from_font_dirs([std::path::Path::new(""), &missing]);
+        assert!(library.is_empty());
+    }
+
+    #[test]
+    fn a_directory_of_font_files_is_the_whole_library() {
+        let dir = scratch_dir("dejavu");
+        std::fs::write(dir.join("DejaVuSans.ttf"), dejavu::sans::regular()).unwrap();
+        let library = FontLibrary::from_font_dirs([&dir]);
+        assert_eq!(library.face_count(), 1, "only the file in the directory");
+        assert_eq!(library.family_names(), vec!["DejaVu Sans".to_string()]);
+        // The generic sans is pinned to what is there, so a missing family is
+        // reported against it — the CI-runner shape this seam exists to model.
+        assert_eq!(
+            library
+                .substitute_for("Raster Test Missing Family")
+                .as_deref(),
+            Some("DejaVu Sans")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

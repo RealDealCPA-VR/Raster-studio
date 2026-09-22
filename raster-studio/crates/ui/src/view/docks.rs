@@ -27,8 +27,9 @@ use crate::panels::text as text_panel;
 use crate::Workspace;
 
 use super::{
-    badge, body, empty_state, hairline, hint, icon_toggle, icon_toggle_id, panel_frame, row_layout,
-    swatch, text,
+    badge, body, empty_state, hairline, hint, icon_action, icon_action_id, icon_toggle,
+    icon_toggle_id, list_row_layout, panel_frame, panel_icon_side, row_layout, swatch, text,
+    ActionState,
 };
 
 /// Draw every rail.
@@ -114,11 +115,11 @@ fn icon_rail(w: &mut Workspace, ctx: &egui::Context, side: DockSide) {
                     if !w.dock.is_open(panel) {
                         continue;
                     }
-                    if icon_toggle_id(
+                    if icon_action_id(
                         ui,
                         "overflow",
-                        false,
                         panel.title(),
+                        ActionState::Idle,
                         Some(super::ids::rail_icon(panel)),
                     )
                     .clicked()
@@ -128,11 +129,11 @@ fn icon_rail(w: &mut Workspace, ctx: &egui::Context, side: DockSide) {
                     }
                 }
                 ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-                    if icon_toggle_id(
+                    if icon_action_id(
                         ui,
                         "chevron-right",
-                        false,
                         crate::strings::tr("ui.docks.expand.the.dock"),
+                        ActionState::Idle,
                         Some(super::ids::rail_expand(side)),
                     )
                     .clicked()
@@ -253,11 +254,11 @@ fn tab_strip(w: &mut Workspace, ui: &mut Ui, members: &[PanelId], active: PanelI
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add_space(Space::XSmall.pt());
-                if icon_toggle(
+                if icon_action(
                     ui,
                     "close",
-                    false,
                     crate::strings::tr("ui.docks.close.panel"),
+                    ActionState::Idle,
                 )
                 .clicked()
                 {
@@ -267,11 +268,11 @@ fn tab_strip(w: &mut Workspace, ui: &mut Ui, members: &[PanelId], active: PanelI
                     });
                 }
                 let open = w.panel_menu == Some(active);
-                if icon_toggle_id(
+                if icon_action_id(
                     ui,
                     "overflow",
-                    open,
                     crate::strings::tr("ui.docks.move.this.panel"),
+                    ActionState::selected_if(open),
                     Some(super::ids::panel_menu(active)),
                 )
                 .clicked()
@@ -393,8 +394,10 @@ fn layers_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     let model = LayersModel::build(doc, &w.layers);
     let active = doc.active_layer();
 
+    // Photopea's order: the kind filter on top, then the compact blend /
+    // opacity / lock / fill block, then the rows, then the footer.
+    layer_filter_row(w, ui);
     blend_and_opacity(w, ui, doc, active);
-    lock_row(w, ui, doc, active);
     ui.add_space(Space::XSmall.pt());
     hairline(ui);
 
@@ -452,69 +455,133 @@ fn blend_and_opacity(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Opt
     let mut opacity = layer.map(|l| l.effective_opacity()).unwrap_or(1.0) * 100.0;
     let mut fill = layer.map(|l| l.effective_fill_opacity()).unwrap_or(1.0) * 100.0;
 
+    let locks = layer.map(|l| l.locked).unwrap_or_default();
+
+    // Two rows, Photopea's way: `[Blend v | Opacity --- %]` over
+    // `[Lock: icons | Fill --- %]`. The left column is one shared width so the
+    // two sliders start on the same vertical line.
+    let t = current_tokens(ui);
+    let left = t.metrics.inspector_label_width + t.metrics.numeric_field_width;
+    let height = panel_icon_side(t).max(t.metrics.control_height);
+
     ui.add_enabled_ui(enabled, |ui| {
-        design::inspector_field(ui, "Blend", |ui| {
-            let mut picked = mode;
-            let combo = egui::ComboBox::from_id_salt("raster-layer-blend")
-                .selected_text(body(ui, mode.label()))
-                .show_ui(ui, |ui| {
-                    for candidate in BlendMode::ALL {
-                        let row =
-                            ui.selectable_label(candidate == mode, body(ui, candidate.label()));
-                        super::mark(ui, row.rect, super::ids::layer_blend_option(candidate));
-                        if row.clicked() {
-                            picked = candidate;
+        ui.horizontal(|ui| {
+            ui.allocate_ui_with_layout(
+                Vec2::new(left, height),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.label(hint(ui, "Blend"));
+                    let mut picked = mode;
+                    let combo = egui::ComboBox::from_id_salt("raster-layer-blend")
+                        .width(ui.available_width())
+                        .selected_text(body(ui, mode.label()))
+                        .show_ui(ui, |ui| {
+                            for candidate in BlendMode::ALL {
+                                let row = ui.selectable_label(
+                                    candidate == mode,
+                                    body(ui, candidate.label()),
+                                );
+                                super::mark(
+                                    ui,
+                                    row.rect,
+                                    super::ids::layer_blend_option(candidate),
+                                );
+                                if row.clicked() {
+                                    picked = candidate;
+                                }
+                            }
+                        });
+                    super::mark(ui, combo.response.rect, super::ids::layer_blend());
+                    if picked != mode {
+                        if let Some(id) = active {
+                            w.emit(Intent::Document(LayersModel::set_blend_mode(id, picked)));
                         }
                     }
-                });
-            super::mark(ui, combo.response.rect, super::ids::layer_blend());
-            if picked != mode {
+                },
+            );
+            let opacity_row =
+                percent_slider(ui, "Opacity", &mut opacity, super::ids::layer_opacity());
+            if opacity_row.changed() {
                 if let Some(id) = active {
-                    w.emit(Intent::Document(LayersModel::set_blend_mode(id, picked)));
+                    if let Some(c) = LayersModel::set_opacity(id, opacity / 100.0) {
+                        w.emit(Intent::Document(c));
+                    }
                 }
             }
         });
-        let opacity_row = design::slider_row(ui, "Opacity", &mut opacity, 0.0..=100.0);
-        super::mark(ui, opacity_row.rect, super::ids::layer_opacity());
-        if opacity_row.changed() {
-            if let Some(id) = active {
-                if let Some(c) = LayersModel::set_opacity(id, opacity / 100.0) {
-                    w.emit(Intent::Document(c));
+
+        ui.horizontal(|ui| {
+            ui.allocate_ui_with_layout(
+                Vec2::new(left, height),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.label(hint(ui, "Lock"));
+                    ui.spacing_mut().item_spacing.x = Space::Hair.pt();
+                    let mut next = locks;
+                    for toggle in super::LockToggle::ALL {
+                        let (key, tip) = toggle.icon_and_tooltip();
+                        let on = toggle.get(locks);
+                        // A lock is a real on/off, drawn as the selected accent
+                        // when engaged; without a layer there is nothing to
+                        // lock, and only then does the row read as disabled.
+                        let state = if enabled {
+                            ActionState::selected_if(on)
+                        } else {
+                            ActionState::Disabled
+                        };
+                        if icon_action_id(ui, key, tip, state, Some(super::ids::layer_lock(toggle)))
+                            .clicked()
+                        {
+                            toggle.set(&mut next, !on);
+                        }
+                    }
+                    if next != locks {
+                        if let Some(id) = active {
+                            w.emit(Intent::Document(LayersModel::set_locks(id, next)));
+                        }
+                    }
+                },
+            );
+            let fill_row = percent_slider(ui, "Fill", &mut fill, super::ids::layer_fill());
+            if fill_row.changed() {
+                if let Some(id) = active {
+                    if let Some(c) = LayersModel::set_fill_opacity(id, fill / 100.0) {
+                        w.emit(Intent::Document(c));
+                    }
                 }
             }
-        }
-        let fill_row = design::slider_row(ui, "Fill", &mut fill, 0.0..=100.0);
-        super::mark(ui, fill_row.rect, super::ids::layer_fill());
-        if fill_row.changed() {
-            if let Some(id) = active {
-                if let Some(c) = LayersModel::set_fill_opacity(id, fill / 100.0) {
-                    w.emit(Intent::Document(c));
-                }
-            }
-        }
+        });
     });
 }
 
-fn lock_row(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<LayerId>) {
-    let Some(id) = active else { return };
-    let Some(layer) = doc.layers.get(id) else {
-        return;
-    };
-    let locks = layer.locked;
-    ui.horizontal(|ui| {
-        ui.label(hint(ui, "Lock"));
-        let mut next = locks;
-        for toggle in super::LockToggle::ALL {
-            let (key, tip) = toggle.icon_and_tooltip();
-            let on = toggle.get(locks);
-            if icon_toggle_id(ui, key, on, tip, Some(super::ids::layer_lock(toggle))).clicked() {
-                toggle.set(&mut next, !on);
-            }
-        }
-        if next != locks {
-            w.emit(Intent::Document(LayersModel::set_locks(id, next)));
-        }
-    });
+/// `label  [slider] [ 100 %]`, filling the rest of the row.
+///
+/// The inspector's `design::slider_row` reserves a full label column, which is
+/// the right shape for the Properties panel and the wrong one for a row that
+/// already spent its left half on the blend combo or the lock icons. The
+/// returned response is the union of the slider and the field, and it is
+/// marked under `id` so a headless test can drag the control by name.
+fn percent_slider(ui: &mut Ui, label: &str, value: &mut f32, id: egui::Id) -> egui::Response {
+    let t = current_tokens(ui);
+    let height = t.metrics.control_height;
+    let field_width = t.metrics.numeric_field_width;
+    ui.label(hint(ui, label));
+    let remaining =
+        (ui.available_width() - field_width - Space::Small.pt()).max(t.metrics.min_hit_target);
+    let slider = ui.add_sized(
+        Vec2::new(remaining, height),
+        egui::Slider::new(value, 0.0..=100.0).show_value(false),
+    );
+    let field = ui.add_sized(
+        Vec2::new(field_width, height),
+        egui::DragValue::new(value)
+            .range(0.0..=100.0)
+            .max_decimals(0)
+            .suffix("%"),
+    );
+    let response = slider | field;
+    super::mark(ui, response.rect, id);
+    response
 }
 
 fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) -> egui::Response {
@@ -1102,16 +1169,19 @@ fn row_drag_position(
     Some(position)
 }
 
-fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<LayerId>) {
-    // The kind filter and the thumbnail size, the two controls Photopea puts
-    // above the footer row.
+/// The kind filter and the thumbnail size: the row Photopea puts at the *top*
+/// of the Layers panel, above the blend block.
+///
+/// The one filter that is on is the selected action; every other button is a
+/// plain action, ready to be pressed. None of them is ever disabled.
+fn layer_filter_row(w: &mut Workspace, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = Space::Hair.pt();
-        if icon_toggle_id(
+        if icon_action_id(
             ui,
             "overflow",
-            w.layers.filter.is_none(),
             crate::strings::tr("ui.docks.show.every.layer"),
+            ActionState::selected_if(w.layers.filter.is_none()),
             Some(super::ids::layer_filter_all()),
         )
         .clicked()
@@ -1120,11 +1190,11 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
         }
         for class in crate::menu::LayerClass::ALL {
             let on = w.layers.filter == Some(class);
-            if icon_toggle_id(
+            if icon_action_id(
                 ui,
                 class_icon(class),
-                on,
                 &filter_tip(class),
+                ActionState::selected_if(on),
                 Some(super::ids::layer_filter(class)),
             )
             .clicked()
@@ -1133,11 +1203,11 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
             }
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if icon_toggle_id(
+            if icon_action_id(
                 ui,
                 "plus",
-                false,
                 crate::strings::tr("ui.docks.thumbnail.size"),
+                ActionState::Idle,
                 Some(super::ids::layer_thumb_size()),
             )
             .clicked()
@@ -1146,8 +1216,17 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
             }
         });
     });
+}
 
-    // Photopea's footer row: link, fx, mask, adjustment, group, new, delete.
+/// Photopea's footer row, in Photopea's order: link, fx, mask, adjustment,
+/// group, new layer — and delete on its own at the right-hand end.
+///
+/// Every button here is an *action*, not a toggle: it was `icon_toggle` with
+/// `on = false` before, which painted the whole row in the disabled colour
+/// while every button worked. A button is drawn disabled only when it really
+/// cannot act — fx and mask without a layer, delete without a selection — and
+/// then it senses nothing as well.
+fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<LayerId>) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = Space::Hair.pt();
         let has_layer = active.is_some();
@@ -1159,15 +1238,21 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
 
         // Link: every selected layer carries the chain, as one patch per
         // layer. Linking wins if any selected layer is unlinked, so one click
-        // on a mixed selection links them all.
+        // on a mixed selection links them all. The button shows the accent
+        // while the selection is chained.
         let link_on = selection
             .iter()
             .any(|id| doc.layers.get(*id).is_some_and(|l| l.linked));
-        if icon_toggle_id(
+        let link_state = if has_layer {
+            ActionState::selected_if(link_on)
+        } else {
+            ActionState::Disabled
+        };
+        if icon_action_id(
             ui,
             "link",
-            link_on,
             crate::strings::tr("ui.docks.link.selected.layers"),
+            link_state,
             Some(super::ids::layer_link()),
         )
         .clicked()
@@ -1185,22 +1270,6 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
             }
         }
 
-        // Adjustment: the grid lives in its own panel.
-        if icon_toggle_id(
-            ui,
-            "adjustment",
-            false,
-            crate::strings::tr("ui.docks.open.the.adjustments.panel"),
-            Some(super::ids::layer_adjustment()),
-        )
-        .clicked()
-        {
-            w.emit(Intent::SetPanelOpen {
-                panel: PanelId::Adjustments,
-                open: true,
-            });
-        }
-
         // fx: the layer-style editor, which is the Properties panel.
         let fx = super::labelled_button(ui, "fx", has_layer, super::ids::layer_fx());
         let fx = if has_layer {
@@ -1216,11 +1285,11 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
         let has_mask = active
             .and_then(|id| doc.layers.get(id))
             .is_some_and(|l| l.mask.is_some());
-        let mask = icon_toggle_id(
+        let mask = icon_action_id(
             ui,
             "mask",
-            false,
             crate::strings::tr("ui.docks.add.a.layer.mask"),
+            ActionState::enabled_if(has_layer && !has_mask),
             Some(super::ids::layer_mask()),
         );
         if has_layer && !has_mask && mask.clicked() {
@@ -1229,36 +1298,52 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
             }
         }
 
-        if icon_toggle_id(
+        // Adjustment: the grid lives in its own panel.
+        if icon_action_id(
             ui,
-            "plus",
-            true,
-            crate::strings::tr("ui.docks.new.layer"),
-            Some(super::ids::new_layer()),
+            "adjustment",
+            crate::strings::tr("ui.docks.open.the.adjustments.panel"),
+            ActionState::Idle,
+            Some(super::ids::layer_adjustment()),
         )
         .clicked()
         {
-            w.emit(Intent::Document(LayersModel::new_layer(doc)));
+            w.emit(Intent::SetPanelOpen {
+                panel: PanelId::Adjustments,
+                open: true,
+            });
         }
-        if icon_toggle_id(
+
+        if icon_action_id(
             ui,
             "new-group",
-            true,
             crate::strings::tr("ui.docks.new.group"),
+            ActionState::Idle,
             Some(super::ids::new_group()),
         )
         .clicked()
         {
             w.emit(Intent::Document(LayersModel::new_group()));
         }
+        if icon_action_id(
+            ui,
+            "plus",
+            crate::strings::tr("ui.docks.new.layer"),
+            ActionState::Idle,
+            Some(super::ids::new_layer()),
+        )
+        .clicked()
+        {
+            w.emit(Intent::Document(LayersModel::new_layer(doc)));
+        }
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let can_delete = !selection.is_empty();
-            let delete = icon_toggle_id(
+            let delete = icon_action_id(
                 ui,
                 "trash",
-                false,
                 crate::strings::tr("ui.docks.delete.selected.layers"),
+                ActionState::enabled_if(can_delete),
                 Some(super::ids::layer_delete()),
             );
             if can_delete && delete.clicked() {
@@ -1300,11 +1385,14 @@ fn history_body(w: &mut Workspace, ui: &mut Ui, history: &History) {
 
     for step in model.steps() {
         let selected = step.index == current;
-        let response = row_layout(ui, |ui| {
+        // A full-width row under the id `view::ids` publishes for it: the
+        // whole line is the click target and the whole line takes the
+        // selection fill, painted *under* the label rather than over it.
+        let response = list_row_layout(ui, super::ids::history_row(step.index), selected, |ui| {
             ui.add_space(Space::XSmall.pt());
-            let side = current_tokens(ui).metrics.min_hit_target * 0.8;
+            let side = current_tokens(ui).metrics.min_hit_target;
             let (marker, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
-            super::paint_icon(
+            super::paint_panel_icon(
                 ui,
                 marker,
                 step.kind.icon(),
@@ -1327,28 +1415,6 @@ fn history_body(w: &mut Workspace, ui: &mut Ui, history: &History) {
             ));
         })
         .response;
-        // The row carries the id `view::ids` publishes for it, so a headless
-        // test clicks the row a user would click rather than a number.
-        let response = ui.interact(
-            response.rect,
-            super::ids::history_row(step.index),
-            Sense::click(),
-        );
-
-        if ui.is_rect_visible(response.rect) && (selected || response.hovered()) {
-            let t = current_tokens(ui);
-            let radius = Radius::Medium.resolve(&t.radii, response.rect.height());
-            let fill = if selected {
-                ColorRole::SelectionFill
-            } else {
-                ColorRole::ControlFillHovered
-            };
-            ui.painter().rect_filled(
-                response.rect,
-                rounding(radius),
-                color32(t.palette.color(fill)),
-            );
-        }
         if response.clicked() {
             jump = model.jump_to(step.index);
         }
@@ -1356,10 +1422,19 @@ fn history_body(w: &mut Workspace, ui: &mut Ui, history: &History) {
 
     ui.add_space(Space::XSmall.pt());
     hairline(ui);
+    // The footer: icon actions under the list, Photopea's way, so a snapshot
+    // control no longer reads as one more history row. New snapshot first;
+    // "new document from this state" and "delete snapshot" join it later.
     ui.horizontal(|ui| {
-        if design::ghost_button(ui, "Snapshot")
-            .on_hover_text(crate::strings::tr("ui.docks.mark.this.state.so.you.can"))
-            .clicked()
+        ui.spacing_mut().item_spacing.x = Space::Hair.pt();
+        if icon_action_id(
+            ui,
+            "plus",
+            crate::strings::tr("ui.docks.mark.this.state.so.you.can"),
+            ActionState::Idle,
+            Some(super::ids::history_new_snapshot()),
+        )
+        .clicked()
         {
             let index = model.current();
             w.snapshots.push(crate::panels::history::Snapshot {
@@ -1415,11 +1490,11 @@ fn adjustments_body(w: &mut Workspace, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = Space::Hair.pt();
             for id in chunk {
-                if icon_toggle_id(
+                if icon_action_id(
                     ui,
                     AdjustmentsPanel::icon(*id),
-                    true,
                     id.label(),
+                    ActionState::Idle,
                     Some(super::ids::adjustment_tile(*id)),
                 )
                 .clicked()
@@ -1821,11 +1896,11 @@ fn color_body(w: &mut Workspace, ui: &mut Ui) {
     }
 
     ui.horizontal(|ui| {
-        if icon_toggle(
+        if icon_action(
             ui,
             "target",
-            w.color.eyedropper_armed,
             crate::strings::tr("ui.docks.sample.a.colour.from.the.canvas"),
+            ActionState::selected_if(w.color.eyedropper_armed),
         )
         .clicked()
         {
@@ -2445,13 +2520,27 @@ fn navigator_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
 
     ui.add_space(Space::XSmall.pt());
     ui.horizontal(|ui| {
-        if icon_toggle(ui, "minus", true, crate::strings::tr("ui.docks.zoom.out")).clicked() {
+        if icon_action(
+            ui,
+            "minus",
+            crate::strings::tr("ui.docks.zoom.out"),
+            ActionState::Idle,
+        )
+        .clicked()
+        {
             w.emit(Intent::SetZoom(crate::panels::navigator::zoom_out(
                 w.status.zoom,
             )));
         }
         ui.label(body(ui, format_zoom(w.status.zoom)));
-        if icon_toggle(ui, "plus", true, crate::strings::tr("ui.docks.zoom.in")).clicked() {
+        if icon_action(
+            ui,
+            "plus",
+            crate::strings::tr("ui.docks.zoom.in"),
+            ActionState::Idle,
+        )
+        .clicked()
+        {
             w.emit(Intent::SetZoom(crate::panels::navigator::zoom_in(
                 w.status.zoom,
             )));

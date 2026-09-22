@@ -32,6 +32,19 @@
 //! [`ui::Workspace::drain_intents`] when the docked panels, the tool palette and
 //! the options bar are drawn. One translation table, so a control in a panel and
 //! the menu item that does the same thing cannot disagree.
+//!
+//! # A menu click takes the same road a panel click does
+//!
+//! [`draw`] resolves each row to the [`Intent`] the shared model gives it and,
+//! on a click, hands that intent to the chrome (`Chrome::menu_click`), which
+//! routes it exactly as it routes an intent drained from the workspace: the
+//! dialog host is asked first, then [`pick`] and [`record`]. It used to call
+//! [`record`] here directly, which is how Image Size, Canvas Size, Arbitrary
+//! rotation, Layer Style, the Filter Gallery and every Filter row skipped the
+//! dialogs the chrome hosts for them and landed in [`perform`], which has no
+//! arm for a question only a dialog can answer.
+//! `every_enabled_menu_item_really_does_something` drives every enabled row
+//! through that click handler and fails on one that reaches nobody.
 
 use std::path::PathBuf;
 
@@ -465,9 +478,12 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
 /// when [`perform`] performs it.
 ///
 /// **This function is the whole gate.** An item it answers `None` for is
-/// enabled, so [`perform`] must have a real arm for it —
-/// `every_enabled_menu_item_really_does_something` runs every one of them
-/// against a live document and fails on an arm that changes nothing.
+/// enabled, so either the chrome's dialog host opens a dialog for it or
+/// [`perform`] has a real arm for it —
+/// `every_enabled_menu_item_really_does_something` drives every one of them
+/// through the menu bar's click handler against a live document and fails on
+/// one that does neither, and `no_enabled_menu_item_resolves_to_a_no_op`
+/// fails on a performed arm that changes nothing.
 ///
 /// Every reason names the *specific* missing piece. "This build cannot do that
 /// yet" is not a reason; it is the absence of one, and 126 items wore it.
@@ -600,30 +616,62 @@ pub fn record(pick: Pick, out: &mut ChromeOutput) {
 /// Exposed so the enablement rule is testable without a window; [`draw`] is
 /// the only caller that paints it.
 pub fn resolve(action: MenuAction, context: &MenuContext, editor: &Editor) -> Result<Pick, String> {
+    let intent = resolve_intent(action, context, editor)?;
+    pick(&intent, editor).ok_or_else(|| refusal(action))
+}
+
+/// The [`Intent`] an enabled row hands the chrome when it is clicked, or the
+/// sentence saying why the row is off.
+///
+/// This is what [`draw`] paints and what a click sends: the *intent*, not the
+/// [`Pick`], because the chrome routes an intent — the dialog host is asked
+/// first, and only an intent no dialog answers is picked and recorded. A row
+/// whose intent [`pick`] cannot answer is off, so a click can never hand the
+/// chrome something it has no road for.
+pub fn resolve_intent(
+    action: MenuAction,
+    context: &MenuContext,
+    editor: &Editor,
+) -> Result<Intent, String> {
     match action.resolve(context) {
         Resolution::Disabled(reason) => Err(reason.to_string()),
-        Resolution::Enabled(intent) => pick(&intent, editor).ok_or_else(|| {
-            // The specific sentence, when there is one. [`NOT_WIRED`] is the
-            // last resort and no menu item reaches it — see
-            // `no_menu_item_falls_back_to_the_generic_refusal`.
-            unavailable_reason(action).unwrap_or(NOT_WIRED).to_string()
-        }),
+        Resolution::Enabled(intent) => {
+            if pick(&intent, editor).is_some() {
+                Ok(intent)
+            } else {
+                Err(refusal(action))
+            }
+        }
     }
+}
+
+/// The specific sentence for a row this build cannot perform, when there is
+/// one. [`NOT_WIRED`] is the last resort and no menu item reaches it — see
+/// `no_menu_item_falls_back_to_the_generic_refusal`.
+fn refusal(action: MenuAction) -> String {
+    unavailable_reason(action).unwrap_or(NOT_WIRED).to_string()
 }
 
 // ---------------------------------------------------------------------------
 // Drawing
 // ---------------------------------------------------------------------------
 
-/// Draw the menu bar and record whatever the user picked.
+/// Draw the menu bar and hand the chrome the intent of whatever row was
+/// clicked.
+///
+/// `on_click` is `Chrome::menu_click`: the click is *routed*, not recorded,
+/// so a row whose dialog the chrome hosts opens that dialog, and only a row
+/// with no dialog is picked and recorded — the road every panel control's
+/// intent already travels. `context` is built by the caller because it needs
+/// the chrome's live workspace (dock, view flags) and the editor's clipboard
+/// probe, and the chrome is what holds both.
 pub fn draw(
     ctx: &egui::Context,
-    editor: &mut Editor,
-    workspace: &Workspace,
-    out: &mut ChromeOutput,
+    editor: &Editor,
+    context: &MenuContext,
+    on_click: &mut dyn FnMut(Intent),
 ) {
     let menus = menus(editor);
-    let context = context(editor, workspace);
     egui::TopBottomPanel::top("raster-menu-bar")
         .frame(crate::chrome::panel_frame(
             ctx,
@@ -634,7 +682,7 @@ pub fn draw(
             egui::menu::bar(ui, |ui| {
                 for menu in &menus {
                     ui.menu_button(menu.title, |ui| {
-                        entries(ui, &menu.entries, &context, editor, out);
+                        entries(ui, &menu.entries, context, editor, on_click);
                     });
                 }
             });
@@ -646,11 +694,11 @@ fn entries(
     entries: &[Entry],
     context: &MenuContext,
     editor: &Editor,
-    out: &mut ChromeOutput,
+    on_click: &mut dyn FnMut(Intent),
 ) {
     for entry in entries {
         match entry {
-            Entry::Item(action) => item(ui, *action, context, editor, out),
+            Entry::Item(action) => item(ui, *action, context, editor, on_click),
             Entry::Separator => {
                 ui.separator();
             }
@@ -663,10 +711,10 @@ fn entries(
                 let live = children
                     .iter()
                     .flat_map(Entry::actions)
-                    .any(|a| resolve(a, context, editor).is_ok());
+                    .any(|a| resolve_intent(a, context, editor).is_ok());
                 if live {
                     ui.menu_button(*label, |ui| {
-                        self::entries(ui, children, context, editor, out);
+                        self::entries(ui, children, context, editor, on_click);
                     });
                 } else {
                     ui.add_enabled(false, egui::Button::new(*label))
@@ -682,9 +730,9 @@ fn item(
     action: MenuAction,
     context: &MenuContext,
     editor: &Editor,
-    out: &mut ChromeOutput,
+    on_click: &mut dyn FnMut(Intent),
 ) {
-    let outcome = resolve(action, context, editor);
+    let outcome = resolve_intent(action, context, editor);
     // A checkable row reserves the gutter with spaces and the tick is *drawn*
     // into it below. It used to be a "✓" in the label, and U+2713 is not in the
     // font egui loads, so every checked row showed a tofu box.
@@ -715,9 +763,9 @@ fn item(
         ui::icons::paint_ui_icon(ui, gutter, "check", role);
     }
     match outcome {
-        Ok(pick) => {
+        Ok(intent) => {
             if response.clicked() {
-                record(pick, out);
+                on_click(intent);
                 ui.close_menu();
             }
         }
@@ -1481,10 +1529,23 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         // Card 058: inverting coverage is a one-channel pixel edit on the
         // mask's tile map — undoable, layer pixels untouched.
         MenuAction::Mask(MaskOp::Invert) => invert_mask(editor),
-        // `LayerStyle(_)` never reaches here: the chrome's dialog host opens
-        // the real dialog for it (`DialogHost::open_for_menu_action`) and the
-        // confirmed style arrives as the command the dialog emits. Reaching
-        // this catch-all anyway means the host and this match disagree.
+        // ---- Rows a dialog answers ---------------------------------------
+        // Image Size, Canvas Size, Arbitrary rotation, Layer Style, the
+        // Filter Gallery, Refine Mask and Remove Color Fringe are questions,
+        // and the chrome's dialog host asks them
+        // (`DialogHost::open_for_menu_action`); the confirmed value arrives
+        // as a `DialogAction` one or more frames later. A click reaches here
+        // only when the host had nothing to open a dialog *over* — no
+        // document, no layer, no mask, no pixels — so the answer is the
+        // reason, on the status line, rather than a silent nothing or the
+        // "no implementation" shrug below.
+        MenuAction::ImageSize
+        | MenuAction::CanvasSize
+        | MenuAction::RotateCanvas(CR::Arbitrary)
+        | MenuAction::LayerStyle(_)
+        | MenuAction::FilterGallery
+        | MenuAction::RefineMask
+        | MenuAction::RemoveColorFringe => Err(dialog_refused(action, editor)),
         MenuAction::SelectAllLayers => {
             let doc = editor
                 .active_mut()
@@ -1539,8 +1600,10 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         )),
 
         // Anything else must have been refused during enablement. Reaching here
-        // means `unavailable_reason` and this match disagree, which
-        // `every_enabled_menu_item_really_does_something` is there to catch.
+        // means `unavailable_reason`, the dialog host and this match disagree,
+        // which `every_enabled_menu_item_really_does_something` is there to
+        // catch: it drives every enabled row through the menu bar's click
+        // handler and fails on one that lands here.
         other => Err(format!(
             "{}: this build has no implementation for it",
             other.label()
@@ -1556,6 +1619,42 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
 
 fn canvas_rect(w: u32, h: u32) -> selection::Rect {
     selection::Rect::from_xywh(0, 0, w, h)
+}
+
+/// Why a dialog-hosted row's dialog did not open: the thing it had nothing
+/// to open over, named.
+///
+/// The menu's own gate (`ui::menu`) and `DialogHost::open_for_menu_action`
+/// agree in every state a user can reach, so this is the second line of
+/// defence — but it has to say something specific, because the status line is
+/// the only place a click that opened no dialog is visible at all.
+fn dialog_refused(action: MenuAction, editor: &Editor) -> String {
+    let Some(doc) = editor.active() else {
+        return "No document is open".to_string();
+    };
+    let layer = doc.document.active_layer();
+    let reason = match action {
+        MenuAction::LayerStyle(_) if layer.is_none() => "Select a layer first",
+        MenuAction::RefineMask | MenuAction::RemoveColorFringe => match layer {
+            None => "Select a layer first",
+            Some(id) => match doc.document.layers.get(id).and_then(|l| l.mask.as_ref()) {
+                None => "The active layer has no mask",
+                Some(_) => "",
+            },
+        },
+        MenuAction::FilterGallery => {
+            return match pixel_layer(editor) {
+                Ok(_) => format!("{}: its dialog could not open", action.label()),
+                Err(reason) => reason,
+            }
+        }
+        _ => "",
+    };
+    if reason.is_empty() {
+        format!("{}: its dialog could not open", action.label())
+    } else {
+        reason.to_string()
+    }
 }
 
 /// A colour well's value as a stored 8-bit pixel.
@@ -5810,6 +5909,136 @@ mod tests {
         assert!(
             checked > 60,
             "only {checked} items were exercised; the walk stopped finding them"
+        );
+    }
+
+    #[test]
+    fn every_enabled_menu_item_really_does_something() {
+        // The gate `unavailable_reason`'s doc names, driven the way a user
+        // drives it. Every row the menu bar draws *enabled* with a document
+        // open is sent through `Chrome::menu_click` — the handler `draw` calls
+        // on a click, nothing else — and has to either open a dialog or reach
+        // a pick the shell accepts. Landing in `perform`'s "no implementation"
+        // arm is the failure this exists to catch: it is exactly what Image
+        // Size, Canvas Size, Arbitrary rotation, Layer Style and the Filter
+        // Gallery did while the menu bar recorded picks straight into the
+        // output and the dialog host was consulted only for workspace intents.
+        let dir = tempfile::tempdir().unwrap();
+        let mut template = with_two_layers(dir.path());
+        let menu_ctx = context(&mut template, &Workspace::new());
+        let enabled: Vec<MenuAction> = menus(&template)
+            .into_iter()
+            .flat_map(|m| m.actions())
+            .filter(|a| resolve_intent(*a, &menu_ctx, &template).is_ok())
+            .collect();
+        drop(template);
+        assert!(
+            enabled.len() > 100,
+            "only {} rows are enabled; the walk stopped finding them",
+            enabled.len()
+        );
+
+        // Rows `perform` legitimately *refuses* in this fixture, and says so
+        // on the status line — a loud refusal is a real answer, a silent
+        // "no implementation" is not. Each one is refused for a state this
+        // fixture is in, not for a missing arm: the scripted file dialogs
+        // cancel (Place, Replace Contents, Export Layers, Print, Export
+        // Diagnostics, and the unsaved-changes prompt behind Close All),
+        // nothing has been copied or defined (Paste/Apply a style, a Pattern
+        // fill layer), the layer has no style to define as a preset, the
+        // content already fills the canvas (Trim), the document already wears
+        // one of the colour modes, and there is no smart object to commit.
+        const LOUD_REFUSALS: &[MenuAction] = &[
+            MenuAction::CloseAll,
+            MenuAction::Trim,
+            MenuAction::DefineStylePreset,
+            MenuAction::PlaceEmbedded,
+            MenuAction::PlaceLinked,
+            MenuAction::ReplaceContents,
+            MenuAction::ExportLayers,
+            MenuAction::Print,
+            MenuAction::ExportDiagnostics,
+            MenuAction::PasteLayerStyle,
+            MenuAction::ApplyStylePreset,
+            MenuAction::NewFillLayer(ui::menu::FillLayerKind::Pattern),
+            MenuAction::CommitSmartObjectContents,
+            MenuAction::SetColorMode(ui::menu::ColorMode::Rgb),
+            MenuAction::SetColorMode(ui::menu::ColorMode::Grayscale),
+            MenuAction::SetColorMode(ui::menu::ColorMode::Lab),
+            MenuAction::SetColorMode(ui::menu::ColorMode::Cmyk),
+            MenuAction::SetColorMode(ui::menu::ColorMode::Indexed),
+        ];
+
+        let mut broken = Vec::new();
+        let mut opened = Vec::new();
+        let mut routed = 0usize;
+        for action in enabled {
+            let mut ed = with_two_layers(dir.path());
+            // The Help rows open a browser through the editor's launcher —
+            // record instead of opening tabs on the CI runner.
+            ed.set_url_launcher(Box::new(SharedRecorder::default()));
+            let mut chrome = crate::chrome::Chrome::new();
+            let menu_ctx = context(&mut ed, chrome.workspace());
+            let intent = resolve_intent(action, &menu_ctx, &ed).expect("enabled above");
+            let mut out = ChromeOutput::default();
+            chrome.menu_click(intent, &ed, &mut out);
+            if chrome.dialog_open() {
+                opened.push(action);
+                continue;
+            }
+            if !out.unrouted.is_empty() {
+                broken.push(format!("{action:?}: the chrome had no road for it"));
+                continue;
+            }
+            if out.is_empty() {
+                broken.push(format!("{action:?}: the click produced nothing"));
+                continue;
+            }
+            // A pick reached the output. `Pick::Menu` is the one kind the
+            // shell hands back to this module, so it is the one kind that can
+            // still fall through; the others are the shell's own channels.
+            for named in std::mem::take(&mut out.menu) {
+                match perform(named, &mut ed) {
+                    Ok(_) => {}
+                    Err(reason) if reason.contains("no implementation") => {
+                        broken.push(format!("{action:?}: {reason}"));
+                    }
+                    Err(_) if LOUD_REFUSALS.contains(&action) => {}
+                    Err(reason) => broken.push(format!("{action:?}: refused with {reason:?}")),
+                }
+            }
+            routed += 1;
+        }
+        assert!(
+            broken.is_empty(),
+            "{} enabled menu rows reach nobody when clicked:\n{broken:#?}",
+            broken.len()
+        );
+        // The rows whose whole point is a question: with a document open every
+        // one of them has to open its dialog from the menu bar, not run at its
+        // defaults and not refuse.
+        for asked in [
+            MenuAction::ImageSize,
+            MenuAction::CanvasSize,
+            MenuAction::RotateCanvas(ui::menu::CanvasRotation::Arbitrary),
+            MenuAction::LayerStyle(ui::menu::EffectSlot::DropShadow),
+            MenuAction::FilterGallery,
+            MenuAction::Filter(ui::menu::FilterId::GaussianBlur),
+            MenuAction::Filter(ui::menu::FilterId::Custom),
+            MenuAction::Filter(ui::menu::FilterId::Offset),
+            MenuAction::Export(raster::ExportFormat::Png),
+            MenuAction::FillDialog,
+            MenuAction::StrokeDialog,
+            MenuAction::NewDocument,
+        ] {
+            assert!(
+                opened.contains(&asked),
+                "{asked:?} did not open its dialog from the menu bar; the rows that did: {opened:?}"
+            );
+        }
+        assert!(
+            routed > 60,
+            "only {routed} rows were performed; the walk stopped finding them"
         );
     }
 
