@@ -1016,6 +1016,20 @@ pub enum SessionGeometry {
     },
 }
 
+/// A live numeric readout a running gesture wants shown by the pointer —
+/// the shape tools' W/H while a box is being dragged (Photopea's cursor
+/// label). Published through [`Tool::live_readout`], deliberately separate
+/// from [`SessionGeometry`]: a readout is a label, not overlay geometry.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LiveReadout {
+    /// The dragged box's width, in document pixels.
+    pub width_px: f32,
+    /// The dragged box's height, in document pixels.
+    pub height_px: f32,
+    /// Where the label belongs, in document space: the pointer's position.
+    pub anchor: Vec2,
+}
+
 /// The interface every interactive tool implements.
 ///
 /// Object safe on purpose: [`crate::registry`] hands the UI a
@@ -1209,6 +1223,15 @@ pub trait Tool {
     /// a committed gesture removes the handles with no second mechanism to
     /// forget.
     fn live_geometry(&self) -> Option<SessionGeometry> {
+        None
+    }
+
+    /// The numeric readout a live gesture wants shown beside the pointer, or
+    /// `None` when there is nothing to show. The app shell reads it after
+    /// every pointer sample, next to [`Tool::live_geometry`], and again after
+    /// it cancels a gesture (Escape, focus loss); a released or cancelled
+    /// gesture answers `None`, and that re-read is what takes the label down.
+    fn live_readout(&self) -> Option<LiveReadout> {
         None
     }
 }

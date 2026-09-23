@@ -236,12 +236,9 @@ pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
         // renders from and `perform`'s ResetViewRotation arm uprights — not
         // the workspace canvas camera's, which this shell never turns.
         //
-        // Not yet user-reachable: no user path turns the document camera
-        // today. The Rotate View tool's drag is dropped in tool_input.rs
-        // (`canvas_camera_of` / `write_camera_back`, ~619-655, owned by the
-        // tools wave W3-A), so in the running app this reads upright and the
-        // item stays greyed until that hand-off lands. The tests turn the
-        // camera directly.
+        // The Rotate View tool's drag turns this camera (`write_camera_back`
+        // writes the rotation back), so the item enables as soon as the view
+        // is turned and uprights it.
         context.view_rotated = open.camera.is_rotated();
     }
     context
@@ -463,8 +460,15 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
         // them, and they perform exactly what Undo and Redo perform.
         MenuAction::StepBackward => Action::Undo,
         MenuAction::StepForward => Action::Redo,
-        // The shortcut editor lives inside the preferences window.
-        MenuAction::Preferences | MenuAction::KeyboardShortcuts => Action::ShowPreferences,
+        MenuAction::Preferences => Action::ShowPreferences,
+        // Edit > Keyboard Shortcuts... is never performed through this arm:
+        // `Chrome::route` asks the dialog host first, and
+        // `DialogHost::open_for_menu_action` answers this intent by opening
+        // Preferences on its Keymap page (the click, the context menu and the
+        // chord all arrive as that one intent). What this pick decides is the
+        // row's enablement in `resolve_intent`: the shortcut editor lives in
+        // the preferences window, so the row is live whenever Preferences is.
+        MenuAction::KeyboardShortcuts => Action::ShowPreferences,
         MenuAction::DuplicateLayer => Action::DuplicateLayer,
         MenuAction::Zoom(Z::In) => Action::ZoomIn,
         MenuAction::Zoom(Z::Out) => Action::ZoomOut,

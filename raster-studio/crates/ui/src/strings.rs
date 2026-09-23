@@ -436,6 +436,9 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.chrome.close.tab", &[(Locale::En, "Close")]),
     ("ui.chrome.more.tabs", &[(Locale::En, "More tabs")]),
     ("ui.chrome.more.readouts", &[(Locale::En, "More readouts")]),
+    // XB: the shape tools' W/H label beside the pointer while dragging.
+    ("ui.chrome.readout.width", &[(Locale::En, "W")]),
+    ("ui.chrome.readout.height", &[(Locale::En, "H")]),
     ("ui.chrome.start.new", &[(Locale::En, "New")]),
     ("ui.chrome.start.new.hint", &[(Locale::En, "A blank canvas at any size")]),
     ("ui.chrome.start.open", &[(Locale::En, "Open\u{2026}")]),

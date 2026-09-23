@@ -223,6 +223,20 @@ impl LoadSelectionDialog {
         &self.names
     }
 
+    /// Over the document's saved-selection names, `index` chosen when it
+    /// names one (W3-X: the Channels row that was clicked), the most recent
+    /// otherwise.
+    pub fn new_at(names: Vec<String>, has_selection: bool, index: usize) -> Self {
+        let mut dialog = Self::new(names, has_selection);
+        dialog.select(index);
+        dialog
+    }
+
+    /// The index of the entry the dialog would load.
+    pub fn selected(&self) -> usize {
+        self.index
+    }
+
     pub fn select(&mut self, index: usize) {
         if index < self.names.len() {
             self.index = index;
@@ -408,28 +422,24 @@ mod tests {
         assert_eq!(dialog.confirm().map(|s| s.index), Some(0));
     }
 
-    /// The Channels panel's saved-selection rows emit a bare Load Selection
-    /// (no row index), and the dialog opens on the NEWEST entry. So clicking
-    /// the "Alpha 1" row of two opens on "Alpha 2": the row's hover text must
-    /// promise only to open the dialog and have the user choose there, never
-    /// to load the row that was clicked.
+    /// W3-X: a Channels saved-selection row opens the dialog on the row that
+    /// was clicked (`new_at`), not on the newest entry; an index that no
+    /// longer names an entry falls back to the newest rather than panicking.
     #[test]
-    fn the_channels_row_hint_promises_only_the_dialog_not_the_clicked_row() {
+    fn the_dialog_opens_on_the_channels_row_that_was_clicked() {
         let names = vec!["Alpha 1".to_string(), "Alpha 2".to_string()];
-        let dialog = LoadSelectionDialog::new(names, false);
+        let dialog = LoadSelectionDialog::new_at(names.clone(), false, 0);
+        assert_eq!(dialog.selected(), 0);
         assert_eq!(
-            dialog.confirm().map(|s| s.name),
-            Some("Alpha 2".to_string()),
-            "the dialog opens on the newest entry, whichever row was clicked"
+            dialog.confirm().map(|s| (s.index, s.name)),
+            Some((0, "Alpha 1".to_string()))
         );
+        let stale = LoadSelectionDialog::new_at(names, false, 7);
+        assert_eq!(stale.selected(), 1);
         let hint = tr("ui.docks.channels.saved.hint").to_lowercase();
         assert!(
-            !hint.contains("load it"),
-            "the hint promises to load the clicked row: {hint}"
-        );
-        assert!(
-            hint.contains("load selection") && hint.contains("choose"),
-            "the hint must name the dialog and say the user chooses there: {hint}"
+            hint.contains("load selection"),
+            "the hint must name the dialog the click opens: {hint}"
         );
     }
 

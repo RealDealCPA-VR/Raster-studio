@@ -863,7 +863,11 @@ mod tests {
         prefs.scratch.dir = "  D:/scratch  ".to_string();
         let fixed = prefs.sanitized();
         assert_eq!(fixed.interface.ui_scale, *UI_SCALE_RANGE.start());
-        assert_eq!(fixed.interface.units, Unit::Pixels, "picas are not offered");
+        assert_eq!(
+            fixed.interface.units,
+            Unit::Picas,
+            "picas are a units choice the rulers offer; sanitizing keeps them"
+        );
         assert_eq!(fixed.history.states, 1);
         assert_eq!(fixed.general.autosave_minutes, MAX_AUTOSAVE_MINUTES);
         assert_eq!(fixed.scratch.dir, "D:/scratch");
@@ -1054,6 +1058,55 @@ mod tests {
             super::super::chrome::resolve(&dialog, DialogKeys::CANCEL),
             DialogOutcome::Cancelled
         );
+    }
+
+    /// W3-X: the Units control on the Interface page lists Picas, and
+    /// picking it there, by clicking the drawn combo and then the drawn row,
+    /// lands Picas in the preferences. Read off what egui painted, not off
+    /// the choices constant.
+    #[test]
+    fn the_units_control_offers_picas_and_a_click_on_it_sets_them() {
+        use crate::dialogs::chrome::test_support::Harness;
+        let h = Harness::new();
+        let mut dialog = PreferencesDialog::new(UiPreferences::default());
+        dialog.set_section(PrefsSection::Interface);
+        let text_rect = |h: &Harness, dialog: &mut PreferencesDialog, text: &str| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Harness::SCREEN)),
+                ..Default::default()
+            };
+            let output = h.ctx.run(input, |ctx| {
+                let _ = dialog.show(ctx);
+            });
+            output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(t) if t.galley.text() == text => {
+                        Some(egui::Rect::from_min_size(t.pos, t.galley.size()))
+                    }
+                    _ => None,
+                })
+        };
+        let pixels = format!("{} ({})", Unit::Pixels.label(), Unit::Pixels.short());
+        let picas = format!("{} ({})", Unit::Picas.label(), Unit::Picas.short());
+        let mut combo = None;
+        for _ in 0..Harness::STABLE_FRAMES {
+            combo = text_rect(&h, &mut dialog, &pixels);
+        }
+        let combo = combo.expect("the Units combo shows the current unit");
+        h.frame(Harness::click_events(combo.center()), |ctx| {
+            let _ = dialog.show(ctx);
+        });
+        let mut row = None;
+        for _ in 0..Harness::STABLE_FRAMES {
+            row = text_rect(&h, &mut dialog, &picas);
+        }
+        let row = row.expect("the open Units list draws a Picas row");
+        h.frame(Harness::click_events(row.center()), |ctx| {
+            let _ = dialog.show(ctx);
+        });
+        assert_eq!(dialog.prefs().interface.units, Unit::Picas);
     }
 
     #[test]

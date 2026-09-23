@@ -369,6 +369,20 @@ impl DialogHost {
         action: &ui::menu::MenuAction,
         editor: &crate::Editor,
     ) -> bool {
+        self.open_for_menu_action_at(action, editor, None)
+    }
+
+    /// [`Self::open_for_menu_action`], with the saved-selection row a
+    /// Channels click named (W3-X). For `LoadSelection`, `load` opens the
+    /// dialog on that row; a direct (Ctrl+click) request parks that row as
+    /// a confirmed New load and returns `false`, so the bridge performs it
+    /// without asking. Every other action ignores `load`.
+    pub fn open_for_menu_action_at(
+        &mut self,
+        action: &ui::menu::MenuAction,
+        editor: &crate::Editor,
+        load: Option<ui::SelectionLoadRequest>,
+    ) -> bool {
         match action {
             // Edit ▸ Keyboard Shortcuts… is the Preferences dialog opened on
             // its Keymap page (W3-G). Answered here, where a menu click, the
@@ -606,9 +620,31 @@ impl DialogHost {
                 if names.is_empty() {
                     return false;
                 }
-                self.open(ActiveDialog::LoadSelection(Box::new(
-                    ui::dialogs::LoadSelectionDialog::new(names, has_live_selection(editor)),
-                )));
+                // W3-X: Ctrl+click on a Channels row loads that row as the
+                // new selection, as Photopea's Ctrl+click on a channel
+                // thumbnail does: parked exactly as a confirmed dialog would
+                // park it, for the bridge's `load_selection` to perform. A
+                // row that no longer exists falls through to the dialog.
+                if let Some(request) = load.filter(|r| r.direct) {
+                    if let Some(name) = names.get(request.index) {
+                        let spec = ui::dialogs::LoadSelectionSpec {
+                            index: request.index,
+                            name: name.clone(),
+                            op: ui::dialogs::LoadOperation::New,
+                            invert: false,
+                        };
+                        CONFIRMED_LOAD_SELECTION.with(|slot| *slot.borrow_mut() = Some(spec));
+                        return false;
+                    }
+                }
+                let live = has_live_selection(editor);
+                let dialog = match load {
+                    Some(request) => {
+                        ui::dialogs::LoadSelectionDialog::new_at(names, live, request.index)
+                    }
+                    None => ui::dialogs::LoadSelectionDialog::new(names, live),
+                };
+                self.open(ActiveDialog::LoadSelection(Box::new(dialog)));
                 true
             }
             // Select ▸ Refine Edge… over the selection's coverage.

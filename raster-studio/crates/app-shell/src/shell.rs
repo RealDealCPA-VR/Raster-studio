@@ -2097,7 +2097,13 @@ impl Shell {
             }
             return outcome.had_pending;
         }
-        if !self.pointer.cancel(&mut self.editor) {
+        let cancelled = self.pointer.cancel(&mut self.editor);
+        // XB: an abandoned gesture takes its W/H readout down with it, through
+        // the same publisher the pointer route uses — Escape and focus loss
+        // never produce a pointer sample, so nothing else would clear it.
+        self.chrome
+            .publish_tool_readout(self.pointer.live_readout());
+        if !cancelled {
             return false;
         }
         // Card 013: an abandoned gesture drops its preview with it.
@@ -2176,6 +2182,10 @@ impl Shell {
         let geometry = self.pointer.live_geometry();
         self.chrome
             .publish_tool_geometry(geometry.clone(), self.editor.active().map(|doc| doc.id()));
+        // XB: and the same session's pointer readout (a shape drag's W/H),
+        // which the chrome paints beside the pointer; a release clears it.
+        self.chrome
+            .publish_tool_readout(self.pointer.live_readout());
         // Card 013: the same live session is what the compositor previews —
         // the object's pixels move as the handles move, through the one
         // compositor, with the committed document and its history untouched.
@@ -2934,6 +2944,109 @@ mod tests {
             "an unrelated Preferences save reverted the rulers"
         );
         assert_eq!(shell.editor.display_unit(), ui::dialogs::Unit::Inches);
+    }
+
+    /// W3-X: View > Rulers > Picas used to persist as px, because the
+    /// preference had no picas choice, so the next launch showed pixels. The
+    /// ruler menu route, the saved file and a fresh load all keep Picas.
+    #[test]
+    fn picking_picas_on_the_ruler_menu_persists_picas_and_a_fresh_load_restores_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        let ctx = egui::Context::default();
+        crate::chrome::install_theme(&ctx, design::Theme::Dark);
+        let frame = |shell: &mut Shell| {
+            let mut out = ChromeOutput::default();
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                out = shell.chrome.ui(ctx, &mut shell.editor);
+            });
+            shell.apply_chrome(out);
+        };
+        frame(&mut shell);
+
+        // View > Rulers > Picas, resolved against the live menu context and
+        // its intent posted, as a click on the row does.
+        let context = crate::menu_bridge::context(&mut shell.editor, shell.chrome.workspace());
+        let intent = ui::MenuAction::SetRulerUnit(ui::dialogs::Unit::Picas)
+            .resolve(&context)
+            .intent()
+            .cloned()
+            .expect("View > Rulers > Picas is enabled");
+        shell.chrome.emit(intent);
+        for _ in 0..2 {
+            frame(&mut shell);
+        }
+        assert_eq!(
+            shell.chrome.workspace().canvas.unit,
+            ui::dialogs::Unit::Picas
+        );
+        assert_eq!(
+            shell.editor.display_unit(),
+            ui::dialogs::Unit::Picas,
+            "the ruler pick did not reach the Units preference as picas"
+        );
+        assert_eq!(
+            shell.editor.preferences().units,
+            crate::prefs::UnitChoice::Pc
+        );
+
+        // Saved, then read back from disk by a fresh load.
+        shell.editor.persist().unwrap();
+        let file = shell.editor.paths().preferences_file();
+        let loaded = Preferences::load(&file);
+        assert_eq!(loaded.units, crate::prefs::UnitChoice::Pc);
+
+        // A shell started on the loaded file draws its rulers in picas.
+        let editor = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("config2")),
+            loaded,
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        let mut fresh = Shell::new(editor, Vec::new());
+        frame(&mut fresh);
+        assert_eq!(
+            fresh.chrome.workspace().canvas.unit,
+            ui::dialogs::Unit::Picas,
+            "the next launch did not restore the ruler unit"
+        );
+    }
+
+    /// W3-X: the Edit menu's Keyboard Shortcuts row, found in the menu the
+    /// bar draws, enabled by the bridge's own resolution and clicked through
+    /// the menu bar's handler, opens Preferences on the Keymap page.
+    #[test]
+    fn the_edit_menu_keyboard_shortcuts_row_is_live_and_opens_the_keymap_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        let edit = crate::menu_bridge::menus(&shell.editor)
+            .into_iter()
+            .find(|m| m.actions().contains(&ui::MenuAction::Undo))
+            .expect("the Edit menu");
+        assert!(
+            edit.actions().contains(&ui::MenuAction::KeyboardShortcuts),
+            "the Edit menu lists Keyboard Shortcuts"
+        );
+        let context = crate::menu_bridge::context(&mut shell.editor, shell.chrome.workspace());
+        let intent = crate::menu_bridge::resolve_intent(
+            ui::MenuAction::KeyboardShortcuts,
+            &context,
+            &shell.editor,
+        )
+        .expect("the Keyboard Shortcuts row is enabled");
+        let mut out = ChromeOutput::default();
+        shell.chrome.menu_click(intent, &shell.editor, &mut out);
+        assert!(
+            out.actions.is_empty() && out.menu.is_empty() && out.unrouted.is_empty(),
+            "the click was answered by the dialog host, not recorded: {:?} {:?}",
+            out.actions,
+            out.menu
+        );
+        let dialog = shell
+            .chrome
+            .dialogs_for_test()
+            .active_preferences_for_test();
+        assert_eq!(dialog.section(), ui::dialogs::PrefsSection::Keymap);
     }
 
     /// W3-G: every size readout the spec names follows the Units preference,
@@ -5909,6 +6022,102 @@ mod tests {
         assert!(
             status.contains("Drop failed"),
             "the failed file was reported: {status:?}"
+        );
+    }
+
+    /// XB: the W/H readout reaches the running app. A shape drag fed through
+    /// the shell's own pointer path (the one `window_event` uses) must leave
+    /// the chrome painting both numbers on its next frame, and the release
+    /// must take the label down — no hand-published readout anywhere.
+    #[test]
+    fn a_shape_drag_through_the_shell_paints_the_w_h_readout_until_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_ready_to_draw(dir.path());
+        shell.editor.set_tool(tools::ToolId::Rectangle);
+        let ctx = egui::Context::default();
+        crate::chrome::install_theme(&ctx, design::Theme::Dark);
+        let painted_text = |shell: &mut Shell| -> Vec<String> {
+            let mut texts = Vec::new();
+            // Two passes: the first frame is where egui learns the sizes.
+            for _ in 0..2 {
+                let output = ctx.run(egui::RawInput::default(), |ctx| {
+                    let _ = shell.chrome.ui(ctx, &mut shell.editor);
+                });
+                texts = output
+                    .shapes
+                    .iter()
+                    .filter_map(|clipped| match &clipped.shape {
+                        egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+                        _ => None,
+                    })
+                    .collect();
+            }
+            texts
+        };
+        let has_readout = |texts: &[String]| {
+            texts
+                .iter()
+                .any(|t| t.contains("W: 10 px") && t.contains("H: 7 px"))
+        };
+
+        point(&mut shell, PointerPhase::Down, Vec2::new(2.0, 3.0), false);
+        point(&mut shell, PointerPhase::Move, Vec2::new(12.0, 10.0), false);
+        let texts = painted_text(&mut shell);
+        assert!(
+            has_readout(&texts),
+            "a shape drag through the shell painted no W/H readout: {texts:?}"
+        );
+
+        point(&mut shell, PointerPhase::Up, Vec2::new(12.0, 10.0), false);
+        let texts = painted_text(&mut shell);
+        assert!(
+            !texts.iter().any(|t| t.contains("W: 10 px")),
+            "the released drag still paints a readout: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn escape_mid_shape_drag_takes_the_w_h_readout_down() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_ready_to_draw(dir.path());
+        shell.editor.set_tool(tools::ToolId::Rectangle);
+        let ctx = egui::Context::default();
+        crate::chrome::install_theme(&ctx, design::Theme::Dark);
+        let painted_text = |shell: &mut Shell| -> Vec<String> {
+            let mut texts = Vec::new();
+            for _ in 0..2 {
+                let output = ctx.run(egui::RawInput::default(), |ctx| {
+                    let _ = shell.chrome.ui(ctx, &mut shell.editor);
+                });
+                texts = output
+                    .shapes
+                    .iter()
+                    .filter_map(|clipped| match &clipped.shape {
+                        egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+                        _ => None,
+                    })
+                    .collect();
+            }
+            texts
+        };
+
+        point(&mut shell, PointerPhase::Down, Vec2::new(2.0, 3.0), false);
+        point(&mut shell, PointerPhase::Move, Vec2::new(12.0, 10.0), false);
+        let texts = painted_text(&mut shell);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("W: 10 px") && t.contains("H: 7 px")),
+            "precondition: the drag paints its W/H readout: {texts:?}"
+        );
+
+        // Escape (and focus loss) route through abandon_gesture, with no
+        // pointer sample after it.
+        assert!(shell.abandon_gesture(), "the live drag was cancelled");
+        let texts = painted_text(&mut shell);
+        assert!(
+            !texts.iter().any(|t| t.contains("W: 10 px")),
+            "a cancelled drag still paints its readout: {texts:?}"
         );
     }
 }

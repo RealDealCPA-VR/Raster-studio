@@ -114,6 +114,17 @@ pub struct Workspace {
     pub info: panels::navigator::InfoState,
     /// What the Properties panel is looking at.
     pub property_focus: panels::properties::PropertyFocus,
+    /// W3-X: the saved-selection row the Channels panel clicked this frame,
+    /// waiting for the chrome to route the `LoadSelection` action the click
+    /// emitted: the dialog host opens Load Selection on this row (or, for a
+    /// Ctrl+click, loads it directly) instead of on the most recent entry.
+    /// Taken with [`Workspace::take_pending_selection_load`].
+    pub pending_selection_load: Option<SelectionLoadRequest>,
+    /// W3-X: set when the Properties Transform block is drawn, taken by the
+    /// application once a frame ([`Workspace::take_transform_block_drawn`]),
+    /// so the raster-ink measurement only the block reads is made while the
+    /// block is on screen and not per frame.
+    transform_block_drawn: bool,
     /// The status bar's derived content.
     pub status: StatusBar,
     /// View overlays.
@@ -218,6 +229,16 @@ impl MaskViewMode {
     ];
 }
 
+/// W3-X: a click on one of the Channels panel's saved-selection rows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SelectionLoadRequest {
+    /// Index into the document's saved selections.
+    pub index: usize,
+    /// Ctrl+click (Photopea's shortcut on a channel thumbnail): load the row
+    /// as the new selection without asking.
+    pub direct: bool,
+}
+
 /// Index of a side in [`Workspace::rail_measure`].
 fn rail_slot(side: DockSide) -> usize {
     side.slot()
@@ -265,6 +286,8 @@ impl Workspace {
             mask_view: MaskViewMode::Composite,
             info: panels::navigator::InfoState::default(),
             property_focus: panels::properties::PropertyFocus::default(),
+            pending_selection_load: None,
+            transform_block_drawn: false,
             status: StatusBar::new(),
             view_flags: ViewFlags::defaults(),
             clipboard: ClipboardState::EMPTY,
@@ -378,6 +401,21 @@ impl Workspace {
     /// wherever the control lives.
     pub fn emit(&mut self, intent: Intent) {
         self.outbox.push(intent);
+    }
+
+    /// W3-X: the saved-selection row a Channels click asked to load, once.
+    pub fn take_pending_selection_load(&mut self) -> Option<SelectionLoadRequest> {
+        self.pending_selection_load.take()
+    }
+
+    /// W3-X: whether the Properties Transform block was drawn since the last
+    /// take.
+    pub fn take_transform_block_drawn(&mut self) -> bool {
+        std::mem::take(&mut self.transform_block_drawn)
+    }
+
+    pub(crate) fn note_transform_block_drawn(&mut self) {
+        self.transform_block_drawn = true;
     }
 
     /// Take everything queued this frame.

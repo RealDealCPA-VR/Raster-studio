@@ -168,6 +168,10 @@ pub enum UnitChoice {
     Cm,
     Mm,
     Pt,
+    /// Picas, six to the inch. Added after the file format shipped: an older
+    /// file never names it, and every name an older file can hold still reads
+    /// as before, so the addition is backward compatible by construction.
+    Pc,
     Percent,
 }
 
@@ -179,22 +183,24 @@ impl From<UnitChoice> for ui::dialogs::Unit {
             UnitChoice::Cm => Self::Centimeters,
             UnitChoice::Mm => Self::Millimeters,
             UnitChoice::Pt => Self::Points,
+            UnitChoice::Pc => Self::Picas,
             UnitChoice::Percent => Self::Percent,
         }
     }
 }
 
 impl From<ui::dialogs::Unit> for UnitChoice {
-    /// Picas are not a preference choice (no ruler reads in them); they fall
-    /// back to pixels, the same answer the dialog's sanitizer gives.
+    /// Lossless: every unit View ▸ Rulers offers has its own choice, so the
+    /// unit a ruler menu pick persists is the unit the next launch restores.
     fn from(u: ui::dialogs::Unit) -> Self {
         match u {
+            ui::dialogs::Unit::Pixels => Self::Px,
             ui::dialogs::Unit::Inches => Self::In,
             ui::dialogs::Unit::Centimeters => Self::Cm,
             ui::dialogs::Unit::Millimeters => Self::Mm,
             ui::dialogs::Unit::Points => Self::Pt,
+            ui::dialogs::Unit::Picas => Self::Pc,
             ui::dialogs::Unit::Percent => Self::Percent,
-            ui::dialogs::Unit::Pixels | ui::dialogs::Unit::Picas => Self::Px,
         }
     }
 }
@@ -535,13 +541,70 @@ mod tests {
             UnitChoice::Cm,
             UnitChoice::Mm,
             UnitChoice::Pt,
+            UnitChoice::Pc,
             UnitChoice::Percent,
         ] {
             let dialog: ui::dialogs::Unit = u.into();
             assert!(ui::dialogs::Unit::PREFERENCE_CHOICES.contains(&dialog));
             assert_eq!(UnitChoice::from(dialog), u);
         }
-        assert_eq!(UnitChoice::from(ui::dialogs::Unit::Picas), UnitChoice::Px);
+    }
+
+    /// W3-X: View ▸ Rulers lists every unit, so every one of them must
+    /// survive the trip into the preference and back — Picas used to land as
+    /// pixels.
+    #[test]
+    fn every_unit_the_rulers_offer_survives_the_preference_round_trip() {
+        for unit in ui::dialogs::Unit::ALL {
+            let back: ui::dialogs::Unit = UnitChoice::from(*unit).into();
+            assert_eq!(back, *unit);
+        }
+    }
+
+    #[test]
+    fn picas_are_saved_by_name_and_restored_by_a_fresh_load() {
+        let dir = tmp();
+        let path = dir.path().join("preferences.json");
+        let prefs = Preferences {
+            units: UnitChoice::from(ui::dialogs::Unit::Picas),
+            ..Preferences::default()
+        };
+        prefs.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(r#""units": "pc""#), "{text}");
+        let loaded = Preferences::load(&path);
+        assert_eq!(loaded.units, UnitChoice::Pc);
+        assert_eq!(
+            ui::dialogs::Unit::from(loaded.units),
+            ui::dialogs::Unit::Picas
+        );
+    }
+
+    #[test]
+    fn a_file_written_before_picas_existed_still_loads_every_unit_it_could_name() {
+        let dir = tmp();
+        let path = dir.path().join("preferences.json");
+        for (name, unit) in [
+            ("px", UnitChoice::Px),
+            ("in", UnitChoice::In),
+            ("cm", UnitChoice::Cm),
+            ("mm", UnitChoice::Mm),
+            ("pt", UnitChoice::Pt),
+            ("percent", UnitChoice::Percent),
+        ] {
+            std::fs::write(
+                &path,
+                format!(r#"{{"theme":"dark","ui_scale":1.25,"units":"{name}"}}"#),
+            )
+            .unwrap();
+            let p = Preferences::load(&path);
+            assert_eq!(p.units, unit, "{name}");
+            assert_eq!(
+                p.theme,
+                ThemeChoice::Dark,
+                "{name}: the rest of the file was kept"
+            );
+        }
     }
 
     #[test]

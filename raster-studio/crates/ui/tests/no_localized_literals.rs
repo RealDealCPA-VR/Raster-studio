@@ -6,13 +6,15 @@
 //! A string literal with a space and prose-like casing, in non-test code. The
 //! exemptions below are each a *decision*, documented inline:
 //!
-//! * **Const-table data.** `filter_dialog`'s option specs, `new_document`'s
-//!   presets and preferences' keymap table are `const` arrays feeding shared
-//!   schemas (`tools::OptionSpec`, `DocumentPreset`, the keymap registry). A
-//!   fn call cannot live in a `const` initialiser; resolving their labels
-//!   needs a key-field refactor of those shared types (the gradient editor's
-//!   presets already did it — see its `name_key`). Until that refactor lands,
-//!   literals inside `const` items are exempt and the exemption is counted.
+//! * **Const-table data.** `filter_dialog`'s option specs and
+//!   `new_document`'s presets are `const` arrays feeding shared schemas
+//!   (`tools::OptionSpec`, `DocumentPreset`). A fn call cannot live in a
+//!   `const` initialiser; resolving their labels needs a key-field refactor of
+//!   those shared types (the gradient editor's presets already did it — see
+//!   its `name_key`). Until that refactor lands, those files are exempt.
+//! * **Named literals.** `preferences.rs` is not exempt as a file: only the
+//!   exact literals listed in [`EXEMPT_LITERALS`] are, each with its reason,
+//!   so any new prose there fails the gate like it would anywhere else.
 //! * **Identifiers, never shown**: egui ids, icon keys, catalogue keys,
 //!   format templates (`{}`/`{x}`), serde field names.
 //! * **Assert and log messages**: developer-facing, never rendered as UI.
@@ -38,12 +40,22 @@ const EXEMPT_FILES: &[(&str, &str)] = &[
         "the preset const table feeds DocumentPreset; same refactor shape as \
          the gradient editor's name_key",
     ),
-    (
-        "src/dialogs/preferences.rs",
-        "the keymap registry table feeds the shortcut list; the enum-label \
-         const fns resolve at their display sites",
-    ),
 ];
+
+/// Single literals exempt by decision, per file, with the reason a reviewer
+/// reads. Everything else in these files is scanned like any other file.
+const EXEMPT_LITERALS: &[(&str, &[&str], &str)] = &[(
+    "src/dialogs/preferences.rs",
+    &[
+        "Keyboard Shortcuts",
+        "Restore Defaults",
+        "Autosave is off: a crash loses everything since the last save.",
+    ],
+    "the Keymap page's sidebar label (returned by the const fn \
+     PrefsSection::label, which cannot call tr), the Restore Defaults button \
+     label and the autosave-off caption have no catalogue keys in strings.rs \
+     yet; each moves to tr() when its key lands",
+)];
 
 /// Literals that are identifiers or templates, not prose. A literal is exempt
 /// when it contains no space (ids, keys, single words), contains a `{`
@@ -141,7 +153,15 @@ fn no_user_facing_literal_remains_in_view_or_dialog_modules() {
                 }
                 continue;
             }
+            let allowed: &[&str] = EXEMPT_LITERALS
+                .iter()
+                .find(|(f, _, _)| *f == rel)
+                .map(|(_, lits, _)| *lits)
+                .unwrap_or(&[]);
             for lit in prose_literals(&strip_noise(&source)) {
+                if allowed.contains(&lit.as_str()) {
+                    continue;
+                }
                 offenders.push(format!("{rel}: {lit:?}"));
             }
         }
@@ -158,6 +178,19 @@ fn no_user_facing_literal_remains_in_view_or_dialog_modules() {
              refactor that emptied it should land together"
         );
         let _ = reason;
+    }
+    // A named literal no longer in its file moved to tr(): its exemption goes
+    // with it, so the list can only shrink.
+    for (file, lits, reason) in EXEMPT_LITERALS {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
+        let literals = prose_literals(&strip_noise(&std::fs::read_to_string(path).unwrap()));
+        for lit in *lits {
+            assert!(
+                literals.contains(*lit),
+                "{file}: {lit:?} is exempt but no longer present; drop it from \
+                 EXEMPT_LITERALS ({reason})"
+            );
+        }
     }
     assert!(
         offenders.is_empty(),

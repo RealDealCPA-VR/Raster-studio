@@ -73,22 +73,22 @@ impl std::error::Error for GeometryError {}
 /// puts every overlay where the *upright* view would show the pixel — a
 /// quarter turn away from the picture.
 ///
-/// Not yet the only mirror: `tool_input::canvas_camera_of` (tool_input.rs,
-/// owned by the tools wave W3-A) STILL hard-codes `rotation: 0.0`, and the
-/// shell (shell.rs), the chrome (chrome.rs) and the dialog host
-/// (dialog_host.rs) still route pointer input through it. Until W3-A points
-/// those callers here (or makes that function carry `camera.rotation`), the
-/// tool router converts on an upright camera even when this one is turned.
+/// The **view mirror** is carried the same way: `render::Camera::flip_x` /
+/// `flip_y` and `CanvasCamera`'s flags mean the same on-screen mirror about
+/// the viewport centre, applied after the rotation (`F · S · R`), so a click
+/// on a flipped view lands on the mirrored pixel the renderer draws there.
+/// (In this build the running app never sets the flags: View > Flip is still
+/// greyed by the chrome. See `tool_input`'s module docs.)
 ///
-/// Flip is not carried: `render::Camera` has no flip, so neither does its
-/// mirror.
+/// It is the only mirror: `tool_input::canvas_camera_of`, which the pointer
+/// router, the shell, the chrome and the dialog host call, delegates here.
 pub fn canvas_camera_of(camera: &render::Camera) -> CanvasCamera {
     CanvasCamera {
         center: camera.center,
         zoom: camera.zoom,
         rotation: camera.rotation,
-        flip_x: false,
-        flip_y: false,
+        flip_x: camera.flip_x,
+        flip_y: camera.flip_y,
     }
 }
 
@@ -361,6 +361,58 @@ mod tests {
         assert!(
             (right.x - 256.0).abs() < 1e-2 && (right.y - (144.0 - 40.0)).abs() < 1e-2,
             "screen right of centre is document {right:?}, expected (256, 104)"
+        );
+    }
+
+    /// A mirrored view: the interaction camera carries both flip flags, a
+    /// pointer hit lands on the mirrored pixel (the one `render::Camera`
+    /// draws there), and screen -> document -> screen round-trips, with a
+    /// turn in force as well.
+    #[test]
+    fn the_interaction_camera_honours_the_view_mirror() {
+        let surface = Vec2::new(400.0, 300.0);
+        let vp = crate::tool_input::canvas_viewport(surface);
+        let mut render_cam = render::Camera::new(Vec2::new(512.0, 288.0), surface);
+        render_cam.zoom = 2.0;
+        render_cam.center = Vec2::new(256.0, 144.0);
+        for (fx, fy) in [(true, false), (false, true), (true, true)] {
+            for angle in [0.0, 0.6, std::f32::consts::FRAC_PI_2] {
+                render_cam.flip_x = fx;
+                render_cam.flip_y = fy;
+                render_cam.set_rotation(angle);
+                let mirror = canvas_camera_of(&render_cam);
+                assert_eq!((mirror.flip_x, mirror.flip_y), (fx, fy));
+                for screen in [
+                    Vec2::new(0.0, 0.0),
+                    Vec2::new(37.0, 250.0),
+                    Vec2::new(260.0, 110.0),
+                ] {
+                    let via_ui = screen_to_document(&mirror, &vp, screen);
+                    let via_render = render_cam.screen_to_image(screen);
+                    assert!(
+                        (via_ui - via_render).length() < 1e-2,
+                        "flip ({fx},{fy}) angle {angle}: screen {screen:?} is {via_ui:?} \
+                         to the pointer and {via_render:?} to the renderer"
+                    );
+                    let back = document_to_screen(&mirror, &vp, via_ui);
+                    assert!((back - screen).length() < 1e-2, "{screen:?} -> {back:?}");
+                }
+            }
+        }
+        // The hit really is mirrored: upright, flip H, a pointer 60 px right
+        // of the window centre is the document 30 px LEFT of the camera
+        // centre.
+        render_cam.set_rotation(0.0);
+        render_cam.flip_x = true;
+        render_cam.flip_y = false;
+        let hit = screen_to_document(
+            &canvas_camera_of(&render_cam),
+            &vp,
+            surface * 0.5 + Vec2::new(60.0, 0.0),
+        );
+        assert!(
+            (hit - Vec2::new(226.0, 144.0)).length() < 1e-2,
+            "the hit is not mirrored: {hit:?}"
         );
     }
 

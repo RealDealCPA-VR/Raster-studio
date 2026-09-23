@@ -49,14 +49,16 @@ impl Unit {
     ];
 
     /// The units the Preferences dialog offers as the application-wide
-    /// measurement unit — what the rulers and the size readouts use. Picas are
-    /// left to the size dialogs' own menus: no ruler reads in picas.
+    /// measurement unit — what the rulers and the size readouts use. It is
+    /// every unit View ▸ Rulers offers (Picas included), so a unit picked on
+    /// the ruler menu is one the Preferences dialog can show and keep.
     pub const PREFERENCE_CHOICES: &'static [Unit] = &[
         Self::Pixels,
         Self::Inches,
         Self::Centimeters,
         Self::Millimeters,
         Self::Points,
+        Self::Picas,
         Self::Percent,
     ];
 
@@ -355,7 +357,14 @@ mod tests {
         for unit in Unit::PREFERENCE_CHOICES {
             assert!(Unit::ALL.contains(unit));
         }
-        assert!(!Unit::PREFERENCE_CHOICES.contains(&Unit::Picas));
+        // Every unit the ruler menu lists is a preference the dialog can hold,
+        // or a ruler pick would be reverted by the next Preferences OK.
+        for unit in crate::canvas::rulers::Unit::ALL {
+            assert!(
+                Unit::PREFERENCE_CHOICES.contains(&Unit::from(*unit)),
+                "{unit:?} is on View > Rulers but not in Preferences"
+            );
+        }
     }
 
     #[test]

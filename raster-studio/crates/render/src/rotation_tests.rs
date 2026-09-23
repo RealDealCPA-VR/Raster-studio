@@ -153,3 +153,114 @@ fn zero_rotation_is_the_classic_frame() {
         img.pixel(18, 18)
     );
 }
+
+/// Every pixel of `got` against `want(x, y)`, which names the pixel of the
+/// reference frame that must appear at `(x, y)`.
+fn assert_frame_is(
+    got: &Readback,
+    reference: &Readback,
+    size: u32,
+    want: impl Fn(u32, u32) -> (u32, u32),
+    what: &str,
+) {
+    let mut mismatches = Vec::new();
+    for y in 0..size {
+        for x in 0..size {
+            let (rx, ry) = want(x, y);
+            let expected = reference.pixel(rx, ry);
+            let actual = got.pixel(x, y);
+            if !close(actual, expected, 3) {
+                mismatches.push(((x, y), actual, expected));
+            }
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "{what}: {} of {} pixels differ; first: {:?}",
+        mismatches.len(),
+        size * size,
+        &mismatches[..mismatches.len().min(6)]
+    );
+}
+
+/// View > Flip Horizontal renders the upright frame column-reversed: pixel
+/// `(x, y)` of the flipped frame is pixel `(S-1-x, y)` of the upright one —
+/// image, pasteboard and the checkerboard through the hole alike. With eight
+/// 8-px cells a side, a checker that stayed nailed to the window has the
+/// opposite parity under the reversal and fails this comparison.
+#[test]
+fn flip_horizontal_renders_the_column_reversed_frame() {
+    let Some(gpu) = gpu() else { return };
+    let source = quadrant_source(&gpu);
+    let size = 64u32;
+    let upright = Camera::new(Vec2::splat(32.0), Vec2::splat(size as f32));
+    let mut flipped = upright.clone();
+    flipped.flip_horizontal();
+
+    let a = render(&gpu, &source, &upright, size);
+    let b = render(&gpu, &source, &flipped, size);
+    assert_ne!(a, b, "the flipped frame is identical to the upright one");
+    assert_frame_is(&b, &a, size, |x, y| (size - 1 - x, y), "flip H");
+
+    // Landmarks: the red top-left quadrant is now top-RIGHT, and the hole
+    // (doc [0,8)^2) sits at screen [40,48)x[16,24) showing the checker.
+    assert!(
+        close(b.pixel(36, 28), [255, 0, 0, 255], 3),
+        "{:?}",
+        b.pixel(36, 28)
+    );
+    let light = render_shaders::CHECKER_LIGHT_SRGB_U8;
+    let dark = render_shaders::CHECKER_DARK_SRGB_U8;
+    let hole = b.pixel(44, 20);
+    assert!(
+        close(hole, [light, light, light, 255], 3) || close(hole, [dark, dark, dark, 255], 3),
+        "the hole did not mirror with the picture: {hole:?}"
+    );
+
+    // And Flip Vertical is the row-reversed frame.
+    let mut v = upright.clone();
+    v.flip_vertical();
+    let c = render(&gpu, &source, &v, size);
+    assert_frame_is(&c, &a, size, |x, y| (x, size - 1 - y), "flip V");
+}
+
+/// Flip then unflip is the identity: the frame is exactly the upright one.
+#[test]
+fn flip_then_unflip_renders_the_upright_frame() {
+    let Some(gpu) = gpu() else { return };
+    let source = quadrant_source(&gpu);
+    let size = 64u32;
+    let upright = Camera::new(Vec2::splat(32.0), Vec2::splat(size as f32));
+    let mut cam = upright.clone();
+    cam.flip_horizontal();
+    cam.flip_vertical();
+    cam.flip_horizontal();
+    cam.flip_vertical();
+    assert_eq!(
+        render(&gpu, &source, &cam, size),
+        render(&gpu, &source, &upright, size)
+    );
+}
+
+/// A mirror composes with a quarter turn: Flip Horizontal plus a quarter
+/// turn clockwise renders the upright frame transposed (screen = F·R·doc, so
+/// pixel `(x, y)` shows upright pixel `(y, x)`), and undoing both returns
+/// the upright frame.
+#[test]
+fn flip_plus_a_quarter_turn_round_trips() {
+    let Some(gpu) = gpu() else { return };
+    let source = quadrant_source(&gpu);
+    let size = 64u32;
+    let upright = Camera::new(Vec2::splat(32.0), Vec2::splat(size as f32));
+    let mut cam = upright.clone();
+    cam.flip_horizontal();
+    cam.rotate_by(std::f32::consts::FRAC_PI_2);
+
+    let a = render(&gpu, &source, &upright, size);
+    let b = render(&gpu, &source, &cam, size);
+    assert_frame_is(&b, &a, size, |x, y| (y, x), "flip H + 90");
+
+    cam.rotate_by(-std::f32::consts::FRAC_PI_2);
+    cam.flip_horizontal();
+    assert_eq!(render(&gpu, &source, &cam, size), a);
+}

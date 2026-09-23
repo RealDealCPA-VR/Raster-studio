@@ -1948,9 +1948,18 @@ fn transform_block(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) 
     }
     design::section_header(ui, "Transform");
     // Raster ink is measured by the application, which holds the tile
-    // bytes, and published each frame (`RasterInks::publish`).
+    // bytes, and published (`RasterInks::publish`) only while this block is
+    // drawn and only when the layer changed: the note tells it the block is
+    // on screen.
+    w.note_transform_block_drawn();
     let inks = props::RasterInks::published(ui.ctx());
     let Some(frame) = props::Transform::frame(doc, id, &inks) else {
+        // Just opened, or the layer changed while the block was closed: the
+        // measurement arrives on the next frame, so ask for one rather than
+        // waiting for the pointer to move.
+        if ink_pending(doc, id, &inks) {
+            ui.ctx().request_repaint();
+        }
         ui.label(hint(
             ui,
             crate::strings::tr("ui.docks.properties.nothing.to.measure"),
@@ -2008,6 +2017,29 @@ fn transform_block(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) 
     for command in commands.into_iter().flatten() {
         w.emit(Intent::Document(command));
     }
+}
+
+/// Whether a pixel-owning layer at or under `id` has no raster-ink
+/// measurement for the tiles it holds now — the one case a next frame fixes.
+/// An empty layer is measured (`rect: None`), so it is never pending.
+fn ink_pending(doc: &Document, id: LayerId, inks: &props::RasterInks) -> bool {
+    const MAX_DEPTH: usize = 64;
+    let mut stack = vec![(id, 0usize)];
+    while let Some((id, depth)) = stack.pop() {
+        let Some(layer) = doc.layers.get(id) else {
+            continue;
+        };
+        match &layer.kind {
+            layer_model::LayerKind::Group(g) if depth < MAX_DEPTH => {
+                stack.extend(g.children.iter().map(|&c| (c, depth + 1)));
+            }
+            kind if props::RasterInk::owns_pixels(kind) && inks.current(doc, id).is_none() => {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// The text page: family, size, weight and fill, mirroring the Character
@@ -3737,8 +3769,10 @@ fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Histo
 /// the colour and mask channels as Photopea lists its alpha channels: one row
 /// per name, oldest first, each with the mask glyph in its well. A click
 /// opens Select > Load Selection -- the dialog that restores a saved
-/// selection by name with New / Add / Subtract / Intersect -- so the row never
-/// promises an action no route performs.
+/// selection by name with New / Add / Subtract / Intersect -- on the row that
+/// was clicked ([`Workspace::pending_selection_load`]); a Ctrl+click loads
+/// that row as the new selection directly. The row never promises an action
+/// no route performs.
 fn saved_selection_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     for (index, (name, _)) in doc.saved_selections.iter().enumerate() {
         let response = row_layout(ui, |ui| {
@@ -3764,6 +3798,11 @@ fn saved_selection_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             .interact(response, saved_selection_row_id(index), Sense::click())
             .on_hover_text(crate::strings::tr("ui.docks.channels.saved.hint"));
         if response.clicked() {
+            // W3-X: the row that was clicked, not the most recent entry. A
+            // Ctrl+click loads it as the selection without asking, as
+            // Photopea's Ctrl+click on a channel thumbnail does.
+            let direct = ui.input(|i| i.modifiers.command);
+            w.pending_selection_load = Some(crate::SelectionLoadRequest { index, direct });
             w.emit(Intent::Action(crate::menu::MenuAction::LoadSelection));
         }
     }
@@ -4142,6 +4181,49 @@ mod tests {
         assert_eq!(
             w.drain_intents(),
             vec![Intent::Action(crate::menu::MenuAction::LoadSelection)]
+        );
+        // W3-X: the click names the row it landed on, so the dialog can open
+        // on "Keep" rather than on the most recent entry.
+        assert_eq!(
+            w.take_pending_selection_load(),
+            Some(crate::SelectionLoadRequest {
+                index: 1,
+                direct: false
+            })
+        );
+
+        // Ctrl+click on the first row asks for a direct load of that row.
+        let first_rect = ctx
+            .read_response(saved_selection_row_id(0))
+            .expect("the first row is interactive")
+            .rect;
+        let ctrl_click = |pressed: bool| egui::Event::PointerButton {
+            pos: first_rect.center(),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        let mut input = raw();
+        input.modifiers = egui::Modifiers::COMMAND;
+        input.events = vec![
+            egui::Event::PointerMoved(first_rect.center()),
+            ctrl_click(true),
+        ];
+        let _ = frame(&mut w, input);
+        let mut input = raw();
+        input.modifiers = egui::Modifiers::COMMAND;
+        input.events = vec![ctrl_click(false)];
+        let _ = frame(&mut w, input);
+        assert_eq!(
+            w.drain_intents(),
+            vec![Intent::Action(crate::menu::MenuAction::LoadSelection)]
+        );
+        assert_eq!(
+            w.take_pending_selection_load(),
+            Some(crate::SelectionLoadRequest {
+                index: 0,
+                direct: true
+            })
         );
     }
 

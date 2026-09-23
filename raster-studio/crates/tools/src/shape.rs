@@ -539,6 +539,9 @@ pub struct ShapeTool {
     pub paint: ShapePaint,
     anchor: Option<Vec2>,
     current: Option<Vec2>,
+    /// Shift as the last pointer sample carried it, so the live preview and
+    /// the W/H readout show the constrained box the release will commit.
+    shift: bool,
 }
 
 impl ShapeTool {
@@ -550,19 +553,22 @@ impl ShapeTool {
             paint: ShapePaint::default(),
             anchor: None,
             current: None,
+            shift: false,
         }
     }
 
     /// The path as it would commit right now, for the live overlay.
     pub fn preview(&self) -> Option<Path> {
-        let (a, b) = self.corners(self.current?, false);
+        let (a, b) = self.corners(self.current?, self.shift);
         path_for(&self.kind, a, b).ok()
     }
 
-    /// The width and height of the box being dragged, in document pixels —
-    /// the W/H readout. `None` between gestures.
+    /// The width and height of the box being dragged, in document pixels.
+    /// `None` between gestures. The value behind [`Tool::live_readout`],
+    /// which the app shell publishes to its chrome after each pointer sample
+    /// so the W/H label is drawn by the pointer.
     pub fn drag_size(&self) -> Option<Vec2> {
-        let (a, b) = self.corners(self.current?, false);
+        let (a, b) = self.corners(self.current?, self.shift);
         Some((b - a).abs())
     }
 
@@ -609,6 +615,7 @@ impl Tool for ShapeTool {
         crate::error::finite_pt("shape anchor", event.pos)?;
         self.anchor = Some(event.pos);
         self.current = Some(event.pos);
+        self.shift = event.modifiers.shift;
         Ok(())
     }
 
@@ -619,6 +626,7 @@ impl Tool for ShapeTool {
     ) -> Result<(), ToolError> {
         if self.anchor.is_some() {
             self.current = Some(event.pos);
+            self.shift = event.modifiers.shift;
         }
         Ok(())
     }
@@ -634,6 +642,7 @@ impl Tool for ShapeTool {
         let (a, b) = self.corners(event.pos, event.modifiers.shift);
         self.anchor = None;
         self.current = None;
+        self.shift = false;
         let path = path_for(&self.kind, a, b)?;
 
         match self.mode {
@@ -660,10 +669,22 @@ impl Tool for ShapeTool {
     fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {
         self.anchor = None;
         self.current = None;
+        self.shift = false;
     }
 
     fn is_active(&self) -> bool {
         self.anchor.is_some()
+    }
+
+    /// The W/H of the box being dragged, anchored at the pointer — what the
+    /// chrome labels beside the cursor. `None` between gestures.
+    fn live_readout(&self) -> Option<crate::tool::LiveReadout> {
+        let size = self.drag_size()?;
+        Some(crate::tool::LiveReadout {
+            width_px: size.x,
+            height_px: size.y,
+            anchor: self.current?,
+        })
     }
 
     /// Every option the registry declares for a shape tool reaches the tool:
@@ -968,6 +989,51 @@ mod tests {
         assert_eq!(tool.drag_size(), Some(Vec2::new(120.0, 60.0)));
         Tool::cancel(&mut tool, &mut ctx);
         assert_eq!(tool.drag_size(), None);
+    }
+
+    /// XB: the readout a shell reads through `dyn Tool` is the dragged box,
+    /// anchored at the pointer, shift-constrained exactly as the release
+    /// will commit it — and gone once the gesture ends.
+    #[test]
+    fn a_shape_drag_publishes_a_live_readout_until_release() {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 256, 256));
+        let mut boxed: Box<dyn Tool> = Box::new(ShapeTool::default());
+        let tool = boxed.as_mut();
+        assert_eq!(tool.live_readout(), None);
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(10.0, 20.0))
+            .unwrap();
+        tool.on_pointer_move(&mut ctx, PointerEvent::at(133.0, 77.0))
+            .unwrap();
+        assert_eq!(
+            tool.live_readout(),
+            Some(crate::tool::LiveReadout {
+                width_px: 123.0,
+                height_px: 57.0,
+                anchor: Vec2::new(133.0, 77.0),
+            })
+        );
+        // Shift squares the box on release, so the readout squares it too.
+        let shifted = PointerEvent::at(133.0, 77.0).with_modifiers(crate::tool::Modifiers::shift());
+        tool.on_pointer_move(&mut ctx, shifted).unwrap();
+        let readout = tool.live_readout().expect("still dragging");
+        assert_eq!((readout.width_px, readout.height_px), (123.0, 123.0));
+        tool.on_pointer_up(&mut ctx, shifted).unwrap();
+        assert_eq!(tool.live_readout(), None);
+        // What was committed is the box the readout showed.
+        let committed = created_shape(&mut ctx);
+        let square = path_for(
+            &ShapeKind::Rectangle,
+            Vec2::new(10.0, 20.0),
+            Vec2::new(133.0, 143.0),
+        )
+        .unwrap();
+        assert_eq!(
+            committed.path_svg,
+            ShapePaint::default()
+                .layer(&square, ctx.foreground)
+                .path_svg
+        );
     }
 
     /// Rasterise a 20..100 x 20..100 rectangle with `configure`'s paint into

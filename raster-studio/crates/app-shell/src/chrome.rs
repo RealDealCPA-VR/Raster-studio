@@ -479,6 +479,10 @@ pub fn chord_from_egui(key: egui::Key, mods: egui::Modifiers) -> Option<Chord> {
 /// document or in the editor.
 #[derive(Default)]
 pub struct Chrome {
+    /// XB: the live tool's pointer readout (a shape drag's W/H), published by
+    /// the shell's pointer handler (`Shell::on_pointer`, after each tool
+    /// sample) through [`Chrome::publish_tool_readout`].
+    live_readout: Option<(crate::doc::DocumentId, tools::tool::LiveReadout)>,
     /// W3-A: View ▸ Extras — rulers, guides, grid, layer edges, precise
     /// cursor — painted over the composite. See [`crate::canvas_extras`].
     extras: crate::canvas_extras::CanvasExtras,
@@ -525,6 +529,12 @@ pub struct Chrome {
     /// sample was read at, so the 1x1 composite runs when either moves and
     /// not per frame. See [`Chrome::refresh_info_sample`].
     info_sample_at: Option<(u64, egui::Pos2)>,
+    /// W3-X: the (revision, active tab, active layer) the raster inks were
+    /// last measured at. See [`Chrome::publish_raster_inks`].
+    inks_published_at: Option<(u64, Option<usize>, Option<LayerId>)>,
+    /// W3-X: how many times [`Chrome::publish_raster_inks`] measured — the
+    /// counter its gate is tested by.
+    ink_publishes: usize,
     /// What the docks are drawn against while no document is open: a
     /// document with no layers and an empty history, so every panel shows
     /// its header over an empty body — Photopea's start state — rather than
@@ -543,21 +553,12 @@ pub struct Chrome {
 /// W3-A: why a View toggle cannot be turned on in *this application*, or
 /// `None` when it can.
 ///
-/// The `ui` crate's own reasons ([`ui::view_flag_unavailable`]: Proof Colors,
-/// Gamut Warning) plus the two this shell adds: the `ui` canvas host mirrors
-/// its camera for Flip View, but the image here is the wgpu composite, whose
-/// `render::Camera` has no mirror — ticking the item would flip the overlays
-/// and not the picture under them.
+/// Exactly the `ui` crate's own reasons ([`ui::view_flag_unavailable`]:
+/// Proof Colors, Gamut Warning). Flip View is honoured: `render::Camera`
+/// mirrors, and [`Chrome::ui`] copies the checkmarks onto the active
+/// document's camera every frame through [`crate::tool_input::apply_view_flips`].
 pub fn view_flag_refusal(flag: ui::ViewFlag) -> Option<&'static str> {
-    match flag {
-        ui::ViewFlag::FlipHorizontal => {
-            Some("Flip View Horizontal is not available: the canvas renderer cannot mirror the view in this build")
-        }
-        ui::ViewFlag::FlipVertical => {
-            Some("Flip View Vertical is not available: the canvas renderer cannot mirror the view in this build")
-        }
-        other => ui::view_flag_unavailable(other),
-    }
+    ui::view_flag_unavailable(flag)
 }
 
 /// Where this frame's window is, and where the part of it the user can see the
@@ -858,17 +859,34 @@ impl Chrome {
         }
     }
 
-    /// W2-X: the bounded downsample of the active composite the Navigator
-    /// draws under its view box and the Histogram counts, rebuilt only when
-    /// [`Editor::revision`] moves — never per frame — and read from the
-    /// canvas in bands (see [`composite_preview`]) so the peak buffer is one
-    /// band rather than the whole canvas.
     /// W3-J: the Properties panel's Transform block measures a raster
     /// layer by its alpha ink, which only the tile bytes held here can
     /// answer. Measure the active layer (and, for a group, the layers under
     /// it) through the compositor's hash-cached `alpha_bounds` and hand the
-    /// result to the panel for this frame.
-    fn publish_raster_inks(ctx: &egui::Context, editor: &Editor) {
+    /// result to the panel.
+    ///
+    /// W3-X: only the Transform block reads it, and the block is closed by
+    /// default, so this runs only when the block was drawn last frame
+    /// ([`ui::Workspace::take_transform_block_drawn`]) AND the editor
+    /// revision or the active layer moved since the last measurement — never
+    /// per frame. The block asks for a repaint when it finds no current
+    /// measurement, so opening it costs one frame, not a pointer move.
+    fn publish_raster_inks(&mut self, ctx: &egui::Context, editor: &Editor) {
+        if !self.workspace.take_transform_block_drawn() {
+            return;
+        }
+        let key = (
+            editor.revision(),
+            editor.active_index(),
+            editor
+                .active()
+                .and_then(|open| open.document.active_layer()),
+        );
+        if self.inks_published_at == Some(key) {
+            return;
+        }
+        self.inks_published_at = Some(key);
+        self.ink_publishes += 1;
         editor
             .active()
             .and_then(|open| {
@@ -883,6 +901,11 @@ impl Chrome {
             .publish(ctx);
     }
 
+    /// W2-X: the bounded downsample of the active composite the Navigator
+    /// draws under its view box and the Histogram counts, rebuilt only when
+    /// [`Editor::revision`] moves — never per frame — and read from the
+    /// canvas in bands (see [`composite_preview`]) so the peak buffer is one
+    /// band rather than the whole canvas.
     fn refresh_composite_preview(&mut self, ctx: &egui::Context, editor: &mut Editor) {
         let revision = editor.revision();
         let Some(open) = editor.active_mut() else {
@@ -1006,8 +1029,16 @@ impl Chrome {
         self.read_gesture(ctx);
         self.sync_workspace(editor);
         self.refresh_layer_thumbs(ctx, editor);
+        // View > Flip Horizontal / Vertical: the checkmarks are the
+        // authority, the document camera is what the renderer and the pointer
+        // read. A change owes one more frame so the picture follows at once.
+        if let Some(doc) = editor.active_mut() {
+            if crate::tool_input::apply_view_flips(self.workspace.view_flags, &mut doc.camera) {
+                ctx.request_repaint();
+            }
+        }
         self.refresh_composite_preview(ctx, editor);
-        Self::publish_raster_inks(ctx, editor);
+        self.publish_raster_inks(ctx, editor);
         // W2-X: Photopea's F. Both full-screen modes drop the options bar,
         // the tool column and the docks; the last drops the menu bar too. The
         // editor's Tab flag still hides the panels on its own in Standard.
@@ -1072,6 +1103,7 @@ impl Chrome {
         // (card 012). After the docks, so the canvas rectangle is what the
         // docks left; clipped to it, because a panel must never grow handles.
         self.paint_live_tool_geometry(ctx, editor);
+        self.paint_live_readout(ctx, editor);
         // The modal dialog host, after the docks: a dialog floats over
         // everything and, opened by a click this frame, draws from the next
         // one — so the click that opened it is never the click that lands on
@@ -1345,6 +1377,86 @@ impl Chrome {
         }
     }
 
+    /// XB: publish (or clear, with `None`) the live tool's pointer readout —
+    /// the shape tools' W/H. The shell calls this with
+    /// [`crate::tool_input::ToolPointer::live_readout`] after every pointer
+    /// sample it hands the tools (so a release clears it) and after
+    /// abandoning a gesture on Escape or focus loss (so a cancel clears it).
+    pub fn publish_tool_readout(
+        &mut self,
+        readout: Option<(crate::doc::DocumentId, tools::tool::LiveReadout)>,
+    ) {
+        self.live_readout = readout;
+    }
+
+    /// XB: the W/H label beside the pointer while a shape is dragged
+    /// (Photopea's cursor readout), in the Units preference, token-styled, on
+    /// the overlay layer over the canvas. Nothing is painted without a
+    /// published readout or when it belongs to a document not in front.
+    fn paint_live_readout(&self, ctx: &egui::Context, editor: &Editor) {
+        let Some((doc_id, readout)) = self.live_readout else {
+            return;
+        };
+        let Some(doc) = editor.active().filter(|d| d.id() == doc_id) else {
+            return;
+        };
+        let camera = crate::tool_input::canvas_camera_of(&doc.camera);
+        let viewport = crate::tool_input::canvas_viewport(doc.camera.viewport_size);
+        let pointer =
+            crate::interaction_geometry::document_to_screen(&camera, &viewport, readout.anchor);
+        if !pointer.is_finite() {
+            return;
+        }
+        let unit = match editor.display_unit() {
+            ui::dialogs::Unit::Percent => ui::dialogs::Unit::Pixels,
+            other => other,
+        };
+        let ppi = ui::dialogs::units::DEFAULT_PPI;
+        let decimals = unit.decimals();
+        let line = |key: &str, px: f32| {
+            let px = f64::from(px);
+            let value = unit.from_pixels(px, ppi, px);
+            format!(
+                "{}: {value:.decimals$} {}",
+                ui::strings::tr(key),
+                unit.short()
+            )
+        };
+        let text = format!(
+            "{}\n{}",
+            line("ui.chrome.readout.width", readout.width_px),
+            line("ui.chrome.readout.height", readout.height_px)
+        );
+        let tokens = design::current_theme(ctx).tokens();
+        let painter = ctx
+            .layer_painter(crate::canvas_extras::overlay_layer())
+            .with_clip_rect(ctx.available_rect());
+        let galley = painter.layout_no_wrap(
+            text,
+            design::egui_theme::font_id(tokens, TypeRole::Caption),
+            design::color32(tokens.palette.text(TextRole::Primary)),
+        );
+        let pad = Space::Small.pt();
+        let offset = Space::Large.pt();
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(pointer.x + offset, pointer.y + offset),
+            galley.size() + egui::vec2(pad * 2.0, pad * 2.0),
+        );
+        painter.rect(
+            rect,
+            design::egui_theme::rounding(
+                design::Radius::Small.resolve(&tokens.radii, rect.height()),
+            ),
+            design::color32(tokens.palette.color(design::ColorRole::SurfaceOverlay)),
+            egui::Stroke::new(
+                tokens.borders.hairline,
+                design::color32(tokens.palette.color(design::ColorRole::SeparatorHairline)),
+            ),
+        );
+        let color = design::color32(tokens.palette.text(TextRole::Primary));
+        painter.galley(rect.min + egui::vec2(pad, pad), galley, color);
+    }
+
     /// Paint the published live geometry over the canvas (card 012).
     ///
     /// The image is a wgpu composite behind egui and `CanvasHost::
@@ -1551,7 +1663,12 @@ impl Chrome {
     /// reported, never dropped.
     fn route(&mut self, intent: ui::Intent, editor: &Editor, out: &mut ChromeOutput) {
         if let ui::Intent::Action(action) = &intent {
-            if self.dialogs.open_for_menu_action(action, editor) {
+            // W3-X: a Channels saved-selection row names the row it loads.
+            let load = match action {
+                ui::menu::MenuAction::LoadSelection => self.workspace.take_pending_selection_load(),
+                _ => None,
+            };
+            if self.dialogs.open_for_menu_action_at(action, editor, load) {
                 return;
             }
         }
@@ -3763,17 +3880,57 @@ mod tests {
         );
     }
 
-    /// W3-A: Proof Colors, Gamut Warning and Flip View cannot be honoured by
-    /// this renderer: the toggle is refused (the item never ticks) and the
-    /// status line says why, rather than a tick that changes nothing.
+    /// View > Flip Horizontal, through the real toggle intent and a real
+    /// chrome frame: the item ticks, the active document's camera mirrors, a
+    /// point on screen maps to the mirrored image column, and unticking
+    /// restores the upright mapping.
+    #[test]
+    fn view_flip_ticks_and_mirrors_the_document_camera() {
+        let mut frame = extras_frame(&[], 1.0);
+        let camera = frame.editor.active().unwrap().camera.clone();
+        // A point off the vertical centre line of the viewport, so a mirror
+        // about that line must move it to another column.
+        let probe = camera.viewport_size * 0.5 + glam::Vec2::new(-20.0, 3.0);
+        let upright = camera.screen_to_image(probe);
+
+        frame.chrome.emit(ui::Intent::SetViewFlag {
+            flag: ui::ViewFlag::FlipHorizontal,
+            on: true,
+        });
+        let _ = painted_shapes(&mut frame.chrome, &mut frame.editor);
+        assert!(frame
+            .chrome
+            .workspace()
+            .view_flags
+            .get(ui::ViewFlag::FlipHorizontal));
+        assert!(frame.editor.status().is_none_or(|s| !s.contains("Flip")));
+        let flipped = frame.editor.active().unwrap().camera.clone();
+        assert!(
+            flipped.flip_x && !flipped.flip_y,
+            "the checkmark never reached the camera"
+        );
+        let mirrored = flipped.screen_to_image(probe);
+        assert!(
+            (mirrored.x - upright.x).abs() > 1.0 && (mirrored.y - upright.y).abs() < 1e-3,
+            "a mirrored view maps the same screen point to another column: {upright:?} vs {mirrored:?}"
+        );
+
+        frame.chrome.emit(ui::Intent::SetViewFlag {
+            flag: ui::ViewFlag::FlipHorizontal,
+            on: false,
+        });
+        let _ = painted_shapes(&mut frame.chrome, &mut frame.editor);
+        let back = frame.editor.active().unwrap().camera.clone();
+        assert!(!back.flip_x);
+        assert!((back.screen_to_image(probe) - upright).length() < 1e-3);
+    }
+
+    /// W3-A: Proof Colors and Gamut Warning cannot be honoured by this
+    /// renderer: the toggle is refused (the item never ticks) and the status
+    /// line says why, rather than a tick that changes nothing.
     #[test]
     fn view_toggles_this_build_cannot_honour_are_refused_with_a_reason() {
-        for flag in [
-            ui::ViewFlag::ProofColors,
-            ui::ViewFlag::GamutWarning,
-            ui::ViewFlag::FlipHorizontal,
-            ui::ViewFlag::FlipVertical,
-        ] {
+        for flag in [ui::ViewFlag::ProofColors, ui::ViewFlag::GamutWarning] {
             let mut frame = extras_frame(&[], 1.0);
             frame
                 .chrome
@@ -3902,6 +4059,90 @@ mod tests {
                 _ => false,
             });
         assert!(!quad, "the ended session paints no quad: {painted:?}");
+    }
+
+    /// XB: a real shape drag, published through the production publisher,
+    /// paints a W/H label beside the pointer carrying both dragged numbers;
+    /// the release takes it down through the same route.
+    #[test]
+    fn a_shape_drag_paints_a_w_h_readout_by_the_pointer_until_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wide.png");
+        std::fs::write(
+            &path,
+            raster::encode(raster::ExportFormat::Png, 200, 100, &[9u8; 200 * 100 * 4]).unwrap(),
+        )
+        .unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&path).unwrap();
+        {
+            let doc = ed.active_mut().unwrap();
+            doc.set_viewport(glam::Vec2::new(1400.0, 900.0));
+            doc.camera.zoom = 1.0;
+            doc.camera.center = glam::Vec2::new(100.0, 50.0);
+        }
+        ed.set_tool(tools::ToolId::Rectangle);
+        let doc_to_screen = |x: f32, y: f32| egui::pos2(700.0 + x - 100.0, 450.0 + y - 50.0);
+        let at = |phase: ui::canvas::PointerPhase, pos: egui::Pos2| {
+            ui::canvas::PointerInput::at(phase, glam::Vec2::new(pos.x, pos.y))
+        };
+        let mut pointer = ToolPointer::new();
+        assert!(pointer.live_readout().is_none(), "no gesture, no readout");
+        pointer.handle(
+            &mut ed,
+            at(ui::canvas::PointerPhase::Down, doc_to_screen(10.0, 20.0)),
+            false,
+            &[],
+        );
+        pointer.handle(
+            &mut ed,
+            at(ui::canvas::PointerPhase::Move, doc_to_screen(133.0, 77.0)),
+            false,
+            &[],
+        );
+        let readout = pointer.live_readout();
+        let (doc_id, live) = readout.expect("a shape drag publishes a readout");
+        assert_eq!(Some(doc_id), ed.active().map(|d| d.id()));
+        assert!((live.width_px - 123.0).abs() < 1e-3, "{live:?}");
+        assert!((live.height_px - 57.0).abs() < 1e-3, "{live:?}");
+
+        let mut chrome = Chrome::new();
+        chrome.publish_tool_readout(readout);
+        let labels = |painted: &[egui::Shape]| -> Vec<(String, egui::Pos2)> {
+            painted
+                .iter()
+                .filter_map(|s| match s {
+                    egui::Shape::Text(t) => Some((t.galley.text().to_string(), t.pos)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let painted = labels(&painted_shapes(&mut chrome, &mut ed));
+        let pointer_at = doc_to_screen(133.0, 77.0);
+        let label = painted
+            .iter()
+            .find(|(text, _)| text.contains("W: 123 px") && text.contains("H: 57 px"));
+        let (_, pos) = label.unwrap_or_else(|| panic!("no W/H readout painted: {painted:?}"));
+        assert!(
+            pos.x >= pointer_at.x && pos.y >= pointer_at.y && pos.distance(pointer_at) < 60.0,
+            "the readout sits beside the pointer at {pointer_at:?}, not at {pos:?}"
+        );
+
+        // Release: the readout is gone, and the next frame paints none.
+        pointer.handle(
+            &mut ed,
+            at(ui::canvas::PointerPhase::Up, doc_to_screen(133.0, 77.0)),
+            false,
+            &[],
+        );
+        let readout = pointer.live_readout();
+        assert!(readout.is_none(), "a released drag has no readout");
+        chrome.publish_tool_readout(readout);
+        let painted = labels(&painted_shapes(&mut chrome, &mut ed));
+        assert!(
+            !painted.iter().any(|(text, _)| text.contains("W: 123")),
+            "the released drag still paints a readout: {painted:?}"
+        );
     }
 
     #[test]
@@ -7395,28 +7636,6 @@ mod tests {
     /// One opaque grey tile at the canvas origin of `id`, through the real
     /// command route — the edit that must (and the only edit that must)
     /// recomposite that layer's thumbnail.
-    /// W3-J: the Properties Transform block measures a raster layer by the
-    /// ink the chrome publishes each frame, not by its stored tiles. A
-    /// 300x200 image is stored as 512x256 of tiles; the published frame is
-    /// the image.
-    #[test]
-    fn the_chrome_publishes_the_active_raster_layer_s_alpha_ink_to_properties() {
-        let dir = tempfile::tempdir().unwrap();
-        let (mut ed, ids) = editor_with_layers(dir.path(), 1);
-        let ctx = egui::Context::default();
-        install_theme(&ctx, design::Theme::Dark);
-        let mut chrome = Chrome::new();
-        thumb_frame(&ctx, &mut chrome, &mut ed);
-        let inks = ui::panels::properties::RasterInks::published(&ctx);
-        let doc = &ed.active().unwrap().document;
-        let frame = ui::panels::properties::Transform::frame(doc, ids[0], &inks)
-            .expect("the chrome measured the active raster layer");
-        assert_eq!(
-            (frame.x, frame.y, frame.width, frame.height),
-            (0.0, 0.0, 300.0, 200.0)
-        );
-    }
-
     fn paint_grey(open: &mut crate::doc::OpenDocument, id: LayerId, v: u8) {
         let ts = raster::TILE_SIZE;
         let mut bytes = Vec::with_capacity((ts * ts * 4) as usize);
@@ -7435,6 +7654,189 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+    }
+
+    /// [`paint_grey`] through [`Editor::apply_command`], the choke point
+    /// every user edit goes through, so the editor's revision moves.
+    fn paint_grey_through_editor(ed: &mut Editor, id: LayerId, v: u8) {
+        let ts = raster::TILE_SIZE;
+        let mut bytes = Vec::with_capacity((ts * ts * 4) as usize);
+        for _ in 0..ts * ts {
+            bytes.extend_from_slice(&[v, v, v, 255]);
+        }
+        let hash = ed.active_mut().unwrap().tiles.insert_bytes(bytes);
+        ed.apply_command(
+            Command::paint_tiles(
+                editor_core::PixelTarget::Layer(id),
+                vec![editor_core::TileEdit::set(
+                    raster::TileCoord::new(0, 0, 0),
+                    hash,
+                )],
+            )
+            .unwrap(),
+        );
+    }
+
+    /// W3-J: the Properties Transform block measures a raster layer by the
+    /// ink the chrome publishes, not by its stored tiles. A 300x200 image is
+    /// stored as 512x256 of tiles; the published frame is the image. W3-X:
+    /// the block is opened through its drawn disclosure first, because the
+    /// chrome measures only for a block on screen.
+    #[test]
+    fn the_chrome_publishes_the_active_raster_layer_s_alpha_ink_to_properties() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, ids) = editor_with_layers(dir.path(), 1);
+        let mut window = Window::new(&mut ed);
+        let _ = window.click(&mut ed, ui::panels::properties::ids::transform_toggle());
+        window.settle(&mut ed);
+        let inks = ui::panels::properties::RasterInks::published(&window.ctx);
+        let doc = &ed.active().unwrap().document;
+        let frame = ui::panels::properties::Transform::frame(doc, ids[0], &inks)
+            .expect("the chrome measured the active raster layer");
+        assert_eq!(
+            (frame.x, frame.y, frame.width, frame.height),
+            (0.0, 0.0, 300.0, 200.0)
+        );
+    }
+
+    /// W3-X: the alpha-ink measurement only the Transform block reads is made
+    /// while that block is on screen and the layer changed — never per frame,
+    /// and never with the block closed (its default).
+    #[test]
+    fn the_raster_ink_is_measured_only_for_an_open_transform_block_after_an_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, ids) = editor_with_layers(dir.path(), 1);
+        let mut window = Window::new(&mut ed);
+        window.settle(&mut ed);
+        assert_eq!(
+            window.chrome.ink_publishes, 0,
+            "measured with the Transform block closed"
+        );
+        paint_grey_through_editor(&mut ed, ids[0], 40);
+        window.settle(&mut ed);
+        assert_eq!(
+            window.chrome.ink_publishes, 0,
+            "an edit under a closed block was measured"
+        );
+
+        // Open the block through the disclosure the Properties panel draws.
+        let _ = window.click(&mut ed, ui::panels::properties::ids::transform_toggle());
+        window.settle(&mut ed);
+        assert_eq!(window.chrome.ink_publishes, 1, "opening measures once");
+        {
+            let inks = ui::panels::properties::RasterInks::published(&window.ctx);
+            let doc = &ed.active().unwrap().document;
+            assert!(
+                ui::panels::properties::Transform::frame(doc, ids[0], &inks).is_some(),
+                "the open block has a current measurement"
+            );
+        }
+        window.settle(&mut ed);
+        assert_eq!(
+            window.chrome.ink_publishes, 1,
+            "idle frames re-measured an unchanged layer"
+        );
+
+        // One edit with the block open: exactly one more measurement.
+        paint_grey_through_editor(&mut ed, ids[0], 90);
+        window.settle(&mut ed);
+        assert_eq!(window.chrome.ink_publishes, 2, "one edit, one measurement");
+
+        // Closed again: an edit measures nothing.
+        let _ = window.click(&mut ed, ui::panels::properties::ids::transform_toggle());
+        window.settle(&mut ed);
+        paint_grey_through_editor(&mut ed, ids[0], 130);
+        window.settle(&mut ed);
+        assert_eq!(window.chrome.ink_publishes, 2, "measured a closed block");
+    }
+
+    /// W3-X: a Channels saved-selection row loads the row that was clicked.
+    /// A plain click opens Load Selection with that row chosen (not the
+    /// newest entry); a Ctrl+click loads it as the selection without asking.
+    #[test]
+    fn a_channels_saved_selection_row_loads_the_row_that_was_clicked() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, _ids) = editor_with_layers(dir.path(), 1);
+        let first = editor_core::Selection::Rect {
+            min: glam::IVec2::new(0, 0),
+            max: glam::IVec2::new(10, 10),
+        };
+        let second = editor_core::Selection::Rect {
+            min: glam::IVec2::new(20, 20),
+            max: glam::IVec2::new(40, 40),
+        };
+        let third = editor_core::Selection::Rect {
+            min: glam::IVec2::new(50, 50),
+            max: glam::IVec2::new(60, 60),
+        };
+        {
+            let doc = &mut ed.active_mut().unwrap().document;
+            doc.saved_selections
+                .push(("Alpha 1".to_string(), first.clone()));
+            doc.saved_selections.push(("Keep".to_string(), second));
+            doc.saved_selections.push(("Newest".to_string(), third));
+        }
+        let mut window = Window::new(&mut ed);
+        window
+            .chrome
+            .workspace
+            .dock
+            .apply_layout(ui::dock::LayoutId::Minimal);
+        window
+            .chrome
+            .workspace
+            .dock
+            .set_open(ui::PanelId::Channels, true);
+        window.settle(&mut ed);
+
+        // Click the second row: the dialog opens on "Keep", not "Newest".
+        let _ = window.click_text(&mut ed, "Keep");
+        let dialog = window
+            .chrome
+            .dialogs
+            .active_load_selection_dialog_for_test();
+        assert_eq!(dialog.selected(), 1, "the dialog opened on another row");
+        assert_eq!(
+            dialog.confirm().map(|spec| spec.name),
+            Some("Keep".to_string())
+        );
+        window.chrome.dialogs.close();
+        window.settle(&mut ed);
+
+        // Ctrl+click the first row: no dialog, and performing the routed
+        // action loads that row.
+        let rect = window
+            .painted_text_rects(&mut ed)
+            .into_iter()
+            .find(|(text, _)| text == "Alpha 1")
+            .map(|(_, rect)| rect)
+            .expect("the first saved selection row was painted");
+        let pos = rect.center();
+        let press = |pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        let mut input = raw_input(vec![
+            egui::Event::PointerMoved(pos),
+            press(true),
+            press(false),
+        ]);
+        input.modifiers = egui::Modifiers::COMMAND;
+        let mut out = ChromeOutput::default();
+        let chrome = &mut window.chrome;
+        let _ = window.ctx.run(input, |ctx| {
+            out = chrome.ui(ctx, &mut ed);
+        });
+        assert!(
+            !window.chrome.dialogs.is_open(),
+            "a Ctrl+click asked instead of loading"
+        );
+        let status =
+            crate::menu_bridge::perform(ui::menu::MenuAction::LoadSelection, &mut ed).unwrap();
+        assert!(status.contains("Alpha 1"), "{status} / {out:?}");
+        assert_eq!(ed.active().unwrap().document.selection, first);
     }
 
     /// An editor whose active document is a 300x200 image under `n - 1`

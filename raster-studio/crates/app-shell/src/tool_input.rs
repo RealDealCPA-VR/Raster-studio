@@ -94,11 +94,18 @@
 //!
 //! # What this cannot do yet
 //!
-//! * **Rotate View changes nothing on screen.** [`render::Camera`] is
-//!   axis-aligned by construction (see its `clip_to_uv`), so the rotation the
-//!   tool applies to the mirrored camera has nowhere to be written back to and
-//!   is dropped. The gesture reaches the tool and the tool is correct; the
-//!   renderer cannot show the result. Hand and Zoom write back in full.
+//! * **Rotate View turns the picture.** The router's camera is the document
+//!   camera's full mirror ([`canvas_camera_of`]: pan, zoom, rotation and the
+//!   camera's `flip_x` / `flip_y`), and [`write_camera_back`] writes the
+//!   rotation back with the pan and zoom, so a Rotate View drag turns the
+//!   frame the shell renders and View > Reset View Rotation (enabled off
+//!   `render::Camera::is_rotated`) uprights it. On a mirrored camera the
+//!   drag's angle is corrected so the picture still turns with the pointer
+//!   (see [`ToolPointer::handle`]'s navigation branch).
+//! * **View > Flip reaches the camera.** `Chrome::ui` copies the Flip View
+//!   checkmarks onto the active document's camera every frame through
+//!   [`apply_view_flips`]; `render` and the interaction geometry honour the
+//!   mirror, so the picture and the pointer flip together.
 //! * **A selection gesture is undoable (card 056).** The gesture's edits fold
 //!   into `Command::SetSelection` entries — one gesture, one step — so undo
 //!   and redo carry the selection exactly like any other edit.
@@ -624,16 +631,52 @@ pub fn canvas_viewport(surface_px: Vec2) -> Viewport {
     Viewport::new(surface_px, PanelInsets::NONE, 1.0)
 }
 
-/// The router's camera, mirrored from the document's.
+/// The router's camera, mirrored from the document's: pan, zoom, view
+/// rotation and view mirror, so the pointer converts through exactly the
+/// mapping the renderer draws with.
 ///
-/// Rotation and flip are zero because [`render::Camera`] cannot express them.
+/// One mirror for the whole shell: this delegates to
+/// [`crate::interaction_geometry::canvas_camera_of`], and every caller that
+/// builds an interaction camera from `OpenDocument::camera` — the pointer
+/// route here, the shell's text overlays, the chrome's canvas host and the
+/// dialog host's eyedropper — comes through this function.
 pub fn canvas_camera_of(camera: &Camera) -> CanvasCamera {
-    CanvasCamera {
-        center: camera.center,
-        zoom: camera.zoom,
-        rotation: 0.0,
-        flip_x: false,
-        flip_y: false,
+    crate::interaction_geometry::canvas_camera_of(camera)
+}
+
+/// Put the workspace's View > Flip Horizontal / Flip Vertical checkmarks on
+/// the document camera the shell renders from. Reports whether either flag
+/// changed, i.e. whether a repaint is owed.
+///
+/// The checkmarks are the authority (they are what the menu draws and what a
+/// click toggles); the camera is what `render` and the pointer read.
+/// `Chrome::ui` calls it every frame for the active document.
+pub fn apply_view_flips(flags: ui::ViewFlags, camera: &mut Camera) -> bool {
+    let flip_x = flags.get(ui::ViewFlag::FlipHorizontal);
+    let flip_y = flags.get(ui::ViewFlag::FlipVertical);
+    let changed = camera.flip_x != flip_x || camera.flip_y != flip_y;
+    camera.flip_x = flip_x;
+    camera.flip_y = flip_y;
+    changed
+}
+
+/// Make a Rotate View step turn the picture *with* the pointer on a mirrored
+/// view.
+///
+/// The router measures the drag's sweep on screen and adds it to the camera's
+/// rotation. The rotation is applied before the mirror (`screen = F * S * R *
+/// doc`), and with an odd number of flips `F * R(d) = R(-d) * F`: the picture
+/// would turn *against* the pointer. So on such a camera the step the router
+/// took is reversed. Upright or doubly flipped (a half turn), nothing changes.
+pub fn follow_the_pointer_on_a_mirror(rotation_before: f32, camera: &mut CanvasCamera) {
+    if camera.flip_x == camera.flip_y {
+        return;
+    }
+    let step = camera.rotation - rotation_before;
+    if step.is_finite() && step != 0.0 {
+        // `set_rotation` wraps, so a step that crossed the branch cut still
+        // lands on the right angle.
+        camera.set_rotation(rotation_before - step);
     }
 }
 
@@ -642,9 +685,10 @@ pub fn canvas_camera_of(camera: &Camera) -> CanvasCamera {
 ///
 /// The document's camera is the authority — it is what the renderer reads — so
 /// this, and not the router's own `changed` flag, is what says a repaint is
-/// owed. The two disagree for exactly one gesture: a Rotate View drag moves the
-/// mirror and nothing else, and reporting that as a change would repaint an
-/// identical frame.
+/// owed. The rotation is written back too: `render::Camera` turns the frame,
+/// so a Rotate View drag is a real change to the picture. The mirror flags
+/// are not written: no pointer gesture changes them ([`apply_view_flips`] is
+/// the one writer).
 pub fn write_camera_back(from: &CanvasCamera, to: &mut Camera) -> bool {
     let center = if from.center.is_finite() {
         from.center
@@ -659,7 +703,11 @@ pub fn write_camera_back(from: &CanvasCamera, to: &mut Camera) -> bool {
     } else {
         to.zoom
     };
-    let moved = center != to.center || zoom != to.zoom;
+    let before_rotation = to.rotation;
+    // `set_rotation` wraps and refuses a non-finite angle, the same guard the
+    // router's camera applies.
+    to.set_rotation(from.rotation);
+    let moved = center != to.center || zoom != to.zoom || to.rotation != before_rotation;
     to.center = center;
     to.zoom = zoom;
     moved
@@ -993,6 +1041,14 @@ impl ToolPointer {
                 None
             }
         }
+    }
+
+    /// XB: the live tool's pointer readout (the shape tools' W/H), with the
+    /// document the gesture is aimed at. `None` without a running gesture
+    /// that has one — which is what takes the chrome's label down.
+    pub fn live_readout(&self) -> Option<(DocumentId, tools::tool::LiveReadout)> {
+        let readout = self.current.as_ref()?.1.live_readout()?;
+        Some((self.session_doc.or(self.aimed_at)?, readout))
     }
 
     /// The live instance of `id`, building it if the active tool changed.
@@ -1778,7 +1834,17 @@ impl ToolPointer {
             let doc = editor.active_mut().expect("checked immediately above");
             let viewport = canvas_viewport(doc.camera.viewport_size);
             let mut camera = canvas_camera_of(&doc.camera);
+            let rotation_before = camera.rotation;
             let dispatch = self.router.handle(input, &mut camera, &viewport, effective);
+            if matches!(
+                dispatch,
+                Dispatch::Navigated {
+                    route: Route::RotateView,
+                    ..
+                }
+            ) {
+                follow_the_pointer_on_a_mirror(rotation_before, &mut camera);
+            }
             out.view_changed = write_camera_back(&camera, &mut doc.camera);
             (dispatch, viewport)
         };
@@ -6246,18 +6312,199 @@ mod tests {
         assert_eq!(camera.center, Vec2::new(10.0, 20.0));
         assert_eq!(camera.zoom, MAX_ZOOM);
 
-        // A rotate-view drag moves the mirror's rotation and nothing else, so
-        // nothing is owed a repaint.
+        // A rotate-view drag turns the document camera, which turns the
+        // rendered frame, so a repaint is owed.
         let mut turned = canvas_camera_of(&camera);
         turned.rotation = 1.0;
-        assert!(!write_camera_back(&turned, &mut camera));
+        assert!(write_camera_back(&turned, &mut camera));
+        assert_eq!(camera.rotation, 1.0);
+        // And writing the same angle again is no change.
+        assert!(!write_camera_back(&canvas_camera_of(&camera), &mut camera));
 
         let mut broken = canvas_camera_of(&camera);
         broken.center = Vec2::new(f32::NAN, 0.0);
         broken.zoom = f32::INFINITY;
+        broken.rotation = f32::NAN;
         let before = camera.center;
         assert!(!write_camera_back(&broken, &mut camera));
         assert_eq!(camera.center, before);
+        assert_eq!(camera.rotation, 1.0, "a NaN angle was written");
+    }
+
+    /// The mirror goes out to the router with the rotation, so the pointer
+    /// converts through the camera the renderer draws with.
+    #[test]
+    fn the_routers_camera_carries_the_rotation_and_the_mirror() {
+        let mut camera = Camera::new(Vec2::splat(64.0), VIEWPORT);
+        camera.set_rotation(0.8);
+        camera.flip_x = true;
+        let mirror = canvas_camera_of(&camera);
+        assert_eq!(mirror.rotation, 0.8);
+        assert!(mirror.flip_x && !mirror.flip_y);
+        let viewport = canvas_viewport(VIEWPORT);
+        let at = Vec2::new(37.0, 211.0);
+        let router = mirror.doc_of_screen_pt(&viewport, at);
+        let renderer = camera.screen_to_image(at);
+        assert!(
+            (router - renderer).length() < 1e-3,
+            "{router:?} vs {renderer:?}"
+        );
+    }
+
+    /// View > Flip checkmarks reach the document camera through
+    /// `apply_view_flips`, which says whether anything changed.
+    #[test]
+    fn the_view_flip_checkmarks_reach_the_document_camera() {
+        let mut camera = Camera::new(Vec2::splat(64.0), VIEWPORT);
+        let mut flags = ui::ViewFlags::default();
+        assert!(!apply_view_flips(flags, &mut camera));
+        flags.set(ui::ViewFlag::FlipHorizontal, true);
+        assert!(apply_view_flips(flags, &mut camera));
+        assert!(camera.flip_x && !camera.flip_y);
+        assert!(
+            !apply_view_flips(flags, &mut camera),
+            "no change the second time"
+        );
+        flags.set(ui::ViewFlag::FlipHorizontal, false);
+        flags.set(ui::ViewFlag::FlipVertical, true);
+        assert!(apply_view_flips(flags, &mut camera));
+        assert!(!camera.flip_x && camera.flip_y);
+    }
+
+    /// Rotate View, end to end through the real pointer route: a drag with the
+    /// Rotate View tool turns the document camera (the one the shell renders
+    /// from), which enables View > Reset View Rotation, which uprights it.
+    #[test]
+    fn a_rotate_view_drag_turns_the_document_camera_and_reset_uprights_it() {
+        use crate::menu_bridge::{context, perform, resolve_intent};
+        use ui::menu::MenuAction;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::RotateView);
+        let mut pointer = ToolPointer::new();
+        let ws = ui::Workspace::new();
+        assert_eq!(editor.active().unwrap().camera.rotation, 0.0);
+        assert!(
+            resolve_intent(
+                MenuAction::ResetViewRotation,
+                &context(&mut editor, &ws),
+                &editor
+            )
+            .is_err(),
+            "Reset View Rotation is enabled on an upright view"
+        );
+
+        // A quarter-circle drag about the viewport centre: from right of the
+        // centre, round to below it.
+        let c = VIEWPORT * 0.5;
+        let mut outcomes = Vec::new();
+        for (i, at) in [
+            c + Vec2::new(100.0, 0.0),
+            c + Vec2::new(70.0, 70.0),
+            c + Vec2::new(0.0, 100.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let phase = if i == 0 {
+                PointerPhase::Down
+            } else {
+                PointerPhase::Move
+            };
+            outcomes.push(pointer.handle(&mut editor, sample(phase, at), false, &[]));
+        }
+        outcomes.push(pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Up, c + Vec2::new(0.0, 100.0)),
+            false,
+            &[],
+        ));
+        assert!(
+            outcomes.iter().all(|o| !o.reached_tool),
+            "Rotate View is the camera's: {outcomes:?}"
+        );
+        assert!(outcomes.iter().any(|o| o.view_changed), "{outcomes:?}");
+        let turned = editor.active().unwrap().camera.rotation;
+        assert!(
+            (turned - std::f32::consts::FRAC_PI_2).abs() < 1e-3,
+            "a quarter-circle drag turned the document camera by {turned}"
+        );
+
+        // The item is enabled now, off the same camera, and uprights it.
+        let ctx = context(&mut editor, &ws);
+        assert!(ctx.view_rotated);
+        assert!(resolve_intent(MenuAction::ResetViewRotation, &ctx, &editor).is_ok());
+        assert_eq!(
+            perform(MenuAction::ResetViewRotation, &mut editor),
+            Ok("View rotation reset".to_string())
+        );
+        assert_eq!(editor.active().unwrap().camera.rotation, 0.0);
+    }
+
+    /// Rotate View on a mirrored camera, through the real pointer route: the
+    /// document point grabbed at pointer-down ends up under the pointer's
+    /// final angle about the viewport centre, i.e. the picture turns *with*
+    /// the pointer, upright, flipped on either axis and flipped on both. With
+    /// one flip and no correction it would end a half circle away.
+    #[test]
+    fn a_rotate_view_drag_follows_the_pointer_on_a_mirrored_view() {
+        for (flip_x, flip_y) in [(false, false), (true, false), (false, true), (true, true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut editor = editor(dir.path());
+            editor.set_tool(ToolId::RotateView);
+            {
+                let doc = editor.active_mut().unwrap();
+                doc.camera.flip_x = flip_x;
+                doc.camera.flip_y = flip_y;
+            }
+            let viewport = canvas_viewport(editor.active().unwrap().camera.viewport_size);
+            let c = viewport.center_pt();
+            // Off-axis points (30 and 120 degrees): neither is invariant under
+            // a mirror about either screen axis, so a dropped flip anywhere in
+            // the interaction camera shows up in the cross-check below.
+            let at = |deg: f32| {
+                let r = deg.to_radians();
+                c + Vec2::new(100.0 * r.cos(), 100.0 * r.sin())
+            };
+            let start = at(30.0);
+            let end = at(120.0);
+            let grabbed = canvas_camera_of(&editor.active().unwrap().camera)
+                .doc_of_screen_pt(&viewport, start);
+
+            let mut pointer = ToolPointer::new();
+            pointer.handle(&mut editor, sample(PointerPhase::Down, start), false, &[]);
+            pointer.handle(
+                &mut editor,
+                sample(PointerPhase::Move, at(75.0)),
+                false,
+                &[],
+            );
+            pointer.handle(&mut editor, sample(PointerPhase::Move, end), false, &[]);
+            pointer.handle(&mut editor, sample(PointerPhase::Up, end), false, &[]);
+
+            let camera = &editor.active().unwrap().camera;
+            assert_eq!((camera.flip_x, camera.flip_y), (flip_x, flip_y));
+            assert!(
+                (camera.rotation.abs() - std::f32::consts::FRAC_PI_2).abs() < 1e-3,
+                "flip {flip_x}/{flip_y}: a quarter-circle drag turned the view by {}",
+                camera.rotation
+            );
+            // Where the grabbed point is now drawn: through the renderer's own
+            // mapping and through the interaction camera, which must agree.
+            let drawn = canvas_camera_of(camera).screen_pt_of(&viewport, grabbed);
+            let rendered = camera.screen_to_image(drawn);
+            assert!(
+                (grabbed - rendered).length() < 1e-2,
+                "{grabbed:?} vs {rendered:?}"
+            );
+            let want = (end - c).normalize();
+            let got = (drawn - c).normalize();
+            assert!(
+                (want - got).length() < 1e-2,
+                "flip {flip_x}/{flip_y}: the picture turned to {got:?}, the pointer went to {want:?}"
+            );
+        }
     }
 
     /// Card 026: the double-click route begins an entered session on the

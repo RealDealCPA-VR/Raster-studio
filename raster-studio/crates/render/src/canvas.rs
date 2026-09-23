@@ -289,7 +289,8 @@ impl Canvas {
     /// target encodings. Call after [`Canvas::set_backdrop`] for the new
     /// backdrop to reach the quad; a host that uploads the camera every frame
     /// gets that for free. `m3` is the view rotation's frame for the
-    /// checkerboard ([`Camera::checker_frame`]), so the checker turns with the
+    /// checkerboard ([`Camera::checker_frame`]), so the checker turns (and
+    /// mirrors, when the camera's `flip_x` / `flip_y` is set) with the
     /// document instead of staying nailed to the window.
     pub fn update_camera(&self, gpu: &GpuContext, camera: &Camera) {
         let (m0, mut m1) = camera.clip_to_uv();
