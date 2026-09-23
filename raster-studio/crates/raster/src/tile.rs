@@ -192,6 +192,26 @@ impl Tile {
     }
 }
 
+/// Pack RGBA16 samples into tile bytes: native-endian, two bytes a sample —
+/// the layout `app-shell`'s 16-bit solid background writes (reached only by
+/// a 16-bit New Document, which the dialog still refuses: see P2.5b in
+/// `docs/parity-matrix.md`) and the compositor reads back
+/// (`compositor::composite`'s `fill_layer`). One spelling of the convention,
+/// so a writer and a reader cannot disagree about byte order.
+pub fn rgba16_to_tile_bytes(samples: &[u16]) -> Vec<u8> {
+    samples.iter().flat_map(|v| v.to_ne_bytes()).collect()
+}
+
+/// The inverse of [`rgba16_to_tile_bytes`]. A trailing odd byte is ignored.
+pub fn tile_bytes_to_rgba16(bytes: &[u8]) -> Vec<u16> {
+    bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| u16::from_ne_bytes(*b))
+        .collect()
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TileError {
     #[error("tile byte length mismatch: expected {expected}, got {got}")]
@@ -201,6 +221,18 @@ pub enum TileError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rgba16_tile_bytes_round_trip_every_code_and_fill_an_rgba16_tile() {
+        let samples: Vec<u16> = (0..TILE_SIZE as usize * TILE_SIZE as usize * 4)
+            .map(|i| (i * 7919 % 65536) as u16)
+            .collect();
+        let bytes = super::rgba16_to_tile_bytes(&samples);
+        assert_eq!(bytes.len(), Tile::byte_len(PixelFormat::Rgba16));
+        assert_eq!(super::tile_bytes_to_rgba16(&bytes), samples);
+        assert!(Tile::from_bytes(PixelFormat::Rgba16, bytes).is_ok());
+        assert_eq!(super::tile_bytes_to_rgba16(&[1, 2, 3]).len(), 1);
+    }
 
     #[test]
     fn transparent_tile_is_deterministic() {

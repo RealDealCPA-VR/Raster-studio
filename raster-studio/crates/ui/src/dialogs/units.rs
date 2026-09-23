@@ -48,6 +48,18 @@ impl Unit {
         Self::Picas,
     ];
 
+    /// The units the Preferences dialog offers as the application-wide
+    /// measurement unit — what the rulers and the size readouts use. Picas are
+    /// left to the size dialogs' own menus: no ruler reads in picas.
+    pub const PREFERENCE_CHOICES: &'static [Unit] = &[
+        Self::Pixels,
+        Self::Inches,
+        Self::Centimeters,
+        Self::Millimeters,
+        Self::Points,
+        Self::Percent,
+    ];
+
     /// Short suffix for a numeric field.
     pub const fn short(self) -> &'static str {
         match self {
@@ -188,6 +200,23 @@ impl ResolutionUnit {
     }
 }
 
+/// A width and height in pixels, written in `unit` at `ppi` — `10.160 × 7.620 cm`,
+/// `1920 × 1080 px` — the one spelling every size readout shares once the
+/// application has a measurement unit.
+///
+/// [`Unit::Percent`] is relative to a reference a readout does not have, so it
+/// reads in pixels: a status line saying `100 × 100 %` would be a tautology.
+pub fn format_size(width_px: f64, height_px: f64, unit: Unit, ppi: f64) -> String {
+    let unit = match unit {
+        Unit::Percent => Unit::Pixels,
+        other => other,
+    };
+    let decimals = unit.decimals();
+    let w = unit.from_pixels(width_px, ppi, width_px);
+    let h = unit.from_pixels(height_px, ppi, height_px);
+    format!("{w:.decimals$} × {h:.decimals$} {}", unit.short())
+}
+
 /// A byte count rendered the way a file manager renders it.
 ///
 /// Binary multiples, because that is what an image editor's "Image Size" panel
@@ -296,6 +325,37 @@ mod tests {
             );
             assert_eq!(unit.is_physical(), Unit::PHYSICAL.contains(unit));
         }
+    }
+
+    #[test]
+    fn a_size_reads_in_the_chosen_unit_at_the_given_resolution() {
+        assert_eq!(
+            format_size(1920.0, 1080.0, Unit::Pixels, 72.0),
+            "1920 × 1080 px"
+        );
+        assert_eq!(
+            format_size(300.0, 150.0, Unit::Inches, 300.0),
+            "1.000 × 0.500 in"
+        );
+        assert_eq!(
+            format_size(300.0, 300.0, Unit::Centimeters, 300.0),
+            "2.540 × 2.540 cm"
+        );
+        assert_eq!(
+            format_size(72.0, 36.0, Unit::Points, 72.0),
+            "72.00 × 36.00 pt"
+        );
+        // Percent has no reference in a readout, so it says pixels.
+        assert_eq!(format_size(64.0, 32.0, Unit::Percent, 72.0), "64 × 32 px");
+    }
+
+    #[test]
+    fn the_preference_choices_are_a_subset_of_every_unit_and_lead_with_pixels() {
+        assert_eq!(Unit::PREFERENCE_CHOICES[0], Unit::Pixels);
+        for unit in Unit::PREFERENCE_CHOICES {
+            assert!(Unit::ALL.contains(unit));
+        }
+        assert!(!Unit::PREFERENCE_CHOICES.contains(&Unit::Picas));
     }
 
     #[test]

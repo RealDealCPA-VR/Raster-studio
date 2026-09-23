@@ -67,14 +67,19 @@
 pub mod blur;
 pub mod buffer;
 pub mod defringe;
+pub mod displace;
 pub mod distort;
 pub mod noise;
 pub mod other;
 pub mod pixelate;
+pub mod pixelate_extra;
+pub mod quick;
 pub mod render;
 pub mod rng;
 pub mod sharpen;
+pub mod smart_blur;
 pub mod stylize;
+pub mod stylize_extra;
 pub mod support;
 
 pub use buffer::{FilterBuffer, FilterError};
@@ -84,6 +89,7 @@ pub use blur::{
     box_blur, gaussian_blur, lens_blur, motion_blur, radial_blur, surface_blur, RadialBlur,
     RadialBlurKind,
 };
+pub use displace::{displace, DisplaceFit};
 pub use distort::{
     pinch, polar_coordinates, ripple, shear, spherize, twirl, wave, zigzag, PolarMode, Wave,
     WaveKind, ZigZag, ZigZagKind,
@@ -93,12 +99,18 @@ pub use noise::{
 };
 pub use other::{convolve, high_pass, maximum, minimum, offset, Kernel};
 pub use pixelate::{color_halftone, crystallize, mosaic, pointillize};
+pub use pixelate_extra::{facet, fragment, mezzotint, MezzotintType};
+pub use quick::{average, blur, blur_more, sharpen, sharpen_edges, sharpen_more};
 pub use render::{
     clouds, difference_clouds, fibers, gradient_fill, lens_flare, CloudParams, FiberParams,
     Gradient, GradientKind, GradientStop, LensFlare,
 };
 pub use rng::{Perlin, Rng};
 pub use sharpen::{smart_sharpen, unsharp_mask};
+pub use smart_blur::{smart_blur, SmartBlurMode};
 pub use stylize::{
     diffuse, emboss, find_edges, oil_paint, solarize, wind, DiffuseMode, WindDirection,
+};
+pub use stylize_extra::{
+    extrude, tiles, trace_contour, ContourEdge, ExtrudeDepth, ExtrudeType, TilesFill,
 };

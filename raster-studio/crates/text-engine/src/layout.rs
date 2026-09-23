@@ -20,7 +20,9 @@ use cosmic_text::{
 
 use crate::font::{db_stretch, db_style, FontId, FontLibrary};
 use crate::model::{Alignment, TextFrame, TextRun};
-use crate::style::{resolve_style, CharStyle, FontWeight, StyleRun};
+use crate::style::{
+    resolve_style, AntiAlias, Caps, CharStyle, FontWeight, StyleRun, SMALL_CAPS_SIZE_FACTOR,
+};
 
 /// Smallest font size the engine will shape at. Zero-size text would divide by
 /// zero inside the shaper's em-relative maths.
@@ -120,6 +122,12 @@ pub struct ShapedGlyph {
     pub synthetic_italic: bool,
     /// Index into [`ShapedText::styles`].
     pub style_index: usize,
+    /// W3-J: horizontal stretch the rasteriser applies to the glyph image
+    /// about its pen origin (1.0 = none). `advance` already includes it.
+    pub scale_x: f32,
+    /// W3-J: vertical stretch the rasteriser applies to the glyph image about
+    /// the baseline (1.0 = none).
+    pub scale_y: f32,
 }
 
 /// One visual line — one row of glyphs after wrapping.
@@ -201,6 +209,8 @@ pub struct ShapedText {
     pub line_height: f32,
     /// Height of the frame, if the run was boxed.
     pub frame_height: Option<f32>,
+    /// W3-J: how the rasteriser treats glyph edges - the base style's mode.
+    pub anti_alias: AntiAlias,
 }
 
 impl ShapedText {
@@ -266,12 +276,24 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
         Alignment::Left => Align::Left,
         Alignment::Center => Align::Center,
         Alignment::Right => Align::Right,
-        Alignment::Justify => Align::Justified,
+        // The shaper justifies every line but the last; the last-line
+        // variants are placed afterwards by `place_last_lines`.
+        Alignment::Justify
+        | Alignment::JustifyLastCenter
+        | Alignment::JustifyLastRight
+        | Alignment::JustifyAll => Align::Justified,
     };
 
+    // W3-J: horizontal scale stretches every advance after shaping, so the
+    // shaper wraps at the box's inner width *divided* by the scale - the
+    // scaled lines then fill exactly the inner width. The inner width is the
+    // box less the left and right indents.
+    let h_scale = glyph_scale(run.style.horizontal_scale);
     let (wrap, width_opt) = match run.frame {
         TextFrame::Point => (Wrap::None, None),
-        TextFrame::Box { width, .. } => (Wrap::WordOrGlyph, Some(width.max(0.0))),
+        TextFrame::Box { width, .. } => {
+            (Wrap::WordOrGlyph, Some(inner_width(run, width) / h_scale))
+        }
     };
     let frame_height = match run.frame {
         TextFrame::Point => None,
@@ -296,9 +318,20 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
     // so the immutable `library` borrows end before `system_mut()` takes the
     // mutable one.
     let paragraph_offsets = paragraph_offsets(&run.text);
+    // W3-J: caps change only what is shaped, never the stored string, and
+    // only by same-length substitutions, so every byte offset still holds.
+    let (display_text, small_caps) = apply_caps(&run.text, &segments);
+    let small_styles: Vec<CharStyle> = segments
+        .iter()
+        .map(|seg| {
+            let mut style = seg.style.clone();
+            style.size_px *= SMALL_CAPS_SIZE_FACTOR;
+            style
+        })
+        .collect();
     let mut lines = Vec::with_capacity(paragraph_offsets.len());
     for (index, &offset) in paragraph_offsets.iter().enumerate() {
-        let (text, ending) = paragraph_slice(&run.text, &paragraph_offsets, index);
+        let (text, ending) = paragraph_slice(&display_text, &paragraph_offsets, index);
         let mut attrs_list = AttrsList::new(&default_attrs);
         for (seg_index, seg) in segments.iter().enumerate() {
             let start = seg.start.max(offset);
@@ -307,6 +340,16 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
                 attrs_list.add_span(
                     start - offset..end - offset,
                     &attrs_for(library, &seg.style, seg_index, line_height),
+                );
+            }
+        }
+        for &(start, end, seg_index) in &small_caps {
+            let start = start.max(offset);
+            let end = end.min(offset + text.len());
+            if start < end {
+                attrs_list.add_span(
+                    start - offset..end - offset,
+                    &attrs_for(library, &small_styles[seg_index], seg_index, line_height),
                 );
             }
         }
@@ -338,6 +381,7 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
         base_size_px: base_size,
         line_height,
         frame_height,
+        anti_alias: run.style.anti_alias,
     };
 
     let paragraph_step = run.paragraph.space_before + run.paragraph.space_after;
@@ -363,6 +407,9 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
             0.0
         };
         let indent = if layout_run.rtl { -indent } else { indent };
+        // W3-J: the left indent is physical - the box's inner area starts
+        // there for every line, whatever the direction.
+        let indent = indent + left_indent(run);
 
         let line_index = out.lines.len();
         let first_glyph = out.glyphs.len();
@@ -377,9 +424,16 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
             .min()
             .map_or(offset, |local| offset + local);
 
+        // W3-J: the stretch every earlier glyph on the line added beyond the
+        // base scale, so a run with its own scale pushes the rest along.
+        let mut scale_carry = 0.0_f32;
         for glyph in layout_run.glyphs {
             let style_index = glyph.metadata;
             let style = out.styles.get(style_index).unwrap_or(&run.style);
+            let glyph_h = glyph_scale(style.horizontal_scale);
+            let glyph_v = glyph_scale(style.vertical_scale);
+            let scaled_x = glyph.x * h_scale + scale_carry;
+            scale_carry += (glyph_h - h_scale) * glyph.w;
             let cluster_start = offset + glyph.start;
             let cluster_end = offset + glyph.end;
             let shift = kern_shift(
@@ -389,8 +443,10 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
                 cluster_start,
                 layout_run.rtl,
             );
-            let x = glyph.x + indent + shift + run.origin[0];
-            let baseline = baseline_y + glyph.y + style.script.baseline_shift(base_size);
+            let x = scaled_x + indent + shift + run.origin[0];
+            // Positive baseline shift raises; layer y grows downwards.
+            let baseline = baseline_y + glyph.y + style.script.baseline_shift(base_size)
+                - finite_or_zero(style.baseline_shift);
             let declared = library
                 .declared_weight(FontId(glyph.font_id))
                 .unwrap_or(FontWeight(glyph.font_weight.0));
@@ -404,8 +460,8 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
                 cluster_start,
                 cluster_end,
                 x,
-                advance: glyph.w,
-                draw_x: x + glyph.font_size * glyph.x_offset,
+                advance: glyph.w * glyph_h,
+                draw_x: x + glyph.font_size * glyph.x_offset * glyph_h,
                 draw_y: baseline - glyph.font_size * glyph.y_offset,
                 size_px: glyph.font_size,
                 weight: FontWeight(glyph.font_weight.0),
@@ -414,6 +470,8 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
                 synthetic_bold,
                 synthetic_italic,
                 style_index,
+                scale_x: glyph_h,
+                scale_y: glyph_v,
             });
         }
 
@@ -466,6 +524,7 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
     }
 
     extend_line_ends(&mut out, &paragraph_offsets, &run.text);
+    place_last_lines(&mut out, run);
     align_point_text(&mut out, run);
     out.bounds = compute_bounds(&out.lines);
     let rules = decorations(library, &out);
@@ -527,7 +586,7 @@ fn push_fontless_lines(
     // Every synthesised line is the first — and only — line of its paragraph,
     // so the first-line indent applies to all of them, exactly as it does to a
     // glyphless line in the shaped path.
-    let x = empty_line_x + run.paragraph.first_line_indent + run.origin[0];
+    let x = empty_line_x + run.paragraph.first_line_indent + left_indent(run) + run.origin[0];
     // `line_top` is accumulated, and the baseline is centred inside the line
     // box before the paragraph offset is added, because that is term for term
     // how the shaped path arrives at the same numbers — associating them any
@@ -649,9 +708,10 @@ fn align_point_text(out: &mut ShapedText, run: &TextRun) {
             Alignment::Left => 0.0,
             Alignment::Center => slack / 2.0,
             Alignment::Right => slack,
-            // Mirrored: an RTL paragraph's start edge is on the right.
-            Alignment::Justify if line.rtl => slack,
-            Alignment::Justify => 0.0,
+            // Mirrored: an RTL paragraph's start edge is on the right. Every
+            // justify variant has nothing to stretch to without a box.
+            a if a.is_justified() && line.rtl => slack,
+            _ => 0.0,
         };
         if delta == 0.0 || !delta.is_finite() {
             continue;
@@ -684,10 +744,190 @@ fn compute_bounds(lines: &[ShapedLine]) -> Rect {
 /// [`align_point_text`], along with every other line.
 fn empty_line_x(run: &TextRun) -> f32 {
     match (run.paragraph.alignment, run.frame) {
-        (Alignment::Center, TextFrame::Box { width, .. }) => width / 2.0,
-        (Alignment::Right, TextFrame::Box { width, .. }) => width,
+        (Alignment::Center | Alignment::JustifyLastCenter, TextFrame::Box { width, .. }) => {
+            inner_width(run, width) / 2.0
+        }
+        (Alignment::Right | Alignment::JustifyLastRight, TextFrame::Box { width, .. }) => {
+            inner_width(run, width)
+        }
         _ => 0.0,
     }
+}
+
+/// A glyph scale the layout can use: finite and positive, else 100 %.
+fn glyph_scale(value: f32) -> f32 {
+    if value.is_finite() && value > 0.0 {
+        value
+    } else {
+        1.0
+    }
+}
+
+fn finite_or_zero(value: f32) -> f32 {
+    if value.is_finite() {
+        value
+    } else {
+        0.0
+    }
+}
+
+/// The paragraph's left indent, sanitised.
+fn left_indent(run: &TextRun) -> f32 {
+    finite_or_zero(run.paragraph.left_indent)
+}
+
+/// A box's width less both indents - the width lines wrap and align in.
+fn inner_width(run: &TextRun, width: f32) -> f32 {
+    (width.max(0.0) - left_indent(run) - finite_or_zero(run.paragraph.right_indent)).max(0.0)
+}
+
+/// W3-J: the last visual line of every paragraph under a justify variant.
+///
+/// The shaper justifies every line but a paragraph's last, which it leaves at
+/// the start edge. Here that last line is centred, set flush right, or - for
+/// Justify All - stretched to the inner width by widening its word spaces
+/// (or, with no space on the line, the gaps between its glyphs). Point text
+/// has no width to measure against and is left to [`align_point_text`].
+fn place_last_lines(out: &mut ShapedText, run: &TextRun) {
+    let TextFrame::Box { width, .. } = run.frame else {
+        return;
+    };
+    let alignment = run.paragraph.alignment;
+    if !matches!(
+        alignment,
+        Alignment::JustifyLastCenter | Alignment::JustifyLastRight | Alignment::JustifyAll
+    ) {
+        return;
+    }
+    let right = left_indent(run) + inner_width(run, width) + run.origin[0];
+    for index in 0..out.lines.len() {
+        let paragraph = out.lines[index].paragraph;
+        let is_last = out
+            .lines
+            .get(index + 1)
+            .is_none_or(|next| next.paragraph != paragraph);
+        let line = &out.lines[index];
+        if !is_last || line.glyph_count == 0 {
+            continue;
+        }
+        let slack = right - line.x_max;
+        if !slack.is_finite() || slack <= 0.0 {
+            continue;
+        }
+        let range = line.glyph_range();
+        if alignment == Alignment::JustifyAll {
+            justify_line(out, index, slack);
+            continue;
+        }
+        let delta = if alignment == Alignment::JustifyLastCenter {
+            slack / 2.0
+        } else {
+            slack
+        };
+        for glyph in &mut out.glyphs[range] {
+            glyph.x += delta;
+            glyph.draw_x += delta;
+        }
+        let line = &mut out.lines[index];
+        line.x_min += delta;
+        line.x_max += delta;
+    }
+}
+
+/// Stretch one line by `slack`: across its word spaces, or across the gaps
+/// between its glyphs when it has no space.
+fn justify_line(out: &mut ShapedText, line_index: usize, slack: f32) {
+    let range = out.lines[line_index].glyph_range();
+    let text = &out.text;
+    let is_space: Vec<bool> = out.glyphs[range.clone()]
+        .iter()
+        .map(|g| {
+            text.get(g.cluster_start..g.cluster_end)
+                .is_some_and(|c| !c.is_empty() && c.chars().all(char::is_whitespace))
+        })
+        .collect();
+    // Trailing spaces sit past the visible end; they take no share.
+    let spaces = is_space.iter().filter(|s| **s).count();
+    let gaps = if spaces > 0 {
+        spaces
+    } else {
+        range.len().saturating_sub(1)
+    };
+    if gaps == 0 {
+        return;
+    }
+    let per_gap = slack / gaps as f32;
+    // Walk in visual order: each widened gap pushes everything to its right.
+    let mut order: Vec<usize> = (0..range.len()).collect();
+    order.sort_by(|a, b| {
+        out.glyphs[range.start + a]
+            .x
+            .total_cmp(&out.glyphs[range.start + b].x)
+    });
+    let mut carry = 0.0_f32;
+    for (position, local) in order.iter().enumerate() {
+        let glyph = &mut out.glyphs[range.start + local];
+        glyph.x += carry;
+        glyph.draw_x += carry;
+        if spaces > 0 {
+            if is_space[*local] {
+                glyph.advance += per_gap;
+                carry += per_gap;
+            }
+        } else if position + 1 < order.len() {
+            carry += per_gap;
+        }
+    }
+    out.lines[line_index].x_max += slack;
+}
+
+/// W3-J: the string the shaper sees, with caps applied, and the byte ranges
+/// (with their segment) that shape at the small-cap size.
+///
+/// A lowercase letter is replaced only when its capital is a single
+/// character of the same UTF-8 length - true for the Latin, Greek and
+/// Cyrillic letters in common use - so the shaped string and the stored one
+/// share every byte offset, and the caret, hit test and selection stay
+/// exact. A letter whose capital is longer (German sharp s) shapes as typed.
+fn apply_caps(text: &str, segments: &[Segment]) -> (String, Vec<(usize, usize, usize)>) {
+    if segments.iter().all(|s| s.style.caps == Caps::Normal) {
+        return (text.to_string(), Vec::new());
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut small: Vec<(usize, usize, usize)> = Vec::new();
+    for (index, ch) in text.char_indices() {
+        let segment = segments
+            .iter()
+            .position(|s| s.start <= index && index < s.end);
+        let caps = segment.map_or(Caps::Normal, |i| segments[i].style.caps);
+        let upper = same_length_upper(ch);
+        match (caps, upper) {
+            (Caps::AllCaps, Some(up)) => out.push(up),
+            (Caps::SmallCaps, Some(up)) => {
+                out.push(up);
+                let seg = segment.unwrap_or(0);
+                let end = index + ch.len_utf8();
+                match small.last_mut() {
+                    Some(last) if last.1 == index && last.2 == seg => last.1 = end,
+                    _ => small.push((index, end, seg)),
+                }
+            }
+            _ => out.push(ch),
+        }
+    }
+    debug_assert_eq!(out.len(), text.len(), "caps must keep every byte offset");
+    (out, small)
+}
+
+/// The capital of a lowercase letter when it is one character of the same
+/// encoded length; `None` otherwise (not lowercase, or no such capital).
+fn same_length_upper(ch: char) -> Option<char> {
+    if !ch.is_lowercase() {
+        return None;
+    }
+    let mut upper = ch.to_uppercase();
+    let first = upper.next()?;
+    (upper.next().is_none() && first.len_utf8() == ch.len_utf8() && first != ch).then_some(first)
 }
 
 fn kern_shift(
@@ -913,5 +1153,275 @@ fn rule(
         },
         color,
         line,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// W3-J: scale, baseline shift, caps, indents, justify variants, anti-alias
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod w3j_tests {
+    use super::*;
+    use crate::model::ParagraphStyle;
+    use crate::raster::{rasterize, GlyphRasterCache};
+
+    fn library() -> FontLibrary {
+        let mut library = FontLibrary::empty();
+        library.load_bytes(dejavu::sans::regular().to_vec());
+        library
+    }
+
+    fn width(shaped: &ShapedText) -> f32 {
+        shaped
+            .lines
+            .iter()
+            .map(|l| l.x_max - l.x_min)
+            .fold(0.0, f32::max)
+    }
+
+    fn ink_x_range(shaped: &ShapedText) -> (f32, f32) {
+        shaped
+            .glyphs
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), g| {
+                (lo.min(g.x), hi.max(g.x + g.advance))
+            })
+    }
+
+    #[test]
+    fn a_200_percent_horizontal_scale_doubles_the_laid_out_width() {
+        let mut library = library();
+        let base = TextRun::point("Hello world", "DejaVu Sans", 32.0);
+        let plain = shape(&mut library, &base);
+        let mut wide = base.clone();
+        wide.style.horizontal_scale = 2.0;
+        let scaled = shape(&mut library, &wide);
+        let (a, b) = (width(&plain), width(&scaled));
+        assert!(a > 50.0, "real text: {a}");
+        assert!(
+            (b - 2.0 * a).abs() < 0.5,
+            "200 % doubles the width: {a} -> {b}"
+        );
+        assert!(scaled
+            .glyphs
+            .iter()
+            .all(|g| g.scale_x == 2.0 && g.scale_y == 1.0));
+        // Every glyph's advance doubled and the pen positions spread with it.
+        for (p, s) in plain.glyphs.iter().zip(&scaled.glyphs) {
+            assert!((s.advance - 2.0 * p.advance).abs() < 1e-3);
+            assert!((s.x - 2.0 * p.x).abs() < 1e-3);
+        }
+        // And the rasterised ink is about twice as wide too.
+        let mut cache = GlyphRasterCache::new();
+        let plain_ink = rasterize(&mut library, &mut cache, &plain);
+        let wide_ink = rasterize(&mut library, &mut cache, &scaled);
+        let ratio = wide_ink.width as f32 / plain_ink.width as f32;
+        assert!((ratio - 2.0).abs() < 0.1, "ink width ratio {ratio}");
+        assert_eq!(wide_ink.height, plain_ink.height, "vertical untouched");
+    }
+
+    #[test]
+    fn vertical_scale_stretches_the_ink_about_the_baseline() {
+        let mut library = library();
+        let base = TextRun::point("H", "DejaVu Sans", 40.0);
+        let plain = shape(&mut library, &base);
+        let mut tall = base.clone();
+        tall.style.vertical_scale = 2.0;
+        let scaled = shape(&mut library, &tall);
+        assert_eq!(width(&plain), width(&scaled), "advance unchanged");
+        let mut cache = GlyphRasterCache::new();
+        let a = rasterize(&mut library, &mut cache, &plain);
+        let b = rasterize(&mut library, &mut cache, &scaled);
+        let ratio = b.height as f32 / a.height as f32;
+        assert!((ratio - 2.0).abs() < 0.15, "ink height ratio {ratio}");
+        // Stretched about the baseline: the bottom of an H stays on it.
+        let a_bottom = a.origin_y + a.height as i32;
+        let b_bottom = b.origin_y + b.height as i32;
+        assert!((a_bottom - b_bottom).abs() <= 1, "{a_bottom} vs {b_bottom}");
+    }
+
+    #[test]
+    fn a_wrapping_box_wraps_the_scaled_text_inside_its_width() {
+        let mut library = library();
+        let plain_run =
+            TextRun::paragraph("one two three four five six", "DejaVu Sans", 20.0, 200.0);
+        let plain = shape(&mut library, &plain_run);
+        let mut run = plain_run.clone();
+        run.style.horizontal_scale = 1.5;
+        let shaped = shape(&mut library, &run);
+        // The glyphs really are stretched...
+        let first = |s: &ShapedText| s.glyphs.first().expect("glyphs").advance;
+        assert!(
+            (first(&shaped) - 1.5 * first(&plain)).abs() < 1e-3,
+            "{} vs {}",
+            first(&shaped),
+            first(&plain)
+        );
+        // ...so the same box holds fewer words per line: more lines...
+        assert!(
+            shaped.lines.len() > plain.lines.len(),
+            "{} lines scaled vs {} plain",
+            shaped.lines.len(),
+            plain.lines.len()
+        );
+        // ...and none of them overhangs the box.
+        for line in &shaped.lines {
+            assert!(line.x_max <= 200.0 + 0.5, "line overhangs: {}", line.x_max);
+        }
+    }
+
+    #[test]
+    fn baseline_shift_moves_the_glyphs_up_by_its_value() {
+        let mut library = library();
+        let base = TextRun::point("Shift", "DejaVu Sans", 30.0);
+        let plain = shape(&mut library, &base);
+        let mut raised = base.clone();
+        raised.style.baseline_shift = 10.0;
+        let shifted = shape(&mut library, &raised);
+        for (p, s) in plain.glyphs.iter().zip(&shifted.glyphs) {
+            assert!((p.draw_y - s.draw_y - 10.0).abs() < 1e-4, "raised by 10 px");
+            assert_eq!(p.x, s.x, "no horizontal move");
+        }
+        let mut cache = GlyphRasterCache::new();
+        let a = rasterize(&mut library, &mut cache, &plain);
+        let b = rasterize(&mut library, &mut cache, &shifted);
+        assert_eq!(a.origin_y - b.origin_y, 10, "the ink bounds moved up");
+    }
+
+    #[test]
+    fn a_left_indent_moves_the_first_glyph_and_a_right_indent_narrows_the_wrap() {
+        let mut library = library();
+        let text = "alpha beta gamma delta epsilon zeta eta theta";
+        let base = TextRun::paragraph(text, "DejaVu Sans", 18.0, 240.0);
+        let plain = shape(&mut library, &base);
+        let mut indented = base.clone();
+        indented.paragraph.left_indent = 30.0;
+        let moved = shape(&mut library, &indented);
+        let first = |s: &ShapedText| s.glyphs.iter().map(|g| g.x).fold(f32::INFINITY, f32::min);
+        assert!((first(&moved) - first(&plain) - 30.0).abs() < 1e-3);
+        for line in &moved.lines {
+            assert!(line.x_max <= 240.0 + 0.5, "wraps inside the box");
+        }
+        let mut right = base.clone();
+        right.paragraph.right_indent = 100.0;
+        let narrowed = shape(&mut library, &right);
+        assert!(
+            narrowed.lines.len() > plain.lines.len(),
+            "a narrower measure wraps more"
+        );
+        for line in &narrowed.lines {
+            assert!(
+                line.x_max <= 140.0 + 0.5,
+                "inside the right indent: {}",
+                line.x_max
+            );
+        }
+        // Point text: the left indent moves it too.
+        let mut point = TextRun::point("Indent", "DejaVu Sans", 18.0);
+        let before = first(&shape(&mut library, &point));
+        point.paragraph = ParagraphStyle {
+            left_indent: 12.0,
+            ..ParagraphStyle::default()
+        };
+        assert!((first(&shape(&mut library, &point)) - before - 12.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_justify_variants_place_the_last_line() {
+        let mut library = library();
+        let text = "the quick brown fox jumps over the lazy dog again";
+        let mut run = TextRun::paragraph(text, "DejaVu Sans", 18.0, 220.0);
+        let last = |s: &ShapedText| s.lines.last().cloned().unwrap();
+        run.paragraph.alignment = Alignment::Justify;
+        let left = last(&shape(&mut library, &run));
+        assert!(
+            left.x_max < 219.0,
+            "plain justify leaves the last line short"
+        );
+
+        run.paragraph.alignment = Alignment::JustifyLastRight;
+        let right = last(&shape(&mut library, &run));
+        assert!(
+            (right.x_max - 220.0).abs() < 0.5,
+            "flush right: {}",
+            right.x_max
+        );
+
+        run.paragraph.alignment = Alignment::JustifyLastCenter;
+        let center = last(&shape(&mut library, &run));
+        let (l, r) = (center.x_min, 220.0 - center.x_max);
+        assert!((l - r).abs() < 0.5, "centred: {l} vs {r}");
+
+        run.paragraph.alignment = Alignment::JustifyAll;
+        let shaped = shape(&mut library, &run);
+        let all = last(&shaped);
+        assert!(all.x_min.abs() < 0.5 && (all.x_max - 220.0).abs() < 0.5);
+        let (lo, hi) = ink_x_range(&ShapedText {
+            glyphs: shaped.glyphs[all.glyph_range()].to_vec(),
+            ..shaped.clone()
+        });
+        assert!(lo.abs() < 0.5 && (hi - 220.0).abs() < 0.5, "{lo}..{hi}");
+    }
+
+    #[test]
+    fn all_caps_and_small_caps_change_the_shapes_but_not_the_text() {
+        let mut library = library();
+        let base = TextRun::point("abc", "DejaVu Sans", 30.0);
+        let lower = shape(&mut library, &base);
+        let upper = shape(&mut library, &TextRun::point("ABC", "DejaVu Sans", 30.0));
+        let mut all = base.clone();
+        all.style.caps = Caps::AllCaps;
+        let caps = shape(&mut library, &all);
+        assert_eq!(caps.text, "abc", "the stored string is untouched");
+        let ids = |s: &ShapedText| s.glyphs.iter().map(|g| g.glyph_id).collect::<Vec<_>>();
+        assert_eq!(ids(&caps), ids(&upper), "shaped as capitals");
+        assert_ne!(ids(&caps), ids(&lower));
+        // Cluster offsets still index the stored string.
+        assert_eq!(caps.glyphs[1].cluster_start, 1);
+
+        let mut small = base.clone();
+        small.style.caps = Caps::SmallCaps;
+        let smalls = shape(&mut library, &small);
+        assert_eq!(ids(&smalls), ids(&upper), "capital glyphs");
+        for g in &smalls.glyphs {
+            assert!(
+                (g.size_px - 30.0 * SMALL_CAPS_SIZE_FACTOR).abs() < 1e-3,
+                "{}",
+                g.size_px
+            );
+        }
+        // A capital typed as a capital stays full size.
+        let mut mixed = TextRun::point("Ab", "DejaVu Sans", 30.0);
+        mixed.style.caps = Caps::SmallCaps;
+        let m = shape(&mut library, &mixed);
+        assert_eq!(m.glyphs[0].size_px, 30.0);
+        assert!(m.glyphs[1].size_px < 30.0);
+        // Sharp s has no same-length capital: shaped as typed, no panic.
+        let sharp = String::from_utf8(vec![0xC3, 0x9F]).unwrap();
+        let mut odd = TextRun::point(sharp.clone(), "DejaVu Sans", 30.0);
+        odd.style.caps = Caps::AllCaps;
+        assert_eq!(shape(&mut library, &odd).text, sharp);
+    }
+
+    #[test]
+    fn anti_alias_none_leaves_only_full_or_empty_pixels() {
+        let mut library = library();
+        let mut run = TextRun::point("Aliased", "DejaVu Sans", 24.0);
+        let mut cache = GlyphRasterCache::new();
+        let shaped = shape(&mut library, &run);
+        let smooth = rasterize(&mut library, &mut cache, &shaped);
+        assert!(
+            smooth.data.iter().any(|v| *v > 0 && *v < 255),
+            "smooth has grey"
+        );
+        run.style.anti_alias = AntiAlias::None;
+        let shaped = shape(&mut library, &run);
+        let hard = rasterize(&mut library, &mut cache, &shaped);
+        assert!(hard.data.contains(&255));
+        assert!(
+            hard.data.iter().all(|v| *v == 0 || *v == 255),
+            "no grey edge"
+        );
     }
 }

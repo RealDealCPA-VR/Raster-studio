@@ -1,0 +1,202 @@
+//! Displace: move every pixel by an amount read from a second image.
+//!
+//! The map's straight red channel drives the horizontal shift and its green
+//! channel the vertical one, so a grey map shifts along the diagonal and a
+//! colour map can shift the two axes independently — the Photoshop
+//! convention. A value of one half is "no shift"; black is the full negative
+//! scale, white the full positive scale.
+//!
+//! The map is in **straight** linear values, so a half-transparent map still
+//! reads as the colour it is; and a shift of exactly zero copies the source
+//! pixel through untouched rather than resampling it, so a neutral map is the
+//! identity bit for bit.
+
+use serde::{Deserialize, Serialize};
+
+use crate::buffer::FilterBuffer;
+use crate::support::{fill_tiles, Sampling};
+
+/// How a map of a different size is laid over the source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum DisplaceFit {
+    /// Stretch the map to the source's size.
+    #[default]
+    Stretch,
+    /// Repeat the map from the top-left corner.
+    Tile,
+}
+
+/// Displace `src` by `map`.
+///
+/// * `scale_x`, `scale_y` — the shift, in pixels, that a fully white map
+///   value produces (black produces the negative of it).
+/// * `fit` — see [`DisplaceFit`].
+///
+/// An empty map, or two zero scales, is the identity. Non-finite scales are
+/// treated as zero.
+pub fn displace(
+    src: &FilterBuffer,
+    map: &FilterBuffer,
+    scale_x: f32,
+    scale_y: f32,
+    fit: DisplaceFit,
+    sampling: Sampling,
+) -> FilterBuffer {
+    let sx = if scale_x.is_finite() { scale_x } else { 0.0 };
+    let sy = if scale_y.is_finite() { scale_y } else { 0.0 };
+    if src.is_empty() || map.is_empty() || (sx == 0.0 && sy == 0.0) {
+        return src.clone();
+    }
+    let (w, h) = src.dimensions();
+    let (mw, mh) = map.dimensions();
+    let mut out = src.same_size_blank();
+    fill_tiles(w, h, out.pixels_mut(), |x, y| {
+        let (mx, my) = match fit {
+            DisplaceFit::Stretch => (
+                ((u64::from(x) * u64::from(mw)) / u64::from(w)) as u32,
+                ((u64::from(y) * u64::from(mh)) / u64::from(h)) as u32,
+            ),
+            DisplaceFit::Tile => (x % mw, y % mh),
+        };
+        let m = color::unpremultiply(map.get(mx.min(mw - 1), my.min(mh - 1)));
+        let dx = (m[0].clamp(0.0, 1.0) - 0.5) * 2.0 * sx;
+        let dy = (m[1].clamp(0.0, 1.0) - 0.5) * 2.0 * sy;
+        if dx.abs() < 1e-6 && dy.abs() < 1e-6 {
+            return src.get(x, y);
+        }
+        src.sample(x as f32 + 0.5 + dx, y as f32 + 0.5 + dy, sampling)
+    });
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::support::{EdgeMode, Interpolation};
+
+    fn ramp(w: u32, h: u32) -> FilterBuffer {
+        let mut px = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                px.push([x as f32 / w as f32, y as f32 / h as f32, 0.3, 1.0]);
+            }
+        }
+        FilterBuffer::from_pixels(w, h, px).unwrap()
+    }
+
+    #[test]
+    fn a_zero_map_is_the_identity_bit_for_bit() {
+        let src = ramp(20, 12);
+        let neutral = FilterBuffer::filled(20, 12, [0.5, 0.5, 0.5, 1.0]).unwrap();
+        let out = displace(
+            &src,
+            &neutral,
+            40.0,
+            40.0,
+            DisplaceFit::Stretch,
+            Sampling::clamped(),
+        );
+        assert_eq!(out.pixels(), src.pixels());
+        // A half-transparent neutral map is still neutral: the map is read
+        // straight, not premultiplied.
+        let faint = FilterBuffer::filled(7, 5, [0.25, 0.25, 0.25, 0.5]).unwrap();
+        let out = displace(
+            &src,
+            &faint,
+            40.0,
+            40.0,
+            DisplaceFit::Tile,
+            Sampling::clamped(),
+        );
+        assert_eq!(out.pixels(), src.pixels());
+        // And so are two zero scales, whatever the map says.
+        let loud = FilterBuffer::filled(20, 12, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        let out = displace(
+            &src,
+            &loud,
+            0.0,
+            0.0,
+            DisplaceFit::Stretch,
+            Sampling::clamped(),
+        );
+        assert_eq!(out.pixels(), src.pixels());
+    }
+
+    #[test]
+    fn a_white_map_shifts_by_the_full_scale_along_each_axis() {
+        let src = ramp(32, 32);
+        let white = FilterBuffer::filled(1, 1, [1.0, 1.0, 1.0, 1.0]).unwrap();
+        let out = displace(
+            &src,
+            &white,
+            3.0,
+            5.0,
+            DisplaceFit::Stretch,
+            Sampling::new(EdgeMode::Clamp, Interpolation::Nearest),
+        );
+        // Interior pixel (10, 10) now shows what was at (13, 15).
+        assert_eq!(out.get(10, 10), src.get(13, 15));
+        // Red only drives x: a red map leaves y alone.
+        let red = FilterBuffer::filled(1, 1, [1.0, 0.5, 0.5, 1.0]).unwrap();
+        let out = displace(
+            &src,
+            &red,
+            3.0,
+            5.0,
+            DisplaceFit::Tile,
+            Sampling::new(EdgeMode::Clamp, Interpolation::Nearest),
+        );
+        assert_eq!(out.get(10, 10), src.get(13, 10));
+    }
+
+    #[test]
+    fn stretch_and_tile_lay_a_small_map_differently() {
+        let src = ramp(16, 16);
+        // Left half white, right half black: stretched it splits the image
+        // in two; tiled it alternates every pixel.
+        let map = FilterBuffer::from_pixels(2, 1, vec![[1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]])
+            .unwrap();
+        let nearest = Sampling::new(EdgeMode::Clamp, Interpolation::Nearest);
+        let stretched = displace(&src, &map, 2.0, 0.0, DisplaceFit::Stretch, nearest);
+        let tiled = displace(&src, &map, 2.0, 0.0, DisplaceFit::Tile, nearest);
+        assert_eq!(stretched.get(4, 4), src.get(6, 4));
+        assert_eq!(stretched.get(12, 4), src.get(10, 4));
+        assert_eq!(tiled.get(4, 4), src.get(6, 4));
+        assert_eq!(tiled.get(5, 4), src.get(3, 4));
+        assert_ne!(stretched.pixels(), tiled.pixels());
+    }
+
+    #[test]
+    fn degenerate_inputs_do_not_panic() {
+        let src = ramp(3, 3);
+        let empty = FilterBuffer::transparent(0, 0).unwrap();
+        assert_eq!(
+            displace(
+                &src,
+                &empty,
+                5.0,
+                5.0,
+                DisplaceFit::Tile,
+                Sampling::clamped()
+            )
+            .pixels(),
+            src.pixels()
+        );
+        let _ = displace(
+            &empty,
+            &src,
+            5.0,
+            5.0,
+            DisplaceFit::Tile,
+            Sampling::clamped(),
+        );
+        let _ = displace(
+            &src,
+            &src,
+            f32::NAN,
+            f32::INFINITY,
+            DisplaceFit::Stretch,
+            Sampling::clamped(),
+        );
+    }
+}

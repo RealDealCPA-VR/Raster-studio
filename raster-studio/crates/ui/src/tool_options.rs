@@ -1088,4 +1088,126 @@ mod type_reaches_the_engine_tests {
             "serif choice resolves to a different family than sans"
         );
     }
+
+    /// W3-B: one frame of the real options bar for `tool`, returning the
+    /// drawn rect of every option control it marked.
+    fn options_bar_rects(tool: ToolId) -> Vec<(&'static str, egui::Rect)> {
+        let mut w = crate::Workspace::new();
+        w.palette.activate(&crate::PaletteModel::build(), tool);
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let input = || egui::RawInput {
+            // Wide enough that the bar's horizontal scroll shows every control.
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(6000.0, 400.0),
+            )),
+            ..Default::default()
+        };
+        // Two frames: the first lays out, the second draws at settled sizes.
+        let _ = ctx.run(input(), |ctx| crate::view::tool_options(&mut w, ctx));
+        let _ = ctx.run(input(), |ctx| crate::view::tool_options(&mut w, ctx));
+        tools::registry::info(tool)
+            .expect("in the registry")
+            .options
+            .iter()
+            .filter_map(|spec| {
+                ctx.read_response(crate::view::ids::tool_option(tool, spec.key))
+                    .map(|r| (spec.key, r.rect))
+            })
+            .collect()
+    }
+
+    /// W3-B: the Pen's options bar is no longer empty, and every shape tool
+    /// draws fill, stroke and stroke-width controls — drawn by the real
+    /// `view::tool_options`, not read out of the schema.
+    #[test]
+    fn the_options_bar_draws_the_pen_and_shape_paint_controls() {
+        const PAINT: &[&str] = &[
+            "fill",
+            "fill_color",
+            "stroke",
+            "stroke_color",
+            "stroke_width",
+        ];
+        let cases: &[(ToolId, &[&str])] = &[
+            (ToolId::Pen, &["mode", "combine"]),
+            (ToolId::Rectangle, &["mode", "from_center"]),
+            (ToolId::RoundedRectangle, &["radius", "from_center"]),
+            (ToolId::Ellipse, &["from_center"]),
+            (ToolId::Polygon, &["sides"]),
+            (ToolId::Star, &["points", "inner_ratio"]),
+            (ToolId::Line, &["width"]),
+            (ToolId::CustomShape, &["preset", "from_center"]),
+        ];
+        for (tool, own) in cases {
+            let rects = options_bar_rects(*tool);
+            for key in own.iter().chain(PAINT) {
+                let rect = rects
+                    .iter()
+                    .find(|(k, _)| k == key)
+                    .map(|(_, r)| *r)
+                    .unwrap_or_else(|| panic!("{tool:?}: no `{key}` control was drawn"));
+                assert!(
+                    rect.width() > 0.0 && rect.height() > 0.0 && rect.is_finite(),
+                    "{tool:?}/{key}: drawn at {rect:?}"
+                );
+            }
+        }
+    }
+
+    /// W3-B: the Custom Shape picker offers the built-in library, and a pick
+    /// travels options bar -> held set -> `set_setting` -> drag -> a shape
+    /// layer holding that library entry, not a rectangle.
+    #[test]
+    fn a_custom_shape_pick_reaches_the_drawn_layer() {
+        let spec = ToolOptions::spec_for_test(ToolId::CustomShape, "preset").expect("declared");
+        let OptionKind::Choice { choices, .. } = spec.kind else {
+            panic!("preset is a Choice");
+        };
+        assert!(choices.len() >= 8, "{choices:?}");
+        for want in ["Heart", "Star", "Arrow", "Speech Bubble", "Check", "Cross"] {
+            assert!(choices.contains(&want), "{want} missing from {choices:?}");
+        }
+
+        let drawn_svg = |options: &ToolOptions| {
+            let mut tool = tools::registry::make(ToolId::CustomShape);
+            for (key, value) in options.held(ToolId::CustomShape) {
+                tool.set_setting(&key, to_setting(value))
+                    .unwrap_or_else(|e| panic!("CustomShape/{key}: {e}"));
+            }
+            let mut tiles = tools::MemoryTiles::new();
+            let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 256, 256));
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(10.0, 10.0))
+                .unwrap();
+            tool.on_pointer_move(&mut ctx, PointerEvent::at(110.0, 110.0))
+                .unwrap();
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(110.0, 110.0))
+                .unwrap();
+            let cmds = ctx.drain();
+            let Some(Command::CreateLayer { layer }) = cmds.first() else {
+                panic!("no layer: {cmds:?}");
+            };
+            let LayerKind::Shape(shape) = &layer.kind else {
+                panic!("{:?}", layer.kind);
+            };
+            (layer.name.clone(), shape.clone())
+        };
+        let star = choices.iter().position(|c| *c == "Star").unwrap();
+        let mut options = ToolOptions::new();
+        let (default_name, default_shape) = drawn_svg(&options);
+        assert!(options.set(ToolId::CustomShape, "preset", OptionValue::Choice(star)));
+        assert!(options.set(ToolId::CustomShape, "stroke", OptionValue::Choice(1)));
+        assert!(options.set(ToolId::CustomShape, "stroke_width", OptionValue::Float(4.0)));
+        let (name, shape) = drawn_svg(&options);
+        assert_eq!(name, "Star");
+        assert_ne!(name, default_name);
+        assert_ne!(shape.path_svg, default_shape.path_svg);
+        let path = vector::parse_svg(&shape.path_svg).unwrap();
+        // A five-point star has ten corners; a rectangle has four.
+        assert_eq!(vector::anchors::anchor_points(&path).len(), 10);
+        let b = path.bounds();
+        assert!(b.min.x >= 9.99 && b.max.x <= 110.01 && b.min.y >= 9.99 && b.max.y <= 110.01);
+        assert_eq!(shape.stroke.expect("stroke on").width_px, 4.0);
+    }
 }

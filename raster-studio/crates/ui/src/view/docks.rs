@@ -21,7 +21,7 @@ use crate::panels::history::HistoryModel;
 use crate::panels::layers::{DropPosition, DropRejection, LayerRow, LayersModel};
 use crate::panels::navigator::{format_zoom, ViewBox};
 use crate::panels::properties::{
-    AdjustmentsPanel, MaskProperties, PropertiesSubject, PropertyFocus,
+    self as props, AdjustmentsPanel, MaskProperties, PropertiesSubject, PropertyFocus,
 };
 use crate::panels::text as text_panel;
 use crate::Workspace;
@@ -489,7 +489,7 @@ fn body_of(
         PanelId::Layers => layers_body(w, ui, doc, fill_bottom),
         PanelId::History => history_body(w, ui, history),
         PanelId::Adjustments => adjustments_body(w, ui),
-        PanelId::Properties => properties_body(w, ui, doc),
+        PanelId::Properties => properties_body(w, ui, doc, history),
         PanelId::Color => color_body(w, ui),
         PanelId::Swatches => swatches_body(w, ui),
         PanelId::Brushes => brushes_body(w, ui, fill_bottom),
@@ -819,7 +819,28 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
         let (rect, _) = content.allocate_exact_size(Vec2::splat(side), Sense::hover());
         super::paint_icon(&content, rect, "clipping", TextRole::Tertiary);
     }
-    content.label(body(&content, row.name.clone()));
+    // W3-J: the name is its own control. A double-click on it opens the
+    // inline rename in its place; a single click selects like the row does
+    // (the label takes the click from the row underneath, so it has to be
+    // forwarded). Elsewhere on a text row a double-click still enters the
+    // layer (card 026).
+    let mut name_clicked = false;
+    if w.layers.renaming() == Some(row.id) {
+        rename_field(w, &mut content, row);
+    } else {
+        let label = content.label(body(&content, row.name.clone()));
+        let name = content.interact(
+            label.rect,
+            crate::panels::layers::ids::name_label(row.id),
+            Sense::click(),
+        );
+        if name.double_clicked() {
+            w.layers.begin_rename(row.id, &row.name);
+        } else if name.clicked() {
+            name_clicked = true;
+        }
+        name.on_hover_text(crate::strings::tr("ui.docks.layers.rename.tip"));
+    }
 
     content.with_layout(Layout::right_to_left(Align::Center), |ui| {
         if row.shows_lock_badge() {
@@ -846,7 +867,7 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
     if response.double_clicked() && row.class == crate::menu::LayerClass::Text {
         w.emit(Intent::EnterTextLayer { layer: row.id });
     }
-    if response.clicked() {
+    if response.clicked() || name_clicked {
         let modifiers = ui.input(|i| i.modifiers);
         if modifiers.command {
             w.layers.toggle_selected(row.id);
@@ -866,6 +887,48 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
         });
     }
     response
+}
+
+/// W3-J: the inline rename, drawn where the name label was.
+///
+/// The field takes focus and selects its text on the frame it opens. Enter
+/// (which makes a single-line edit surrender focus) or a click elsewhere
+/// commits: one [`LayersModel::rename`] command, so one undo step. Escape
+/// cancels and the name is untouched. An unchanged or all-space name emits
+/// nothing — the same rule the Properties Name field follows.
+fn rename_field(w: &mut Workspace, content: &mut Ui, row: &LayerRow) {
+    let t = current_tokens(content);
+    let id = crate::panels::layers::ids::rename_field(row.id);
+    let width = (content.available_width() - Space::Medium.pt()).max(t.metrics.numeric_field_width);
+    let fresh = w.layers.take_rename_fresh();
+    let seed = w.layers.rename_buffer_mut().clone();
+    let edit = super::text_field_sized(content, id, &seed, width);
+    if fresh {
+        edit.response.request_focus();
+        // Select the whole name, so typing replaces it (Photopea's rename).
+        let mut state = egui::text_edit::TextEditState::load(content.ctx(), id).unwrap_or_default();
+        let end = seed.chars().count();
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(0),
+                egui::text::CCursor::new(end),
+            )));
+        state.store(content.ctx(), id);
+        return;
+    }
+    if content.input(|i| i.key_pressed(egui::Key::Escape)) {
+        w.layers.cancel_rename();
+        return;
+    }
+    if let Some(name) = edit.committed {
+        w.layers.finish_rename();
+        if name.trim() != row.name {
+            if let Some(command) = LayersModel::rename(row.id, &name) {
+                w.emit(Intent::Document(command));
+            }
+        }
+    }
 }
 
 /// The 4:3 thumbnail well.
@@ -1317,47 +1380,85 @@ fn row_drag_position(
 /// The one filter that is on is the selected action; every other button is a
 /// plain action, ready to be pressed. None of them is ever disabled.
 fn layer_filter_row(w: &mut Workspace, ui: &mut Ui) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = Space::Hair.pt();
-        if icon_action_id(
-            ui,
-            "overflow",
-            crate::strings::tr("ui.docks.show.every.layer"),
-            ActionState::selected_if(w.layers.filter.is_none()),
-            Some(super::ids::layer_filter_all()),
-        )
-        .clicked()
-        {
-            w.layers.filter = None;
-        }
-        for class in crate::menu::LayerClass::ALL {
-            let on = w.layers.filter == Some(class);
+    let search_drawn = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = Space::Hair.pt();
             if icon_action_id(
                 ui,
-                class_icon(class),
-                &filter_tip(class),
-                ActionState::selected_if(on),
-                Some(super::ids::layer_filter(class)),
+                "overflow",
+                crate::strings::tr("ui.docks.show.every.layer"),
+                ActionState::selected_if(w.layers.filter.is_none()),
+                Some(super::ids::layer_filter_all()),
             )
             .clicked()
             {
-                w.layers.filter = if on { None } else { Some(class) };
+                w.layers.filter = None;
             }
-        }
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if icon_action_id(
-                ui,
-                "plus",
-                crate::strings::tr("ui.docks.thumbnail.size"),
-                ActionState::Idle,
-                Some(super::ids::layer_thumb_size()),
-            )
-            .clicked()
-            {
-                w.layers.thumb_scale = w.layers.thumb_scale.cycled();
+            for class in crate::menu::LayerClass::ALL {
+                let on = w.layers.filter == Some(class);
+                if icon_action_id(
+                    ui,
+                    class_icon(class),
+                    &filter_tip(class),
+                    ActionState::selected_if(on),
+                    Some(super::ids::layer_filter(class)),
+                )
+                .clicked()
+                {
+                    w.layers.filter = if on { None } else { Some(class) };
+                }
             }
-        });
-    });
+            let mut search_drawn = false;
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if icon_action_id(
+                    ui,
+                    "plus",
+                    crate::strings::tr("ui.docks.thumbnail.size"),
+                    ActionState::Idle,
+                    Some(super::ids::layer_thumb_size()),
+                )
+                .clicked()
+                {
+                    w.layers.thumb_scale = w.layers.thumb_scale.cycled();
+                }
+                // W3-J: the name search fills what the icons left of the row.
+                // When a narrow column leaves less than a numeric field's width,
+                // it drops to its own line below instead of overflowing.
+                let t = current_tokens(ui);
+                let width = ui.available_width() - Space::XSmall.pt();
+                if width >= t.metrics.numeric_field_width {
+                    layer_search_field(w, ui, width);
+                    search_drawn = true;
+                }
+            });
+            search_drawn
+        })
+        .inner;
+    if !search_drawn {
+        let t = current_tokens(ui);
+        let width = ui.available_width() - Space::XSmall.pt();
+        layer_search_field(w, ui, width.max(t.metrics.numeric_field_width));
+    }
+}
+
+/// W3-J: the Layers panel's name search. Typing narrows the rows to those
+/// whose name contains the text (`panels::layers::matches_search`); clearing
+/// it shows every row again. Panel state, never document state.
+fn layer_search_field(w: &mut Workspace, ui: &mut Ui, width: f32) {
+    let current = w.layers.search.clone();
+    let edit = super::text_field_sized(
+        ui,
+        crate::panels::layers::ids::search_field(),
+        &current,
+        width,
+    );
+    // Live: the rows narrow with every keystroke, not only on Enter.
+    let next = edit.committed.unwrap_or(edit.text);
+    if next != current {
+        w.layers.search = next;
+    }
+    edit.response
+        .on_hover_text(crate::strings::tr("ui.docks.layers.search"));
 }
 
 /// Photopea's footer row, in Photopea's order: link, fx, mask, adjustment,
@@ -1655,7 +1756,7 @@ fn adjustments_body(w: &mut Workspace, ui: &mut Ui) {
 // Properties
 // ---------------------------------------------------------------------------
 
-fn properties_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
+fn properties_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &History) {
     let subject = PropertiesSubject::resolve(doc, doc.active_layer(), w.property_focus);
     ui.label(text(
         ui,
@@ -1669,26 +1770,30 @@ fn properties_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
         PropertiesSubject::Nothing => {
             empty_state(ui, crate::strings::tr("ui.docks.select.a.layer.to.see.its"));
         }
-        PropertiesSubject::Layer(id) => layer_properties(w, ui, doc, id),
+        PropertiesSubject::Layer(id) => {
+            layer_properties(w, ui, doc, id);
+            transform_block(w, ui, doc, id);
+        }
         PropertiesSubject::Mask(id) => mask_properties(w, ui, doc, id),
         PropertiesSubject::Adjustment { layer, id } => {
             adjustment_properties(w, ui, doc, layer, id);
         }
+        // W3-J: each kind gets its own page under the common block and the
+        // transform, in place of the hint that used to send the user away.
         PropertiesSubject::Text(id) => {
             layer_properties(w, ui, doc, id);
-            ui.add_space(Space::XSmall.pt());
-            ui.label(hint(
-                ui,
-                crate::strings::tr("ui.docks.type.is.edited.in.character.and"),
-            ));
+            transform_block(w, ui, doc, id);
+            text_properties(w, ui, doc, id);
         }
         PropertiesSubject::Shape(id) => {
             layer_properties(w, ui, doc, id);
-            ui.add_space(Space::XSmall.pt());
-            ui.label(hint(
-                ui,
-                crate::strings::tr("ui.docks.path.editing.lives.in.the.paths"),
-            ));
+            transform_block(w, ui, doc, id);
+            shape_properties(w, ui, doc, id);
+        }
+        PropertiesSubject::SmartObject(id) => {
+            layer_properties(w, ui, doc, id);
+            transform_block(w, ui, doc, id);
+            smart_object_properties(w, ui, doc, history, id);
         }
     }
 
@@ -1732,6 +1837,7 @@ fn layer_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId)
     }
     design::inspector_field(ui, "Kind", |ui| {
         ui.label(body(ui, crate::menu::LayerClass::of(&layer.kind).label()));
+        ui.with_layout(Layout::right_to_left(Align::Center), transform_toggle);
     });
     let mut clipping = layer.is_clipping();
     design::inspector_field(ui, "Clipping", |ui| {
@@ -1761,6 +1867,348 @@ fn layer_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId)
             }
         });
     }
+}
+
+// ---------------------------------------------------------------------------
+// W3-J: the Transform block, the Align row and the per-kind pages
+// ---------------------------------------------------------------------------
+
+/// Where the Transform block's open state lives: panel view state, one for
+/// the session, never document state.
+fn transform_open_key() -> egui::Id {
+    egui::Id::new("raster-properties-transform-open")
+}
+
+fn transform_open(ui: &Ui) -> bool {
+    ui.memory(|m| {
+        m.data
+            .get_temp::<bool>(transform_open_key())
+            .unwrap_or(false)
+    })
+}
+
+/// The Transform block's disclosure, drawn at the end of the Kind row so it
+/// costs no line of its own: the Properties group shares the rail with
+/// Layers, and every line it takes is a Layers row the user loses. Closed
+/// until opened; the choice holds for the session.
+fn transform_toggle(ui: &mut Ui) {
+    let open = transform_open(ui);
+    let chevron = if open {
+        "chevron-down"
+    } else {
+        "chevron-right"
+    };
+    if icon_toggle_id(
+        ui,
+        chevron,
+        true,
+        crate::strings::tr("ui.docks.properties.transform.toggle"),
+        Some(props::ids::transform_toggle()),
+    )
+    .clicked()
+    {
+        ui.memory_mut(|m| m.data.insert_temp(transform_open_key(), !open));
+    }
+    ui.label(text(ui, "Transform", TextRole::Secondary, TypeRole::Body));
+}
+
+/// A number the way the fields show it: up to two decimals, no trailing zeros.
+fn px_text(value: f32) -> String {
+    let text = format!("{value:.2}");
+    let trimmed = text.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() || trimmed == "-" {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// One `label: [ field ]` pair of the Transform block. Returns the value the
+/// user committed (Enter or focus loss), parsed, or `None`.
+fn px_field(ui: &mut Ui, label: &str, id: egui::Id, value: f32, enabled: bool) -> Option<f32> {
+    let t = current_tokens(ui);
+    ui.label(text(ui, label, TextRole::Secondary, TypeRole::Body));
+    let committed = ui
+        .add_enabled_ui(enabled, |ui| {
+            super::text_field_sized(ui, id, &px_text(value), t.metrics.numeric_field_width)
+        })
+        .inner
+        .committed?;
+    let parsed: f32 = committed.trim().parse().ok()?;
+    parsed.is_finite().then_some(parsed)
+}
+
+/// X / Y / W / H, editable, and the Align row — for every layer that has a
+/// measurable frame. Each commit is one `Command::TransformLayer`
+/// ([`props::Transform`]), so one undo step.
+fn transform_block(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) {
+    // Opened by the disclosure on the Kind row ([`transform_toggle`]).
+    if !transform_open(ui) {
+        return;
+    }
+    design::section_header(ui, "Transform");
+    // Raster ink is measured by the application, which holds the tile
+    // bytes, and published each frame (`RasterInks::publish`).
+    let inks = props::RasterInks::published(ui.ctx());
+    let Some(frame) = props::Transform::frame(doc, id, &inks) else {
+        ui.label(hint(
+            ui,
+            crate::strings::tr("ui.docks.properties.nothing.to.measure"),
+        ));
+        return;
+    };
+    let locked = props::Transform::is_locked(doc, id);
+    if locked {
+        ui.label(hint(
+            ui,
+            crate::strings::tr("ui.docks.properties.position.locked"),
+        ));
+    }
+    let enabled = !locked;
+    let mut commands: Vec<Option<Command>> = Vec::new();
+    ui.horizontal(|ui| {
+        if let Some(x) = px_field(ui, "X", props::ids::transform_x(id), frame.x, enabled) {
+            commands.push(props::Transform::set_x(doc, id, &inks, x));
+        }
+        ui.add_space(Space::Small.pt());
+        if let Some(y) = px_field(ui, "Y", props::ids::transform_y(id), frame.y, enabled) {
+            commands.push(props::Transform::set_y(doc, id, &inks, y));
+        }
+    });
+    ui.horizontal(|ui| {
+        if let Some(width) = px_field(ui, "W", props::ids::transform_w(id), frame.width, enabled) {
+            commands.push(props::Transform::set_width(doc, id, &inks, width));
+        }
+        ui.add_space(Space::Small.pt());
+        if let Some(height) = px_field(ui, "H", props::ids::transform_h(id), frame.height, enabled)
+        {
+            commands.push(props::Transform::set_height(doc, id, &inks, height));
+        }
+    });
+    // One row: a picker rather than six buttons, so the block stays short
+    // enough that the Layers panel sharing the rail keeps its rows.
+    design::inspector_field(ui, "Align", |ui| {
+        ui.add_enabled_ui(enabled, |ui| {
+            let combo = egui::ComboBox::from_id_salt(("raster-properties-align", id))
+                .selected_text(body(ui, crate::strings::tr("ui.docks.align.pick")))
+                .show_ui(ui, |ui| {
+                    for edge in props::AlignEdge::ALL {
+                        let row = ui
+                            .selectable_label(false, body(ui, edge.label()))
+                            .on_hover_text(crate::strings::tr(edge.tip_key()));
+                        super::mark(ui, row.rect, props::ids::align(*edge));
+                        if row.clicked() {
+                            commands.push(props::Transform::align(doc, id, &inks, *edge));
+                        }
+                    }
+                });
+            super::mark(ui, combo.response.rect, props::ids::align_picker(id));
+        });
+    });
+    for command in commands.into_iter().flatten() {
+        w.emit(Intent::Document(command));
+    }
+}
+
+/// The text page: family, size, weight and fill, mirroring the Character
+/// panel's controls through the same setters, so both surfaces agree.
+fn text_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) {
+    let Some((layer, mut run)) = text_panel::active_text(doc, Some(id)) else {
+        return;
+    };
+    design::section_header(ui, "Type");
+    let mut changed = false;
+    let mut family: Option<String> = None;
+    design::inspector_field(ui, "Family", |ui| {
+        family = super::text_field(ui, props::ids::text_family(layer), &run.style.family).committed;
+    });
+    if let Some(family) = family {
+        changed |= text_panel::Character::set_family(&mut run, &family);
+    }
+    let mut size = run.style.size_px;
+    if design::slider_row(
+        ui,
+        "Size",
+        &mut size,
+        text_panel::MIN_SIZE_PX..=text_panel::MAX_SIZE_PX.min(400.0),
+    )
+    .changed()
+    {
+        changed |= text_panel::Character::set_size(&mut run, size);
+    }
+    design::inspector_field(ui, "Weight", |ui| {
+        let mut picked = run.style.weight.0;
+        egui::ComboBox::from_id_salt("raster-properties-weight")
+            .selected_text(body(ui, text_panel::weight_label(run.style.weight)))
+            .show_ui(ui, |ui| {
+                for (name, value) in text_panel::WEIGHTS {
+                    if ui
+                        .selectable_label(run.style.weight.0 == *value, body(ui, *name))
+                        .clicked()
+                    {
+                        picked = *value;
+                    }
+                }
+            });
+        if picked != run.style.weight.0 {
+            changed |= text_panel::Character::set_weight(&mut run, picked);
+        }
+    });
+    design::inspector_field(ui, "Fill", |ui| {
+        let mut picked = text_panel::fill_to_swatch(run.style.color);
+        if ui.color_edit_button_srgba(&mut picked).changed() {
+            changed |=
+                text_panel::Character::set_color(&mut run, text_panel::swatch_to_fill(picked));
+        }
+    });
+    if changed {
+        if let Some(intent) = text_panel::commit(doc, layer, &run) {
+            w.emit(intent);
+        }
+    }
+}
+
+/// The shape page: fill on/off and colour, stroke on/off, colour and width.
+///
+/// Corner radius: a rectangle's path is recognised and re-rounded in place
+/// (`ShapeProperties::set_corner_radius`); any other path gets a note instead
+/// of a slider that could not act.
+fn shape_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) {
+    let (Some(fill), Some(stroke)) = (
+        props::ShapeProperties::fill(doc, id),
+        props::ShapeProperties::stroke(doc, id),
+    ) else {
+        return;
+    };
+    design::section_header(ui, "Shape");
+    let mut intents: Vec<Option<Intent>> = Vec::new();
+    let mut filled = fill.is_some();
+    design::inspector_field(ui, "Fill", |ui| {
+        let toggle = ui.checkbox(
+            &mut filled,
+            hint(ui, crate::strings::tr("ui.docks.shape.filled")),
+        );
+        super::mark(ui, toggle.rect, props::ids::shape_fill_enabled(id));
+        if toggle.changed() {
+            intents.push(props::ShapeProperties::set_fill_enabled(doc, id, filled));
+        }
+        if let Some(color) = fill {
+            let mut picked = props::shape_to_swatch(color);
+            if ui.color_edit_button_srgba(&mut picked).changed() {
+                intents.push(props::ShapeProperties::set_fill(
+                    doc,
+                    id,
+                    Some(props::swatch_to_shape(picked)),
+                ));
+            }
+        }
+    });
+    let mut stroked = stroke.is_some();
+    design::inspector_field(ui, "Stroke", |ui| {
+        let toggle = ui.checkbox(
+            &mut stroked,
+            hint(ui, crate::strings::tr("ui.docks.shape.stroked")),
+        );
+        super::mark(ui, toggle.rect, props::ids::shape_stroke_enabled(id));
+        if toggle.changed() {
+            intents.push(props::ShapeProperties::set_stroke_enabled(doc, id, stroked));
+        }
+        if let Some(stroke) = &stroke {
+            let mut picked = props::shape_to_swatch(stroke.color);
+            if ui.color_edit_button_srgba(&mut picked).changed() {
+                intents.push(props::ShapeProperties::set_stroke_color(
+                    doc,
+                    id,
+                    props::swatch_to_shape(picked),
+                ));
+            }
+        }
+    });
+    if let Some(stroke) = &stroke {
+        let mut width = stroke.width_px;
+        if design::slider_row(ui, "Width", &mut width, 0.0..=100.0).changed() {
+            intents.push(props::ShapeProperties::set_stroke_width(doc, id, width));
+        }
+    }
+    // W3-J: corner radius, for a rectangle or rounded rectangle - the path
+    // is re-rounded in place. Any other path has no corners to round.
+    match props::ShapeProperties::corner_radius(doc, id) {
+        Some(mut radius) => {
+            let response = design::slider_row(
+                ui,
+                crate::strings::tr("ui.docks.shape.radius"),
+                &mut radius,
+                0.0..=500.0,
+            );
+            super::mark(ui, response.rect, props::ids::shape_radius(id));
+            if response.changed() {
+                intents.push(props::ShapeProperties::set_corner_radius(doc, id, radius));
+            }
+        }
+        None => {
+            ui.label(hint(ui, crate::strings::tr("ui.docks.shape.no.radius")));
+        }
+    }
+    for intent in intents.into_iter().flatten() {
+        w.emit(intent);
+    }
+}
+
+/// The smart-object page: the source's name and kind, and the two actions
+/// the Layer ▸ Smart Objects menu offers, routed to the very same actions.
+fn smart_object_properties(
+    w: &mut Workspace,
+    ui: &mut Ui,
+    doc: &Document,
+    history: &History,
+    id: LayerId,
+) {
+    let Some(source) = props::smart_object_source(doc, id) else {
+        return;
+    };
+    design::section_header(ui, "Source");
+    design::inspector_field(ui, "Source", |ui| {
+        if source.name.is_empty() {
+            ui.label(hint(ui, crate::strings::tr("ui.docks.smart.no.source")));
+        } else {
+            ui.label(body(ui, source.name.clone()));
+        }
+    });
+    design::inspector_field(ui, "Kind", |ui| {
+        let key = if source.linked {
+            "ui.docks.smart.linked"
+        } else {
+            "ui.docks.smart.embedded"
+        };
+        ui.label(body(ui, crate::strings::tr(key)));
+    });
+    // Enablement comes from the menu's own resolver, so the buttons and the
+    // Layer > Smart Objects rows cannot disagree.
+    let context = w.menu_context(doc, history);
+    let replace = props::REPLACE_CONTENTS.resolve(&context);
+    let edit = props::EDIT_CONTENTS.resolve(&context);
+    ui.horizontal_wrapped(|ui| {
+        if super::labelled_button(
+            ui,
+            &props::REPLACE_CONTENTS.label(),
+            replace.is_enabled(),
+            props::ids::replace_contents(),
+        )
+        .clicked()
+        {
+            w.emit(Intent::Action(props::REPLACE_CONTENTS));
+        }
+        if super::labelled_button(
+            ui,
+            &props::EDIT_CONTENTS.label(),
+            edit.is_enabled(),
+            props::ids::edit_contents(),
+        )
+        .clicked()
+        {
+            w.emit(Intent::Action(props::EDIT_CONTENTS));
+        }
+    });
 }
 
 fn mask_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) {
@@ -2313,6 +2761,7 @@ fn brushes_body(w: &mut Workspace, ui: &mut Ui, fill_bottom: Option<f32>) {
 fn character_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     let Some((layer, mut run)) = text_panel::active_text(doc, doc.active_layer()) else {
         empty_state(ui, text_panel::no_text_layer_reason());
+        type_tool_defaults(w, ui, DefaultsPage::Character);
         return;
     };
     let mut changed = false;
@@ -2439,6 +2888,21 @@ fn character_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     {
         changed |= text_panel::Character::set_size(&mut run, size);
     }
+    character_basics(ui, &mut run, &mut changed);
+    character_typography(ui, &mut run, &mut changed);
+
+    if changed {
+        if let Some(intent) = text_panel::commit(doc, layer, &run) {
+            w.emit(intent);
+        }
+    }
+}
+
+/// W3-J: the Character panel's everyday controls - weight, fill, italic,
+/// underline, strike, tracking and leading - drawn on a run. Shared by the
+/// text-layer page and the Type tool's defaults page, so the two offer the
+/// same controls with the same setters.
+fn character_basics(ui: &mut Ui, run: &mut text_engine::TextRun, changed: &mut bool) {
     design::inspector_field(ui, "Weight", |ui| {
         let current = text_panel::weight_label(run.style.weight);
         let mut picked = run.style.weight.0;
@@ -2455,7 +2919,7 @@ fn character_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
                 }
             });
         if picked != run.style.weight.0 {
-            changed |= text_panel::Character::set_weight(&mut run, picked);
+            *changed |= text_panel::Character::set_weight(run, picked);
         }
     });
     // Card 021: the direct fill colour control. The model stores linear
@@ -2469,7 +2933,7 @@ fn character_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
         let mut picked = text_panel::fill_to_swatch(fill);
         if ui.color_edit_button_srgba(&mut picked).changed() {
             fill = text_panel::swatch_to_fill(picked);
-            changed |= text_panel::Character::set_color(&mut run, fill);
+            *changed |= text_panel::Character::set_color(run, fill);
         }
     });
     let mut italic = run.style.slant != text_engine::FontSlant::Normal;
@@ -2477,39 +2941,342 @@ fn character_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     let mut strike = run.style.strikethrough;
     ui.horizontal(|ui| {
         if ui.checkbox(&mut italic, hint(ui, "Italic")).changed() {
-            changed |= text_panel::Character::set_italic(&mut run, italic);
+            *changed |= text_panel::Character::set_italic(run, italic);
         }
         if ui.checkbox(&mut underline, hint(ui, "Underline")).changed() {
-            changed |= text_panel::Character::set_underline(&mut run, underline);
+            *changed |= text_panel::Character::set_underline(run, underline);
         }
         if ui.checkbox(&mut strike, hint(ui, "Strike")).changed() {
-            changed |= text_panel::Character::set_strikethrough(&mut run, strike);
+            *changed |= text_panel::Character::set_strikethrough(run, strike);
         }
     });
     let mut tracking = run.style.tracking;
     if design::slider_row(ui, "Tracking", &mut tracking, -100.0..=400.0).changed() {
-        changed |= text_panel::Character::set_tracking(&mut run, tracking);
+        *changed |= text_panel::Character::set_tracking(run, tracking);
     }
-    design::inspector_field(ui, "Leading", |ui| {
-        ui.label(hint(
-            ui,
-            format!(
-                "{:.1} px",
-                text_panel::Character::leading_px(&run.style, &run.paragraph)
-            ),
-        ));
-    });
+    // W3-J: leading is editable here as well as in Paragraph — it was a
+    // read-only readout. Same setters, same run, so the two panels agree.
+    let mut leading = text_panel::Character::leading_px(&run.style, &run.paragraph);
+    if design::slider_row(ui, "Leading", &mut leading, 1.0..=400.0)
+        .on_hover_text(crate::strings::tr("ui.docks.character.leading.tip"))
+        .changed()
+    {
+        *changed |= text_panel::Paragraph::set_leading_px(run, leading);
+    }
+    if design::ghost_button(ui, crate::strings::tr("ui.docks.auto.leading")).clicked() {
+        *changed |= text_panel::Paragraph::set_leading_auto(run, 1.2);
+    }
+}
 
-    if changed {
-        if let Some(intent) = text_panel::commit(doc, layer, &run) {
-            w.emit(intent);
+/// W3-J: the Character panel's typography block - scale, baseline shift,
+/// super/subscript, caps, kerning, ligatures and anti-alias. Every control
+/// writes a `TextRun` field that the layout or the rasteriser consumes
+/// (`text_engine::shape` / `rasterize`), so none of them is decorative.
+fn character_typography(ui: &mut Ui, run: &mut text_engine::TextRun, changed: &mut bool) {
+    let mut h_scale = run.style.horizontal_scale * 100.0;
+    if design::slider_row(
+        ui,
+        crate::strings::tr("ui.docks.character.hscale"),
+        &mut h_scale,
+        text_panel::MIN_SCALE_PERCENT..=text_panel::MAX_SCALE_PERCENT,
+    )
+    .on_hover_text(crate::strings::tr("ui.docks.character.hscale.tip"))
+    .changed()
+    {
+        *changed |= text_panel::Character::set_horizontal_scale(run, h_scale);
+    }
+    let mut v_scale = run.style.vertical_scale * 100.0;
+    if design::slider_row(
+        ui,
+        crate::strings::tr("ui.docks.character.vscale"),
+        &mut v_scale,
+        text_panel::MIN_SCALE_PERCENT..=text_panel::MAX_SCALE_PERCENT,
+    )
+    .on_hover_text(crate::strings::tr("ui.docks.character.vscale.tip"))
+    .changed()
+    {
+        *changed |= text_panel::Character::set_vertical_scale(run, v_scale);
+    }
+    let mut shift = run.style.baseline_shift;
+    if design::slider_row(
+        ui,
+        crate::strings::tr("ui.docks.character.baseline.shift"),
+        &mut shift,
+        -200.0..=200.0,
+    )
+    .changed()
+    {
+        *changed |= text_panel::Character::set_baseline_shift(run, shift);
+    }
+    let mut script_index = text_panel::SCRIPTS
+        .iter()
+        .position(|s| *s == run.style.script)
+        .unwrap_or(0);
+    let script_labels: Vec<&str> = text_panel::SCRIPTS
+        .iter()
+        .map(|s| text_panel::script_label(*s))
+        .collect();
+    design::inspector_field(ui, "Position", |ui| {
+        if design::segmented_control(ui, "raster-char-script", &mut script_index, &script_labels) {
+            *changed |= text_panel::Character::set_script(run, text_panel::SCRIPTS[script_index]);
+        }
+    })
+    .response
+    .on_hover_text(crate::strings::tr("ui.docks.character.script.tip"));
+    let mut caps_index = text_panel::CAPS
+        .iter()
+        .position(|c| *c == run.style.caps)
+        .unwrap_or(0);
+    let caps_labels: Vec<&str> = text_panel::CAPS
+        .iter()
+        .map(|c| text_panel::caps_label(*c))
+        .collect();
+    design::inspector_field(ui, "Caps", |ui| {
+        if design::segmented_control(ui, "raster-char-caps", &mut caps_index, &caps_labels) {
+            *changed |= text_panel::Character::set_caps(run, text_panel::CAPS[caps_index]);
+        }
+    })
+    .response
+    .on_hover_text(crate::strings::tr("ui.docks.character.caps.tip"));
+    let (mode, manual) = text_panel::Character::kerning_mode(run);
+    // Manual kerning sits between two characters; on shorter text (and on
+    // the Type tool's defaults, which have no text) it is not offered, and
+    // the tooltip says why.
+    let modes: &[text_panel::KerningMode] = if text_panel::manual_kerning_available(run) {
+        text_panel::KerningMode::ALL
+    } else {
+        &text_panel::KerningMode::ALL[..2]
+    };
+    let mut kern_index = modes.iter().position(|m| *m == mode).unwrap_or(0);
+    let kern_labels: Vec<&str> = modes.iter().map(|m| m.label()).collect();
+    design::inspector_field(ui, "Kerning", |ui| {
+        if design::segmented_control(ui, "raster-char-kerning", &mut kern_index, &kern_labels) {
+            *changed |= text_panel::Character::set_kerning_mode(
+                run,
+                modes[kern_index],
+                manual.unwrap_or(0.0),
+            );
+        }
+    })
+    .response
+    .on_hover_text(crate::strings::tr("ui.docks.character.kerning.tip"));
+    if mode == text_panel::KerningMode::Manual {
+        let mut amount = manual.unwrap_or(0.0);
+        if design::slider_row(
+            ui,
+            crate::strings::tr("ui.docks.character.kerning.amount"),
+            &mut amount,
+            -1000.0..=1000.0,
+        )
+        .changed()
+        {
+            *changed |= text_panel::Character::set_kerning_mode(
+                run,
+                text_panel::KerningMode::Manual,
+                amount,
+            );
         }
     }
+    let mut ligatures = run.style.ligatures;
+    if ui
+        .checkbox(
+            &mut ligatures,
+            hint(ui, crate::strings::tr("ui.docks.character.ligatures")),
+        )
+        .changed()
+    {
+        *changed |= text_panel::Character::set_ligatures(run, ligatures);
+    }
+    let mut aa_index = text_panel::ANTI_ALIAS
+        .iter()
+        .position(|a| *a == run.style.anti_alias)
+        .unwrap_or(0);
+    let aa_labels: Vec<&str> = text_panel::ANTI_ALIAS
+        .iter()
+        .map(|a| text_panel::anti_alias_label(*a))
+        .collect();
+    design::inspector_field(ui, "Edges", |ui| {
+        if design::segmented_control(ui, "raster-char-antialias", &mut aa_index, &aa_labels) {
+            *changed |=
+                text_panel::Character::set_anti_alias(run, text_panel::ANTI_ALIAS[aa_index]);
+        }
+    })
+    .response
+    .on_hover_text(crate::strings::tr("ui.docks.character.antialias.tip"));
+}
+
+/// W3-J: alignment (with the four justify variants), leading, the three
+/// indents and paragraph spacing, drawn on a run. Shared by the text-layer
+/// page and the Type tool's defaults page.
+fn paragraph_style_controls(ui: &mut Ui, run: &mut text_engine::TextRun, changed: &mut bool) {
+    let mut index = text_panel::alignment_index(run.paragraph.alignment);
+    let labels: Vec<&str> = text_panel::ALIGNMENTS
+        .iter()
+        .map(|a| text_panel::alignment_label(*a))
+        .collect();
+    if design::segmented_control(ui, "raster-paragraph-align", &mut index, &labels) {
+        *changed |= text_panel::Paragraph::set_alignment(run, text_panel::ALIGNMENTS[index]);
+    }
+    // W3-J: the four justify variants - where a justified paragraph's last
+    // line goes - as a second row, shown while Justify is on.
+    if run.paragraph.alignment.is_justified() {
+        let mut last = text_panel::JUSTIFY_VARIANTS
+            .iter()
+            .position(|a| *a == run.paragraph.alignment)
+            .unwrap_or(0);
+        let last_labels: Vec<&str> = text_panel::JUSTIFY_VARIANTS
+            .iter()
+            .map(|a| text_panel::last_line_label(*a))
+            .collect();
+        design::inspector_field(
+            ui,
+            crate::strings::tr("ui.docks.paragraph.last.line"),
+            |ui| {
+                if design::segmented_control(
+                    ui,
+                    "raster-paragraph-last-line",
+                    &mut last,
+                    &last_labels,
+                ) {
+                    *changed |= text_panel::Paragraph::set_alignment(
+                        run,
+                        text_panel::JUSTIFY_VARIANTS[last],
+                    );
+                }
+            },
+        );
+    }
+
+    let mut leading = text_panel::Character::leading_px(&run.style, &run.paragraph);
+    if design::slider_row(ui, "Leading", &mut leading, 1.0..=400.0).changed() {
+        *changed |= text_panel::Paragraph::set_leading_px(run, leading);
+    }
+    if design::ghost_button(ui, crate::strings::tr("ui.docks.auto.leading")).clicked() {
+        *changed |= text_panel::Paragraph::set_leading_auto(run, 1.2);
+    }
+
+    // W3-J: left and right indents move every line; the box wraps inside
+    // them. The first-line indent adds to the left one.
+    let mut left = run.paragraph.left_indent;
+    if design::slider_row(
+        ui,
+        crate::strings::tr("ui.docks.paragraph.indent.left"),
+        &mut left,
+        -200.0..=1000.0,
+    )
+    .changed()
+    {
+        *changed |= text_panel::Paragraph::set_left_indent(run, left);
+    }
+    let mut right = run.paragraph.right_indent;
+    if design::slider_row(
+        ui,
+        crate::strings::tr("ui.docks.paragraph.indent.right"),
+        &mut right,
+        -200.0..=1000.0,
+    )
+    .changed()
+    {
+        *changed |= text_panel::Paragraph::set_right_indent(run, right);
+    }
+    let mut indent = run.paragraph.first_line_indent;
+    if design::slider_row(
+        ui,
+        crate::strings::tr("ui.docks.paragraph.indent.first"),
+        &mut indent,
+        -200.0..=200.0,
+    )
+    .changed()
+    {
+        *changed |= text_panel::Paragraph::set_first_line_indent(run, indent);
+    }
+    let mut before = run.paragraph.space_before;
+    if design::slider_row(ui, "Before", &mut before, 0.0..=200.0).changed() {
+        *changed |= text_panel::Paragraph::set_space_before(run, before);
+    }
+    let mut after = run.paragraph.space_after;
+    if design::slider_row(ui, "After", &mut after, 0.0..=200.0).changed() {
+        *changed |= text_panel::Paragraph::set_space_after(run, after);
+    }
+}
+
+/// W3-J: which panel is drawing the Type tool's defaults.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DefaultsPage {
+    Character,
+    Paragraph,
+}
+
+/// W3-J: with no text layer selected, the Character and Paragraph panels
+/// edit the Type tool's DEFAULT style - held on the workspace as the Type
+/// tool's options (`Workspace::options`) and seeded into the next layer the
+/// tool creates (`tools::text::TypeTool::seed`). The controls are the very
+/// ones the text-layer page draws, run on a run built from those options
+/// (`text_panel::type_defaults`); every value the edit changed goes back
+/// through the same `SetToolOption` route the options bar uses, so the panels
+/// and the bar can never disagree.
+fn type_tool_defaults(w: &mut Workspace, ui: &mut Ui, page: DefaultsPage) {
+    let tool = tools::ToolId::Type;
+    design::section_header(ui, crate::strings::tr("ui.docks.character.type.defaults"));
+    let emit = |w: &mut Workspace, key: &'static str, value: crate::OptionValue| {
+        if w.options.set(tool, key, value) {
+            w.emit(Intent::SetToolOption { tool, key, value });
+        }
+    };
+    if page == DefaultsPage::Character {
+        if let (Some(spec), Some(crate::OptionValue::Choice(index))) = (
+            crate::ToolOptions::spec_for_test(tool, "font_family"),
+            w.options.get(tool, "font_family"),
+        ) {
+            if let tools::OptionKind::Choice { choices, .. } = spec.kind {
+                let mut picked = index;
+                design::inspector_field(ui, "Family", |ui| {
+                    egui::ComboBox::from_id_salt("raster-char-default-family")
+                        .selected_text(body(ui, choices.get(index).copied().unwrap_or_default()))
+                        .show_ui(ui, |ui| {
+                            for (i, choice) in choices.iter().enumerate() {
+                                if ui.selectable_label(i == index, body(ui, *choice)).clicked() {
+                                    picked = i;
+                                }
+                            }
+                        });
+                });
+                if picked != index {
+                    emit(w, "font_family", crate::OptionValue::Choice(picked));
+                }
+            }
+        }
+        if let Some(crate::OptionValue::Float(mut size)) = w.options.get(tool, "size_px") {
+            if design::slider_row(ui, "Size", &mut size, 4.0..=512.0).changed() {
+                emit(w, "size_px", crate::OptionValue::Float(size));
+            }
+        }
+    }
+    let before = text_panel::type_defaults(&w.options);
+    let mut run = before.clone();
+    let mut changed = false;
+    match page {
+        DefaultsPage::Character => {
+            character_basics(ui, &mut run, &mut changed);
+            character_typography(ui, &mut run, &mut changed);
+        }
+        DefaultsPage::Paragraph => paragraph_style_controls(ui, &mut run, &mut changed),
+    }
+    if changed {
+        for (key, value) in text_panel::type_default_writes(&before, &run) {
+            emit(w, key, value);
+        }
+    }
+    ui.label(hint(
+        ui,
+        crate::strings::tr("ui.docks.character.type.defaults.note"),
+    ));
 }
 
 fn paragraph_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     let Some((layer, mut run)) = text_panel::active_text(doc, doc.active_layer()) else {
         empty_state(ui, text_panel::no_text_layer_reason());
+        type_tool_defaults(w, ui, DefaultsPage::Paragraph);
         return;
     };
     let mut changed = false;
@@ -2589,38 +3356,7 @@ fn paragraph_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
         }
     }
 
-    let mut index = text_panel::ALIGNMENTS
-        .iter()
-        .position(|a| *a == run.paragraph.alignment)
-        .unwrap_or(0);
-    let labels: Vec<&str> = text_panel::ALIGNMENTS
-        .iter()
-        .map(|a| text_panel::alignment_label(*a))
-        .collect();
-    if design::segmented_control(ui, "raster-paragraph-align", &mut index, &labels) {
-        changed |= text_panel::Paragraph::set_alignment(&mut run, text_panel::ALIGNMENTS[index]);
-    }
-
-    let mut leading = text_panel::Character::leading_px(&run.style, &run.paragraph);
-    if design::slider_row(ui, "Leading", &mut leading, 1.0..=400.0).changed() {
-        changed |= text_panel::Paragraph::set_leading_px(&mut run, leading);
-    }
-    if design::ghost_button(ui, crate::strings::tr("ui.docks.auto.leading")).clicked() {
-        changed |= text_panel::Paragraph::set_leading_auto(&mut run, 1.2);
-    }
-
-    let mut indent = run.paragraph.first_line_indent;
-    if design::slider_row(ui, "Indent", &mut indent, -200.0..=200.0).changed() {
-        changed |= text_panel::Paragraph::set_first_line_indent(&mut run, indent);
-    }
-    let mut before = run.paragraph.space_before;
-    if design::slider_row(ui, "Before", &mut before, 0.0..=200.0).changed() {
-        changed |= text_panel::Paragraph::set_space_before(&mut run, before);
-    }
-    let mut after = run.paragraph.space_after;
-    if design::slider_row(ui, "After", &mut after, 0.0..=200.0).changed() {
-        changed |= text_panel::Paragraph::set_space_after(&mut run, after);
-    }
+    paragraph_style_controls(ui, &mut run, &mut changed);
 
     if changed {
         if let Some(intent) = text_panel::commit(doc, layer, &run) {
@@ -2765,7 +3501,9 @@ fn navigator_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
 }
 
 fn info_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
-    for readout in w.info.readouts(doc) {
+    // W3-G: the Document row reads in the Units preference, which the shell
+    // pushes into the workspace as the rulers' unit.
+    for readout in w.info.readouts_in(doc, w.canvas.unit) {
         design::inspector_field(ui, readout.label, |ui| {
             let label = ui.label(body(ui, readout.value.clone()));
             // Named so a test can read the value the row shows — the RGB and
@@ -2957,6 +3695,7 @@ fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Histo
             );
         }
     }
+    saved_selection_rows(w, ui, doc);
     if let Some((kind, visible)) = toggle {
         match kind {
             ChannelKind::Composite => {
@@ -2992,6 +3731,47 @@ fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Histo
     ui.add_space(Space::XSmall.pt());
     hairline(ui);
     channel_footer(w, ui, doc, history);
+}
+
+/// The document's saved selections (Select > Save Selection), listed under
+/// the colour and mask channels as Photopea lists its alpha channels: one row
+/// per name, oldest first, each with the mask glyph in its well. A click
+/// opens Select > Load Selection -- the dialog that restores a saved
+/// selection by name with New / Add / Subtract / Intersect -- so the row never
+/// promises an action no route performs.
+fn saved_selection_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
+    for (index, (name, _)) in doc.saved_selections.iter().enumerate() {
+        let response = row_layout(ui, |ui| {
+            let t = current_tokens(ui);
+            let height = t.metrics.list_row_height - Space::XSmall.pt();
+            // The eye column's width, left empty: an alpha row has no
+            // visibility of its own in this build.
+            ui.add_space(height);
+            let size = Vec2::new(height * 4.0 / 3.0, height);
+            let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+            if ui.is_rect_visible(rect) {
+                super::checkerboard(ui.painter(), rect, Space::XSmall.pt());
+                let side = rect.height() * 0.7;
+                let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(side));
+                super::paint_icon(ui, icon_rect, "mask", TextRole::Tertiary);
+            }
+            ui.add_space(Space::XSmall.pt());
+            ui.label(body(ui, name.clone()));
+        })
+        .response
+        .rect;
+        let response = ui
+            .interact(response, saved_selection_row_id(index), Sense::click())
+            .on_hover_text(crate::strings::tr("ui.docks.channels.saved.hint"));
+        if response.clicked() {
+            w.emit(Intent::Action(crate::menu::MenuAction::LoadSelection));
+        }
+    }
+}
+
+/// The id of the `index`th saved-selection row in the Channels panel.
+pub(crate) fn saved_selection_row_id(index: usize) -> egui::Id {
+    egui::Id::new(("channels-saved-selection", index))
 }
 
 /// The 4:3 well beside a channel row.
@@ -3294,6 +4074,74 @@ mod tests {
         assert_eq!(
             drop_position(true, id, rect, rect.bottom() + 500.0),
             DropPosition::Below(id)
+        );
+    }
+
+    /// A headless frame of the Channels body with two saved selections:
+    /// both names are painted as rows under the channels, in order, and a
+    /// click on a row asks for Select > Load Selection.
+    #[test]
+    fn saved_selections_are_listed_as_alpha_rows_that_open_load_selection() {
+        let mut doc = Document::new(8, 8, "alpha");
+        doc.saved_selections
+            .push(("Alpha 1".to_string(), editor_core::Selection::None));
+        doc.saved_selections
+            .push(("Keep".to_string(), editor_core::Selection::None));
+        let history = History::default();
+        let mut w = Workspace::new();
+        let ctx = egui::Context::default();
+        let frame = |w: &mut Workspace, input: egui::RawInput| {
+            ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    channels_body(w, ui, &doc, &history);
+                });
+            })
+        };
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 600.0));
+        let raw = || egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        };
+        let _ = frame(&mut w, raw());
+        let out = frame(&mut w, raw());
+        let mut texts: Vec<(f32, String)> = Vec::new();
+        for clipped in &out.shapes {
+            if let egui::Shape::Text(text) = &clipped.shape {
+                texts.push((text.pos.y, text.galley.text().to_string()));
+            }
+        }
+        let y_of = |needle: &str| {
+            texts
+                .iter()
+                .find(|(_, s)| s == needle)
+                .map(|(y, _)| *y)
+                .unwrap_or_else(|| panic!("{needle:?} not painted: {texts:?}"))
+        };
+        let first = y_of("Alpha 1");
+        let second = y_of("Keep");
+        assert!(first < second, "rows out of order: {texts:?}");
+        let rect = ctx
+            .read_response(saved_selection_row_id(1))
+            .expect("the second row is interactive")
+            .rect;
+        assert!(rect.contains(egui::pos2(rect.center().x, second + 1.0)));
+
+        let _ = w.drain_intents();
+        let click = |pressed: bool| egui::Event::PointerButton {
+            pos: rect.center(),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut input = raw();
+        input.events = vec![egui::Event::PointerMoved(rect.center()), click(true)];
+        let _ = frame(&mut w, input);
+        let mut input = raw();
+        input.events = vec![click(false)];
+        let _ = frame(&mut w, input);
+        assert_eq!(
+            w.drain_intents(),
+            vec![Intent::Action(crate::menu::MenuAction::LoadSelection)]
         );
     }
 

@@ -42,7 +42,7 @@ use editor_core::{
 use glam::Vec2;
 use layer_model::{Layer, LayerId, LayerMask, MaskId};
 use raster::{PixelFormat, PixelRect, Tile, TileCoord, TileHash, TILE_SIZE};
-use tools::TileAccess;
+use tools::{Modifiers, TileAccess};
 use ui::canvas::{PointerInput, PointerPhase};
 use ui::menu::MenuAction;
 
@@ -194,9 +194,50 @@ pub fn shell_pointer(
     phase: PointerPhase,
     doc_pt: Vec2,
 ) -> PointerOutcome {
+    shell_pointer_with(pointer, editor, phase, doc_pt, Modifiers::NONE)
+}
+
+/// The same sample with modifier keys held — the Alt of a clone-source
+/// click, the Shift of a constrained drag. The shell reads these off the
+/// winit modifiers state and hands them over exactly like this.
+pub fn shell_pointer_with(
+    pointer: &mut ToolPointer,
+    editor: &mut Editor,
+    phase: PointerPhase,
+    doc_pt: Vec2,
+    modifiers: Modifiers,
+) -> PointerOutcome {
     let doc = editor.active().expect("a document is open");
     let pos = shell_screen_pt(doc, doc_pt.x, doc_pt.y);
-    pointer.handle(editor, PointerInput::at(phase, pos), false, &[])
+    pointer.handle(
+        editor,
+        PointerInput::at(phase, pos).with_modifiers(modifiers),
+        false,
+        &[],
+    )
+}
+
+/// Press and release at one document point — a click, with no Move between.
+pub fn shell_click(
+    pointer: &mut ToolPointer,
+    editor: &mut Editor,
+    doc_pt: Vec2,
+) -> Vec<PointerOutcome> {
+    shell_click_with(pointer, editor, doc_pt, Modifiers::NONE)
+}
+
+/// A click with modifiers held on both samples: Alt-click sets a clone
+/// source, Shift-click adds to a selection.
+pub fn shell_click_with(
+    pointer: &mut ToolPointer,
+    editor: &mut Editor,
+    doc_pt: Vec2,
+    modifiers: Modifiers,
+) -> Vec<PointerOutcome> {
+    vec![
+        shell_pointer_with(pointer, editor, PointerPhase::Down, doc_pt, modifiers),
+        shell_pointer_with(pointer, editor, PointerPhase::Up, doc_pt, modifiers),
+    ]
 }
 
 /// Press, drag through `points`, release — one real gesture.

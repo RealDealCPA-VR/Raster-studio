@@ -165,6 +165,41 @@ pub fn compare_swatch(after: bool) -> Id {
     Id::new((ROOT, "compare-swatch", after))
 }
 
+/// Select ▸ Color Range…: the preview image, which samples on click.
+pub fn color_range_preview() -> Id {
+    Id::new((ROOT, "color-range-preview"))
+}
+
+/// Select ▸ Color Range…: the Fuzziness slider.
+pub fn color_range_fuzziness() -> Id {
+    Id::new((ROOT, "color-range-fuzziness"))
+}
+
+/// Select ▸ Color Range…: the sampled-colour readout.
+pub fn color_range_color() -> Id {
+    Id::new((ROOT, "color-range-color"))
+}
+
+/// Select ▸ Modify ▸ …: the amount field.
+pub fn selection_modify_amount() -> Id {
+    Id::new((ROOT, "selection-modify-amount"))
+}
+
+/// Select ▸ Save Selection…: the name field.
+pub fn save_selection_name() -> Id {
+    Id::new((ROOT, "save-selection-name"))
+}
+
+/// Select ▸ Load Selection…: the saved-selection combo.
+pub fn load_selection_source() -> Id {
+    Id::new((ROOT, "load-selection-source"))
+}
+
+/// Select ▸ Load Selection…: the operation combo.
+pub fn load_selection_operation() -> Id {
+    Id::new((ROOT, "load-selection-operation"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,6 +207,13 @@ mod tests {
     #[test]
     fn different_controls_never_share_an_id() {
         let mut ids = vec![
+            color_range_preview(),
+            color_range_fuzziness(),
+            color_range_color(),
+            selection_modify_amount(),
+            save_selection_name(),
+            load_selection_source(),
+            load_selection_operation(),
             custom_background("new-document"),
             custom_background("canvas-size"),
             filter_param_color("tint"),

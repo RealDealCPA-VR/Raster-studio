@@ -27,6 +27,7 @@ use cosmic_text::{CacheKey, CacheKeyFlags, SwashCache, SwashContent, SwashImage,
 
 use crate::font::{FontId, FontLibrary};
 use crate::layout::{Rect, ShapedGlyph, ShapedText};
+use crate::style::AntiAlias;
 
 /// Faux-bold smear width as a fraction of the em size.
 const SYNTHETIC_BOLD_FACTOR: f32 = 0.03;
@@ -217,6 +218,10 @@ pub struct GlyphKey {
     pub synthetic_bold: bool,
     /// Skewed copy.
     pub synthetic_italic: bool,
+    /// W3-J: bit pattern of the horizontal glyph scale.
+    pub scale_x_bits: u32,
+    /// W3-J: bit pattern of the vertical glyph scale.
+    pub scale_y_bits: u32,
 }
 
 /// Cache of rasterised glyphs.
@@ -313,6 +318,8 @@ impl GlyphRasterCache {
             x_bin: bin_index(cache_key.x_bin),
             synthetic_bold: glyph.synthetic_bold,
             synthetic_italic: glyph.synthetic_italic,
+            scale_x_bits: glyph.scale_x.to_bits(),
+            scale_y_bits: glyph.scale_y.to_bits(),
         };
         if let Some(cached) = self.images.get(&key) {
             self.hits += 1;
@@ -330,6 +337,7 @@ impl GlyphRasterCache {
                     image
                 }
             })
+            .and_then(|image| stretch(&image, glyph.scale_x, glyph.scale_y))
             .map(Arc::new);
         self.images.insert(key, image.clone());
         (image, pen_x, pen_y)
@@ -360,6 +368,11 @@ fn placements(
     for glyph in &text.glyphs {
         let color = text.style_of(glyph).color;
         let (image, pen_x, pen_y) = cache.glyph_image(library, glyph);
+        // W3-J: anti-alias None - every pixel is ink or not.
+        let image = match (image, text.anti_alias) {
+            (Some(image), AntiAlias::None) => Some(Arc::new(threshold(&image))),
+            (image, _) => image,
+        };
         if let Some(image) = image {
             if image.width == 0 || image.height == 0 {
                 continue;
@@ -764,4 +777,92 @@ fn embolden(image: &GlyphImage, radius: u32) -> GlyphImage {
         height: image.height,
         data,
     }
+}
+
+/// W3-J: hard edges - coverage at or above half becomes full, the rest none.
+fn threshold(image: &GlyphImage) -> GlyphImage {
+    GlyphImage {
+        data: image
+            .data
+            .iter()
+            .map(|&v| if v >= 128 { 255 } else { 0 })
+            .collect(),
+        ..image.clone()
+    }
+}
+
+/// Largest stretch the resampler honours; the schema caps scale at 10.
+const MAX_STRETCH: f32 = 10.0;
+
+/// W3-J: stretch a glyph image by `(sx, sy)` about its pen origin - the
+/// baseline stays put and the left side bearing scales with the glyph.
+///
+/// Each destination pixel averages a grid of bilinear samples, enough to
+/// cover the source footprint when shrinking, so a 50 % glyph is filtered
+/// rather than decimated. `None` when the stretch leaves no pixels.
+fn stretch(image: &GlyphImage, sx: f32, sy: f32) -> Option<GlyphImage> {
+    let valid = |s: f32| s.is_finite() && s > 0.0;
+    let sx = if valid(sx) { sx.min(MAX_STRETCH) } else { 1.0 };
+    let sy = if valid(sy) { sy.min(MAX_STRETCH) } else { 1.0 };
+    if (sx - 1.0).abs() < 1e-6 && (sy - 1.0).abs() < 1e-6 {
+        return Some(image.clone());
+    }
+    let left = image.left as f32;
+    let top = image.top as f32;
+    let (w, h) = (image.width as f32, image.height as f32);
+    let new_left = (left * sx).floor();
+    let new_right = ((left + w) * sx).ceil();
+    let new_top = (top * sy).ceil();
+    let new_bottom = ((top - h) * sy).floor();
+    let width = (new_right - new_left).max(0.0) as u32;
+    let height = (new_top - new_bottom).max(0.0) as u32;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let samples_x = (1.0 / sx).ceil().clamp(1.0, 8.0) as u32;
+    let samples_y = (1.0 / sy).ceil().clamp(1.0, 8.0) as u32;
+    let fetch = |col: i32, row: i32| -> f32 {
+        if col < 0 || row < 0 || col >= image.width as i32 || row >= image.height as i32 {
+            0.0
+        } else {
+            f32::from(image.data[(row as u32 * image.width + col as u32) as usize])
+        }
+    };
+    let bilinear = |u: f32, v: f32| -> f32 {
+        let x0 = u.floor();
+        let y0 = v.floor();
+        let fx = u - x0;
+        let fy = v - y0;
+        let (x0, y0) = (x0 as i32, y0 as i32);
+        let top_row = fetch(x0, y0) * (1.0 - fx) + fetch(x0 + 1, y0) * fx;
+        let bottom_row = fetch(x0, y0 + 1) * (1.0 - fx) + fetch(x0 + 1, y0 + 1) * fx;
+        top_row * (1.0 - fy) + bottom_row * fy
+    };
+    let mut data = vec![0u8; (width as usize) * (height as usize)];
+    let count = (samples_x * samples_y) as f32;
+    for dy in 0..height {
+        for dx in 0..width {
+            let mut sum = 0.0;
+            for jy in 0..samples_y {
+                for jx in 0..samples_x {
+                    // Destination sample position, relative to the pen:
+                    // x to the right, y *up* from the baseline.
+                    let px = new_left + dx as f32 + (jx as f32 + 0.5) / samples_x as f32;
+                    let py = new_top - (dy as f32 + (jy as f32 + 0.5) / samples_y as f32);
+                    // Back into source pixel-centre coordinates.
+                    let u = px / sx - left - 0.5;
+                    let v = top - py / sy - 0.5;
+                    sum += bilinear(u, v);
+                }
+            }
+            data[(dy * width + dx) as usize] = (sum / count).round().clamp(0.0, 255.0) as u8;
+        }
+    }
+    Some(GlyphImage {
+        left: new_left as i32,
+        top: new_top as i32,
+        width,
+        height,
+        data,
+    })
 }

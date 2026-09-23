@@ -304,6 +304,74 @@ pub fn rulers(
     }
 }
 
+/// The pointer's position marked on each ruler — W3-A: a hairline across the
+/// top gutter at the pointer's x and across the left gutter at its y, so the
+/// rulers read the cursor and not only the document.
+///
+/// `outer` and `thickness_pt` are the same two values [`rulers`] was given.
+/// Returns whether anything was drawn: nothing is when the pointer is not over
+/// `outer`, or is not a finite position at all.
+pub fn ruler_pointer_mark(
+    painter: &egui::Painter,
+    outer: egui::Rect,
+    thickness_pt: f32,
+    pointer_pt: Vec2,
+    style: &CanvasStyle,
+) -> bool {
+    if !pointer_pt.is_finite() || !outer.contains(to_pos2(pointer_pt)) {
+        return false;
+    }
+    let [top, left] = rulers::gutters(outer, thickness_pt);
+    if top.height() <= 0.0 || left.width() <= 0.0 {
+        return false;
+    }
+    let stroke = style.hairline(style.guide);
+    painter.line_segment(
+        [
+            egui::pos2(pointer_pt.x, top.min.y),
+            egui::pos2(pointer_pt.x, top.max.y),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(left.min.x, pointer_pt.y),
+            egui::pos2(left.max.x, pointer_pt.y),
+        ],
+        stroke,
+    );
+    true
+}
+
+/// View ▸ Precise Cursor — W3-A: a crosshair at `center_pt`, each arm
+/// `arm_pt` long, drawn through [`brush`] so it takes the same two-tone
+/// stroke and reads over any image content.
+///
+/// Returns whether it was drawn; a non-finite centre or a non-positive arm
+/// draws nothing.
+pub fn precise_cursor(
+    painter: &egui::Painter,
+    center_pt: Vec2,
+    arm_pt: f32,
+    style: &CanvasStyle,
+) -> bool {
+    if !center_pt.is_finite() || !arm_pt.is_finite() || arm_pt <= 0.0 {
+        return false;
+    }
+    let dx = Vec2::new(arm_pt, 0.0);
+    let dy = Vec2::new(0.0, arm_pt);
+    let cursor = BrushCursor {
+        outline: Vec::new(),
+        crosshair: Some([
+            [center_pt - dx, center_pt + dx],
+            [center_pt - dy, center_pt + dy],
+        ]),
+        center_pt,
+    };
+    brush(painter, &cursor, style);
+    true
+}
+
 /// The user's guides.
 pub fn guides(
     painter: &egui::Painter,

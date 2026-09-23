@@ -17,9 +17,9 @@
 //!
 //! The options bar is covered arm by arm, not just through the shared `emit`
 //! closure: Float, Int, Bool and Choice each have their own driven control, so
-//! a wiring bug in one arm cannot hide behind the others. `Color` is the one
-//! arm with no click test, and `no_tool_declares_a_colour_option_so_that_arm_is_undrawn`
-//! is why — it goes red the day a tool ships one.
+//! a wiring bug in one arm cannot hide behind the others. `Color` is driven
+//! through egui's own picker popup, and a second test carries a picked colour
+//! all the way to the shape layer the tool then draws.
 //!
 //! It also pins the two facts a drawn frame used to destroy: the dock's
 //! saved-layout identity, and the viewport the Navigator measures the document
@@ -1760,25 +1760,193 @@ fn dragging_an_int_option_writes_it_and_says_so() {
     assert_eq!(h.workspace.options.get(tool, "sides"), Some(last.2));
 }
 
-/// Float, Int, Bool and Choice each have a click-level test above; `Color` has
-/// none, because no tool in the registry declares one, so the bar never draws
-/// that arm and there is nothing on screen to drive. That is a fact about the
-/// schema, not a decision, so pin it: the day a tool ships a colour option this
-/// goes red and asks for the fifth test rather than letting an undriven arm in
-/// unnoticed.
+/// The options bar's `Color` arm, driven the way a user drives it: click the
+/// swatch, which opens egui's picker popup, then click inside the picker's
+/// saturation/value square. The click must come back as one
+/// `SetToolOption` carrying the new colour, and the workspace must hold the
+/// same value. Both colour keys the shape tools and the pen declare are
+/// driven. This test stops at the stored option: with the default paint
+/// (Fill = Foreground, Stroke = None) the swatches are not read at all, which
+/// is why they are labelled "Custom ... Colour";
+/// `a_custom_fill_colour_picked_in_the_bar_is_the_colour_the_shape_draws`
+/// drives the source to Custom and follows the colour to the drawn layer.
 #[test]
-fn no_tool_declares_a_colour_option_so_that_arm_is_undrawn() {
-    let with_colour: Vec<&str> = tools::registry::all()
+fn picking_a_colour_in_the_options_bar_swatch_writes_it() {
+    let mut h = Harness::new();
+    let tool = tools::ToolId::Rectangle;
+    h.use_tool(tool);
+
+    for key in ["fill_color", "stroke_color"] {
+        let before = h.workspace.options.get(tool, key);
+        assert_eq!(
+            before,
+            Some(ui::OptionValue::Color([0.0, 0.0, 0.0, 1.0])),
+            "{key} starts black"
+        );
+
+        // Opening the picker is not an edit.
+        let opened = h.click(ids::tool_option(tool, key));
+        assert!(
+            option_writes(&opened).is_empty(),
+            "opening the {key} picker wrote {opened:?}"
+        );
+        h.settle();
+        let popup = h
+            .ctx
+            .memory(|m| {
+                // egui's picker is a foreground area at least as wide as its
+                // 275pt saturation/value square.
+                m.areas()
+                    .visible_layer_ids()
+                    .into_iter()
+                    .filter(|layer| layer.order == egui::Order::Foreground)
+                    .filter_map(|layer| m.area_rect(layer.id))
+                    .find(|r| r.width() >= 275.0)
+            })
+            .unwrap_or_else(|| panic!("clicking the {key} swatch opened no picker"));
+
+        // The saturation/value square is the tall middle of the popup: the
+        // numeric row, preview and blending row sit above it, the hue and
+        // alpha strips below.
+        let at = egui::pos2(
+            popup.left() + popup.width() * 0.5,
+            popup.top() + popup.height() * 0.55,
+        );
+        let intents = h.click_at(at);
+        let writes = option_writes(&intents);
+        let last = writes
+            .last()
+            .copied()
+            .unwrap_or_else(|| panic!("clicking inside the {key} picker emitted {intents:?}"));
+        assert_eq!((last.0, last.1), (tool, key));
+        match last.2 {
+            ui::OptionValue::Color(c) => assert!(
+                c[..3].iter().any(|v| *v > 0.05),
+                "{key} picked {c:?}, still black"
+            ),
+            other => panic!("{key} emitted {other:?}"),
+        }
+        assert_eq!(h.workspace.options.get(tool, key), Some(last.2));
+
+        // Escape closes the picker before the next key is driven.
+        h.key(egui::Key::Escape, egui::Modifiers::default());
+        h.settle();
+    }
+}
+
+/// The whole paint route a user takes: open the Fill drop-down and pick
+/// "Custom", click the Custom Fill Colour swatch, click inside egui's picker,
+/// then drag a rectangle with the options the bar holds. The created shape
+/// layer must be filled with the picked colour, not the foreground. With the
+/// source left on Foreground the same picked swatch is ignored, which is what
+/// the "Custom" in the swatch's label tells the user.
+#[test]
+fn a_custom_fill_colour_picked_in_the_bar_is_the_colour_the_shape_draws() {
+    use editor_core::Command;
+    use raster::PixelRect;
+    use tools::tool::{PointerEvent, ToolContext};
+
+    let mut h = Harness::new();
+    let tool = tools::ToolId::Rectangle;
+    h.use_tool(tool);
+
+    let spec = tools::registry::info(tool)
+        .expect("the rectangle is registered")
+        .options
         .iter()
-        .flat_map(|info| info.options)
-        .filter(|o| matches!(o.kind, tools::OptionKind::Color { .. }))
-        .map(|o| o.key)
-        .collect();
+        .find(|s| s.key == "fill_color")
+        .expect("the rectangle declares a fill colour");
     assert!(
-        with_colour.is_empty(),
-        "a colour option now ships ({with_colour:?}) — drive it from the options \
-         bar the way the Float and Int tests do"
+        spec.label.contains("Custom"),
+        "the swatch is read only for a Custom fill, and its label must say so: {:?}",
+        spec.label
     );
+
+    // The shape the options bar's held options draw, with a blue foreground.
+    let foreground = [0.0, 0.0, 1.0, 1.0];
+    let drawn_fill = |h: &Harness| {
+        let mut t = tools::registry::make(tool);
+        for (key, value) in h.workspace.options.held(tool) {
+            let setting = match value {
+                ui::OptionValue::Float(v) => tools::ToolSetting::Float(v),
+                ui::OptionValue::Int(v) => tools::ToolSetting::Int(v),
+                ui::OptionValue::Bool(v) => tools::ToolSetting::Bool(v),
+                ui::OptionValue::Choice(v) => tools::ToolSetting::Choice(v),
+                ui::OptionValue::Color(v) => tools::ToolSetting::Color(v),
+            };
+            t.set_setting(&key, setting)
+                .unwrap_or_else(|e| panic!("Rectangle/{key}: {e}"));
+        }
+        let mut tiles = tools::MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 256, 256));
+        ctx.foreground = foreground;
+        t.on_pointer_down(&mut ctx, PointerEvent::at(10.0, 10.0))
+            .unwrap();
+        t.on_pointer_move(&mut ctx, PointerEvent::at(80.0, 60.0))
+            .unwrap();
+        t.on_pointer_up(&mut ctx, PointerEvent::at(80.0, 60.0))
+            .unwrap();
+        let cmds = ctx.drain();
+        let Some(Command::CreateLayer { layer }) = cmds.first() else {
+            panic!("a rectangle drag creates a layer: {cmds:?}");
+        };
+        let layer_model::LayerKind::Shape(shape) = &layer.kind else {
+            panic!("a rectangle drag creates a SHAPE layer: {:?}", layer.kind);
+        };
+        shape.fill.expect("the rectangle is filled")
+    };
+
+    // Pick a colour first, with the source still on Foreground.
+    h.click(ids::tool_option(tool, "fill_color"));
+    h.settle();
+    let popup = h
+        .ctx
+        .memory(|m| {
+            m.areas()
+                .visible_layer_ids()
+                .into_iter()
+                .filter(|layer| layer.order == egui::Order::Foreground)
+                .filter_map(|layer| m.area_rect(layer.id))
+                .find(|r| r.width() >= 275.0)
+        })
+        .expect("clicking the fill swatch opened no picker");
+    h.click_at(egui::pos2(
+        popup.left() + popup.width() * 0.5,
+        popup.top() + popup.height() * 0.55,
+    ));
+    h.key(egui::Key::Escape, egui::Modifiers::default());
+    h.settle();
+    let Some(ui::OptionValue::Color(picked)) = h.workspace.options.get(tool, "fill_color") else {
+        panic!("no colour stored");
+    };
+    assert!(
+        picked[..3].iter().any(|v| *v > 0.05),
+        "still black: {picked:?}"
+    );
+    assert!(
+        picked[2] < 0.9 || picked[0] > 0.1,
+        "picked the foreground: {picked:?}"
+    );
+
+    // Source on Foreground: the swatch is ignored and the foreground draws.
+    let fill = drawn_fill(&h);
+    assert_ne!(fill, picked, "a Foreground fill drew the swatch colour");
+    assert!(
+        fill[2] > 0.99 && fill[0] < 0.01,
+        "not the blue foreground: {fill:?}"
+    );
+
+    // Now pick "Custom" from the Fill drop-down, the way a user does.
+    h.click(ids::tool_option(tool, "fill"));
+    let intents = h.click(ids::tool_option_choice(tool, "fill", 2));
+    assert_eq!(
+        option_writes(&intents),
+        vec![(tool, "fill", ui::OptionValue::Choice(2))],
+        "picking Custom emitted {intents:?}"
+    );
+
+    // The drawn shape is now the colour the swatch shows.
+    assert_eq!(drawn_fill(&h), picked);
 }
 
 #[test]

@@ -82,6 +82,32 @@ pub enum Script {
     Subscript,
 }
 
+/// Capitalisation applied at layout time (W3-J). The stored text keeps the
+/// case the user typed; only the shaped glyphs change, so turning the option
+/// off gives the original text back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum Caps {
+    /// The text as typed.
+    #[default]
+    Normal,
+    /// Every lowercase letter shapes as its capital.
+    AllCaps,
+    /// Lowercase letters shape as capitals at the small-cap size.
+    SmallCaps,
+}
+
+/// How glyph edges are rasterised (W3-J). The scaler has one smooth mode, so
+/// that is the only smooth choice offered; `None` thresholds the coverage to
+/// hard, aliased edges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum AntiAlias {
+    /// Hard edges: every pixel is either ink or not.
+    None,
+    /// Smooth, grey-scale coverage.
+    #[default]
+    Smooth,
+}
+
 /// Horizontal alignment of a paragraph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Alignment {
@@ -94,6 +120,12 @@ pub enum Alignment {
     Right,
     /// Both edges flush; word spaces absorb the slack (last line stays flush).
     Justified,
+    /// Justified, last line centred (W3-J).
+    JustifyLastCenter,
+    /// Justified, last line flush right (W3-J).
+    JustifyLastRight,
+    /// Justified, last line stretched to both edges too (W3-J).
+    JustifyAll,
 }
 
 /// Leading: a multiple of the size (auto) or an absolute distance in layer
@@ -142,6 +174,16 @@ pub struct BaseStyle {
     pub synthetic_bold: bool,
     /// Allow synthesising italic when the family has no italic face.
     pub synthetic_italic: bool,
+    /// W3-J: horizontal glyph scale, 1.0 = 100 %.
+    pub horizontal_scale: f32,
+    /// W3-J: vertical glyph scale, 1.0 = 100 %.
+    pub vertical_scale: f32,
+    /// W3-J: baseline shift in layer pixels; positive raises the text.
+    pub baseline_shift: f32,
+    /// W3-J: all caps / small caps.
+    pub caps: Caps,
+    /// W3-J: edge rasterisation, for the whole layer.
+    pub anti_alias: AntiAlias,
 }
 
 impl Default for BaseStyle {
@@ -159,6 +201,11 @@ impl Default for BaseStyle {
             kerning: true,
             synthetic_bold: true,
             synthetic_italic: true,
+            horizontal_scale: 1.0,
+            vertical_scale: 1.0,
+            baseline_shift: 0.0,
+            caps: Caps::Normal,
+            anti_alias: AntiAlias::Smooth,
         }
     }
 }
@@ -188,7 +235,10 @@ pub struct StyleSpan {
 }
 
 /// Paragraph settings, applied per paragraph (lines split on newlines).
+///
+/// `#[serde(default)]`: the W3-J indents load as zero from older payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Paragraph {
     pub alignment: Alignment,
     pub leading: Leading,
@@ -196,6 +246,10 @@ pub struct Paragraph {
     pub first_line_indent: f32,
     pub space_before: f32,
     pub space_after: f32,
+    /// W3-J: indent of every line from the start edge, in layer pixels.
+    pub left_indent: f32,
+    /// W3-J: indent of every line from the end edge, in layer pixels.
+    pub right_indent: f32,
 }
 
 impl Default for Paragraph {
@@ -206,6 +260,8 @@ impl Default for Paragraph {
             first_line_indent: 0.0,
             space_before: 0.0,
             space_after: 0.0,
+            left_indent: 0.0,
+            right_indent: 0.0,
         }
     }
 }
@@ -486,6 +542,12 @@ pub enum TextError {
     NonFiniteColour,
     #[error("tracking must be finite, got {value}")]
     NonFiniteTracking { value: f32 },
+    #[error("glyph scale must be finite and between {min} and {max}, got {value}")]
+    ScaleOutOfRange { value: f32, min: f32, max: f32 },
+    #[error("baseline shift must be finite, got {value}")]
+    NonFiniteBaselineShift { value: f32 },
+    #[error("paragraph spacing and indents must be finite, got {value}")]
+    NonFiniteParagraphSpacing { value: f32 },
     #[error("leading must be finite, got {value}")]
     NonFiniteLeading { value: f32 },
     #[error("frame dimension must be finite and non-negative, got {value}")]
@@ -508,6 +570,11 @@ pub enum TextError {
 pub const MAX_TEXT_BYTES: usize = 4 << 20;
 /// Most styled ranges one layer may carry.
 pub const MAX_SPANS: usize = 4096;
+/// Smallest glyph scale the schema accepts (1 %): a zero scale has no ink
+/// and could not be scaled back.
+pub const MIN_GLYPH_SCALE: f32 = 0.01;
+/// Largest glyph scale the schema accepts (1000 %, Photoshop's ceiling).
+pub const MAX_GLYPH_SCALE: f32 = 10.0;
 /// Largest type size the schema accepts — far above every panel maximum, but
 /// a finite bound so a corrupt payload cannot ask for an unbounded raster.
 pub const MAX_SIZE_PX: f32 = 4096.0;
@@ -531,6 +598,17 @@ impl TextLayer {
             });
         }
         self.style.validate()?;
+        for value in [
+            self.paragraph.first_line_indent,
+            self.paragraph.space_before,
+            self.paragraph.space_after,
+            self.paragraph.left_indent,
+            self.paragraph.right_indent,
+        ] {
+            if !value.is_finite() {
+                return Err(TextError::NonFiniteParagraphSpacing { value });
+            }
+        }
         if !self.paragraph.leading_is_finite() {
             return match self.paragraph.leading {
                 Leading::Multiple(v) | Leading::Absolute(v) => {
@@ -597,6 +675,20 @@ impl BaseStyle {
         if !self.tracking.is_finite() {
             return Err(TextError::NonFiniteTracking {
                 value: self.tracking,
+            });
+        }
+        for value in [self.horizontal_scale, self.vertical_scale] {
+            if !value.is_finite() || !(MIN_GLYPH_SCALE..=MAX_GLYPH_SCALE).contains(&value) {
+                return Err(TextError::ScaleOutOfRange {
+                    value,
+                    min: MIN_GLYPH_SCALE,
+                    max: MAX_GLYPH_SCALE,
+                });
+            }
+        }
+        if !self.baseline_shift.is_finite() {
+            return Err(TextError::NonFiniteBaselineShift {
+                value: self.baseline_shift,
             });
         }
         Ok(())
@@ -769,4 +861,71 @@ fn overlapping_spans_normalize_deterministically() {
     layer.spans = vec![b.clone(), a.clone(), b.clone()];
     let normalized = layer.normalized_spans();
     assert_eq!(normalized, vec![a, b]);
+}
+
+// -- W3-J: scale, baseline shift, caps, anti-alias, indents ------------
+
+#[test]
+fn a_payload_written_before_the_w3j_fields_loads_with_neutral_defaults() {
+    let payload = serde_json::json!({
+        "text": "Headline",
+        "font_family": "DejaVu Sans",
+        "size_px": 48.0,
+        "style": { "weight": 700 },
+        "paragraph": {
+            "alignment": "Center",
+            "leading": { "Multiple": 1.0 },
+            "first_line_indent": 4.0,
+            "space_before": 0.0,
+            "space_after": 0.0
+        }
+    });
+    let layer: TextLayer = serde_json::from_value(payload).unwrap();
+    assert_eq!(layer.style.horizontal_scale, 1.0);
+    assert_eq!(layer.style.vertical_scale, 1.0);
+    assert_eq!(layer.style.baseline_shift, 0.0);
+    assert_eq!(layer.style.caps, Caps::Normal);
+    assert_eq!(layer.style.anti_alias, AntiAlias::Smooth);
+    assert_eq!(layer.paragraph.first_line_indent, 4.0);
+    assert_eq!(layer.paragraph.left_indent, 0.0);
+    assert_eq!(layer.paragraph.right_indent, 0.0);
+    assert!(layer.validate().is_ok());
+}
+
+#[test]
+fn the_w3j_fields_round_trip_and_validate() {
+    let mut layer = TextLayer::legacy("Hi", "DejaVu Sans", 24.0);
+    layer.style.horizontal_scale = 2.0;
+    layer.style.vertical_scale = 0.5;
+    layer.style.baseline_shift = 6.0;
+    layer.style.caps = Caps::SmallCaps;
+    layer.style.anti_alias = AntiAlias::None;
+    layer.paragraph.left_indent = 10.0;
+    layer.paragraph.right_indent = 12.0;
+    layer.paragraph.alignment = Alignment::JustifyAll;
+    assert!(layer.validate().is_ok());
+    assert!(!layer.is_legacy());
+    let back: TextLayer = serde_json::from_str(&serde_json::to_string(&layer).unwrap()).unwrap();
+    assert_eq!(back, layer);
+
+    layer.style.horizontal_scale = 0.0;
+    assert!(matches!(
+        layer.validate(),
+        Err(TextError::ScaleOutOfRange { .. })
+    ));
+    layer.style.horizontal_scale = 1.0;
+    layer.style.vertical_scale = f32::NAN;
+    assert!(layer.validate().is_err());
+    layer.style.vertical_scale = 1.0;
+    layer.style.baseline_shift = f32::INFINITY;
+    assert!(matches!(
+        layer.validate(),
+        Err(TextError::NonFiniteBaselineShift { .. })
+    ));
+    layer.style.baseline_shift = 0.0;
+    layer.paragraph.left_indent = f32::NAN;
+    assert!(matches!(
+        layer.validate(),
+        Err(TextError::NonFiniteParagraphSpacing { .. })
+    ));
 }

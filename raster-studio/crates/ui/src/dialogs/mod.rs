@@ -71,6 +71,7 @@ pub mod canvas_size;
 pub mod chrome;
 pub mod color_edit;
 pub mod color_picker;
+pub mod color_range;
 pub mod controls;
 pub mod defringe;
 pub mod duplicate_layer;
@@ -87,6 +88,8 @@ pub mod new_guide;
 pub mod preferences;
 pub mod refine_mask;
 pub mod rename_layer;
+pub mod selection_modify;
+pub mod selection_name;
 pub mod sizes;
 pub mod trim;
 pub mod units;
@@ -103,6 +106,7 @@ pub use chrome::{
 };
 pub use color_edit::ColorEdit;
 pub use color_picker::{ColorPickerDialog, ColorValue, Eyedropper, RecentColors, ScreenSampler};
+pub use color_range::{ColorRangeDialog, ColorRangeSpec, ColorRangeView};
 pub use duplicate_layer::DuplicateLayerDialog;
 pub use export_as::{ExportAsDialog, ExportEntry, ExportJob, PreviewSource};
 pub use fill_stroke::{
@@ -124,6 +128,10 @@ pub use preferences::{
     PrefsSection, Shortcut, ThemeChoice, UiPreferences,
 };
 pub use rename_layer::RenameLayerDialog;
+pub use selection_modify::{ModifySpec, SelectionModifyDialog};
+pub use selection_name::{
+    LoadOperation, LoadSelectionDialog, LoadSelectionSpec, SaveSelectionDialog, SaveSelectionSpec,
+};
 pub use trim::{TrimBasis, TrimDialog, TrimSpec};
 pub use units::{format_bytes, ResolutionUnit, Unit};
 

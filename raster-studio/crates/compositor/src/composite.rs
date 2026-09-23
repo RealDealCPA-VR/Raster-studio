@@ -1109,13 +1109,34 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
         }
     }
 
+    /// Decode one stored RGBA16 colour into linear, at full precision: a
+    /// 16-bit code reaches the `f32` canvas as `code / 65535`, never through
+    /// an 8-bit step.
+    fn decode_rgb16(&self, r: u16, g: u16, b: u16) -> [f32; 3] {
+        to_linear(
+            &self.space,
+            [
+                f32::from(r) / 65535.0,
+                f32::from(g) / 65535.0,
+                f32::from(b) / 65535.0,
+            ],
+        )
+    }
+
     /// Read a raster layer's stored tiles into `out`.
+    ///
+    /// A tile is read at the depth it is stored at, told apart by its length:
+    /// an RGBA8 tile is `TILE_SIZE² × 4` bytes and an RGBA16 one
+    /// (`raster::rgba16_to_tile_bytes`, native-endian samples) is twice that,
+    /// so a 16-bit layer composites in `f32` from its 16-bit codes (P2.5b)
+    /// instead of being read as garbage 8-bit bytes or skipped.
     fn fill_layer(&self, id: LayerId, out: &mut Canvas) {
         let Some(map) = self.doc.layer_tiles(id) else {
             return;
         };
         let rect = out.rect();
         let needed = Tile::byte_len(PixelFormat::Rgba8);
+        let deep_len = Tile::byte_len(PixelFormat::Rgba16);
         for coord in tile_coords_for(rect, self.level) {
             let Some(hash) = map.get(coord) else { continue };
             let Some(data) = self.source.tile(hash) else {
@@ -1124,6 +1145,7 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             if data.len() < needed {
                 continue;
             }
+            let deep = data.len() == deep_len;
             let (ox, oy) = coord.pixel_origin();
             let x0 = rect.x.max(ox);
             let x1 = rect.right().min(ox + TILE_SIZE as i64);
@@ -1131,9 +1153,22 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             let y1 = rect.bottom().min(oy + TILE_SIZE as i64);
             for y in y0..y1 {
                 for x in x0..x1 {
-                    let s = (((y - oy) as usize) * TILE_SIZE as usize + (x - ox) as usize) * 4;
-                    let a = data[s + 3] as f32 / 255.0;
-                    let lin = self.decode_rgb(data[s], data[s + 1], data[s + 2]);
+                    let p = ((y - oy) as usize) * TILE_SIZE as usize + (x - ox) as usize;
+                    let (a, lin) = if deep {
+                        let s = p * 8;
+                        let ch =
+                            |k: usize| u16::from_ne_bytes([data[s + 2 * k], data[s + 2 * k + 1]]);
+                        (
+                            f32::from(ch(3)) / 65535.0,
+                            self.decode_rgb16(ch(0), ch(1), ch(2)),
+                        )
+                    } else {
+                        let s = p * 4;
+                        (
+                            data[s + 3] as f32 / 255.0,
+                            self.decode_rgb(data[s], data[s + 1], data[s + 2]),
+                        )
+                    };
                     let Some(i) = out.index_of(x, y) else {
                         continue;
                     };

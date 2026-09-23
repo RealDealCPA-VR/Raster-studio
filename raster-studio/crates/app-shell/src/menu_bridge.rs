@@ -232,6 +232,17 @@ pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
         context.selected_layers = context
             .selected_layers
             .max(open.document.layer_selection().len());
+        // The view rotation is the DOCUMENT camera's — the camera the shell
+        // renders from and `perform`'s ResetViewRotation arm uprights — not
+        // the workspace canvas camera's, which this shell never turns.
+        //
+        // Not yet user-reachable: no user path turns the document camera
+        // today. The Rotate View tool's drag is dropped in tool_input.rs
+        // (`canvas_camera_of` / `write_camera_back`, ~619-655, owned by the
+        // tools wave W3-A), so in the running app this reads upright and the
+        // item stays greyed until that hand-off lands. The tests turn the
+        // camera directly.
+        context.view_rotated = open.camera.is_rotated();
     }
     context
 }
@@ -344,37 +355,27 @@ pub fn unrouted_message(intent: &Intent) -> String {
 
 /// The View-menu items whose whole implementation is [`Workspace`]'s own.
 ///
-/// [`ui::Workspace::absorb_action`] performs all four against the canvas
-/// camera, and did so for a whole release while the four sat greyed out beside
+/// [`ui::Workspace::absorb_action`] performs all three against the canvas
+/// camera, and did so for a whole release while they sat greyed out beside
 /// Zoom In and Fit on Screen — because the bridge routed *no* [`Intent::Action`]
 /// to the workspace, so the only actions that worked were the ones the shell
 /// happened to reimplement as an [`Action`].
 ///
 /// Every one is an absolute placement of the camera (fill this rectangle, frame
-/// this selection, this many pixels per inch, rotation zero), so all four
-/// satisfy the idempotence [`Pick::Workspace`] requires.
+/// this selection, this many pixels per inch), so all three satisfy the
+/// idempotence [`Pick::Workspace`] requires.
 ///
-/// # Three of the four are reachable by a user; the fourth is routed only for
-/// completeness
+/// # Reset View Rotation is deliberately NOT one of them
 ///
-/// Fill Screen, Zoom to Selection and Print Size can be clicked and do their
-/// work. `ResetViewRotation` is routed here for completeness and **cannot be
-/// enabled in this build at all**: `ui::menu` gates it on
-/// [`MenuContext::view_rotated`], which reads
-/// `Workspace::canvas.view.camera.rotation`, and no code path in this shell
-/// ever writes that field to anything but zero.
-/// `Chrome::sync_workspace` pushes the document camera's zoom
-/// and centre into that camera and not a rotation, and the Rotate View tool
-/// turns a *mirror* built by `tool_input::canvas_camera_of` — which starts at
-/// rotation zero every gesture — whose rotation `tool_input::write_camera_back`
-/// then drops, because [`render::Camera`], the camera this shell actually
-/// renders from, is axis-aligned (`crate::tool_input`'s own module docs say so).
-/// So the item is permanently greyed out here, the ratchet counts it under
-/// `disabled` in every state this build can reach, and the tests that cover it
-/// have to rotate the workspace camera by hand because no user path can. What
-/// they prove is the routing, not the reachability; the item becomes reachable
-/// the day the renderer can show a rotated view, and this routing is what will
-/// make it work that day without a second wiring pass.
+/// It used to be routed here, and was permanently greyed out: `ui::menu` gates
+/// it on [`MenuContext::view_rotated`], the workspace camera's rotation is
+/// never written by this shell, and the camera the shell actually renders from
+/// — [`render::Camera`] on `OpenDocument` — is where the view rotation now
+/// lives. So the item is performed against the *document* camera by
+/// [`perform`] (`doc.camera.reset_rotation()`), its enablement is read off the
+/// same camera by [`context`], and the read-back-to-the-document dance the
+/// three zoom items need does not apply: there is nothing on the workspace
+/// side to read back.
 pub fn is_workspace_camera_action(action: MenuAction) -> bool {
     use ui::menu::ZoomCommand as Z;
     matches!(
@@ -382,7 +383,6 @@ pub fn is_workspace_camera_action(action: MenuAction) -> bool {
         MenuAction::Zoom(Z::FillScreen)
             | MenuAction::Zoom(Z::ToSelection)
             | MenuAction::Zoom(Z::PrintSize)
-            | MenuAction::ResetViewRotation
     )
 }
 
@@ -551,11 +551,11 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
         // Transform Selection routes to the gizmo wearing its Selection
         // target now (P2.2): the drag resamples the selection mask and
         // commits as one undoable SetSelection step. It has no reason here.
-        // Reselect, Save Selection and Load Selection all need somewhere to
-        // *keep* a selection between operations, and no such store exists —
         // Select ▸ Reselect/Save/Load Selection are wired (the store lives on
-        // the document, see `Document::stored_selection`), so they have no
-        // entry here.
+        // the document, see `Document::stored_selection` / `saved_selections`)
+        // and Save/Load ask their name / entry in a dialog (W3-H), so they
+        // have no entry here. Color Range and the five Modify rows open their
+        // dialogs too (W3-H).
 
         // ---- Filter --------------------------------------------------------
         // Every filter opens its parameter dialog now, including the two whose
@@ -637,6 +637,15 @@ pub fn resolve_intent(
     context: &MenuContext,
     editor: &Editor,
 ) -> Result<Intent, String> {
+    // W3-A: a View toggle this build cannot honour is greyed with its reason
+    // rather than refused only after the click.
+    if let MenuAction::ToggleView(flag) = action {
+        if !context.view.get(flag) {
+            if let Some(reason) = crate::chrome::view_flag_refusal(flag) {
+                return Err(reason.to_string());
+            }
+        }
+    }
     match action.resolve(context) {
         Resolution::Disabled(reason) => Err(reason.to_string()),
         Resolution::Enabled(intent) => {
@@ -1526,6 +1535,23 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::Reselect => reselect(editor),
         MenuAction::ToggleQuickMask => editor.toggle_quick_mask(),
         MenuAction::SetColorMode(mode) => editor.set_color_mode(mode),
+        // W3-H: Image > Mode > 8/16 Bits/Channel. The menu greys both rows
+        // with the specific reason (`ChannelDepth::conversion_reason`); a
+        // caller that bypasses enablement gets the same sentence.
+        MenuAction::SetBitDepth(depth) => {
+            let current = ui::menu::ChannelDepth::of_bits(
+                editor
+                    .active()
+                    .ok_or("No document is open")?
+                    .document
+                    .meta
+                    .bit_depth,
+            );
+            Err(depth
+                .conversion_reason(current)
+                .unwrap_or("This build cannot change the bit depth")
+                .to_string())
+        }
         // W2-F: Select ▸ Refine Edge… confirmed. The parameters are the
         // dialog's (parked by `DialogHost::ui`); a click that opened no
         // dialog — no selection to refine — is answered with the reason.
@@ -1615,6 +1641,20 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
                 .set_active_layer(None)
                 .map(|()| "No layer is selected now".to_string())
                 .map_err(|e| e.to_string()),
+        },
+
+        // ---- View ----------------------------------------------------------
+        // The view rotation lives on the DOCUMENT camera — the one the shell
+        // renders from — so it is uprighted there. `context` enables the item
+        // from that same camera, so a click can only arrive on a turned view;
+        // the refusal below is for a caller that bypasses enablement.
+        MenuAction::ResetViewRotation => match editor.active_mut() {
+            None => Err("No document is open".to_string()),
+            Some(doc) if !doc.camera.is_rotated() => Err("The view is already upright".to_string()),
+            Some(doc) => {
+                doc.camera.reset_rotation();
+                Ok("View rotation reset".to_string())
+            }
         },
 
         // ---- Help ----------------------------------------------------------
@@ -2324,10 +2364,15 @@ fn set_selection(
     Ok(())
 }
 
-/// Select ▸ Save Selection: set the document's stored selection to the
-/// current one and append it to the named list (suffixed with a counter,
-/// since the shell hosts no dialog to name it with).
+/// Select ▸ Save Selection…: append the live selection to the document's
+/// named list under the name the dialog confirmed (W3-H), and make it the
+/// stored selection Reselect brings back.
+///
+/// With no name parked — a caller that opened no dialog — the entry takes the
+/// first free "Alpha N", the name the dialog would have opened at. A name the
+/// list already holds is refused rather than shadowed: Load lists by name.
 fn save_selection(editor: &mut Editor) -> Result<String, String> {
+    let parked = crate::dialog_host::take_confirmed_save_selection();
     let doc = editor
         .active_mut()
         .ok_or_else(|| "No document is open".to_string())?;
@@ -2335,34 +2380,104 @@ fn save_selection(editor: &mut Editor) -> Result<String, String> {
     if selection.is_none() {
         return Err("There is no selection to save".to_string());
     }
-    let n = doc.document.saved_selections.len() + 1;
+    let names = crate::dialog_host::saved_selection_names(&doc.document);
+    let name = match parked {
+        Some(spec) => spec.name,
+        None => ui::dialogs::selection_name::next_alpha_name(&names),
+    };
+    if names.contains(&name) {
+        return Err(format!("A saved selection is already called \"{name}\""));
+    }
     doc.document
         .saved_selections
-        .push((format!("Selection {n}"), selection.clone()));
+        .push((name.clone(), selection.clone()));
     doc.document.stored_selection = Some(selection);
     doc.document.mark_dirty();
-    Ok(format!("Saved the selection (Selection {n})"))
+    Ok(format!("Saved the selection as \"{name}\""))
 }
 
-/// Select ▸ Load Selection: replace the live selection with the last saved one.
+/// Select ▸ Load Selection…: bring a saved selection back by name, combined
+/// with the live one the way the dialog confirmed (W3-H) — new, add,
+/// subtract or intersect, optionally inverted — as one undoable
+/// `SetSelection` step.
+///
+/// With nothing parked (no dialog), the most recent entry replaces the live
+/// selection, which is what the row did before it asked.
 fn load_selection(editor: &mut Editor) -> Result<String, String> {
+    use ui::dialogs::LoadOperation as Op;
+    let parked = crate::dialog_host::take_confirmed_load_selection();
+    let (w, h) = canvas_of(editor)?;
     let doc = editor
         .active_mut()
         .ok_or_else(|| "No document is open".to_string())?;
-    let saved = doc
-        .document
-        .saved_selections
-        .last()
-        .map(|(_, s)| s.clone())
-        .or(doc.document.stored_selection.clone())
-        .ok_or_else(|| "No selection has been saved".to_string())?;
-    if doc.document.selection == saved {
+    let (name, saved, op, invert) = match parked {
+        Some(spec) => {
+            // The dialog captured the list when it opened; if the entry at
+            // that index is no longer the one it named, refuse rather than
+            // load whatever moved into the slot.
+            let Some((name, saved)) = doc.document.saved_selections.get(spec.index) else {
+                return Err(format!("\"{}\" is no longer saved", spec.name));
+            };
+            if *name != spec.name {
+                return Err(format!("\"{}\" is no longer saved", spec.name));
+            }
+            (name.clone(), saved.clone(), spec.op, spec.invert)
+        }
+        None => {
+            let (name, saved) = doc
+                .document
+                .saved_selections
+                .last()
+                .cloned()
+                .or_else(|| {
+                    doc.document
+                        .stored_selection
+                        .clone()
+                        .map(|s| ("the stored selection".to_string(), s))
+                })
+                .ok_or_else(|| "No selection has been saved".to_string())?;
+            (name, saved, Op::New, false)
+        }
+    };
+    let canvas = canvas_rect(w, h);
+    let incoming = if invert {
+        selection::invert_selection(&saved, canvas).map_err(|e| e.to_string())?
+    } else {
+        saved
+    };
+    let live = doc.document.selection.clone();
+    let has_live = live.bounds().is_some();
+    let next = match op {
+        Op::New => incoming,
+        // "Everything" is what a Selection::None materialises as, so a
+        // combine against no live selection would answer against the whole
+        // canvas. Photopea offers only New there; the dialog greys the
+        // others, and a bypassing caller is refused with the same reason.
+        _ if !has_live => {
+            return Err("There is no live selection to combine with".to_string());
+        }
+        Op::Add | Op::Subtract | Op::Intersect => {
+            let boolean = match op {
+                Op::Add => selection::BooleanOp::Add,
+                Op::Subtract => selection::BooleanOp::Subtract,
+                _ => selection::BooleanOp::Intersect,
+            };
+            selection::combine_selection(canvas, &live, &incoming, boolean)
+                .map_err(|e| e.to_string())?
+        }
+    };
+    if next == live {
         return Err("The saved selection is already active".to_string());
     }
     doc.document.stored_selection = None;
     // Card 056: a user-facing selection edit rides history like every other.
-    editor.apply_command(Command::SetSelection { selection: saved });
-    Ok("Loaded the saved selection".to_string())
+    editor.apply_command(Command::SetSelection { selection: next });
+    Ok(match op {
+        Op::New => format!("Loaded \"{name}\""),
+        Op::Add => format!("Added \"{name}\" to the selection"),
+        Op::Subtract => format!("Subtracted \"{name}\" from the selection"),
+        Op::Intersect => format!("Intersected the selection with \"{name}\""),
+    })
 }
 
 /// Select ▸ Reselect: bring back the most recently saved selection and clear
@@ -2386,30 +2501,48 @@ fn reselect(editor: &mut Editor) -> Result<String, String> {
     Ok("Reselected".to_string())
 }
 
-/// The radius each Select ▸ Modify item uses, in pixels.
-///
-/// Photoshop asks; this build has no numeric prompt to ask in, so each one uses
-/// the value that dialog opens at. Named as a constant so the number is one
-/// decision in one place rather than five literals.
+/// The radius a Select ▸ Modify item uses when no dialog asked, in pixels —
+/// the amount every Modify dialog opens at
+/// (`ui::dialogs::selection_modify::DEFAULT_MODIFY_PX`).
 pub const MODIFY_RADIUS: u32 = 4;
 
+/// Select ▸ Modify ▸ <op>…: the morphology at the amount the dialog confirmed
+/// (W3-H), as one undoable `SetSelection` step. With nothing parked for `op`
+/// (no dialog) it runs at [`MODIFY_RADIUS`].
 fn modify_selection(editor: &mut Editor, op: ui::menu::ModifySelection) -> Result<String, String> {
     use ui::menu::ModifySelection as M;
+    let spec = crate::dialog_host::take_confirmed_modify(op).unwrap_or(ui::dialogs::ModifySpec {
+        op,
+        amount: MODIFY_RADIUS as f32,
+    });
+    if !spec.is_valid() {
+        return Err(format!(
+            "{} px is outside what {} accepts",
+            spec.amount,
+            op.label().trim_end_matches('…')
+        ));
+    }
+    let px = spec.whole_px();
     set_selection(editor, |sel, w, h| {
         let rect = canvas_rect(w, h);
         let mask = selection::to_mask(sel, rect).map_err(|e| e.to_string())?;
         let next = match op {
-            M::Border => selection::border(&mask, MODIFY_RADIUS),
-            M::Smooth => selection::smooth(&mask, MODIFY_RADIUS),
-            M::Expand => selection::expand(&mask, MODIFY_RADIUS),
-            M::Contract => selection::contract(&mask, MODIFY_RADIUS),
-            M::Feather => selection::feather(&mask, MODIFY_RADIUS as f32),
+            M::Border => selection::border(&mask, px),
+            M::Smooth => selection::smooth(&mask, px),
+            M::Expand => selection::expand(&mask, px),
+            M::Contract => selection::contract(&mask, px),
+            M::Feather => selection::feather(&mask, spec.amount),
         }
         .map_err(|e| e.to_string())?;
         Ok(editor_core::Selection::Mask(next))
     })?;
+    let amount = if op == M::Feather {
+        format!("{}", spec.amount)
+    } else {
+        px.to_string()
+    };
     Ok(format!(
-        "{} by {MODIFY_RADIUS} px — this build has no radius dialog",
+        "{} by {amount} px",
         op.label().trim_end_matches('…')
     ))
 }
@@ -2444,28 +2577,35 @@ fn grow_or_similar(editor: &mut Editor, contiguous: bool) -> Result<String, Stri
     })
 }
 
+/// Select ▸ Color Range…: select by the spec the dialog confirmed (W3-H) —
+/// colour, fuzziness, invert — over the active pixel layer at full
+/// resolution, as one undoable `SetSelection` step. The coverage comes from
+/// [`ui::dialogs::ColorRangeSpec::mask`], the function the dialog's preview
+/// runs, so the preview and the result cannot disagree. With nothing parked
+/// (no dialog) it selects around the foreground at the opening fuzziness.
 fn color_range(editor: &mut Editor) -> Result<String, String> {
     let layer = pixel_layer(editor)?;
     let (w, h) = canvas_of(editor)?;
-    let fg = editor.foreground();
-    let hex = crate::editor::color_hex(fg);
-    let mut target = rgba8_of(fg);
-    target[3] = 255;
+    let spec = crate::dialog_host::take_confirmed_color_range()
+        .unwrap_or_else(|| ui::dialogs::ColorRangeSpec::new(rgba8_of(editor.foreground())));
     let rgba = {
         let doc = editor.active().ok_or("No document is open")?;
         pixels::read_layer(doc, layer)
     };
-    let image = selection::ImageBuffer::from_rgba8(glam::IVec2::ZERO, w, h, rgba)
-        .map_err(|e| e.to_string())?;
-    set_selection(editor, |_, _, _| {
-        let opts = selection::ColorRangeOptions::default();
-        let mask =
-            selection::color_range(&image.view(), target, &opts).map_err(|e| e.to_string())?;
-        Ok(editor_core::Selection::Mask(mask))
-    })?;
+    let mask = spec.mask(&rgba, w, h)?;
+    set_selection(editor, |_, _, _| Ok(editor_core::Selection::Mask(mask)))?;
+    let hex = format!(
+        "#{:02X}{:02X}{:02X}",
+        spec.color[0], spec.color[1], spec.color[2]
+    );
     Ok(format!(
-        "Selected everything near the foreground colour {hex} — this build has \
-         no colour-range dialog to pick another"
+        "Selected {} {hex} at fuzziness {}",
+        if spec.invert {
+            "everything but"
+        } else {
+            "everything near"
+        },
+        spec.fuzziness
     ))
 }
 
@@ -3670,13 +3810,12 @@ mod tests {
     //
     // The two that moved most recently are Fill Screen and Print Size, and
     // their siblings Zoom to Selection and Reset View Rotation moved with them.
-    // Both of those are counted under `disabled` here, for reasons that are not
-    // the same: Zoom to Selection is disabled because *this* state has nothing
-    // selected, and a selection enables it. Reset View Rotation is disabled in
-    // every state this build can reach — nothing writes the workspace canvas
-    // camera's rotation, so `view_rotated` is permanently false and only three
-    // of the four are user-reachable today. `is_workspace_camera_action`'s doc
-    // has the whole reason. All four were implemented in
+    // Both of those are counted under `disabled` here, for the same kind of
+    // reason: Zoom to Selection is disabled because *this* state has nothing
+    // selected, and a selection enables it; Reset View Rotation is disabled
+    // because *this* state's view is upright, and turning the document camera
+    // enables it (`reset_view_rotation_is_enabled_on_a_turned_view_and_uprights_
+    // the_document_camera`). All four were implemented in
     // `ui::Workspace::absorb_action` and unreachable, because the bridge routed
     // no `Intent::Action` to the workspace at all.
     //
@@ -3767,6 +3906,15 @@ mod tests {
         }
         for flag in ui::ViewFlag::ALL {
             let outcome = resolve(MenuAction::ToggleView(*flag), &context, &ed);
+            // W3-A: the toggles this build cannot honour are greyed with
+            // their reason instead of routed.
+            if let Some(reason) = crate::chrome::view_flag_refusal(*flag) {
+                assert!(
+                    matches!(&outcome, Err(r) if r == reason),
+                    "{flag:?} resolved to {outcome:?}"
+                );
+                continue;
+            }
             assert!(
                 matches!(outcome, Ok(Pick::Workspace(_))),
                 "{flag:?} resolved to {outcome:?}"
@@ -3860,10 +4008,10 @@ mod tests {
     }
 
     #[test]
-    fn the_four_view_items_the_workspace_performs_are_routed_to_it() {
-        // Fill Screen, Zoom to Selection, Print Size and Reset View Rotation
-        // are all implemented by `ui::Workspace::absorb_action` and were all
-        // greyed out with `NOT_WIRED`, sitting beside four zoom items that
+    fn the_three_view_items_the_workspace_performs_are_routed_to_it() {
+        // Fill Screen, Zoom to Selection and Print Size are implemented by
+        // `ui::Workspace::absorb_action` and were all greyed out with
+        // `NOT_WIRED`, sitting beside four zoom items that
         // worked. The cause was structural: `shell_action` mapped a
         // `MenuAction` to a shell `Action` or to nothing, so an action whose
         // whole implementation lives in the workspace had no way through.
@@ -3876,22 +4024,19 @@ mod tests {
             min: glam::IVec2::new(2, 2),
             max: glam::IVec2::new(20, 20),
         };
-        // ...and Reset View Rotation is gated on a rotated view, which is a
-        // state no user of *this* build can put the workspace canvas into: see
-        // `is_workspace_camera_action`'s doc. It is rotated by hand here because
-        // nothing else can rotate it, and what that proves is the routing —
-        // that the item reaches the workspace rather than `NOT_WIRED` — and not
-        // that a user can reach the item. Three of the four are user-reachable
-        // today; this one is wired ahead of a renderer that can show it.
-        let mut ws = Workspace::new();
-        ws.canvas.view.camera.set_rotation(0.7);
+        // ...and Reset View Rotation is gated on a rotated view — the DOCUMENT
+        // camera's rotation, the one the shell renders from. The workspace
+        // canvas camera is deliberately left upright here: it is not the
+        // camera the item reads or resets, and turning it must not enable
+        // anything.
+        let ws = Workspace::new();
+        ed.active_mut().unwrap().camera.set_rotation(0.7);
         let context = context(&mut ed, &ws);
 
         for action in [
             MenuAction::Zoom(Z::FillScreen),
             MenuAction::Zoom(Z::ToSelection),
             MenuAction::Zoom(Z::PrintSize),
-            MenuAction::ResetViewRotation,
         ] {
             match resolve(action, &context, &ed) {
                 Ok(Pick::Workspace(intent)) => assert_eq!(*intent, Intent::Action(action)),
@@ -3901,6 +4046,66 @@ mod tests {
                 ),
             }
         }
+        // Reset View Rotation is performed against the document camera, not
+        // routed to the workspace.
+        match resolve(MenuAction::ResetViewRotation, &context, &ed) {
+            Ok(Pick::Menu(MenuAction::ResetViewRotation)) => {}
+            other => panic!(
+                "ResetViewRotation resolved to {other:?}; it must reach `perform`, which \
+                 uprights the document camera"
+            ),
+        }
+    }
+
+    /// View ▸ Reset View Rotation, end to end on the camera the shell renders
+    /// from: greyed out with the reason while the view is upright, enabled the
+    /// moment the document camera is turned, performed through `perform` so
+    /// the camera is upright again, and greyed out once more afterwards.
+    #[test]
+    fn reset_view_rotation_is_enabled_on_a_turned_view_and_uprights_the_document_camera() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor_with_a_document(dir.path());
+        let ws = Workspace::new();
+
+        let upright = context(&mut ed, &ws);
+        assert_eq!(
+            resolve(MenuAction::ResetViewRotation, &upright, &ed),
+            Err("The view is already upright".to_string()),
+            "an upright view must grey the item out with the reason"
+        );
+        // Bypassing enablement is refused with the same sentence.
+        assert_eq!(
+            perform(MenuAction::ResetViewRotation, &mut ed),
+            Err("The view is already upright".to_string())
+        );
+
+        ed.active_mut().unwrap().camera.set_rotation(0.7);
+        let turned = context(&mut ed, &ws);
+        assert!(
+            turned.view_rotated,
+            "the context did not read the document camera"
+        );
+        let pick = resolve(MenuAction::ResetViewRotation, &turned, &ed)
+            .expect("a turned view enables Reset View Rotation");
+        assert_eq!(pick, Pick::Menu(MenuAction::ResetViewRotation));
+
+        assert_eq!(
+            perform(MenuAction::ResetViewRotation, &mut ed),
+            Ok("View rotation reset".to_string())
+        );
+        assert_eq!(
+            ed.active().unwrap().camera.rotation,
+            0.0,
+            "Reset View Rotation left the document camera turned"
+        );
+        assert_eq!(ed.status(), Some("View rotation reset"));
+
+        let after = context(&mut ed, &ws);
+        assert!(!after.view_rotated);
+        assert!(
+            resolve(MenuAction::ResetViewRotation, &after, &ed).is_err(),
+            "the item stayed enabled on an upright view"
+        );
     }
 
     #[test]
@@ -6395,12 +6600,52 @@ mod tests {
             MenuAction::About,
             MenuAction::BlendingOptions,
             MenuAction::DuplicateLayer,
+            // W3-H: Color Range asks its fuzziness and colour. The other
+            // Select-menu questions (Modify, Save/Load Selection) are gated on
+            // a selection this fixture does not have; their menu-bar route is
+            // pinned by `the_select_menu_questions_open_from_the_menu_bar_...`.
+            MenuAction::ColorRange,
         ];
         asked.extend(
             ui::menu::AdjustmentId::ALL
                 .iter()
                 .copied()
                 .map(MenuAction::ApplyAdjustment),
+        );
+        // W3-E: the Photopea-parity filter rows. Each opens the generated
+        // FilterDialog (live preview) from the menu bar, the parameterless
+        // one-click ones included.
+        {
+            use ui::menu::FilterId as F;
+            asked.extend(
+                [
+                    F::Average,
+                    F::Blur,
+                    F::BlurMore,
+                    F::SmartBlur,
+                    F::Sharpen,
+                    F::SharpenMore,
+                    F::SharpenEdges,
+                    F::Displace,
+                    F::Facet,
+                    F::Fragment,
+                    F::Mezzotint,
+                    F::Extrude,
+                    F::Tiles,
+                    F::TraceContour,
+                ]
+                .map(MenuAction::Filter),
+            );
+        }
+        // Convert for Smart Filters is drawn greyed with its reason, never
+        // enabled as a silent no-op.
+        assert_eq!(
+            resolve_intent(
+                MenuAction::ConvertForSmartFilters,
+                &menu_ctx,
+                &with_two_layers(dir.path())
+            ),
+            Err(ui::menu::SMART_FILTERS_UNSUPPORTED.to_string())
         );
         for asked in asked {
             assert!(
@@ -6412,6 +6657,109 @@ mod tests {
             routed > 60,
             "only {routed} rows were performed; the walk stopped finding them"
         );
+    }
+
+    /// W3-H, the real route: each Select-menu question is clicked in the
+    /// menu bar (`Chrome::menu_click`, what `draw` calls), must open its
+    /// dialog instead of running at a default, and Enter through the whole
+    /// chrome's frame must hand back the pick whose `perform` edits the
+    /// document -- the selection for Color Range / Modify / Load, the named
+    /// store for Save.
+    #[test]
+    fn the_select_menu_questions_open_from_the_menu_bar_and_their_confirmation_edits_the_document()
+    {
+        use ui::menu::ModifySelection as M;
+        let dir = tempfile::tempdir().unwrap();
+        let rows = [
+            MenuAction::ColorRange,
+            MenuAction::Modify(M::Border),
+            MenuAction::Modify(M::Smooth),
+            MenuAction::Modify(M::Expand),
+            MenuAction::Modify(M::Contract),
+            MenuAction::Modify(M::Feather),
+            MenuAction::SaveSelection,
+            MenuAction::LoadSelection,
+        ];
+        let raw = |events: Vec<egui::Event>| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        for action in rows {
+            let mut ed = with_two_layers(dir.path());
+            select_rect(&mut ed, (4, 4), (20, 20));
+            ed.active_mut().unwrap().document.saved_selections.push((
+                "Alpha 1".to_string(),
+                editor_core::Selection::Rect {
+                    min: glam::IVec2::new(0, 0),
+                    max: glam::IVec2::new(3, 3),
+                },
+            ));
+            let before_selection = ed.active().unwrap().document.selection.clone();
+
+            let mut chrome = crate::chrome::Chrome::new();
+            let ctx = egui::Context::default();
+            design::apply_theme(&ctx, design::Theme::Dark);
+            // One frame so the workspace mirrors the document (the saved
+            // selections count the Load row is gated on) as it does live.
+            let _ = ctx.run(raw(Vec::new()), |ctx| {
+                let _ = chrome.ui(ctx, &mut ed);
+            });
+            let menu_ctx = context(&mut ed, chrome.workspace());
+            let intent = resolve_intent(action, &menu_ctx, &ed)
+                .unwrap_or_else(|reason| panic!("{action:?} is greyed: {reason}"));
+            let mut out = ChromeOutput::default();
+            chrome.menu_click(intent, &ed, &mut out);
+            assert!(
+                chrome.dialog_open(),
+                "{action:?} did not open its dialog from the menu bar"
+            );
+            assert!(out.menu.is_empty(), "{action:?} ran at its defaults");
+
+            let _ = ctx.run(raw(Vec::new()), |ctx| {
+                let _ = chrome.ui(ctx, &mut ed);
+            });
+            let mut out = ChromeOutput::default();
+            let enter = egui::Event::Key {
+                key: egui::Key::Enter,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+                physical_key: None,
+            };
+            let _ = ctx.run(raw(vec![enter]), |ctx| {
+                out = chrome.ui(ctx, &mut ed);
+            });
+            assert!(!chrome.dialog_open(), "{action:?}: Enter did not confirm");
+            assert_eq!(
+                out.menu,
+                vec![action],
+                "{action:?}: the pick did not travel"
+            );
+            for named in std::mem::take(&mut out.menu) {
+                perform(named, &mut ed)
+                    .unwrap_or_else(|reason| panic!("{action:?} refused: {reason}"));
+            }
+            let doc = &ed.active().unwrap().document;
+            if action == MenuAction::SaveSelection {
+                assert_eq!(
+                    doc.saved_selections
+                        .iter()
+                        .map(|(n, _)| n.as_str())
+                        .collect::<Vec<_>>(),
+                    vec!["Alpha 1", "Alpha 2"],
+                    "Save did not store under the dialog's default name"
+                );
+            } else {
+                assert_ne!(
+                    doc.selection, before_selection,
+                    "{action:?} left the selection as it was"
+                );
+            }
+        }
     }
 
     #[test]

@@ -94,6 +94,7 @@
 //!   [`shell::withhold_from_egui`]. Text fields are reached with the pointer.
 
 pub mod action;
+pub mod canvas_extras;
 pub mod chrome;
 pub mod clipboard;
 pub mod dialog_host;
@@ -121,6 +122,7 @@ pub mod tool_input;
 pub mod version;
 
 pub use action::{Action, Category, ToolKey};
+pub use canvas_extras::{CanvasExtras, ExtrasReport};
 pub use chrome::{Chrome, ChromeOutput, Rebind, ShortcutRow};
 pub use dialogs::{CloseChoice, FileDialogs, NativeDialogs, ScriptedDialogs};
 pub use dirty::DirtyTiles;
@@ -138,7 +140,7 @@ pub use presenter::CanvasPresenter;
 pub use recent::{RecentFiles, MAX_RECENT_FILES};
 pub use session::{SessionMarker, SessionRecord};
 pub use shell::Shell;
-pub use tool_input::{PointerOutcome, Refusal, ToolPointer};
+pub use tool_input::{PointerOutcome, Refusal, SnapPolicy, ToolPointer};
 pub use version::{about_line, set_version_stamp, version, Version};
 
 use std::path::PathBuf;
@@ -146,5 +148,39 @@ use std::path::PathBuf;
 /// Start the application: real dialogs, the user's configuration directory, and
 /// whatever files were named on the command line.
 pub fn launch(files: Vec<PathBuf>, shot: Option<PathBuf>) -> Result<(), ShellError> {
+    if shot.is_some() {
+        if let Ok(spec) = std::env::var(SHOT_VIEW_ENV) {
+            let _ = SHOT_VIEW.set(parse_view_flags(&spec));
+        }
+    }
     Shell::with_shot(Editor::native(), files, shot).run()
+}
+
+/// W3-A: the environment variable a `--shot` reads for the View toggles to
+/// tick before the capture, as a comma-separated list of flag names
+/// (`rulers,grid`, case-insensitive, the [`ui::ViewFlag`] variant names). A
+/// screenshot fixture can then show an Extra that is off by default without
+/// a click. Ignored without `--shot`.
+pub const SHOT_VIEW_ENV: &str = "RASTER_SHOT_VIEW";
+
+/// The View toggles a `--shot` run asked for; unset otherwise. Read by
+/// [`Chrome::new`].
+static SHOT_VIEW: std::sync::OnceLock<Vec<ui::ViewFlag>> = std::sync::OnceLock::new();
+
+/// The View toggles to turn on at start-up (only ever set by a `--shot` run).
+pub(crate) fn shot_view_flags() -> &'static [ui::ViewFlag] {
+    SHOT_VIEW.get().map(Vec::as_slice).unwrap_or(&[])
+}
+
+/// Parse [`SHOT_VIEW_ENV`]'s value; unknown names are skipped.
+pub fn parse_view_flags(spec: &str) -> Vec<ui::ViewFlag> {
+    spec.split(',')
+        .map(|name| name.trim().to_ascii_lowercase())
+        .filter_map(|name| {
+            ui::ViewFlag::ALL
+                .iter()
+                .copied()
+                .find(|flag| format!("{flag:?}").to_ascii_lowercase() == name)
+        })
+        .collect()
 }

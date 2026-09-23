@@ -28,6 +28,23 @@ pub enum Alignment {
     /// Both edges flush; word spaces absorb the slack. The last line of a
     /// paragraph is never justified.
     Justify,
+    /// Justified; the last line of each paragraph is centred (W3-J).
+    JustifyLastCenter,
+    /// Justified; the last line of each paragraph is flush right (W3-J).
+    JustifyLastRight,
+    /// Justified, the last line included (W3-J).
+    JustifyAll,
+}
+
+impl Alignment {
+    /// Whether the lines of a boxed paragraph are stretched to both edges.
+    #[must_use]
+    pub const fn is_justified(self) -> bool {
+        matches!(
+            self,
+            Self::Justify | Self::JustifyLastCenter | Self::JustifyLastRight | Self::JustifyAll
+        )
+    }
 }
 
 /// Distance from one baseline to the next.
@@ -71,6 +88,11 @@ pub struct ParagraphStyle {
     pub space_before: f32,
     /// Extra vertical space inserted after every paragraph but the last.
     pub space_after: f32,
+    /// W3-J: indent of every line from the start edge, in layer pixels.
+    pub left_indent: f32,
+    /// W3-J: indent of every line from the end edge, in layer pixels. A
+    /// boxed frame wraps inside both indents.
+    pub right_indent: f32,
 }
 
 /// How the text is placed: a single anchor, or a box that text wraps inside.
@@ -236,6 +258,11 @@ impl From<&layer_model::TextLayer> for TextRun {
                 kerning: layer.style.kerning,
                 allow_synthetic_bold: layer.style.synthetic_bold,
                 allow_synthetic_italic: layer.style.synthetic_italic,
+                horizontal_scale: layer.style.horizontal_scale,
+                vertical_scale: layer.style.vertical_scale,
+                baseline_shift: layer.style.baseline_shift,
+                caps: layer.style.caps,
+                anti_alias: layer.style.anti_alias,
             },
             runs: layer
                 .spans
@@ -305,6 +332,9 @@ fn paragraph_from_persisted(p: &layer_model::text::Paragraph) -> ParagraphStyle 
             layer_model::text::Alignment::Center => Alignment::Center,
             layer_model::text::Alignment::Right => Alignment::Right,
             layer_model::text::Alignment::Justified => Alignment::Justify,
+            layer_model::text::Alignment::JustifyLastCenter => Alignment::JustifyLastCenter,
+            layer_model::text::Alignment::JustifyLastRight => Alignment::JustifyLastRight,
+            layer_model::text::Alignment::JustifyAll => Alignment::JustifyAll,
         },
         line_height: match p.leading {
             layer_model::text::Leading::Multiple(v) => LineHeight::Multiple(v),
@@ -313,6 +343,8 @@ fn paragraph_from_persisted(p: &layer_model::text::Paragraph) -> ParagraphStyle 
         first_line_indent: p.first_line_indent,
         space_before: p.space_before,
         space_after: p.space_after,
+        left_indent: p.left_indent,
+        right_indent: p.right_indent,
     }
 }
 
@@ -361,6 +393,11 @@ impl From<&TextRun> for layer_model::TextLayer {
                 kerning: run.style.kerning,
                 synthetic_bold: run.style.allow_synthetic_bold,
                 synthetic_italic: run.style.allow_synthetic_italic,
+                horizontal_scale: run.style.horizontal_scale,
+                vertical_scale: run.style.vertical_scale,
+                baseline_shift: run.style.baseline_shift,
+                caps: run.style.caps,
+                anti_alias: run.style.anti_alias,
             },
             spans: run
                 .runs
@@ -411,6 +448,9 @@ impl From<&TextRun> for layer_model::TextLayer {
                     Alignment::Center => layer_model::text::Alignment::Center,
                     Alignment::Right => layer_model::text::Alignment::Right,
                     Alignment::Justify => layer_model::text::Alignment::Justified,
+                    Alignment::JustifyLastCenter => layer_model::text::Alignment::JustifyLastCenter,
+                    Alignment::JustifyLastRight => layer_model::text::Alignment::JustifyLastRight,
+                    Alignment::JustifyAll => layer_model::text::Alignment::JustifyAll,
                 },
                 leading: match run.paragraph.line_height {
                     LineHeight::Multiple(v) => layer_model::text::Leading::Multiple(v),
@@ -419,6 +459,8 @@ impl From<&TextRun> for layer_model::TextLayer {
                 first_line_indent: run.paragraph.first_line_indent,
                 space_before: run.paragraph.space_before,
                 space_after: run.paragraph.space_after,
+                left_indent: run.paragraph.left_indent,
+                right_indent: run.paragraph.right_indent,
             },
             frame: match run.frame {
                 TextFrame::Point => layer_model::text::Frame::Point,

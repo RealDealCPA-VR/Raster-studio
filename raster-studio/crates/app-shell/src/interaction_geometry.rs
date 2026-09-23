@@ -60,6 +60,38 @@ impl std::fmt::Display for GeometryError {
 
 impl std::error::Error for GeometryError {}
 
+/// The interaction camera for a document camera: the [`ui::CanvasCamera`] that
+/// puts every screen point on the document pixel [`render::Camera`] is
+/// drawing there.
+///
+/// This is the one mirror that carries the **view rotation**. Both cameras
+/// measure it positive-clockwise on screen about the viewport centre
+/// (`render::camera`'s module docs state the convention), so the angle is
+/// copied straight across, and a click, a handle, a marching-ants corner or a
+/// text caret converted through the result lands on the pixel the user is
+/// looking at when the view is turned. A mirror that zeroes the rotation
+/// puts every overlay where the *upright* view would show the pixel — a
+/// quarter turn away from the picture.
+///
+/// Not yet the only mirror: `tool_input::canvas_camera_of` (tool_input.rs,
+/// owned by the tools wave W3-A) STILL hard-codes `rotation: 0.0`, and the
+/// shell (shell.rs), the chrome (chrome.rs) and the dialog host
+/// (dialog_host.rs) still route pointer input through it. Until W3-A points
+/// those callers here (or makes that function carry `camera.rotation`), the
+/// tool router converts on an upright camera even when this one is turned.
+///
+/// Flip is not carried: `render::Camera` has no flip, so neither does its
+/// mirror.
+pub fn canvas_camera_of(camera: &render::Camera) -> CanvasCamera {
+    CanvasCamera {
+        center: camera.center,
+        zoom: camera.zoom,
+        rotation: camera.rotation,
+        flip_x: false,
+        flip_y: false,
+    }
+}
+
 /// The document point under a screen position (through the canvas camera).
 pub fn screen_to_document(
     camera: &CanvasCamera,
@@ -244,6 +276,92 @@ mod tests {
                 "zoom {zoom}: {doc:?} -> {screen:?} -> {back:?}"
             );
         }
+    }
+
+    /// A rotated view still round-trips: screen → document → screen is the
+    /// identity at 45°, and so is document → screen → document.
+    #[test]
+    fn screen_document_round_trips_on_a_view_turned_45_degrees() {
+        let vp = viewport(400.0, 300.0, 1.0);
+        let mut cam = camera(Vec2::new(256.0, 144.0), 1.5);
+        cam.set_rotation(std::f32::consts::FRAC_PI_4);
+        for doc in [
+            Vec2::new(310.5, 77.25),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(256.0, 144.0),
+        ] {
+            let screen = document_to_screen(&cam, &vp, doc);
+            let back = screen_to_document(&cam, &vp, screen);
+            assert!(
+                (back - doc).length() < 1e-3,
+                "{doc:?} -> {screen:?} -> {back:?}"
+            );
+        }
+        for screen in [Vec2::new(10.0, 290.0), Vec2::new(200.0, 150.0)] {
+            let doc = screen_to_document(&cam, &vp, screen);
+            let back = document_to_screen(&cam, &vp, doc);
+            assert!(
+                (back - screen).length() < 1e-3,
+                "{screen:?} -> {doc:?} -> {back:?}"
+            );
+        }
+    }
+
+    /// The interaction camera built from the document camera carries its
+    /// rotation, and agrees with the renderer about where every screen pixel
+    /// is: `screen_to_document` through the mirror is `render::Camera::
+    /// screen_to_image` on the original, at 45° as at 0°. A mirror that
+    /// dropped the angle would put a click a quarter turn from the pixel.
+    #[test]
+    fn the_interaction_camera_agrees_with_the_render_camera_when_turned() {
+        let surface = Vec2::new(400.0, 300.0);
+        let mut render_cam = render::Camera::new(Vec2::new(512.0, 288.0), surface);
+        render_cam.zoom = 1.5;
+        render_cam.center = Vec2::new(256.0, 144.0);
+        for angle in [
+            0.0,
+            std::f32::consts::FRAC_PI_4,
+            std::f32::consts::FRAC_PI_2,
+            -2.3,
+        ] {
+            render_cam.set_rotation(angle);
+            let mirror = canvas_camera_of(&render_cam);
+            assert_eq!(
+                mirror.rotation, render_cam.rotation,
+                "the mirror dropped the angle"
+            );
+            assert_eq!(mirror.center, render_cam.center);
+            assert_eq!(mirror.zoom, render_cam.zoom);
+            let vp = crate::tool_input::canvas_viewport(surface);
+            for screen in [
+                Vec2::new(0.0, 0.0),
+                Vec2::new(400.0, 300.0),
+                Vec2::new(37.0, 250.0),
+                Vec2::new(200.0, 150.0),
+            ] {
+                let via_ui = screen_to_document(&mirror, &vp, screen);
+                let via_render = render_cam.screen_to_image(screen);
+                assert!(
+                    (via_ui - via_render).length() < 1e-2,
+                    "angle {angle}: screen {screen:?} is document {via_ui:?} to the \
+                     interaction camera and {via_render:?} to the renderer"
+                );
+            }
+        }
+        // And the turn is a real turn: on a quarter-turned view, the pixel
+        // right of the window's centre is the document ABOVE the camera
+        // centre.
+        render_cam.set_rotation(std::f32::consts::FRAC_PI_2);
+        let vp = crate::tool_input::canvas_viewport(surface);
+        let right = screen_to_document(
+            &canvas_camera_of(&render_cam),
+            &vp,
+            surface * 0.5 + Vec2::new(60.0, 0.0),
+        );
+        assert!(
+            (right.x - 256.0).abs() < 1e-2 && (right.y - (144.0 - 40.0)).abs() < 1e-2,
+            "screen right of centre is document {right:?}, expected (256, 104)"
+        );
     }
 
     #[test]

@@ -233,23 +233,129 @@ pub(crate) fn tight_document_bounds(
 /// Candidate LAYERS are capped so layer-heavy documents stay cheap.
 pub(crate) const SNAP_CANDIDATE_LAYER_CAP: usize = 64;
 
-pub(crate) fn snap_candidates_for(
+/// W3-A: what View ▸ Snap and View ▸ Smart Guides say about snapping.
+///
+/// The flags live on the chrome's workspace; the pointer route lives here and
+/// never sees a workspace, so they cross on the option seed the shell hands
+/// [`ToolPointer::handle`] with every sample, under two reserved keys
+/// ([`SnapPolicy::to_settings`], [`SnapPolicy::split_settings`]). The default is
+/// the `ui::ViewFlags::defaults()` answer — both on — so a shell that has not
+/// yet copied them gets the behaviour the menu shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapPolicy {
+    /// View ▸ Snap. Off yields **no** candidates at all: the canvas edges and
+    /// centre included, since a geometry that still catches on the canvas
+    /// while Snap is unticked is exactly the "ignored flag" this fixes.
+    pub enabled: bool,
+    /// View ▸ Smart Guides: the layer-edge and layer-centre candidates. The
+    /// smart guides *are* the layer snap — the line appears because an edge
+    /// caught — so one flag governs both, as `ui::Workspace::sync_canvas_view`
+    /// already states.
+    pub to_layers: bool,
+}
+
+impl Default for SnapPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            to_layers: true,
+        }
+    }
+}
+
+impl SnapPolicy {
+    /// The reserved setting key that carries View ▸ Snap across the options
+    /// boundary. Never a tool option: [`ToolPointer::handle`] strips it before
+    /// any tool is told anything.
+    pub const SNAP_KEY: &'static str = "view.snap";
+    /// The reserved setting key that carries View ▸ Smart Guides.
+    pub const SMART_GUIDES_KEY: &'static str = "view.smart_guides";
+
+    /// Read the two flags off the View menu's state.
+    pub fn from_view_flags(flags: ui::ViewFlags) -> Self {
+        Self {
+            enabled: flags.get(ui::ViewFlag::Snap),
+            to_layers: flags.get(ui::ViewFlag::SmartGuides),
+        }
+    }
+
+    /// The policy as the reserved settings the shell's per-sample option seed
+    /// carries (`Chrome::tool_options` appends them). The default — both on —
+    /// is carried as *nothing*, so the forward set of an untouched tool stays
+    /// empty and a sample with no reserved key means "Snap on".
+    pub fn to_settings<V>(self, bool_value: impl Fn(bool) -> V) -> Vec<(String, V)> {
+        if self == Self::default() {
+            return Vec::new();
+        }
+        vec![
+            (Self::SNAP_KEY.to_string(), bool_value(self.enabled)),
+            (
+                Self::SMART_GUIDES_KEY.to_string(),
+                bool_value(self.to_layers),
+            ),
+        ]
+    }
+
+    /// Split the reserved keys out of a sample's settings: the policy they
+    /// say (the default when they are absent) and every other setting, for
+    /// the tool.
+    pub fn split_settings(
+        settings: &[(String, tools::ToolSetting)],
+    ) -> (Self, Vec<(String, tools::ToolSetting)>) {
+        let mut policy = Self::default();
+        let mut rest = Vec::with_capacity(settings.len());
+        for (key, value) in settings {
+            match (key.as_str(), value) {
+                (Self::SNAP_KEY, tools::ToolSetting::Bool(on)) => policy.enabled = *on,
+                (Self::SMART_GUIDES_KEY, tools::ToolSetting::Bool(on)) => policy.to_layers = *on,
+                (Self::SNAP_KEY | Self::SMART_GUIDES_KEY, _) => {}
+                _ => rest.push((key.clone(), *value)),
+            }
+        }
+        (policy, rest)
+    }
+}
+
+/// The snap candidates with the *reason* each one is a candidate, for the
+/// smart guides the chrome paints while a session is live (W3-A). The
+/// tool-facing [`snap_candidates_for`] is this with the kinds dropped, so the
+/// line drawn and the coordinate snapped to cannot come from two lists.
+pub(crate) fn snap_candidates_kinded(
     doc: &editor_core::Document,
     tiles: &compositor::MemoryTileSource,
     zoom: f32,
     selected: &[layer_model::LayerId],
-) -> (Vec<tools::SnapCandidate>, f32) {
+    policy: SnapPolicy,
+) -> (Vec<ui::canvas::SnapCandidate>, f32) {
+    use ui::canvas::{Axis, SnapCandidate, SnapKind};
     let threshold_doc = ui::canvas::snapping::SnapSettings::default().threshold() / zoom.max(0.05);
     let mut candidates = Vec::new();
+    if !policy.enabled {
+        return (candidates, threshold_doc);
+    }
     let canvas = glam::vec2(doc.width() as f32, doc.height() as f32);
-    for (axis, values) in [
-        (tools::SnapAxis::X, [0.0f32, canvas.x, canvas.x * 0.5]),
-        (tools::SnapAxis::Y, [0.0f32, canvas.y, canvas.y * 0.5]),
+    for (axis, lo, hi, mid) in [
+        (Axis::X, 0.0f32, canvas.x, canvas.x * 0.5),
+        (Axis::Y, 0.0f32, canvas.y, canvas.y * 0.5),
     ] {
-        for v in values {
-            candidates.push(tools::SnapCandidate { axis, doc: v });
+        candidates.push(SnapCandidate::new(axis, lo, SnapKind::CanvasEdge));
+        candidates.push(SnapCandidate::new(axis, hi, SnapKind::CanvasEdge));
+        candidates.push(SnapCandidate::new(axis, mid, SnapKind::CanvasCenter));
+    }
+    if !policy.to_layers {
+        return (candidates, threshold_doc);
+    }
+    // The moving layer never snaps to where it already is: the active layer
+    // is excluded with the selection, since with an empty panel selection it
+    // is the one the Move tool drags (W3-A: its own edges would otherwise be
+    // drawn as smart guides the whole drag).
+    let mut moving = selected.to_vec();
+    if let Some(active) = doc.active_layer() {
+        if !moving.contains(&active) {
+            moving.push(active);
         }
     }
+    let selected = moving.as_slice();
     let mut layers = 0usize;
     for id in doc.layers.iter_depth_first() {
         let selected_or_descendant = selected.contains(&id) || {
@@ -276,23 +382,47 @@ pub(crate) fn snap_candidates_for(
         layers += 1;
         for (axis, lo, hi, mid) in [
             (
-                tools::SnapAxis::X,
+                Axis::X,
                 b.x as f32,
                 (b.x + b.width as i64) as f32,
                 b.x as f32 + b.width as f32 * 0.5,
             ),
             (
-                tools::SnapAxis::Y,
+                Axis::Y,
                 b.y as f32,
                 (b.y + b.height as i64) as f32,
                 b.y as f32 + b.height as f32 * 0.5,
             ),
         ] {
-            for v in [lo, hi, mid] {
-                candidates.push(tools::SnapCandidate { axis, doc: v });
-            }
+            candidates.push(SnapCandidate::new(axis, lo, SnapKind::LayerEdge));
+            candidates.push(SnapCandidate::new(axis, hi, SnapKind::LayerEdge));
+            candidates.push(SnapCandidate::new(axis, mid, SnapKind::LayerCenter));
         }
     }
+    (candidates, threshold_doc)
+}
+
+/// The tool-facing candidates: [`snap_candidates_kinded`] with the kinds
+/// dropped and the axes in the `tools` crate's vocabulary. Empty when `policy`
+/// has Snap off.
+pub(crate) fn snap_candidates_for(
+    doc: &editor_core::Document,
+    tiles: &compositor::MemoryTileSource,
+    zoom: f32,
+    selected: &[layer_model::LayerId],
+    policy: SnapPolicy,
+) -> (Vec<tools::SnapCandidate>, f32) {
+    let (kinded, threshold_doc) = snap_candidates_kinded(doc, tiles, zoom, selected, policy);
+    let candidates = kinded
+        .into_iter()
+        .map(|c| tools::SnapCandidate {
+            axis: match c.axis {
+                ui::canvas::Axis::X => tools::SnapAxis::X,
+                ui::canvas::Axis::Y => tools::SnapAxis::Y,
+            },
+            doc: c.doc,
+        })
+        .collect();
     (candidates, threshold_doc)
 }
 
@@ -730,11 +860,27 @@ pub struct ToolPointer {
     /// free-transform's handles survive its own pointer-up and die with the
     /// session.
     session_doc: Option<DocumentId>,
+    /// W3-A: View ▸ Snap and View ▸ Smart Guides, as last copied across by the
+    /// shell. See [`SnapPolicy`].
+    snap: SnapPolicy,
 }
 
 impl ToolPointer {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// W3-A: adopt the View menu's snap flags. [`ToolPointer::handle`]
+    /// overwrites this from every sample's option seed (the production
+    /// route: `Chrome::tool_options` carries the flags); this is for a caller
+    /// that commits without a sample in between.
+    pub fn set_snap_policy(&mut self, policy: SnapPolicy) {
+        self.snap = policy;
+    }
+
+    /// The snap flags the next sample is routed with.
+    pub fn snap_policy(&self) -> SnapPolicy {
+        self.snap
     }
 
     /// Who owns the pointer right now, if anyone.
@@ -920,6 +1066,7 @@ impl ToolPointer {
         editor: &mut Editor,
         action: impl FnOnce(&mut dyn Tool, &mut ToolContext<'_>) -> Result<(), tools::ToolError>,
     ) -> (Result<(), tools::ToolError>, Vec<Command>, Vec<ToolRequest>) {
+        let snap = self.snap;
         let Some((_, tool)) = &mut self.current else {
             return (Ok(()), Vec::new(), Vec::new());
         };
@@ -963,7 +1110,7 @@ impl ToolPointer {
         // doc pixels.
         let selected = doc.document.layer_selection();
         let (snap_candidates, snap_threshold_doc) =
-            snap_candidates_for(&doc.document, &doc.tiles, doc.camera.zoom, &selected);
+            snap_candidates_for(&doc.document, &doc.tiles, doc.camera.zoom, &selected, snap);
         // Card 042: the commit route gets the same tight-ink answer as the
         // gesture route — a future snap consumer here must not see None.
         let active_layer_ink_bounds =
@@ -1580,6 +1727,12 @@ impl ToolPointer {
         settings: &[(String, tools::ToolSetting)],
     ) -> PointerOutcome {
         let mut out = PointerOutcome::default();
+        // W3-A: View ▸ Snap and View ▸ Smart Guides ride the option seed under
+        // reserved keys (see `SnapPolicy::to_settings`). Taken out here, so no
+        // tool is ever asked about them, and remembered for the commit route.
+        let (snap, settings) = SnapPolicy::split_settings(settings);
+        let settings = settings.as_slice();
+        self.snap = snap;
         if over_panel && !self.router.is_gesture_active() {
             out.refused = Some(Refusal::OverPanel);
             return out;
@@ -1796,7 +1949,7 @@ impl ToolPointer {
             // its descendants excluded) + the dragged layer's tight ink.
             let selected = doc.document.layer_selection();
             let (snap_candidates, snap_threshold_doc) =
-                snap_candidates_for(&doc.document, &doc.tiles, doc.camera.zoom, &selected);
+                snap_candidates_for(&doc.document, &doc.tiles, doc.camera.zoom, &selected, snap);
             let active_layer_ink_bounds = effective_layer
                 .and_then(|layer| tight_document_bounds(&doc.document, &doc.tiles, layer));
             // Card 043: the link chain — every layer carrying the flag.
@@ -6807,5 +6960,201 @@ mod tests {
         );
         assert_eq!(bounds.y, -30, "the negative y origin survives");
         assert_eq!(bounds.height, 20, "the height is the true extent");
+    }
+
+    /// Two inked layers for the W3-A snap tests: A is a 40x40 block at the
+    /// origin, B a 10x10 block at (62, 8). Returns (A, B), with A selected.
+    fn two_inked_layers(editor: &mut Editor) -> (layer_model::LayerId, layer_model::LayerId) {
+        let layer_a = layer_model::Layer::raster("A");
+        let a_id = layer_a.id;
+        let layer_b = layer_model::Layer::raster("B");
+        let b_id = layer_b.id;
+        {
+            let doc = editor.active_mut().unwrap();
+            let block = |doc: &mut crate::doc::OpenDocument,
+                         xs: std::ops::Range<usize>,
+                         ys: std::ops::Range<usize>| {
+                let mut bytes = vec![0u8; 256 * 256 * 4];
+                for y in ys {
+                    for x in xs.clone() {
+                        let i = (y * 256 + x) * 4;
+                        bytes[i..i + 4].copy_from_slice(&[10, 60, 10, 255]);
+                    }
+                }
+                doc.tiles.insert_bytes(bytes)
+            };
+            let ink_a = block(doc, 0..40, 0..40);
+            let ink_b = block(doc, 62..72, 8..18);
+            for (layer, id, ink) in [(layer_a, a_id, ink_a), (layer_b, b_id, ink_b)] {
+                doc.apply(Command::create_layer(layer)).unwrap();
+                doc.apply(
+                    Command::paint_tiles(
+                        editor_core::PixelTarget::Layer(id),
+                        vec![editor_core::TileEdit::set(TileCoord::new(0, 0, 0), ink)],
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            }
+        }
+        editor.set_layer_selection(vec![a_id], Some(a_id));
+        (a_id, b_id)
+    }
+
+    /// The shell's boundary conversion (`Shell::on_pointer`), verbatim.
+    fn shell_settings(
+        chrome: &crate::chrome::Chrome,
+        tool: ToolId,
+    ) -> Vec<(String, tools::ToolSetting)> {
+        chrome
+            .tool_options(tool)
+            .into_iter()
+            .map(|(key, value)| {
+                let setting = match value {
+                    ui::OptionValue::Float(v) => tools::ToolSetting::Float(v),
+                    ui::OptionValue::Int(v) => tools::ToolSetting::Int(v),
+                    ui::OptionValue::Bool(v) => tools::ToolSetting::Bool(v),
+                    ui::OptionValue::Choice(v) => tools::ToolSetting::Choice(v),
+                    ui::OptionValue::Color(v) => tools::ToolSetting::Color(v),
+                };
+                (key, setting)
+            })
+            .collect()
+    }
+
+    /// W3-A: View ▸ Snap is read. Snap off yields no candidates at all; on,
+    /// the canvas and layer features are there. Smart Guides off keeps the
+    /// canvas features and drops the layer ones.
+    #[test]
+    fn snap_off_yields_no_candidates_and_smart_guides_off_drops_the_layer_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        let (_, _) = two_inked_layers(&mut editor);
+        let doc = editor.active().unwrap();
+        let selected = doc.document.layer_selection();
+        let run = |policy: SnapPolicy| {
+            snap_candidates_for(&doc.document, &doc.tiles, 1.0, &selected, policy).0
+        };
+        let on = run(SnapPolicy::default());
+        assert!(
+            on.iter()
+                .any(|c| c.axis == tools::SnapAxis::X && c.doc == 62.0),
+            "Snap on offers B's left edge: {on:?}"
+        );
+        assert!(on.iter().any(|c| c.doc == 32.0), "and the canvas centre");
+        let off = run(SnapPolicy {
+            enabled: false,
+            to_layers: true,
+        });
+        assert!(off.is_empty(), "Snap off offered {off:?}");
+        let canvas_only = run(SnapPolicy {
+            enabled: true,
+            to_layers: false,
+        });
+        assert_eq!(canvas_only.len(), 6, "{canvas_only:?}");
+        assert!(!canvas_only.iter().any(|c| c.doc == 62.0));
+    }
+
+    /// W3-A's real route: View ▸ Snap unticked in the chrome reaches a Move
+    /// drag through the same option seed the shell hands the pointer, and the
+    /// drag that snapped to B's edge with Snap on lands unsnapped with it off.
+    /// The reserved keys never reach the tool (no refusal).
+    #[test]
+    fn unticking_view_snap_in_the_chrome_stops_a_move_drag_snapping() {
+        use tools::ToolId;
+        let drag = |snap_on: bool| -> (i64, Option<String>) {
+            let dir = tempfile::tempdir().unwrap();
+            let mut editor = editor(dir.path());
+            let (a_id, _) = two_inked_layers(&mut editor);
+            editor.set_tool(ToolId::Move);
+            let mut chrome = crate::chrome::Chrome::new();
+            if !snap_on {
+                chrome.emit(ui::Intent::SetViewFlag {
+                    flag: ui::ViewFlag::Snap,
+                    on: false,
+                });
+                let ctx = egui::Context::default();
+                let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                    chrome.ui(ctx, &mut editor);
+                });
+            }
+            assert_eq!(chrome.snap_policy().enabled, snap_on);
+            let settings = shell_settings(&chrome, ToolId::Move);
+            let screen_at = |doc_pt: Vec2| -> Vec2 {
+                let center = Vec2::new(W as f32 / 2.0, H as f32 / 2.0);
+                VIEWPORT * 0.5 + (doc_pt - center)
+            };
+            let mut pointer = ToolPointer::new();
+            let mut failed = None;
+            for (phase, at) in [
+                (PointerPhase::Down, Vec2::new(10.0, 10.0)),
+                (PointerPhase::Move, Vec2::new(30.4, 10.0)),
+                (PointerPhase::Up, Vec2::new(30.4, 10.0)),
+            ] {
+                let out =
+                    pointer.handle(&mut editor, sample(phase, screen_at(at)), false, &settings);
+                failed = failed.or(out.failed);
+            }
+            assert_eq!(pointer.snap_policy().enabled, snap_on);
+            let doc = editor.active().unwrap();
+            let a = tight_document_bounds(&doc.document, &doc.tiles, a_id).expect("bounds");
+            (a.x + a.width as i64, failed)
+        };
+        let (snapped, failed_on) = drag(true);
+        assert_eq!(snapped, 62, "Snap on: A's right edge catches B's left edge");
+        assert_eq!(failed_on, None);
+        // Unsnapped, the 20.4 px drag puts the edge at 60.4, which the
+        // integer commit resolves to 60 or 61 — anywhere but B's edge.
+        let (free, failed_off) = drag(false);
+        assert!(
+            (60..=61).contains(&free),
+            "Snap off: the drag lands where the pointer put it, not on B's edge: {free}"
+        );
+        assert_eq!(
+            failed_off, None,
+            "the reserved keys were refused by the tool"
+        );
+    }
+
+    /// W3-A (round 3): the box the chrome's Smart Guides draw for a plain
+    /// Move drag (`canvas_extras::move_drag_corners`) is the box the release
+    /// commits: the same drag, routed through the real pointer, lands A's
+    /// ink exactly on those corners (snapped onto B's left edge at 62).
+    #[test]
+    fn the_smart_guide_box_of_a_move_drag_is_where_the_release_lands() {
+        use tools::ToolId;
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        let (a_id, _) = two_inked_layers(&mut editor);
+        editor.set_tool(ToolId::Move);
+        let (start, now) = (Vec2::new(10.0, 10.0), Vec2::new(30.4, 10.0));
+        let predicted = {
+            let doc = editor.active().unwrap();
+            let base = tight_document_bounds(&doc.document, &doc.tiles, a_id).expect("bounds");
+            crate::canvas_extras::move_drag_corners(doc, base, start, now, SnapPolicy::default())
+                .expect("a finite drag")
+        };
+        assert_eq!(predicted[1].x, 62.0, "the drawn box caught B's edge");
+        let screen_at = |doc_pt: Vec2| -> Vec2 {
+            let center = Vec2::new(W as f32 / 2.0, H as f32 / 2.0);
+            VIEWPORT * 0.5 + (doc_pt - center)
+        };
+        let mut pointer = ToolPointer::new();
+        for (phase, at) in [
+            (PointerPhase::Down, start),
+            (PointerPhase::Move, now),
+            (PointerPhase::Up, now),
+        ] {
+            pointer.handle(&mut editor, sample(phase, screen_at(at)), false, &[]);
+        }
+        let doc = editor.active().unwrap();
+        let landed = tight_document_bounds(&doc.document, &doc.tiles, a_id).expect("bounds");
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        assert!(
+            near(landed.x as f32, predicted[0].x)
+                && near(landed.y as f32, predicted[0].y)
+                && near((landed.x + landed.width as i64) as f32, predicted[2].x),
+            "the release landed off the drawn box: {landed:?} vs {predicted:?}"
+        );
     }
 }

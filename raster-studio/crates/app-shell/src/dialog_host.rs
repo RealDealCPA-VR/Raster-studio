@@ -68,6 +68,53 @@ thread_local! {
     /// [`ui::menu::MenuAction::DuplicateLayer`] pick that rides out of the
     /// same frame.
     static CONFIRMED_DUPLICATE_NAME: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// W3-H: the spec the Color Range dialog confirmed, waiting for the
+    /// [`ui::menu::MenuAction::ColorRange`] pick.
+    static CONFIRMED_COLOR_RANGE: RefCell<Option<ui::dialogs::ColorRangeSpec>> =
+        const { RefCell::new(None) };
+    /// W3-H: the amount a Select > Modify dialog confirmed, waiting for the
+    /// [`ui::menu::MenuAction::Modify`] pick of the same operation.
+    static CONFIRMED_MODIFY: RefCell<Option<ui::dialogs::ModifySpec>> = const { RefCell::new(None) };
+    /// W3-H: the name the Save Selection dialog confirmed.
+    static CONFIRMED_SAVE_SELECTION: RefCell<Option<ui::dialogs::SaveSelectionSpec>> =
+        const { RefCell::new(None) };
+    /// W3-H: the entry and operation the Load Selection dialog confirmed.
+    static CONFIRMED_LOAD_SELECTION: RefCell<Option<ui::dialogs::LoadSelectionSpec>> =
+        const { RefCell::new(None) };
+}
+
+/// The Color Range spec a dialog confirmed, if one did since the last take.
+/// Consumed on read; `perform` with nothing parked selects around the
+/// foreground at the dialog's opening fuzziness.
+pub(crate) fn take_confirmed_color_range() -> Option<ui::dialogs::ColorRangeSpec> {
+    CONFIRMED_COLOR_RANGE.with(|slot| slot.borrow_mut().take())
+}
+
+/// The Modify amount a dialog confirmed for `op`, if one did since the last
+/// take. A parked spec for *another* operation is left in place, the way a
+/// parked adjustment for another id is.
+pub(crate) fn take_confirmed_modify(
+    op: ui::menu::ModifySelection,
+) -> Option<ui::dialogs::ModifySpec> {
+    CONFIRMED_MODIFY.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.as_ref().is_some_and(|parked| parked.op == op) {
+            slot.take()
+        } else {
+            None
+        }
+    })
+}
+
+/// The name a Save Selection dialog confirmed, if one did since the last take.
+pub(crate) fn take_confirmed_save_selection() -> Option<ui::dialogs::SaveSelectionSpec> {
+    CONFIRMED_SAVE_SELECTION.with(|slot| slot.borrow_mut().take())
+}
+
+/// The choice a Load Selection dialog confirmed, if one did since the last
+/// take.
+pub(crate) fn take_confirmed_load_selection() -> Option<ui::dialogs::LoadSelectionSpec> {
+    CONFIRMED_LOAD_SELECTION.with(|slot| slot.borrow_mut().take())
 }
 
 /// Where the licence lives, as the About window says it.
@@ -182,6 +229,19 @@ pub enum ActiveDialog {
     /// selection's coverage instead of a layer mask's. Its confirmed spec is
     /// parked for the `RefineEdge` menu arm, which writes the selection.
     RefineEdge(Box<ui::dialogs::refine_mask::RefineMaskDialog>),
+    /// Select > Color Range... (W3-H): colour, fuzziness, invert and a
+    /// selection preview. Its confirmed spec is parked for the `ColorRange`
+    /// menu arm, which selects at full resolution.
+    ColorRange(Box<ui::dialogs::ColorRangeDialog>),
+    /// Select > Modify > <op>... (W3-H): the amount. Parked for the `Modify`
+    /// arm of the same operation.
+    SelectionModify(Box<ui::dialogs::SelectionModifyDialog>),
+    /// Select > Save Selection... (W3-H): the name. Parked for the
+    /// `SaveSelection` arm.
+    SaveSelection(Box<ui::dialogs::SaveSelectionDialog>),
+    /// Select > Load Selection... (W3-H): which saved selection, and how it
+    /// meets the live one. Parked for the `LoadSelection` arm.
+    LoadSelection(Box<ui::dialogs::LoadSelectionDialog>),
 }
 
 impl ActiveDialog {
@@ -223,7 +283,13 @@ impl ActiveDialog {
             // `trim_confirms_to_a_parked_spec_and_the_trim_pick` and
             // `about_opens_from_the_menu_and_escape_closes_it` drive both
             // through `ui` to prove the arm below is never the one that runs.
-            Self::Trim(_) | Self::About(_) | Self::DuplicateLayer(_) => DialogOutcome::Open,
+            Self::Trim(_)
+            | Self::About(_)
+            | Self::DuplicateLayer(_)
+            | Self::ColorRange(_)
+            | Self::SelectionModify(_)
+            | Self::SaveSelection(_)
+            | Self::LoadSelection(_) => DialogOutcome::Open,
         }
     }
 
@@ -238,6 +304,10 @@ impl ActiveDialog {
                 | Self::About(_)
                 | Self::RefineEdge(_)
                 | Self::DuplicateLayer(_)
+                | Self::ColorRange(_)
+                | Self::SelectionModify(_)
+                | Self::SaveSelection(_)
+                | Self::LoadSelection(_)
         )
     }
 }
@@ -300,6 +370,16 @@ impl DialogHost {
         editor: &crate::Editor,
     ) -> bool {
         match action {
+            // Edit ▸ Keyboard Shortcuts… is the Preferences dialog opened on
+            // its Keymap page (W3-G). Answered here, where a menu click, the
+            // context menu and the chord (posted as the same intent) all
+            // arrive, so no road can land on the General page instead.
+            ui::menu::MenuAction::KeyboardShortcuts => {
+                let mut prefs = editor.ui_preferences();
+                prefs.page = ui::dialogs::PrefsSection::Keymap;
+                self.open_preferences(prefs);
+                true
+            }
             // File ▸ New… asks for size and background before anything is
             // created; the confirmed spec comes back as
             // [`DialogAction::NewDocument`] and the shell builds the document
@@ -482,6 +562,55 @@ impl DialogHost {
                 }
                 None => false,
             },
+            // W3-H: Select > Color Range... over the active pixel layer. With
+            // no pixel layer it falls through to the bridge, whose message
+            // names the reason.
+            ui::menu::MenuAction::ColorRange => match color_range_dialog(editor) {
+                Some(dialog) => {
+                    self.open(dialog);
+                    true
+                }
+                None => false,
+            },
+            // W3-H: Select > Modify > <op>... asks the amount -- only over a
+            // live selection, the same gate the menu row has.
+            ui::menu::MenuAction::Modify(op) => {
+                if !has_live_selection(editor) {
+                    return false;
+                }
+                self.open(ActiveDialog::SelectionModify(Box::new(
+                    ui::dialogs::SelectionModifyDialog::new(*op),
+                )));
+                true
+            }
+            // W3-H: Select > Save Selection... asks the name.
+            ui::menu::MenuAction::SaveSelection => {
+                let Some(open) = editor.active() else {
+                    return false;
+                };
+                if !has_live_selection(editor) {
+                    return false;
+                }
+                self.open(ActiveDialog::SaveSelection(Box::new(
+                    ui::dialogs::SaveSelectionDialog::new(saved_selection_names(&open.document)),
+                )));
+                true
+            }
+            // W3-H: Select > Load Selection... lists the saved selections by
+            // name.
+            ui::menu::MenuAction::LoadSelection => {
+                let Some(open) = editor.active() else {
+                    return false;
+                };
+                let names = saved_selection_names(&open.document);
+                if names.is_empty() {
+                    return false;
+                }
+                self.open(ActiveDialog::LoadSelection(Box::new(
+                    ui::dialogs::LoadSelectionDialog::new(names, has_live_selection(editor)),
+                )));
+                true
+            }
             // Select ▸ Refine Edge… over the selection's coverage.
             ui::menu::MenuAction::RefineEdge => {
                 match crate::layer_ops::refine_edge_dialog(editor) {
@@ -820,6 +949,58 @@ impl DialogHost {
             }
             return;
         }
+        // W3-H: the four Select-menu questions take Trim's road -- the
+        // confirmed value is parked and the pick rides `out.menu` to the arm
+        // that edits the selection as one undoable step.
+        if let ActiveDialog::ColorRange(dialog) = active {
+            match dialog.show(ctx, sampler) {
+                DialogOutcome::Open => {}
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(spec) => {
+                    CONFIRMED_COLOR_RANGE.with(|slot| *slot.borrow_mut() = Some(spec));
+                    out.menu.push(ui::menu::MenuAction::ColorRange);
+                    self.active = None;
+                }
+            }
+            return;
+        }
+        if let ActiveDialog::SelectionModify(dialog) = active {
+            match dialog.show(ctx) {
+                DialogOutcome::Open => {}
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(spec) => {
+                    let op = spec.op;
+                    CONFIRMED_MODIFY.with(|slot| *slot.borrow_mut() = Some(spec));
+                    out.menu.push(ui::menu::MenuAction::Modify(op));
+                    self.active = None;
+                }
+            }
+            return;
+        }
+        if let ActiveDialog::SaveSelection(dialog) = active {
+            match dialog.show(ctx) {
+                DialogOutcome::Open => {}
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(spec) => {
+                    CONFIRMED_SAVE_SELECTION.with(|slot| *slot.borrow_mut() = Some(spec));
+                    out.menu.push(ui::menu::MenuAction::SaveSelection);
+                    self.active = None;
+                }
+            }
+            return;
+        }
+        if let ActiveDialog::LoadSelection(dialog) = active {
+            match dialog.show(ctx) {
+                DialogOutcome::Open => {}
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(spec) => {
+                    CONFIRMED_LOAD_SELECTION.with(|slot| *slot.borrow_mut() = Some(spec));
+                    out.menu.push(ui::menu::MenuAction::LoadSelection);
+                    self.active = None;
+                }
+            }
+            return;
+        }
         // About asks nothing: dismissed is closed.
         if let ActiveDialog::About(dialog) = active {
             if dialog.show(ctx) {
@@ -945,6 +1126,88 @@ impl ScreenSampler for CanvasSampler<'_> {
     }
 }
 
+/// Whether the active document has a live selection -- the gate Select >
+/// Modify and Save Selection share with their menu rows (`Selection::None`
+/// has no bounds, so it does not count).
+fn has_live_selection(editor: &crate::Editor) -> bool {
+    editor
+        .active()
+        .is_some_and(|open| open.document.selection.bounds().is_some())
+}
+
+/// The names of the document's saved selections, oldest first -- what the
+/// Load dialog lists and the Save dialog checks a new name against.
+pub(crate) fn saved_selection_names(doc: &editor_core::Document) -> Vec<String> {
+    doc.saved_selections
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// A [`ui::dialogs::ColorRangeDialog`] over the active pixel layer, starting
+/// from the foreground colour. `None` without a pixel layer; the dialog keeps
+/// only a bounded preview copy of the pixels.
+fn color_range_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
+    let open = editor.active()?;
+    let id = open.document.active_layer()?;
+    let layer = open.document.layers.get(id)?;
+    if !matches!(
+        layer.kind,
+        layer_model::LayerKind::Raster(_) | layer_model::LayerKind::Generator(_)
+    ) {
+        return None;
+    }
+    let rgba = crate::menu_bridge::pixels::read_layer(open, id);
+    Some(ActiveDialog::ColorRange(Box::new(
+        ui::dialogs::ColorRangeDialog::new(
+            crate::menu_bridge::rgba8_of(editor.foreground()),
+            &rgba,
+            open.document.width(),
+            open.document.height(),
+        ),
+    )))
+}
+
+/// The open W3-H Select-menu dialogs, for tests that drive them.
+#[cfg(test)]
+impl DialogHost {
+    pub(crate) fn active_color_range_dialog_for_test(
+        &mut self,
+    ) -> &mut ui::dialogs::ColorRangeDialog {
+        match self.active_for_test() {
+            ActiveDialog::ColorRange(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the color range dialog"),
+        }
+    }
+
+    pub(crate) fn active_selection_modify_dialog_for_test(
+        &mut self,
+    ) -> &mut ui::dialogs::SelectionModifyDialog {
+        match self.active_for_test() {
+            ActiveDialog::SelectionModify(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not a Modify dialog"),
+        }
+    }
+
+    pub(crate) fn active_save_selection_dialog_for_test(
+        &mut self,
+    ) -> &mut ui::dialogs::SaveSelectionDialog {
+        match self.active_for_test() {
+            ActiveDialog::SaveSelection(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not Save Selection"),
+        }
+    }
+
+    pub(crate) fn active_load_selection_dialog_for_test(
+        &mut self,
+    ) -> &mut ui::dialogs::LoadSelectionDialog {
+        match self.active_for_test() {
+            ActiveDialog::LoadSelection(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not Load Selection"),
+        }
+    }
+}
+
 /// A [`LayerStyleDialog`] over the active layer's effects.
 fn layer_style_dialog(editor: &crate::Editor, blending: bool) -> Option<ActiveDialog> {
     let open = editor.active()?;
@@ -1003,11 +1266,11 @@ fn duplicate_layer_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
 /// changes the ppi resamples nothing and is a no-op the shell reports.
 fn image_size_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
     let open = editor.active()?;
-    Some(ActiveDialog::ImageSize(Box::new(ImageSizeDialog::new(
-        open.document.width(),
-        open.document.height(),
-        72.0,
-    ))))
+    // W3-G: the fields open in the Units preference.
+    Some(ActiveDialog::ImageSize(Box::new(
+        ImageSizeDialog::new(open.document.width(), open.document.height(), 72.0)
+            .with_unit(editor.display_unit()),
+    )))
 }
 
 /// A [`FilterDialog`] over the active layer's pixels for one filter's schema.
@@ -1138,11 +1401,10 @@ fn filter_gallery_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
 /// A [`CanvasSizeDialog`] over the active document's size.
 fn canvas_size_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
     let open = editor.active()?;
-    Some(ActiveDialog::CanvasSize(Box::new(CanvasSizeDialog::new(
-        open.document.width(),
-        open.document.height(),
-        72.0,
-    ))))
+    let mut dialog = CanvasSizeDialog::new(open.document.width(), open.document.height(), 72.0);
+    // W3-G: the fields open in the Units preference.
+    dialog.set_unit(editor.display_unit());
+    Some(ActiveDialog::CanvasSize(Box::new(dialog)))
 }
 
 /// An [`ExportAsDialog`] over the active document: its size, its title as the
@@ -1744,5 +2006,261 @@ mod tests {
             depth - 1,
             "one undo took the whole confirmation back"
         );
+    }
+
+    // ---- W3-H: Select-menu dialogs ------------------------------------------
+
+    /// An 8x8 document whose left half is red and right half blue, the image
+    /// layer active.
+    fn halves(dir: &std::path::Path) -> Editor {
+        let mut bytes = Vec::with_capacity(8 * 8 * 4);
+        for _y in 0..8 {
+            for x in 0..8 {
+                bytes.extend_from_slice(if x < 4 {
+                    &[255, 0, 0, 255]
+                } else {
+                    &[0, 0, 255, 255]
+                });
+            }
+        }
+        let path = dir.join("halves.png");
+        std::fs::write(
+            &path,
+            raster::encode(raster::ExportFormat::Png, 8, 8, &bytes).unwrap(),
+        )
+        .unwrap();
+        let mut ed = editor(&dir.join("config"));
+        ed.open_path(&path).unwrap();
+        ed
+    }
+
+    /// Run a settle frame and then an Enter frame over the host.
+    fn settle_and_confirm(host: &mut DialogHost) -> ChromeOutput {
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| host.ui(ctx, None, &mut out));
+        assert!(
+            host.is_open() && out.is_empty(),
+            "a settle frame decides nothing"
+        );
+        let _ = ctx.run(raw_input(vec![key(egui::Key::Enter)]), |ctx| {
+            host.ui(ctx, None, &mut out)
+        });
+        assert!(!host.is_open(), "Enter closed the dialog");
+        out
+    }
+
+    /// A settle frame and an Enter frame over a dialog whose primary is
+    /// blocked: it stays open and emits nothing.
+    fn settle_and_confirm_blocked(host: &mut DialogHost) {
+        let ctx = egui::Context::default();
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| host.ui(ctx, None, &mut out));
+        let _ = ctx.run(raw_input(vec![key(egui::Key::Enter)]), |ctx| {
+            host.ui(ctx, None, &mut out)
+        });
+        assert!(
+            host.is_open() && out.is_empty(),
+            "a blocked Enter decides nothing"
+        );
+    }
+
+    #[test]
+    fn color_range_opens_a_previewing_dialog_and_its_confirmation_selects_as_one_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = halves(dir.path());
+        let mut host = DialogHost::default();
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::ColorRange, &ed));
+        let before = history_len(&ed);
+        {
+            let dialog = host.active_color_range_dialog_for_test();
+            assert_eq!(dialog.preview_size(), (8, 8));
+            // A click on the preview's right half samples blue.
+            assert!(dialog.sample_preview(6, 3));
+            dialog.set_fuzziness(0);
+            let preview = dialog.preview_coverage().unwrap();
+            assert_eq!(preview[3], 0, "red is not in a blue range");
+            assert_eq!(preview[4], 255, "blue is");
+        }
+        assert_eq!(history_len(&ed), before, "previewing is not an edit");
+        let out = settle_and_confirm(&mut host);
+        assert_eq!(out.menu, vec![ui::menu::MenuAction::ColorRange]);
+        assert!(out.commands.is_empty() && out.dialog.is_none());
+        let status = crate::menu_bridge::perform(ui::menu::MenuAction::ColorRange, &mut ed)
+            .expect("the confirmed range selects");
+        assert!(status.contains("#0000FF"), "{status}");
+        let sel = &ed.active().unwrap().document.selection;
+        for y in 0..8 {
+            for x in 0..8 {
+                let want = if x < 4 { 0.0 } else { 1.0 };
+                assert_eq!(sel.coverage_at(glam::IVec2::new(x, y)), want, "({x}, {y})");
+            }
+        }
+        assert_eq!(history_len(&ed), before + 1, "one undoable step");
+        assert_eq!(take_confirmed_color_range(), None, "taken once");
+        // Cancelling parks nothing and selects nothing.
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::ColorRange, &ed));
+        let ctx = egui::Context::default();
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(raw_input(vec![key(egui::Key::Escape)]), |ctx| {
+            host.ui(ctx, None, &mut out)
+        });
+        assert!(!host.is_open() && out.is_empty());
+        assert_eq!(take_confirmed_color_range(), None);
+    }
+
+    #[test]
+    fn each_modify_row_asks_its_amount_and_the_confirmed_amount_is_the_one_applied() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = two_layers(dir.path());
+        let mut host = DialogHost::default();
+        // Without a live selection no Modify dialog opens.
+        for op in ui::menu::ModifySelection::ALL {
+            assert!(!host.open_for_menu_action(&ui::menu::MenuAction::Modify(*op), &ed));
+        }
+        ed.apply_command(editor_core::Command::SetSelection {
+            selection: editor_core::Selection::Rect {
+                min: glam::IVec2::new(3, 3),
+                max: glam::IVec2::new(5, 5),
+            },
+        });
+        let op = ui::menu::ModifySelection::Expand;
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::Modify(op), &ed));
+        host.active_selection_modify_dialog_for_test()
+            .set_amount(2.0);
+        let before = history_len(&ed);
+        let out = settle_and_confirm(&mut host);
+        assert_eq!(out.menu, vec![ui::menu::MenuAction::Modify(op)]);
+        let status = crate::menu_bridge::perform(ui::menu::MenuAction::Modify(op), &mut ed)
+            .expect("the confirmed expand applies");
+        assert!(status.contains("by 2 px"), "{status}");
+        assert_eq!(
+            ed.active().unwrap().document.selection.bounds(),
+            Some((glam::IVec2::new(1, 1), glam::IVec2::new(7, 7))),
+            "expanded by the confirmed 2 px, not the default 4"
+        );
+        assert_eq!(history_len(&ed), before + 1);
+        // A parked amount belongs to its own operation only.
+        assert!(host.open_for_menu_action(
+            &ui::menu::MenuAction::Modify(ui::menu::ModifySelection::Feather),
+            &ed
+        ));
+        host.active_selection_modify_dialog_for_test()
+            .set_amount(1.5);
+        let _ = settle_and_confirm(&mut host);
+        assert_eq!(
+            take_confirmed_modify(ui::menu::ModifySelection::Border),
+            None
+        );
+        assert_eq!(
+            take_confirmed_modify(ui::menu::ModifySelection::Feather).map(|s| s.amount),
+            Some(1.5)
+        );
+    }
+
+    #[test]
+    fn save_names_the_selection_and_load_lists_it_by_name_with_an_operation() {
+        use ui::dialogs::LoadOperation;
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = two_layers(dir.path());
+        let mut host = DialogHost::default();
+        let left = editor_core::Selection::Rect {
+            min: glam::IVec2::new(0, 0),
+            max: glam::IVec2::new(4, 8),
+        };
+        let right = editor_core::Selection::Rect {
+            min: glam::IVec2::new(4, 0),
+            max: glam::IVec2::new(8, 8),
+        };
+        // Nothing saved yet: Load opens no dialog.
+        assert!(!host.open_for_menu_action(&ui::menu::MenuAction::LoadSelection, &ed));
+
+        ed.apply_command(editor_core::Command::SetSelection {
+            selection: left.clone(),
+        });
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::SaveSelection, &ed));
+        assert_eq!(
+            host.active_save_selection_dialog_for_test().name(),
+            "Alpha 1"
+        );
+        host.active_save_selection_dialog_for_test()
+            .set_name("Left half");
+        let out = settle_and_confirm(&mut host);
+        assert_eq!(out.menu, vec![ui::menu::MenuAction::SaveSelection]);
+        crate::menu_bridge::perform(ui::menu::MenuAction::SaveSelection, &mut ed).unwrap();
+
+        ed.apply_command(editor_core::Command::SetSelection {
+            selection: right.clone(),
+        });
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::SaveSelection, &ed));
+        assert_eq!(
+            host.active_save_selection_dialog_for_test().name(),
+            "Alpha 1",
+            "the first free Alpha name"
+        );
+        host.active_save_selection_dialog_for_test()
+            .set_name("Left half");
+        settle_and_confirm_blocked(&mut host);
+        host.active_save_selection_dialog_for_test()
+            .set_name("Right half");
+        let _ = settle_and_confirm(&mut host);
+        crate::menu_bridge::perform(ui::menu::MenuAction::SaveSelection, &mut ed).unwrap();
+        assert_eq!(
+            saved_selection_names(&ed.active().unwrap().document),
+            vec!["Left half".to_string(), "Right half".to_string()]
+        );
+
+        // Load "Left half" as a new selection.
+        ed.apply_command(editor_core::Command::SetSelection {
+            selection: editor_core::Selection::None,
+        });
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::LoadSelection, &ed));
+        {
+            let dialog = host.active_load_selection_dialog_for_test();
+            assert_eq!(dialog.names(), &["Left half", "Right half"]);
+            dialog.set_operation(LoadOperation::Add);
+            assert!(dialog.confirm().is_none(), "no live selection: only New");
+            dialog.set_operation(LoadOperation::New);
+            dialog.select(0);
+        }
+        let _ = settle_and_confirm(&mut host);
+        let before = history_len(&ed);
+        let status =
+            crate::menu_bridge::perform(ui::menu::MenuAction::LoadSelection, &mut ed).unwrap();
+        assert!(status.contains("Left half"), "{status}");
+        assert_eq!(ed.active().unwrap().document.selection, left);
+        assert_eq!(history_len(&ed), before + 1);
+
+        // Add "Right half": the union covers the canvas.
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::LoadSelection, &ed));
+        {
+            let dialog = host.active_load_selection_dialog_for_test();
+            dialog.select(1);
+            dialog.set_operation(LoadOperation::Add);
+        }
+        let _ = settle_and_confirm(&mut host);
+        crate::menu_bridge::perform(ui::menu::MenuAction::LoadSelection, &mut ed).unwrap();
+        let sel = &ed.active().unwrap().document.selection;
+        assert_eq!(
+            sel.bounds(),
+            Some((glam::IVec2::new(0, 0), glam::IVec2::new(8, 8)))
+        );
+        assert_eq!(sel.coverage_at(glam::IVec2::new(1, 1)), 1.0);
+        assert_eq!(sel.coverage_at(glam::IVec2::new(6, 6)), 1.0);
+
+        // Subtract the inverse of "Left half": what is left is the left half.
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::LoadSelection, &ed));
+        {
+            let dialog = host.active_load_selection_dialog_for_test();
+            dialog.select(0);
+            dialog.set_operation(LoadOperation::Subtract);
+            dialog.set_invert(true);
+        }
+        let _ = settle_and_confirm(&mut host);
+        crate::menu_bridge::perform(ui::menu::MenuAction::LoadSelection, &mut ed).unwrap();
+        let sel = &ed.active().unwrap().document.selection;
+        assert_eq!(sel.coverage_at(glam::IVec2::new(1, 1)), 1.0);
+        assert_eq!(sel.coverage_at(glam::IVec2::new(6, 6)), 0.0);
     }
 }

@@ -116,6 +116,8 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Vector paths, pen tool, shape layers | ✅ | Bézier pen and shape layers reachable from the UI |
 | Filters: blur family | ✅ | separable Gaussian; every filter in the Filter menu applies against the live document |
 | Filters: sharpen, noise, distort, stylize, pixelate, render | ✅ | the whole library is reachable from the Filter menu |
+| Filters: Photopea one-click and parity rows | ✅ | Blur ▸ Average, Blur, Blur More, Smart Blur; Sharpen ▸ Sharpen, Sharpen More, Sharpen Edges; Distort ▸ Displace (map: the layer itself or a seeded cloud field — no external PSD map picker); Pixelate ▸ Facet, Fragment, Mezzotint; Stylize ▸ Extrude, Tiles, Trace Contour. Each opens the generated FilterDialog with live preview (`the_photopea_parity_filters_preview_through_their_dialogs`) |
+| Filter ▸ Convert for Smart Filters | 🚫 | greyed out with its reason (`ui::menu::SMART_FILTERS_UNSUPPORTED`): `layer_model::SmartObjectLayer` holds only an asset id and a link flag — no filter stack — and the compositor renders the source with nothing re-applied |
 | Smart objects | ✅ | placed raster sources with editable transforms, embedded + linked origins, replace-contents refresh, full-extent storage; verified through real routes (cards 044–050, interchange tests) |
 | PSD import | ✅ | groups, masks (with density/feather), blend modes, all four channel encodings, editable-text subset, the four mapped effects, ICC retention, full layer extents; a per-layer fidelity report (`PsdNotes`) names exactly what did not map — see `docs/PSD-THUMBNAIL-SUPPORT.md` |
 | PSD export | 🔶 | layered export verified by independent re-read (structure, masks, effects as editable lfx2 descriptors, appearance-preserving text/shape/smart-object fallback pixels, merged preview matching the composite at ≤1/255); NOT yet verified in Photoshop/Photopea (card 081's manual step is pending) and editable text export (TySh) is blocked on an independently verified engine-data payload — see `docs/PSD-THUMBNAIL-SUPPORT.md` |
@@ -141,6 +143,8 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Camera RAW | Per-sensor demosaic and profiles; belongs behind a finished colour pipeline. |
 | Liquify, Vanishing Point, Puppet Warp | Deep mesh-warp tooling, beyond the transform mesh that exists. |
 | Content-aware fill / Select Subject | Requires ML inference we deliberately do not bundle. |
+| Filter ▸ Render ▸ Lighting Effects | A per-pixel light rig (spot/omni/infinite lights, a bump channel, material gloss) with an interactive on-canvas light editor; the parameter-schema dialog cannot express the light handles, and a slider-only version would not be Lighting Effects. |
+| Smart Filters (non-destructive filter stacks on smart objects) | The smart-object layer kind carries no filter stack and the compositor has no re-apply pass; Convert for Smart Filters stays greyed with that reason until both exist. |
 | Licensing and auto-update crates | Dropped from the workspace (P3.2): both were complete and tested with zero dependents — entitlement checks and update feeds are release-engineering for a shipped product, not this build. |
 | Video and animation timeline | Out of scope for a raster editor v1. |
 | Collaboration, cloud, mobile | Explicit non-goals: this is a local-first desktop app. |
@@ -155,9 +159,21 @@ Kept here rather than buried, because a ✅ with a footnote is still a claim:
 - **Live editing composites at 8-bit-equivalent precision (P2.5b, open).**
   Deep sources are honoured on export (a 16-bit source writes 16 bits to
   PNG/TIFF; an 8-bit source keeps the byte-exact path), `.rstudio` records
-  each layer's depth (`a_rstudio_package_round_trips_the_bit_depth`), but the
-  live tiles still composite at 8 bits and the New Document dialog refuses
-  16-bit rather than confirm a document that would draw as garbage.
+  each layer's depth (`a_rstudio_package_round_trips_the_bit_depth`).
+  *Done (W3-H):* the compositor reads an RGBA16 tile at its own depth and
+  composites it in `f32` (`fill_layer`), so a 16-bit ramp comes out of the
+  composite, and out of a 16-bit PNG export of that composite, within one
+  code of its source (`a_sixteen_bit_ramp_composites_at_sixteen_bit_precision`,
+  `a_sixteen_bit_ramp_composited_then_exported_equals_its_source`).
+  *Still open, and why no user reaches the done part yet:* nothing a user
+  can do produces an RGBA16 tile. `open_path` decodes a 16-bit source to
+  RGBA8 tiles; the New Document dialog refuses 16-bit
+  (`new_document.rs`); the paint tools, filters and adjustments read and
+  write RGBA8 tiles, so no test shows a brush stroke keeping a 16-bit layer
+  16-bit; and there is no depth-conversion command, so Image > Mode >
+  8 / 16 Bits/Channel are greyed with that reason. Closing P2.5b needs a
+  depth-generic pixel path in `editor-core::pixels` and the tools/filters
+  that write through it, then the importer and New Document emitting RGBA16.
 - **Native tablet events need a pen.** Pressure is wired through the shell
   seam (`Shell::set_pen_pressure`) and the stroke engine is pressure-aware,
   but subscribing to one device's winit tablet events requires hardware on

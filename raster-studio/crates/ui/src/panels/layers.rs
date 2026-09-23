@@ -108,6 +108,16 @@ pub struct LayersState {
     /// Card 059: true on the frame the popup opened, so the opening
     /// right-click's own release does not close it.
     pub mask_menu_fresh: bool,
+    /// W3-J: the name search. Rows whose name does not contain it
+    /// (case-insensitively) are hidden; empty shows every row.
+    pub search: String,
+    /// W3-J: the row whose name is being edited inline, if any.
+    renaming: Option<LayerId>,
+    /// The text of the in-flight rename.
+    rename_buffer: String,
+    /// True on the frame the rename opened, so the field can take focus and
+    /// select its contents once.
+    rename_fresh: bool,
 }
 
 /// Photopea's thumbnail sizes. The multiplier applies to the row height, so a
@@ -250,6 +260,72 @@ impl LayersState {
     pub fn end_drag(&mut self) -> Option<LayerId> {
         self.dragging.take()
     }
+
+    // -- W3-J: inline rename ---------------------------------------------
+
+    /// Open the inline rename on `id`, seeded with its current name.
+    pub fn begin_rename(&mut self, id: LayerId, current: &str) {
+        self.renaming = Some(id);
+        self.rename_buffer = current.to_string();
+        self.rename_fresh = true;
+    }
+
+    /// The row being renamed, if any.
+    pub fn renaming(&self) -> Option<LayerId> {
+        self.renaming
+    }
+
+    /// The rename field's text, for the widget to edit in place.
+    pub fn rename_buffer_mut(&mut self) -> &mut String {
+        &mut self.rename_buffer
+    }
+
+    /// `true` exactly once, on the frame after [`Self::begin_rename`].
+    pub fn take_rename_fresh(&mut self) -> bool {
+        std::mem::take(&mut self.rename_fresh)
+    }
+
+    /// Escape: drop the edit, keep the name.
+    pub fn cancel_rename(&mut self) {
+        self.renaming = None;
+        self.rename_buffer.clear();
+        self.rename_fresh = false;
+    }
+
+    /// Enter (or a click elsewhere): close the edit and hand back the layer
+    /// and the text typed, for the panel to turn into one rename command.
+    pub fn finish_rename(&mut self) -> Option<(LayerId, String)> {
+        let id = self.renaming.take()?;
+        self.rename_fresh = false;
+        Some((id, std::mem::take(&mut self.rename_buffer)))
+    }
+}
+
+/// W3-J: whether a row's name passes the search. Empty (or all-space)
+/// searches pass everything; otherwise a case-insensitive substring match.
+pub fn matches_search(name: &str, search: &str) -> bool {
+    let needle = search.trim();
+    needle.is_empty() || name.to_lowercase().contains(&needle.to_lowercase())
+}
+
+/// Stable ids for the W3-J controls, so a headless test can find them.
+pub mod ids {
+    use layer_model::LayerId;
+
+    /// The name label of one row: double-click it to rename.
+    pub fn name_label(layer: LayerId) -> egui::Id {
+        egui::Id::new(("raster-layer-name-label", layer))
+    }
+
+    /// The inline rename field of one row, drawn in the label's place.
+    pub fn rename_field(layer: LayerId) -> egui::Id {
+        egui::Id::new(("raster-layer-rename", layer))
+    }
+
+    /// The filter row's name search.
+    pub fn search_field() -> egui::Id {
+        egui::Id::new("raster-layer-search")
+    }
 }
 
 /// Where a dragged row would land.
@@ -316,13 +392,23 @@ impl LayersModel {
             // The kind filter hides non-matching rows; their children are
             // still walked, so a text layer inside a group shows when the
             // filter is on text.
-            if let Some(class) = state.filter {
-                if LayerClass::of(&layer.kind) != class {
-                    continue;
-                }
-            }
+            let hidden_by_kind = state
+                .filter
+                .is_some_and(|class| LayerClass::of(&layer.kind) != class);
+            // W3-J: the name search hides the same way. A hidden group's
+            // children are still walked, so a match inside a group whose own
+            // name does not match is found — that is what a search is for.
+            let hidden_by_search = !matches_search(&layer.name, &state.search);
             let expanded = state.is_expanded(&doc.layers, id);
             let children = layer.children();
+            if hidden_by_kind || hidden_by_search {
+                if layer.is_group() && expanded {
+                    for child in children.iter().rev() {
+                        stack.push((*child, depth + 1));
+                    }
+                }
+                continue;
+            }
             rows.push(LayerRow {
                 id,
                 depth,
@@ -1253,5 +1339,74 @@ mod tests {
         let m = LayersModel::build(&doc, &LayersState::new());
         assert!(m.is_empty());
         assert!(m.rows().is_empty());
+    }
+
+    // ---- W3-J: name search and inline rename ------------------------------
+
+    #[test]
+    fn the_name_search_hides_non_matching_rows_case_insensitively() {
+        let f = fixture();
+        let mut state = LayersState::new();
+        state.search = "CHILD".to_string();
+        let m = LayersModel::build(&f.doc, &state);
+        assert_eq!(names(&m), vec!["Child A"], "only the match shows");
+        // The match sits inside a group whose own name does not match: the
+        // group is hidden, the child is found.
+        assert_eq!(m.rows()[0].depth, 1);
+
+        state.search = "  ".to_string();
+        let m = LayersModel::build(&f.doc, &state);
+        assert_eq!(m.rows().len(), 6, "an all-space search filters nothing");
+
+        state.search = "nothing-here".to_string();
+        let m = LayersModel::build(&f.doc, &state);
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn the_search_and_the_kind_filter_both_apply() {
+        let f = fixture();
+        let mut state = LayersState::new();
+        state.search = "o".to_string(); // Top, Group, Bottom
+        state.filter = Some(LayerClass::Raster);
+        let m = LayersModel::build(&f.doc, &state);
+        assert_eq!(names(&m), vec!["Top", "Bottom"]);
+    }
+
+    #[test]
+    fn matches_search_is_a_case_insensitive_substring_test() {
+        assert!(matches_search("Background", ""));
+        assert!(matches_search("Background", "GROUND"));
+        assert!(matches_search("Background", " back "));
+        assert!(!matches_search("Background", "fore"));
+    }
+
+    #[test]
+    fn an_inline_rename_runs_begin_edit_finish_and_can_be_cancelled() {
+        let f = fixture();
+        let mut state = LayersState::new();
+        assert_eq!(state.renaming(), None);
+        assert!(
+            state.finish_rename().is_none(),
+            "nothing open, nothing to finish"
+        );
+
+        state.begin_rename(f.top, "Top");
+        assert_eq!(state.renaming(), Some(f.top));
+        assert!(state.take_rename_fresh(), "fresh once");
+        assert!(!state.take_rename_fresh(), "and only once");
+        state.rename_buffer_mut().push_str(" layer");
+        assert_eq!(
+            state.finish_rename(),
+            Some((f.top, "Top layer".to_string()))
+        );
+        assert_eq!(state.renaming(), None);
+
+        state.begin_rename(f.top, "Top");
+        state.rename_buffer_mut().clear();
+        state.cancel_rename();
+        assert_eq!(state.renaming(), None);
+        assert!(state.finish_rename().is_none());
+        assert!(!state.take_rename_fresh());
     }
 }

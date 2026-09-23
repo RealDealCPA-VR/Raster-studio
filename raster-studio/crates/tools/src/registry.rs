@@ -16,8 +16,9 @@ use crate::edit::{
     CropTool, EyedropperTool, MagicEraserTool, MoveTool, PatchTool, RedEyeTool, SliceTool,
 };
 use crate::gradient::GradientTool;
+use crate::pen::{Combine, PenMode};
 use crate::select::{LassoKind, LassoTool, MarqueeShape, MarqueeTool, WandKind, WandTool};
-use crate::shape::{ShapeKind, ShapeMode, ShapeTool};
+use crate::shape::{PaintSource, ShapeKind, ShapeMode, ShapeTool, DEFAULT_STROKE_WIDTH};
 use crate::stroke::{SpongeMode, StrokeOp, StrokeTool, ToneRange};
 use crate::tool::{Tool, ToolId};
 use crate::transform::TransformTool;
@@ -123,6 +124,47 @@ const fn c(
     }
 }
 
+const fn col(key: &'static str, label: &'static str, default: [f32; 4]) -> OptionSpec {
+    OptionSpec {
+        key,
+        label,
+        kind: OptionKind::Color { default },
+    }
+}
+
+/// The five paint controls every shape tool and the pen share, after the
+/// tool's own leading controls — the keys [`crate::shape::PAINT_KEYS`] names
+/// and [`crate::shape::ShapePaint::set`] answers. The defaults are
+/// [`crate::shape::ShapePaint::default`]'s: filled with the foreground,
+/// unstroked. A colour swatch is read only while its source is `Custom`
+/// ([`crate::shape::ShapePaint::fill_rgba`]); the labels say so, so a user who
+/// picks a swatch with the source on `Foreground` is told why the shape still
+/// draws in the foreground colour.
+macro_rules! with_paint {
+    ($($lead:expr),* $(,)?) => {
+        &[
+            $($lead,)*
+            c("fill", "Fill", PaintSource::CHOICES, 1),
+            col("fill_color", "Custom Fill Colour", [0.0, 0.0, 0.0, 1.0]),
+            c("stroke", "Stroke", PaintSource::CHOICES, 0),
+            col("stroke_color", "Custom Stroke Colour", [0.0, 0.0, 0.0, 1.0]),
+            f("stroke_width", "Stroke Width", 0.0, 500.0, DEFAULT_STROKE_WIDTH),
+        ]
+    };
+}
+
+/// A shape tool's options: the mode, From Centre, the kind's own geometry
+/// keys, then the paint.
+macro_rules! shape_opts {
+    ($($extra:expr),* $(,)?) => {
+        with_paint!(
+            c("mode", "Mode", &["Shape Layer", "Rasterize"], 0),
+            b("from_center", "From Centre", false),
+            $($extra,)*
+        )
+    };
+}
+
 /// The controls every stamping tool shares.
 const BRUSH_OPTS: &[OptionSpec] = &[
     f("size", "Size", 1.0, 5000.0, 24.0),
@@ -179,10 +221,7 @@ const TONE_OPTS: &[OptionSpec] = &[
     c("range", "Range", &["Shadows", "Midtones", "Highlights"], 1),
 ];
 
-const SHAPE_OPTS: &[OptionSpec] = &[
-    c("mode", "Mode", &["Shape Layer", "Rasterize"], 0),
-    b("from_center", "From Centre", false),
-];
+const SHAPE_OPTS: &[OptionSpec] = shape_opts!();
 
 /// Everything the UI needs to know about one tool.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -682,7 +721,13 @@ const TOOLS: &[ToolInfo] = &[
         Cursor::Crosshair,
         // `P`, the one letter of the brief no tool answered to.
         Some('p'),
-        &[],
+        // Mode (Path / Shape / Pixels), the shared paint, and how a closed
+        // path combines with the active shape layer. `vector::boolean` does
+        // union, difference and intersection, so all four are live.
+        with_paint!(
+            c("mode", "Mode", PenMode::CHOICES, 1),
+            c("combine", "Combine", Combine::CHOICES, 0),
+        ),
     ),
     t(
         ToolId::Type,
@@ -708,6 +753,32 @@ const TOOLS: &[ToolInfo] = &[
                 &["sans-serif", "serif", "monospace"],
                 0,
             ),
+            // W3-J: the Type tool's DEFAULT style - what the Character and
+            // Paragraph panels edit with no text layer selected, held on the
+            // workspace like every option and seeded into the next layer the
+            // tool creates (`text::TypeTool::seed`). The keys and their
+            // mapping live in `text::TYPE_STYLE_KEYS`.
+            c("weight", "Weight", crate::text::TYPE_WEIGHTS, 3),
+            b("italic", "Italic", false),
+            b("underline", "Underline", false),
+            b("strikethrough", "Strike", false),
+            col("color", "Color", [0.0, 0.0, 0.0, 1.0]),
+            f("tracking", "Tracking", -100.0, 400.0, 0.0),
+            f("leading", "Leading (0 = auto)", 0.0, 400.0, 0.0),
+            f("horizontal_scale", "H scale %", 1.0, 1000.0, 100.0),
+            f("vertical_scale", "V scale %", 1.0, 1000.0, 100.0),
+            f("baseline_shift", "Baseline", -200.0, 200.0, 0.0),
+            c("script", "Position", crate::text::TYPE_SCRIPTS, 0),
+            c("caps", "Caps", crate::text::TYPE_CAPS, 0),
+            b("kerning", "Metrics kerning", true),
+            b("ligatures", "Ligatures", true),
+            c("anti_alias", "Edges", crate::text::TYPE_ANTI_ALIAS, 0),
+            c("alignment", "Align", crate::text::TYPE_ALIGNMENTS, 0),
+            f("left_indent", "Indent left", -200.0, 1000.0, 0.0),
+            f("right_indent", "Indent right", -200.0, 1000.0, 0.0),
+            f("first_line_indent", "First line", -200.0, 1000.0, 0.0),
+            f("space_before", "Space before", 0.0, 1000.0, 0.0),
+            f("space_after", "Space after", 0.0, 1000.0, 0.0),
         ],
     ),
     t(
@@ -750,10 +821,7 @@ const TOOLS: &[ToolInfo] = &[
         "shape-rrect",
         Cursor::Crosshair,
         Some('u'),
-        &[
-            c("mode", "Mode", &["Shape Layer", "Rasterize"], 0),
-            f("radius", "Radius", 0.0, 500.0, 8.0),
-        ],
+        shape_opts!(f("radius", "Radius", 0.0, 500.0, 8.0)),
     ),
     t(
         ToolId::Ellipse,
@@ -773,10 +841,7 @@ const TOOLS: &[ToolInfo] = &[
         "shape-polygon",
         Cursor::Crosshair,
         Some('u'),
-        &[
-            c("mode", "Mode", &["Shape Layer", "Rasterize"], 0),
-            i("sides", "Sides", 3, 100, 6),
-        ],
+        shape_opts!(i("sides", "Sides", 3, 100, 6)),
     ),
     t(
         ToolId::Star,
@@ -786,11 +851,10 @@ const TOOLS: &[ToolInfo] = &[
         "shape-star",
         Cursor::Crosshair,
         Some('u'),
-        &[
-            c("mode", "Mode", &["Shape Layer", "Rasterize"], 0),
+        shape_opts!(
             i("points", "Points", 3, 100, 5),
             f("inner_ratio", "Indent", 0.05, 1.0, 0.4),
-        ],
+        ),
     ),
     t(
         ToolId::Line,
@@ -800,10 +864,7 @@ const TOOLS: &[ToolInfo] = &[
         "shape-line",
         Cursor::Crosshair,
         Some('u'),
-        &[
-            c("mode", "Mode", &["Shape Layer", "Rasterize"], 0),
-            f("width", "Weight", 0.1, 500.0, 2.0),
-        ],
+        shape_opts!(f("width", "Weight", 0.1, 500.0, 2.0)),
     ),
     t(
         ToolId::CustomShape,
@@ -813,7 +874,9 @@ const TOOLS: &[ToolInfo] = &[
         "shape-custom",
         Cursor::Crosshair,
         Some('u'),
-        SHAPE_OPTS,
+        // The built-in library (`vector::custom`), picked by index; the
+        // labels are built from the enum so the two cannot disagree.
+        shape_opts!(c("preset", "Shape", &vector::CUSTOM_SHAPE_NAMES, 0)),
     ),
     t(
         ToolId::Hand,
@@ -1065,13 +1128,8 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
             ShapeMode::VectorLayer,
         )),
         ToolId::CustomShape => Box::new(ShapeTool::new(
-            ShapeKind::Custom {
-                path: vector::shapes::rect(vector::Bounds::new(
-                    vector::point(0.0, 0.0),
-                    vector::point(1.0, 1.0),
-                )),
-                name: "Custom Shape".into(),
-            },
+            // The library's first entry, matching the `preset` default (0).
+            ShapeKind::custom(vector::CustomShape::ALL[0]),
             ShapeMode::VectorLayer,
         )),
         ToolId::Hand => Box::new(ViewTool::new(ViewGesture::Pan)),

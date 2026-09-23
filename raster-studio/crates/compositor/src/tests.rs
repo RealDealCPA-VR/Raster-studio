@@ -2979,3 +2979,123 @@ fn relinking_does_not_jump_the_visible_mask() {
         );
     }
 }
+
+/// P2.5b: a layer stored as RGBA16 tiles composites in `f32` from its 16-bit
+/// codes — through the free compositor and through the cached one the live
+/// view draws with — so a 16-bit ramp comes back out of `to_rgba16` within
+/// one code of the source. Before the depth-aware read, an RGBA16 tile was
+/// read as if its bytes were RGBA8 (the length check only asked for "at
+/// least an 8-bit tile"), which is garbage, not banding.
+#[test]
+fn a_sixteen_bit_ramp_composites_at_sixteen_bit_precision() {
+    let w = TILE_SIZE;
+    let h = 2u32;
+    let mut t = TestDoc::new(w, h);
+    let id = t.push_raster("deep");
+    // Every column a distinct 16-bit code, and none of them a multiple of
+    // 257: an 8-bit step anywhere on the road collapses neighbours.
+    let code = |x: u32| -> u16 { (x * 256 + (x % 200) + 1).min(65534) as u16 };
+    let mut samples = Vec::with_capacity((TILE_SIZE * TILE_SIZE * 4) as usize);
+    for y in 0..TILE_SIZE {
+        for x in 0..TILE_SIZE {
+            let v = if y < h { code(x) } else { 0 };
+            let a = if y < h { u16::MAX } else { 0 };
+            samples.extend_from_slice(&[v, v / 2, 65535 - v, a]);
+        }
+    }
+    let hash = t.src.insert_bytes(raster::rgba16_to_tile_bytes(&samples));
+    t.set_tile_hash(id, TileCoord::new(0, 0, 0), hash);
+    let (doc, src) = t.finish();
+
+    let region = rect(0, 0, w, h);
+    let free = composite_region(&doc, &src, region, 0, opts()).expect("composite");
+    let mut cached = TileCompositor::new();
+    let live = cached
+        .composite_region(&doc, &src, region, 0, opts())
+        .expect("cached composite");
+    for canvas in [free, live] {
+        let out = canvas.to_rgba16(&ColorSpace::Srgb);
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let v = code(x);
+                let want = [v, v / 2, 65535 - v, u16::MAX];
+                for k in 0..4 {
+                    let got = out[i + k];
+                    assert!(
+                        got.abs_diff(want[k]) <= 1,
+                        "({x}, {y}) channel {k}: {got} vs source {}",
+                        want[k]
+                    );
+                }
+            }
+        }
+        // The ramp kept every distinct code: nothing was banded to 256 steps.
+        let mut reds: Vec<u16> = (0..w).map(|x| out[(x * 4) as usize]).collect();
+        reds.dedup();
+        assert_eq!(reds.len(), w as usize, "the ramp was banded");
+    }
+}
+
+/// P2.5b, the export half: the same 16-bit ramp, composited from RGBA16
+/// tiles, handed to the real exporter as a 16-bit PNG and decoded back,
+/// equals the source within one 16-bit code (1/65535) on every channel. An
+/// 8-bit step anywhere between the tile and the file collapses the ramp's
+/// neighbours and fails this by up to 128 codes.
+#[test]
+fn a_sixteen_bit_ramp_composited_then_exported_equals_its_source() {
+    use raster::export::{export, BitDepth, ExportMetadata, ExportPreset, LinearImage};
+    use raster::ExportFormat;
+    use raster::{ImportLimits, SurfacePixels};
+
+    let w = TILE_SIZE;
+    let h = 3u32;
+    let mut t = TestDoc::new(w, h);
+    let id = t.push_raster("deep");
+    let code =
+        |x: u32, y: u32| -> u16 { (x * 256 + (x * 37 + y * 11) % 250 + 1).min(65534) as u16 };
+    let mut samples = Vec::with_capacity((TILE_SIZE * TILE_SIZE * 4) as usize);
+    for y in 0..TILE_SIZE {
+        for x in 0..TILE_SIZE {
+            if y < h {
+                let v = code(x, y);
+                samples.extend_from_slice(&[v, 65535 - v, v / 3, u16::MAX]);
+            } else {
+                samples.extend_from_slice(&[0, 0, 0, 0]);
+            }
+        }
+    }
+    let hash = t.src.insert_bytes(raster::rgba16_to_tile_bytes(&samples));
+    t.set_tile_hash(id, TileCoord::new(0, 0, 0), hash);
+    let (doc, src) = t.finish();
+
+    let canvas = composite_region(&doc, &src, rect(0, 0, w, h), 0, opts()).expect("composite");
+    let flat: Vec<f32> = canvas.pixels().iter().flatten().copied().collect();
+    let image = LinearImage::from_premultiplied(w, h, flat).expect("linear image");
+    let preset = ExportPreset::new("deep", ExportFormat::Png).with_bit_depth(BitDepth::Sixteen);
+    let file = export(&image, &preset, &ExportMetadata::default()).expect("export");
+    let decoded =
+        raster::decode_surface_bytes(&file.bytes, ImportLimits::default()).expect("decode");
+    assert_eq!((decoded.width, decoded.height), (w, h));
+    let SurfacePixels::Rgba16(back) = decoded.pixels else {
+        panic!(
+            "the export wrote {:?}, not 16 bits",
+            decoded.pixels.format()
+        );
+    };
+    for y in 0..h {
+        for x in 0..w {
+            let v = code(x, y);
+            let want = [v, 65535 - v, v / 3, u16::MAX];
+            let i = ((y * w + x) * 4) as usize;
+            for k in 0..4 {
+                assert!(
+                    back[i + k].abs_diff(want[k]) <= 1,
+                    "({x}, {y}) channel {k}: exported {} vs source {}",
+                    back[i + k],
+                    want[k]
+                );
+            }
+        }
+    }
+}

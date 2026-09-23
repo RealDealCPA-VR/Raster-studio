@@ -33,6 +33,8 @@ pub mod composite;
 pub mod context;
 pub mod offscreen;
 pub mod overlay;
+#[cfg(test)]
+mod rotation_tests;
 pub mod texture;
 
 pub use camera::{Camera, MAX_ZOOM, MIN_ZOOM};

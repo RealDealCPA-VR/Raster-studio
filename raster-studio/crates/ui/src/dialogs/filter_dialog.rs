@@ -34,6 +34,7 @@ use std::collections::BTreeMap;
 use design::tokens::{Radius, Space};
 use egui::{vec2, Context, TextureHandle};
 use filters::{blur, distort, noise, other, pixelate, render, sharpen, stylize};
+use filters::{displace, pixelate_extra, quick, smart_blur, stylize_extra};
 use filters::{EdgeMode, FilterBuffer, Interpolation, Sampling};
 use tools::{OptionKind, OptionSpec};
 
@@ -511,7 +512,92 @@ const OFFSET: &[OptionSpec] = &[
     int("dy", "Vertical", -4096, 4096, 0),
     choice("edge", "Edges", EDGE_MODES, 0),
 ];
+const SMART_BLUR_MODES: &[&str] = &["Normal", "Edge only", "Overlay edge"];
+const SMART_BLUR: &[OptionSpec] = &[
+    int("radius", "Radius", 1, 64, 3),
+    float("threshold", "Threshold", 0.001, 1.0, 0.1),
+    choice("mode", "Mode", SMART_BLUR_MODES, 0),
+    choice("edge", "Edges", EDGE_MODES, 0),
+];
+/// Where Displace reads its map from. Photoshop asks for a PSD file; this
+/// dialog offers the two maps a layer always has to hand: the layer itself
+/// (its red channel drives x, its green y) and a seeded cloud field.
+const DISPLACE_MAPS: &[&str] = &["This layer", "Clouds"];
+const DISPLACE_FITS: &[&str] = &["Stretch to fit", "Tile"];
+const DISPLACE: &[OptionSpec] = &[
+    float("scale_x", "Horizontal scale", -999.0, 999.0, 10.0),
+    float("scale_y", "Vertical scale", -999.0, 999.0, 10.0),
+    choice("map", "Displacement map", DISPLACE_MAPS, 1),
+    choice("fit", "Map fit", DISPLACE_FITS, 0),
+    int("seed", "Clouds seed", 0, 9999, 1),
+    choice("edge", "Edges", EDGE_MODES, 0),
+];
+const MEZZOTINT_TYPES: &[&str] = &[
+    "Fine dots",
+    "Medium dots",
+    "Grainy dots",
+    "Coarse dots",
+    "Short lines",
+    "Medium lines",
+    "Long lines",
+    "Short strokes",
+    "Medium strokes",
+    "Long strokes",
+];
+const MEZZOTINT: &[OptionSpec] = &[
+    choice("kind", "Type", MEZZOTINT_TYPES, 1),
+    int("seed", "Seed", 0, 9999, 1),
+];
+const EXTRUDE_TYPES: &[&str] = &["Blocks", "Pyramids"];
+const EXTRUDE_DEPTHS: &[&str] = &["Random", "Level-based"];
+const EXTRUDE: &[OptionSpec] = &[
+    choice("kind", "Type", EXTRUDE_TYPES, 0),
+    int("size", "Size", 2, 255, 30),
+    float("depth", "Depth", 1.0, 100.0, 30.0),
+    choice("depth_mode", "Depth from", EXTRUDE_DEPTHS, 0),
+    int("seed", "Seed", 0, 9999, 1),
+];
+const TILES_FILLS: &[&str] = &["Solid colour", "Inverse image", "Unaltered image"];
+const TILES: &[OptionSpec] = &[
+    int("count", "Number of tiles", 1, 99, 10),
+    float("offset", "Maximum offset (%)", 1.0, 99.0, 10.0),
+    choice("fill", "Fill empty area with", TILES_FILLS, 0),
+    color("fill_color", "Fill colour", [1.0, 1.0, 1.0, 1.0]),
+    int("seed", "Seed", 0, 9999, 1),
+];
+const CONTOUR_EDGES: &[&str] = &["Lower", "Upper"];
+const TRACE_CONTOUR: &[OptionSpec] = &[
+    int("level", "Level", 0, 255, 128),
+    choice("side", "Edge", CONTOUR_EDGES, 0),
+    choice("edge", "Edges", EDGE_MODES, 0),
+];
 const NO_PARAMS: &[OptionSpec] = &[];
+
+/// The side of the cloud field Displace generates as its map. Fixed rather
+/// than the layer's size, so the map is a separate image the way Photoshop's
+/// is, and "Stretch to fit" and "Tile" lay it over the layer differently.
+const DISPLACE_CLOUDS_SIDE: u32 = 128;
+
+/// Displace's map: the layer itself, or a seeded cloud field.
+fn displace_map(src: &FilterBuffer, p: &FilterParams) -> FilterBuffer {
+    let seed = u64::from(p.uint("seed"));
+    match p.choice("map") {
+        1 => {
+            let side = DISPLACE_CLOUDS_SIDE;
+            render::clouds(
+                side,
+                side,
+                &render::CloudParams {
+                    scale: side as f32 / 4.0,
+                    seed,
+                    ..render::CloudParams::default()
+                },
+            )
+            .unwrap_or_else(|_| src.clone())
+        }
+        _ => src.clone(),
+    }
+}
 
 /// The Custom kernel's nine weights, in row-major order.
 const CUSTOM_TAPS: &[&str] = &[
@@ -540,6 +626,24 @@ fn gradient_axis(w: u32, h: u32, angle_deg: f32) -> ((f32, f32), (f32, f32)) {
 /// directions, so neither a menu item with nothing behind it nor a dialog
 /// nothing can open can survive.
 pub const FILTERS: &[FilterSpec] = &[
+    FilterSpec {
+        id: FilterId::Average,
+        summary: "Fills the layer with its own mean colour.",
+        params: NO_PARAMS,
+        apply: |src, _| quick::average(src),
+    },
+    FilterSpec {
+        id: FilterId::Blur,
+        summary: "A light, fixed 3x3 blur.",
+        params: NO_PARAMS,
+        apply: |src, _| quick::blur(src, EdgeMode::Clamp),
+    },
+    FilterSpec {
+        id: FilterId::BlurMore,
+        summary: "A fixed 5x5 blur, softer than Blur.",
+        params: NO_PARAMS,
+        apply: |src, _| quick::blur_more(src, EdgeMode::Clamp),
+    },
     FilterSpec {
         id: FilterId::BoxBlur,
         summary: "A flat average over a square window.",
@@ -608,6 +712,28 @@ pub const FILTERS: &[FilterSpec] = &[
         },
     },
     FilterSpec {
+        id: FilterId::SmartBlur,
+        summary: "Averages only the neighbours within the threshold, keeping edges hard.",
+        params: SMART_BLUR,
+        apply: |src, p| {
+            smart_blur::smart_blur(
+                src,
+                p.uint("radius"),
+                p.float("threshold"),
+                p.choose(
+                    "mode",
+                    &[
+                        smart_blur::SmartBlurMode::Normal,
+                        smart_blur::SmartBlurMode::EdgeOnly,
+                        smart_blur::SmartBlurMode::OverlayEdge,
+                    ],
+                )
+                .unwrap_or_default(),
+                edge_mode(p, "edge"),
+            )
+        },
+    },
+    FilterSpec {
         id: FilterId::SurfaceBlur,
         summary: "Blurs flat areas and leaves edges alone.",
         params: SURFACE_BLUR,
@@ -619,6 +745,24 @@ pub const FILTERS: &[FilterSpec] = &[
                 edge_mode(p, "edge"),
             )
         },
+    },
+    FilterSpec {
+        id: FilterId::Sharpen,
+        summary: "A fixed, light sharpen.",
+        params: NO_PARAMS,
+        apply: |src, _| quick::sharpen(src, EdgeMode::Clamp),
+    },
+    FilterSpec {
+        id: FilterId::SharpenEdges,
+        summary: "Sharpens only where there is an edge; flat areas are left exactly as they were.",
+        params: NO_PARAMS,
+        apply: |src, _| quick::sharpen_edges(src, EdgeMode::Clamp),
+    },
+    FilterSpec {
+        id: FilterId::SharpenMore,
+        summary: "A fixed sharpen, stronger than Sharpen.",
+        params: NO_PARAMS,
+        apply: |src, _| quick::sharpen_more(src, EdgeMode::Clamp),
     },
     FilterSpec {
         id: FilterId::SmartSharpen,
@@ -704,6 +848,27 @@ pub const FILTERS: &[FilterSpec] = &[
                 p.float("strength"),
                 p.float("detail"),
                 edge_mode(p, "edge"),
+            )
+        },
+    },
+    FilterSpec {
+        id: FilterId::Displace,
+        summary:
+            "Moves each pixel by the map: red drives the horizontal shift, green the vertical.",
+        params: DISPLACE,
+        apply: |src, p| {
+            let map = displace_map(src, p);
+            displace::displace(
+                src,
+                &map,
+                p.float("scale_x"),
+                p.float("scale_y"),
+                p.choose(
+                    "fit",
+                    &[displace::DisplaceFit::Stretch, displace::DisplaceFit::Tile],
+                )
+                .unwrap_or_default(),
+                sampling(p, "edge"),
             )
         },
     },
@@ -860,6 +1025,31 @@ pub const FILTERS: &[FilterSpec] = &[
         apply: |src, p| pixelate::crystallize(src, p.uint("cell"), u64::from(p.uint("seed"))),
     },
     FilterSpec {
+        id: FilterId::Facet,
+        summary: "Clumps similar neighbouring pixels into flat, single-colour cells.",
+        params: NO_PARAMS,
+        apply: |src, _| pixelate_extra::facet(src, EdgeMode::Clamp),
+    },
+    FilterSpec {
+        id: FilterId::Fragment,
+        summary: "Averages four offset copies of the layer, for a shaken look.",
+        params: NO_PARAMS,
+        apply: |src, _| pixelate_extra::fragment(src, EdgeMode::Clamp),
+    },
+    FilterSpec {
+        id: FilterId::Mezzotint,
+        summary: "A random black-and-white screen of dots, lines or strokes.",
+        params: MEZZOTINT,
+        apply: |src, p| {
+            pixelate_extra::mezzotint(
+                src,
+                p.choose("kind", pixelate_extra::MezzotintType::ALL)
+                    .unwrap_or_default(),
+                u64::from(p.uint("seed")),
+            )
+        },
+    },
+    FilterSpec {
         id: FilterId::Mosaic,
         summary: "Averages the image into square cells.",
         params: MOSAIC,
@@ -992,6 +1182,35 @@ pub const FILTERS: &[FilterSpec] = &[
         },
     },
     FilterSpec {
+        id: FilterId::Extrude,
+        summary: "Turns the layer into a field of shaded blocks or pyramids.",
+        params: EXTRUDE,
+        apply: |src, p| {
+            stylize_extra::extrude(
+                src,
+                p.choose(
+                    "kind",
+                    &[
+                        stylize_extra::ExtrudeType::Blocks,
+                        stylize_extra::ExtrudeType::Pyramids,
+                    ],
+                )
+                .unwrap_or_default(),
+                p.uint("size"),
+                p.float("depth"),
+                p.choose(
+                    "depth_mode",
+                    &[
+                        stylize_extra::ExtrudeDepth::Random,
+                        stylize_extra::ExtrudeDepth::LevelBased,
+                    ],
+                )
+                .unwrap_or_default(),
+                u64::from(p.uint("seed")),
+            )
+        },
+    },
+    FilterSpec {
         id: FilterId::FindEdges,
         summary: "Keeps the gradient magnitude and throws away the flat areas.",
         params: NO_PARAMS,
@@ -1015,6 +1234,45 @@ pub const FILTERS: &[FilterSpec] = &[
         summary: "Inverts the tones above mid grey.",
         params: NO_PARAMS,
         apply: |src, _| stylize::solarize(src),
+    },
+    FilterSpec {
+        id: FilterId::Tiles,
+        summary: "Cuts the layer into square tiles and nudges each one.",
+        params: TILES,
+        apply: |src, p| {
+            let fill = match p.choice("fill") {
+                1 => stylize_extra::TilesFill::Inverse,
+                2 => stylize_extra::TilesFill::Unaltered,
+                _ => stylize_extra::TilesFill::Color(p.color("fill_color")),
+            };
+            stylize_extra::tiles(
+                src,
+                p.uint("count"),
+                p.float("offset"),
+                fill,
+                u64::from(p.uint("seed")),
+            )
+        },
+    },
+    FilterSpec {
+        id: FilterId::TraceContour,
+        summary: "Draws a thin line, per channel, where the tone crosses the level.",
+        params: TRACE_CONTOUR,
+        apply: |src, p| {
+            stylize_extra::trace_contour(
+                src,
+                p.uint("level") as f32 / 255.0,
+                p.choose(
+                    "side",
+                    &[
+                        stylize_extra::ContourEdge::Lower,
+                        stylize_extra::ContourEdge::Upper,
+                    ],
+                )
+                .unwrap_or_default(),
+                edge_mode(p, "edge"),
+            )
+        },
     },
     FilterSpec {
         id: FilterId::Wind,
@@ -2116,5 +2374,68 @@ mod tests {
             let mut dialog = FilterDialog::new(&COLOR_FILTER, placeholder_buffer(16, 16));
             assert!(dialog.show(ctx, None).is_open());
         });
+    }
+
+    /// The fourteen Photopea-parity filters, driven through the dialog the
+    /// menu opens: each one's live preview at its defaults is a real change
+    /// of a busy layer, and each carries the property its engine pins.
+    #[test]
+    fn the_photopea_parity_filters_preview_through_their_dialogs() {
+        let added = [
+            FilterId::Average,
+            FilterId::Blur,
+            FilterId::BlurMore,
+            FilterId::SmartBlur,
+            FilterId::Sharpen,
+            FilterId::SharpenEdges,
+            FilterId::SharpenMore,
+            FilterId::Displace,
+            FilterId::Facet,
+            FilterId::Fragment,
+            FilterId::Mezzotint,
+            FilterId::Extrude,
+            FilterId::Tiles,
+            FilterId::TraceContour,
+        ];
+        let source = busy_buffer(32);
+        let preview_of = |id: FilterId| {
+            let spec = filter_by_id(id).unwrap_or_else(|| panic!("{id:?} has no dialog"));
+            FilterDialog::new(spec, source.clone()).preview_buffer()
+        };
+        for id in added {
+            let out = preview_of(id);
+            assert_eq!(out.dimensions(), source.dimensions(), "{id:?}");
+            assert_ne!(
+                out.pixels(),
+                source.pixels(),
+                "{id:?}: the preview is the identity"
+            );
+        }
+        // Average: one flat colour.
+        let avg = preview_of(FilterId::Average);
+        assert!(avg.pixels().iter().all(|p| *p == avg.pixels()[0]));
+        // Mezzotint: every pixel black or white.
+        for p in preview_of(FilterId::Mezzotint).pixels() {
+            assert_eq!(p[0], p[1]);
+            assert_eq!(p[1], p[2]);
+            assert!(p[0] == 0.0 || p[0] == p[3], "{p:?}");
+        }
+        // Blur More smooths harder than Blur.
+        let spread = |b: &FilterBuffer| {
+            let n = b.len() as f32;
+            let mean = b.pixels().iter().map(|p| p[0]).sum::<f32>() / n;
+            b.pixels()
+                .iter()
+                .map(|p| (p[0] - mean).powi(2))
+                .sum::<f32>()
+                / n
+        };
+        assert!(spread(&preview_of(FilterId::BlurMore)) < spread(&preview_of(FilterId::Blur)));
+        // Displace with both scales at zero is the identity, bit for bit.
+        let spec = filter_by_id(FilterId::Displace).unwrap();
+        let mut dialog = FilterDialog::new(spec, source.clone());
+        assert!(dialog.set_param("scale_x", ParamValue::Float(0.0)));
+        assert!(dialog.set_param("scale_y", ParamValue::Float(0.0)));
+        assert_eq!(dialog.preview_buffer().pixels(), source.pixels());
     }
 }

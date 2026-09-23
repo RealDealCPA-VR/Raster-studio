@@ -21,16 +21,25 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 
 /// The languages the catalogue carries. `En` is the source of truth.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Locale {
+    #[default]
     En,
 }
 
 impl Locale {
+    /// Every locale the catalogue has a row for, in preferences-list order.
+    /// One entry today: the Preferences dialog offers exactly this list, so
+    /// it cannot promise a language the table cannot show.
+    pub const ALL: &'static [Locale] = &[Locale::En];
+
     /// The locale the editor shows, as the preferences system stores it.
     pub fn from_code(code: &str) -> Self {
-        let _ = code; // more locales arrive with their table rows
-        Self::En
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|l| l.code() == code)
+            .unwrap_or(Self::En)
     }
 
     /// The BCP-47 code, for the preferences UI.
@@ -54,20 +63,64 @@ static ACTIVE: AtomicU8 = AtomicU8::new(0);
 
 /// Switch the catalogue's locale. Unknown codes fall back to English.
 pub fn set_locale(locale: Locale) {
-    let code = match locale {
-        Locale::En => 0,
-    };
-    ACTIVE.store(code, Ordering::Relaxed);
+    let index = Locale::ALL.iter().position(|l| *l == locale).unwrap_or(0);
+    ACTIVE.store(index as u8, Ordering::Relaxed);
 }
 
-fn active() -> Locale {
-    let _ = ACTIVE.load(Ordering::Relaxed); // locales beyond En flip this
-    Locale::En
+/// The locale in force.
+pub fn active() -> Locale {
+    let index = ACTIVE.load(Ordering::Relaxed) as usize;
+    Locale::ALL.get(index).copied().unwrap_or(Locale::En)
 }
 
 /// Every catalogue entry: the English source string first, then any
 /// translations. A locale missing from a row falls back to English at lookup.
 const TABLE: &[(&str, &[(Locale, &str)])] = &[
+    // W3-H: Color Range, Select ▸ Modify, Save / Load Selection.
+    ("ui.selection_modify.border.title", &[(Locale::En, "Border Selection")]),
+    ("ui.selection_modify.smooth.title", &[(Locale::En, "Smooth Selection")]),
+    ("ui.selection_modify.expand.title", &[(Locale::En, "Expand Selection")]),
+    ("ui.selection_modify.contract.title", &[(Locale::En, "Contract Selection")]),
+    ("ui.selection_modify.feather.title", &[(Locale::En, "Feather Selection")]),
+    ("ui.selection_modify.width", &[(Locale::En, "Width")]),
+    ("ui.selection_modify.sample.radius", &[(Locale::En, "Sample radius")]),
+    ("ui.selection_modify.expand.by", &[(Locale::En, "Expand by")]),
+    ("ui.selection_modify.contract.by", &[(Locale::En, "Contract by")]),
+    ("ui.selection_modify.feather.radius", &[(Locale::En, "Feather radius")]),
+    ("ui.selection_modify.apply", &[(Locale::En, "Apply")]),
+    ("ui.selection_modify.px", &[(Locale::En, "px")]),
+    ("ui.selection_modify.out.of.range", &[(Locale::En, "The amount must be within")]),
+    ("ui.selection_modify.range.to", &[(Locale::En, "to")]),
+    ("ui.selection_modify.border.caption", &[(Locale::En, "Selects a band of this width along the selection's edge")]),
+    ("ui.selection_name.alpha", &[(Locale::En, "Alpha")]),
+    ("ui.selection_name.save.title", &[(Locale::En, "Save Selection")]),
+    ("ui.selection_name.load.title", &[(Locale::En, "Load Selection")]),
+    ("ui.selection_name.empty", &[(Locale::En, "The name cannot be empty")]),
+    ("ui.selection_name.taken", &[(Locale::En, "A saved selection already has that name")]),
+    ("ui.selection_name.name", &[(Locale::En, "Name")]),
+    ("ui.selection_name.save.caption", &[(Locale::En, "The selection is kept with the document under this name")]),
+    ("ui.selection_name.save", &[(Locale::En, "Save")]),
+    ("ui.selection_name.op.new", &[(Locale::En, "New Selection")]),
+    ("ui.selection_name.op.add", &[(Locale::En, "Add to Selection")]),
+    ("ui.selection_name.op.subtract", &[(Locale::En, "Subtract from Selection")]),
+    ("ui.selection_name.op.intersect", &[(Locale::En, "Intersect with Selection")]),
+    ("ui.selection_name.op.needs.selection", &[(Locale::En, "There is no live selection to combine with")]),
+    ("ui.selection_name.none.saved", &[(Locale::En, "No selection has been saved")]),
+    ("ui.selection_name.channel", &[(Locale::En, "Channel")]),
+    ("ui.selection_name.operation", &[(Locale::En, "Operation")]),
+    ("ui.selection_name.invert", &[(Locale::En, "Invert")]),
+    ("ui.selection_name.load", &[(Locale::En, "Load")]),
+    ("ui.color_range.title", &[(Locale::En, "Color Range")]),
+    ("ui.color_range.subtitle", &[(Locale::En, "Select every pixel near one colour")]),
+    ("ui.color_range.view.selection", &[(Locale::En, "Selection")]),
+    ("ui.color_range.view.image", &[(Locale::En, "Image")]),
+    ("ui.color_range.sampled.colour", &[(Locale::En, "Sampled colour")]),
+    ("ui.color_range.fuzziness", &[(Locale::En, "Fuzziness")]),
+    ("ui.color_range.invert", &[(Locale::En, "Invert")]),
+    ("ui.color_range.click.to.sample", &[(Locale::En, "Click anywhere to sample a colour")]),
+    ("ui.color_range.click.preview", &[(Locale::En, "Click the preview to sample a colour from it")]),
+    ("ui.color_range.select", &[(Locale::En, "Select")]),
+    ("ui.color_range.eyedropper", &[(Locale::En, "Eyedropper")]),
     ("actions.record", &[(Locale::En, "Record")]),
     ("ui.canvas_rotation.rotates.everything", &[(Locale::En, "Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.")]),
     ("ui.docks.enter.a.colour", &[(Locale::En, "Enter a colour like #3366CC")]),
@@ -91,26 +144,25 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.layer_style.no.pattern", &[(Locale::En, "No pattern chosen — the overlay paints nothing.")]),
     ("ui.units.0.bytes", &[(Locale::En, "0 bytes")]),
     ("ui.preferences.minutes.0.is.off", &[(Locale::En, "minutes (0 is off)")]),
-    ("ui.preferences.recent.files", &[(Locale::En, "Recent files")]),
-    ("ui.preferences.reopen.the.last.session.at.startup", &[(Locale::En, "Reopen the last session at startup")]),
-    ("ui.preferences.ask.before.discarding.unsaved.work", &[(Locale::En, "Ask before discarding unsaved work")]),
     ("ui.preferences.ui.scale", &[(Locale::En, "UI scale")]),
-    ("ui.preferences.show.tooltips", &[(Locale::En, "Show tooltips")]),
-    ("ui.preferences.show.the.status.bar", &[(Locale::En, "Show the status bar")]),
-    ("ui.preferences.brush.cursor", &[(Locale::En, "Brush cursor")]),
+    ("ui.preferences.language", &[(Locale::En, "Language")]),
+    ("ui.preferences.only.english", &[(Locale::En, "Only English is available in this build")]),
+    ("ui.preferences.units", &[(Locale::En, "Units")]),
+    ("ui.preferences.units.caption", &[(Locale::En, "The rulers and the size readouts use this unit")]),
     ("ui.preferences.scroll.wheel.zooms.instead.of.scrolling", &[(Locale::En, "Scroll wheel zooms instead of scrolling")]),
-    ("ui.preferences.snap.to.guides", &[(Locale::En, "Snap to guides")]),
-    ("ui.preferences.snapshot.every", &[(Locale::En, "Snapshot every")]),
-    ("ui.preferences.record.the.edit.log.in.saved", &[(Locale::En, "Record the edit log in saved files")]),
-    ("ui.preferences.tile.cache", &[(Locale::En, "Tile cache")]),
-    ("ui.preferences.use.the.gpu.where.available", &[(Locale::En, "Use the GPU where available")]),
-    ("ui.preferences.scratch.disks", &[(Locale::En, "Scratch disks")]),
-    ("ui.preferences.move.up", &[(Locale::En, "Move up")]),
-    ("ui.preferences.stop.using.this.location.for.scratch", &[(Locale::En, "Stop using this location for scratch")]),
-    ("ui.preferences.add.scratch.disk", &[(Locale::En, "Add scratch disk")]),
+    ("ui.preferences.scroll.wheel.caption", &[(Locale::En, "Off: the wheel pans the view and Ctrl+wheel zooms")]),
+    ("ui.preferences.scratch.directory", &[(Locale::En, "Scratch directory")]),
+    ("ui.preferences.scratch.caption", &[(Locale::En, "Autosaves of never-saved documents go here; empty uses the default")]),
+    ("ui.preferences.press.a.key", &[(Locale::En, "Press a key\u{2026}")]),
+    ("ui.preferences.add.shortcut", &[(Locale::En, "Add shortcut")]),
+    ("ui.preferences.remove.this.shortcut", &[(Locale::En, "Remove this shortcut")]),
+    ("ui.preferences.changed", &[(Locale::En, "changed")]),
+    ("ui.preferences.no.commands", &[(Locale::En, "No commands to bind")]),
     ("ui.preferences.reassign.anyway", &[(Locale::En, "Reassign anyway")]),
     ("ui.preferences.keep.as.it.was", &[(Locale::En, "Keep as it was")]),
     ("ui.preferences.reset.all.shortcuts", &[(Locale::En, "Reset all shortcuts")]),
+    ("ui.keymap.no.such.command", &[(Locale::En, "No such command")]),
+    ("ui.keymap.already.used.by", &[(Locale::En, "Already used by")]),
     ("ui.docks.expand.the.dock", &[(Locale::En, "Expand the dock")]),
     ("ui.docks.character.face.none", &[(Locale::En, "No faces listed for this family name")]),
     ("ui.docks.character.family.not.installed", &[(Locale::En, "Not installed — shaping with")]),
@@ -239,6 +291,44 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.docks.edit.brush", &[(Locale::En, "Edit brush…")]),
     ("ui.docks.save.current.brush", &[(Locale::En, "Save current brush")]),
     ("ui.docks.auto.leading", &[(Locale::En, "Auto leading")]),
+    ("ui.docks.align.pick", &[(Locale::En, "To canvas")]),
+    ("ui.docks.properties.transform.toggle", &[(Locale::En, "Show or hide the position, size and alignment fields")]),
+    ("ui.docks.align.left", &[(Locale::En, "Align the left edge to the canvas")]),
+    ("ui.docks.align.hcenter", &[(Locale::En, "Center horizontally on the canvas")]),
+    ("ui.docks.align.right", &[(Locale::En, "Align the right edge to the canvas")]),
+    ("ui.docks.align.top", &[(Locale::En, "Align the top edge to the canvas")]),
+    ("ui.docks.align.vcenter", &[(Locale::En, "Center vertically on the canvas")]),
+    ("ui.docks.align.bottom", &[(Locale::En, "Align the bottom edge to the canvas")]),
+    ("ui.docks.properties.nothing.to.measure", &[(Locale::En, "Nothing to measure yet — paint or place something on this layer first")]),
+    ("ui.docks.properties.position.locked", &[(Locale::En, "Position is locked — unlock it in the Layers panel to move or resize")]),
+    ("ui.docks.shape.filled", &[(Locale::En, "Paint the inside of the path")]),
+    ("ui.docks.shape.stroked", &[(Locale::En, "Outline the path")]),
+    ("ui.docks.shape.no.radius", &[(Locale::En, "Corner radius applies to rectangles; this path has no corners to round")]),
+    ("ui.docks.shape.radius", &[(Locale::En, "Corner radius")]),
+    ("ui.docks.smart.embedded", &[(Locale::En, "Embedded source")]),
+    ("ui.docks.smart.linked", &[(Locale::En, "Linked file")]),
+    ("ui.docks.smart.no.source", &[(Locale::En, "No source recorded for this object")]),
+    ("ui.docks.layers.search", &[(Locale::En, "Search layers by name")]),
+    ("ui.docks.layers.rename.tip", &[(Locale::En, "Double-click to rename")]),
+    ("ui.docks.character.kerning", &[(Locale::En, "Pair kerning")]),
+    ("ui.docks.character.kerning.tip", &[(Locale::En, "Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.")]),
+    ("ui.docks.character.kerning.amount", &[(Locale::En, "Amount")]),
+    ("ui.docks.character.ligatures", &[(Locale::En, "Standard ligatures")]),
+    ("ui.docks.character.script.tip", &[(Locale::En, "Superscript raises and shrinks the text; subscript lowers and shrinks it.")]),
+    ("ui.docks.character.hscale", &[(Locale::En, "Scale H")]),
+    ("ui.docks.character.vscale", &[(Locale::En, "Scale V")]),
+    ("ui.docks.character.hscale.tip", &[(Locale::En, "Horizontal scale, in percent: widens or narrows the glyphs and their spacing")]),
+    ("ui.docks.character.vscale.tip", &[(Locale::En, "Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged")]),
+    ("ui.docks.character.baseline.shift", &[(Locale::En, "Baseline shift")]),
+    ("ui.docks.character.caps.tip", &[(Locale::En, "All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.")]),
+    ("ui.docks.character.antialias.tip", &[(Locale::En, "Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.")]),
+    ("ui.docks.character.type.defaults", &[(Locale::En, "Type tool defaults")]),
+    ("ui.docks.character.type.defaults.note", &[(Locale::En, "The next text layer the Type tool creates starts with this style.")]),
+    ("ui.docks.paragraph.last.line", &[(Locale::En, "Last line")]),
+    ("ui.docks.paragraph.indent.left", &[(Locale::En, "Left indent")]),
+    ("ui.docks.paragraph.indent.right", &[(Locale::En, "Right indent")]),
+    ("ui.docks.paragraph.indent.first", &[(Locale::En, "First line")]),
+    ("ui.docks.character.leading.tip", &[(Locale::En, "Baseline to baseline. Auto leading follows the type size.")]),
     ("ui.docks.zoom.out", &[(Locale::En, "Zoom out")]),
     ("ui.docks.zoom.in", &[(Locale::En, "Zoom in")]),
     ("ui.docks.fit.the.whole.image.in.the", &[(Locale::En, "Fit the whole image in the window")]),
@@ -463,6 +553,7 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.docks.channels.no.alpha.store", &[(Locale::En, "This build keeps channels on layers; it has no free-standing alpha channels yet")]),
     ("ui.docks.channels.not.a.mask", &[(Locale::En, "Only a mask channel can be loaded as a selection here")]),
     ("ui.docks.channels.no.document", &[(Locale::En, "No document is open")]),
+    ("ui.docks.channels.saved.hint", &[(Locale::En, "A saved selection: click to open Select > Load Selection, then choose it by name there")]),
     ("actions.stop", &[(Locale::En, "Stop")]),
     ("actions.replay", &[(Locale::En, "Replay")]),
     (
@@ -479,6 +570,72 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
 /// moment a second locale lands, the preferences UI reads this list too.
 #[cfg(test)]
 const KNOWN_KEYS: &[&str] = &[
+    // W3-H: Color Range, Select ▸ Modify, Save / Load Selection.
+    "ui.selection_modify.border.title",
+    "ui.selection_modify.smooth.title",
+    "ui.selection_modify.expand.title",
+    "ui.selection_modify.contract.title",
+    "ui.selection_modify.feather.title",
+    "ui.selection_modify.width",
+    "ui.selection_modify.sample.radius",
+    "ui.selection_modify.expand.by",
+    "ui.selection_modify.contract.by",
+    "ui.selection_modify.feather.radius",
+    "ui.selection_modify.apply",
+    "ui.selection_modify.px",
+    "ui.selection_modify.out.of.range",
+    "ui.selection_modify.range.to",
+    "ui.selection_modify.border.caption",
+    "ui.selection_name.alpha",
+    "ui.selection_name.save.title",
+    "ui.selection_name.load.title",
+    "ui.selection_name.empty",
+    "ui.selection_name.taken",
+    "ui.selection_name.name",
+    "ui.selection_name.save.caption",
+    "ui.selection_name.save",
+    "ui.selection_name.op.new",
+    "ui.selection_name.op.add",
+    "ui.selection_name.op.subtract",
+    "ui.selection_name.op.intersect",
+    "ui.selection_name.op.needs.selection",
+    "ui.selection_name.none.saved",
+    "ui.selection_name.channel",
+    "ui.selection_name.operation",
+    "ui.selection_name.invert",
+    "ui.selection_name.load",
+    "ui.color_range.title",
+    "ui.color_range.subtitle",
+    "ui.color_range.view.selection",
+    "ui.color_range.view.image",
+    "ui.color_range.sampled.colour",
+    "ui.color_range.fuzziness",
+    "ui.color_range.invert",
+    "ui.color_range.click.to.sample",
+    "ui.color_range.click.preview",
+    "ui.color_range.select",
+    "ui.color_range.eyedropper",
+    // W3-G: the Preferences dialog's live controls and the keymap editor.
+    "ui.preferences.minutes.0.is.off",
+    "ui.preferences.ui.scale",
+    "ui.preferences.language",
+    "ui.preferences.only.english",
+    "ui.preferences.units",
+    "ui.preferences.units.caption",
+    "ui.preferences.scroll.wheel.zooms.instead.of.scrolling",
+    "ui.preferences.scroll.wheel.caption",
+    "ui.preferences.scratch.directory",
+    "ui.preferences.scratch.caption",
+    "ui.preferences.press.a.key",
+    "ui.preferences.add.shortcut",
+    "ui.preferences.remove.this.shortcut",
+    "ui.preferences.changed",
+    "ui.preferences.no.commands",
+    "ui.preferences.reassign.anyway",
+    "ui.preferences.keep.as.it.was",
+    "ui.preferences.reset.all.shortcuts",
+    "ui.keymap.no.such.command",
+    "ui.keymap.already.used.by",
     // W2-F: About, Trim, New Guide, Rename Layer.
     "ui.about.title",
     "ui.about.tagline",
@@ -521,6 +678,7 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.docks.channels.no.alpha.store",
     "ui.docks.channels.not.a.mask",
     "ui.docks.channels.no.document",
+    "ui.docks.channels.saved.hint",
     "actions.record",
     "actions.stop",
     "actions.replay",
@@ -622,6 +780,46 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.layer_style.blending.opacity",
     "ui.layer_style.blending.fill",
     "ui.layer_style.blending.caption",
+    // W3-J: Properties transform / shape / smart-object pages, Layers search
+    // and rename, Character kerning / ligatures / script.
+    "ui.docks.align.pick",
+    "ui.docks.properties.transform.toggle",
+    "ui.docks.align.left",
+    "ui.docks.align.hcenter",
+    "ui.docks.align.right",
+    "ui.docks.align.top",
+    "ui.docks.align.vcenter",
+    "ui.docks.align.bottom",
+    "ui.docks.properties.nothing.to.measure",
+    "ui.docks.properties.position.locked",
+    "ui.docks.shape.filled",
+    "ui.docks.shape.stroked",
+    "ui.docks.shape.no.radius",
+    "ui.docks.shape.radius",
+    "ui.docks.smart.embedded",
+    "ui.docks.smart.linked",
+    "ui.docks.smart.no.source",
+    "ui.docks.layers.search",
+    "ui.docks.layers.rename.tip",
+    "ui.docks.character.kerning",
+    "ui.docks.character.kerning.tip",
+    "ui.docks.character.kerning.amount",
+    "ui.docks.character.ligatures",
+    "ui.docks.character.script.tip",
+    "ui.docks.character.hscale",
+    "ui.docks.character.vscale",
+    "ui.docks.character.hscale.tip",
+    "ui.docks.character.vscale.tip",
+    "ui.docks.character.baseline.shift",
+    "ui.docks.character.caps.tip",
+    "ui.docks.character.antialias.tip",
+    "ui.docks.character.type.defaults",
+    "ui.docks.character.type.defaults.note",
+    "ui.docks.paragraph.last.line",
+    "ui.docks.paragraph.indent.left",
+    "ui.docks.paragraph.indent.right",
+    "ui.docks.paragraph.indent.first",
+    "ui.docks.character.leading.tip",
 ];
 
 /// Resolve `key` in the active locale, falling back to English. An
@@ -661,6 +859,17 @@ mod tests {
                 "{key:?} has no English entry; English is the fallback source"
             );
         }
+    }
+
+    #[test]
+    fn every_listed_locale_round_trips_through_its_code_and_unknown_codes_fall_back() {
+        for locale in Locale::ALL {
+            assert_eq!(Locale::from_code(locale.code()), *locale);
+            set_locale(*locale);
+            assert_eq!(active(), *locale);
+        }
+        assert_eq!(Locale::from_code("xx-not-a-locale"), Locale::En);
+        set_locale(Locale::En);
     }
 
     #[test]

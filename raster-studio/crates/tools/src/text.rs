@@ -65,6 +65,84 @@ pub fn font_family_choice(index: usize) -> Option<&'static str> {
         .copied()
 }
 
+/// W3-J: the choice lists the registry declares for the Type tool's default
+/// style, in the order [`TypeTool::set_setting`] maps them.
+pub const TYPE_WEIGHTS: &[&str] = &[
+    "Thin",
+    "Extra Light",
+    "Light",
+    "Regular",
+    "Medium",
+    "Semibold",
+    "Bold",
+    "Extra Bold",
+    "Black",
+];
+pub const TYPE_SCRIPTS: &[&str] = &["Normal", "Superscript", "Subscript"];
+pub const TYPE_CAPS: &[&str] = &["Normal", "All Caps", "Small Caps"];
+pub const TYPE_ANTI_ALIAS: &[&str] = &["Smooth", "None"];
+pub const TYPE_ALIGNMENTS: &[&str] = &[
+    "Left",
+    "Center",
+    "Right",
+    "Justify",
+    "Justify, last centred",
+    "Justify, last right",
+    "Justify all",
+];
+
+/// W3-J: every default-style key the Type tool answers, besides `size_px`
+/// and `font_family`.
+pub const TYPE_STYLE_KEYS: &[&str] = &[
+    "weight",
+    "italic",
+    "underline",
+    "strikethrough",
+    "color",
+    "tracking",
+    "leading",
+    "horizontal_scale",
+    "vertical_scale",
+    "baseline_shift",
+    "script",
+    "caps",
+    "kerning",
+    "ligatures",
+    "anti_alias",
+    "alignment",
+    "left_indent",
+    "right_indent",
+    "first_line_indent",
+    "space_before",
+    "space_after",
+];
+
+/// W3-J: the model values behind [`TYPE_SCRIPTS`], [`TYPE_CAPS`],
+/// [`TYPE_ANTI_ALIAS`] and [`TYPE_ALIGNMENTS`], index for index.
+pub const SCRIPT_VALUES: [layer_model::text::Script; 3] = [
+    layer_model::text::Script::Normal,
+    layer_model::text::Script::Superscript,
+    layer_model::text::Script::Subscript,
+];
+pub const CAPS_VALUES: [layer_model::text::Caps; 3] = [
+    layer_model::text::Caps::Normal,
+    layer_model::text::Caps::AllCaps,
+    layer_model::text::Caps::SmallCaps,
+];
+pub const ANTI_ALIAS_VALUES: [layer_model::text::AntiAlias; 2] = [
+    layer_model::text::AntiAlias::Smooth,
+    layer_model::text::AntiAlias::None,
+];
+pub const ALIGNMENT_VALUES: [layer_model::text::Alignment; 7] = [
+    layer_model::text::Alignment::Left,
+    layer_model::text::Alignment::Center,
+    layer_model::text::Alignment::Right,
+    layer_model::text::Alignment::Justified,
+    layer_model::text::Alignment::JustifyLastCenter,
+    layer_model::text::Alignment::JustifyLastRight,
+    layer_model::text::Alignment::JustifyAll,
+];
+
 /// Live IME preedit (card 025 stores the state; card 029 routes the events).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Composition {
@@ -442,6 +520,11 @@ const PARAGRAPH_MAX_BOX_WIDTH_PX: f32 = 4096.0;
 pub struct TypeTool {
     pub font_family: String,
     pub size_px: f32,
+    /// W3-J: the default character style the next created layer starts with.
+    pub style: layer_model::text::BaseStyle,
+    /// W3-J: the default paragraph settings the next created layer starts
+    /// with.
+    pub paragraph: layer_model::text::Paragraph,
     /// Where the press landed, while the button is still down.
     pending: Option<Vec2>,
     session: Option<TextSession>,
@@ -452,6 +535,8 @@ impl Default for TypeTool {
         Self {
             font_family: DEFAULT_FONT_FAMILY.to_string(),
             size_px: DEFAULT_SIZE_PX,
+            style: layer_model::text::BaseStyle::default(),
+            paragraph: layer_model::text::Paragraph::default(),
             pending: None,
             session: None,
         }
@@ -459,6 +544,99 @@ impl Default for TypeTool {
 }
 
 impl TypeTool {
+    /// W3-J: the text payload the next click creates, before its frame is
+    /// known - the family, size, character style and paragraph settings the
+    /// options hold. The Character and Paragraph panels read the Type tool's
+    /// defaults through this same function, so what they show and what the
+    /// next layer gets cannot disagree.
+    pub fn seed(&self) -> TextLayer {
+        TextLayer {
+            text: String::new(),
+            font_family: self.font_family.clone(),
+            size_px: self.size_px,
+            style: self.style,
+            paragraph: self.paragraph,
+            ..Default::default()
+        }
+    }
+
+    /// W3-J: apply one default-style option. `Ok(false)` when `key` is not
+    /// a style key at all.
+    fn set_style_setting(
+        &mut self,
+        key: &str,
+        setting: crate::tool::ToolSetting,
+    ) -> Result<bool, ToolError> {
+        use crate::tool::ToolSetting as S;
+        use layer_model::text as t;
+        let pick = |index: usize, len: usize| index.min(len.saturating_sub(1));
+        let scale = |v: f32| (v / 100.0).clamp(t::MIN_GLYPH_SCALE, t::MAX_GLYPH_SCALE);
+        if let S::Float(v) = setting {
+            let what = TYPE_STYLE_KEYS
+                .iter()
+                .find(|k| **k == key)
+                .copied()
+                .unwrap_or("type style");
+            crate::error::finite(what, v)?;
+        }
+        let st = &mut self.style;
+        let pa = &mut self.paragraph;
+        match (key, setting) {
+            ("weight", S::Choice(i)) => {
+                let step = u16::try_from(pick(i, TYPE_WEIGHTS.len()) + 1).unwrap_or(4);
+                st.weight = t::Weight(100 * step);
+            }
+            ("italic", S::Bool(on)) => {
+                st.slant = if on {
+                    t::Slant::Italic
+                } else {
+                    t::Slant::Normal
+                };
+            }
+            ("underline", S::Bool(on)) => st.underline = on,
+            ("strikethrough", S::Bool(on)) => st.strikethrough = on,
+            ("color", S::Color(c)) if c.iter().all(|v| v.is_finite()) => {
+                // The option is straight sRGB; the layer stores linear.
+                let lin = |v: f32| color::srgb_to_linear(v.clamp(0.0, 1.0));
+                st.fill = [lin(c[0]), lin(c[1]), lin(c[2]), c[3].clamp(0.0, 1.0)];
+            }
+            ("tracking", S::Float(v)) => st.tracking = v,
+            // Zero is the option's "auto".
+            ("leading", S::Float(v)) => {
+                pa.leading = if v > 0.0 {
+                    t::Leading::Absolute(v)
+                } else {
+                    t::Leading::default()
+                };
+            }
+            ("horizontal_scale", S::Float(v)) => st.horizontal_scale = scale(v),
+            ("vertical_scale", S::Float(v)) => st.vertical_scale = scale(v),
+            ("baseline_shift", S::Float(v)) => st.baseline_shift = v,
+            ("script", S::Choice(i)) => st.script = SCRIPT_VALUES[pick(i, SCRIPT_VALUES.len())],
+            ("caps", S::Choice(i)) => st.caps = CAPS_VALUES[pick(i, CAPS_VALUES.len())],
+            ("kerning", S::Bool(on)) => st.kerning = on,
+            ("ligatures", S::Bool(on)) => st.ligatures = on,
+            ("anti_alias", S::Choice(i)) => {
+                st.anti_alias = ANTI_ALIAS_VALUES[pick(i, ANTI_ALIAS_VALUES.len())];
+            }
+            ("alignment", S::Choice(i)) => {
+                pa.alignment = ALIGNMENT_VALUES[pick(i, ALIGNMENT_VALUES.len())];
+            }
+            ("left_indent", S::Float(v)) => pa.left_indent = v,
+            ("right_indent", S::Float(v)) => pa.right_indent = v,
+            ("first_line_indent", S::Float(v)) => pa.first_line_indent = v,
+            ("space_before", S::Float(v)) => pa.space_before = v.max(0.0),
+            ("space_after", S::Float(v)) => pa.space_after = v.max(0.0),
+            _ if TYPE_STYLE_KEYS.contains(&key) => {
+                return Err(ToolError::OptionKindMismatch {
+                    key: key.to_owned(),
+                })
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
     /// The layer being edited, if any.
     pub fn session(&self) -> Option<&TextSession> {
         self.session.as_ref()
@@ -652,9 +830,6 @@ impl Tool for TypeTool {
         let mut layer = Layer::with_kind(
             "Type",
             LayerKind::Text(TextLayer {
-                text: String::new(),
-                font_family: self.font_family.clone(),
-                size_px: self.size_px,
                 frame: if drag_width > PARAGRAPH_DRAG_THRESHOLD_PX {
                     Frame::Box {
                         width: drag_width.max(PARAGRAPH_MIN_BOX_WIDTH_PX),
@@ -663,7 +838,7 @@ impl Tool for TypeTool {
                 } else {
                     Frame::Point
                 },
-                ..Default::default()
+                ..self.seed()
             }),
         );
         // The click *is* the position: the run is authored at the layer's own
@@ -750,6 +925,8 @@ impl Tool for TypeTool {
             ("size_px", _) | ("font_family", _) => Err(ToolError::OptionKindMismatch {
                 key: key.to_owned(),
             }),
+            // W3-J: the default character and paragraph style.
+            _ if self.set_style_setting(key, setting)? => Ok(()),
             _ => Err(ToolError::UnknownOption {
                 key: key.to_owned(),
             }),

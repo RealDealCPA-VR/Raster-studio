@@ -102,8 +102,9 @@ pub use raster::{
     GlyphKey, GlyphRasterCache, LinearImage,
 };
 pub use style::{
-    resolve_style, CharStyle, FontSlant, FontStretch, FontWeight, ScriptPosition, StyleOverride,
-    StyleRun, SCRIPT_SIZE_FACTOR, SUBSCRIPT_DROP, SUPERSCRIPT_RISE,
+    resolve_style, AntiAlias, Caps, CharStyle, FontSlant, FontStretch, FontWeight, ScriptPosition,
+    StyleOverride, StyleRun, SCRIPT_SIZE_FACTOR, SMALL_CAPS_SIZE_FACTOR, SUBSCRIPT_DROP,
+    SUPERSCRIPT_RISE,
 };
 
 /// Whether the text engine is implemented.

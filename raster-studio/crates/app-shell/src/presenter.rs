@@ -868,11 +868,12 @@ impl SelectionOutline {
 
 /// The marching ants for `doc` at `time_secs`, in framebuffer pixels.
 ///
-/// The camera and the viewport are the *same* ones
-/// [`crate::tool_input::ToolPointer`] routes a click against, so the ants land
-/// on exactly the pixels a click at that point would hit — which is what makes
-/// the outline agree with the selection it is tracing rather than sitting a
-/// panel's width away from it.
+/// The viewport is the same one [`crate::tool_input::ToolPointer`] routes a
+/// click against, and the camera is the document camera's full mirror
+/// ([`crate::interaction_geometry::canvas_camera_of`], rotation included), so
+/// the ants land on exactly the pixels the renderer is drawing the selection
+/// on — which is what makes the outline agree with the selection it is tracing
+/// rather than sitting a panel's width, or a quarter turn, away from it.
 pub fn selection_ants(
     outline: &mut SelectionOutline,
     doc: &OpenDocument,
@@ -880,7 +881,7 @@ pub fn selection_ants(
     style: &ui::canvas::AntsStyle,
 ) -> ui::canvas::AntsGeometry {
     let viewport = crate::tool_input::canvas_viewport(doc.camera.viewport_size);
-    let camera = crate::tool_input::canvas_camera_of(&doc.camera);
+    let camera = crate::interaction_geometry::canvas_camera_of(&doc.camera);
     let phase = ui::canvas::ants_phase(time_secs, style);
     let loops = outline.of(&doc.document);
     if loops.is_empty() {
@@ -989,6 +990,42 @@ mod tests {
                 .any(|p| (*p - corner).length() < 0.5),
             "the outline is not where the camera puts the selection: {:?}",
             some.outlines[0]
+        );
+    }
+
+    /// On a turned view the ants turn with the picture: the outline corner is
+    /// where the rotated document camera puts document (10, 12), not where the
+    /// upright view would have — a quarter turn away from the selection it is
+    /// supposed to trace.
+    #[test]
+    fn the_ants_turn_with_the_view() {
+        let mut doc = framed(64, 64);
+        doc.document.selection = editor_core::Selection::Rect {
+            min: glam::IVec2::new(10, 12),
+            max: glam::IVec2::new(40, 44),
+        };
+        doc.camera.set_rotation(std::f32::consts::FRAC_PI_2);
+        let mut outline = SelectionOutline::new();
+        let style = ui::canvas::AntsStyle::default();
+        let ants = selection_ants(&mut outline, &doc, 0.0, &style);
+        assert!(!ants.is_empty());
+
+        // Screen = viewport centre + R(90°) · (doc − camera centre) · zoom: a
+        // clockwise quarter turn maps the offset (−22, −20) to (20, −22).
+        let turned = glam::Vec2::new(200.0 + 20.0, 150.0 - 22.0);
+        assert!(
+            ants.outlines[0]
+                .iter()
+                .any(|p| (*p - turned).length() < 0.5),
+            "the outline is not where the turned camera puts (10, 12): {:?}",
+            ants.outlines[0]
+        );
+        let upright = glam::Vec2::new(200.0 - 32.0 + 10.0, 150.0 - 32.0 + 12.0);
+        assert!(
+            !ants.outlines[0]
+                .iter()
+                .any(|p| (*p - upright).length() < 0.5),
+            "the outline ignored the view rotation"
         );
     }
 

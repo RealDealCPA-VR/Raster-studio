@@ -479,6 +479,12 @@ pub fn chord_from_egui(key: egui::Key, mods: egui::Modifiers) -> Option<Chord> {
 /// document or in the editor.
 #[derive(Default)]
 pub struct Chrome {
+    /// W3-A: View ▸ Extras — rulers, guides, grid, layer edges, precise
+    /// cursor — painted over the composite. See [`crate::canvas_extras`].
+    extras: crate::canvas_extras::CanvasExtras,
+    /// W3-A: the reason the last View toggle was refused this frame, for the
+    /// status line. See [`view_flag_refusal`].
+    refused_view_flag: Option<&'static str>,
     /// Card 059: the document id the mask-well popup state belongs to —
     /// switching tabs closes the popup (it anchors a layer of that stack).
     showing_document: Option<crate::doc::DocumentId>,
@@ -534,6 +540,26 @@ pub struct Chrome {
     recent_thumbs: HashMap<PathBuf, Option<egui::TextureHandle>>,
 }
 
+/// W3-A: why a View toggle cannot be turned on in *this application*, or
+/// `None` when it can.
+///
+/// The `ui` crate's own reasons ([`ui::view_flag_unavailable`]: Proof Colors,
+/// Gamut Warning) plus the two this shell adds: the `ui` canvas host mirrors
+/// its camera for Flip View, but the image here is the wgpu composite, whose
+/// `render::Camera` has no mirror — ticking the item would flip the overlays
+/// and not the picture under them.
+pub fn view_flag_refusal(flag: ui::ViewFlag) -> Option<&'static str> {
+    match flag {
+        ui::ViewFlag::FlipHorizontal => {
+            Some("Flip View Horizontal is not available: the canvas renderer cannot mirror the view in this build")
+        }
+        ui::ViewFlag::FlipVertical => {
+            Some("Flip View Vertical is not available: the canvas renderer cannot mirror the view in this build")
+        }
+        other => ui::view_flag_unavailable(other),
+    }
+}
+
 /// Where this frame's window is, and where the part of it the user can see the
 /// image in is. **They are not the same rectangle**, and confusing them is what
 /// made Fill Screen smaller than Fit on Screen.
@@ -563,7 +589,14 @@ struct FrameGeometry {
 
 impl Chrome {
     pub fn new() -> Self {
-        Self::default()
+        let mut chrome = Self::default();
+        // W3-A: a `--shot` run can ask for View toggles (see
+        // `crate::SHOT_VIEW_ENV`); they go through the same intent a menu
+        // click posts, so the first frame's harvest applies them.
+        for &flag in crate::shot_view_flags() {
+            chrome.emit(ui::Intent::SetViewFlag { flag, on: true });
+        }
+        chrome
     }
 
     /// The workspace this chrome draws, for tests and for the shell's own
@@ -635,8 +668,48 @@ impl Chrome {
     /// tool implements — the refusals would flood the status bar on every
     /// press and drown genuine ones. A tool's untouched options are its
     /// registry defaults by construction.
+    ///
+    /// W3-A: View ▸ Snap and View ▸ Smart Guides ride along under the two
+    /// reserved keys of [`crate::SnapPolicy`] when either is off — the pointer
+    /// route strips them before a tool sees anything — so the flags reach
+    /// every sample the shell routes. Both on (the default) adds nothing.
     pub fn tool_options(&self, tool: tools::ToolId) -> Vec<(String, ui::OptionValue)> {
-        self.workspace.options.held(tool)
+        let mut held = self.workspace.options.held(tool);
+        held.extend(self.snap_policy().to_settings(ui::OptionValue::Bool));
+        held
+    }
+
+    /// W3-A: what View ▸ Snap and View ▸ Smart Guides say right now.
+    pub fn snap_policy(&self) -> crate::SnapPolicy {
+        crate::SnapPolicy::from_view_flags(self.workspace.view_flags)
+    }
+
+    /// W3-A: View ▸ Selection Edges — whether the marching ants are shown.
+    pub fn selection_edges_visible(&self) -> bool {
+        self.workspace.view_flags.get(ui::ViewFlag::SelectionEdges)
+    }
+
+    /// W3-A: the marching ants the shell strokes over the canvas this frame,
+    /// gated on View ▸ Selection Edges. The shell's redraw calls this rather
+    /// than [`crate::presenter::selection_ants`] directly, so the flag the
+    /// menu ticks is the one that decides whether the outline is drawn. Off
+    /// yields empty geometry: the selection itself is untouched, only hidden.
+    pub fn selection_ants(
+        &self,
+        outline: &mut crate::presenter::SelectionOutline,
+        doc: &crate::doc::OpenDocument,
+        time_secs: f64,
+        style: &ui::canvas::AntsStyle,
+    ) -> ui::canvas::AntsGeometry {
+        if !self.selection_edges_visible() {
+            return ui::canvas::AntsGeometry::default();
+        }
+        crate::presenter::selection_ants(outline, doc, time_secs, style)
+    }
+
+    /// W3-A: what the View ▸ Extras pass drew on the last frame.
+    pub fn extras_report(&self) -> crate::ExtrasReport {
+        self.extras.last_report()
     }
 
     /// Whether a modal dialog is open this frame. The shell suppresses the
@@ -790,6 +863,26 @@ impl Chrome {
     /// [`Editor::revision`] moves — never per frame — and read from the
     /// canvas in bands (see [`composite_preview`]) so the peak buffer is one
     /// band rather than the whole canvas.
+    /// W3-J: the Properties panel's Transform block measures a raster
+    /// layer by its alpha ink, which only the tile bytes held here can
+    /// answer. Measure the active layer (and, for a group, the layers under
+    /// it) through the compositor's hash-cached `alpha_bounds` and hand the
+    /// result to the panel for this frame.
+    fn publish_raster_inks(ctx: &egui::Context, editor: &Editor) {
+        editor
+            .active()
+            .and_then(|open| {
+                let id = open.document.active_layer()?;
+                Some(ui::panels::properties::RasterInks::measure(
+                    &open.document,
+                    &open.tiles,
+                    id,
+                ))
+            })
+            .unwrap_or_default()
+            .publish(ctx);
+    }
+
     fn refresh_composite_preview(&mut self, ctx: &egui::Context, editor: &mut Editor) {
         let revision = editor.revision();
         let Some(open) = editor.active_mut() else {
@@ -914,6 +1007,7 @@ impl Chrome {
         self.sync_workspace(editor);
         self.refresh_layer_thumbs(ctx, editor);
         self.refresh_composite_preview(ctx, editor);
+        Self::publish_raster_inks(ctx, editor);
         // W2-X: Photopea's F. Both full-screen modes drop the options bar,
         // the tool column and the docks; the last drops the menu bar too. The
         // editor's Tab flag still hides the panels on its own in Standard.
@@ -965,6 +1059,15 @@ impl Chrome {
             self.tab_strip(ctx, editor, &mut out);
         }
         self.start_screen(ctx, editor, &mut out);
+        // W3-A: View ▸ Extras over the composite, in the rectangle the docks
+        // left and under the live session's handles. Painted on a background
+        // layer, so an open dialog and its scrim sit over them; with one up
+        // they take no pointer (`CanvasExtras::paint`, *Layering*).
+        if !editor.documents().is_empty() {
+            let modal_open = self.dialogs.is_open();
+            self.extras
+                .paint(ctx, &mut self.workspace, editor, modal_open);
+        }
         // The live tool session's overlays, over the canvas the surface shows
         // (card 012). After the docks, so the canvas rectangle is what the
         // docks left; clipped to it, because a panel must never grow handles.
@@ -1029,6 +1132,11 @@ impl Chrome {
         ui::context_menu::draw_open(&mut self.workspace, ctx, &menu_ctx);
         self.channel_chords(ctx, editor);
         self.harvest(editor, &mut out);
+        // W3-A: a View toggle this build cannot honour was refused rather
+        // than ticked; say why, where the user is looking.
+        if let Some(reason) = self.refused_view_flag.take() {
+            editor.set_status(reason);
+        }
         // A colour well's double-click asked for the picker: open it now (the
         // harvest that delivered the intent ran after this frame's draw), and
         // the dialog draws from the next frame with the target remembered.
@@ -1069,6 +1177,11 @@ impl Chrome {
         let Some(open) = editor.active() else {
             return;
         };
+        // W3-A: a guide being dragged on the canvas converges once, on the
+        // drop — one drag is one undo step, not one per frame it moved.
+        if self.extras.is_dragging_guide() {
+            return;
+        }
         let canvas = self.workspace.canvas.view.guides.to_document();
         if canvas != open.document.guides {
             out.commands
@@ -1259,10 +1372,10 @@ impl Chrome {
             layout: &layout,
             active,
         };
-        let mut painter = ctx.layer_painter(egui::LayerId::new(
-            egui::Order::Middle,
-            egui::Id::new("raster-live-tool-overlays"),
-        ));
+        // The extras' layer, painted after them: the handles sit over the
+        // grid and guides deterministically (one layer draws in order), and
+        // an open dialog and its scrim sit over both.
+        let mut painter = ctx.layer_painter(crate::canvas_extras::overlay_layer());
         painter.set_clip_rect(ctx.available_rect());
         paint::transform(&painter, &camera, &viewport, &session, &style);
     }
@@ -1530,6 +1643,13 @@ impl Chrome {
                 ui::Intent::Action(ui::menu::MenuAction::Zoom(
                     ui::menu::ZoomCommand::ToSelection,
                 )) => self.frame_selection(),
+                // W3-A: a flag this build cannot honour is refused with its
+                // reason instead of ticked and ignored.
+                ui::Intent::SetViewFlag { flag, on: true }
+                    if view_flag_refusal(*flag).is_some() =>
+                {
+                    self.refused_view_flag = view_flag_refusal(*flag);
+                }
                 _ => {
                     self.workspace.absorb(intent);
                 }
@@ -2288,7 +2408,11 @@ impl Chrome {
                                     out.set_zoom = Some(zoom);
                                 }
                             }
-                            ui.colored_label(dim, ui::status::format_dimensions(&doc.document));
+                            // W3-G: the Size field reads in the Units preference.
+                            ui.colored_label(
+                                dim,
+                                editor.size_readout(doc.document.width(), doc.document.height()),
+                            );
                         }
                         None => {
                             ui.colored_label(dim, ui::strings::tr("ui.chrome.no.document"));
@@ -2935,6 +3059,756 @@ mod tests {
         );
     }
 
+    /// W3-A: an 8x8 document at `zoom`, centred in the 1400x900 test window,
+    /// with exactly the View ▸ Extras in `on` ticked — every other extra is
+    /// unticked, through the same `SetViewFlag` intents the menu posts — and
+    /// the shapes the next frame paints.
+    struct ExtrasFrame {
+        _dir: tempfile::TempDir,
+        editor: Editor,
+        chrome: Chrome,
+        shapes: Vec<egui::Shape>,
+        content: egui::Rect,
+        style: ui::canvas::CanvasStyle,
+    }
+
+    const EXTRAS: [ui::ViewFlag; 7] = [
+        ui::ViewFlag::Rulers,
+        ui::ViewFlag::Guides,
+        ui::ViewFlag::Grid,
+        ui::ViewFlag::PixelGrid,
+        ui::ViewFlag::LayerEdges,
+        ui::ViewFlag::PreciseCursor,
+        ui::ViewFlag::SmartGuides,
+    ];
+
+    fn extras_frame(on: &[ui::ViewFlag], zoom: f32) -> ExtrasFrame {
+        extras_frame_of(on, zoom, &[9u8; 8 * 8 * 4])
+    }
+
+    /// [`extras_frame`] over an 8x8 image of the given RGBA bytes.
+    fn extras_frame_of(on: &[ui::ViewFlag], zoom: f32, rgba: &[u8]) -> ExtrasFrame {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.png");
+        std::fs::write(
+            &p,
+            raster::encode(raster::ExportFormat::Png, 8, 8, rgba).unwrap(),
+        )
+        .unwrap();
+        let mut editor = editor(&dir.path().join("config"));
+        editor.open_path(&p).unwrap();
+        {
+            let doc = editor.active_mut().unwrap();
+            doc.set_viewport(glam::Vec2::new(1400.0, 900.0));
+            doc.camera.zoom = zoom;
+            doc.camera.center = glam::Vec2::new(4.0, 4.0);
+        }
+        let mut chrome = Chrome::new();
+        for flag in EXTRAS {
+            chrome.emit(ui::Intent::SetViewFlag {
+                flag,
+                on: on.contains(&flag),
+            });
+        }
+        // Frame one harvests the toggles; frame two paints with them.
+        let shapes = painted_shapes(&mut chrome, &mut editor);
+        let content = chrome.frame_geometry.expect("a frame was drawn").content;
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let style = ui::canvas::CanvasStyle::from_context(&ctx);
+        ExtrasFrame {
+            _dir: dir,
+            editor,
+            chrome,
+            shapes,
+            content,
+            style,
+        }
+    }
+
+    /// Every line segment painted in `colour` that crosses `within` (the
+    /// painter clips to it, so a grid line spanning the window is still one
+    /// line on the canvas).
+    fn segments_in(
+        shapes: &[egui::Shape],
+        colour: egui::Color32,
+        within: egui::Rect,
+    ) -> Vec<[egui::Pos2; 2]> {
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::LineSegment { points, stroke }
+                    if stroke.color == egui::epaint::ColorMode::Solid(colour)
+                        && egui::Rect::from_two_pos(points[0], points[1])
+                            .expand(0.5)
+                            .intersects(within) =>
+                {
+                    Some(*points)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Every filled rectangle painted in `fill`.
+    fn rects_filled(shapes: &[egui::Shape], fill: egui::Color32) -> Vec<egui::Rect> {
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Rect(r) if r.fill == fill => Some(r.rect),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// W3-A: View ▸ Rulers paints the two gutter bands over the top and left
+    /// of the canvas area the docks left; unticked, neither band is there.
+    #[test]
+    fn view_rulers_paints_the_two_ruler_bands_over_the_canvas() {
+        let on = extras_frame(&[ui::ViewFlag::Rulers], 1.0);
+        let [top, left] = ui::canvas::rulers::gutters(on.content, on.style.ruler_thickness_pt);
+        let bands = rects_filled(&on.shapes, on.style.ruler_fill);
+        let near = |a: egui::Rect, b: egui::Rect| {
+            (a.min - b.min).length() < 0.5 && (a.max - b.max).length() < 0.5
+        };
+        assert!(
+            bands.iter().any(|r| near(*r, top)),
+            "no top ruler band at {top:?}: {bands:?}"
+        );
+        assert!(
+            bands.iter().any(|r| near(*r, left)),
+            "no left ruler band at {left:?}: {bands:?}"
+        );
+        assert!(on.chrome.extras_report().rulers);
+
+        let off = extras_frame(&[], 1.0);
+        let bands = rects_filled(&off.shapes, off.style.ruler_fill);
+        assert!(
+            !bands.iter().any(|r| near(*r, top) || near(*r, left)),
+            "Rulers unticked still painted a band: {bands:?}"
+        );
+        assert!(!off.chrome.extras_report().rulers);
+
+        // The pointer is marked on both rulers: a hairline across the top
+        // gutter at its x, and across the left gutter at its y.
+        let mut frame = extras_frame(&[ui::ViewFlag::Rulers], 1.0);
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let at = egui::pos2(400.0, 300.0);
+        let mut shapes = Vec::new();
+        for _ in 0..2 {
+            shapes = ctx
+                .run(raw_input(vec![egui::Event::PointerMoved(at)]), |ctx| {
+                    frame.chrome.ui(ctx, &mut frame.editor);
+                })
+                .shapes
+                .into_iter()
+                .map(|c| c.shape)
+                .collect();
+        }
+        let marks = segments_in(&shapes, frame.style.guide, top);
+        assert!(
+            marks.iter().any(|[a, b]| a.x == at.x && b.x == at.x),
+            "no pointer mark on the top ruler at x = {}: {marks:?}",
+            at.x
+        );
+        let marks = segments_in(&shapes, frame.style.guide, left);
+        assert!(
+            marks.iter().any(|[a, b]| a.y == at.y && b.y == at.y),
+            "no pointer mark on the left ruler at y = {}: {marks:?}",
+            at.y
+        );
+    }
+
+    /// W3-A: View ▸ Grid at 100% paints the document grid — at the default
+    /// 64 px spacing a 1400x900 view crosses well over a dozen major lines —
+    /// and unticked paints none.
+    #[test]
+    fn view_grid_paints_grid_lines_at_100_percent() {
+        let on = extras_frame(&[ui::ViewFlag::Grid], 1.0);
+        let major = segments_in(&on.shapes, on.style.grid_major, on.content);
+        assert!(major.len() >= 12, "only {} major grid lines", major.len());
+        let off = extras_frame(&[], 1.0);
+        assert!(segments_in(&off.shapes, off.style.grid_major, off.content).is_empty());
+    }
+
+    /// W3-A: View ▸ Pixel Grid paints nothing at 100% and one line per pixel
+    /// boundary of the 8x8 document at 800%: nine each way, on the pixel
+    /// edges (the document spans x 668..732 on screen at 800%).
+    #[test]
+    fn view_pixel_grid_paints_nothing_at_100_percent_and_the_pixel_lines_at_800() {
+        let low = extras_frame(&[ui::ViewFlag::PixelGrid], 1.0);
+        assert!(
+            segments_in(&low.shapes, low.style.pixel_grid, low.content).is_empty(),
+            "the pixel grid drew at 100%"
+        );
+        let high = extras_frame(&[ui::ViewFlag::PixelGrid], 8.0);
+        let lines = segments_in(&high.shapes, high.style.pixel_grid, high.content);
+        let verticals: std::collections::BTreeSet<i32> = lines
+            .iter()
+            .filter(|[a, b]| (a.x - b.x).abs() < 1e-3)
+            .map(|[a, _]| a.x.round() as i32)
+            .collect();
+        let expected: std::collections::BTreeSet<i32> = (0..=8).map(|i| 668 + 8 * i).collect();
+        assert_eq!(verticals, expected, "vertical pixel-grid lines");
+        assert!(
+            lines.len() >= 18,
+            "{} pixel-grid lines at 800%",
+            lines.len()
+        );
+        let off = extras_frame(&[], 8.0);
+        assert!(segments_in(&off.shapes, off.style.pixel_grid, off.content).is_empty());
+    }
+
+    /// W3-A: View ▸ Layer Edges outlines the active layer's ink where it is
+    /// on screen - not the canvas: the layer is inked over only part of it.
+    #[test]
+    fn view_layer_edges_outlines_the_active_layer_at_its_screen_bounds() {
+        let outline = |frame: &ExtrasFrame| -> Vec<Vec<egui::Pos2>> {
+            frame
+                .shapes
+                .iter()
+                .filter_map(|s| match s {
+                    egui::Shape::Path(p)
+                        if p.closed
+                            && p.stroke.color
+                                == egui::epaint::ColorMode::Solid(frame.style.layer_edge) =>
+                    {
+                        Some(p.points.clone())
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        // Ink only at x 2..6, y 1..4 of the 8x8 canvas; the rest is clear.
+        // The canvas spans (696, 446)..(704, 454) on screen, so the layer's
+        // ink spans (698, 447)..(702, 450) - a box the canvas border is not.
+        let mut rgba = [0u8; 8 * 8 * 4];
+        for y in 1..4 {
+            for x in 2..6 {
+                let i = (y * 8 + x) * 4;
+                rgba[i..i + 4].copy_from_slice(&[200, 40, 40, 255]);
+            }
+        }
+        let on = extras_frame_of(&[ui::ViewFlag::LayerEdges], 1.0, &rgba);
+        let quads = outline(&on);
+        let is_quad = |q: &Vec<egui::Pos2>, corners: [egui::Pos2; 4]| {
+            q.len() == 4
+                && corners
+                    .iter()
+                    .all(|e| q.iter().any(|p| (*p - *e).length() < 0.01))
+        };
+        let ink = [
+            egui::pos2(698.0, 447.0),
+            egui::pos2(702.0, 447.0),
+            egui::pos2(702.0, 450.0),
+            egui::pos2(698.0, 450.0),
+        ];
+        let canvas = [
+            egui::pos2(696.0, 446.0),
+            egui::pos2(704.0, 446.0),
+            egui::pos2(704.0, 454.0),
+            egui::pos2(696.0, 454.0),
+        ];
+        assert!(
+            quads.iter().any(|q| is_quad(q, ink)),
+            "no outline at the layer's ink bounds {ink:?}: {quads:?}"
+        );
+        assert!(
+            !quads.iter().any(|q| is_quad(q, canvas)),
+            "Layer Edges outlined the canvas, not the layer: {quads:?}"
+        );
+        assert_eq!(on.chrome.extras_report().layer_edges, 1);
+        let off = extras_frame(&[], 1.0);
+        assert!(outline(&off).is_empty(), "Layer Edges unticked still drew");
+    }
+
+    /// W3-A: View ▸ Precise Cursor draws a crosshair at the pointer over the
+    /// canvas.
+    #[test]
+    fn view_precise_cursor_draws_a_crosshair_at_the_pointer() {
+        let mut frame = extras_frame(&[ui::ViewFlag::PreciseCursor], 1.0);
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let at = egui::pos2(700.0, 450.0);
+        let crosshair = |frame: &mut ExtrasFrame| -> Vec<[egui::Pos2; 2]> {
+            let mut shapes: Vec<egui::Shape> = Vec::new();
+            for _ in 0..2 {
+                shapes = ctx
+                    .run(raw_input(vec![egui::Event::PointerMoved(at)]), |ctx| {
+                        frame.chrome.ui(ctx, &mut frame.editor);
+                    })
+                    .shapes
+                    .into_iter()
+                    .map(|c| c.shape)
+                    .collect();
+            }
+            // The two arms, each centred on the pointer: one horizontal, one
+            // vertical, in the cursor's contrasting stroke.
+            segments_in(&shapes, frame.style.brush_ring_over, frame.content)
+                .into_iter()
+                .filter(|[a, b]| {
+                    (egui::pos2((a.x + b.x) * 0.5, (a.y + b.y) * 0.5) - at).length() < 0.01
+                })
+                .collect()
+        };
+        let arms = crosshair(&mut frame);
+        assert!(
+            arms.iter()
+                .any(|[a, b]| (a.y - b.y).abs() < 1e-3 && (a.x - b.x).abs() > 1.0),
+            "no horizontal crosshair arm through {at:?}: {arms:?}"
+        );
+        assert!(
+            arms.iter()
+                .any(|[a, b]| (a.x - b.x).abs() < 1e-3 && (a.y - b.y).abs() > 1.0),
+            "no vertical crosshair arm through {at:?}: {arms:?}"
+        );
+        assert!(frame.chrome.extras_report().precise_cursor);
+        let mut off = extras_frame(&[], 1.0);
+        assert!(
+            crosshair(&mut off).is_empty(),
+            "Precise Cursor unticked still drew a crosshair"
+        );
+        assert!(!off.chrome.extras_report().precise_cursor);
+    }
+
+    /// Drive one frame of `frame` with `events` and apply the commands the
+    /// chrome emitted, as the shell does. Returns the painted shapes.
+    fn extras_step(
+        ctx: &egui::Context,
+        frame: &mut ExtrasFrame,
+        events: Vec<egui::Event>,
+    ) -> Vec<egui::Shape> {
+        let mut commands = Vec::new();
+        let shapes = ctx
+            .run(raw_input(events), |ctx| {
+                commands = frame.chrome.ui(ctx, &mut frame.editor).commands;
+            })
+            .shapes
+            .into_iter()
+            .map(|c| c.shape)
+            .collect();
+        for command in commands {
+            frame.editor.apply_command(command);
+        }
+        shapes
+    }
+
+    /// A press at `from`, a drag through `to`, and the release there - the
+    /// frames a real mouse produces.
+    fn extras_drag(ctx: &egui::Context, frame: &mut ExtrasFrame, from: egui::Pos2, to: egui::Pos2) {
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        let mid = from + (to - from) * 0.5;
+        for events in [
+            vec![egui::Event::PointerMoved(from)],
+            vec![egui::Event::PointerMoved(from)],
+            vec![button(from, true)],
+            vec![egui::Event::PointerMoved(mid)],
+            vec![egui::Event::PointerMoved(to)],
+            vec![button(to, false)],
+            Vec::new(),
+        ] {
+            let _ = extras_step(ctx, frame, events);
+        }
+    }
+
+    /// The long horizontal guide-coloured lines across the image area (the
+    /// ruler's pointer mark is the same colour but only a gutter deep).
+    fn horizontal_guides(frame: &ExtrasFrame, shapes: &[egui::Shape]) -> Vec<f32> {
+        segments_in(shapes, frame.style.guide, frame.content)
+            .into_iter()
+            .filter(|[a, b]| (a.y - b.y).abs() < 1e-3 && (a.x - b.x).abs() > 100.0)
+            .map(|[a, _]| a.y)
+            .collect()
+    }
+
+    /// W3-A: View ▸ Guides on an ordinary opened image (whose document guide
+    /// set is the default, `visible: false`): a guide pulled out of the top
+    /// ruler lands in the document as one `SetGuides`, is painted where it was
+    /// dropped on the next frame, and can be grabbed and moved again.
+    /// Unticking Guides hides it without editing the document.
+    #[test]
+    fn view_guides_drags_a_guide_out_of_the_ruler_paints_it_and_moves_it_again() {
+        let mut frame = extras_frame(&[ui::ViewFlag::Rulers, ui::ViewFlag::Guides], 1.0);
+        assert!(
+            !frame.editor.active().unwrap().document.guides.visible,
+            "the fixture is the ordinary case: the document's own flag is off"
+        );
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let [top, _] = ui::canvas::rulers::gutters(frame.content, frame.style.ruler_thickness_pt);
+        let x = 600.0;
+        // Dropped at screen y 452: document y 4 + (452 - 450) = 6 at 100%.
+        extras_drag(
+            &ctx,
+            &mut frame,
+            egui::pos2(x, top.center().y),
+            egui::pos2(x, 452.0),
+        );
+        let guides = frame.editor.active().unwrap().document.guides.clone();
+        assert_eq!(guides.list.len(), 1, "one guide landed: {guides:?}");
+        assert_eq!(guides.list[0].axis, editor_core::GuideAxis::Horizontal);
+        assert!(
+            (guides.list[0].doc - 6.0).abs() <= 1.0,
+            "the guide is where it was dropped: {guides:?}"
+        );
+        assert!(
+            !guides.visible,
+            "toggling a view must not edit the document's persisted flag"
+        );
+        let screen_y = 450.0 + guides.list[0].doc - 4.0;
+        let shapes = extras_step(&ctx, &mut frame, Vec::new());
+        let painted = horizontal_guides(&frame, &shapes);
+        assert!(
+            painted.iter().any(|y| (y - screen_y).abs() < 0.5),
+            "the dropped guide is not painted at y {screen_y}: {painted:?}"
+        );
+        assert_eq!(frame.chrome.extras_report().guides, 1);
+
+        // Grab it again and move it 10 points down.
+        extras_drag(
+            &ctx,
+            &mut frame,
+            egui::pos2(x, screen_y),
+            egui::pos2(x, screen_y + 10.0),
+        );
+        let moved = frame.editor.active().unwrap().document.guides.clone();
+        assert_eq!(moved.list.len(), 1, "{moved:?}");
+        assert!(
+            (moved.list[0].doc - (guides.list[0].doc + 10.0)).abs() <= 1.0,
+            "the guide was grabbed and moved: {guides:?} -> {moved:?}"
+        );
+
+        // Guides unticked: nothing painted, and the document keeps its guide.
+        frame.chrome.emit(ui::Intent::SetViewFlag {
+            flag: ui::ViewFlag::Guides,
+            on: false,
+        });
+        let _ = extras_step(&ctx, &mut frame, Vec::new());
+        let shapes = extras_step(&ctx, &mut frame, Vec::new());
+        assert!(horizontal_guides(&frame, &shapes).is_empty());
+        assert_eq!(frame.chrome.extras_report().guides, 0);
+        assert_eq!(frame.editor.active().unwrap().document.guides, moved);
+    }
+
+    /// W3-A (round 3): the extras paint *under* an open modal dialog and its
+    /// scrim. They used to be a free `Order::Middle` layer, which egui draws
+    /// after every ordered middle area — over the dialog and undimmed — so
+    /// with Grid or the default Layer Edges on, lines crossed Image Size or
+    /// Levels. Here every grid line and the layer outline come before the
+    /// scrim in paint order, and the scrim before the dialog's text.
+    #[test]
+    fn view_extras_paint_under_an_open_dialog_and_its_scrim() {
+        let mut frame = extras_frame(&[ui::ViewFlag::Grid, ui::ViewFlag::LayerEdges], 1.0);
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        frame.chrome.open_new_document_dialog();
+        let _ = extras_step(&ctx, &mut frame, Vec::new());
+        let shapes = extras_step(&ctx, &mut frame, Vec::new());
+        assert!(frame.chrome.dialog_open(), "the dialog is up");
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
+        // The scrim: the one translucent wash over the whole window.
+        let scrim = shapes
+            .iter()
+            .position(|s| {
+                matches!(s, egui::Shape::Rect(r)
+                    if r.rect == screen && r.fill.a() > 0 && r.fill.a() < 255)
+            })
+            .expect("the scrim is painted");
+        let last_text = shapes
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| matches!(s, egui::Shape::Text(_)))
+            .map(|(i, _)| i)
+            .max()
+            .expect("the dialog paints text");
+        let grid: Vec<usize> = shapes
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| {
+                matches!(s, egui::Shape::LineSegment { stroke, .. }
+                    if stroke.color == egui::epaint::ColorMode::Solid(frame.style.grid_major))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        assert!(grid.len() >= 12, "the grid is painted: {}", grid.len());
+        assert_eq!(frame.chrome.extras_report().layer_edges, 1);
+        let last_grid = *grid.iter().max().expect("grid lines");
+        assert!(
+            last_grid < scrim,
+            "a grid line (shape {last_grid}) is painted over the scrim (shape {scrim})"
+        );
+        assert!(scrim < last_text, "the dialog is over its scrim");
+        let layer_edge = frame.style.layer_edge;
+        let outlines_over_scrim = shapes
+            .iter()
+            .enumerate()
+            .skip(scrim)
+            .filter(|(_, s)| {
+                matches!(s, egui::Shape::Path(p)
+                    if p.closed && p.stroke.color == egui::epaint::ColorMode::Solid(layer_edge))
+            })
+            .count();
+        assert_eq!(
+            outlines_over_scrim, 0,
+            "the layer outline is over the scrim"
+        );
+    }
+
+    /// W3-A (round 3): with a modal up, a press in the ruler gutter belongs to
+    /// the scrim, not to a guide gesture: no guide is pulled out. The gutter
+    /// areas used to be raised at `Order::Middle`, above the scrim.
+    #[test]
+    fn a_ruler_press_under_an_open_dialog_pulls_no_guide() {
+        let mut frame = extras_frame(&[ui::ViewFlag::Rulers, ui::ViewFlag::Guides], 1.0);
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        frame.chrome.open_new_document_dialog();
+        let _ = extras_step(&ctx, &mut frame, Vec::new());
+        assert!(frame.chrome.dialog_open());
+        let [top, _] = ui::canvas::rulers::gutters(frame.content, frame.style.ruler_thickness_pt);
+        extras_drag(
+            &ctx,
+            &mut frame,
+            egui::pos2(600.0, top.center().y),
+            egui::pos2(600.0, 452.0),
+        );
+        assert!(frame.chrome.dialog_open(), "the dialog stayed up");
+        assert!(
+            frame
+                .editor
+                .active()
+                .unwrap()
+                .document
+                .guides
+                .list
+                .is_empty(),
+            "a press the scrim owns pulled a guide: {:?}",
+            frame.editor.active().unwrap().document.guides
+        );
+    }
+
+    /// W3-A (round 3): a guide's grab band stands down while a transform
+    /// session is live — the session's handles have the higher claim (the
+    /// `ui` host's `may_grab` rule) — and grabs again once it ends.
+    #[test]
+    fn guide_grab_bands_yield_to_a_live_transform_session() {
+        let mut frame = extras_frame(&[ui::ViewFlag::Rulers, ui::ViewFlag::Guides], 1.0);
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let [top, _] = ui::canvas::rulers::gutters(frame.content, frame.style.ruler_thickness_pt);
+        let x = 600.0;
+        extras_drag(
+            &ctx,
+            &mut frame,
+            egui::pos2(x, top.center().y),
+            egui::pos2(x, 452.0),
+        );
+        let placed = frame.editor.active().unwrap().document.guides.clone();
+        assert_eq!(placed.list.len(), 1, "{placed:?}");
+        let screen_y = 450.0 + placed.list[0].doc - 4.0;
+
+        let doc_id = frame.editor.active().unwrap().id();
+        let session = tools::SessionGeometry::Transform {
+            state: tools::transform::TransformState::new(raster::PixelRect::new(0, 0, 8, 8)),
+            mode: tools::transform::TransformMode::Scale,
+            active: None,
+            layer: None,
+        };
+        frame
+            .chrome
+            .publish_tool_geometry(Some((doc_id, session)), Some(doc_id));
+        extras_drag(
+            &ctx,
+            &mut frame,
+            egui::pos2(x, screen_y),
+            egui::pos2(x, screen_y + 10.0),
+        );
+        assert_eq!(
+            frame.editor.active().unwrap().document.guides,
+            placed,
+            "the guide was grabbed through a live transform session"
+        );
+
+        // The session ends: the same press grabs the guide again.
+        frame.chrome.publish_tool_geometry(None, Some(doc_id));
+        extras_drag(
+            &ctx,
+            &mut frame,
+            egui::pos2(x, screen_y),
+            egui::pos2(x, screen_y + 10.0),
+        );
+        let moved = frame.editor.active().unwrap().document.guides.clone();
+        assert!(
+            (moved.list[0].doc - (placed.list[0].doc + 10.0)).abs() <= 1.0,
+            "with no session the guide moves: {placed:?} -> {moved:?}"
+        );
+    }
+
+    /// W3-A (round 3): Smart Guides while an ordinary Move-tool drag is held
+    /// (no transform session is published for one). A 2x2 block of ink in
+    /// the 8x8 image, dragged 3.2 px right at 800%, snaps its centre onto the
+    /// canvas centre (x 4), and the canvas-centre smart guide is drawn there
+    /// (screen x 700) while the button is down; released, it is gone. With
+    /// Smart Guides off the same drag draws none.
+    #[test]
+    fn a_move_drag_paints_the_smart_guide_it_snapped_to() {
+        let mut rgba = vec![0u8; 8 * 8 * 4];
+        for y in 0..2 {
+            for x in 0..2 {
+                let i = (y * 8 + x) * 4;
+                rgba[i..i + 4].copy_from_slice(&[200, 30, 30, 255]);
+            }
+        }
+        let held = |smart: bool| -> (Vec<egui::Shape>, usize, usize, ExtrasFrame) {
+            let on: &[ui::ViewFlag] = if smart {
+                &[ui::ViewFlag::SmartGuides]
+            } else {
+                &[]
+            };
+            let mut frame = extras_frame_of(on, 8.0, &rgba);
+            frame.editor.set_tool(tools::ToolId::Move);
+            let ctx = egui::Context::default();
+            install_theme(&ctx, design::Theme::Dark);
+            // Doc (1, 1) is screen (676, 426) at 800% about (700, 450).
+            let from = egui::pos2(676.0, 426.0);
+            let to = egui::pos2(676.0 + 3.2 * 8.0, 426.0);
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            };
+            let _ = extras_step(&ctx, &mut frame, vec![egui::Event::PointerMoved(from)]);
+            let _ = extras_step(&ctx, &mut frame, vec![egui::Event::PointerMoved(from)]);
+            let _ = extras_step(&ctx, &mut frame, vec![button(from, true)]);
+            let shapes = extras_step(&ctx, &mut frame, vec![egui::Event::PointerMoved(to)]);
+            let during = frame.chrome.extras_report().smart_guides;
+            let _ = extras_step(&ctx, &mut frame, vec![button(to, false)]);
+            let _ = extras_step(&ctx, &mut frame, Vec::new());
+            let after = frame.chrome.extras_report().smart_guides;
+            (shapes, during, after, frame)
+        };
+        let (shapes, during, after, frame) = held(true);
+        let lines = segments_in(&shapes, frame.style.smart_guide, frame.content);
+        assert!(
+            lines
+                .iter()
+                .any(|[a, b]| (a.x - 700.0).abs() < 0.5 && (b.x - 700.0).abs() < 0.5),
+            "no smart guide at the canvas centre x 700: {lines:?}"
+        );
+        // The dragged layer never catches on its own pre-drag edges (its
+        // top edge at y 0 is where the zero-y drag leaves it): no horizontal
+        // smart guide at screen y 418, 426 or 434.
+        assert!(
+            !lines.iter().any(|[a, b]| (a.y - b.y).abs() < 1e-3),
+            "the moving layer snapped to itself: {lines:?}"
+        );
+        assert_eq!(during, 1, "one smart guide: {lines:?}");
+        assert_eq!(after, 0, "released, the smart guide is gone");
+
+        let (shapes, during, _, frame) = held(false);
+        assert!(segments_in(&shapes, frame.style.smart_guide, frame.content).is_empty());
+        assert_eq!(during, 0, "Smart Guides off draws none");
+    }
+
+    /// W3-A: the `--shot` fixture's View toggles parse from their variant
+    /// names, case-insensitively, skipping unknown ones.
+    #[test]
+    fn shot_view_flags_parse_from_variant_names() {
+        assert_eq!(
+            crate::parse_view_flags("Rulers, grid,nope,PIXELGRID"),
+            vec![
+                ui::ViewFlag::Rulers,
+                ui::ViewFlag::Grid,
+                ui::ViewFlag::PixelGrid
+            ]
+        );
+    }
+
+    /// W3-A: View ▸ Selection Edges decides whether the shell's marching ants
+    /// are drawn: the geometry the shell strokes ([`Chrome::selection_ants`],
+    /// what `Shell::redraw` calls) is the outline with the flag on and empty
+    /// with it off, over the same selection.
+    #[test]
+    fn view_selection_edges_gates_the_marching_ants_the_shell_draws() {
+        let ants = |on: bool| {
+            let mut frame = extras_frame(&[], 1.0);
+            frame.chrome.emit(ui::Intent::SetViewFlag {
+                flag: ui::ViewFlag::SelectionEdges,
+                on,
+            });
+            let _ = painted_shapes(&mut frame.chrome, &mut frame.editor);
+            assert_eq!(frame.chrome.selection_edges_visible(), on);
+            let doc = frame.editor.active_mut().unwrap();
+            doc.document.selection = editor_core::Selection::Rect {
+                min: glam::IVec2::new(1, 1),
+                max: glam::IVec2::new(6, 6),
+            };
+            let doc = frame.editor.active().unwrap();
+            let mut outline = crate::presenter::SelectionOutline::new();
+            frame
+                .chrome
+                .selection_ants(&mut outline, doc, 0.0, &Default::default())
+        };
+        assert!(!ants(true).is_empty(), "Selection Edges on drew no ants");
+        assert!(
+            ants(false).is_empty(),
+            "Selection Edges off still drew ants"
+        );
+    }
+
+    /// W3-A: Proof Colors, Gamut Warning and Flip View cannot be honoured by
+    /// this renderer: the toggle is refused (the item never ticks) and the
+    /// status line says why, rather than a tick that changes nothing.
+    #[test]
+    fn view_toggles_this_build_cannot_honour_are_refused_with_a_reason() {
+        for flag in [
+            ui::ViewFlag::ProofColors,
+            ui::ViewFlag::GamutWarning,
+            ui::ViewFlag::FlipHorizontal,
+            ui::ViewFlag::FlipVertical,
+        ] {
+            let mut frame = extras_frame(&[], 1.0);
+            frame
+                .chrome
+                .emit(ui::Intent::SetViewFlag { flag, on: true });
+            let _ = painted_shapes(&mut frame.chrome, &mut frame.editor);
+            assert!(
+                !frame.chrome.workspace().view_flags.get(flag),
+                "{flag:?} ticked and changes nothing"
+            );
+            let reason = view_flag_refusal(flag).expect("a reason");
+            assert_eq!(frame.editor.status(), Some(reason), "{flag:?}");
+            // And the menu row is greyed with that reason *before* any click:
+            // the enablement the menu bar paints from.
+            let context = crate::menu_bridge::context(&mut frame.editor, frame.chrome.workspace());
+            assert_eq!(
+                crate::menu_bridge::resolve_intent(
+                    ui::MenuAction::ToggleView(flag),
+                    &context,
+                    &frame.editor
+                ),
+                Err(reason.to_string()),
+                "{flag:?} is drawn enabled"
+            );
+        }
+        // A toggle this build honours stays enabled.
+        let mut frame = extras_frame(&[], 1.0);
+        let context = crate::menu_bridge::context(&mut frame.editor, frame.chrome.workspace());
+        assert!(crate::menu_bridge::resolve_intent(
+            ui::MenuAction::ToggleView(ui::ViewFlag::Grid),
+            &context,
+            &frame.editor
+        )
+        .is_ok());
+    }
+
     /// Card 012's check: a shell-published transform session is *visible* —
     /// the same frame paints the quad and handles, and an ended session paints
     /// none. Publication happens through the production publisher fed by a
@@ -2979,6 +3853,14 @@ mod tests {
         let geometry = pointer.live_geometry();
         assert!(geometry.is_some(), "the session is live");
         let mut chrome = Chrome::new();
+        // W3-A: View ▸ Layer Edges is on by default and outlines the 8x8
+        // layer at (696, 446)..(704, 454) — a closed path within this test's
+        // 3pt tolerance of the quad corner it looks for. Unticked, so the
+        // only closed path near there is the transform's.
+        chrome.emit(ui::Intent::SetViewFlag {
+            flag: ui::ViewFlag::LayerEdges,
+            on: false,
+        });
         chrome.publish_tool_geometry(geometry, ed.active().map(|d| d.id()));
         let painted = painted_shapes(&mut chrome, &mut ed);
         let quad = painted
@@ -6513,6 +7395,28 @@ mod tests {
     /// One opaque grey tile at the canvas origin of `id`, through the real
     /// command route — the edit that must (and the only edit that must)
     /// recomposite that layer's thumbnail.
+    /// W3-J: the Properties Transform block measures a raster layer by the
+    /// ink the chrome publishes each frame, not by its stored tiles. A
+    /// 300x200 image is stored as 512x256 of tiles; the published frame is
+    /// the image.
+    #[test]
+    fn the_chrome_publishes_the_active_raster_layer_s_alpha_ink_to_properties() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, ids) = editor_with_layers(dir.path(), 1);
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        thumb_frame(&ctx, &mut chrome, &mut ed);
+        let inks = ui::panels::properties::RasterInks::published(&ctx);
+        let doc = &ed.active().unwrap().document;
+        let frame = ui::panels::properties::Transform::frame(doc, ids[0], &inks)
+            .expect("the chrome measured the active raster layer");
+        assert_eq!(
+            (frame.x, frame.y, frame.width, frame.height),
+            (0.0, 0.0, 300.0, 200.0)
+        );
+    }
+
     fn paint_grey(open: &mut crate::doc::OpenDocument, id: LayerId, v: u8) {
         let ts = raster::TILE_SIZE;
         let mut bytes = Vec::with_capacity((ts * ts * 4) as usize);

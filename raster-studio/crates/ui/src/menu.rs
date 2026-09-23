@@ -187,13 +187,20 @@ impl AdjustmentId {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum FilterId {
     // Blur
+    Average,
+    Blur,
+    BlurMore,
     BoxBlur,
     GaussianBlur,
     LensBlur,
     MotionBlur,
     RadialBlur,
+    SmartBlur,
     SurfaceBlur,
     // Sharpen
+    Sharpen,
+    SharpenEdges,
+    SharpenMore,
     SmartSharpen,
     UnsharpMask,
     // Noise
@@ -203,6 +210,7 @@ pub enum FilterId {
     Median,
     ReduceNoise,
     // Distort
+    Displace,
     Pinch,
     PolarCoordinates,
     Ripple,
@@ -214,6 +222,9 @@ pub enum FilterId {
     // Pixelate
     ColorHalftone,
     Crystallize,
+    Facet,
+    Fragment,
+    Mezzotint,
     Mosaic,
     Pointillize,
     // Render
@@ -225,9 +236,12 @@ pub enum FilterId {
     // Stylize
     Diffuse,
     Emboss,
+    Extrude,
     FindEdges,
     OilPaint,
     Solarize,
+    Tiles,
+    TraceContour,
     Wind,
     // Other
     Custom,
@@ -278,12 +292,19 @@ impl FilterGroup {
 
 impl FilterId {
     pub const ALL: &'static [FilterId] = &[
+        FilterId::Average,
+        FilterId::Blur,
+        FilterId::BlurMore,
         FilterId::BoxBlur,
         FilterId::GaussianBlur,
         FilterId::LensBlur,
         FilterId::MotionBlur,
         FilterId::RadialBlur,
+        FilterId::SmartBlur,
         FilterId::SurfaceBlur,
+        FilterId::Sharpen,
+        FilterId::SharpenEdges,
+        FilterId::SharpenMore,
         FilterId::SmartSharpen,
         FilterId::UnsharpMask,
         FilterId::AddNoise,
@@ -291,6 +312,7 @@ impl FilterId {
         FilterId::DustAndScratches,
         FilterId::Median,
         FilterId::ReduceNoise,
+        FilterId::Displace,
         FilterId::Pinch,
         FilterId::PolarCoordinates,
         FilterId::Ripple,
@@ -301,6 +323,9 @@ impl FilterId {
         FilterId::ZigZag,
         FilterId::ColorHalftone,
         FilterId::Crystallize,
+        FilterId::Facet,
+        FilterId::Fragment,
+        FilterId::Mezzotint,
         FilterId::Mosaic,
         FilterId::Pointillize,
         FilterId::Clouds,
@@ -310,9 +335,12 @@ impl FilterId {
         FilterId::LensFlare,
         FilterId::Diffuse,
         FilterId::Emboss,
+        FilterId::Extrude,
         FilterId::FindEdges,
         FilterId::OilPaint,
         FilterId::Solarize,
+        FilterId::Tiles,
+        FilterId::TraceContour,
         FilterId::Wind,
         FilterId::Custom,
         FilterId::HighPass,
@@ -323,19 +351,28 @@ impl FilterId {
 
     pub const fn group(self) -> FilterGroup {
         match self {
-            FilterId::BoxBlur
+            FilterId::Average
+            | FilterId::Blur
+            | FilterId::BlurMore
+            | FilterId::BoxBlur
             | FilterId::GaussianBlur
             | FilterId::LensBlur
             | FilterId::MotionBlur
             | FilterId::RadialBlur
+            | FilterId::SmartBlur
             | FilterId::SurfaceBlur => FilterGroup::Blur,
-            FilterId::SmartSharpen | FilterId::UnsharpMask => FilterGroup::Sharpen,
+            FilterId::Sharpen
+            | FilterId::SharpenEdges
+            | FilterId::SharpenMore
+            | FilterId::SmartSharpen
+            | FilterId::UnsharpMask => FilterGroup::Sharpen,
             FilterId::AddNoise
             | FilterId::Despeckle
             | FilterId::DustAndScratches
             | FilterId::Median
             | FilterId::ReduceNoise => FilterGroup::Noise,
-            FilterId::Pinch
+            FilterId::Displace
+            | FilterId::Pinch
             | FilterId::PolarCoordinates
             | FilterId::Ripple
             | FilterId::Shear
@@ -345,6 +382,9 @@ impl FilterId {
             | FilterId::ZigZag => FilterGroup::Distort,
             FilterId::ColorHalftone
             | FilterId::Crystallize
+            | FilterId::Facet
+            | FilterId::Fragment
+            | FilterId::Mezzotint
             | FilterId::Mosaic
             | FilterId::Pointillize => FilterGroup::Pixelate,
             FilterId::Clouds
@@ -354,9 +394,12 @@ impl FilterId {
             | FilterId::LensFlare => FilterGroup::Render,
             FilterId::Diffuse
             | FilterId::Emboss
+            | FilterId::Extrude
             | FilterId::FindEdges
             | FilterId::OilPaint
             | FilterId::Solarize
+            | FilterId::Tiles
+            | FilterId::TraceContour
             | FilterId::Wind => FilterGroup::Stylize,
             FilterId::Custom
             | FilterId::HighPass
@@ -370,12 +413,19 @@ impl FilterId {
     /// filter with no parameters applies immediately and carries none.
     pub const fn label(self) -> &'static str {
         match self {
+            FilterId::Average => "Average",
+            FilterId::Blur => "Blur",
+            FilterId::BlurMore => "Blur More",
             FilterId::BoxBlur => "Box Blur…",
             FilterId::GaussianBlur => "Gaussian Blur…",
             FilterId::LensBlur => "Lens Blur…",
             FilterId::MotionBlur => "Motion Blur…",
             FilterId::RadialBlur => "Radial Blur…",
+            FilterId::SmartBlur => "Smart Blur…",
             FilterId::SurfaceBlur => "Surface Blur…",
+            FilterId::Sharpen => "Sharpen",
+            FilterId::SharpenEdges => "Sharpen Edges",
+            FilterId::SharpenMore => "Sharpen More",
             FilterId::SmartSharpen => "Smart Sharpen…",
             FilterId::UnsharpMask => "Unsharp Mask…",
             FilterId::AddNoise => "Add Noise…",
@@ -383,6 +433,7 @@ impl FilterId {
             FilterId::DustAndScratches => "Dust & Scratches…",
             FilterId::Median => "Median…",
             FilterId::ReduceNoise => "Reduce Noise…",
+            FilterId::Displace => "Displace…",
             FilterId::Pinch => "Pinch…",
             FilterId::PolarCoordinates => "Polar Coordinates…",
             FilterId::Ripple => "Ripple…",
@@ -393,6 +444,9 @@ impl FilterId {
             FilterId::ZigZag => "ZigZag…",
             FilterId::ColorHalftone => "Color Halftone…",
             FilterId::Crystallize => "Crystallize…",
+            FilterId::Facet => "Facet",
+            FilterId::Fragment => "Fragment",
+            FilterId::Mezzotint => "Mezzotint…",
             FilterId::Mosaic => "Mosaic…",
             FilterId::Pointillize => "Pointillize…",
             FilterId::Clouds => "Clouds",
@@ -402,9 +456,12 @@ impl FilterId {
             FilterId::LensFlare => "Lens Flare…",
             FilterId::Diffuse => "Diffuse…",
             FilterId::Emboss => "Emboss…",
+            FilterId::Extrude => "Extrude…",
             FilterId::FindEdges => "Find Edges",
             FilterId::OilPaint => "Oil Paint…",
             FilterId::Solarize => "Solarize",
+            FilterId::Tiles => "Tiles…",
+            FilterId::TraceContour => "Trace Contour…",
             FilterId::Wind => "Wind…",
             FilterId::Custom => "Custom…",
             FilterId::HighPass => "High Pass…",
@@ -693,6 +750,79 @@ impl ColorMode {
     /// and does not do yet.
     pub const fn is_supported(self) -> bool {
         matches!(self, ColorMode::Rgb | ColorMode::Grayscale)
+    }
+
+    /// Why this build cannot convert into the mode, or `None` when it can.
+    ///
+    /// Specific per mode, because "not yet" tells the user nothing about
+    /// what is missing: each of the three needs a pixel store the RGBA tile
+    /// model does not have.
+    pub const fn unsupported_reason(self) -> Option<&'static str> {
+        match self {
+            ColorMode::Rgb | ColorMode::Grayscale => None,
+            ColorMode::Lab => {
+                Some("Lab needs L*a*b* channels; this build stores every layer as RGBA tiles")
+            }
+            ColorMode::Cmyk => Some(
+                "CMYK needs four ink channels and a press profile; this build stores RGBA tiles",
+            ),
+            ColorMode::Indexed => {
+                Some("Indexed colour needs a palette and index tiles; this build stores RGBA tiles")
+            }
+        }
+    }
+}
+
+/// A document's bits per channel, as Image ▸ Mode lists them.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord, Default)]
+pub enum ChannelDepth {
+    #[default]
+    Eight,
+    Sixteen,
+}
+
+impl ChannelDepth {
+    pub const ALL: &'static [ChannelDepth] = &[ChannelDepth::Eight, ChannelDepth::Sixteen];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            ChannelDepth::Eight => "8 Bits/Channel",
+            ChannelDepth::Sixteen => "16 Bits/Channel",
+        }
+    }
+
+    /// The document metadata's `bit_depth` as a menu depth: 16 is Sixteen,
+    /// anything else Eight.
+    pub const fn of_bits(bits: u8) -> Self {
+        if bits == 16 {
+            ChannelDepth::Sixteen
+        } else {
+            ChannelDepth::Eight
+        }
+    }
+
+    /// Why converting a document at `current` into `self` is unavailable,
+    /// or `None` when it is.
+    ///
+    /// Neither conversion exists in this build, and each says exactly why:
+    /// the paint tools, filters and adjustments write RGBA8 tiles, so a
+    /// 16-bit working document would be undone by its first edit; and a
+    /// 16-bit source is already crushed to 8-bit tiles on import, keeping
+    /// only its 16-bit *export* depth, which the export route reads from the
+    /// source rather than from the document's depth.
+    pub const fn conversion_reason(self, current: ChannelDepth) -> Option<&'static str> {
+        match (current, self) {
+            (ChannelDepth::Eight, ChannelDepth::Eight)
+            | (ChannelDepth::Sixteen, ChannelDepth::Sixteen) => {
+                Some("The document is already at that depth")
+            }
+            (ChannelDepth::Eight, ChannelDepth::Sixteen) => Some(
+                "16-bit editing is not in this build: the paint tools, filters and adjustments write 8-bit tiles",
+            ),
+            (ChannelDepth::Sixteen, ChannelDepth::Eight) => Some(
+                "The pixels are already edited at 8 bits; a 16-bit source keeps only its 16-bit export depth, which this build cannot drop yet",
+            ),
+        }
     }
 }
 
@@ -1045,6 +1175,7 @@ pub enum MenuAction {
 
     // ---- Image ---------------------------------------------------------
     SetColorMode(ColorMode),
+    SetBitDepth(ChannelDepth),
     ApplyAdjustment(AdjustmentId),
     AutoTone,
     AutoContrast,
@@ -1163,6 +1294,12 @@ pub enum MenuAction {
     // ---- Filter --------------------------------------------------------
     LastFilter,
     FilterGallery,
+    /// Filter ▸ Convert for Smart Filters. Greyed out in every state with
+    /// [`SMART_FILTERS_UNSUPPORTED`]: a smart object layer
+    /// (`layer_model::SmartObjectLayer`) carries an asset id and a link flag
+    /// and nothing else, so there is no filter stack for a conversion to put
+    /// the filter in, and the compositor renders the source unfiltered.
+    ConvertForSmartFilters,
     Filter(FilterId),
 
     // ---- View ----------------------------------------------------------
@@ -1365,6 +1502,8 @@ pub struct MenuContext {
     pub active: Option<ActiveLayer>,
     pub last_filter: Option<FilterId>,
     pub color_mode: ColorMode,
+    /// The document's bits per channel, so Image ▸ Mode can tick it.
+    pub bit_depth: ChannelDepth,
     pub view: ViewFlags,
     /// The canvas view is turned off-axis, so Reset View Rotation has
     /// something to do. A *view* fact rather than a document one, read off the
@@ -1404,6 +1543,7 @@ impl Default for MenuContext {
             active: None,
             last_filter: None,
             color_mode: ColorMode::Rgb,
+            bit_depth: ChannelDepth::Eight,
             view: ViewFlags::defaults(),
             view_rotated: false,
             ruler_unit: crate::dialogs::units::Unit::Pixels,
@@ -1453,6 +1593,7 @@ impl MenuContext {
                 1 => ColorMode::Grayscale,
                 _ => ColorMode::Rgb,
             },
+            bit_depth: ChannelDepth::of_bits(doc.meta.bit_depth),
             ..Self::default()
         }
     }
@@ -1586,6 +1727,12 @@ impl MenuAction {
         // ---- Image ----
         out.extend(ColorMode::ALL.iter().copied().map(MenuAction::SetColorMode));
         out.extend(
+            ChannelDepth::ALL
+                .iter()
+                .copied()
+                .map(MenuAction::SetBitDepth),
+        );
+        out.extend(
             AdjustmentId::ALL
                 .iter()
                 .copied()
@@ -1698,6 +1845,7 @@ impl MenuAction {
             // ---- Filter ----
             MenuAction::LastFilter,
             MenuAction::FilterGallery,
+            MenuAction::ConvertForSmartFilters,
         ]);
         out.extend(FilterId::ALL.iter().copied().map(MenuAction::Filter));
         // ---- View ----
@@ -1770,6 +1918,7 @@ impl MenuAction {
             MenuAction::Preferences => "Preferences…".into(),
 
             MenuAction::SetColorMode(m) => m.label().into(),
+            MenuAction::SetBitDepth(d) => d.label().into(),
             MenuAction::ApplyAdjustment(a) => format!("{}…", a.label()),
             MenuAction::AutoTone => "Auto Tone".into(),
             MenuAction::AutoContrast => "Auto Contrast".into(),
@@ -1837,6 +1986,7 @@ impl MenuAction {
 
             MenuAction::LastFilter => "Last Filter".into(),
             MenuAction::FilterGallery => "Filter Gallery…".into(),
+            MenuAction::ConvertForSmartFilters => "Convert for Smart Filters".into(),
             MenuAction::RefineMask => "Refine Mask…".into(),
             MenuAction::RemoveColorFringe => "Remove Color Fringe…".into(),
             MenuAction::CopyLayerStyle => "Copy Layer Style".into(),
@@ -1938,7 +2088,11 @@ impl MenuAction {
             MenuAction::Reselect => Shortcut::ctrl_shift('d'),
             MenuAction::InverseSelection => Shortcut::ctrl_shift('i'),
             MenuAction::SelectAllLayers => Shortcut::ctrl_alt('a'),
-            MenuAction::Modify(ModifySelection::Feather) => Shortcut::shift('6'),
+            // Photopea's (and Photoshop's) Feather… chord: Shift+F6.
+            MenuAction::Modify(ModifySelection::Feather) => Shortcut {
+                shift: true,
+                ..Shortcut::bare(Key::F(6))
+            },
             MenuAction::ToggleQuickMask => Shortcut::bare(Key::character('q')),
 
             MenuAction::LastFilter => Shortcut::ctrl('f'),
@@ -1970,6 +2124,7 @@ impl MenuAction {
             MenuAction::SetTheme(theme) => ctx.theme == theme,
             MenuAction::ApplyLayout(layout) => ctx.dock.layout() == Some(layout),
             MenuAction::SetColorMode(mode) => ctx.color_mode == mode,
+            MenuAction::SetBitDepth(depth) => ctx.bit_depth == depth,
             MenuAction::SetRulerUnit(unit) => ctx.ruler_unit == unit,
             MenuAction::ToggleLayerVisibility => ctx.active.map(|l| l.visible)?,
             MenuAction::LockLayer(lock) => lock.is_set(ctx.active?.locked),
@@ -2063,9 +2218,12 @@ impl MenuAction {
             MenuAction::KeyboardShortcuts | MenuAction::Preferences => act(self),
 
             // ---- Image -----------------------------------------------------
-            MenuAction::SetColorMode(mode) => gate(
-                ctx.need_document().or((!mode.is_supported())
-                    .then_some("This build cannot convert to that colour mode yet")),
+            MenuAction::SetColorMode(mode) => {
+                gate(ctx.need_document().or(mode.unsupported_reason()), act(self))
+            }
+            MenuAction::SetBitDepth(depth) => gate(
+                ctx.need_document()
+                    .or(depth.conversion_reason(ctx.bit_depth)),
                 act(self),
             ),
             MenuAction::ApplyAdjustment(_)
@@ -2375,6 +2533,7 @@ impl MenuAction {
                     act(MenuAction::RemoveColorFringe),
                 )
             }
+            MenuAction::ConvertForSmartFilters => Resolution::Disabled(SMART_FILTERS_UNSUPPORTED),
             MenuAction::FilterGallery | MenuAction::Filter(_) => match ctx.need_editable_pixels() {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
@@ -2682,7 +2841,12 @@ fn image_menu() -> Menu {
     Menu {
         title: "Image",
         entries: vec![
-            Entry::submenu("Mode", items(ColorMode::ALL, MenuAction::SetColorMode)),
+            Entry::submenu("Mode", {
+                let mut e = items(ColorMode::ALL, MenuAction::SetColorMode);
+                e.push(Entry::Separator);
+                e.extend(items(ChannelDepth::ALL, MenuAction::SetBitDepth));
+                e
+            }),
             Entry::Separator,
             Entry::submenu(
                 "Adjustments",
@@ -2817,11 +2981,21 @@ fn select_menu() -> Menu {
     }
 }
 
+/// Why Filter ▸ Convert for Smart Filters is greyed out. A smart object layer
+/// holds an asset id and a link flag and no filter stack, and the compositor
+/// renders its source with nothing re-applied, so a conversion would have
+/// nowhere to keep the filter. Recorded in docs/parity-matrix.md.
+pub const SMART_FILTERS_UNSUPPORTED: &str =
+    "Smart objects cannot carry a filter stack yet: the layer model stores only \
+     the source asset, and the compositor renders it with no filters re-applied";
+
 fn filter_menu() -> Menu {
     let mut entries = vec![
         item(MenuAction::LastFilter),
         Entry::Separator,
         item(MenuAction::FilterGallery),
+        Entry::Separator,
+        item(MenuAction::ConvertForSmartFilters),
         Entry::Separator,
     ];
     for group in FilterGroup::ALL {
@@ -3318,6 +3492,157 @@ mod tests {
             .is_enabled());
     }
 
+    /// Filter ▸ Convert for Smart Filters is in the Filter menu and greyed
+    /// out with its specific reason in every state — with a pixel layer
+    /// active, with a filter already run — never enabled as a silent no-op.
+    #[test]
+    fn convert_for_smart_filters_is_listed_and_greyed_with_its_reason() {
+        assert!(filter_menu()
+            .actions()
+            .contains(&MenuAction::ConvertForSmartFilters));
+        assert!(MenuAction::all().contains(&MenuAction::ConvertForSmartFilters));
+        assert_eq!(
+            MenuAction::ConvertForSmartFilters.label(),
+            "Convert for Smart Filters"
+        );
+        let (doc, group, inside, _b) = stacked_document();
+        for ctx in [
+            MenuContext::default(),
+            ctx_with_layer(&doc, inside),
+            ctx_with_layer(&doc, group),
+            MenuContext {
+                last_filter: Some(FilterId::Mosaic),
+                ..ctx_with_layer(&doc, inside)
+            },
+        ] {
+            assert_eq!(
+                MenuAction::ConvertForSmartFilters.resolve(&ctx).reason(),
+                Some(SMART_FILTERS_UNSUPPORTED)
+            );
+        }
+        assert!(SMART_FILTERS_UNSUPPORTED.len() > 30);
+    }
+
+    /// The Photopea rows the parity audit found missing are in the submenu
+    /// Photopea files them under, and parameterless ones apply without the
+    /// ellipsis that promises a dialog.
+    #[test]
+    fn the_photopea_parity_filters_sit_in_their_submenus() {
+        let expect: &[(FilterId, FilterGroup, &str)] = &[
+            (FilterId::Average, FilterGroup::Blur, "Average"),
+            (FilterId::Blur, FilterGroup::Blur, "Blur"),
+            (FilterId::BlurMore, FilterGroup::Blur, "Blur More"),
+            (FilterId::SmartBlur, FilterGroup::Blur, "Smart Blur…"),
+            (FilterId::Sharpen, FilterGroup::Sharpen, "Sharpen"),
+            (FilterId::SharpenMore, FilterGroup::Sharpen, "Sharpen More"),
+            (
+                FilterId::SharpenEdges,
+                FilterGroup::Sharpen,
+                "Sharpen Edges",
+            ),
+            (FilterId::Displace, FilterGroup::Distort, "Displace…"),
+            (FilterId::Facet, FilterGroup::Pixelate, "Facet"),
+            (FilterId::Fragment, FilterGroup::Pixelate, "Fragment"),
+            (FilterId::Mezzotint, FilterGroup::Pixelate, "Mezzotint…"),
+            (FilterId::Extrude, FilterGroup::Stylize, "Extrude…"),
+            (FilterId::Tiles, FilterGroup::Stylize, "Tiles…"),
+            (
+                FilterId::TraceContour,
+                FilterGroup::Stylize,
+                "Trace Contour…",
+            ),
+        ];
+        let listed = filter_menu().actions();
+        for (id, group, label) in expect {
+            assert_eq!(id.group(), *group, "{id:?}");
+            assert_eq!(id.label(), *label, "{id:?}");
+            assert!(
+                listed.contains(&MenuAction::Filter(*id)),
+                "{id:?} is not in the menu"
+            );
+        }
+    }
+
+    #[test]
+    fn image_mode_lists_both_depths_ticks_the_documents_and_says_why_neither_converts() {
+        let mode = image_menu()
+            .entries
+            .into_iter()
+            .find_map(|e| match e {
+                Entry::Submenu {
+                    label: "Mode",
+                    entries,
+                } => Some(entries),
+                _ => None,
+            })
+            .expect("Image has a Mode submenu");
+        let actions: Vec<MenuAction> = mode
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Item(a) => Some(*a),
+                _ => None,
+            })
+            .collect();
+        for depth in ChannelDepth::ALL {
+            assert!(
+                actions.contains(&MenuAction::SetBitDepth(*depth)),
+                "{depth:?} is missing from Image > Mode"
+            );
+            assert!(menu_actions().contains(&MenuAction::SetBitDepth(*depth)));
+        }
+        let mut doc = Document::new(8, 8, "deep");
+        doc.meta.bit_depth = 16;
+        let ctx = MenuContext::from_document(&doc, &History::default());
+        assert_eq!(ctx.bit_depth, ChannelDepth::Sixteen);
+        assert_eq!(
+            MenuAction::SetBitDepth(ChannelDepth::Sixteen).checked(&ctx),
+            Some(true)
+        );
+        assert_eq!(
+            MenuAction::SetBitDepth(ChannelDepth::Eight).checked(&ctx),
+            Some(false)
+        );
+        for depth in ChannelDepth::ALL {
+            let reason = MenuAction::SetBitDepth(*depth).resolve(&ctx).reason();
+            assert!(reason.is_some(), "{depth:?} has no reason: {reason:?}");
+        }
+        assert_eq!(
+            MenuAction::SetBitDepth(ChannelDepth::Sixteen)
+                .resolve(&ctx)
+                .reason(),
+            Some("The document is already at that depth")
+        );
+        let shallow = MenuContext::from_document(&Document::new(8, 8, "s"), &History::default());
+        assert!(MenuAction::SetBitDepth(ChannelDepth::Sixteen)
+            .resolve(&shallow)
+            .reason()
+            .is_some_and(|r| r.contains("8-bit tiles")));
+        // Every reason is one clean sentence: a lost `\` continuation
+        // once left a run of indentation mid-sentence in the greyed row.
+        for from in ChannelDepth::ALL {
+            for to in ChannelDepth::ALL {
+                let reason = to.conversion_reason(*from).unwrap_or_default();
+                assert!(
+                    !reason.contains("  ") && reason == reason.trim(),
+                    "{from:?} -> {to:?} reason has a whitespace run: {reason:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn feather_is_shift_f6() {
+        assert_eq!(
+            MenuAction::Modify(ModifySelection::Feather).shortcut(),
+            Some(Shortcut {
+                ctrl: false,
+                alt: false,
+                shift: true,
+                key: Key::F(6),
+            })
+        );
+    }
+
     #[test]
     fn an_unsupported_colour_mode_is_disabled_rather_than_hidden() {
         let ctx = MenuContext {
@@ -3331,8 +3656,11 @@ mod tests {
             MenuAction::SetColorMode(ColorMode::Cmyk)
                 .resolve(&ctx)
                 .reason(),
-            Some("This build cannot convert to that colour mode yet")
+            ColorMode::Cmyk.unsupported_reason()
         );
+        assert!(ColorMode::Cmyk
+            .unsupported_reason()
+            .is_some_and(|r| r.contains("ink")));
         // And it is still in the menu, so the user can see the product's edge.
         assert!(menu_actions().contains(&MenuAction::SetColorMode(ColorMode::Cmyk)));
     }

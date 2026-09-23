@@ -3,7 +3,8 @@
 //! Three files, all JSON, all in one directory:
 //!
 //! ```text
-//! preferences.json   theme, UI scale, autosave, history depth, scratch, keymap
+//! preferences.json   theme, UI scale, units, language, wheel, autosave,
+//!                    history depth, scratch, keymap
 //! recent.json        the recent-files list (see [`crate::recent`])
 //! sessions/{pid}.json  one "this run is alive" marker per running instance
 //!                      (see [`crate::session`])
@@ -153,6 +154,51 @@ impl From<ui::dialogs::ThemeChoice> for ThemeChoice {
     }
 }
 
+/// The application-wide measurement unit: what the rulers read in and what
+/// the size readouts the editor writes are spelled in.
+///
+/// Its own serialized enum rather than [`ui::dialogs::Unit`] so the file
+/// format does not move when the dialog crate renames a variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnitChoice {
+    #[default]
+    Px,
+    In,
+    Cm,
+    Mm,
+    Pt,
+    Percent,
+}
+
+impl From<UnitChoice> for ui::dialogs::Unit {
+    fn from(u: UnitChoice) -> Self {
+        match u {
+            UnitChoice::Px => Self::Pixels,
+            UnitChoice::In => Self::Inches,
+            UnitChoice::Cm => Self::Centimeters,
+            UnitChoice::Mm => Self::Millimeters,
+            UnitChoice::Pt => Self::Points,
+            UnitChoice::Percent => Self::Percent,
+        }
+    }
+}
+
+impl From<ui::dialogs::Unit> for UnitChoice {
+    /// Picas are not a preference choice (no ruler reads in them); they fall
+    /// back to pixels, the same answer the dialog's sanitizer gives.
+    fn from(u: ui::dialogs::Unit) -> Self {
+        match u {
+            ui::dialogs::Unit::Inches => Self::In,
+            ui::dialogs::Unit::Centimeters => Self::Cm,
+            ui::dialogs::Unit::Millimeters => Self::Mm,
+            ui::dialogs::Unit::Points => Self::Pt,
+            ui::dialogs::Unit::Percent => Self::Percent,
+            ui::dialogs::Unit::Pixels | ui::dialogs::Unit::Picas => Self::Px,
+        }
+    }
+}
+
 /// Window size and position, restored between sessions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowGeometry {
@@ -212,6 +258,14 @@ fn default_history_depth() -> usize {
     editor_core::DEFAULT_HISTORY_LIMIT
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_language() -> String {
+    ui::strings::Locale::En.code().to_string()
+}
+
 /// Everything the application remembers about how the user likes it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -230,6 +284,16 @@ pub struct Preferences {
     pub scratch_dir: Option<PathBuf>,
     pub keymap_overrides: Vec<KeyOverride>,
     pub window: Option<WindowGeometry>,
+    /// The measurement unit the rulers and the size readouts use.
+    pub units: UnitChoice,
+    /// The strings-catalogue locale, as its BCP-47 code. A code the catalogue
+    /// does not carry is replaced by English on load.
+    #[serde(default = "default_language")]
+    pub language: String,
+    /// A plain wheel zooms the canvas (Photopea's default). Off, the plain
+    /// wheel pans and Ctrl+wheel zooms.
+    #[serde(default = "default_true")]
+    pub scroll_wheel_zooms: bool,
 }
 
 impl Default for Preferences {
@@ -242,6 +306,9 @@ impl Default for Preferences {
             scratch_dir: None,
             keymap_overrides: Vec::new(),
             window: None,
+            units: UnitChoice::default(),
+            language: default_language(),
+            scroll_wheel_zooms: true,
         }
     }
 }
@@ -276,7 +343,22 @@ impl Preferences {
             .history_depth
             .clamp(Self::MIN_HISTORY_DEPTH, Self::MAX_HISTORY_DEPTH);
         self.window = self.window.map(WindowGeometry::sanitized);
+        self.language = self.locale().code().to_string();
+        // An empty scratch path is "the default", not "the working directory".
+        if self
+            .scratch_dir
+            .as_ref()
+            .is_some_and(|p| p.as_os_str().to_string_lossy().trim().is_empty())
+        {
+            self.scratch_dir = None;
+        }
         self
+    }
+
+    /// The catalogue locale the language code names (English for any code the
+    /// catalogue does not carry).
+    pub fn locale(&self) -> ui::strings::Locale {
+        ui::strings::Locale::from_code(&self.language)
     }
 
     pub fn autosave_interval(&self) -> Option<std::time::Duration> {
@@ -345,6 +427,9 @@ mod tests {
                 height: 800,
                 maximized: false,
             }),
+            units: UnitChoice::Cm,
+            language: "en".to_string(),
+            scroll_wheel_zooms: false,
         };
 
         prefs.save(&paths.preferences_file()).unwrap();
@@ -417,6 +502,46 @@ mod tests {
             ThemeChoice::Light.resolve(design::Theme::Dark),
             design::Theme::Light
         );
+    }
+
+    #[test]
+    fn an_older_file_reads_the_new_fields_as_their_defaults() {
+        // A preferences file written before units / language / wheel existed.
+        let dir = tmp();
+        let path = dir.path().join("preferences.json");
+        std::fs::write(&path, r#"{"theme":"light","ui_scale":1.5}"#).unwrap();
+        let p = Preferences::load(&path);
+        assert_eq!(p.units, UnitChoice::Px);
+        assert_eq!(p.language, "en");
+        assert!(p.scroll_wheel_zooms, "a plain wheel zooms by default");
+    }
+
+    #[test]
+    fn an_unknown_language_code_falls_back_to_english_on_load() {
+        let dir = tmp();
+        let path = dir.path().join("preferences.json");
+        std::fs::write(&path, r#"{"language":"xx-not-a-locale","units":"cm"}"#).unwrap();
+        let p = Preferences::load(&path);
+        assert_eq!(p.language, "en");
+        assert_eq!(p.locale(), ui::strings::Locale::En);
+        assert_eq!(p.units, UnitChoice::Cm);
+    }
+
+    #[test]
+    fn every_unit_choice_round_trips_through_the_dialogs_unit() {
+        for u in [
+            UnitChoice::Px,
+            UnitChoice::In,
+            UnitChoice::Cm,
+            UnitChoice::Mm,
+            UnitChoice::Pt,
+            UnitChoice::Percent,
+        ] {
+            let dialog: ui::dialogs::Unit = u.into();
+            assert!(ui::dialogs::Unit::PREFERENCE_CHOICES.contains(&dialog));
+            assert_eq!(UnitChoice::from(dialog), u);
+        }
+        assert_eq!(UnitChoice::from(ui::dialogs::Unit::Picas), UnitChoice::Px);
     }
 
     #[test]

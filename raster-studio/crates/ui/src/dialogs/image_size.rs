@@ -113,6 +113,29 @@ impl ImageSizeDialog {
         }
     }
 
+    /// Open the fields in the application's measurement unit (the Units
+    /// preference): a printed length goes on the Document Size menu, pixels
+    /// or percent on the Pixel Dimensions menu. The other menu keeps its
+    /// default.
+    pub fn with_unit(mut self, unit: Unit) -> Self {
+        if unit.is_physical() {
+            self.print_unit = unit;
+        } else {
+            self.pixel_unit = unit;
+        }
+        self
+    }
+
+    /// The unit the Pixel Dimensions fields are typed in.
+    pub fn pixel_unit(&self) -> Unit {
+        self.pixel_unit
+    }
+
+    /// The unit the Document Size fields are typed in.
+    pub fn print_unit(&self) -> Unit {
+        self.print_unit
+    }
+
     /// The size the document had when the dialog opened.
     pub fn original(&self) -> (u32, u32) {
         (self.original_width, self.original_height)
@@ -617,6 +640,18 @@ fn sane_ppi(ppi: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::dialogs::chrome::test_support::frame_both_themes;
+
+    #[test]
+    fn with_unit_puts_a_printed_length_on_the_document_menu_and_pixels_on_the_pixel_menu() {
+        let d = ImageSizeDialog::new(100, 100, 72.0).with_unit(Unit::Centimeters);
+        assert_eq!(d.print_unit(), Unit::Centimeters);
+        assert_eq!(d.pixel_unit(), Unit::Pixels);
+        let d = ImageSizeDialog::new(100, 100, 72.0).with_unit(Unit::Percent);
+        assert_eq!(d.pixel_unit(), Unit::Percent);
+        assert_eq!(d.print_unit(), Unit::Inches);
+        // The size itself is untouched by the unit it is shown in.
+        assert_eq!((d.width(), d.height()), (100, 100));
+    }
 
     #[test]
     fn the_aspect_ratio_is_reduced_to_integers() {

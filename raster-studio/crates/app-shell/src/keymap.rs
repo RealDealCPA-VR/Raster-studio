@@ -524,7 +524,158 @@ pub fn menu_twin(action: Action) -> Option<MenuAction> {
     })
 }
 
+/// The egui key a keymap key is pressed as — the inverse of
+/// [`crate::chrome::chord_from_egui`]'s key mapping.
+///
+/// `None` for a character egui has no key for; such a chord cannot be shown
+/// in (or edited by) the Preferences dialog's keymap page, and
+/// [`Keymap::apply_editor_model`] leaves its override alone.
+fn egui_key_of(key: Key) -> Option<egui::Key> {
+    use egui::Key as K;
+    Some(match key {
+        Key::Tab => K::Tab,
+        Key::Space => K::Space,
+        Key::Enter => K::Enter,
+        Key::Escape => K::Escape,
+        Key::Backspace => K::Backspace,
+        Key::Delete => K::Delete,
+        Key::ArrowLeft => K::ArrowLeft,
+        Key::ArrowRight => K::ArrowRight,
+        Key::ArrowUp => K::ArrowUp,
+        Key::ArrowDown => K::ArrowDown,
+        Key::Char('-') => K::Minus,
+        Key::Char('+') => K::Plus,
+        Key::Char('=') => K::Equals,
+        Key::Char(',') => K::Comma,
+        Key::Char('.') => K::Period,
+        Key::Char(';') => K::Semicolon,
+        Key::Char(':') => K::Colon,
+        Key::Char('/') => K::Slash,
+        Key::Char('\\') => K::Backslash,
+        Key::Char('|') => K::Pipe,
+        Key::Char('?') => K::Questionmark,
+        Key::Char('[') => K::OpenBracket,
+        Key::Char(']') => K::CloseBracket,
+        Key::Char('`') => K::Backtick,
+        Key::Char('\'') => K::Quote,
+        Key::Char(c) if c.is_ascii_alphanumeric() => {
+            K::from_name(&c.to_ascii_uppercase().to_string())?
+        }
+        Key::Char(_) => return None,
+        Key::Function(n) => K::from_name(&format!("F{n}"))?,
+    })
+}
+
+/// A keymap chord as the Preferences dialog's keymap editor holds it.
+pub fn editor_shortcut_of_chord(chord: &Chord) -> Option<ui::dialogs::Shortcut> {
+    Some(ui::dialogs::Shortcut {
+        key: egui_key_of(chord.key)?,
+        ctrl: chord.ctrl_or_cmd,
+        shift: chord.shift,
+        alt: chord.alt,
+    })
+}
+
+/// The chord a shortcut captured by the Preferences dialog stands for.
+pub fn chord_of_editor_shortcut(shortcut: ui::dialogs::Shortcut) -> Option<Chord> {
+    crate::chrome::chord_from_egui(shortcut.key, shortcut.modifiers())
+}
+
 impl Keymap {
+    /// The Preferences dialog's model of this keymap: every [`Action`] as a
+    /// bindable command (keyed by [`Action::id`]), the shipped table as the
+    /// defaults, and the effective table — user layer included — as the
+    /// bindings in force.
+    ///
+    /// A chord egui cannot spell is left out of both tables, so it is neither
+    /// shown nor reported as a change; [`Keymap::apply_editor_model`] keeps
+    /// any override on such a chord as it was.
+    pub fn editor_model(&self) -> ui::dialogs::Keymap {
+        let commands = Action::all()
+            .into_iter()
+            .map(|a| {
+                ui::dialogs::preferences::KeyCommand::new(a.id(), a.category().title(), a.label())
+            })
+            .collect();
+        let convert = |bindings: Vec<Binding>| {
+            bindings
+                .into_iter()
+                .filter_map(|b| Some((editor_shortcut_of_chord(&b.chord)?, b.action.id())))
+                .collect::<Vec<_>>()
+        };
+        // The menu-only chords `resolve_any` falls back to (Ctrl+A Select
+        // All, Ctrl+E Merge Down): not bindable commands here, but a key the
+        // menu paints. Handed to the editor as held, so binding one is a
+        // conflict the user decides rather than a silent steal of the menu's
+        // shortcut. A chord the user unbound falls through to nothing, and one
+        // the application's table answers is already in the table.
+        let reserved: Vec<(ui::dialogs::Shortcut, String)> = self
+            .menu
+            .iter()
+            .filter(|(chord, _)| self.resolve(chord).is_none())
+            .filter(|(chord, _)| {
+                !self
+                    .overrides
+                    .iter()
+                    .any(|o| o.chord == **chord && o.action.is_none())
+            })
+            .filter_map(|(chord, menu)| Some((editor_shortcut_of_chord(chord)?, menu.label())))
+            .collect();
+        ui::dialogs::Keymap::new(
+            commands,
+            convert(Self::defaults()),
+            convert(self.bindings()),
+        )
+        .with_reserved(reserved)
+    }
+
+    /// Adopt the table the Preferences dialog confirmed.
+    ///
+    /// The dialog's [`ui::dialogs::Keymap::changes`] is the diff against the
+    /// shipped table, which is exactly this keymap's user layer: a chord bound
+    /// to something other than its default becomes an override naming the
+    /// action, a default chord the user removed becomes an unbinding override.
+    /// Overrides the diff can never re-emit are carried over untouched: one on
+    /// a chord the dialog cannot spell, and an unbinding of a chord the
+    /// shipped table does not hold — a menu-only chord such as Ctrl+E Merge
+    /// Down, whose unbinding is what stops [`Keymap::resolve_any`] falling
+    /// through to the menu. [`ui::dialogs::Keymap::changes`] reports only
+    /// removals of *default* chords, so dropping such an override here would
+    /// silently undo a stored customisation on every Preferences OK. A chord
+    /// the dialog does bind replaces a carried override on the same chord,
+    /// and the dialog's Reset ([`ui::dialogs::Keymap::was_reset`]) drops the
+    /// carried menu-chord unbindings too: Reset means the shipped table.
+    pub fn apply_editor_model(&mut self, model: &ui::dialogs::Keymap) {
+        let defaults: Vec<Chord> = Self::defaults().into_iter().map(|b| b.chord).collect();
+        let mut overrides: Vec<KeyOverride> = self
+            .overrides
+            .iter()
+            .filter(|o| {
+                editor_shortcut_of_chord(&o.chord).is_none()
+                    || (!model.was_reset() && o.action.is_none() && !defaults.contains(&o.chord))
+            })
+            .cloned()
+            .collect();
+        for change in model.changes() {
+            let (shortcut, action) = match change {
+                ui::dialogs::preferences::KeyChange::Bound { shortcut, command } => {
+                    let Some(action) = Action::from_id(&command) else {
+                        continue;
+                    };
+                    (shortcut, Some(action))
+                }
+                ui::dialogs::preferences::KeyChange::Unbound { shortcut } => (shortcut, None),
+            };
+            let Some(chord) = chord_of_editor_shortcut(shortcut) else {
+                continue;
+            };
+            overrides.retain(|o| o.chord != chord);
+            overrides.push(KeyOverride { chord, action });
+        }
+        self.overrides = overrides;
+        self.rebuild();
+    }
+
     /// The built-in table: the Photoshop/Photopea set this application ships.
     ///
     /// Returned as a list rather than a map so [`conflicts`] can see a mistake
@@ -746,6 +897,172 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_default_chord_round_trips_through_the_dialogs_shortcut() {
+        for b in Keymap::defaults() {
+            let shortcut = editor_shortcut_of_chord(&b.chord)
+                .unwrap_or_else(|| panic!("{} has no dialog spelling", b.chord));
+            assert_eq!(
+                chord_of_editor_shortcut(shortcut),
+                Some(b.chord),
+                "{}",
+                b.chord
+            );
+        }
+    }
+
+    #[test]
+    fn the_editor_model_of_a_fresh_keymap_is_the_shipped_table_with_no_changes() {
+        let model = Keymap::default().editor_model();
+        assert!(model.is_default());
+        assert!(model.changes().is_empty());
+        assert_eq!(model.commands().len(), Action::all().len());
+        assert_eq!(
+            model.command_for(ui::dialogs::Shortcut::ctrl(egui::Key::S)),
+            Some(Action::Save.id().as_str())
+        );
+    }
+
+    #[test]
+    fn an_override_bound_in_the_dialog_resolves_after_it_is_applied() {
+        let mut live = Keymap::default();
+        let mut model = live.editor_model();
+        // Ctrl+Shift+F12: a chord nothing ships.
+        let free = ui::dialogs::Shortcut {
+            key: egui::Key::F12,
+            ctrl: true,
+            shift: true,
+            alt: false,
+        };
+        model.assign(&Action::Export.id(), free).unwrap();
+        // And a default removed.
+        model.unbind(ui::dialogs::Shortcut::plain(egui::Key::X));
+        let chord = chord_of_editor_shortcut(free).unwrap();
+        assert_eq!(live.resolve(&chord), None, "not before OK");
+        live.apply_editor_model(&model);
+        assert_eq!(live.resolve(&chord), Some(Action::Export));
+        assert_eq!(live.resolve(&Chord::letter('x')), None);
+        assert_eq!(
+            live.resolve_any(&Chord::letter('x')),
+            None,
+            "an unbind does not fall through to the menu table"
+        );
+        // The dialog re-opened on the live map shows exactly what was applied.
+        let reopened = live.editor_model();
+        assert_eq!(reopened.changes(), model.changes());
+    }
+
+    #[test]
+    fn a_conflict_in_the_dialog_is_reported_and_leaves_the_live_map_alone() {
+        let mut live = Keymap::default();
+        let mut model = live.editor_model();
+        let ctrl_s = ui::dialogs::Shortcut::ctrl(egui::Key::S);
+        let err = model.assign(&Action::Export.id(), ctrl_s).unwrap_err();
+        assert_eq!(
+            err,
+            ui::dialogs::KeymapError::Conflict {
+                held_by: Action::Save.id()
+            }
+        );
+        live.apply_editor_model(&model);
+        assert_eq!(
+            live.resolve(&Chord::ctrl(Key::character('s'))),
+            Some(Action::Save)
+        );
+        assert!(live.overrides().is_empty());
+    }
+
+    #[test]
+    fn binding_a_menu_only_chord_in_the_dialog_is_a_conflict_naming_the_menu_item() {
+        // Ctrl+A and Ctrl+E are not in the application's table; the menu bar
+        // paints them beside Select ▸ All and Layer ▸ Merge Down, and
+        // `resolve_any` falls back to them. The dialog must see them as held.
+        let live = Keymap::default();
+        for (key, menu) in [
+            (egui::Key::A, MenuAction::SelectAll),
+            (egui::Key::E, MenuAction::MergeDown),
+        ] {
+            let chord = chord_of_editor_shortcut(ui::dialogs::Shortcut::ctrl(key)).unwrap();
+            assert_eq!(live.resolve(&chord), None, "{chord} is menu-only");
+            assert_eq!(live.resolve_any(&chord), Some(Resolved::Menu(menu)));
+            let mut model = live.editor_model();
+            let err = model
+                .assign(&Action::Export.id(), ui::dialogs::Shortcut::ctrl(key))
+                .unwrap_err();
+            assert_eq!(
+                err,
+                ui::dialogs::KeymapError::Conflict {
+                    held_by: menu.label()
+                },
+                "{chord}"
+            );
+            assert!(model.changes().is_empty(), "a refusal binds nothing");
+        }
+    }
+
+    #[test]
+    fn a_menu_chord_taken_on_purpose_wins_after_ok() {
+        let mut live = Keymap::default();
+        let ctrl_a = ui::dialogs::Shortcut::ctrl(egui::Key::A);
+        let chord = chord_of_editor_shortcut(ctrl_a).unwrap();
+        let mut model = live.editor_model();
+        // The user was told and chose to take it.
+        assert_eq!(
+            model.force_assign(&Action::Export.id(), ctrl_a),
+            Some(MenuAction::SelectAll.label())
+        );
+        live.apply_editor_model(&model);
+        assert_eq!(
+            live.resolve_any(&chord),
+            Some(Resolved::App(Action::Export))
+        );
+        // Re-opened, the chord is the application's own, not reserved.
+        assert_eq!(live.editor_model().reserved_by(ctrl_a), None);
+    }
+
+    /// Round-3 review: an untouched Preferences OK dropped a stored unbinding
+    /// of a menu-only chord (Ctrl+E Merge Down), because the dialog's diff
+    /// only reports removals of *default* chords.
+    #[test]
+    fn an_unbound_menu_chord_survives_an_untouched_dialog_ok_and_reset_restores_it() {
+        let mut live = Keymap::default();
+        let ctrl_e = Chord::ctrl(Key::character('e'));
+        live.unbind(ctrl_e);
+        assert_eq!(live.resolve_any(&ctrl_e), None);
+        let before = live.overrides().to_vec();
+
+        // Preferences opened and confirmed without touching the keymap page.
+        let model = live.editor_model();
+        live.apply_editor_model(&model);
+        assert_eq!(live.overrides(), &before[..]);
+        assert_eq!(live.resolve_any(&ctrl_e), None, "the unbind was dropped");
+
+        // The dialog's Reset asks for the shipped table: the menu item is back.
+        let mut model = live.editor_model();
+        model.reset();
+        live.apply_editor_model(&model);
+        assert!(live.overrides().is_empty());
+        assert_eq!(
+            live.resolve_any(&ctrl_e),
+            Some(Resolved::Menu(MenuAction::MergeDown))
+        );
+    }
+
+    #[test]
+    fn resetting_in_the_dialog_drops_the_user_layer() {
+        let mut live = Keymap::default();
+        live.force_bind(Chord::ctrl(Key::character('s')), Action::Export);
+        let mut model = live.editor_model();
+        assert!(!model.is_default());
+        model.reset();
+        live.apply_editor_model(&model);
+        assert!(live.overrides().is_empty());
+        assert_eq!(
+            live.resolve(&Chord::ctrl(Key::character('s'))),
+            Some(Action::Save)
+        );
+    }
 
     #[test]
     fn chords_round_trip_through_text() {

@@ -1,0 +1,1547 @@
+//! W3-I: every palette tool, driven through the real pointer route.
+//!
+//! Each test here selects a tool the way the palette does
+//! (`ui::Intent::SelectTool` → `menu_bridge::pick` → `menu_bridge::record` →
+//! `ChromeOutput::select_tool` → `Editor::set_tool`, the exact steps
+//! `shell.rs` performs), performs a realistic gesture through
+//! `app_shell::tool_input::ToolPointer::handle` — the route `shell.rs` feeds
+//! winit pointer events into — on a fixture document with known pixels, and
+//! asserts an observable specific to that tool: which pixels changed and in
+//! which direction, or which pixels the selection now covers. Every editing
+//! gesture must land as exactly ONE history entry, and one Undo through the
+//! editor's own action route must restore the document byte for byte.
+//!
+//! A tool that fails its route test here is a real bug in the product, not in
+//! the test: the history of this project says an untested route hides a dead
+//! tool.
+
+use app_shell::action::Action;
+use app_shell::edit_target::EditTargetKind;
+use app_shell::editor::Editor;
+use app_shell::tool_input::{PointerOutcome, ToolPointer};
+use app_shell::{menu_bridge, ChromeOutput};
+use editor_core::Selection;
+use glam::{IVec2, Vec2};
+use integration_tests::app::{self, DocExt};
+use tools::{Modifiers, ToolId};
+use ui::canvas::Route;
+
+// --------------------------------------------------------------- fixtures --
+
+/// The fixture canvas. Large enough for the 60 px dodge/burn/sponge brushes
+/// to leave untouched pixels around a stroke, small enough that a 400 × 300
+/// viewport shows all of it at 100%.
+const W: u32 = 128;
+const H: u32 = 128;
+
+const RED: [u8; 4] = [255, 0, 0, 255];
+const BLUE: [u8; 4] = [0, 0, 255, 255];
+const WHITE: [u8; 4] = [255, 255, 255, 255];
+const GREY: [u8; 4] = [160, 160, 160, 255];
+const MID_GREY: [u8; 4] = [128, 128, 128, 255];
+const DARK: [u8; 4] = [40, 40, 40, 255];
+const DARK_RED: [u8; 4] = [128, 0, 0, 255];
+const BLACK: [u8; 4] = [0, 0, 0, 255];
+/// The two tones of the 4 px checker the blur/sharpen tests read variance off.
+const CHECKER_LO: [u8; 4] = [96, 96, 96, 255];
+const CHECKER_HI: [u8; 4] = [160, 160, 160, 255];
+/// A saturated red the sponge desaturates.
+const SATURATED: [u8; 4] = [200, 60, 60, 255];
+/// Flash-red pupil colour for the red-eye fixture.
+const PUPIL: [u8; 4] = [220, 30, 30, 255];
+
+/// Left half red, right half blue, split at x = 64.
+fn halves(x: u32, _y: u32) -> [u8; 4] {
+    if x < 64 {
+        RED
+    } else {
+        BLUE
+    }
+}
+
+fn mid_grey(_x: u32, _y: u32) -> [u8; 4] {
+    MID_GREY
+}
+
+fn white(_x: u32, _y: u32) -> [u8; 4] {
+    WHITE
+}
+
+fn saturated(_x: u32, _y: u32) -> [u8; 4] {
+    SATURATED
+}
+
+/// A 4 px checker of two greys.
+fn checker4(x: u32, y: u32) -> [u8; 4] {
+    if (x / 4 + y / 4).is_multiple_of(2) {
+        CHECKER_LO
+    } else {
+        CHECKER_HI
+    }
+}
+
+fn disc(x: u32, y: u32, cx: u32, cy: u32, r: u32) -> bool {
+    let dx = x as i64 - cx as i64;
+    let dy = y as i64 - cy as i64;
+    dx * dx + dy * dy <= (r * r) as i64
+}
+
+/// Light grey with a dark blemish of radius 4 at `(cx, cy)`.
+fn spot_at(cx: u32, cy: u32) -> impl Fn(u32, u32) -> [u8; 4] {
+    move |x, y| if disc(x, y, cx, cy, 4) { DARK } else { GREY }
+}
+
+/// Light grey with a flash-red pupil of radius 8 at the centre.
+fn red_eye(x: u32, y: u32) -> [u8; 4] {
+    if disc(x, y, 64, 64, 8) {
+        PUPIL
+    } else {
+        GREY
+    }
+}
+
+/// White with a blue wall at x in 60..68 splitting it into two white regions.
+fn wall(x: u32, _y: u32) -> [u8; 4] {
+    if (60..68).contains(&x) {
+        BLUE
+    } else {
+        WHITE
+    }
+}
+
+/// White with a black square over 40..88 on both axes — a strong edge for
+/// the magnetic lasso to snap onto.
+fn black_square(x: u32, y: u32) -> [u8; 4] {
+    if (40..88).contains(&x) && (40..88).contains(&y) {
+        BLACK
+    } else {
+        WHITE
+    }
+}
+
+/// Left half dark red, right half white.
+fn dark_red_left(x: u32, _y: u32) -> [u8; 4] {
+    if x < 64 {
+        DARK_RED
+    } else {
+        WHITE
+    }
+}
+
+// ---------------------------------------------------------------- harness --
+
+/// A shell editor over one `W × H` document whose pixels are `fixture`,
+/// baked through the real command route. The tempdir must outlive the editor.
+fn open(fixture: &dyn Fn(u32, u32) -> [u8; 4]) -> (tempfile::TempDir, Editor) {
+    let dir = tempfile::tempdir().expect("a tempdir");
+    let mut ed = app::shell_editor(dir.path(), W, H);
+    let layer = app::the_opened_layer(&ed);
+    ed.active_mut()
+        .expect("one document")
+        .paint_canvas(layer, fixture);
+    (dir, ed)
+}
+
+/// Select a tool the way a palette click does: the intent resolves through
+/// `menu_bridge::pick`, is recorded into the frame's `ChromeOutput`, and the
+/// shell applies `select_tool` to the editor (`shell.rs` apply_chrome).
+fn select_tool(ed: &mut Editor, id: ToolId) {
+    let pick = menu_bridge::pick(&ui::Intent::SelectTool(id), ed)
+        .unwrap_or_else(|| panic!("{id:?}: Intent::SelectTool did not route to a Pick"));
+    let mut out = ChromeOutput::default();
+    menu_bridge::record(pick, &mut out);
+    let tool = out
+        .select_tool
+        .unwrap_or_else(|| panic!("{id:?}: the pick did not record select_tool: {out:?}"));
+    ed.set_tool(tool);
+    assert_eq!(ed.tool(), id, "the palette intent did not select {id:?}");
+}
+
+fn composite(ed: &mut Editor) -> Vec<u8> {
+    ed.active_mut().expect("one document").composite_all()
+}
+
+fn px(buf: &[u8], x: u32, y: u32) -> [u8; 4] {
+    let i = ((y * W + x) * 4) as usize;
+    [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+}
+
+fn depth(ed: &Editor) -> usize {
+    ed.active().expect("one document").history_depth()
+}
+
+fn selection(ed: &Editor) -> Selection {
+    ed.active()
+        .expect("one document")
+        .document
+        .selection
+        .clone()
+}
+
+fn cov(ed: &Editor, x: i32, y: i32) -> f32 {
+    selection(ed).coverage_at(IVec2::new(x, y))
+}
+
+/// Edit ▸ Undo through the editor's own action route.
+fn undo(ed: &mut Editor) {
+    ed.dispatch(Action::Undo).expect("undo is available");
+}
+
+fn v(x: f32, y: f32) -> Vec2 {
+    Vec2::new(x, y)
+}
+
+fn drag(pointer: &mut ToolPointer, ed: &mut Editor, pts: &[Vec2]) -> Vec<PointerOutcome> {
+    app::shell_stroke(pointer, ed, pts)
+}
+
+fn click(pointer: &mut ToolPointer, ed: &mut Editor, at: Vec2) -> Vec<PointerOutcome> {
+    app::shell_click(pointer, ed, at)
+}
+
+fn alt_click(pointer: &mut ToolPointer, ed: &mut Editor, at: Vec2) -> Vec<PointerOutcome> {
+    app::shell_click_with(pointer, ed, at, Modifiers::alt())
+}
+
+/// Every sample of a gesture reached the tool and none was refused.
+fn all_reached(id: ToolId, outcomes: &[PointerOutcome]) {
+    for o in outcomes {
+        assert!(
+            o.reached_tool,
+            "{id:?}: a sample did not reach the tool: {o:?}"
+        );
+        assert_eq!(o.failed, None, "{id:?}: the tool refused a sample: {o:?}");
+    }
+}
+
+/// The document pixels a gesture changed, as `(x, y)`.
+fn changed(before: &[u8], after: &[u8]) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    for y in 0..H {
+        for x in 0..W {
+            if px(before, x, y) != px(after, x, y) {
+                out.push((x, y));
+            }
+        }
+    }
+    out
+}
+
+/// Distance from a pixel centre to the segment `a`–`b`.
+fn dist_to_segment(p: (u32, u32), a: Vec2, b: Vec2) -> f32 {
+    let p = Vec2::new(p.0 as f32 + 0.5, p.1 as f32 + 0.5);
+    let ab = b - a;
+    let t = if ab.length_squared() < 1e-6 {
+        0.0
+    } else {
+        ((p - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0)
+    };
+    (p - (a + ab * t)).length()
+}
+
+/// Every changed pixel lies within `radius` of the stroke's segment — the
+/// "changes pixels only inside the stroke" half of a retouch tool's contract.
+fn changed_only_within(id: ToolId, before: &[u8], after: &[u8], a: Vec2, b: Vec2, radius: f32) {
+    let moved = changed(before, after);
+    assert!(!moved.is_empty(), "{id:?}: the gesture changed no pixel");
+    let stray: Vec<_> = moved
+        .iter()
+        .copied()
+        .filter(|p| dist_to_segment(*p, a, b) > radius)
+        .collect();
+    assert!(
+        stray.is_empty(),
+        "{id:?}: {} pixel(s) changed outside the stroke's {radius} px reach, e.g. {:?}",
+        stray.len(),
+        &stray[..stray.len().min(5)]
+    );
+}
+
+/// Population variance of the red channel over the half-open window.
+fn variance(buf: &[u8], x0: u32, y0: u32, x1: u32, y1: u32) -> f64 {
+    let mut n = 0.0;
+    let mut sum = 0.0;
+    let mut sq = 0.0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let r = px(buf, x, y)[0] as f64;
+            n += 1.0;
+            sum += r;
+            sq += r * r;
+        }
+    }
+    let mean = sum / n;
+    sq / n - mean * mean
+}
+
+fn srgb_to_linear(c: u8) -> f64 {
+    let c = c as f64 / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_luminance(p: [u8; 4]) -> f64 {
+    0.2126 * srgb_to_linear(p[0]) + 0.7152 * srgb_to_linear(p[1]) + 0.0722 * srgb_to_linear(p[2])
+}
+
+fn saturation(p: [u8; 4]) -> i32 {
+    let hi = p[0].max(p[1]).max(p[2]) as i32;
+    let lo = p[0].min(p[1]).min(p[2]) as i32;
+    hi - lo
+}
+
+/// Two colours within `tol` on every channel.
+fn near(a: [u8; 4], b: [u8; 4], tol: u8) -> bool {
+    a.iter().zip(b.iter()).all(|(x, y)| x.abs_diff(*y) <= tol)
+}
+
+/// A pixel-editing gesture: the composite before, the composite after, one
+/// history entry, and the gesture's outcomes for the caller to inspect.
+struct PixelRun {
+    before: Vec<u8>,
+    after: Vec<u8>,
+}
+
+/// Select `id`, run `gesture`, and check the route-level contract every pixel
+/// tool shares: every sample reached the tool, exactly one history entry
+/// landed, and the composite changed. The tool-specific assertions follow in
+/// the caller; `undo_restores` closes the loop.
+fn run_pixel_route(
+    ed: &mut Editor,
+    pointer: &mut ToolPointer,
+    id: ToolId,
+    gesture: impl FnOnce(&mut ToolPointer, &mut Editor) -> Vec<PointerOutcome>,
+) -> PixelRun {
+    select_tool(ed, id);
+    let before = composite(ed);
+    let d0 = depth(ed);
+    let outcomes = gesture(pointer, ed);
+    all_reached(id, &outcomes);
+    let steps: usize = outcomes.iter().map(|o| o.steps).sum();
+    assert_eq!(
+        steps, 1,
+        "{id:?}: the gesture reported {steps} history steps, not one"
+    );
+    assert_eq!(
+        depth(ed),
+        d0 + 1,
+        "{id:?}: one gesture must land as exactly one history entry"
+    );
+    let after = composite(ed);
+    assert_ne!(after, before, "{id:?}: the gesture changed no pixel");
+    PixelRun { before, after }
+}
+
+/// One Undo restores the composite byte for byte and takes the entry back.
+fn undo_restores(ed: &mut Editor, id: ToolId, run: &PixelRun) {
+    let d = depth(ed);
+    undo(ed);
+    assert_eq!(depth(ed), d - 1, "{id:?}: undo did not take one entry back");
+    assert_eq!(
+        composite(ed),
+        run.before,
+        "{id:?}: undo did not restore the pixels byte for byte"
+    );
+}
+
+/// Select `id`, run `gesture`, and check the contract every selection tool
+/// shares: every sample reached the tool, exactly one history entry landed
+/// (`Command::SetSelection`), the selection changed, and no pixel moved.
+fn run_selection_route(
+    ed: &mut Editor,
+    pointer: &mut ToolPointer,
+    id: ToolId,
+    gesture: impl FnOnce(&mut ToolPointer, &mut Editor) -> Vec<PointerOutcome>,
+) -> Vec<u8> {
+    select_tool(ed, id);
+    assert_eq!(
+        selection(ed),
+        Selection::None,
+        "{id:?}: the fixture starts unselected"
+    );
+    let before = composite(ed);
+    let d0 = depth(ed);
+    let outcomes = gesture(pointer, ed);
+    all_reached(id, &outcomes);
+    assert!(
+        outcomes.iter().any(|o| o.selection_changed),
+        "{id:?}: no sample reported a selection change: {outcomes:?}"
+    );
+    assert_eq!(
+        depth(ed),
+        d0 + 1,
+        "{id:?}: one selection gesture must land as exactly one history entry"
+    );
+    assert_ne!(
+        selection(ed),
+        Selection::None,
+        "{id:?}: nothing was selected"
+    );
+    assert_eq!(
+        composite(ed),
+        before,
+        "{id:?}: a selection gesture moved pixels"
+    );
+    before
+}
+
+/// One Undo clears the selection again and leaves the pixels alone.
+fn undo_restores_selection(ed: &mut Editor, id: ToolId, before: &[u8]) {
+    let d = depth(ed);
+    undo(ed);
+    assert_eq!(depth(ed), d - 1, "{id:?}: undo did not take one entry back");
+    assert_eq!(
+        selection(ed),
+        Selection::None,
+        "{id:?}: undo did not restore the empty selection"
+    );
+    assert_eq!(composite(ed), before, "{id:?}: undo moved pixels");
+}
+
+// ------------------------------------------------------- selection tools --
+
+#[test]
+fn rect_marquee_selects_exactly_the_dragged_box() {
+    let id = ToolId::RectMarquee;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    let before = run_selection_route(&mut ed, &mut pointer, id, |p, ed| {
+        drag(p, ed, &[v(32.0, 32.0), v(64.0, 64.0), v(96.0, 96.0)])
+    });
+    assert_eq!(cov(&ed, 32, 32), 1.0, "the box's first pixel");
+    assert_eq!(cov(&ed, 95, 95), 1.0, "the box's last pixel");
+    assert_eq!(cov(&ed, 31, 64), 0.0, "one column left of the box");
+    assert_eq!(
+        cov(&ed, 96, 64),
+        0.0,
+        "the column the drag ended on is outside"
+    );
+    assert_eq!(cov(&ed, 64, 31), 0.0, "one row above");
+    assert_eq!(
+        cov(&ed, 64, 96),
+        0.0,
+        "the row the drag ended on is outside"
+    );
+    undo_restores_selection(&mut ed, id, &before);
+}
+
+#[test]
+fn ellipse_marquee_selects_the_inscribed_ellipse_of_the_drag() {
+    let id = ToolId::EllipseMarquee;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    let before = run_selection_route(&mut ed, &mut pointer, id, |p, ed| {
+        drag(p, ed, &[v(32.0, 32.0), v(64.0, 64.0), v(96.0, 96.0)])
+    });
+    assert_eq!(
+        cov(&ed, 64, 64),
+        1.0,
+        "the centre of the ellipse is selected"
+    );
+    assert_eq!(
+        cov(&ed, 64, 36),
+        1.0,
+        "a point inside the ellipse near its top rim"
+    );
+    assert_eq!(
+        cov(&ed, 33, 33),
+        0.0,
+        "the drag box's corner lies outside the ellipse and must not be selected"
+    );
+    assert_eq!(cov(&ed, 10, 10), 0.0, "outside the drag box");
+    undo_restores_selection(&mut ed, id, &before);
+}
+
+#[test]
+fn single_row_marquee_selects_exactly_the_clicked_row() {
+    let id = ToolId::SingleRowMarquee;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    let before = run_selection_route(&mut ed, &mut pointer, id, |p, ed| {
+        click(p, ed, v(10.5, 40.5))
+    });
+    assert_eq!(cov(&ed, 0, 40), 1.0, "row 40 is selected at the left edge");
+    assert_eq!(
+        cov(&ed, 127, 40),
+        1.0,
+        "row 40 is selected at the right edge"
+    );
+    assert_eq!(cov(&ed, 64, 39), 0.0, "the row above is not");
+    assert_eq!(cov(&ed, 64, 41), 0.0, "the row below is not");
+    undo_restores_selection(&mut ed, id, &before);
+}
+
+#[test]
+fn single_column_marquee_selects_exactly_the_clicked_column() {
+    let id = ToolId::SingleColumnMarquee;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    let before = run_selection_route(&mut ed, &mut pointer, id, |p, ed| {
+        click(p, ed, v(40.5, 10.5))
+    });
+    assert_eq!(cov(&ed, 40, 0), 1.0, "column 40 is selected at the top");
+    assert_eq!(
+        cov(&ed, 40, 127),
+        1.0,
+        "column 40 is selected at the bottom"
+    );
+    assert_eq!(cov(&ed, 39, 64), 0.0, "the column to the left is not");
+    assert_eq!(cov(&ed, 41, 64), 0.0, "the column to the right is not");
+    undo_restores_selection(&mut ed, id, &before);
+}
+
+/// The corners of a 20..100 square, closed, as a drag path.
+fn square_path() -> Vec<Vec2> {
+    vec![
+        v(20.0, 20.0),
+        v(60.0, 20.0),
+        v(100.0, 20.0),
+        v(100.0, 60.0),
+        v(100.0, 100.0),
+        v(60.0, 100.0),
+        v(20.0, 100.0),
+        v(20.0, 60.0),
+        v(20.0, 20.0),
+    ]
+}
+
+fn assert_square_selected(id: ToolId, ed: &Editor) {
+    assert_eq!(cov(ed, 60, 60), 1.0, "{id:?}: inside the outline");
+    assert_eq!(cov(ed, 25, 95), 1.0, "{id:?}: inside, near a corner");
+    assert_eq!(cov(ed, 10, 10), 0.0, "{id:?}: outside, top-left");
+    assert_eq!(cov(ed, 110, 60), 0.0, "{id:?}: outside, right");
+    assert_eq!(cov(ed, 60, 110), 0.0, "{id:?}: outside, below");
+}
+
+#[test]
+fn lasso_selects_the_region_the_drag_outlined() {
+    let id = ToolId::Lasso;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    let before = run_selection_route(&mut ed, &mut pointer, id, |p, ed| {
+        drag(p, ed, &square_path())
+    });
+    assert_square_selected(id, &ed);
+    undo_restores_selection(&mut ed, id, &before);
+}
+
+#[test]
+fn polygonal_lasso_closes_on_the_first_vertex_and_selects_the_polygon() {
+    let id = ToolId::PolygonalLasso;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    let before = run_selection_route(&mut ed, &mut pointer, id, |p, ed| {
+        let mut out = Vec::new();
+        for corner in [
+            v(20.0, 20.0),
+            v(100.0, 20.0),
+            v(100.0, 100.0),
+            v(20.0, 100.0),
+        ] {
+            let d = depth(ed);
+            out.extend(click(p, ed, corner));
+            assert_eq!(
+                depth(ed),
+                d,
+                "a corner click emitted a step before the close"
+            );
+        }
+        // Clicking back within POLYGON_CLOSE_PX of the first vertex closes.
+        out.extend(click(p, ed, v(21.0, 21.0)));
+        out
+    });
+    assert_square_selected(id, &ed);
+    undo_restores_selection(&mut ed, id, &before);
+}
+
+#[test]
+fn magnetic_lasso_snaps_the_guide_path_onto_the_image_edge() {
+    let id = ToolId::MagneticLasso;
+    let (_dir, mut ed) = open(&black_square);
+    let mut pointer = ToolPointer::new();
+    // A loose guide path 6 px outside the black square's edges (which sit at
+    // 40 and 88), sampled every 10 px so the tool keeps sparse anchors.
+    let mut path = Vec::new();
+    for x in (34..=94).step_by(10) {
+        path.push(v(x as f32, 34.0));
+    }
+    for y in (34..=94).step_by(10) {
+        path.push(v(94.0, y as f32));
+    }
+    for x in (34..=94).rev().step_by(10) {
+        path.push(v(x as f32, 94.0));
+    }
+    for y in (34..=94).rev().step_by(10) {
+        path.push(v(34.0, y as f32));
+    }
+    let before = run_selection_route(&mut ed, &mut pointer, id, |p, ed| drag(p, ed, &path));
+    assert_eq!(cov(&ed, 64, 64), 1.0, "the square's interior is selected");
+    assert_eq!(
+        cov(&ed, 44, 64),
+        1.0,
+        "inside the square, just past its left edge"
+    );
+    assert_eq!(cov(&ed, 10, 10), 0.0, "far outside");
+    // The magnetic claim: the guide ran at x = 34, but the selection edge is
+    // the image edge at x = 40 — a pixel between the two is NOT selected. A
+    // freehand fill of the same path would select it.
+    assert_eq!(
+        cov(&ed, 36, 64),
+        0.0,
+        "the path did not snap from the guide (x = 34) onto the edge (x = 40)"
+    );
+    undo_restores_selection(&mut ed, id, &before);
+}
+
+#[test]
+fn magic_wand_selects_the_contiguous_colour_under_the_click() {
+    let id = ToolId::MagicWand;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    let before = run_selection_route(&mut ed, &mut pointer, id, |p, ed| {
+        click(p, ed, v(32.0, 64.0))
+    });
+    assert_eq!(cov(&ed, 32, 64), 1.0, "the clicked pixel");
+    assert_eq!(
+        cov(&ed, 5, 120),
+        1.0,
+        "the far corner of the same red region"
+    );
+    assert_eq!(cov(&ed, 63, 64), 1.0, "the last red column");
+    assert_eq!(cov(&ed, 64, 64), 0.0, "the first blue column");
+    assert_eq!(cov(&ed, 96, 64), 0.0, "the blue half");
+    undo_restores_selection(&mut ed, id, &before);
+}
+
+#[test]
+fn quick_selection_grows_from_the_scrubbed_region_to_its_colour() {
+    let id = ToolId::QuickSelect;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    let before = run_selection_route(&mut ed, &mut pointer, id, |p, ed| {
+        drag(p, ed, &[v(20.0, 64.0), v(35.0, 64.0), v(50.0, 64.0)])
+    });
+    assert_eq!(cov(&ed, 35, 64), 1.0, "under the scrub");
+    assert_eq!(
+        cov(&ed, 63, 64),
+        1.0,
+        "the scrub's colour grows to the region's edge"
+    );
+    assert_eq!(cov(&ed, 64, 64), 0.0, "and stops at the blue");
+    assert_eq!(cov(&ed, 96, 64), 0.0, "the blue half is untouched");
+    undo_restores_selection(&mut ed, id, &before);
+}
+
+// --------------------------------------------------------- retouch tools --
+
+#[test]
+fn spot_healing_fills_the_blemish_from_its_surround() {
+    let id = ToolId::SpotHealing;
+    let (_dir, mut ed) = open(&spot_at(64, 64));
+    let mut pointer = ToolPointer::new();
+    let (a, b) = (v(60.0, 64.0), v(68.0, 64.0));
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| drag(p, ed, &[a, b]));
+    let centre_before = px(&run.before, 64, 64);
+    let centre_after = px(&run.after, 64, 64);
+    assert_eq!(centre_before, DARK);
+    assert!(
+        centre_after[0] > centre_before[0] + 60,
+        "the blemish did not blend toward its surround: {centre_before:?} -> {centre_after:?}"
+    );
+    assert_eq!(
+        px(&run.after, 64, 20),
+        GREY,
+        "outside the stroke is untouched"
+    );
+    // Brush 30 px: nothing beyond its 15 px radius (plus antialias) moves.
+    changed_only_within(id, &run.before, &run.after, a, b, 16.0);
+    undo_restores(&mut ed, id, &run);
+}
+
+#[test]
+fn healing_brush_takes_texture_from_the_alt_set_source_and_colour_from_the_surround() {
+    let id = ToolId::HealingBrush;
+    let (_dir, mut ed) = open(&spot_at(64, 64));
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    // Alt-click sets the source on clean grey and commits nothing.
+    let d0 = depth(&ed);
+    let src = alt_click(&mut pointer, &mut ed, v(24.0, 64.0));
+    all_reached(id, &src);
+    assert_eq!(depth(&ed), d0, "setting the source is not an edit");
+    let (a, b) = (v(60.0, 64.0), v(68.0, 64.0));
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| drag(p, ed, &[a, b]));
+    let centre_after = px(&run.after, 64, 64);
+    assert!(
+        centre_after[0] > DARK[0] + 60,
+        "the blemish did not heal toward the grey: {centre_after:?}"
+    );
+    assert_eq!(px(&run.after, 24, 64), GREY, "the source is only read");
+    changed_only_within(id, &run.before, &run.after, a, b, 21.0);
+    undo_restores(&mut ed, id, &run);
+}
+
+#[test]
+fn patch_lassoes_a_region_then_heals_it_from_where_it_is_dragged_to() {
+    let id = ToolId::Patch;
+    let (_dir, mut ed) = open(&spot_at(40, 64));
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    // Gesture one: outline the blemish. Nothing is committed yet.
+    let d0 = depth(&ed);
+    let outline = drag(
+        &mut pointer,
+        &mut ed,
+        &[
+            v(28.0, 52.0),
+            v(52.0, 52.0),
+            v(52.0, 76.0),
+            v(28.0, 76.0),
+            v(28.0, 52.0),
+        ],
+    );
+    all_reached(id, &outline);
+    assert_eq!(depth(&ed), d0, "drawing the outline is not an edit");
+    // Gesture two: drag the region onto clean pixels 50 px to the right.
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| {
+        drag(p, ed, &[v(40.0, 64.0), v(65.0, 64.0), v(90.0, 64.0)])
+    });
+    let centre_after = px(&run.after, 40, 64);
+    assert!(
+        centre_after[0] > DARK[0] + 60,
+        "the patched region did not heal: {centre_after:?}"
+    );
+    // Only the outlined region moves — nothing under the drag path itself.
+    let stray: Vec<_> = changed(&run.before, &run.after)
+        .into_iter()
+        .filter(|&(x, y)| !(28..=53).contains(&x) || !(52..=77).contains(&y))
+        .collect();
+    assert!(
+        stray.is_empty(),
+        "pixels outside the outline changed: {stray:?}"
+    );
+    assert_eq!(px(&run.after, 90, 64), GREY, "the source is only read");
+    undo_restores(&mut ed, id, &run);
+}
+
+#[test]
+fn red_eye_desaturates_the_flash_red_inside_the_box_and_nothing_else() {
+    let id = ToolId::RedEye;
+    let (_dir, mut ed) = open(&red_eye);
+    let mut pointer = ToolPointer::new();
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| {
+        drag(p, ed, &[v(50.0, 50.0), v(78.0, 78.0)])
+    });
+    let pupil = px(&run.after, 64, 64);
+    assert!(pupil[0] < 120, "the red did not drop: {pupil:?}");
+    assert!(
+        pupil[0].abs_diff(pupil[1]) <= 12 && pupil[0].abs_diff(pupil[2]) <= 12,
+        "the pupil is not grey: {pupil:?}"
+    );
+    assert_eq!(pupil[3], 255);
+    assert_eq!(
+        px(&run.after, 52, 52),
+        GREY,
+        "grey inside the box is not red, so untouched"
+    );
+    assert_eq!(px(&run.after, 20, 20), GREY, "outside the box");
+    // Every changed pixel is a pupil pixel.
+    for (x, y) in changed(&run.before, &run.after) {
+        assert!(
+            disc(x, y, 64, 64, 8),
+            "a non-pupil pixel changed at ({x}, {y})"
+        );
+    }
+    undo_restores(&mut ed, id, &run);
+}
+
+#[test]
+fn colour_replacement_recolours_to_the_foreground_and_keeps_luminance() {
+    let id = ToolId::ColorReplacement;
+    let (_dir, mut ed) = open(&dark_red_left);
+    ed.set_foreground([0.0, 0.0, 1.0, 1.0]);
+    let mut pointer = ToolPointer::new();
+    let (a, b) = (v(30.0, 64.0), v(40.0, 64.0));
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| drag(p, ed, &[a, b]));
+    let before = px(&run.before, 35, 64);
+    let after = px(&run.after, 35, 64);
+    assert_eq!(before, DARK_RED);
+    assert!(
+        after[2] > 150 && after[0] < 20,
+        "the hue did not move to the foreground blue: {after:?}"
+    );
+    let (lb, la) = (linear_luminance(before), linear_luminance(after));
+    assert!(
+        (la - lb).abs() < lb * 0.05,
+        "luminance was not kept: {lb:.4} -> {la:.4}"
+    );
+    assert_eq!(px(&run.after, 35, 20), DARK_RED, "outside the stroke");
+    changed_only_within(id, &run.before, &run.after, a, b, 16.0);
+    undo_restores(&mut ed, id, &run);
+}
+
+#[test]
+fn clone_stamp_copies_from_the_alt_set_source_under_the_stroke() {
+    let id = ToolId::CloneStamp;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let d0 = depth(&ed);
+    let src = alt_click(&mut pointer, &mut ed, v(32.0, 64.0));
+    all_reached(id, &src);
+    assert_eq!(depth(&ed), d0, "setting the source is not an edit");
+    let (a, b) = (v(96.0, 60.0), v(96.0, 68.0));
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| drag(p, ed, &[a, b]));
+    let cloned = px(&run.after, 96, 64);
+    assert!(
+        cloned[0] > 200 && cloned[2] < 50,
+        "the blue under the stroke was not replaced by the red source: {cloned:?}"
+    );
+    assert_eq!(px(&run.after, 32, 64), RED, "the source is only read");
+    assert_eq!(px(&run.after, 96, 10), BLUE, "outside the stroke");
+    changed_only_within(id, &run.before, &run.after, a, b, 21.0);
+    undo_restores(&mut ed, id, &run);
+}
+
+/// Edit ▸ Define Pattern over a 2 × 2 red/blue checker baked into the
+/// top-left corner — the real route the menu item takes. Leaves no selection.
+fn define_checker_pattern(ed: &mut Editor) {
+    let layer = app::the_opened_layer(ed);
+    ed.active_mut().unwrap().paint_canvas(layer, &|x, y| {
+        if x < 2 && y < 2 {
+            if (x + y).is_multiple_of(2) {
+                RED
+            } else {
+                BLUE
+            }
+        } else {
+            WHITE
+        }
+    });
+    app::set_selection(
+        ed,
+        Selection::Rect {
+            min: IVec2::new(0, 0),
+            max: IVec2::new(2, 2),
+        },
+    );
+    let status = ed
+        .define_pattern_from_selection()
+        .expect("Define Pattern accepts the 2 x 2 selection");
+    assert!(status.contains("2 2"), "{status}");
+    app::set_selection(ed, Selection::None);
+    assert!(
+        ed.active_tool_pattern().is_some(),
+        "the preset reaches the tools"
+    );
+}
+
+/// The checker colour the defined pattern puts at a document pixel.
+fn checker_at(x: u32, y: u32) -> [u8; 4] {
+    if (x % 2 + y % 2).is_multiple_of(2) {
+        RED
+    } else {
+        BLUE
+    }
+}
+
+#[test]
+fn pattern_stamp_paints_the_defined_pattern_under_the_stroke() {
+    let id = ToolId::PatternStamp;
+    let (_dir, mut ed) = open(&white);
+    define_checker_pattern(&mut ed);
+    let mut pointer = ToolPointer::new();
+    let (a, b) = (v(64.0, 60.0), v(64.0, 68.0));
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| drag(p, ed, &[a, b]));
+    for (x, y) in [(64, 64), (65, 64), (64, 65), (65, 65), (60, 62), (67, 66)] {
+        let got = px(&run.after, x, y);
+        assert!(
+            near(got, checker_at(x, y), 2),
+            "({x}, {y}) is {got:?}, the pattern says {:?}",
+            checker_at(x, y)
+        );
+    }
+    assert_eq!(px(&run.after, 64, 10), WHITE, "outside the stroke");
+    changed_only_within(id, &run.before, &run.after, a, b, 21.0);
+    undo_restores(&mut ed, id, &run);
+}
+
+#[test]
+fn background_eraser_clears_only_the_colour_first_touched() {
+    let id = ToolId::BackgroundEraser;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    // Start on red, cross into blue.
+    let (a, b) = (v(56.0, 64.0), v(72.0, 64.0));
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| drag(p, ed, &[a, b]));
+    assert_eq!(
+        px(&run.after, 50, 64)[3],
+        0,
+        "red under the stroke is erased"
+    );
+    assert_eq!(
+        px(&run.after, 80, 64),
+        BLUE,
+        "blue under the stroke is kept"
+    );
+    assert_eq!(
+        px(&run.after, 10, 64),
+        RED,
+        "red outside the stroke is kept"
+    );
+    for (x, _) in changed(&run.before, &run.after) {
+        assert!(x < 64, "a blue pixel changed at x = {x}");
+    }
+    changed_only_within(id, &run.before, &run.after, a, b, 21.0);
+    undo_restores(&mut ed, id, &run);
+}
+
+#[test]
+fn magic_eraser_clears_the_contiguous_colour_under_the_click() {
+    let id = ToolId::MagicEraser;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| {
+        click(p, ed, v(32.0, 64.0))
+    });
+    assert_eq!(px(&run.after, 32, 64)[3], 0, "the clicked red is gone");
+    assert_eq!(
+        px(&run.after, 5, 120)[3],
+        0,
+        "the whole contiguous red region is gone"
+    );
+    assert_eq!(
+        px(&run.after, 64, 64),
+        BLUE,
+        "the first blue column is kept"
+    );
+    assert_eq!(px(&run.after, 96, 64), BLUE, "the blue half is kept");
+    undo_restores(&mut ed, id, &run);
+}
+
+// ------------------------------------------------------------ fill tools --
+
+#[test]
+fn gradient_paints_the_ramp_from_the_drag_start_to_its_end() {
+    let id = ToolId::Gradient;
+    let (_dir, mut ed) = open(&white);
+    let mut pointer = ToolPointer::new();
+    let (a, b) = (v(0.0, 64.0), v(127.0, 64.0));
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| {
+        drag(p, ed, &[a, v(64.0, 64.0), b])
+    });
+    // The default ramp is foreground black to background white, opaque,
+    // interpolated in LINEAR light (`GradientRamp::sample`) and dithered by
+    // under half an encoded level. So every pixel of every row, not just the
+    // drag's own, is the sRGB encoding of `t` within one level, and it is
+    // neutral and opaque. The white the fixture held must not show through
+    // anywhere: an opaque ramp covers it completely.
+    for y in [0, 5, 64, 127] {
+        for x in 0..W {
+            let t = ((x as f32 + 0.5 - a.x) / (b.x - a.x)).clamp(0.0, 1.0);
+            let ideal = linear_to_srgb8(t);
+            let got = px(&run.after, x, y);
+            assert!(
+                (got[0] as f32 - ideal).abs() <= 1.0,
+                "({x}, {y}) is {got:?}; the linear-light ramp puts {ideal:.2} there"
+            );
+            assert_eq!(got[0], got[1], "({x}, {y}) is not neutral: {got:?}");
+            assert_eq!(got[1], got[2], "({x}, {y}) is not neutral: {got:?}");
+            assert_eq!(got[3], 255, "({x}, {y}) is not opaque: {got:?}");
+        }
+    }
+    undo_restores(&mut ed, id, &run);
+}
+
+/// A linear-light value in `0..=1`, sRGB-encoded onto the 0..=255 scale.
+fn linear_to_srgb8(l: f32) -> f32 {
+    let e = if l <= 0.003_130_8 {
+        l * 12.92
+    } else {
+        1.055 * l.powf(1.0 / 2.4) - 0.055
+    };
+    e * 255.0
+}
+
+#[test]
+fn paint_bucket_fills_only_the_contiguous_region_under_the_click() {
+    let id = ToolId::PaintBucket;
+    let (_dir, mut ed) = open(&wall);
+    ed.set_foreground([0.0, 1.0, 0.0, 1.0]);
+    let mut pointer = ToolPointer::new();
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| {
+        click(p, ed, v(20.0, 64.0))
+    });
+    let filled = px(&run.after, 20, 64);
+    assert!(
+        filled[1] >= 250 && filled[0] <= 5 && filled[2] <= 5,
+        "the clicked region is not the foreground green: {filled:?}"
+    );
+    assert_eq!(
+        px(&run.after, 5, 5),
+        filled,
+        "the whole left region is filled"
+    );
+    assert_eq!(px(&run.after, 59, 127), filled, "up to the wall");
+    assert_eq!(px(&run.after, 64, 64), BLUE, "the wall is kept");
+    assert_eq!(
+        px(&run.after, 100, 64),
+        WHITE,
+        "the disconnected white region is kept"
+    );
+    for (x, _) in changed(&run.before, &run.after) {
+        assert!(x < 60, "a pixel at or past the wall changed at x = {x}");
+    }
+    undo_restores(&mut ed, id, &run);
+}
+
+#[test]
+fn pattern_fill_tiles_the_defined_pattern_over_the_canvas() {
+    let id = ToolId::PatternFill;
+    let (_dir, mut ed) = open(&white);
+    define_checker_pattern(&mut ed);
+    let mut pointer = ToolPointer::new();
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| {
+        click(p, ed, v(64.0, 64.0))
+    });
+    for (x, y) in [
+        (0, 0),
+        (1, 0),
+        (0, 1),
+        (64, 64),
+        (65, 64),
+        (127, 127),
+        (126, 127),
+    ] {
+        let got = px(&run.after, x, y);
+        assert!(
+            near(got, checker_at(x, y), 2),
+            "({x}, {y}) is {got:?}, the tiled pattern says {:?}",
+            checker_at(x, y)
+        );
+    }
+    undo_restores(&mut ed, id, &run);
+}
+
+// --------------------------------------------------------- tone/focus tools --
+
+#[test]
+fn blur_lowers_the_local_variance_under_the_stroke() {
+    let id = ToolId::Blur;
+    let (_dir, mut ed) = open(&checker4);
+    let mut pointer = ToolPointer::new();
+    let (a, b) = (v(56.0, 64.0), v(72.0, 64.0));
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| drag(p, ed, &[a, b]));
+    let before = variance(&run.before, 56, 56, 72, 72);
+    let after = variance(&run.after, 56, 56, 72, 72);
+    assert!(
+        after < before * 0.7,
+        "blur did not lower the local variance: {before:.1} -> {after:.1}"
+    );
+    assert_eq!(
+        px(&run.after, 10, 10),
+        checker4(10, 10),
+        "outside the stroke"
+    );
+    changed_only_within(id, &run.before, &run.after, a, b, 21.0);
+    undo_restores(&mut ed, id, &run);
+}
+
+#[test]
+fn sharpen_raises_the_local_variance_under_the_stroke() {
+    let id = ToolId::Sharpen;
+    let (_dir, mut ed) = open(&checker4);
+    let mut pointer = ToolPointer::new();
+    let (a, b) = (v(56.0, 64.0), v(72.0, 64.0));
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| drag(p, ed, &[a, b]));
+    let before = variance(&run.before, 56, 56, 72, 72);
+    let after = variance(&run.after, 56, 56, 72, 72);
+    assert!(
+        after > before * 1.05,
+        "sharpen did not raise the local variance: {before:.1} -> {after:.1}"
+    );
+    assert_eq!(
+        px(&run.after, 10, 10),
+        checker4(10, 10),
+        "outside the stroke"
+    );
+    changed_only_within(id, &run.before, &run.after, a, b, 21.0);
+    undo_restores(&mut ed, id, &run);
+}
+
+#[test]
+fn smudge_drags_the_colour_it_started_on_along_the_stroke() {
+    let id = ToolId::Smudge;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    // Start on red and pull rightwards into the blue.
+    let (a, b) = (v(56.0, 64.0), v(80.0, 64.0));
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| {
+        drag(p, ed, &[a, v(64.0, 64.0), v(72.0, 64.0), b])
+    });
+    let smeared = px(&run.after, 72, 64);
+    assert!(
+        smeared[0] > 40,
+        "no red was dragged into the blue at (72, 64): {smeared:?}"
+    );
+    assert!(smeared[0] > px(&run.before, 72, 64)[0]);
+    assert_eq!(px(&run.after, 72, 10), BLUE, "outside the stroke");
+    assert_eq!(px(&run.after, 20, 64), RED, "behind the stroke start");
+    changed_only_within(id, &run.before, &run.after, a, b, 21.0);
+    undo_restores(&mut ed, id, &run);
+}
+
+#[test]
+fn dodge_lightens_the_midtones_under_the_stroke() {
+    let id = ToolId::Dodge;
+    let (_dir, mut ed) = open(&mid_grey);
+    let mut pointer = ToolPointer::new();
+    let (a, b) = (v(54.0, 64.0), v(74.0, 64.0));
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| drag(p, ed, &[a, b]));
+    let lit = px(&run.after, 64, 64);
+    assert!(lit[0] > MID_GREY[0] + 15, "dodge did not lighten: {lit:?}");
+    assert_eq!(lit[0], lit[1]);
+    assert_eq!(lit[1], lit[2]);
+    assert_eq!(lit[3], 255);
+    for (x, y) in changed(&run.before, &run.after) {
+        assert!(
+            px(&run.after, x, y)[0] >= MID_GREY[0],
+            "dodge darkened ({x}, {y})"
+        );
+    }
+    assert_eq!(px(&run.after, 10, 10), MID_GREY, "outside the stroke");
+    changed_only_within(id, &run.before, &run.after, a, b, 31.0);
+    undo_restores(&mut ed, id, &run);
+}
+
+#[test]
+fn burn_darkens_the_midtones_under_the_stroke() {
+    let id = ToolId::Burn;
+    let (_dir, mut ed) = open(&mid_grey);
+    let mut pointer = ToolPointer::new();
+    let (a, b) = (v(54.0, 64.0), v(74.0, 64.0));
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| drag(p, ed, &[a, b]));
+    let burnt = px(&run.after, 64, 64);
+    assert!(
+        burnt[0] < MID_GREY[0] - 15,
+        "burn did not darken: {burnt:?}"
+    );
+    assert_eq!(burnt[0], burnt[1]);
+    assert_eq!(burnt[1], burnt[2]);
+    assert_eq!(burnt[3], 255);
+    for (x, y) in changed(&run.before, &run.after) {
+        assert!(
+            px(&run.after, x, y)[0] <= MID_GREY[0],
+            "burn lightened ({x}, {y})"
+        );
+    }
+    assert_eq!(px(&run.after, 10, 10), MID_GREY, "outside the stroke");
+    changed_only_within(id, &run.before, &run.after, a, b, 31.0);
+    undo_restores(&mut ed, id, &run);
+}
+
+#[test]
+fn sponge_desaturates_under_the_stroke() {
+    let id = ToolId::Sponge;
+    let (_dir, mut ed) = open(&saturated);
+    let mut pointer = ToolPointer::new();
+    let (a, b) = (v(54.0, 64.0), v(74.0, 64.0));
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| drag(p, ed, &[a, b]));
+    let before = px(&run.before, 64, 64);
+    let after = px(&run.after, 64, 64);
+    assert!(
+        saturation(after) < saturation(before) - 10,
+        "the sponge did not change saturation: {before:?} -> {after:?}"
+    );
+    assert_eq!(after[3], 255);
+    for (x, y) in changed(&run.before, &run.after) {
+        assert!(
+            saturation(px(&run.after, x, y)) <= saturation(SATURATED),
+            "the sponge saturated ({x}, {y}) in Desaturate mode"
+        );
+    }
+    assert_eq!(px(&run.after, 10, 10), SATURATED, "outside the stroke");
+    changed_only_within(id, &run.before, &run.after, a, b, 31.0);
+    undo_restores(&mut ed, id, &run);
+}
+
+// ------------------------------------------------------------ smoke rows --
+//
+// The tools below either have real-route tests elsewhere in this crate
+// (Move, Brush, Eraser, FreeTransform) or are covered here by one row each
+// that pins the route reaches them and the gesture's headline observable.
+
+#[test]
+fn hand_pans_the_view_and_edits_nothing() {
+    let id = ToolId::Hand;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let centre = ed.active().unwrap().camera.center;
+    let d0 = depth(&ed);
+    let outcomes = drag(&mut pointer, &mut ed, &[v(64.0, 64.0), v(84.0, 74.0)]);
+    for o in &outcomes {
+        assert_eq!(o.route, Some(Route::Pan), "{o:?}");
+        assert_eq!(o.failed, None);
+    }
+    assert!(outcomes.iter().any(|o| o.view_changed), "{outcomes:?}");
+    assert_ne!(
+        ed.active().unwrap().camera.center,
+        centre,
+        "the view did not move"
+    );
+    assert_eq!(depth(&ed), d0, "a pan is not an edit");
+}
+
+#[test]
+fn zoom_click_zooms_in_and_edits_nothing() {
+    let id = ToolId::Zoom;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let zoom = ed.active().unwrap().camera.zoom;
+    let d0 = depth(&ed);
+    let outcomes = click(&mut pointer, &mut ed, v(64.0, 64.0));
+    for o in &outcomes {
+        assert_eq!(o.route, Some(Route::Zoom), "{o:?}");
+    }
+    assert!(outcomes.iter().any(|o| o.view_changed), "{outcomes:?}");
+    assert!(
+        ed.active().unwrap().camera.zoom > zoom,
+        "the view did not zoom in"
+    );
+    assert_eq!(depth(&ed), d0, "a zoom is not an edit");
+}
+
+#[test]
+fn rotate_view_routes_to_the_camera_and_edits_nothing() {
+    let id = ToolId::RotateView;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let d0 = depth(&ed);
+    let before = composite(&mut ed);
+    let outcomes = drag(&mut pointer, &mut ed, &[v(64.0, 64.0), v(84.0, 74.0)]);
+    for o in &outcomes {
+        assert_eq!(o.route, Some(Route::RotateView), "{o:?}");
+        assert_eq!(o.failed, None);
+    }
+    assert_eq!(depth(&ed), d0, "rotating the view is not an edit");
+    assert_eq!(composite(&mut ed), before);
+}
+
+#[test]
+fn eyedropper_picks_the_colour_under_the_click_into_the_foreground() {
+    let id = ToolId::Eyedropper;
+    let (_dir, mut ed) = open(&halves);
+    ed.set_foreground([0.0, 0.0, 0.0, 1.0]);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let d0 = depth(&ed);
+    let outcomes = click(&mut pointer, &mut ed, v(96.0, 64.0));
+    all_reached(id, &outcomes);
+    assert!(outcomes.iter().any(|o| o.picked.is_some()), "{outcomes:?}");
+    let fg = ed.foreground();
+    assert!(
+        fg[2] > 0.9 && fg[0] < 0.1 && fg[1] < 0.1,
+        "picked {fg:?}, not the blue"
+    );
+    assert_eq!(depth(&ed), d0, "picking a colour is not an edit");
+}
+
+#[test]
+fn crop_drag_then_enter_resizes_the_canvas_as_one_step_and_undo_restores_it() {
+    let id = ToolId::Crop;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+    let outcomes = drag(&mut pointer, &mut ed, &[v(40.0, 20.0), v(80.0, 60.0)]);
+    all_reached(id, &outcomes);
+    assert_eq!(depth(&ed), d0, "the drag alone commits nothing");
+    assert!(
+        pointer.has_pending_commit(),
+        "the crop box is not held for Enter"
+    );
+    let commit = pointer.commit(&mut ed);
+    assert!(commit.had_pending);
+    assert_eq!(commit.failed, None);
+    assert_eq!(
+        commit.cropped_to.map(|r| (r.x, r.y, r.width, r.height)),
+        Some((40, 20, 40, 40))
+    );
+    assert_eq!(commit.steps, 1, "a crop is one undoable step: {commit:?}");
+    let doc = ed.active().unwrap();
+    assert_eq!((doc.document.width(), doc.document.height()), (40, 40));
+    assert_eq!(depth(&ed), d0 + 1);
+    // The red/blue split at x = 64 is at x = 24 now.
+    let cropped = ed
+        .active_mut()
+        .unwrap()
+        .composite(raster::PixelRect::new(0, 0, 40, 40))
+        .unwrap();
+    let at = |x: u32, y: u32| {
+        let i = ((y * 40 + x) * 4) as usize;
+        [cropped[i], cropped[i + 1], cropped[i + 2], cropped[i + 3]]
+    };
+    assert_eq!(at(23, 20), RED);
+    assert_eq!(at(24, 20), BLUE);
+    undo(&mut ed);
+    let doc = ed.active().unwrap();
+    assert_eq!((doc.document.width(), doc.document.height()), (W, H));
+    assert_eq!(composite(&mut ed), before, "undo did not restore the crop");
+}
+
+fn layers_of_kind(ed: &Editor, f: impl Fn(&layer_model::LayerKind) -> bool) -> usize {
+    let doc = &ed.active().unwrap().document;
+    doc.layers
+        .iter_depth_first()
+        .into_iter()
+        .filter_map(|id| doc.layers.get(id))
+        .filter(|l| f(&l.kind))
+        .count()
+}
+
+#[test]
+fn type_click_creates_one_text_layer_and_opens_it_for_typing() {
+    let id = ToolId::Type;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let d0 = depth(&ed);
+    let texts = |ed: &Editor| layers_of_kind(ed, |k| matches!(k, layer_model::LayerKind::Text(_)));
+    assert_eq!(texts(&ed), 0);
+    let outcomes = click(&mut pointer, &mut ed, v(20.0, 30.0));
+    all_reached(id, &outcomes);
+    assert_eq!(texts(&ed), 1, "a click makes exactly one text layer");
+    assert_eq!(depth(&ed), d0 + 1, "the layer is one undoable step");
+    assert!(pointer.is_text_editing(), "the run is held open for typing");
+    // Escape: a layer this session created is deleted again.
+    pointer.text_edit(&mut ed, tools::TextEdit::Cancel);
+    assert!(!pointer.is_text_editing());
+    assert_eq!(
+        texts(&ed),
+        0,
+        "cancelling removes the layer the click created"
+    );
+}
+
+#[test]
+fn rectangle_shape_drag_creates_one_shape_layer_that_undo_removes() {
+    let id = ToolId::Rectangle;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let d0 = depth(&ed);
+    let shapes =
+        |ed: &Editor| layers_of_kind(ed, |k| matches!(k, layer_model::LayerKind::Shape(_)));
+    assert_eq!(shapes(&ed), 0);
+    let outcomes = drag(
+        &mut pointer,
+        &mut ed,
+        &[v(20.0, 20.0), v(40.0, 40.0), v(60.0, 60.0)],
+    );
+    all_reached(id, &outcomes);
+    assert_eq!(outcomes.iter().map(|o| o.steps).sum::<usize>(), 1);
+    assert_eq!(depth(&ed), d0 + 1, "one shape drag is one history entry");
+    assert_eq!(shapes(&ed), 1, "the drag made exactly one shape layer");
+    undo(&mut ed);
+    assert_eq!(shapes(&ed), 0, "undo did not remove the shape layer");
+    assert_eq!(depth(&ed), d0);
+}
+
+#[test]
+fn pen_clicks_then_enter_create_one_shape_layer() {
+    let id = ToolId::Pen;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let d0 = depth(&ed);
+    for at in [v(10.0, 10.0), v(50.0, 10.0), v(50.0, 40.0)] {
+        let outcomes = click(&mut pointer, &mut ed, at);
+        all_reached(id, &outcomes);
+        assert_eq!(depth(&ed), d0, "nothing is emitted while the path is drawn");
+    }
+    assert!(pointer.has_pending_commit());
+    let commit = pointer.commit(&mut ed);
+    assert_eq!(commit.failed, None);
+    assert_eq!(commit.steps, 1, "{commit:?}");
+    assert_eq!(depth(&ed), d0 + 1);
+    let shapes =
+        |ed: &Editor| layers_of_kind(ed, |k| matches!(k, layer_model::LayerKind::Shape(_)));
+    assert_eq!(shapes(&ed), 1, "Enter did not make exactly one shape layer");
+    undo(&mut ed);
+    assert_eq!(shapes(&ed), 0);
+}
+
+#[test]
+fn pencil_click_paints_one_hard_black_pixel_as_one_step() {
+    let id = ToolId::Pencil;
+    let (_dir, mut ed) = open(&white);
+    ed.set_foreground([0.0, 0.0, 0.0, 1.0]);
+    let mut pointer = ToolPointer::new();
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| {
+        click(p, ed, v(64.5, 64.5))
+    });
+    assert_eq!(
+        px(&run.after, 64, 64),
+        BLACK,
+        "the clicked pixel is not black"
+    );
+    let moved = changed(&run.before, &run.after);
+    assert_eq!(
+        moved,
+        vec![(64, 64)],
+        "a 1 px pencil click touched {moved:?}"
+    );
+    undo_restores(&mut ed, id, &run);
+}
+
+#[test]
+fn slice_drag_then_enter_reports_one_slice_and_edits_nothing() {
+    let id = ToolId::Slice;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let d0 = depth(&ed);
+    let before = composite(&mut ed);
+    let outcomes = drag(&mut pointer, &mut ed, &[v(10.0, 10.0), v(50.0, 40.0)]);
+    all_reached(id, &outcomes);
+    let commit = pointer.commit(&mut ed);
+    assert!(commit.had_pending, "{commit:?}");
+    assert_eq!(commit.slices.len(), 1, "one drag is one slice: {commit:?}");
+    assert_eq!(commit.steps, 0, "a slice set is not an edit: {commit:?}");
+    assert_eq!(depth(&ed), d0);
+    assert_eq!(composite(&mut ed), before);
+}
+
+#[test]
+fn refine_boundary_regrades_the_mask_band_and_leaves_the_layer_pixels_alone() {
+    let id = ToolId::RefineBoundary;
+    let (_dir, mut ed) = open(&halves);
+    let layer = app::the_opened_layer(&ed);
+    // A mask with a jagged left/right boundary near x = 64, attached and
+    // painted through the real command route, then targeted the way the
+    // Properties panel's Mask control does.
+    ed.active_mut().unwrap().attach_mask(layer);
+    ed.active_mut().unwrap().paint_canvas_mask(layer, &|x, y| {
+        let edge = 60 + 8 * ((y / 2) % 2);
+        if x < edge {
+            255
+        } else {
+            0
+        }
+    });
+    ed.set_edit_target_kind(EditTargetKind::from_focus(true));
+    assert!(ed.edit_target_is_mask());
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let layer_before = app::layer_tile_map(&ed, layer);
+    let mask_before = app::mask_tile_map(&ed, layer);
+    let d0 = depth(&ed);
+    let outcomes = drag(
+        &mut pointer,
+        &mut ed,
+        &[v(64.0, 40.0), v(64.0, 64.0), v(64.0, 88.0)],
+    );
+    all_reached(id, &outcomes);
+    assert_eq!(depth(&ed), d0 + 1, "one refine stroke is one history entry");
+    assert_ne!(
+        app::mask_tile_map(&ed, layer),
+        mask_before,
+        "the stroke did not regrade the mask's coverage"
+    );
+    assert_eq!(
+        app::layer_tile_map(&ed, layer),
+        layer_before,
+        "the stroke touched the layer's pixels"
+    );
+    undo(&mut ed);
+    assert_eq!(
+        app::mask_tile_map(&ed, layer),
+        mask_before,
+        "undo did not restore the mask"
+    );
+}
+
+// ---------------------------------------------------------- completeness --
+
+/// Every tool in the palette is accounted for: tested here, tested by another
+/// route test in this crate, or explicitly left to the wave that owns it. A
+/// new `ToolId` variant fails this until someone says which.
+#[test]
+fn every_palette_tool_has_a_real_route_test_or_an_owner() {
+    use ToolId::*;
+    let here = [
+        RectMarquee,
+        EllipseMarquee,
+        SingleRowMarquee,
+        SingleColumnMarquee,
+        Lasso,
+        PolygonalLasso,
+        MagneticLasso,
+        MagicWand,
+        QuickSelect,
+        SpotHealing,
+        HealingBrush,
+        Patch,
+        RedEye,
+        ColorReplacement,
+        CloneStamp,
+        PatternStamp,
+        BackgroundEraser,
+        MagicEraser,
+        Gradient,
+        PaintBucket,
+        PatternFill,
+        Blur,
+        Sharpen,
+        Smudge,
+        Dodge,
+        Burn,
+        Sponge,
+        // smoke rows
+        Hand,
+        Zoom,
+        RotateView,
+        Eyedropper,
+        Crop,
+        Type,
+        Rectangle,
+        Pen,
+        Pencil,
+        Slice,
+        RefineBoundary,
+    ];
+    // Real-route tests in `thumbnail_workflow.rs` / `thumbnail_reproducers.rs`.
+    let elsewhere = [Move, Brush, Eraser, FreeTransform];
+    // W3-B owns `pen.rs`, `shape.rs`, `path_select.rs` and `registry.rs`; the
+    // path-editing tools and the remaining shape kinds ride its route tests.
+    let delegated = [
+        PathSelect,
+        DirectSelection,
+        RoundedRectangle,
+        Ellipse,
+        Polygon,
+        Star,
+        Line,
+        CustomShape,
+    ];
+    let mut accounted: Vec<ToolId> = Vec::new();
+    accounted.extend(here);
+    accounted.extend(elsewhere);
+    accounted.extend(delegated);
+    for id in ToolId::ALL {
+        let n = accounted.iter().filter(|t| *t == id).count();
+        assert_eq!(
+            n, 1,
+            "{id:?} is listed {n} times; every tool needs exactly one owner"
+        );
+    }
+    assert_eq!(accounted.len(), ToolId::ALL.len());
+    assert!(here.len() >= 26 + 12);
+}

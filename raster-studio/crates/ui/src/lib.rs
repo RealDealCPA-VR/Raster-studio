@@ -223,6 +223,29 @@ fn rail_slot(side: DockSide) -> usize {
     side.slot()
 }
 
+/// Why a View flag cannot be turned on in this build, or `None` when it can.
+///
+/// W3-A: **Proof Colors** and **Gamut Warning** were checkable and read by
+/// nothing. Neither can be honoured yet: the compositor already composites a
+/// tagged document *through* its ICC profile to the display, so there is no
+/// second output profile to soft-proof against, and the composite reaches the
+/// screen as clipped 8-bit sRGB, in which an out-of-gamut pixel is no longer
+/// distinguishable from a saturated in-gamut one. Rather than tick a flag and
+/// change nothing, [`Workspace::absorb`] refuses the toggle and the host shows
+/// this sentence. One table, so the menu, the shortcut and the status line
+/// cannot disagree about the reason.
+pub fn view_flag_unavailable(flag: ViewFlag) -> Option<&'static str> {
+    match flag {
+        ViewFlag::ProofColors => Some(
+            "Proof Colors is not available: there is no output profile to soft-proof against in this build",
+        ),
+        ViewFlag::GamutWarning => Some(
+            "Gamut Warning is not available: the composite reaches the screen as clipped sRGB, so out-of-gamut pixels cannot be told apart",
+        ),
+        _ => None,
+    }
+}
+
 impl Workspace {
     pub fn new() -> Self {
         Self {
@@ -411,6 +434,13 @@ impl Workspace {
                 changed
             }
             Intent::SetViewFlag { flag, on } => {
+                // W3-A: a flag this build cannot honour is refused rather than
+                // ticked — a checkmark beside an item that changes nothing is
+                // the inert control this wave exists to remove. The reason is
+                // [`view_flag_unavailable`]'s, for the chrome to say.
+                if *on && view_flag_unavailable(*flag).is_some() {
+                    return false;
+                }
                 let changed = self.view_flags.get(*flag) != *on;
                 self.view_flags.set(*flag, *on);
                 changed
@@ -629,6 +659,16 @@ impl Workspace {
     /// nothing has been told the setting was ignored, which it was not.
     pub fn grid_is_suppressed(&self) -> bool {
         self.grid_suppressed
+    }
+
+    /// Record whether the grid was asked for and not drawn this frame.
+    ///
+    /// The door for a host that paints the canvas overlays itself — the
+    /// application shell draws them over its own composite and never calls
+    /// [`Workspace::ui`] — so the status bar's "grid hidden" readout is fed
+    /// by whoever actually ran the grid painter.
+    pub fn set_grid_suppressed(&mut self, suppressed: bool) {
+        self.grid_suppressed = suppressed;
     }
 
     /// Everything a renderer needs to put the image where the user can see it.

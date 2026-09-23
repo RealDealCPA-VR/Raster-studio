@@ -179,6 +179,13 @@ impl InfoState {
     /// an em dash where there is nothing to report — a row that disappears
     /// makes the panel jump about as the pointer moves.
     pub fn readouts(&self, doc: &Document) -> Vec<InfoReadout> {
+        self.readouts_in(doc, crate::dialogs::Unit::Pixels)
+    }
+
+    /// [`InfoState::readouts`] with the Document row spelled in `unit` — the
+    /// application's Units preference, which the workspace carries as the
+    /// rulers' unit.
+    pub fn readouts_in(&self, doc: &Document, unit: crate::dialogs::Unit) -> Vec<InfoReadout> {
         const NOTHING: &str = "—";
         let pointer = match self.pointer {
             Some((x, y)) => format!("{}, {}", x.floor() as i64, y.floor() as i64),
@@ -211,7 +218,12 @@ impl InfoState {
             },
             InfoReadout {
                 label: "Document",
-                value: format!("{} × {} px", doc.width(), doc.height()),
+                value: crate::dialogs::units::format_size(
+                    f64::from(doc.width()),
+                    f64::from(doc.height()),
+                    unit,
+                    crate::dialogs::units::DEFAULT_PPI,
+                ),
             },
             InfoReadout {
                 label: "Selection",
@@ -401,6 +413,15 @@ mod tests {
         assert_eq!(rows[3].value, "640 × 480 px");
         assert_eq!(rows[4].value, "None");
         assert!(rows.iter().all(|r| !r.label.is_empty()));
+    }
+
+    #[test]
+    fn the_document_row_follows_the_unit_it_is_given() {
+        let doc = Document::new(72, 144, "Test");
+        let rows = InfoState::default().readouts_in(&doc, crate::dialogs::Unit::Inches);
+        assert_eq!(rows[3].value, "1.000 × 2.000 in");
+        let rows = InfoState::default().readouts_in(&doc, crate::dialogs::Unit::Pixels);
+        assert_eq!(rows[3].value, "72 × 144 px");
     }
 
     #[test]

@@ -43,8 +43,8 @@
 use editor_core::Document;
 use layer_model::{LayerId, LayerKind, TextLayer};
 use text_engine::{
-    Alignment, CharStyle, FontSlant, FontStretch, FontWeight, LineHeight, ParagraphStyle,
-    TextFrame, TextRun,
+    Alignment, AntiAlias, Caps, CharStyle, FontSlant, FontStretch, FontWeight, KernAdjustment,
+    LineHeight, ParagraphStyle, ScriptPosition, TextFrame, TextRun,
 };
 
 use crate::intent::Intent;
@@ -83,15 +83,122 @@ pub const ALIGNMENTS: &[Alignment] = &[
     Alignment::Justify,
 ];
 
+/// W3-J: the baseline positions the Character panel offers, in panel order.
+/// Each reaches `CharStyle::script`, which the layout consumes as a size
+/// factor and a baseline shift (`ScriptPosition::baseline_shift`).
+pub const SCRIPTS: &[ScriptPosition] = &[
+    ScriptPosition::Normal,
+    ScriptPosition::Superscript,
+    ScriptPosition::Subscript,
+];
+
+/// Panel label for a baseline position.
+pub const fn script_label(script: ScriptPosition) -> &'static str {
+    match script {
+        ScriptPosition::Normal => "Normal",
+        ScriptPosition::Superscript => "Super",
+        ScriptPosition::Subscript => "Sub",
+    }
+}
+
 /// Panel label for an alignment.
 pub const fn alignment_label(alignment: Alignment) -> &'static str {
     match alignment {
         Alignment::Left => "Left",
         Alignment::Center => "Center",
         Alignment::Right => "Right",
-        Alignment::Justify => "Justify",
+        Alignment::Justify
+        | Alignment::JustifyLastCenter
+        | Alignment::JustifyLastRight
+        | Alignment::JustifyAll => "Justify",
     }
 }
+
+/// W3-J: which [`ALIGNMENTS`] segment an alignment lights - every justify
+/// variant lights "Justify"; the last-line row says which one.
+pub fn alignment_index(alignment: Alignment) -> usize {
+    if alignment.is_justified() {
+        ALIGNMENTS.len() - 1
+    } else {
+        ALIGNMENTS.iter().position(|a| *a == alignment).unwrap_or(0)
+    }
+}
+
+/// W3-J: the four justify variants, as the Paragraph panel's "Last line" row
+/// offers them: last line left, centred, right, or justified too.
+pub const JUSTIFY_VARIANTS: &[Alignment] = &[
+    Alignment::Justify,
+    Alignment::JustifyLastCenter,
+    Alignment::JustifyLastRight,
+    Alignment::JustifyAll,
+];
+
+/// Panel label for a justify variant's last line.
+pub const fn last_line_label(alignment: Alignment) -> &'static str {
+    match alignment {
+        Alignment::JustifyLastCenter => "Center",
+        Alignment::JustifyLastRight => "Right",
+        Alignment::JustifyAll => "Full",
+        _ => "Left",
+    }
+}
+
+/// W3-J: the kerning modes the Character panel offers. "Optical" is absent
+/// on purpose: the shaper has no optical kerning, and the control's tooltip
+/// says so instead of offering a choice that would do nothing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum KerningMode {
+    /// The font's own pair kerning (`kern`).
+    Metrics,
+    /// No kerning at all.
+    Off,
+    /// A fixed amount between every pair, in 1/1000 em, in place of the
+    /// font's.
+    Manual,
+}
+
+impl KerningMode {
+    /// Every mode, in panel order.
+    pub const ALL: &'static [KerningMode] =
+        &[KerningMode::Metrics, KerningMode::Off, KerningMode::Manual];
+
+    /// The segment label.
+    pub const fn label(self) -> &'static str {
+        match self {
+            KerningMode::Metrics => "Metrics",
+            KerningMode::Off => "0",
+            KerningMode::Manual => "Manual",
+        }
+    }
+}
+
+/// W3-J: the caps choices, in panel order.
+pub const CAPS: &[Caps] = &[Caps::Normal, Caps::AllCaps, Caps::SmallCaps];
+
+/// Panel label for a caps choice.
+pub const fn caps_label(caps: Caps) -> &'static str {
+    match caps {
+        Caps::Normal => "Normal",
+        Caps::AllCaps => "All Caps",
+        Caps::SmallCaps => "Small Caps",
+    }
+}
+
+/// W3-J: the anti-alias choices, in panel order.
+pub const ANTI_ALIAS: &[AntiAlias] = &[AntiAlias::Smooth, AntiAlias::None];
+
+/// Panel label for an anti-alias mode.
+pub const fn anti_alias_label(mode: AntiAlias) -> &'static str {
+    match mode {
+        AntiAlias::Smooth => "Smooth",
+        AntiAlias::None => "None",
+    }
+}
+
+/// Smallest and largest glyph scale the panel offers, in percent - the
+/// schema's own range.
+pub const MIN_SCALE_PERCENT: f32 = layer_model::text::MIN_GLYPH_SCALE * 100.0;
+pub const MAX_SCALE_PERCENT: f32 = layer_model::text::MAX_GLYPH_SCALE * 100.0;
 
 // The alignment control is a *word* control — `alignment_label` feeds
 // `design::segmented_control` in `view::docks`. There was an `alignment_glyph`
@@ -319,11 +426,137 @@ impl Character {
         changed
     }
 
+    /// W3-J: superscript / subscript / normal for the whole layer. The layout
+    /// shrinks the run by `SCRIPT_SIZE_FACTOR` and shifts its baseline.
+    pub fn set_script(run: &mut TextRun, script: ScriptPosition) -> bool {
+        let changed = run.style.script != script;
+        run.style.script = script;
+        changed
+    }
+
+    /// W3-J: the font's own pair kerning (`kern`) on or off — the shaper's
+    /// "metrics" kerning. There is no optical mode to offer: cosmic-text has
+    /// none, and the panel says so rather than drawing a dead choice.
+    pub fn set_kerning(run: &mut TextRun, on: bool) -> bool {
+        let changed = run.style.kerning != on;
+        run.style.kerning = on;
+        changed
+    }
+
+    /// W3-J: standard and contextual ligatures on or off.
+    pub fn set_ligatures(run: &mut TextRun, on: bool) -> bool {
+        let changed = run.style.ligatures != on;
+        run.style.ligatures = on;
+        changed
+    }
+
+    /// W3-J: horizontal scale in percent (100 = none). Clamped to the
+    /// schema's range; the layout stretches advances and glyph images.
+    pub fn set_horizontal_scale(run: &mut TextRun, percent: f32) -> bool {
+        let Some(scale) = scale_from_percent(percent) else {
+            return false;
+        };
+        let changed = run.style.horizontal_scale != scale;
+        run.style.horizontal_scale = scale;
+        changed
+    }
+
+    /// W3-J: vertical scale in percent (100 = none).
+    pub fn set_vertical_scale(run: &mut TextRun, percent: f32) -> bool {
+        let Some(scale) = scale_from_percent(percent) else {
+            return false;
+        };
+        let changed = run.style.vertical_scale != scale;
+        run.style.vertical_scale = scale;
+        changed
+    }
+
+    /// W3-J: baseline shift in layer pixels; positive raises.
+    pub fn set_baseline_shift(run: &mut TextRun, px: f32) -> bool {
+        if !px.is_finite() || run.style.baseline_shift == px {
+            return false;
+        }
+        run.style.baseline_shift = px;
+        true
+    }
+
+    /// W3-J: all caps / small caps / as typed.
+    pub fn set_caps(run: &mut TextRun, caps: Caps) -> bool {
+        let changed = run.style.caps != caps;
+        run.style.caps = caps;
+        changed
+    }
+
+    /// W3-J: smooth or hard glyph edges, for the whole layer.
+    pub fn set_anti_alias(run: &mut TextRun, mode: AntiAlias) -> bool {
+        let changed = run.style.anti_alias != mode;
+        run.style.anti_alias = mode;
+        changed
+    }
+
+    /// W3-J: the kerning mode the run is in, and the manual amount (1/1000
+    /// em) when every manual step is the same one. A manual table with mixed
+    /// amounts reads as Manual with no single value.
+    pub fn kerning_mode(run: &TextRun) -> (KerningMode, Option<f32>) {
+        if let Some(first) = run.kerning.first() {
+            let uniform = run.kerning.iter().all(|k| k.amount == first.amount);
+            return (KerningMode::Manual, uniform.then_some(first.amount));
+        }
+        if run.style.kerning {
+            (KerningMode::Metrics, None)
+        } else {
+            (KerningMode::Off, None)
+        }
+    }
+
+    /// W3-J: switch kerning mode. Metrics turns the font's `kern` on and
+    /// clears any manual table; Off turns both off; Manual turns the font's
+    /// off and sets `amount` between every pair of the current text.
+    pub fn set_kerning_mode(run: &mut TextRun, mode: KerningMode, amount: f32) -> bool {
+        let before = (run.style.kerning, run.kerning.clone());
+        match mode {
+            KerningMode::Metrics => {
+                run.style.kerning = true;
+                run.kerning.clear();
+            }
+            KerningMode::Off => {
+                run.style.kerning = false;
+                run.kerning.clear();
+            }
+            KerningMode::Manual => {
+                run.style.kerning = false;
+                let amount = if amount.is_finite() { amount } else { 0.0 };
+                run.kerning = manual_kerning(&run.text, amount);
+            }
+        }
+        (run.style.kerning, run.kerning.clone()) != before
+    }
+
     /// The leading the panel shows, in pixels, resolved against the run's own
     /// size — which is what "auto" means and what the field has to display.
     pub fn leading_px(style: &CharStyle, paragraph: &ParagraphStyle) -> f32 {
         paragraph.line_height.resolve(style.size_px)
     }
+}
+
+/// A panel percentage as a model scale, clamped to the schema's range;
+/// `None` for a non-finite value.
+fn scale_from_percent(percent: f32) -> Option<f32> {
+    percent.is_finite().then(|| {
+        (percent / 100.0).clamp(
+            layer_model::text::MIN_GLYPH_SCALE,
+            layer_model::text::MAX_GLYPH_SCALE,
+        )
+    })
+}
+
+/// One manual kerning step before every character but the first, each of
+/// `amount` (1/1000 em) - the whole-layer manual kerning the panel sets.
+fn manual_kerning(text: &str, amount: f32) -> Vec<KernAdjustment> {
+    text.char_indices()
+        .skip(1)
+        .map(|(index, _)| KernAdjustment::new(index, amount))
+        .collect()
 }
 
 /// The model's linear fill as an sRGB swatch for egui's picker.
@@ -403,6 +636,24 @@ impl Paragraph {
             return false;
         }
         run.paragraph.first_line_indent = px;
+        true
+    }
+
+    /// W3-J: indent of every line from the left edge, in layer pixels.
+    pub fn set_left_indent(run: &mut TextRun, px: f32) -> bool {
+        if !px.is_finite() || run.paragraph.left_indent == px {
+            return false;
+        }
+        run.paragraph.left_indent = px;
+        true
+    }
+
+    /// W3-J: indent of every line from the right edge, in layer pixels.
+    pub fn set_right_indent(run: &mut TextRun, px: f32) -> bool {
+        if !px.is_finite() || run.paragraph.right_indent == px {
+            return false;
+        }
+        run.paragraph.right_indent = px;
         true
     }
 
@@ -931,4 +1182,171 @@ Two"
             "auto height again, width kept"
         );
     }
+
+    // ---- W3-J: script, kerning, ligatures --------------------------------
+
+    #[test]
+    fn script_kerning_and_ligatures_reach_the_persisted_layer_and_back() {
+        let (doc, id) = text_document();
+        let (_, mut run) = active_text(&doc, Some(id)).unwrap();
+        assert!(Character::set_script(&mut run, ScriptPosition::Superscript));
+        assert!(!Character::set_script(
+            &mut run,
+            ScriptPosition::Superscript
+        ));
+        assert!(Character::set_kerning(&mut run, false));
+        assert!(!Character::set_kerning(&mut run, false));
+        assert!(Character::set_ligatures(&mut run, false));
+        assert!(!Character::set_ligatures(&mut run, false));
+
+        let Some(Intent::EditLayerKind { kind, .. }) = commit(&doc, id, &run) else {
+            panic!("expected an edit");
+        };
+        let LayerKind::Text(stored) = *kind else {
+            panic!("not text");
+        };
+        assert_eq!(stored.style.script, layer_model::text::Script::Superscript);
+        assert!(!stored.style.kerning);
+        assert!(!stored.style.ligatures);
+        // And the run the panel reads back next frame agrees.
+        let back = TextRun::from(&stored);
+        assert_eq!(back.style.script, ScriptPosition::Superscript);
+        assert!(!back.style.kerning);
+        assert!(!back.style.ligatures);
+        // The layout consumes the script as a baseline shift and a size.
+        assert!(ScriptPosition::Superscript.baseline_shift(24.0) < 0.0);
+        assert!(back.style.effective_size_px() < 24.0);
+    }
+
+    #[test]
+    fn every_script_position_has_a_distinct_label() {
+        let mut labels: Vec<&str> = SCRIPTS.iter().map(|s| script_label(*s)).collect();
+        assert_eq!(labels.len(), 3);
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(labels.len(), 3);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// W3-J: the Type tool's default style
+// ---------------------------------------------------------------------------
+
+/// W3-J: manual kerning is a step *between* characters, so it needs two of
+/// them. On shorter text the Character panel does not offer the Manual
+/// segment - picking it would store an empty table that reads back as
+/// Metrics or Off on the next frame.
+pub fn manual_kerning_available(run: &TextRun) -> bool {
+    run.text.chars().nth(1).is_some()
+}
+
+/// W3-J: the Type tool's default style as a run: the tool's options, applied
+/// to a Type tool exactly as the shell applies them at a press, and read back
+/// through [`tools::text::TypeTool::seed`] - the payload the next click
+/// creates. What the panels show is therefore what the next layer gets.
+pub fn type_defaults(options: &crate::ToolOptions) -> TextRun {
+    use tools::Tool as _;
+    let mut tool = tools::text::TypeTool::default();
+    for (key, value) in options.held(tools::ToolId::Type) {
+        let setting = match value {
+            crate::OptionValue::Float(v) => tools::ToolSetting::Float(v),
+            crate::OptionValue::Int(v) => tools::ToolSetting::Int(v),
+            crate::OptionValue::Bool(v) => tools::ToolSetting::Bool(v),
+            crate::OptionValue::Choice(v) => tools::ToolSetting::Choice(v),
+            crate::OptionValue::Color(v) => tools::ToolSetting::Color(v),
+        };
+        // A value the tool refuses is the tool's to report at the press; here
+        // it simply leaves the default in place.
+        let _ = tool.set_setting(&key, setting);
+    }
+    TextRun::from(&tool.seed())
+}
+
+/// W3-J: a run's default-style values as the Type tool's option values -
+/// the inverse of the mapping `TypeTool::set_setting` applies.
+fn type_default_values(run: &TextRun) -> Vec<(&'static str, crate::OptionValue)> {
+    use crate::OptionValue as V;
+    use layer_model::text as t;
+    let layer = TextLayer::from(run);
+    let (st, pa) = (layer.style, layer.paragraph);
+    let index = |found: Option<usize>| V::Choice(found.unwrap_or(0));
+    let weight_step = (st.weight.0.clamp(100, 900) + 50) / 100;
+    let srgb = |v: f32| color::linear_to_srgb(v.clamp(0.0, 1.0));
+    vec![
+        ("weight", V::Choice(usize::from(weight_step - 1))),
+        ("italic", V::Bool(st.slant == t::Slant::Italic)),
+        ("underline", V::Bool(st.underline)),
+        ("strikethrough", V::Bool(st.strikethrough)),
+        (
+            "color",
+            V::Color([
+                srgb(st.fill[0]),
+                srgb(st.fill[1]),
+                srgb(st.fill[2]),
+                st.fill[3],
+            ]),
+        ),
+        ("tracking", V::Float(st.tracking)),
+        (
+            "leading",
+            V::Float(match pa.leading {
+                t::Leading::Absolute(px) => px,
+                t::Leading::Multiple(_) => 0.0,
+            }),
+        ),
+        ("horizontal_scale", V::Float(st.horizontal_scale * 100.0)),
+        ("vertical_scale", V::Float(st.vertical_scale * 100.0)),
+        ("baseline_shift", V::Float(st.baseline_shift)),
+        (
+            "script",
+            index(
+                tools::text::SCRIPT_VALUES
+                    .iter()
+                    .position(|s| *s == st.script),
+            ),
+        ),
+        (
+            "caps",
+            index(tools::text::CAPS_VALUES.iter().position(|c| *c == st.caps)),
+        ),
+        ("kerning", V::Bool(st.kerning)),
+        ("ligatures", V::Bool(st.ligatures)),
+        (
+            "anti_alias",
+            index(
+                tools::text::ANTI_ALIAS_VALUES
+                    .iter()
+                    .position(|a| *a == st.anti_alias),
+            ),
+        ),
+        (
+            "alignment",
+            index(
+                tools::text::ALIGNMENT_VALUES
+                    .iter()
+                    .position(|a| *a == pa.alignment),
+            ),
+        ),
+        ("left_indent", V::Float(pa.left_indent)),
+        ("right_indent", V::Float(pa.right_indent)),
+        ("first_line_indent", V::Float(pa.first_line_indent)),
+        ("space_before", V::Float(pa.space_before)),
+        ("space_after", V::Float(pa.space_after)),
+    ]
+}
+
+/// W3-J: the Type tool option writes that turn the defaults `before` into
+/// `after` - only the values the edit changed, so an untouched option stays
+/// untouched (and keeps forwarding nothing to the tool).
+pub fn type_default_writes(
+    before: &TextRun,
+    after: &TextRun,
+) -> Vec<(&'static str, crate::OptionValue)> {
+    let old = type_default_values(before);
+    type_default_values(after)
+        .into_iter()
+        .zip(old)
+        .filter(|(new, old)| new != old)
+        .map(|(new, _)| new)
+        .collect()
 }

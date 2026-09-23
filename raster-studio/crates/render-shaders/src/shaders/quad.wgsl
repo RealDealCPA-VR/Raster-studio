@@ -32,6 +32,13 @@ struct Camera {
     // literal: the host derives it from its theme's BackgroundCanvas token,
     // so panels and pasteboard keep their designed relationship.
     m2: vec4<f32>,   // pasteboard r, g, b, _
+    // The view rotation's frame for the checkerboard: cos, sin of the view
+    // rotation (positive clockwise on screen) and the viewport centre in
+    // framebuffer pixels. The checker belongs to the document, so it turns
+    // with the picture; each fragment is turned BACK by the rotation about the
+    // viewport centre before its cell is looked up. At zero rotation this is
+    // the identity and the pattern is the classic window-anchored one.
+    m3: vec4<f32>,   // cos, sin, viewport_centre.x, viewport_centre.y
 };
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
@@ -82,7 +89,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Photopea's pasteboard: a flat colour OUTSIDE the document, taken from the
     // camera uniform; the checkerboard shows only through transparent pixels
     // INSIDE it.
-    let checker = checker_color(in.pos.xy);
+    let checker = checker_color(unturned_px(in.pos.xy));
     let backdrop = select(camera.m2.rgb, checker, inside);
     let a = select(0.0, src.a, inside);
     let lit = mix(backdrop, src.rgb, a);
@@ -97,6 +104,17 @@ fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
     let lo = x * 12.92;
     let hi = 1.055 * pow(x, vec3<f32>(1.0 / 2.4)) - 0.055;
     return select(hi, lo, x <= vec3<f32>(0.0031308));
+}
+
+/// A framebuffer-pixel coordinate turned back by the view rotation about the
+/// viewport centre, so the checkerboard is looked up in the document's frame
+/// and turns with the picture. R(-rotation) = [[c, s], [-s, c]].
+fn unturned_px(frag_px: vec2<f32>) -> vec2<f32> {
+    let c = camera.m3.x;
+    let s = camera.m3.y;
+    let centre = camera.m3.zw;
+    let d = frag_px - centre;
+    return centre + vec2<f32>(c * d.x + s * d.y, -s * d.x + c * d.y);
 }
 
 /// Checkerboard value for a framebuffer-pixel coordinate. Cell (0,0) is light.

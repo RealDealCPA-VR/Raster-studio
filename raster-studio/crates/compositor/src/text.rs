@@ -127,6 +127,12 @@ pub(crate) fn hash_layer(layer: &TextLayer) -> u64 {
     layer.style.kerning.hash(&mut h);
     layer.style.synthetic_bold.hash(&mut h);
     layer.style.synthetic_italic.hash(&mut h);
+    // W3-J: scale, baseline shift, caps and anti-alias change the pixels.
+    layer.style.horizontal_scale.to_bits().hash(&mut h);
+    layer.style.vertical_scale.to_bits().hash(&mut h);
+    layer.style.baseline_shift.to_bits().hash(&mut h);
+    layer.style.caps.hash(&mut h);
+    layer.style.anti_alias.hash(&mut h);
     for span in &layer.spans {
         span.start.hash(&mut h);
         span.end.hash(&mut h);
@@ -181,6 +187,9 @@ pub(crate) fn hash_layer(layer: &TextLayer) -> u64 {
         layer_model::text::Alignment::Center => 1u8.hash(&mut h),
         layer_model::text::Alignment::Right => 2u8.hash(&mut h),
         layer_model::text::Alignment::Justified => 3u8.hash(&mut h),
+        layer_model::text::Alignment::JustifyLastCenter => 4u8.hash(&mut h),
+        layer_model::text::Alignment::JustifyLastRight => 5u8.hash(&mut h),
+        layer_model::text::Alignment::JustifyAll => 6u8.hash(&mut h),
     }
     match layer.paragraph.leading {
         layer_model::text::Leading::Multiple(v) => {
@@ -195,6 +204,8 @@ pub(crate) fn hash_layer(layer: &TextLayer) -> u64 {
     layer.paragraph.first_line_indent.to_bits().hash(&mut h);
     layer.paragraph.space_before.to_bits().hash(&mut h);
     layer.paragraph.space_after.to_bits().hash(&mut h);
+    layer.paragraph.left_indent.to_bits().hash(&mut h);
+    layer.paragraph.right_indent.to_bits().hash(&mut h);
     match layer.frame {
         layer_model::text::Frame::Point => 0u8.hash(&mut h),
         layer_model::text::Frame::Box { width, height } => {

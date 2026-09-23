@@ -43,7 +43,9 @@ pub use export::{
 pub use format::PixelFormat;
 pub use grid::{GridError, PixelRect, TileGrid};
 pub use mipmap::{MipChain, MipError, MipLevel};
-pub use tile::{Tile, TileCoord, TileError, TileHash, TILE_SIZE};
+pub use tile::{
+    rgba16_to_tile_bytes, tile_bytes_to_rgba16, Tile, TileCoord, TileError, TileHash, TILE_SIZE,
+};
 
 /// A test-only global allocator that measures allocation on the calling thread.
 ///

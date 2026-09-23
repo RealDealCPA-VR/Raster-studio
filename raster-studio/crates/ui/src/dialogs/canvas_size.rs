@@ -371,6 +371,11 @@ impl CanvasSizeDialog {
         self.set_height_pixels(h);
     }
 
+    /// The unit the fields are typed in.
+    pub fn unit(&self) -> Unit {
+        self.unit
+    }
+
     /// Change the unit the fields are typed in, keeping the resulting canvas.
     pub fn set_unit(&mut self, unit: Unit) {
         if unit == self.unit {

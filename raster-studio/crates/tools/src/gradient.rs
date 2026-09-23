@@ -398,7 +398,14 @@ fn ramp_at(settings: &GradientSettings, p: IVec2, start: Vec2, end: Vec2) -> [f3
             let enc = linear_to_srgb(ch.clamp(0.0, 1.0)) + d;
             *ch = srgb_to_linear_scalar(enc.clamp(0.0, 1.0));
         }
-        c[3] = (c[3] + d).clamp(0.0, 1.0);
+        // Alpha only where it actually ramps. A fully opaque (or fully
+        // clear) stretch has no band to break up, and dithering it anyway
+        // takes an opaque gradient below 1.0 on half the Bayer cell — which
+        // lets the pixels underneath leak through, four whole levels on a
+        // dark ramp over white once the leak is encoded.
+        if c[3] > 0.0 && c[3] < 1.0 {
+            c[3] = (c[3] + d).clamp(0.0, 1.0);
+        }
     }
     c
 }
@@ -883,6 +890,19 @@ mod option_tests {
         settings
             .ramp
             .sample(settings.shape.parameter(pt, start, end))
+    }
+
+    #[test]
+    fn dither_never_takes_an_opaque_ramp_below_full_alpha() {
+        let settings = GradientSettings::default();
+        assert!(settings.dither, "the default gradient dithers");
+        let (start, end) = (Vec2::new(0.0, 0.0), Vec2::new(64.0, 0.0));
+        for y in 0..4 {
+            for x in 0..64 {
+                let a = ramp_at(&settings, IVec2::new(x, y), start, end)[3];
+                assert_eq!(a, 1.0, "an opaque ramp dithered alpha to {a} at ({x}, {y})");
+            }
+        }
     }
 
     #[test]

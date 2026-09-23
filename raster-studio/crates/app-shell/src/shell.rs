@@ -87,7 +87,7 @@ use crate::editor::{ActionError, Editor};
 use crate::error::ShellError;
 use crate::keymap::{Chord, Key, Resolved};
 use crate::prefs::WindowGeometry;
-use crate::presenter::{ants_segments, selection_ants, CanvasPresenter, SelectionOutline};
+use crate::presenter::{ants_segments, CanvasPresenter, SelectionOutline};
 use crate::session::SessionMarker;
 use crate::tool_input::ToolPointer;
 use ui::canvas::{PointerButton, PointerInput, PointerPhase};
@@ -322,6 +322,37 @@ pub fn pointer_button(button: MouseButton) -> Option<PointerButton> {
     }
 }
 
+/// Pixels one wheel notch pans the view by; also how a touchpad's pixel
+/// delta is turned into notches.
+const WHEEL_LINE_PX: f32 = 60.0;
+
+/// What one wheel event does to the view.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum WheelGesture {
+    /// Multiply the zoom by this, about the cursor.
+    Zoom(f32),
+    /// Move the picture by this many screen pixels.
+    Pan(Vec2),
+}
+
+/// Decide what a wheel event of `lines` notches does.
+///
+/// `wheel_zooms` is the Scroll-wheel-zooms preference. When it is on, every
+/// wheel zooms; when it is off, only Ctrl (Command) + wheel zooms and a plain
+/// wheel pans — Shift swaps the vertical wheel onto the horizontal axis, the
+/// convention every scrolling surface follows.
+fn wheel_gesture(lines: Vec2, ctrl: bool, shift: bool, wheel_zooms: bool) -> WheelGesture {
+    if wheel_zooms || ctrl {
+        return WheelGesture::Zoom((1.0 + lines.y * 0.1).clamp(0.2, 5.0));
+    }
+    let lines = if shift && lines.x == 0.0 {
+        Vec2::new(lines.y, 0.0)
+    } else {
+        lines
+    };
+    WheelGesture::Pan(lines * WHEEL_LINE_PX)
+}
+
 /// Held modifiers as the tools read them.
 ///
 /// The platform modifier folds into `ctrl`, because a tool that checks `ctrl`
@@ -532,6 +563,11 @@ pub struct Shell {
     /// How many frames have rendered since the `--shot` was requested (C1):
     /// the capture waits out the warm-up so egui's layout is settled.
     shot_frames: u32,
+    /// The ruler unit the chrome's workspace held when the shell last looked.
+    /// A change the shell did not push itself is the user's View ▸ Rulers ▸
+    /// <unit> choice, which [`Shell::adopt_ruler_unit`] writes back into the
+    /// Units preference so the rulers and every size readout stay one setting.
+    ruler_unit_seen: ui::dialogs::Unit,
 }
 
 impl Shell {
@@ -543,7 +579,7 @@ impl Shell {
     /// As [`Shell::new`], but capture one rendered frame to `shot` (a literal
     /// GUI screenshot) and then exit — the S2.3 path, see [`Shell::run`].
     pub fn with_shot(editor: Editor, startup_files: Vec<PathBuf>, shot: Option<PathBuf>) -> Self {
-        Shell {
+        let mut shell = Shell {
             editor,
             chrome: Chrome::new(),
             state: None,
@@ -563,7 +599,11 @@ impl Shell {
             shot,
             shot_taken: false,
             shot_frames: 0,
-        }
+            ruler_unit_seen: ui::dialogs::Unit::default(),
+        };
+        shell.ruler_unit_seen = shell.chrome.workspace().canvas.unit;
+        shell.sync_ruler_unit();
+        shell
     }
 
     pub fn editor(&self) -> &Editor {
@@ -1008,7 +1048,8 @@ impl Shell {
             .editor
             .active()
             .map(|doc| {
-                let geometry = selection_ants(
+                // W3-A: gated on View ▸ Selection Edges by the chrome.
+                let geometry = self.chrome.selection_ants(
                     &mut state.outline,
                     doc,
                     self.started.elapsed().as_secs_f64(),
@@ -1270,6 +1311,7 @@ impl Shell {
     /// immediately point the cursor back at the previously active one; see
     /// `a_new_layer_stays_active_when_the_menu_creates_it`.
     fn apply_chrome(&mut self, output: crate::chrome::ChromeOutput) {
+        self.adopt_ruler_unit();
         if let Some((layers, active)) = output.select_layers {
             self.editor.set_layer_selection(layers, active);
         } else if let Some(id) = output.select_layer {
@@ -1570,10 +1612,11 @@ impl Shell {
             self.editor.set_preferences(prefs);
         }
         // The Preferences dialog's confirmed schema maps onto the app's own
-        // preferences; the keymap bridge is the preferences dedupe task's
-        // documented gap, so the live keymap wins for now.
+        // preferences, keymap page included (`Editor::apply_ui_preferences`);
+        // the Units preference then reaches the rulers through the workspace.
         if let Some(prefs) = output.set_ui_preferences {
             self.editor.apply_ui_preferences(&prefs);
+            self.sync_ruler_unit();
         }
         if output.reset_keymap {
             self.editor.reset_keymap();
@@ -1958,6 +2001,53 @@ impl Shell {
         }
     }
 
+    /// One wheel event over the canvas, `lines` in wheel notches (positive y
+    /// is away from the user).
+    ///
+    /// Honours the Scroll-wheel-zooms preference: on (Photopea's default) a
+    /// plain wheel zooms about the cursor; off, a plain wheel pans the view —
+    /// Shift turns the vertical wheel horizontal — and Ctrl+wheel zooms.
+    fn on_wheel(&mut self, lines: Vec2) {
+        let gesture = wheel_gesture(
+            lines,
+            self.modifiers.control_key() || self.modifiers.super_key(),
+            self.modifiers.shift_key(),
+            self.editor.preferences().scroll_wheel_zooms,
+        );
+        let anchor = self.cursor;
+        if let Some(doc) = self.editor.active_mut() {
+            match gesture {
+                WheelGesture::Zoom(factor) => doc.camera.zoom_at(anchor, factor),
+                WheelGesture::Pan(delta) => doc.camera.pan_screen(delta),
+            }
+        }
+        self.repaint_at = Some(Instant::now());
+    }
+
+    /// A ruler unit the chrome's workspace took since the last look that the
+    /// Units preference does not already hold came from View ▸ Rulers ▸
+    /// <unit>: adopt it as the preference, so the status bar, the Info panel,
+    /// the size dialogs and the Preferences dialog read what the rulers show,
+    /// and a later Preferences OK re-applies it instead of reverting it.
+    /// A change that only lands the preference the shell itself pushed
+    /// ([`Shell::sync_ruler_unit`]) already agrees and is left alone.
+    fn adopt_ruler_unit(&mut self) {
+        let unit = self.chrome.workspace().canvas.unit;
+        if unit != self.ruler_unit_seen {
+            self.ruler_unit_seen = unit;
+            self.editor.set_display_unit(unit);
+        }
+    }
+
+    /// Push the Units preference into the chrome's workspace, where the rulers
+    /// read it. Called at start-up and whenever the preferences are applied.
+    fn sync_ruler_unit(&mut self) {
+        let unit = self.editor.display_unit();
+        if self.chrome.workspace().canvas.unit != unit {
+            self.chrome.emit(ui::Intent::SetRulerUnit(unit));
+        }
+    }
+
     /// A chord only the menu bar paints: Ctrl+E Merge Down, Ctrl+A Select All,
     /// F7 the Layers panel. Posted into the chrome's workspace as
     /// `ui::Intent::Action`, which is the door a click on the menu item goes
@@ -1966,6 +2056,9 @@ impl Shell {
     /// the shell consulted only its own keymap, so every one of these chords
     /// was painted and dead.
     fn perform_menu_chord(&mut self, action: ui::MenuAction) {
+        // Edit ▸ Keyboard Shortcuts' Ctrl+Alt+Shift+K rides this same door:
+        // the chrome's dialog host answers the intent with the Preferences
+        // dialog on its Keymap page, exactly as it answers the click.
         self.chrome.emit(ui::Intent::Action(action));
         self.repaint_at = Some(Instant::now());
     }
@@ -2404,16 +2497,13 @@ impl ApplicationHandler<crate::shell::AppEvent> for Shell {
                 self.abandon_gesture();
             }
             WindowEvent::MouseWheel { delta, .. } if !consumed => {
-                let scroll = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y,
-                    MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.0,
+                let lines = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => Vec2::new(x, y),
+                    MouseScrollDelta::PixelDelta(p) => {
+                        Vec2::new(p.x as f32, p.y as f32) / WHEEL_LINE_PX
+                    }
                 };
-                let factor = (1.0 + scroll * 0.1).clamp(0.2, 5.0);
-                let anchor = self.cursor;
-                if let Some(doc) = self.editor.active_mut() {
-                    doc.camera.zoom_at(anchor, factor);
-                }
-                self.repaint_at = Some(Instant::now());
+                self.on_wheel(lines);
             }
             _ => {}
         }
@@ -2451,6 +2541,484 @@ mod tests {
         );
         editor.open_path(&png).unwrap();
         Shell::new(editor, Vec::new())
+    }
+
+    fn camera_of(shell: &Shell) -> (Vec2, f32) {
+        let camera = &shell.editor.active().unwrap().camera;
+        (camera.center, camera.zoom)
+    }
+
+    #[test]
+    fn scroll_wheel_zooms_false_routes_a_plain_wheel_to_pan() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        // The default: a plain wheel zooms.
+        assert!(shell.editor.preferences().scroll_wheel_zooms);
+        let (center, zoom) = camera_of(&shell);
+        shell.on_wheel(Vec2::new(0.0, 1.0));
+        let (c1, z1) = camera_of(&shell);
+        assert_ne!(z1, zoom, "a plain wheel zooms by default");
+
+        // Off: the same plain wheel pans and leaves the zoom alone.
+        let mut prefs = shell.editor.ui_preferences();
+        prefs.tools.scroll_wheel_zooms = false;
+        shell.apply_chrome(ChromeOutput {
+            set_ui_preferences: Some(Box::new(prefs)),
+            ..ChromeOutput::default()
+        });
+        assert!(!shell.editor.preferences().scroll_wheel_zooms);
+        shell.on_wheel(Vec2::new(0.0, -1.0));
+        let (c2, z2) = camera_of(&shell);
+        assert_eq!(z2, z1, "a plain wheel no longer zooms");
+        assert_ne!(c2, c1, "a plain wheel pans");
+        assert_eq!(c2.x, c1.x, "a vertical wheel pans vertically");
+
+        // Shift turns it horizontal.
+        shell.modifiers = ModifiersState::SHIFT;
+        shell.on_wheel(Vec2::new(0.0, -1.0));
+        let (c3, _) = camera_of(&shell);
+        assert_ne!(c3.x, c2.x);
+        assert_eq!(c3.y, c2.y);
+
+        // Ctrl+wheel still zooms.
+        shell.modifiers = ModifiersState::CONTROL;
+        shell.on_wheel(Vec2::new(0.0, 1.0));
+        let (_, z4) = camera_of(&shell);
+        assert_ne!(z4, z2, "Ctrl+wheel zooms");
+        let _ = center;
+    }
+
+    #[test]
+    fn the_wheel_gesture_follows_the_preference_and_the_modifiers() {
+        let notch = Vec2::new(0.0, 1.0);
+        assert!(matches!(
+            wheel_gesture(notch, false, false, true),
+            WheelGesture::Zoom(f) if f > 1.0
+        ));
+        assert_eq!(
+            wheel_gesture(notch, false, false, false),
+            WheelGesture::Pan(Vec2::new(0.0, WHEEL_LINE_PX))
+        );
+        assert_eq!(
+            wheel_gesture(notch, false, true, false),
+            WheelGesture::Pan(Vec2::new(WHEEL_LINE_PX, 0.0))
+        );
+        assert!(matches!(
+            wheel_gesture(notch, true, false, false),
+            WheelGesture::Zoom(_)
+        ));
+    }
+
+    /// Every control the Preferences dialog draws, against what it changes in
+    /// the running application. The table is an exhaustive match, so a new
+    /// control does not compile until it names its consumer; the loop proves
+    /// each one's edit, confirmed through the shell's apply path, moves that
+    /// consumer.
+    #[test]
+    fn every_preference_control_has_a_consumer() {
+        use ui::dialogs::preferences::PrefControl;
+
+        fn consumer(control: PrefControl, shell: &Shell) -> String {
+            let ed = &shell.editor;
+            match control {
+                // The autosave scheduler's period.
+                PrefControl::Autosave => {
+                    format!("{:?}", crate::editor::autosave_period(ed.preferences()))
+                }
+                // The theme the frame installs.
+                PrefControl::Theme => format!("{:?}", ed.preferences().theme),
+                // egui's points-per-pixel multiplier.
+                PrefControl::UiScale => format!("{}", ed.preferences().ui_scale),
+                // The strings catalogue's active locale.
+                PrefControl::Language => format!("{:?}", ui::strings::active()),
+                // The size readout the status line carries.
+                PrefControl::Units => ed.size_readout(72, 72),
+                // What a plain wheel notch does to the camera.
+                PrefControl::ScrollWheelZooms => format!(
+                    "{:?}",
+                    wheel_gesture(
+                        Vec2::new(0.0, 1.0),
+                        false,
+                        false,
+                        ed.preferences().scroll_wheel_zooms
+                    )
+                ),
+                // The open document's undo limit.
+                PrefControl::HistoryStates => format!("{}", ed.active().unwrap().history.limit()),
+                // Where a never-saved document's autosave is written.
+                PrefControl::ScratchDir => ed
+                    .preferences()
+                    .scratch_dir(ed.paths())
+                    .display()
+                    .to_string(),
+                // What the live keymap resolves.
+                PrefControl::Keymap => format!("{:?}", ed.keymap().bindings()),
+            }
+        }
+
+        for control in PrefControl::ALL {
+            let dir = tempfile::tempdir().unwrap();
+            let mut shell = shell_with_one_image(dir.path());
+            let before = consumer(control, &shell);
+            let mut prefs = shell.editor.ui_preferences();
+            if !control.mutate(&mut prefs) {
+                assert_eq!(control, PrefControl::Language, "{control:?} cannot change");
+                assert_eq!(
+                    ui::strings::Locale::ALL.len(),
+                    1,
+                    "a language list of more than one must be able to change"
+                );
+                continue;
+            }
+            shell.apply_chrome(ChromeOutput {
+                set_ui_preferences: Some(Box::new(prefs)),
+                ..ChromeOutput::default()
+            });
+            let after = consumer(control, &shell);
+            assert_ne!(before, after, "{control:?} changed nothing that reads it");
+        }
+    }
+
+    #[test]
+    fn edit_keyboard_shortcuts_opens_preferences_on_the_keymap_page() {
+        let dir = tempfile::tempdir().unwrap();
+        // Three roads, each driven through the chrome the way a user drives
+        // it, never by writing a `ChromeOutput` by hand:
+        // - the menu bar's click handler (`Chrome::menu_click`, what
+        //   `menu_bridge::draw` calls on a click);
+        // - a workspace intent drained by the chrome's frame (the context
+        //   menu and panel door);
+        // - the chord (Ctrl+Alt+Shift+K through `perform_menu_chord`).
+        // Each has to open the Preferences dialog on the Keymap page, and none
+        // may emit the plain Preferences action that opens on General.
+        let ctx = egui::Context::default();
+        crate::chrome::install_theme(&ctx, design::Theme::Dark);
+        let settle = |shell: &mut Shell| -> Vec<crate::action::Action> {
+            let mut actions = Vec::new();
+            for _ in 0..3 {
+                let mut out = ChromeOutput::default();
+                let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                    out = shell.chrome.ui(ctx, &mut shell.editor);
+                });
+                actions.extend(out.actions.iter().copied());
+                shell.apply_chrome(out);
+            }
+            actions
+        };
+        for road in ["menu click", "workspace intent", "chord"] {
+            let mut shell = shell_with_one_image(dir.path());
+            let mut clicked = ChromeOutput::default();
+            match road {
+                "menu click" => {
+                    let intent = ui::Intent::Action(ui::MenuAction::KeyboardShortcuts);
+                    shell.chrome.menu_click(intent, &shell.editor, &mut clicked);
+                }
+                "workspace intent" => shell
+                    .chrome
+                    .emit(ui::Intent::Action(ui::MenuAction::KeyboardShortcuts)),
+                _ => shell.perform_menu_chord(ui::MenuAction::KeyboardShortcuts),
+            }
+            assert!(
+                !clicked
+                    .actions
+                    .contains(&crate::action::Action::ShowPreferences),
+                "{road}: routed to the plain Preferences action"
+            );
+            shell.apply_chrome(clicked);
+            let actions = settle(&mut shell);
+            assert!(
+                !actions.contains(&crate::action::Action::ShowPreferences),
+                "{road}: routed to the plain Preferences action ({actions:?})"
+            );
+            let dialog = shell
+                .chrome
+                .dialogs_for_test()
+                .active_preferences_for_test();
+            assert_eq!(
+                dialog.section(),
+                ui::dialogs::PrefsSection::Keymap,
+                "{road}"
+            );
+            assert!(!dialog.prefs().keymap.commands().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_shortcut_bound_in_the_dialog_resolves_once_the_dialog_is_confirmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        // Edit ▸ Keyboard Shortcuts…, through the door a menu click uses.
+        shell
+            .chrome
+            .emit(ui::Intent::Action(ui::MenuAction::KeyboardShortcuts));
+        let ctx = egui::Context::default();
+        crate::chrome::install_theme(&ctx, design::Theme::Dark);
+        let frame = |shell: &mut Shell, events: Vec<egui::Event>| {
+            let mut out = ChromeOutput::default();
+            let input = egui::RawInput {
+                events,
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                out = shell.chrome.ui(ctx, &mut shell.editor);
+            });
+            shell.apply_chrome(out);
+        };
+        for _ in 0..3 {
+            frame(&mut shell, Vec::new());
+        }
+        // Capture a chord for Export with a real key press in a frame.
+        shell
+            .chrome
+            .dialogs_for_test()
+            .active_preferences_for_test()
+            .begin_capture(&Action::Export.id());
+        let press = |key: egui::Key, modifiers: egui::Modifiers| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        let mods = egui::Modifiers {
+            ctrl: true,
+            alt: true,
+            command: true,
+            ..Default::default()
+        };
+        frame(&mut shell, vec![press(egui::Key::F9, mods)]);
+        let chord = Chord {
+            ctrl_or_cmd: true,
+            alt: true,
+            shift: false,
+            key: Key::Function(9),
+        };
+        assert_eq!(shell.editor.keymap().resolve(&chord), None, "not before OK");
+        {
+            let dialog = shell
+                .chrome
+                .dialogs_for_test()
+                .active_preferences_for_test();
+            assert_eq!(dialog.capturing(), None, "the key press was captured");
+            assert_eq!(
+                dialog
+                    .prefs()
+                    .keymap
+                    .shortcuts(&Action::Export.id())
+                    .last()
+                    .map(|s| s.display()),
+                Some("Ctrl+Alt+F9".to_string()),
+                "the capture bound the pressed chord on the page"
+            );
+        }
+        // Enter confirms the dialog; the shell applies what it confirmed.
+        frame(
+            &mut shell,
+            vec![press(egui::Key::Enter, egui::Modifiers::default())],
+        );
+        assert_eq!(shell.editor.keymap().resolve(&chord), Some(Action::Export));
+    }
+
+    #[test]
+    fn the_units_preference_reaches_the_rulers() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        let mut prefs = shell.editor.ui_preferences();
+        prefs.interface.units = ui::dialogs::Unit::Centimeters;
+        shell.apply_chrome(ChromeOutput {
+            set_ui_preferences: Some(Box::new(prefs)),
+            ..ChromeOutput::default()
+        });
+        let ctx = egui::Context::default();
+        crate::chrome::install_theme(&ctx, design::Theme::Dark);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            let _ = shell.chrome.ui(ctx, &mut shell.editor);
+        });
+        assert_eq!(
+            shell.chrome.workspace().canvas.unit,
+            ui::dialogs::Unit::Centimeters
+        );
+        // And a shell started on those preferences opens with them.
+        let editor = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("config2")),
+            shell.editor.preferences().clone(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        let mut fresh = Shell::new(editor, Vec::new());
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            let _ = fresh.chrome.ui(ctx, &mut fresh.editor);
+        });
+        assert_eq!(
+            fresh.chrome.workspace().canvas.unit,
+            ui::dialogs::Unit::Centimeters
+        );
+    }
+
+    /// Round-3 review: View ▸ Rulers ▸ Inches changed only the workspace's
+    /// ruler unit, so the status bar kept saying px while the Info panel said
+    /// in, and a later Preferences OK that touched only the theme silently
+    /// put the rulers back to pixels. The ruler menu and the Units preference
+    /// are one setting.
+    #[test]
+    fn the_ruler_menu_is_the_units_preference_and_an_unrelated_save_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        let ctx = egui::Context::default();
+        crate::chrome::install_theme(&ctx, design::Theme::Dark);
+        let frame = |shell: &mut Shell| {
+            let mut out = ChromeOutput::default();
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                out = shell.chrome.ui(ctx, &mut shell.editor);
+            });
+            shell.apply_chrome(out);
+        };
+        frame(&mut shell);
+        assert_eq!(shell.editor.display_unit(), ui::dialogs::Unit::Pixels);
+
+        // The View menu's item: resolved against the live menu context and
+        // its intent posted, which is what a click on View ▸ Rulers ▸ Inches
+        // does.
+        let context = crate::menu_bridge::context(&mut shell.editor, shell.chrome.workspace());
+        let intent = ui::MenuAction::SetRulerUnit(ui::dialogs::Unit::Inches)
+            .resolve(&context)
+            .intent()
+            .cloned()
+            .expect("View > Rulers > Inches is enabled");
+        shell.chrome.emit(intent);
+        for _ in 0..2 {
+            frame(&mut shell);
+        }
+        assert_eq!(
+            shell.chrome.workspace().canvas.unit,
+            ui::dialogs::Unit::Inches
+        );
+        assert_eq!(
+            shell.editor.display_unit(),
+            ui::dialogs::Unit::Inches,
+            "the ruler menu did not reach the Units preference"
+        );
+        assert!(
+            shell.editor.size_readout(72, 72).ends_with(" in"),
+            "status readout: {}",
+            shell.editor.size_readout(72, 72)
+        );
+        assert_eq!(
+            shell.editor.ui_preferences().interface.units,
+            ui::dialogs::Unit::Inches,
+            "the Preferences dialog shows another unit than the rulers"
+        );
+
+        // Preferences… opened and saved with only the theme changed.
+        let mut prefs = shell.editor.ui_preferences();
+        prefs.interface.theme = match prefs.interface.theme {
+            ui::dialogs::preferences::ThemeChoice::Dark => {
+                ui::dialogs::preferences::ThemeChoice::Light
+            }
+            _ => ui::dialogs::preferences::ThemeChoice::Dark,
+        };
+        shell.apply_chrome(ChromeOutput {
+            set_ui_preferences: Some(Box::new(prefs)),
+            ..ChromeOutput::default()
+        });
+        for _ in 0..2 {
+            frame(&mut shell);
+        }
+        assert_eq!(
+            shell.chrome.workspace().canvas.unit,
+            ui::dialogs::Unit::Inches,
+            "an unrelated Preferences save reverted the rulers"
+        );
+        assert_eq!(shell.editor.display_unit(), ui::dialogs::Unit::Inches);
+    }
+
+    /// W3-G: every size readout the spec names follows the Units preference,
+    /// read off what the real frame paints and what the real menu click
+    /// opens — not off the helper that formats it.
+    #[test]
+    fn the_units_preference_reaches_the_status_bar_the_info_panel_and_the_size_dialogs() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        let mut prefs = shell.editor.ui_preferences();
+        prefs.interface.units = ui::dialogs::Unit::Centimeters;
+        shell.apply_chrome(ChromeOutput {
+            set_ui_preferences: Some(Box::new(prefs)),
+            ..ChromeOutput::default()
+        });
+        // The Info panel on screen, alone in a minimal layout, as the ui
+        // crate's own panel tests stage it (in the default layout it is a
+        // background tab behind the Navigator).
+        let dock = &mut shell.chrome.workspace_for_test().dock;
+        dock.apply_layout(ui::LayoutId::Minimal);
+        dock.set_open(ui::dock::PanelId::Info, true);
+        let ctx = egui::Context::default();
+        crate::chrome::install_theme(&ctx, design::Theme::Dark);
+        let mut shapes = Vec::new();
+        for _ in 0..3 {
+            let mut out = ChromeOutput::default();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            let full = ctx.run(input, |ctx| {
+                out = shell.chrome.ui(ctx, &mut shell.editor);
+            });
+            shapes = full.shapes;
+            shell.apply_chrome(out);
+        }
+        // 16 px at the rulers' 72 ppi.
+        let expected = "0.564 × 0.564 cm";
+        assert_eq!(shell.editor.size_readout(16, 16), expected);
+        let painted: Vec<egui::Pos2> = shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) if t.galley.text() == expected => Some(t.pos),
+                _ => None,
+            })
+            .collect();
+        let info_row = ctx
+            .read_response(ui::dock::ids::info_value("Document"))
+            .expect("the Info panel's Document row was drawn")
+            .rect;
+        assert!(
+            painted.iter().any(|p| info_row.expand(1.0).contains(*p)),
+            "the Info panel's Document row does not read {expected:?} (painted at {painted:?}, row {info_row:?})"
+        );
+        assert!(
+            painted.iter().any(|p| p.y > 800.0),
+            "the status bar's Size field does not read {expected:?} (painted at {painted:?})"
+        );
+        assert!(
+            !shapes.iter().any(|c| matches!(
+                &c.shape,
+                egui::Shape::Text(t) if t.galley.text() == "16 × 16 px"
+            )),
+            "a size readout still reads in pixels"
+        );
+
+        // Image ▸ Image Size… and Canvas Size…, clicked through the menu bar's
+        // handler, open with their fields in the preference.
+        for action in [ui::MenuAction::ImageSize, ui::MenuAction::CanvasSize] {
+            let mut out = ChromeOutput::default();
+            shell
+                .chrome
+                .menu_click(ui::Intent::Action(action), &shell.editor, &mut out);
+            let host = shell.chrome.dialogs_for_test();
+            let unit = match host.active_for_test() {
+                crate::dialog_host::ActiveDialog::ImageSize(d) => d.print_unit(),
+                crate::dialog_host::ActiveDialog::CanvasSize(d) => d.unit(),
+                other => panic!("{action:?} opened {other:?}"),
+            };
+            assert_eq!(unit, ui::dialogs::Unit::Centimeters, "{action:?}");
+            host.close();
+        }
     }
 
     #[test]
@@ -3696,8 +4264,9 @@ mod tests {
                 ctrl_shift,
                 M::Zoom(ZoomCommand::FillScreen),
             ),
+            // Feather… is Photopea's Shift+F6 (W3-H), not Shift+6.
             (
-                WKey::Character("^".into()),
+                WKey::Named(NamedKey::F6),
                 ModifiersState::SHIFT,
                 M::Modify(ModifySelection::Feather),
             ),

@@ -8,6 +8,12 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use layer_model::text::{AntiAlias, Caps};
+
+/// Size of a synthesised small capital relative to the run's size — the
+/// conventional 70 % a layout app uses when the face has no `smcp` glyphs.
+pub const SMALL_CAPS_SIZE_FACTOR: f32 = 0.7;
+
 /// Multiplier applied to the font size of a sub/superscript run.
 ///
 /// Matches the conventional 58.3% used by desktop layout apps.
@@ -211,6 +217,18 @@ pub struct CharStyle {
     pub allow_synthetic_bold: bool,
     /// Allow faux italic when the family has no slanted face.
     pub allow_synthetic_italic: bool,
+    /// W3-J: horizontal glyph scale (1.0 = 100 %). Advances and glyph
+    /// images are both stretched, and wrapping accounts for it.
+    pub horizontal_scale: f32,
+    /// W3-J: vertical glyph scale (1.0 = 100 %). Glyph images are stretched
+    /// about the baseline; leading is unchanged, as in Photoshop.
+    pub vertical_scale: f32,
+    /// W3-J: baseline shift in layer pixels; positive raises the glyphs.
+    pub baseline_shift: f32,
+    /// W3-J: all caps / small caps, applied at shaping time only.
+    pub caps: Caps,
+    /// W3-J: edge rasterisation. Read from the base style for the whole run.
+    pub anti_alias: AntiAlias,
 }
 
 impl Default for CharStyle {
@@ -230,6 +248,11 @@ impl Default for CharStyle {
             kerning: true,
             allow_synthetic_bold: true,
             allow_synthetic_italic: true,
+            horizontal_scale: 1.0,
+            vertical_scale: 1.0,
+            baseline_shift: 0.0,
+            caps: Caps::Normal,
+            anti_alias: AntiAlias::Smooth,
         }
     }
 }

@@ -92,6 +92,7 @@ fn the_model_round_trips_through_json() {
             first_line_indent: 12.0,
             space_before: 3.0,
             space_after: 4.0,
+            ..ParagraphStyle::default()
         })
         .with_origin([7.0, 8.0]);
 
@@ -122,7 +123,12 @@ fn the_serialised_shape_is_stable() {
                 "ligatures": true,
                 "kerning": true,
                 "allow_synthetic_bold": true,
-                "allow_synthetic_italic": true
+                "allow_synthetic_italic": true,
+                "horizontal_scale": 1.0,
+                "vertical_scale": 1.0,
+                "baseline_shift": 0.0,
+                "caps": "Normal",
+                "anti_alias": "Smooth"
             },
             "runs": [],
             "paragraph": {
@@ -132,7 +138,9 @@ fn the_serialised_shape_is_stable() {
                 "line_height": { "Multiple": f64::from(1.2_f32) },
                 "first_line_indent": 0.0,
                 "space_before": 0.0,
-                "space_after": 0.0
+                "space_after": 0.0,
+                "left_indent": 0.0,
+                "right_indent": 0.0
             },
             "frame": "Point",
             "kerning": [],

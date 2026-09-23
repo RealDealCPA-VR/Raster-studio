@@ -106,6 +106,29 @@ mod tests {
         );
     }
 
+    /// The checkerboard is looked up in the document's frame — each fragment
+    /// turned back by the view rotation carried in the uniform's fourth row —
+    /// never straight from the framebuffer position, or a rotated view would
+    /// show the picture turned over a checker that stayed nailed to the
+    /// window. Behaviour is pinned by `render`'s
+    /// `a_quarter_turn_renders_the_upright_frame_turned_a_quarter_turn`.
+    #[test]
+    fn checkerboard_turns_with_the_view() {
+        let code = strip_line_comments(QUAD_WGSL);
+        assert!(
+            code.contains("m3: vec4<f32>"),
+            "quad.wgsl's Camera uniform lost its view-rotation row"
+        );
+        assert!(
+            code.contains("checker_color(unturned_px(in.pos.xy))"),
+            "quad.wgsl looks the checker up in window space again"
+        );
+        assert!(
+            code.contains("camera.m3.x") && code.contains("camera.m3.y"),
+            "quad.wgsl does not read the rotation from the uniform"
+        );
+    }
+
     /// `composite.wgsl` derives its UVs in the vertex stage, so clip `+y` must
     /// map to `v = 0`.
     ///

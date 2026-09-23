@@ -783,6 +783,9 @@ impl Editor {
         dialogs: Box<dyn FileDialogs>,
     ) -> Self {
         let prefs = prefs.sanitized();
+        // The catalogue is process-wide; the stored language is installed
+        // before anything draws a string.
+        ui::strings::set_locale(prefs.locale());
         let keymap = Keymap::with_overrides(prefs.keymap_overrides.clone());
         let presets = asset_store::presets::PresetStore::load(&AppPaths::presets_file(&paths));
         Editor {
@@ -1025,49 +1028,98 @@ impl Editor {
 
     /// The dialog-facing view of the application preferences.
     ///
-    /// [`ui::dialogs::UiPreferences`] is the Preferences dialog's schema and
-    /// richer than what this app models, so the four settings the app owns map
-    /// onto it (minutes instead of seconds for autosave, undo states for
-    /// history depth) and the sections without an app counterpart (tools,
-    /// performance, scratch disks) stay at their defaults until their
-    /// features exist.
+    /// Every control the dialog draws maps onto a field this app persists and
+    /// reads (`every_preference_control_has_a_consumer` holds that line):
+    /// minutes instead of seconds for autosave, undo states for history
+    /// depth, the scratch directory as text (empty for the default), and the
+    /// live keymap as the keymap page's model. The page is General: Edit ▸
+    /// Keyboard Shortcuts… opens on the Keymap page by overriding it where
+    /// the menu action is answered (`DialogHost::open_for_menu_action`).
     pub fn ui_preferences(&self) -> ui::dialogs::UiPreferences {
         let prefs = self.preferences();
         ui::dialogs::UiPreferences {
             general: ui::dialogs::GeneralPrefs {
                 autosave_minutes: (prefs.autosave_interval_secs / 60).min(u32::MAX as u64) as u32,
-                ..Default::default()
             },
             interface: ui::dialogs::InterfacePrefs {
                 theme: prefs.theme.into(),
                 ui_scale: prefs.ui_scale,
-                ..Default::default()
+                language: prefs.locale(),
+                units: prefs.units.into(),
+            },
+            tools: ui::dialogs::preferences::ToolPrefs {
+                scroll_wheel_zooms: prefs.scroll_wheel_zooms,
             },
             history: ui::dialogs::HistoryPrefs {
                 states: prefs.history_depth.min(u32::MAX as usize) as u32,
-                ..Default::default()
             },
-            ..Default::default()
+            scratch: ui::dialogs::preferences::ScratchPrefs {
+                dir: prefs
+                    .scratch_dir
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+            },
+            keymap: self.keymap.editor_model(),
+            page: ui::dialogs::PrefsSection::General,
         }
     }
 
     /// Apply the Preferences dialog's confirmed [`ui::dialogs::UiPreferences`].
     ///
-    /// Only the app-owned settings are taken; see [`Self::ui_preferences`].
-    /// The keymap the dialog edits is the ui crate's own command universe
-    /// (dotted ids like `tool.brush`) while the shell's keymap binds menu
-    /// [`Action`]s over per-cycle-group tool letters, so there is no faithful
-    /// conversion yet — the live keymap wins, per the echo rule in
-    /// [`Self::set_preferences`]. That bridge is tracked by the preferences
-    /// dedupe task.
+    /// The keymap page's model is diffed against the shipped table and that
+    /// diff becomes the live keymap's user layer ([`Keymap::apply_editor_model`]),
+    /// so a chord bound on the page resolves the moment the dialog closes and
+    /// is persisted with the rest. A model with no commands (a caller that did
+    /// not build it from [`Self::ui_preferences`]) leaves the keymap alone
+    /// rather than reading as "remove every customisation".
     pub fn apply_ui_preferences(&mut self, ui_prefs: &ui::dialogs::UiPreferences) {
         let mut prefs = self.preferences().clone();
         prefs.theme = ui_prefs.interface.theme.into();
         prefs.ui_scale = ui_prefs.interface.ui_scale;
+        prefs.language = ui_prefs.interface.language.code().to_string();
+        prefs.units = ui_prefs.interface.units.into();
+        prefs.scroll_wheel_zooms = ui_prefs.tools.scroll_wheel_zooms;
         prefs.autosave_interval_secs = ui_prefs.general.autosave_minutes as u64 * 60;
         prefs.history_depth = ui_prefs.history.states.max(1) as usize;
+        prefs.scratch_dir = ui_prefs.scratch.dir().map(std::path::PathBuf::from);
+        if !ui_prefs.keymap.commands().is_empty() {
+            self.keymap.apply_editor_model(&ui_prefs.keymap);
+            self.pending_conflict = None;
+        }
         prefs.keymap_overrides = self.keymap.overrides().to_vec();
         self.set_preferences(prefs);
+    }
+
+    /// The measurement unit the size readouts are written in.
+    pub fn display_unit(&self) -> ui::dialogs::Unit {
+        self.prefs.units.into()
+    }
+
+    /// Adopt a unit chosen outside the Preferences dialog — View ▸ Rulers ▸
+    /// <unit> — as the Units preference, saved with the rest. The rulers, the
+    /// status bar, the Info panel and the size dialogs all read this one
+    /// setting, so the ruler menu cannot leave them disagreeing.
+    pub fn set_display_unit(&mut self, unit: ui::dialogs::Unit) {
+        let unit: crate::prefs::UnitChoice = unit.into();
+        if self.prefs.units == unit {
+            return;
+        }
+        let mut prefs = self.preferences().clone();
+        prefs.units = unit;
+        self.set_preferences(prefs);
+    }
+
+    /// A width × height in pixels, spelled in the Units preference —
+    /// `2.540 × 2.540 cm`. Documents carry no resolution of their own, so the
+    /// conversion is at the same 72 ppi the rulers fall back to.
+    pub fn size_readout(&self, width_px: u32, height_px: u32) -> String {
+        ui::dialogs::units::format_size(
+            f64::from(width_px),
+            f64::from(height_px),
+            self.display_unit(),
+            ui::dialogs::units::DEFAULT_PPI,
+        )
     }
 
     /// Replace the preferences, re-deriving everything that depends on them.
@@ -1084,6 +1136,7 @@ impl Editor {
     /// as a deliberate change and rebuilds the map.
     pub fn set_preferences(&mut self, prefs: Preferences) {
         let mut prefs = prefs.sanitized();
+        ui::strings::set_locale(prefs.locale());
         let live = self.keymap.overrides().to_vec();
         if prefs.keymap_overrides != live {
             if prefs.keymap_overrides == self.prefs.keymap_overrides {
@@ -2386,7 +2439,10 @@ impl Editor {
                 .map_err(|e| e.to_string())?
         };
         self.apply_command(command);
-        self.status = Some(format!("Canvas resized to {new_w}×{new_h}"));
+        self.status = Some(format!(
+            "Canvas resized to {}",
+            self.size_readout(new_w, new_h)
+        ));
         Ok("Resized canvas".to_string())
     }
 
@@ -5378,6 +5434,143 @@ mod preview_sweep_tests {
             "the active document's lens survives"
         );
         let _ = first;
+    }
+}
+
+#[cfg(test)]
+mod preference_tests {
+    use super::*;
+
+    fn editor_with_image(dir: &Path) -> Editor {
+        let png = dir.join("a.png");
+        std::fs::write(
+            &png,
+            raster::encode(raster::ExportFormat::Png, 16, 16, &[255u8; 16 * 16 * 4]).unwrap(),
+        )
+        .unwrap();
+        let mut editor = Editor::with_state(
+            AppPaths::rooted(dir.join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(crate::dialogs::ScriptedDialogs::new()),
+        );
+        editor.open_path(&png).unwrap();
+        editor
+    }
+
+    #[test]
+    fn units_cm_makes_the_status_readout_say_cm() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor_with_image(dir.path());
+        ed.resize_canvas(72, 36, glam::IVec2::ZERO).unwrap();
+        assert_eq!(ed.status(), Some("Canvas resized to 72 × 36 px"));
+
+        let mut ui_prefs = ed.ui_preferences();
+        ui_prefs.interface.units = ui::dialogs::Unit::Centimeters;
+        ed.apply_ui_preferences(&ui_prefs);
+        assert_eq!(ed.preferences().units, crate::prefs::UnitChoice::Cm);
+        // 72 px at the rulers' 72 ppi is one inch: 2.54 cm.
+        ed.resize_canvas(72, 36, glam::IVec2::ZERO).unwrap();
+        assert_eq!(ed.status(), Some("Canvas resized to 2.540 × 1.270 cm"));
+        // And the dialog re-opens showing what was applied.
+        assert_eq!(
+            ed.ui_preferences().interface.units,
+            ui::dialogs::Unit::Centimeters
+        );
+    }
+
+    #[test]
+    fn a_binding_made_on_the_keymap_page_resolves_after_ok_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor_with_image(dir.path());
+        let mut dialog = ui::dialogs::PreferencesDialog::new(ed.ui_preferences());
+        let free = ui::dialogs::Shortcut {
+            key: egui::Key::F9,
+            ctrl: true,
+            shift: false,
+            alt: true,
+        };
+        dialog.begin_capture(&Action::Export.id());
+        dialog.capture(free).unwrap();
+        let chord = crate::keymap::chord_of_editor_shortcut(free).unwrap();
+        assert_eq!(ed.keymap().resolve(&chord), None, "nothing before OK");
+        let Some(ui::dialogs::DialogAction::SetPreferences(confirmed)) =
+            ui::dialogs::Dialog::confirm(&dialog)
+        else {
+            panic!("the dialog confirms its preferences");
+        };
+        ed.apply_ui_preferences(&confirmed);
+        assert_eq!(ed.keymap().resolve(&chord), Some(Action::Export));
+        assert!(ed
+            .preferences()
+            .keymap_overrides
+            .iter()
+            .any(|o| o.chord == chord && o.action == Some(Action::Export)));
+        ed.persist().unwrap();
+        let back = Preferences::load(&ed.paths().preferences_file());
+        assert_eq!(
+            Keymap::with_overrides(back.keymap_overrides).resolve(&chord),
+            Some(Action::Export)
+        );
+    }
+
+    #[test]
+    fn a_conflict_on_the_keymap_page_is_reported_and_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor_with_image(dir.path());
+        let mut dialog = ui::dialogs::PreferencesDialog::new(ed.ui_preferences());
+        dialog.begin_capture(&Action::Export.id());
+        let ctrl_s = ui::dialogs::Shortcut::ctrl(egui::Key::S);
+        assert_eq!(
+            dialog.capture(ctrl_s),
+            Err(ui::dialogs::KeymapError::Conflict {
+                held_by: Action::Save.id()
+            })
+        );
+        let (id, shortcut, _) = dialog.pending_conflict().expect("reported inline");
+        assert_eq!(
+            (id.as_str(), *shortcut),
+            (Action::Export.id().as_str(), ctrl_s)
+        );
+        ed.apply_ui_preferences(dialog.prefs());
+        assert_eq!(
+            ed.keymap()
+                .resolve(&crate::keymap::Chord::ctrl(crate::keymap::Key::character(
+                    's'
+                ))),
+            Some(Action::Save)
+        );
+        assert!(ed.keymap().overrides().is_empty());
+    }
+
+    #[test]
+    fn a_dialog_model_with_no_commands_leaves_the_live_keymap_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor_with_image(dir.path());
+        let chord = crate::keymap::Chord::ctrl(crate::keymap::Key::Function(9));
+        ed.rebind(chord, Action::Export).unwrap();
+        ed.apply_ui_preferences(&ui::dialogs::UiPreferences::default());
+        assert_eq!(ed.keymap().resolve(&chord), Some(Action::Export));
+    }
+
+    #[test]
+    fn the_scratch_directory_set_in_the_dialog_is_where_autosaves_go() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor_with_image(dir.path());
+        let elsewhere = dir.path().join("elsewhere");
+        let mut ui_prefs = ed.ui_preferences();
+        assert_eq!(ui_prefs.scratch.dir, "", "empty means the default");
+        ui_prefs.scratch.dir = elsewhere.display().to_string();
+        ed.apply_ui_preferences(&ui_prefs);
+        assert_eq!(ed.preferences().scratch_dir(ed.paths()), elsewhere);
+        // Emptied again, the default comes back.
+        let mut ui_prefs = ed.ui_preferences();
+        ui_prefs.scratch.dir = "  ".to_string();
+        ed.apply_ui_preferences(&ui_prefs);
+        assert_eq!(
+            ed.preferences().scratch_dir(ed.paths()),
+            ed.paths().default_scratch_dir()
+        );
     }
 }
 

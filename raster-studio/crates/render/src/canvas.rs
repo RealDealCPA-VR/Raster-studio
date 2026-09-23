@@ -17,6 +17,9 @@ struct CameraUniform {
     m1: [f32; 4],
     /// The pasteboard, linear light, `[r, g, b, unused]`.
     m2: [f32; 4],
+    /// The checkerboard's frame: `[cos, sin, viewport_centre.x,
+    /// viewport_centre.y]` — see [`Camera::checker_frame`].
+    m3: [f32; 4],
 }
 
 /// The backdrop a canvas starts with, as an 8-bit sRGB display value.
@@ -285,7 +288,9 @@ impl Canvas {
     /// hardware encode) on the way out, so the same row is right for both
     /// target encodings. Call after [`Canvas::set_backdrop`] for the new
     /// backdrop to reach the quad; a host that uploads the camera every frame
-    /// gets that for free.
+    /// gets that for free. `m3` is the view rotation's frame for the
+    /// checkerboard ([`Camera::checker_frame`]), so the checker turns with the
+    /// document instead of staying nailed to the window.
     pub fn update_camera(&self, gpu: &GpuContext, camera: &Camera) {
         let (m0, mut m1) = camera.clip_to_uv();
         m1[2] = if self.format.is_srgb() { 0.0 } else { 1.0 };
@@ -293,6 +298,7 @@ impl Canvas {
             m0,
             m1,
             m2: self.pasteboard_linear(),
+            m3: camera.checker_frame(),
         };
         gpu.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&u));
