@@ -308,10 +308,13 @@ pub fn route_key(
 /// claims a `Route::Tool` gesture exactly as a `Primary` one does, and
 /// [`tools::PointerEvent`] carries no button for a tool to tell the two apart.
 /// Routing it would mean a right-drag on the canvas painting a full undoable
-/// brush stroke the user never asked for. Nothing in this application binds the
-/// right button to anything else yet — there is no canvas context menu — so it
-/// stops here, where the platform event is named, rather than in the shared
-/// router that `ui` also uses.
+/// brush stroke the user never asked for. So the right button stops here,
+/// where the platform event is named, rather than in the shared router that
+/// `ui` also uses — and what it *does* on the canvas happens on egui's side of
+/// the same event: egui-winit is handed every window event before this, and a
+/// right-click over the bare canvas opens the canvas context menu at the
+/// pointer (`canvas_extras::CanvasExtras::paint`, W4-C), whose rows route
+/// through `Chrome::route`.
 pub fn pointer_button(button: MouseButton) -> Option<PointerButton> {
     match button {
         MouseButton::Left => Some(PointerButton::Primary),
@@ -1138,8 +1141,11 @@ impl Shell {
         if let (Some(doc), Some((geometry_doc, geometry))) =
             (self.editor.active(), self.pointer.live_geometry())
         {
-            if geometry_doc == doc.id() {
-                let tools::SessionGeometry::Transform { state, .. } = &geometry;
+            // W4-A: only a transform has a pivot; the other sessions
+            // (crop, marquee, lasso, path, slices) are painted by the chrome.
+            if let (true, tools::SessionGeometry::Transform { state, .. }) =
+                (geometry_doc == doc.id(), &geometry)
+            {
                 let viewport = crate::tool_input::canvas_viewport(doc.camera.viewport_size);
                 let camera = crate::tool_input::canvas_camera_of(&doc.camera);
                 let pivot = crate::interaction_geometry::document_to_screen(
@@ -1333,6 +1339,13 @@ impl Shell {
                     .set_status(format!("Stepped {moved} place(s) in history"));
             }
         }
+        // W4-G: an options-bar confirm (the Ruler's Straighten Layer) is
+        // Enter by another door: the same commit, the same preview settle
+        // and the same un-publish of the consumed geometry.
+        if output.confirm_tool {
+            self.chrome
+                .confirm_tool(&mut self.pointer, &mut self.editor);
+        }
         for action in output.actions {
             self.perform(action);
         }
@@ -1440,6 +1453,10 @@ impl Shell {
                         background,
                     ) {
                         self.editor.set_status(e.to_string());
+                    } else if let Some(doc) = self.editor.active_mut() {
+                        // W4-F: a transparent background has no tiles to
+                        // carry the depth, so the spec's depth is recorded.
+                        doc.set_initial_bit_depth(spec.bit_depth);
                     }
                 }
                 DialogAction::Export(job) => {
@@ -1449,6 +1466,9 @@ impl Shell {
                     // encodes run on a worker (W2-G); the status line reports
                     // the outcome when it lands.
                     if let Some(dir) = self.editor.pick_export_folder() {
+                        // W4-H: the settings File > Export > Slices reuses —
+                        // remembered only once the job is handed on.
+                        ui::dialogs::export_as::remember_exported_job(&job);
                         self.editor.request_export(*job, dir);
                     }
                     // Cancelled at the folder picker: nothing written, nothing
@@ -1980,6 +2000,11 @@ impl Shell {
                     // misrenders through the stale lens until the next
                     // cursor move heals it.
                     self.pointer.settle_preview(&mut self.editor);
+                    // W4-A: and un-publish the committed crop box / slice
+                    // set / pen path now, not on the next pointer sample.
+                    let geometry = self.pointer.live_geometry();
+                    self.chrome
+                        .publish_tool_geometry(geometry, self.editor.active().map(|d| d.id()));
                     if outcome.needs_repaint() {
                         self.repaint_at = Some(Instant::now());
                     }
@@ -2103,6 +2128,11 @@ impl Shell {
         // never produce a pointer sample, so nothing else would clear it.
         self.chrome
             .publish_tool_readout(self.pointer.live_readout());
+        // W4-A: the same for the session's overlay (crop box, rubber band,
+        // lasso, pen path, slices), which Escape must take down at once.
+        let geometry = self.pointer.live_geometry();
+        self.chrome
+            .publish_tool_geometry(geometry, self.editor.active().map(|d| d.id()));
         if !cancelled {
             return false;
         }
@@ -3957,6 +3987,55 @@ mod tests {
         assert_eq!(shell.editor().active().unwrap().camera.zoom, MIN_ZOOM);
     }
 
+    /// W4-F: the New Document dialog's 16-bit answer, through the shell's
+    /// own dialog arm: a white background becomes RGBA16 tiles and the
+    /// document says 16; a transparent one (no tiles) still says 16.
+    #[test]
+    fn a_sixteen_bit_new_document_is_created_at_sixteen_bits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        for background in [
+            ui::dialogs::BackgroundContents::White,
+            ui::dialogs::BackgroundContents::Transparent,
+        ] {
+            let spec = ui::dialogs::NewDocumentSpec {
+                title: "Deep".to_string(),
+                width: 300,
+                height: 40,
+                resolution_ppi: 72.0,
+                color_mode: ui::dialogs::ColorMode::Rgb,
+                color_space: color::ColorSpace::Srgb,
+                bit_depth: raster::BitDepth::Sixteen,
+                background,
+            };
+            shell.apply_chrome(ChromeOutput {
+                dialog: Some(ui::dialogs::DialogAction::NewDocument(Box::new(spec))),
+                ..Default::default()
+            });
+            let doc = shell.editor().active().unwrap();
+            assert_eq!(doc.title(), "Deep");
+            assert_eq!(doc.document.meta.bit_depth, 16, "{background:?}");
+            let layer = doc.document.active_layer().unwrap();
+            let lens: Vec<usize> = doc
+                .document
+                .layer_tiles(layer)
+                .map(|m| {
+                    m.iter()
+                        .map(|(_, h)| compositor::TileSource::tile(&doc.tiles, h).unwrap().len())
+                        .collect()
+                })
+                .unwrap_or_default();
+            if background == ui::dialogs::BackgroundContents::White {
+                assert_eq!(lens.len(), 2, "two tiles across 300 px");
+            }
+            assert!(
+                lens.iter()
+                    .all(|l| *l == raster::Tile::byte_len(raster::PixelFormat::Rgba16)),
+                "{background:?}: {lens:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_windows_size_reaches_every_open_document_and_fits_it_once() {
         // The defect: the only `fit()` on the open path ran against a viewport
@@ -4594,6 +4673,65 @@ mod tests {
                 .is_some_and(|s| s.starts_with("Exported 1 file")),
             "the status bar did not report the export"
         );
+    }
+
+    /// W4-H: File > Export > Slices writes with the settings of the last
+    /// Export As that was handed to the writer. A job confirmed and then
+    /// cancelled at the folder picker is not remembered.
+    #[test]
+    fn an_export_as_job_is_remembered_for_slices_only_once_a_folder_is_chosen() {
+        use ui::dialogs::export_as::{forget_last_confirmed_entry, last_confirmed_entry};
+        forget_last_confirmed_entry();
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let png = dir.path().join("probe.png");
+        std::fs::write(
+            &png,
+            raster::encode(raster::ExportFormat::Png, 8, 8, &[200u8; 8 * 8 * 4]).unwrap(),
+        )
+        .unwrap();
+        // One folder answer: the first export gets it, the second is cancelled.
+        let dialogs = ScriptedDialogs {
+            export_folders: vec![out.path().to_path_buf()],
+            ..Default::default()
+        };
+        let mut editor = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(dialogs),
+        );
+        editor.open_path(&png).unwrap();
+        let mut shell = Shell::new(editor, Vec::new());
+        let job = |format| ui::dialogs::ExportJob {
+            base_name: "probe".to_string(),
+            entries: vec![ui::dialogs::ExportEntry::new("", format, 0.5)],
+        };
+
+        shell.apply_chrome(ChromeOutput {
+            dialog: Some(DialogAction::Export(Box::new(job(
+                raster::ExportFormat::Jpeg(40),
+            )))),
+            ..Default::default()
+        });
+        let remembered = last_confirmed_entry();
+        assert_eq!(remembered.preset.format, raster::ExportFormat::Jpeg(40));
+        assert_eq!(remembered.preset.scale, 0.5);
+
+        // The picker has no answer left: cancelled, nothing written, and the
+        // remembered settings stay the JPEG ones.
+        shell.apply_chrome(ChromeOutput {
+            dialog: Some(DialogAction::Export(Box::new(job(
+                raster::ExportFormat::Bmp,
+            )))),
+            ..Default::default()
+        });
+        assert_eq!(
+            last_confirmed_entry().preset.format,
+            raster::ExportFormat::Jpeg(40),
+            "a job cancelled at the folder picker was remembered"
+        );
+        forget_last_confirmed_entry();
     }
 
     // ------------------------------------------------------------ W2-G
@@ -6118,6 +6256,200 @@ mod tests {
         assert!(
             !texts.iter().any(|t| t.contains("W: 10 px")),
             "a cancelled drag still paints its readout: {texts:?}"
+        );
+    }
+
+    /// W4-A: how many shapes the chrome paints for the shell's current
+    /// state, settled over two frames (the first lays panels out).
+    fn painted_shape_count(ctx: &egui::Context, shell: &mut Shell) -> usize {
+        let mut count = 0;
+        for _ in 0..2 {
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                let _ = shell.chrome.ui(ctx, &mut shell.editor);
+            });
+            count = output.shapes.len();
+        }
+        count
+    }
+
+    /// W4-A: put `tool` through `gesture` on the shell, then press `key`
+    /// through the real key route (`on_key`), with NO pointer sample after
+    /// it — and require the overlay the gesture published to be gone, both
+    /// from the chrome's published session and from the painted frame.
+    fn key_takes_the_overlay_down(
+        tool: tools::ToolId,
+        gesture: impl Fn(&mut Shell),
+        key: NamedKey,
+        expect: impl Fn(&tools::SessionGeometry) -> bool,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_ready_to_draw(dir.path());
+        shell.editor.set_tool(tool);
+        let ctx = egui::Context::default();
+        crate::chrome::install_theme(&ctx, design::Theme::Dark);
+        let idle = painted_shape_count(&ctx, &mut shell);
+
+        gesture(&mut shell);
+        let session = shell.chrome.live_session().cloned();
+        assert!(
+            session.as_ref().is_some_and(&expect),
+            "precondition: {tool:?} published its overlay: {session:?}"
+        );
+        let live = painted_shape_count(&ctx, &mut shell);
+        assert!(
+            live > idle,
+            "precondition: {tool:?}'s overlay paints ({live} shapes vs {idle} idle)"
+        );
+
+        press(
+            &mut shell,
+            KeyboardOwner::default(),
+            WKey::Named(key),
+            ModifiersState::empty(),
+        );
+        assert!(
+            shell.chrome.live_session().is_none(),
+            "{key:?} left {tool:?}'s overlay published: {:?}",
+            shell.chrome.live_session()
+        );
+        let after = painted_shape_count(&ctx, &mut shell);
+        // What the next pointer sample would paint: the shell's own pointer
+        // route republishes, so this frame has no stale overlay by
+        // construction. A commit changes the document (history row, crop
+        // size, stored path), so that — not the idle frame — is the yardstick
+        // for Enter; Escape must also match the untouched idle frame.
+        point(&mut shell, PointerPhase::Move, Vec2::new(8.0, 8.0), false);
+        assert!(shell.chrome.live_session().is_none());
+        let settled = painted_shape_count(&ctx, &mut shell);
+        assert_eq!(
+            after, settled,
+            "{key:?} left {tool:?}'s overlay painted until the next pointer sample"
+        );
+        if key == NamedKey::Escape {
+            assert_eq!(after, idle, "Escape left {tool:?}'s overlay painted");
+        }
+    }
+
+    fn drag(shell: &mut Shell, from: Vec2, to: Vec2) {
+        point(shell, PointerPhase::Down, from, false);
+        point(shell, PointerPhase::Move, (from + to) * 0.5, false);
+        point(shell, PointerPhase::Move, to, false);
+        point(shell, PointerPhase::Up, to, false);
+    }
+
+    fn click(shell: &mut Shell, at: Vec2) {
+        point(shell, PointerPhase::Down, at, false);
+        point(shell, PointerPhase::Up, at, false);
+    }
+
+    fn is_crop(g: &tools::SessionGeometry) -> bool {
+        matches!(g, tools::SessionGeometry::Crop { .. })
+    }
+
+    fn is_path(g: &tools::SessionGeometry) -> bool {
+        matches!(g, tools::SessionGeometry::Path { .. })
+    }
+
+    fn is_slices(g: &tools::SessionGeometry) -> bool {
+        matches!(g, tools::SessionGeometry::Slices { .. })
+    }
+
+    fn is_lasso(g: &tools::SessionGeometry) -> bool {
+        matches!(g, tools::SessionGeometry::Lasso { .. })
+    }
+
+    #[test]
+    fn escape_mid_crop_drag_takes_the_crop_box_down_through_the_shell() {
+        key_takes_the_overlay_down(
+            tools::ToolId::Crop,
+            |shell| {
+                point(shell, PointerPhase::Down, Vec2::new(2.0, 2.0), false);
+                point(shell, PointerPhase::Move, Vec2::new(12.0, 12.0), false);
+            },
+            NamedKey::Escape,
+            is_crop,
+        );
+    }
+
+    #[test]
+    fn escape_takes_a_released_crop_box_down_through_the_shell() {
+        key_takes_the_overlay_down(
+            tools::ToolId::Crop,
+            |shell| drag(shell, Vec2::new(2.0, 2.0), Vec2::new(12.0, 12.0)),
+            NamedKey::Escape,
+            is_crop,
+        );
+    }
+
+    #[test]
+    fn enter_commits_the_crop_and_takes_its_box_down_through_the_shell() {
+        key_takes_the_overlay_down(
+            tools::ToolId::Crop,
+            |shell| drag(shell, Vec2::new(2.0, 2.0), Vec2::new(12.0, 12.0)),
+            NamedKey::Enter,
+            is_crop,
+        );
+    }
+
+    #[test]
+    fn escape_takes_the_pen_path_down_through_the_shell() {
+        key_takes_the_overlay_down(
+            tools::ToolId::Pen,
+            |shell| {
+                click(shell, Vec2::new(2.0, 2.0));
+                click(shell, Vec2::new(12.0, 4.0));
+                click(shell, Vec2::new(8.0, 12.0));
+            },
+            NamedKey::Escape,
+            is_path,
+        );
+    }
+
+    #[test]
+    fn enter_commits_the_pen_path_and_takes_its_anchors_down_through_the_shell() {
+        key_takes_the_overlay_down(
+            tools::ToolId::Pen,
+            |shell| {
+                click(shell, Vec2::new(2.0, 2.0));
+                click(shell, Vec2::new(12.0, 4.0));
+                click(shell, Vec2::new(8.0, 12.0));
+            },
+            NamedKey::Enter,
+            is_path,
+        );
+    }
+
+    #[test]
+    fn escape_takes_the_slice_set_down_through_the_shell() {
+        key_takes_the_overlay_down(
+            tools::ToolId::Slice,
+            |shell| drag(shell, Vec2::new(2.0, 2.0), Vec2::new(10.0, 10.0)),
+            NamedKey::Escape,
+            is_slices,
+        );
+    }
+
+    #[test]
+    fn enter_commits_the_slices_and_takes_them_down_through_the_shell() {
+        key_takes_the_overlay_down(
+            tools::ToolId::Slice,
+            |shell| drag(shell, Vec2::new(2.0, 2.0), Vec2::new(10.0, 10.0)),
+            NamedKey::Enter,
+            is_slices,
+        );
+    }
+
+    #[test]
+    fn escape_takes_the_polygonal_lasso_outline_down_through_the_shell() {
+        key_takes_the_overlay_down(
+            tools::ToolId::PolygonalLasso,
+            |shell| {
+                click(shell, Vec2::new(2.0, 2.0));
+                click(shell, Vec2::new(12.0, 4.0));
+                click(shell, Vec2::new(8.0, 12.0));
+            },
+            NamedKey::Escape,
+            is_lasso,
         );
     }
 }

@@ -86,6 +86,20 @@ pub enum ToolId {
     Zoom,
     RotateView,
     FreeTransform,
+    /// W4-G: drag to measure; Enter straightens the active layer. See
+    /// [`crate::measure::RulerTool`].
+    Ruler,
+    /// W4-G: up to four persistent sample points. See
+    /// [`crate::measure::ColorSamplerTool`].
+    ColorSampler,
+    /// W4-G: paint from an earlier history state. See
+    /// [`crate::history_brush::HistoryBrushTool`].
+    HistoryBrush,
+    /// W4-G: the Pen slot's path-editing tools. See
+    /// [`crate::path_select::AnchorTool`].
+    AddAnchor,
+    DeleteAnchor,
+    ConvertAnchor,
 }
 
 impl ToolId {
@@ -145,6 +159,12 @@ impl ToolId {
         ToolId::Zoom,
         ToolId::RotateView,
         ToolId::FreeTransform,
+        ToolId::Ruler,
+        ToolId::ColorSampler,
+        ToolId::HistoryBrush,
+        ToolId::AddAnchor,
+        ToolId::DeleteAnchor,
+        ToolId::ConvertAnchor,
     ];
 }
 
@@ -510,6 +530,10 @@ pub struct CropRequest {
     pub straighten: f32,
     /// Throw the cropped-away pixels away rather than keeping them off-canvas.
     pub delete_cropped: bool,
+    /// W4-D: the exact pixel size the crop produces (the W x H x Resolution
+    /// preset), or `None` to keep the kept region's own size. The region is
+    /// scaled onto this canvas.
+    pub output_size: Option<(u32, u32)>,
 }
 
 impl CropRequest {
@@ -782,6 +806,17 @@ pub struct ToolContext<'a> {
     /// text — instead of the whole canvas. `None` when the layer has no ink
     /// or the shell has nothing to say; tools fall back to the canvas.
     pub active_layer_content_bounds: Option<PixelRect>,
+    /// W4-G: the History Brush's source — an earlier state of this document
+    /// (the opened state unless the user picked another), filled by the shell
+    /// at the press that begins a History Brush stroke. `None` when the shell
+    /// has none to offer.
+    pub history_source: Option<std::sync::Arc<crate::history_brush::HistorySource>>,
+    /// W4-G: the document's Colour Sampler points (pixel centres, document
+    /// pixels, placement order). They belong to the document, not to a tool
+    /// instance, so they survive a tool switch; the shell lends them here and
+    /// the Colour Sampler edits them in place. `None` when the shell has no
+    /// document to lend them from.
+    pub samplers: Option<&'a mut Vec<Vec2>>,
 
     commands: Vec<Command>,
     selection_edits: Vec<SelectionEdit>,
@@ -818,6 +853,8 @@ impl<'a> ToolContext<'a> {
     pub fn new(tiles: &'a mut dyn TileAccess, canvas: PixelRect) -> Self {
         Self {
             active_layer_content_bounds: None,
+            history_source: None,
+            samplers: None,
             active_layer_parent_transform: None,
             snap_candidates: Vec::new(),
             snap_threshold_doc: 8.0,
@@ -1014,6 +1051,64 @@ pub enum SessionGeometry {
         /// preview (card 013) overrides and what the commit will edit.
         layer: Option<LayerId>,
     },
+    /// W4-A: a crop box — being dragged, or released and waiting for Enter.
+    /// `rect` is `[min, max]` in document pixels; `guide` is the composition
+    /// guide drawn inside it. W4-D round 2: `straighten` is the Straighten
+    /// line, `[from, to]` in document pixels, while it is dragged and after
+    /// release until Enter or Escape; the painter draws it with the angle
+    /// ([`crate::edit::straighten_angle`]) it will level.
+    Crop {
+        rect: [Vec2; 2],
+        guide: CropGuide,
+        straighten: Option<[Vec2; 2]>,
+    },
+    /// W4-A: a marquee's rubber band while the button is down. `rect` is
+    /// `[min, max]` in document pixels, with the modifier constraints
+    /// (square, from-centre) already applied; for the single-row/column
+    /// marquees it is the one-pixel line across the canvas.
+    Marquee {
+        shape: crate::select::MarqueeShape,
+        rect: [Vec2; 2],
+    },
+    /// W4-A: a lasso outline so far, in document pixels. `closed` means the
+    /// release closes it (freehand, magnetic), so the loop is drawn shut;
+    /// open (polygonal) means the next vertex is still to come, and the
+    /// painter draws a rubber segment from the last vertex to the pointer.
+    Lasso { points: Vec<Vec2>, closed: bool },
+    /// W4-A: a pen path being authored. `anchors` are the anchor positions,
+    /// `handles[i]` the absolute `[in, out]` control points of anchor `i`
+    /// (equal to the anchor when straight), all in document pixels.
+    /// `closing` is true while the press that closes the path on its first
+    /// anchor is held.
+    Path {
+        anchors: Vec<Vec2>,
+        handles: Vec<[Vec2; 2]>,
+        closing: bool,
+    },
+    /// W4-A: the slices drawn and not yet committed, plus the one being
+    /// dragged, each `[min, max]` in document pixels, numbered in order.
+    Slices { rects: Vec<[Vec2; 2]> },
+    /// W4-G: the Ruler's line, `start` to `end` in document pixels — drawn
+    /// over the canvas and read into the Info panel's Distance and Angle rows.
+    /// Held after release, until the next drag, a click, Escape or Straighten.
+    Measure { start: Vec2, end: Vec2 },
+}
+
+/// W4-A: the composition guide a published [`SessionGeometry::Crop`] asks
+/// for inside its box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CropGuide {
+    /// No guide lines.
+    None,
+    /// Two lines each way at the thirds — the default.
+    #[default]
+    Thirds,
+    /// W4-D: the options bar's Overlay choice — a dense grid.
+    Grid,
+    /// W4-D: both diagonals.
+    Diagonals,
+    /// W4-D: the golden-section lines.
+    GoldenRatio,
 }
 
 /// A live numeric readout a running gesture wants shown by the pointer —
@@ -1234,6 +1329,19 @@ pub trait Tool {
     fn live_readout(&self) -> Option<LiveReadout> {
         None
     }
+
+    /// W4-B: the in-flight pixels of a running stroke, for the shell's live
+    /// preview lens — or `None` when nothing changed since the last call or
+    /// the tool paints nothing before it commits. Emits nothing and writes
+    /// nothing to `ctx.tiles`; the stroke tools answer it
+    /// ([`crate::stroke::StrokeTool::live_paint`]), every other tool keeps
+    /// this default.
+    fn live_paint(
+        &mut self,
+        _ctx: &mut ToolContext<'_>,
+    ) -> Result<Option<crate::stroke::LivePaint>, ToolError> {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -1247,6 +1355,7 @@ mod tests {
             rect: PixelRect::new(10, 20, 100, 40),
             straighten: 0.0,
             delete_cropped: false,
+            output_size: None,
         };
         // No straighten: the rect's own corners, clockwise from top-left.
         assert_eq!(

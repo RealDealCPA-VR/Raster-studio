@@ -49,6 +49,16 @@ pub enum ToolError {
     #[error("this tool has no meaning on a coverage mask")]
     UnsupportedOnMask,
 
+    /// W4-G: the History Brush's source state has no layer (or mask) matching
+    /// the one being painted — it was added after that state. Painting from
+    /// it would restore "nothing", i.e. erase; Photoshop refuses too.
+    #[error("the history state does not contain a corresponding layer")]
+    NoSourceLayer,
+
+    /// W4-G: the History Brush has no source state to paint from.
+    #[error("the History Brush has no source state to paint from")]
+    NoHistorySource,
+
     /// A tool was asked to continue a gesture it is not in the middle of: a
     /// keystroke routed to the Type tool with no run open, a pen segment with
     /// no path started.

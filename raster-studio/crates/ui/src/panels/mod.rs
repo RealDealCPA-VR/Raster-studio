@@ -11,6 +11,7 @@
 //! decides *which* command a click produces is separable from the drawing, and
 //! it lives in the `*Model` / `*State` types each module leads with.
 
+pub mod actions;
 pub mod brushes;
 pub mod channels;
 pub mod color;
@@ -18,5 +19,6 @@ pub mod histogram;
 pub mod history;
 pub mod layers;
 pub mod navigator;
+pub mod paths;
 pub mod properties;
 pub mod text;

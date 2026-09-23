@@ -452,7 +452,7 @@ mod tests {
     /// Photopea's column, top to bottom. The registry is the source of the
     /// order; this pins that the palette reproduces it slot for slot.
     #[test]
-    fn the_column_is_photopeas_nineteen_slots_in_photopeas_order() {
+    fn the_column_is_photopeas_twenty_slots_in_photopeas_order() {
         let m = PaletteModel::build();
         assert_eq!(
             m.slot_ids(),
@@ -466,6 +466,7 @@ mod tests {
                 "heal",
                 "brush",
                 "clone",
+                "history",
                 "eraser",
                 "gradient",
                 "blur",
@@ -491,6 +492,7 @@ mod tests {
                 ToolId::SpotHealing,
                 ToolId::Brush,
                 ToolId::CloneStamp,
+                ToolId::HistoryBrush,
                 ToolId::Eraser,
                 ToolId::Gradient,
                 ToolId::Blur,
@@ -780,6 +782,52 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// W4-G: the measuring tools fly out of the Eyedropper slot on `I`, the
+    /// History Brush has a slot of its own on `Y` straight after the Clone
+    /// slot, and the anchor tools fly out of the Pen slot — Photoshop's order.
+    #[test]
+    fn the_w4g_tools_fly_out_of_their_photoshop_slots() {
+        let m = PaletteModel::build();
+        let slot = |id| m.slot_of(id).expect("in the palette");
+        let eyedropper = slot(ToolId::Eyedropper);
+        assert_eq!(
+            m.slots()[eyedropper].tools,
+            vec![ToolId::Eyedropper, ToolId::ColorSampler, ToolId::Ruler]
+        );
+        assert_eq!(
+            registry::cycle('i', Some(ToolId::Eyedropper)),
+            Some(ToolId::ColorSampler)
+        );
+        assert_eq!(
+            registry::cycle('i', Some(ToolId::ColorSampler)),
+            Some(ToolId::Ruler)
+        );
+        let clone = slot(ToolId::CloneStamp);
+        let history = slot(ToolId::HistoryBrush);
+        assert_eq!(history, clone + 1, "its own slot, right after Clone");
+        assert_eq!(m.slots()[history].id, "history");
+        assert_eq!(m.slots()[history].tools, vec![ToolId::HistoryBrush]);
+        assert_eq!(m.slots()[history].shortcut, Some('y'));
+        assert!(!m.slots()[clone].tools.contains(&ToolId::HistoryBrush));
+        assert_eq!(registry::cycle('y', None), Some(ToolId::HistoryBrush));
+        let pen = slot(ToolId::Pen);
+        assert_eq!(
+            m.slots()[pen].tools,
+            vec![
+                ToolId::Pen,
+                ToolId::AddAnchor,
+                ToolId::DeleteAnchor,
+                ToolId::ConvertAnchor
+            ]
+        );
+        assert_eq!(m.slots()[pen].shortcut, Some('p'));
+        assert_eq!(m.slots().len(), 20, "nineteen plus the History slot");
+        // Picking a fly-out variant makes the slot show it.
+        let mut state = PaletteState::new();
+        state.activate(&m, ToolId::Ruler);
+        assert_eq!(state.representative(&m, eyedropper), ToolId::Ruler);
     }
 
     #[test]

@@ -155,9 +155,11 @@ fn mask_delta(
             continue;
         };
         let prior_hash = doc.document.pixels.tile(key, edit.coord);
+        // W4-F: a 16-bit prior tile is compared at 8 bits, the depth the
+        // tool painted at; the apply boundary widens the result back.
         let prior_bytes = prior_hash
             .and_then(|h| doc.tiles.tile(h))
-            .map(<[u8]>::to_vec)
+            .map(|b| raster::rgba8_view(b).into_owned())
             .unwrap_or_else(|| vec![0u8; new_bytes.len()]);
         if prior_bytes.len() != new_bytes.len() {
             edits.push(*edit);
@@ -377,7 +379,10 @@ struct EmbeddedContents {
 /// no layer), and the tile BYTES the command's delta references — hashes are
 /// keys into the recording document's own blob store, so a replay needs the
 /// bytes themselves to re-insert into the replay document's store.
-#[derive(Debug, Clone)]
+///
+/// W4-I: serializable, so the Actions panel's library can be saved to and
+/// loaded from its JSON file (see `actions_library`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RecordedEdit {
     pub command: Command,
     pub layer: Option<usize>,
@@ -622,6 +627,9 @@ pub struct Editor {
     /// through [`Self::apply_command`] is captured with the stack position of
     /// the layer it targets, in order.
     recording: Option<Vec<RecordedEdit>>,
+    /// W4-I: the Actions panel's library — every stopped recording, named,
+    /// in the order they were made (see `actions_library`).
+    actions: Vec<actions_library::NamedAction>,
     /// A smart object whose contents are open in an embedded-document tab
     /// (S1.2 editor): which document and layer own it, and which scratch
     /// document is showing its pixels right now.
@@ -666,6 +674,15 @@ pub struct Editor {
     /// needs a platform clipboard and an encode/decode of the payload) and
     /// nothing here depends on which side of it the pixels live on.
     clipboard: Option<Clipboard>,
+    /// Edit > Purge > Histories / All asked once and is waiting for the second
+    /// choice that confirms it: which purge, when it was asked, and every open
+    /// document's undo/redo depths at that moment — an edit, undo or close in
+    /// between changes them, so the second choice asks again rather than
+    /// dropping a step count the question did not name. See [`Editor::purge`].
+    purge_armed: Option<PurgeArming>,
+    /// The Slice tool's committed regions per document, for File > Export >
+    /// Slices. See [`crate::slices_export`].
+    pub(crate) slices: crate::slices_export::SliceStore,
     /// Card 067: the style block Copy Layer Style captured — style fields
     /// ONLY (never position, masks, text, or asset identity), pasted by
     /// `paste_layer_style` as one wholesale `LayerPatch::effects` replace.
@@ -684,6 +701,23 @@ pub struct Clipboard {
     pub height: u32,
     /// Row-major RGBA8, `width * height * 4` bytes.
     pub rgba8: Vec<u8>,
+    /// Where the rectangle's top-left corner sat on the canvas it was copied
+    /// from, in canvas pixels: what Edit > Paste Special > Paste in Place puts
+    /// it back at.
+    pub origin: (u32, u32),
+}
+
+/// How long an armed Edit > Purge > Histories / All waits for the choice that
+/// confirms it.
+pub const PURGE_CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// An Edit > Purge that asked and waits for its confirming second choice.
+#[derive(Debug)]
+struct PurgeArming {
+    target: ui::menu::PurgeTarget,
+    at: std::time::Instant,
+    /// Every open document's (id, undo depth, redo depth) when it asked.
+    depths: Vec<(crate::doc::DocumentId, usize, usize)>,
 }
 
 /// Whether the top of `doc`'s history is a kind edit to `layer`.
@@ -827,6 +861,7 @@ impl Editor {
             quick_mask: false,
             quick_mask_layer: None,
             recording: None,
+            actions: Vec::new(),
             pending_conflict: None,
             temporary_hand: false,
             quit_requested: false,
@@ -837,6 +872,8 @@ impl Editor {
             revision: 0,
             kind_gesture: None,
             clipboard: None,
+            purge_armed: None,
+            slices: crate::slices_export::SliceStore::default(),
             copied_style: None,
             edit_targets: crate::edit_target::EditTargets::default(),
             edit_sessions: crate::edit_session::EditSessions::default(),
@@ -1281,8 +1318,15 @@ impl Editor {
 
     /// Stop recording and hand back what was captured, in apply order.
     /// `None` when nothing was being recorded.
+    ///
+    /// W4-I: a recording that captured anything is also kept in the Actions
+    /// library under a new name, where the panel lists it and its steps.
     pub fn stop_recording(&mut self) -> Option<Vec<RecordedEdit>> {
-        self.recording.take()
+        let captured = self.recording.take();
+        if let Some(edits) = &captured {
+            self.keep_recording(edits);
+        }
+        captured
     }
 
     /// Whether a recording is in progress (the panel's record button state).
@@ -1388,9 +1432,12 @@ impl Editor {
                 if coord.level != 0 {
                     continue;
                 }
-                let Some(bytes) = doc.tiles.tile(hash) else {
+                let Some(stored) = doc.tiles.tile(hash) else {
                     continue;
                 };
+                // W4-F: a 16-bit tile converts at 8 bits; the apply boundary
+                // widens the result back in a 16-bit document.
+                let bytes = raster::rgba8_view(stored);
                 if bytes.len() != ts * ts * 4 {
                     continue;
                 }
@@ -3641,6 +3688,89 @@ impl Editor {
         self.touch();
     }
 
+    /// Edit > Purge: drop what `target` names.
+    ///
+    /// * **Clipboard** drops the application's own copied pixels at once, and
+    ///   forgets that the OS clipboard's image is the editor's own copy — so a
+    ///   later Paste treats that image as any other application's and places it,
+    ///   rather than looking for the pixels just purged.
+    /// * **Histories** drops every open document's undo and redo stacks. That
+    ///   cannot be undone, so the first choice only *asks*: it arms the purge and
+    ///   says how many steps would go, and choosing the same purge again within
+    ///   [`PURGE_CONFIRM_WINDOW`] performs it. The documents themselves are left
+    ///   exactly as they are.
+    /// * **All** is both, behind the same confirmation when there is history
+    ///   to drop.
+    ///
+    /// Nothing to drop is an `Err` naming that, never a silent success.
+    pub fn purge(&mut self, target: ui::menu::PurgeTarget) -> Result<String, String> {
+        use ui::menu::PurgeTarget as P;
+        let depths: Vec<_> = self
+            .docs
+            .iter()
+            .map(|d| (d.id(), d.history.undo_depth(), d.history.redo_depth()))
+            .collect();
+        let steps: usize = self
+            .docs
+            .iter()
+            .map(|d| d.history.undo_depth() + d.history.redo_depth())
+            .sum();
+        let has_clipboard = self.clipboard.is_some();
+        let (clears_clipboard, clears_history) = match target {
+            P::Clipboard => (true, false),
+            P::Histories => (false, true),
+            P::All => (true, true),
+        };
+        let clipboard_work = clears_clipboard && has_clipboard;
+        let history_work = clears_history && steps > 0;
+        if !clipboard_work && !history_work {
+            return Err(match target {
+                P::Clipboard => "Purge Clipboard: the clipboard is empty",
+                P::Histories => "Purge Histories: there is no history to purge",
+                P::All => "Purge All: there is nothing to purge",
+            }
+            .to_string());
+        }
+        if history_work {
+            let confirmed = self.purge_armed.as_ref().is_some_and(|armed| {
+                armed.target == target
+                    && armed.at.elapsed() < PURGE_CONFIRM_WINDOW
+                    && armed.depths == depths
+            });
+            if !confirmed {
+                self.purge_armed = Some(PurgeArming {
+                    target,
+                    at: std::time::Instant::now(),
+                    depths,
+                });
+                let message = format!(
+                    "Purge {}: this drops {steps} undo/redo step(s) from every open \
+                     document and cannot be undone. Choose Edit > Purge > {} again \
+                     to confirm",
+                    target.label(),
+                    target.label()
+                );
+                self.set_status(message.clone());
+                return Ok(message);
+            }
+        }
+        self.purge_armed = None;
+        let mut done = Vec::new();
+        if clipboard_work {
+            self.clipboard = None;
+            self.os_copy_fingerprint = None;
+            done.push("the clipboard".to_string());
+        }
+        if history_work {
+            let dropped: usize = self.docs.iter_mut().map(|d| d.history.purge()).sum();
+            // The fold guard reads the top of a history that no longer exists.
+            self.kind_gesture = None;
+            done.push(format!("{dropped} history step(s)"));
+        }
+        self.touch();
+        Ok(format!("Purged {}", done.join(" and ")))
+    }
+
     pub fn set_status(&mut self, message: impl Into<String>) {
         self.status = Some(message.into());
         self.touch();
@@ -5577,3 +5707,8 @@ mod preference_tests {
 #[cfg(test)]
 #[path = "editor_tests.rs"]
 mod tests;
+
+// W4-I: the Actions panel's named library, and the panel-preset sync.
+#[path = "actions_library.rs"]
+mod actions_library;
+pub use actions_library::NamedAction;

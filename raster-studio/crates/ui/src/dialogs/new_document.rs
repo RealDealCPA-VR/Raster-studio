@@ -777,17 +777,9 @@ impl Dialog for NewDocumentDialog {
         if spec.resolution_ppi > MAX_PPI {
             return Some(format!("Resolution may not exceed {MAX_PPI} ppi"));
         }
-        if spec.bit_depth == BitDepth::Sixteen {
-            // The tile store holds 16-bit tiles and the export path writes
-            // them, but the compositor reads tiles as RGBA8 — a 16-bit
-            // document would composite as garbage. This lifts when live
-            // compositing handles depth (PRODUCTION-TODO P2.5).
-            return Some(
-                "16-bit documents arrive with live 16-bit compositing; this \
-                 build creates 8-bit documents"
-                    .to_string(),
-            );
-        }
+        // 16 bits per channel is accepted: the compositor reads RGBA16 tiles
+        // at their own depth (W3-H), the base layer is created from RGBA16
+        // tiles, and paint lands back at 16 bits (W4-F, `doc_depth.rs`).
         spec.color_mode.unavailable().map(str::to_string)
     }
 }
@@ -965,22 +957,23 @@ mod tests {
     }
 
     #[test]
-    fn a_sixteen_bit_document_is_refused_until_live_compositing_handles_it() {
-        // The store holds 16-bit tiles and export writes them, but the
-        // compositor reads RGBA8 — so the dialog refuses the depth with a
-        // reason rather than confirming a document that would draw as garbage.
+    fn a_sixteen_bit_document_confirms_with_its_depth() {
+        // W4-F: the compositor composites RGBA16 tiles and the shell builds
+        // the base layer from them, so the dialog no longer refuses 16 bits:
+        // confirming hands the shell a spec that says Sixteen.
         let dialog = NewDocumentDialog {
             bit_depth: BitDepth::Sixteen,
             ..Default::default()
         };
-        let reason = dialog.blocked_reason().expect("16-bit creation is refused");
-        assert!(reason.contains("16-bit"), "{reason}");
+        assert_eq!(dialog.blocked_reason(), None);
         let outcome =
             super::super::chrome::resolve(&dialog, super::super::chrome::DialogKeys::CONFIRM);
-        assert!(
-            matches!(outcome, DialogOutcome::Open),
-            "a blocked dialog must not confirm: {outcome:?}"
-        );
+        match outcome {
+            DialogOutcome::Confirmed(DialogAction::NewDocument(spec)) => {
+                assert_eq!(spec.bit_depth, BitDepth::Sixteen)
+            }
+            other => panic!("a 16-bit document must confirm: {other:?}"),
+        }
     }
 
     #[test]

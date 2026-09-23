@@ -57,18 +57,21 @@
 //!   selection as a field rather than a command, so a marquee changes the
 //!   document directly and marks it dirty. Named in [`tools::SelectionEdit`]'s
 //!   own documentation, not invented here.
-//! * **A stroke is invisible until the button is released.**
-//!   `tools::StrokeTool::commit` emits the stroke's single `PaintTiles` command
-//!   from `on_pointer_up` alone, and the document's pixel references are
-//!   rewritten by that command and nothing else — so the canvas is unchanged
-//!   for the whole drag and the stroke appears at the release. There is no live
-//!   preview layer to draw one into. See [`tool_input`].
-//! * **A slice set cannot be exported.** The Slice tool's regions reach
-//!   [`tool_input::ToolPointer::commit`] and the status bar and stop there:
-//!   writing one file per region needs a folder picker that is not wired. The
-//!   crop beside it *is* performed, as one undoable step — see
-//!   [`tool_input::crop_command`], and the `straighten`/`delete_cropped` halves
-//!   of a crop request that it deliberately does not do.
+//! * **A stroke is previewed, then committed once (W4-B).**
+//!   `tools::StrokeTool::commit` still emits the stroke's single `PaintTiles`
+//!   command from `on_pointer_up` alone, but each Move sample publishes the
+//!   in-flight tiles through `tools::Tool::live_paint` into the document's
+//!   preview lens, so the stroke shows while it is dragged; the release
+//!   commits exactly those pixels and Escape leaves no trace. See
+//!   [`tool_input`].
+//! * **A crop's rotation and scale ride on the layer transforms.** (A slice set *is* exported:
+//!   File > Export > Slices writes one file per region, see [`slices_export`].)
+//!   The crop is performed as one undoable step, straighten, W x H x
+//!   Resolution and Delete Cropped Pixels included (W4-D) — see
+//!   `crop_apply::crop`, which [`tool_input::ToolPointer::commit`] calls
+//!   ([`tool_input::crop_command`] is its geometry half alone); the rotation
+//!   and the scale are carried by the root layers' transforms rather than
+//!   baked into their pixels.
 //! * **The right button does nothing on the canvas.** There is no context menu
 //!   to give it, and [`ui::canvas::InputRouter`] would hand a `Secondary` press
 //!   to the active tool exactly as it hands it a `Primary` one — so a right-drag
@@ -97,6 +100,7 @@ pub mod action;
 pub mod canvas_extras;
 pub mod chrome;
 pub mod clipboard;
+mod crop_apply;
 pub mod dialog_host;
 pub mod dialogs;
 pub mod dirty;
@@ -118,6 +122,7 @@ pub mod presenter;
 pub mod recent;
 pub mod session;
 pub mod shell;
+pub mod slices_export;
 pub mod tool_input;
 pub mod version;
 

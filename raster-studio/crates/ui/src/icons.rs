@@ -699,6 +699,75 @@ const TYPE: &[Prim] = &[
     Prim::Line([0.32, 0.80], [0.68, 0.80]),
 ];
 
+/// W4-G: Ruler — a straight edge on the diagonal with its graduations.
+const RULER: &[Prim] = &[
+    Prim::Poly(
+        &[[0.10, 0.70], [0.70, 0.10], [0.90, 0.30], [0.30, 0.90]],
+        true,
+    ),
+    Prim::Line([0.26, 0.54], [0.36, 0.64]),
+    Prim::Line([0.40, 0.40], [0.46, 0.46]),
+    Prim::Line([0.54, 0.26], [0.64, 0.36]),
+];
+
+/// W4-G: Colour Sampler — the eyedropper's tip over a crosshair target.
+const COLOR_SAMPLER: &[Prim] = &[
+    Prim::Line([0.46, 0.54], [0.72, 0.28]),
+    Prim::Poly(
+        &[[0.66, 0.22], [0.78, 0.10], [0.90, 0.22], [0.78, 0.34]],
+        true,
+    ),
+    Prim::Circle([0.30, 0.70], 0.16),
+    Prim::Line([0.30, 0.46], [0.30, 0.94]),
+    Prim::Line([0.06, 0.70], [0.54, 0.70]),
+];
+
+/// W4-G: History Brush — a brush whose stroke curls back on itself.
+const HISTORY_BRUSH: &[Prim] = &[
+    Prim::Poly(
+        &[[0.50, 0.50], [0.80, 0.14], [0.90, 0.24], [0.56, 0.58]],
+        true,
+    ),
+    Prim::Poly(
+        &[[0.50, 0.56], [0.38, 0.62], [0.30, 0.76], [0.44, 0.70]],
+        true,
+    ),
+    Prim::Poly(
+        &[[0.30, 0.20], [0.14, 0.26], [0.10, 0.44], [0.20, 0.56]],
+        false,
+    ),
+    Prim::Poly(&[[0.24, 0.14], [0.30, 0.20], [0.22, 0.28]], false),
+];
+
+/// W4-G: the three anchor tools share the pen nib and differ in the mark
+/// beside it — a plus, a minus, and a corner turning into a curve.
+const ANCHOR_ADD: &[Prim] = &[
+    Prim::Poly(
+        &[[0.30, 0.90], [0.38, 0.58], [0.64, 0.32], [0.80, 0.48]],
+        true,
+    ),
+    Prim::Line([0.30, 0.90], [0.48, 0.66]),
+    Prim::Line([0.24, 0.12], [0.24, 0.44]),
+    Prim::Line([0.08, 0.28], [0.40, 0.28]),
+];
+
+const ANCHOR_DELETE: &[Prim] = &[
+    Prim::Poly(
+        &[[0.30, 0.90], [0.38, 0.58], [0.64, 0.32], [0.80, 0.48]],
+        true,
+    ),
+    Prim::Line([0.30, 0.90], [0.48, 0.66]),
+    Prim::Line([0.08, 0.28], [0.40, 0.28]),
+];
+
+const ANCHOR_CONVERT: &[Prim] = &[
+    Prim::Poly(&[[0.10, 0.84], [0.50, 0.18], [0.90, 0.84]], false),
+    Prim::Line([0.22, 0.18], [0.78, 0.18]),
+    Prim::Dot([0.22, 0.18], 0.06),
+    Prim::Dot([0.78, 0.18], 0.06),
+    Prim::Fill(&[[0.44, 0.12], [0.56, 0.12], [0.56, 0.24], [0.44, 0.24]]),
+];
+
 /// The drawing for a registry icon key.
 ///
 /// Total over `tools::registry` — see the module note and the gate that keeps
@@ -756,6 +825,12 @@ pub fn icon_for(key: &str) -> Icon {
         "rotate-view" => ROTATE_VIEW,
         "transform" => TRANSFORM,
         "arrow" => ARROW,
+        "ruler" => RULER,
+        "color-sampler" => COLOR_SAMPLER,
+        "history-brush" => HISTORY_BRUSH,
+        "anchor-add" => ANCHOR_ADD,
+        "anchor-delete" => ANCHOR_DELETE,
+        "anchor-convert" => ANCHOR_CONVERT,
         _ => return Icon::UNKNOWN,
     })
 }
@@ -1171,6 +1246,68 @@ const ADJ_SELECTIVE_COLOR: &[Prim] = &[
     ),
 ];
 
+// W4-E: Desaturate, Equalize, Shadows/Highlights, Replace Color, Color Lookup.
+
+/// A disc with its colour drained to one flat half.
+const ADJ_DESATURATE: &[Prim] = &[
+    Prim::Circle([0.5, 0.5], 0.36),
+    Prim::Line([0.5, 0.14], [0.5, 0.86]),
+    Prim::Line([0.5, 0.32], [0.84, 0.32]),
+    Prim::Line([0.5, 0.50], [0.86, 0.50]),
+    Prim::Line([0.5, 0.68], [0.84, 0.68]),
+];
+
+/// Histogram bars of one height.
+const ADJ_EQUALIZE: &[Prim] = &[
+    Prim::Line([0.10, 0.86], [0.90, 0.86]),
+    Prim::Line([0.22, 0.86], [0.22, 0.40]),
+    Prim::Line([0.40, 0.86], [0.40, 0.40]),
+    Prim::Line([0.58, 0.86], [0.58, 0.40]),
+    Prim::Line([0.76, 0.86], [0.76, 0.40]),
+    Prim::Line([0.14, 0.40], [0.86, 0.40]),
+];
+
+/// A half-lit disc with a lift arrow on the dark side.
+const ADJ_SHADOWS_HIGHLIGHTS: &[Prim] = &[
+    Prim::Circle([0.5, 0.5], 0.36),
+    Prim::Fill(&[
+        [0.5, 0.14],
+        [0.5, 0.86],
+        [0.36, 0.83],
+        [0.22, 0.72],
+        [0.14, 0.50],
+        [0.22, 0.28],
+        [0.36, 0.17],
+    ]),
+    Prim::Line([0.68, 0.70], [0.68, 0.32]),
+    Prim::Poly(&[[0.60, 0.42], [0.68, 0.30], [0.76, 0.42]], false),
+];
+
+/// A sampled swatch and the one it becomes.
+const ADJ_REPLACE_COLOR: &[Prim] = &[
+    Prim::Fill(&[[0.10, 0.18], [0.40, 0.18], [0.40, 0.48], [0.10, 0.48]]),
+    Prim::Poly(
+        &[[0.60, 0.52], [0.90, 0.52], [0.90, 0.82], [0.60, 0.82]],
+        true,
+    ),
+    Prim::Line([0.40, 0.48], [0.60, 0.52]),
+    Prim::Poly(&[[0.50, 0.44], [0.60, 0.52], [0.50, 0.60]], false),
+];
+
+/// A cube: the 3D table.
+const ADJ_COLOR_LOOKUP: &[Prim] = &[
+    Prim::Poly(
+        &[[0.16, 0.32], [0.62, 0.32], [0.62, 0.84], [0.16, 0.84]],
+        true,
+    ),
+    Prim::Poly(
+        &[[0.16, 0.32], [0.38, 0.14], [0.84, 0.14], [0.62, 0.32]],
+        false,
+    ),
+    Prim::Poly(&[[0.84, 0.14], [0.84, 0.66], [0.62, 0.84]], false),
+    Prim::Dot([0.39, 0.58], 0.06),
+];
+
 // --- history step kinds ----------------------------------------------------
 
 const STEP_OPEN: &[Prim] = &[
@@ -1375,6 +1512,11 @@ pub fn ui_icon(key: &str) -> Icon {
         "adj-threshold" => ADJ_THRESHOLD,
         "adj-gradient-map" => ADJ_GRADIENT_MAP,
         "adj-selective-color" => ADJ_SELECTIVE_COLOR,
+        "adj-desaturate" => ADJ_DESATURATE,
+        "adj-equalize" => ADJ_EQUALIZE,
+        "adj-shadows-highlights" => ADJ_SHADOWS_HIGHLIGHTS,
+        "adj-replace-color" => ADJ_REPLACE_COLOR,
+        "adj-color-lookup" => ADJ_COLOR_LOOKUP,
         // history step kinds
         "step-open" => STEP_OPEN,
         "step-layer-added" => STEP_LAYER_ADDED,
@@ -1660,7 +1802,12 @@ mod tests {
             | AdjustmentId::Posterize
             | AdjustmentId::Threshold
             | AdjustmentId::GradientMap
-            | AdjustmentId::SelectiveColor => {}
+            | AdjustmentId::SelectiveColor
+            | AdjustmentId::Desaturate
+            | AdjustmentId::Equalize
+            | AdjustmentId::ShadowsHighlights
+            | AdjustmentId::ReplaceColor
+            | AdjustmentId::ColorLookup => {}
         }
         match StepKind::Open {
             StepKind::Open
@@ -1693,7 +1840,7 @@ mod tests {
 
         // One per arm above. If the compiler sent you here, these are what tell
         // you whether the matching `ALL` was extended as well.
-        assert_eq!(AdjustmentId::ALL.len(), 15, "extend the match above too");
+        assert_eq!(AdjustmentId::ALL.len(), 20, "extend the match above too");
         assert_eq!(StepKind::ALL.len(), 11, "extend the match above too");
         assert_eq!(LayerClass::ALL.len(), 7, "extend the match above too");
         assert_eq!(LockToggle::ALL.len(), 4, "extend the match above too");

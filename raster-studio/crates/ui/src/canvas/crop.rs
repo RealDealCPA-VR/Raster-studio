@@ -51,6 +51,21 @@ impl CropGuide {
     }
 }
 
+/// W4-D: the guide a published crop session asks for, drawn as the painter
+/// draws it. Every overlay the Crop options bar offers has its own variant
+/// here, so the choice reaches the screen unchanged.
+impl From<tools::tool::CropGuide> for CropGuide {
+    fn from(guide: tools::tool::CropGuide) -> Self {
+        match guide {
+            tools::tool::CropGuide::None => CropGuide::None,
+            tools::tool::CropGuide::Thirds => CropGuide::Thirds,
+            tools::tool::CropGuide::Grid => CropGuide::Grid,
+            tools::tool::CropGuide::Diagonals => CropGuide::Diagonals,
+            tools::tool::CropGuide::GoldenRatio => CropGuide::GoldenRatio,
+        }
+    }
+}
+
 /// The inverse of the golden ratio: where the golden-section lines fall.
 const GOLDEN: f32 = 0.381_966_02;
 
@@ -500,6 +515,21 @@ mod tests {
             assert_eq!(horizontals.len(), want_fractions.len(), "{style:?}");
             assert!(!style.name().is_empty());
         }
+    }
+
+    /// W4-D: every Overlay the Crop options bar offers maps onto the painter
+    /// guide of the same name, each to a different one — so the choice is
+    /// what is drawn, and no two choices draw the same lines.
+    #[test]
+    fn every_crop_bar_overlay_maps_to_the_guide_it_names() {
+        let mut seen = Vec::new();
+        for (label, guide) in tools::edit::CROP_OVERLAYS {
+            let drawn = CropGuide::from(guide);
+            assert_eq!(drawn.name(), label, "{guide:?}");
+            assert!(!seen.contains(&drawn), "{label} duplicates another choice");
+            seen.push(drawn);
+        }
+        assert_eq!(seen.len(), CropGuide::ALL.len(), "a guide is not offered");
     }
 
     #[test]

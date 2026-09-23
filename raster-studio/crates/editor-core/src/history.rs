@@ -32,7 +32,11 @@ struct Entry {
 }
 
 /// A linear undo/redo stack.
-#[derive(Debug)]
+///
+/// `Clone` so a state can be rebuilt on a *copy* (W4-G: the History Brush's
+/// source) without moving the live stacks; cloning copies every entry, so it
+/// is for a one-off per gesture, not per frame.
+#[derive(Debug, Clone)]
 pub struct History {
     done: Vec<Entry>,
     undone: Vec<Entry>,
@@ -143,6 +147,15 @@ impl History {
         self.undone.clear();
     }
 
+    /// Edit ▸ Purge ▸ Histories: forget every recorded edit, as
+    /// [`History::clear`] does, and say how many entries — undo and redo
+    /// together — were dropped. The limit is kept.
+    pub fn purge(&mut self) -> usize {
+        let dropped = self.done.len() + self.undone.len();
+        self.clear();
+        dropped
+    }
+
     /// Apply a command to the document and record it for undo.
     /// Applying a new command clears the redo stack (standard linear history).
     ///
@@ -246,6 +259,28 @@ mod tests {
         let id = l.id;
         doc.layers.push_root(l).unwrap();
         (doc, id)
+    }
+
+    #[test]
+    fn purge_drops_both_stacks_and_counts_them_but_keeps_the_document() {
+        let mut doc = Document::new(100, 100, "t");
+        let mut hist = History::with_limit(7);
+        for name in ["A", "B", "C"] {
+            hist.apply(&mut doc, Command::create_layer(Layer::raster(name)))
+                .unwrap();
+        }
+        assert!(hist.undo(&mut doc).unwrap());
+        assert_eq!((hist.undo_depth(), hist.redo_depth()), (2, 1));
+        let layers_before = doc.layers.len();
+        assert_eq!(hist.purge(), 3);
+        assert!(!hist.can_undo() && !hist.can_redo());
+        assert_eq!(
+            doc.layers.len(),
+            layers_before,
+            "purge touched the document"
+        );
+        assert_eq!(hist.limit(), 7, "purge reset the limit");
+        assert_eq!(hist.purge(), 0, "a second purge has nothing to drop");
     }
 
     #[test]

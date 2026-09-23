@@ -169,6 +169,9 @@ pub enum Pick {
     OpenGradientEditor,
     /// Open the brush editor dialog over the effective tool's brush.
     OpenBrushEditor,
+    /// W4-G: confirm the live tool's held gesture (the Ruler's Straighten
+    /// Layer button); the shell treats it exactly as Enter.
+    ConfirmTool,
 }
 
 /// The nine menus, exactly as the `ui` crate publishes them.
@@ -224,6 +227,11 @@ pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
         layers: false,
     };
     context.open_documents = editor.documents().len();
+    // W4-H: Edit > Purge > Histories drops every open document's history.
+    context.any_history = editor
+        .documents()
+        .iter()
+        .any(|d| d.history.can_undo() || d.history.can_redo());
     context.theme = editor.preferences().theme.resolve(design::Theme::Dark);
     // The multi-selection lives on the DOCUMENT (`Editor::set_layer_selection`
     // puts it there); the workspace's Layers panel echoes it a frame later.
@@ -303,6 +311,7 @@ pub fn pick(intent: &Intent, editor: &Editor) -> Option<Pick> {
         Intent::OpenColorPicker(target) => Some(Pick::OpenColorPicker(*target)),
         Intent::OpenGradientEditor => Some(Pick::OpenGradientEditor),
         Intent::OpenBrushEditor => Some(Pick::OpenBrushEditor),
+        Intent::ConfirmTool => Some(Pick::ConfirmTool),
         // Everything whose whole effect is on the workspace's own state. Listed
         // rather than caught by a wildcard: a new intent variant must be an
         // explicit decision here, which is what the wildcard used to hide.
@@ -615,6 +624,7 @@ pub fn record(pick: Pick, out: &mut ChromeOutput) {
         Pick::OpenColorPicker(target) => out.color_picker = Some(target),
         Pick::OpenGradientEditor => out.gradient_editor = true,
         Pick::OpenBrushEditor => out.brush_editor = true,
+        Pick::ConfirmTool => out.confirm_tool = true,
     }
 }
 
@@ -1071,7 +1081,8 @@ pub(crate) mod pixels {
     ///
     /// Tiles outside the canvas are dropped and absent tiles read as
     /// transparent black, which is exactly what
-    /// [`raster::TileGrid::to_rgba8`] promises for the same data.
+    /// [`raster::TileGrid::to_rgba8`] promises for the same data. An RGBA16
+    /// tile (a 16-bit document) is rounded to RGBA8 on the way out.
     pub fn read_layer(doc: &OpenDocument, layer: LayerId) -> Vec<u8> {
         let w = doc.document.width() as usize;
         let h = doc.document.height() as usize;
@@ -1085,10 +1096,15 @@ pub(crate) mod pixels {
             if coord.level != 0 {
                 continue;
             }
-            let Some(bytes) = compositor::TileSource::tile(&doc.tiles, hash) else {
+            let Some(stored) = compositor::TileSource::tile(&doc.tiles, hash) else {
                 continue;
             };
-            if bytes.len() < need {
+            // W4-F: a 16-bit tile is read rounded to 8 bits. Every caller
+            // works in RGBA8 and writes back through `write_layer`, and the
+            // apply boundary (`doc_depth.rs`) widens that output again,
+            // keeping the exact 16-bit value of every pixel left unchanged.
+            let bytes = raster::rgba8_view(stored);
+            if bytes.len() != need {
                 continue;
             }
             let ox = coord.x as i64 * ts as i64;
@@ -1355,6 +1371,8 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
             Ok("File Info…".to_string())
         }
         MenuAction::ExportLayers => editor.export_layers(),
+        // W4-H: one file per committed Slice-tool region.
+        MenuAction::ExportSlices => crate::slices_export::export_slices(editor),
         MenuAction::PlaceEmbedded => editor.place_from_dialog(false),
         MenuAction::PlaceLinked => editor.place_from_dialog(true),
         MenuAction::Print => editor.print_pdf(),
@@ -1397,7 +1415,7 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::ApplyAdjustment(id) => {
             let kind = crate::dialog_host::take_confirmed_adjustment(id)
                 .unwrap_or_else(|| id.identity_kind());
-            run_adjustment(
+            run_adjustment_kind(
                 editor,
                 &adjustments::Adjustment::from(&kind),
                 &format!("Apply {}", id.label()),
@@ -1509,8 +1527,12 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::Copy => copy(editor, false),
         MenuAction::CopyMerged => copy(editor, true),
         MenuAction::Cut => cut(editor),
-        MenuAction::Paste => paste(editor, false),
-        MenuAction::PasteInto => paste(editor, true),
+        MenuAction::Paste => paste(editor, PasteMode::Plain),
+        MenuAction::PasteInto => paste(editor, PasteMode::Into),
+        // W4-H: Edit > Paste Special and Edit > Purge.
+        MenuAction::PasteInPlace => paste(editor, PasteMode::InPlace),
+        MenuAction::PasteOutside => paste(editor, PasteMode::Outside),
+        MenuAction::Purge(target) => editor.purge(target),
 
         // ---- Select --------------------------------------------------------
         MenuAction::SelectAll => set_selection(editor, |_, w, h| {
@@ -1539,22 +1561,25 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::Reselect => reselect(editor),
         MenuAction::ToggleQuickMask => editor.toggle_quick_mask(),
         MenuAction::SetColorMode(mode) => editor.set_color_mode(mode),
-        // W3-H: Image > Mode > 8/16 Bits/Channel. The menu greys both rows
-        // with the specific reason (`ChannelDepth::conversion_reason`); a
-        // caller that bypasses enablement gets the same sentence.
+        // W4-F: Image > Mode > 8/16 Bits/Channel. Every raster tile is
+        // widened (8 -> 16, lossless) or rounded (16 -> 8) in ONE undoable
+        // Transaction that also carries the depth (`doc_depth.rs`). The row
+        // for the current depth is greyed with `conversion_reason`; a caller
+        // that bypasses enablement gets the same sentence from the builder.
+        // 16 -> 8 dithers, as Photoshop does with its default "Use Dither"
+        // colour setting: the offset is under half an 8-bit step, so a pixel
+        // that was already an exact 8-bit code comes back unchanged, and a
+        // smooth 16-bit gradient does not band.
         MenuAction::SetBitDepth(depth) => {
-            let current = ui::menu::ChannelDepth::of_bits(
-                editor
-                    .active()
-                    .ok_or("No document is open")?
-                    .document
-                    .meta
-                    .bit_depth,
-            );
-            Err(depth
-                .conversion_reason(current)
-                .unwrap_or("This build cannot change the bit depth")
-                .to_string())
+            let command = editor
+                .active_mut()
+                .ok_or("No document is open")?
+                .depth_conversion(depth.bits(), true)?;
+            editor.apply_command(command);
+            match editor.active().map(|d| d.document.meta.bit_depth) {
+                Some(bits) if bits == depth.bits() => Ok(format!("Converted to {}", depth.label())),
+                _ => Err(format!("Could not convert to {}", depth.label())),
+            }
         }
         // W2-F: Select ▸ Refine Edge… confirmed. The parameters are the
         // dialog's (parked by `DialogHost::ui`); a click that opened no
@@ -1888,6 +1913,80 @@ fn run_adjustment(
         ));
     }
     edit_active_pixels(editor, label, |buffer, space| {
+        prepared.apply_premultiplied_rgba(buffer.pixels_mut(), space);
+        Ok(())
+    })?;
+    Ok(format!("{label} applied"))
+}
+
+/// Image ▸ Adjustments for any adjustment (W4-E): the two that are not a
+/// plain per-pixel function take their own road here — Equalize reads the
+/// histogram of the pixels it is about to change, and Shadows/Highlights reads
+/// each pixel's neighbourhood over its radius — and every other one is
+/// [`run_adjustment`]. Each lands as one undoable step.
+fn run_adjustment_kind(
+    editor: &mut Editor,
+    adjustment: &adjustments::Adjustment,
+    label: &str,
+) -> Result<String, String> {
+    match adjustment {
+        adjustments::Adjustment::Equalize => run_equalize(editor, label),
+        adjustments::Adjustment::ShadowsHighlights(sh) => {
+            if sh.is_identity() {
+                return Err(format!(
+                    "{label} is at its identity setting, so applying it would change \
+                     nothing; move a control in its dialog first"
+                ));
+            }
+            let sh = *sh;
+            edit_active_pixels(editor, label, |buffer, space| {
+                let (w, h) = buffer.dimensions();
+                sh.apply_premultiplied_rgba_spatial(
+                    buffer.pixels_mut(),
+                    w as usize,
+                    h as usize,
+                    space,
+                )
+                .map_err(|e| e.to_string())
+            })?;
+            Ok(format!("{label} applied"))
+        }
+        other => run_adjustment(editor, other, label),
+    }
+}
+
+/// Equalize over the active layer: the histogram is taken from the pixels
+/// the selection covers (all of them with no selection), so equalising a
+/// selection spreads *its* tones, as Photopea's does.
+fn run_equalize(editor: &mut Editor, label: &str) -> Result<String, String> {
+    let selection = editor
+        .active()
+        .map(|doc| doc.document.selection.clone())
+        .ok_or("No document is open")?;
+    edit_active_pixels(editor, label, |buffer, space| {
+        let (w, _) = buffer.dimensions();
+        let mut stats = adjustments::ImageStats::new();
+        for (i, px) in buffer.pixels().iter().enumerate() {
+            if px[3] <= color::UNPREMULTIPLY_ALPHA_EPSILON {
+                continue;
+            }
+            if !selection.is_none() {
+                let at = glam::IVec2::new((i as u32 % w) as i32, (i as u32 / w) as i32);
+                if selection.coverage_at(at) <= 0.0 {
+                    continue;
+                }
+            }
+            let s = color::unpremultiply(*px);
+            stats.add(adjustments::EncodedRgb::new(color::from_linear(
+                space,
+                [s[0], s[1], s[2]],
+            )));
+        }
+        let prepared =
+            adjustments::PreparedAdjustment::with_stats(&adjustments::Adjustment::Equalize, &stats);
+        if prepared.is_identity() {
+            return Err(format!("{label} found nothing to equalize"));
+        }
         prepared.apply_premultiplied_rgba(buffer.pixels_mut(), space);
         Ok(())
     })?;
@@ -2662,6 +2761,7 @@ fn copy(editor: &mut Editor, merged: bool) -> Result<String, String> {
         width: cw,
         height: ch,
         rgba8: rgba.clone(),
+        origin: (x0, y0),
     });
     // Card 052: the same pixels cross the process boundary — the OS image
     // clipboard carries the copy so another application can take it. A
@@ -2718,8 +2818,16 @@ fn cut(editor: &mut Editor) -> Result<String, String> {
 /// masks it by the current selection, which is the only thing that
 /// distinguishes the two; Paste Into keeps the internal path (card 053 owns
 /// its mask semantics).
-fn paste(editor: &mut Editor, into: bool) -> Result<String, String> {
-    if !into {
+///
+/// W4-H, Edit > Paste Special: **Paste in Place** puts the internal copy back
+/// at the canvas position it was copied from ([`crate::editor::Clipboard::
+/// origin`]) instead of the origin, and **Paste Outside** is Paste Into with
+/// the mask inverted — the pasted pixels show everywhere *except* the
+/// selection. Both read only the internal store: an OS-clipboard image has no
+/// copied position and no in-document origin.
+fn paste(editor: &mut Editor, mode: PasteMode) -> Result<String, String> {
+    let into = matches!(mode, PasteMode::Into | PasteMode::Outside);
+    if mode == PasteMode::Plain {
         let external = editor.image_clipboard_mut().get_image();
         match external {
             Ok(Some(image)) if !editor.os_copy_is_ours(&image) => {
@@ -2733,7 +2841,7 @@ fn paste(editor: &mut Editor, into: bool) -> Result<String, String> {
         .cloned()
         .ok_or("The clipboard is empty")?;
     let (w, h) = canvas_of(editor)?;
-    let label = if into { "Paste Into" } else { "Paste" };
+    let label = mode.label();
     // Card 053: the selection's coverage is read before anything mutates.
     let selection = editor
         .active()
@@ -2742,8 +2850,19 @@ fn paste(editor: &mut Editor, into: bool) -> Result<String, String> {
         .selection
         .clone();
     if into && selection.is_empty() {
-        return Err("Paste Into: the selection holds no pixels".to_string());
+        return Err(format!("{label}: the selection holds no pixels"));
     }
+    // Paste Outside masks by everything the selection does not cover.
+    let selection = if mode == PasteMode::Outside {
+        selection::invert_selection(&selection, canvas_rect(w, h)).map_err(|e| e.to_string())?
+    } else {
+        selection
+    };
+    let (ox, oy) = if mode == PasteMode::InPlace {
+        clip.origin
+    } else {
+        (0, 0)
+    };
     // The layer is created up front so its exact id is available after the
     // transaction applies (the paste selects what it created).
     let layer = layer_model::Layer::raster(label);
@@ -2755,14 +2874,14 @@ fn paste(editor: &mut Editor, into: bool) -> Result<String, String> {
         // the selection, so disabling the mask (Layer > Layer Mask > Toggle)
         // reveals every original pixel again.
         let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
-        let rows = clip.height.min(h);
-        let cols = clip.width.min(w);
+        let rows = clip.height.min(h.saturating_sub(oy));
+        let cols = clip.width.min(w.saturating_sub(ox));
         if rows == 0 || cols == 0 {
             return Err(format!("{label}: the clipboard does not fit the canvas"));
         }
         for row in 0..rows {
             let s = (row as usize) * clip.width as usize * 4;
-            let d = (row as usize) * w as usize * 4;
+            let d = ((oy + row) as usize * w as usize + ox as usize) * 4;
             let n = cols as usize * 4;
             rgba[d..d + n].copy_from_slice(&clip.rgba8[s..s + n]);
         }
@@ -2790,7 +2909,7 @@ fn paste(editor: &mut Editor, into: bool) -> Result<String, String> {
                 // (or the origin-pinned clip): a raster mask with no tiles is
                 // hidden EVERYWHERE, so this paste would land invisible and
                 // "succeed".
-                return Err("Paste Into: the selection hides all of it".to_string());
+                return Err(format!("{label}: the selection hides all of it"));
             }
             let mut mask_edits = Vec::new();
             for (coord, coverage_bytes) in coverage {
@@ -2822,7 +2941,38 @@ fn paste(editor: &mut Editor, into: bool) -> Result<String, String> {
     // created id is exact — if paste ever changes insertion position, an
     // indirect root().first() would silently select the wrong layer.
     editor.set_layer_selection(vec![new_id], Some(new_id));
-    Ok(format!("{label}d onto a new layer"))
+    Ok(match mode {
+        PasteMode::Plain => "Pasted onto a new layer".to_string(),
+        PasteMode::Into => "Pasted into the selection on a new layer".to_string(),
+        PasteMode::Outside => "Pasted outside the selection on a new layer".to_string(),
+        PasteMode::InPlace => format!("Pasted in place at {ox}, {oy} onto a new layer"),
+    })
+}
+
+/// Which Edit-menu paste [`paste`] performs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PasteMode {
+    /// Edit > Paste: the OS clipboard first, then the internal store at the
+    /// canvas origin.
+    Plain,
+    /// Edit > Paste Special > Paste Into: masked by the selection.
+    Into,
+    /// Edit > Paste Special > Paste Outside: masked by the inverse of the
+    /// selection.
+    Outside,
+    /// Edit > Paste Special > Paste in Place: at the copied position.
+    InPlace,
+}
+
+impl PasteMode {
+    fn label(self) -> &'static str {
+        match self {
+            PasteMode::Plain => "Paste",
+            PasteMode::Into => "Paste Into",
+            PasteMode::Outside => "Paste Outside",
+            PasteMode::InPlace => "Paste in Place",
+        }
+    }
 }
 
 /// Layer via Copy / Layer via Cut.
@@ -4774,6 +4924,317 @@ mod tests {
         );
     }
 
+    // ------------------------------------------------ W4-H: File / Edit gaps
+
+    /// Resolve `action` through the live menu context and perform it — the
+    /// road a menu click takes — returning the status sentence.
+    fn through_the_menu(ed: &mut Editor, action: MenuAction) -> Result<String, String> {
+        let ctx = context(ed, &Workspace::new());
+        match resolve(action, &ctx, ed)? {
+            Pick::Menu(a) => perform(a, ed),
+            other => Err(format!("{action:?} resolved to {other:?}")),
+        }
+    }
+
+    fn menu_offers(ed: &Editor, action: MenuAction) -> bool {
+        menus(ed).into_iter().any(|m| m.actions().contains(&action))
+    }
+
+    #[test]
+    fn paste_in_place_puts_the_copy_back_where_it_was_copied() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        assert!(menu_offers(&ed, MenuAction::PasteInPlace));
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let original = pixels::read_layer(ed.active().unwrap(), layer);
+        // Nothing copied yet: the row is off, and says why.
+        let ctx = context(&mut ed, &Workspace::new());
+        assert_eq!(
+            resolve(MenuAction::PasteInPlace, &ctx, &ed).unwrap_err(),
+            "The clipboard is empty"
+        );
+        select_rect(&mut ed, (10, 6), (18, 12));
+        assert!(invoke(&mut ed, MenuAction::Copy).unwrap());
+        assert_eq!(ed.clipboard().unwrap().origin, (10, 6));
+        let depth = ed.active().unwrap().history_depth();
+        let said = through_the_menu(&mut ed, MenuAction::PasteInPlace).unwrap();
+        assert!(said.contains("in place at 10, 6"), "{said}");
+        assert_eq!(ed.active().unwrap().history_depth(), depth + 1);
+        let doc = ed.active().unwrap();
+        let pasted = doc.document.active_layer().unwrap();
+        assert_ne!(pasted, layer, "the paste made a new layer");
+        let stored = pixels::read_layer(doc, pasted);
+        let at =
+            |buf: &[u8], x: usize, y: usize| buf[(y * 48 + x) * 4..(y * 48 + x) * 4 + 4].to_vec();
+        // Every copied pixel is back at its own canvas position...
+        for (x, y) in [(10, 6), (17, 11), (13, 9)] {
+            assert_eq!(at(&stored, x, y), at(&original, x, y), "({x},{y})");
+        }
+        // ...and nothing landed at the origin, where plain Paste would put it.
+        assert_eq!(
+            at(&stored, 0, 0)[3],
+            0,
+            "Paste in Place pasted at the origin"
+        );
+        assert_eq!(at(&stored, 18, 12)[3], 0, "the paste spilled past the copy");
+    }
+
+    #[test]
+    fn paste_outside_masks_by_the_inverse_of_the_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        assert!(menu_offers(&ed, MenuAction::PasteOutside));
+        select_rect(&mut ed, (0, 0), (48, 32));
+        assert!(invoke(&mut ed, MenuAction::Copy).unwrap());
+        // Without a selection the row is off.
+        ed.active_mut().unwrap().document.selection = editor_core::Selection::None;
+        let ctx = context(&mut ed, &Workspace::new());
+        assert_eq!(
+            resolve(MenuAction::PasteOutside, &ctx, &ed).unwrap_err(),
+            "Paste Outside needs a selection"
+        );
+        select_rect(&mut ed, (8, 8), (16, 16));
+        let depth = ed.active().unwrap().history_depth();
+        let status = through_the_menu(&mut ed, MenuAction::PasteOutside).unwrap();
+        assert_eq!(status, "Pasted outside the selection on a new layer");
+        assert_eq!(
+            ed.active().unwrap().history_depth(),
+            depth + 1,
+            "one undo step"
+        );
+        let doc = ed.active().unwrap();
+        let pasted = doc.document.active_layer().unwrap();
+        let mask = read_mask_coverage(doc, pasted, 48, 32);
+        // Hidden inside the selection, shown everywhere else: Paste Into
+        // turned inside out.
+        assert_eq!(mask[10 * 48 + 10], 0, "the selection is not hidden");
+        assert_eq!(mask[2 * 48 + 2], 255, "outside the selection is hidden");
+        assert_eq!(mask[20 * 48 + 30], 255, "outside the selection is hidden");
+    }
+
+    #[test]
+    fn purging_the_clipboard_empties_it_and_turns_paste_special_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let purge = MenuAction::Purge(ui::menu::PurgeTarget::Clipboard);
+        assert!(menu_offers(&ed, purge));
+        let ctx = context(&mut ed, &Workspace::new());
+        assert_eq!(
+            resolve(purge, &ctx, &ed).unwrap_err(),
+            "The clipboard is empty"
+        );
+        select_rect(&mut ed, (0, 0), (8, 8));
+        assert!(invoke(&mut ed, MenuAction::Copy).unwrap());
+        let depth = ed.active().unwrap().history_depth();
+        // The clipboard purge needs no confirmation: it goes at once.
+        let said = through_the_menu(&mut ed, purge).unwrap();
+        assert!(said.contains("Purged the clipboard"), "{said}");
+        assert!(ed.clipboard().is_none());
+        assert_eq!(
+            ed.active().unwrap().history_depth(),
+            depth,
+            "history untouched"
+        );
+        let ctx = context(&mut ed, &Workspace::new());
+        assert!(resolve(MenuAction::PasteInPlace, &ctx, &ed).is_err());
+        assert!(resolve(purge, &ctx, &ed).is_err());
+    }
+
+    #[test]
+    fn purging_histories_asks_first_then_drops_every_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = with_two_layers(dir.path());
+        let purge = MenuAction::Purge(ui::menu::PurgeTarget::Histories);
+        assert!(menu_offers(&ed, purge));
+        let steps = ed.active().unwrap().history_depth();
+        assert!(steps > 0, "the fixture has history");
+        assert!(ed.active_mut().unwrap().undo().unwrap());
+        let rect = ed.active().unwrap().canvas_rect();
+        let before = ed.active_mut().unwrap().composite(rect).unwrap();
+        let layers = ed.active().unwrap().document.layers.len();
+        // The first choice only asks.
+        let asked = through_the_menu(&mut ed, purge).unwrap();
+        assert!(asked.contains("cannot be undone"), "{asked}");
+        assert!(
+            asked.contains(&format!("{steps} undo/redo step(s)")),
+            "{asked}"
+        );
+        assert_eq!(ed.status(), Some(asked.as_str()));
+        let doc = ed.active().unwrap();
+        assert!(
+            doc.history.can_undo() && doc.history.can_redo(),
+            "asking purged"
+        );
+        // A different purge does not confirm this one.
+        let other = through_the_menu(&mut ed, MenuAction::Purge(ui::menu::PurgeTarget::All));
+        assert!(other.unwrap().contains("cannot be undone"));
+        assert!(ed.active().unwrap().history.can_undo());
+        // Choosing Histories again (re-arming after the All question) asks,
+        // and the next Histories confirms.
+        through_the_menu(&mut ed, purge).unwrap();
+        let done = through_the_menu(&mut ed, purge).unwrap();
+        assert_eq!(done, format!("Purged {steps} history step(s)"));
+        let doc = ed.active().unwrap();
+        assert!(!doc.history.can_undo() && !doc.history.can_redo());
+        assert_eq!(
+            ed.active_mut().unwrap().composite(rect).unwrap(),
+            before,
+            "purging history changed the pixels"
+        );
+        assert_eq!(ed.active().unwrap().document.layers.len(), layers);
+        // Nothing left to purge: the row is off, and says why.
+        let ctx = context(&mut ed, &Workspace::new());
+        assert_eq!(
+            resolve(purge, &ctx, &ed).unwrap_err(),
+            "There is no history to purge"
+        );
+    }
+
+    /// Purge Histories drops every open document's history, so a background
+    /// document's history is enough for the row to be on.
+    #[test]
+    fn purging_histories_is_offered_for_a_background_documents_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = with_two_layers(dir.path());
+        let background = ed.active().unwrap().id();
+        let steps = ed.active().unwrap().history_depth();
+        assert!(steps > 0, "the fixture has history");
+        ed.open_path(&probe_png(dir.path(), 20, 20)).unwrap();
+        let active = ed.active().unwrap();
+        assert_ne!(active.id(), background, "the second document is active");
+        assert!(!active.history.can_undo() && !active.history.can_redo());
+        let purge = MenuAction::Purge(ui::menu::PurgeTarget::Histories);
+        let asked = through_the_menu(&mut ed, purge).unwrap();
+        assert!(
+            asked.contains(&format!("{steps} undo/redo step(s)")),
+            "{asked}"
+        );
+        let done = through_the_menu(&mut ed, purge).unwrap();
+        assert_eq!(done, format!("Purged {steps} history step(s)"));
+        assert!(ed.documents().iter().all(|d| !d.history.can_undo()));
+    }
+
+    /// An edit between the question and the confirming choice changes what
+    /// the purge would drop, so the second choice asks again, naming the new
+    /// count, instead of dropping a count the question did not name.
+    #[test]
+    fn an_edit_between_the_two_purge_choices_asks_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = with_two_layers(dir.path());
+        let steps = ed.active().unwrap().history_depth();
+        let purge = MenuAction::Purge(ui::menu::PurgeTarget::Histories);
+        let asked = through_the_menu(&mut ed, purge).unwrap();
+        assert!(asked.contains(&format!("{steps} undo/redo step(s)")));
+        ed.apply_command(Command::create_layer(layer_model::Layer::raster("Third")));
+        let again = through_the_menu(&mut ed, purge).unwrap();
+        assert!(
+            again.contains(&format!("{} undo/redo step(s)", steps + 1)),
+            "the edit did not re-ask: {again}"
+        );
+        assert!(ed.active().unwrap().history.can_undo(), "it purged unasked");
+        let done = through_the_menu(&mut ed, purge).unwrap();
+        assert_eq!(done, format!("Purged {} history step(s)", steps + 1));
+    }
+
+    #[test]
+    fn export_slices_writes_one_file_per_slice_with_the_export_as_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("slices");
+        let mut ed = Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(crate::dialogs::ScriptedDialogs::new().exporting_folder(&out)),
+        );
+        ed.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+        ed.open_path(&probe_png(dir.path(), 48, 32)).unwrap();
+        assert!(menu_offers(&ed, MenuAction::ExportSlices));
+        // No slices yet: a loud refusal, and no folder asked for or written.
+        let refused = through_the_menu(&mut ed, MenuAction::ExportSlices).unwrap_err();
+        assert!(refused.contains("no slices"), "{refused}");
+        assert!(!out.exists());
+        // The Slice tool's commit hands its regions over (the same call the
+        // tool pointer makes on Enter).
+        crate::slices_export::remember_committed(
+            &mut ed,
+            &[
+                tools::Slice {
+                    rect: raster::PixelRect::new(0, 0, 16, 8),
+                    name: String::new(),
+                },
+                tools::Slice {
+                    rect: raster::PixelRect::new(20, 10, 12, 20),
+                    name: String::new(),
+                },
+            ],
+        );
+        ui::dialogs::export_as::forget_last_confirmed_entry();
+        let said = through_the_menu(&mut ed, MenuAction::ExportSlices).unwrap();
+        assert!(said.contains("Exported 2 slice(s) as PNG"), "{said}");
+        let mut names: Vec<String> = std::fs::read_dir(&out)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["probe-48x32_01.png", "probe-48x32_02.png"]);
+        let second = raster::decode_path(&out.join("probe-48x32_02.png")).unwrap();
+        assert_eq!((second.width, second.height), (12, 20));
+        // The slice's first pixel is canvas (20,10) of the probe.
+        assert_eq!(
+            &second.rgba8[0..4],
+            // probe_png: (x*5 % 251, y*7 % 241, (x*13 + y*3) % 239, 255).
+            &[100, 70, 51, 255]
+        );
+        ui::dialogs::export_as::forget_last_confirmed_entry();
+    }
+
+    #[test]
+    fn export_slices_follows_the_last_exported_export_as_settings() {
+        use ui::dialogs::Dialog as _;
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("slices");
+        let mut ed = Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(crate::dialogs::ScriptedDialogs::new().exporting_folder(&out)),
+        );
+        ed.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+        ed.open_path(&probe_png(dir.path(), 48, 32)).unwrap();
+        crate::slices_export::remember_committed(
+            &mut ed,
+            &[tools::Slice {
+                rect: raster::PixelRect::new(4, 4, 20, 10),
+                name: String::new(),
+            }],
+        );
+        // The user exports an Export As at WebP, half size (the shell
+        // remembers the job once the folder picker answers; pinned by
+        // `shell::tests::an_export_as_job_is_remembered_for_slices_only_once_a_folder_is_chosen`).
+        let mut dialog = ui::dialogs::ExportAsDialog::new(
+            48,
+            32,
+            "probe",
+            ui::dialogs::PreviewSource::placeholder(8, 8),
+        );
+        dialog.set_format(raster::ExportFormat::WebP);
+        dialog.set_scale(0.5);
+        let Some(ui::dialogs::DialogAction::Export(job)) = dialog.confirm() else {
+            panic!("a valid job");
+        };
+        ui::dialogs::export_as::remember_exported_job(&job);
+        let said = through_the_menu(&mut ed, MenuAction::ExportSlices).unwrap();
+        assert!(said.contains("as WEBP"), "{said}");
+        let file = out.join("probe-48x32_01.webp");
+        let decoded = raster::decode_path(&file).unwrap();
+        assert_eq!(
+            (decoded.width, decoded.height),
+            (10, 5),
+            "scale not applied"
+        );
+        ui::dialogs::export_as::forget_last_confirmed_entry();
+    }
+
     /// Card 053: Paste Into keeps the FULL image on the new layer and
     /// confines it with a retained selection-derived mask - the destructive
     /// alpha multiplication is gone. Disabling the mask reveals every
@@ -4796,7 +5257,8 @@ mod tests {
             ed.apply_command(paint);
         }
         let depth_before = ed.active().unwrap().history_depth();
-        assert!(invoke(&mut ed, MenuAction::PasteInto).unwrap());
+        let status = through_the_menu(&mut ed, MenuAction::PasteInto).unwrap();
+        assert_eq!(status, "Pasted into the selection on a new layer");
 
         let doc = ed.active().unwrap();
         let pasted = doc.document.layers.root()[0];
@@ -6120,7 +6582,12 @@ mod tests {
     #[test]
     fn every_adjustment_row_opens_its_dialog_from_the_menu_bar_over_two_layers() {
         let dir = tempfile::tempdir().unwrap();
-        for id in ui::menu::AdjustmentId::ALL {
+        // Desaturate and Equalize ask nothing (W4-E); their click is covered
+        // by `desaturate_applies_on_the_click_...` and `equalize_applies_...`.
+        for id in ui::menu::AdjustmentId::ALL
+            .iter()
+            .filter(|id| id.has_dialog())
+        {
             let mut ed = with_two_layers(dir.path());
             let before = digest(&ed);
             let mut chrome = crate::chrome::Chrome::new();
@@ -6303,6 +6770,563 @@ mod tests {
         .unwrap());
     }
 
+    // ---- W4-E: Desaturate, Equalize, Shadows/Highlights, Replace Color,
+    // Color Lookup, each through the menu bar the way a user reaches it. ----
+
+    /// The probe document with its active layer repainted as `paint(x, y)`,
+    /// so each adjustment below has pixels whose answer is known.
+    fn painted(dir: &std::path::Path, paint: impl Fn(u32, u32) -> [u8; 4]) -> Editor {
+        let mut ed = opened(dir);
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let (w, h) = canvas_of(&ed).unwrap();
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                rgba.extend_from_slice(&paint(x, y));
+            }
+        }
+        let seed = {
+            let doc = ed.active_mut().unwrap();
+            pixels::write_layer(doc, layer, &rgba, "Seed").unwrap()
+        };
+        ed.apply_command(seed);
+        ed
+    }
+
+    /// Click `id` in Image ▸ Adjustments on the menu bar and perform what the
+    /// click produced, as the shell does. For the two with no dialog the
+    /// click itself is the pick; for the rest the dialog is driven with
+    /// `edit` and confirmed with Enter.
+    fn apply_from_menu_bar(
+        ed: &mut Editor,
+        id: ui::menu::AdjustmentId,
+        edit: impl FnOnce(&mut ui::dialogs::AdjustmentDialog),
+    ) -> Result<(), String> {
+        let out = if id.has_dialog() {
+            drive_adjustment_dialog(ed, id, edit, egui::Key::Enter)
+        } else {
+            let mut chrome = crate::chrome::Chrome::new();
+            let menu_ctx = context(ed, chrome.workspace());
+            let intent =
+                resolve_intent(MenuAction::ApplyAdjustment(id), &menu_ctx, ed).expect("enabled");
+            let mut out = ChromeOutput::default();
+            chrome.menu_click(intent, ed, &mut out);
+            assert!(!chrome.dialog_open(), "{id:?} opened a dialog");
+            out
+        };
+        assert_eq!(
+            out.menu,
+            vec![MenuAction::ApplyAdjustment(id)],
+            "{id:?}: the click did not ride the menu channel: {out:?}"
+        );
+        for action in out.menu {
+            perform(action, ed)?;
+        }
+        Ok(())
+    }
+
+    fn active_pixels(ed: &Editor) -> Vec<u8> {
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        pixels::read_layer(ed.active().unwrap(), layer)
+    }
+
+    #[test]
+    fn desaturate_applies_on_the_click_as_one_step_and_leaves_r_g_b_equal() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = painted(dir.path(), |x, y| {
+            [(x * 5) as u8, (200 - y * 3) as u8, ((x + y) * 2) as u8, 255]
+        });
+        let depth = ed.active().unwrap().history_depth();
+        apply_from_menu_bar(&mut ed, ui::menu::AdjustmentId::Desaturate, |_| {}).unwrap();
+        assert_eq!(ed.active().unwrap().history_depth(), depth + 1);
+        for px in active_pixels(&ed).as_chunks::<4>().0 {
+            assert!(
+                px[0].abs_diff(px[1]) <= 1 && px[1].abs_diff(px[2]) <= 1,
+                "desaturate left {px:?}"
+            );
+        }
+        // Shift+Ctrl+U is the chord it wears.
+        assert_eq!(
+            MenuAction::ApplyAdjustment(ui::menu::AdjustmentId::Desaturate).shortcut(),
+            Some(ui::shortcut::Shortcut::ctrl_shift('u'))
+        );
+    }
+
+    #[test]
+    fn equalize_applies_on_the_click_and_spreads_a_dark_layer_to_white() {
+        let dir = tempfile::tempdir().unwrap();
+        // Every value crowded into the darkest quarter.
+        let mut ed = painted(dir.path(), |x, y| {
+            let v = ((x + y * 48) % 60) as u8;
+            [v, v, v, 255]
+        });
+        let depth = ed.active().unwrap().history_depth();
+        apply_from_menu_bar(&mut ed, ui::menu::AdjustmentId::Equalize, |_| {}).unwrap();
+        assert_eq!(ed.active().unwrap().history_depth(), depth + 1);
+        let after = active_pixels(&ed);
+        let max = after.as_chunks::<4>().0.iter().map(|p| p[0]).max().unwrap();
+        assert!(max >= 250, "equalize left the brightest value at {max}");
+        let bright = after
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] >= 128)
+            .count();
+        let share = bright as f32 / (after.len() / 4) as f32;
+        assert!(
+            (share - 0.5).abs() < 0.1,
+            "{share} of the pixels are above mid-grey"
+        );
+    }
+
+    #[test]
+    fn shadows_highlights_confirmed_from_its_dialog_lifts_only_the_dark_half() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = painted(dir.path(), |x, _| {
+            if x < 24 {
+                [20, 20, 20, 255]
+            } else {
+                [230, 230, 230, 255]
+            }
+        });
+        let before = active_pixels(&ed);
+        let depth = ed.active().unwrap().history_depth();
+        apply_from_menu_bar(&mut ed, ui::menu::AdjustmentId::ShadowsHighlights, |d| {
+            // A 9 px radius: the masks are read from the neighbourhood.
+            assert!(d.set_kind(layer_model::AdjustmentKind::ShadowsHighlights {
+                shadows: [0.8, 0.5, 9.0],
+                highlights: [0.0, 0.5, 9.0],
+            }));
+        })
+        .unwrap();
+        assert_eq!(ed.active().unwrap().history_depth(), depth + 1);
+        let after = active_pixels(&ed);
+        let (w, _) = canvas_of(&ed).unwrap();
+        let lift =
+            |x: u32| i32::from(after[(x * 4) as usize]) - i32::from(before[(x * 4) as usize]);
+        for (i, (a, b)) in after
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(before.as_chunks::<4>().0)
+            .enumerate()
+        {
+            let x = i as u32 % w;
+            if x < 12 {
+                assert!(
+                    a[0] > b[0] + 10,
+                    "a dark pixel was not lifted: {b:?} -> {a:?}"
+                );
+            } else if x >= 36 {
+                assert_eq!(a, b, "a bright pixel moved");
+            }
+        }
+        // The radius is honoured: a dark pixel beside the bright half reads
+        // a brighter neighbourhood and is lifted less than one deep in the
+        // dark half. A per-pixel Shadows/Highlights lifts both the same.
+        assert!(
+            lift(0) > lift(23),
+            "deep {} vs edge {}: the radius was ignored",
+            lift(0),
+            lift(23)
+        );
+    }
+
+    #[test]
+    fn replace_color_confirmed_from_its_dialog_shifts_only_the_sampled_colour() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = painted(dir.path(), |x, _| {
+            if x < 24 {
+                [220, 30, 30, 255]
+            } else {
+                [30, 40, 220, 255]
+            }
+        });
+        let before = active_pixels(&ed);
+        let depth = ed.active().unwrap().history_depth();
+        apply_from_menu_bar(&mut ed, ui::menu::AdjustmentId::ReplaceColor, |d| {
+            // Sample the red half from the preview, as a click there would.
+            assert!(d.sample_preview(2, 2), "the preview could not be sampled");
+            let layer_model::AdjustmentKind::ReplaceColor {
+                color, fuzziness, ..
+            } = d.kind().clone()
+            else {
+                panic!("not a Replace Color kind");
+            };
+            assert!(color[0] > 0.8 && color[2] < 0.2, "sampled {color:?}");
+            assert!(d.set_kind(layer_model::AdjustmentKind::ReplaceColor {
+                color,
+                fuzziness,
+                hue: 120.0,
+                saturation: 0.0,
+                lightness: 0.0,
+            }));
+        })
+        .unwrap();
+        assert_eq!(ed.active().unwrap().history_depth(), depth + 1);
+        let after = active_pixels(&ed);
+        let (w, _) = canvas_of(&ed).unwrap();
+        for (i, (a, b)) in after
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(before.as_chunks::<4>().0)
+            .enumerate()
+        {
+            if (i as u32 % w) < 24 {
+                assert!(a[1] > a[0], "the red half did not turn green: {a:?}");
+            } else {
+                assert_eq!(a, b, "the blue half moved");
+            }
+        }
+    }
+
+    #[test]
+    fn color_lookup_loads_a_cube_file_in_its_dialog_and_bakes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = painted(dir.path(), |x, y| [(x * 5) as u8, (y * 7) as u8, 90, 255]);
+        let before = active_pixels(&ed);
+        let depth = ed.active().unwrap().history_depth();
+        // An inverting 2-point cube, as a .cube file on disk would read.
+        let mut cube = String::from("TITLE \"Invert\"\nLUT_3D_SIZE 2\n");
+        for b in 0..2 {
+            for g in 0..2 {
+                for r in 0..2 {
+                    cube.push_str(&format!("{} {} {}\n", 1 - r, 1 - g, 1 - b));
+                }
+            }
+        }
+        apply_from_menu_bar(&mut ed, ui::menu::AdjustmentId::ColorLookup, |d| {
+            // Untouched it is the identity cube and cannot confirm.
+            assert!(d.invocation().is_identity());
+            d.load_cube_text("invert", &cube).expect("the cube parses");
+            assert!(!d.invocation().is_identity());
+        })
+        .unwrap();
+        assert_eq!(ed.active().unwrap().history_depth(), depth + 1);
+        for (a, b) in active_pixels(&ed)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(before.as_chunks::<4>().0)
+        {
+            for c in 0..3 {
+                assert!(
+                    (i32::from(a[c]) - (255 - i32::from(b[c]))).abs() <= 2,
+                    "{b:?} inverted to {a:?}"
+                );
+            }
+        }
+        // And Color Lookup is also an adjustment layer, as in Photopea.
+        assert!(ui::menu::AdjustmentId::ColorLookup.is_layer());
+        let menu_ctx = context(&mut ed, &Workspace::new());
+        assert!(resolve_intent(
+            MenuAction::NewAdjustmentLayer(ui::menu::AdjustmentId::ColorLookup),
+            &menu_ctx,
+            &ed
+        )
+        .is_ok());
+    }
+
+    /// Click Layer ▸ New Adjustment Layer ▸ `id` on the menu bar, apply what
+    /// it produced, and select the new layer the way a Layers-panel click
+    /// does. Returns the new layer.
+    fn new_adjustment_layer(ed: &mut Editor, id: ui::menu::AdjustmentId) -> layer_model::LayerId {
+        let ids_before = ed.active().unwrap().document.layers.iter_depth_first();
+        let mut chrome = crate::chrome::Chrome::new();
+        let menu_ctx = context(ed, chrome.workspace());
+        let intent =
+            resolve_intent(MenuAction::NewAdjustmentLayer(id), &menu_ctx, ed).expect("enabled");
+        let mut out = ChromeOutput::default();
+        chrome.menu_click(intent, ed, &mut out);
+        assert!(!chrome.dialog_open(), "a new layer asks nothing");
+        apply_output(ed, out).unwrap();
+        let layer = ed
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .find(|l| !ids_before.contains(l))
+            .expect("no layer was created");
+        assert!(matches!(
+            &ed.active().unwrap().document.layers.get(layer).unwrap().kind,
+            layer_model::LayerKind::Adjustment(a)
+                if ui::panels::properties::adjustment_id_of(&a.kind) == Some(id)
+        ));
+        ed.set_active_layer(layer);
+        layer
+    }
+
+    /// Open Layer ▸ Edit Adjustment… (the intent the Properties panel's
+    /// "Open editor…" posts too) through the chrome's own route, let `edit`
+    /// drive the dialog it opened, press Enter, and apply the kind edit the
+    /// confirmation produced, as the shell does.
+    fn edit_adjustment_layer_via_dialog(
+        ed: &mut Editor,
+        edit: impl FnOnce(&mut ui::dialogs::AdjustmentDialog),
+    ) {
+        let mut chrome = crate::chrome::Chrome::new();
+        let menu_ctx = context(ed, chrome.workspace());
+        let intent =
+            resolve_intent(MenuAction::EditAdjustmentLayer, &menu_ctx, ed).expect("enabled");
+        let mut out = ChromeOutput::default();
+        chrome.menu_click(intent, ed, &mut out);
+        assert!(
+            chrome.dialog_open(),
+            "Edit Adjustment opened no dialog on a Color Lookup layer: {out:?}"
+        );
+        assert!(out.is_empty(), "opening produced {out:?}");
+        edit(
+            chrome
+                .dialogs_for_test()
+                .active_adjustment_dialog_for_test(),
+        );
+        let out = press_in_dialog(&mut chrome, egui::Key::Enter);
+        assert!(!chrome.dialog_open(), "Enter did not close the dialog");
+        assert!(
+            out.menu.is_empty() && out.commands.is_empty(),
+            "an adjustment layer's edit baked pixels instead: {out:?}"
+        );
+        assert_eq!(out.layer_kind.len(), 1, "{out:?}");
+        for edit in out.layer_kind {
+            ed.apply_kind_edit(edit);
+        }
+    }
+
+    #[test]
+    fn a_color_lookup_layer_takes_a_built_in_look_and_a_cube_file_through_edit_adjustment() {
+        // W4-E round 2: the layer is created holding the identity cube, and
+        // the only road to its table is the dialog Edit Adjustment reopens.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = painted(dir.path(), |x, y| [(x * 5) as u8, (y * 7) as u8, 90, 255]);
+        let base = composite(&mut ed);
+        let layer = new_adjustment_layer(&mut ed, ui::menu::AdjustmentId::ColorLookup);
+        assert_eq!(composite(&mut ed), base, "the identity cube changed pixels");
+
+        // A built-in look: Invert, the first listed.
+        let depth = ed.active().unwrap().history_depth();
+        edit_adjustment_layer_via_dialog(&mut ed, |d| {
+            assert_eq!(d.edit_layer(), Some(layer));
+            assert!(d.choose_lut(1), "the Invert look is not listed");
+        });
+        assert_eq!(ed.active().unwrap().history_depth(), depth + 1);
+        let layer_model::LayerKind::Adjustment(a) = &ed
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .get(layer)
+            .unwrap()
+            .kind
+        else {
+            panic!("the layer is no longer an adjustment layer");
+        };
+        let layer_model::AdjustmentKind::ColorLookup { name, .. } = &a.kind else {
+            panic!("the layer is no longer a Color Lookup: {:?}", a.kind);
+        };
+        assert_eq!(name, "Invert");
+        let inverted = composite(&mut ed);
+        for (a, b) in inverted
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(base.as_chunks::<4>().0)
+        {
+            for c in 0..3 {
+                assert!(
+                    (i32::from(a[c]) - (255 - i32::from(b[c]))).abs() <= 3,
+                    "{b:?} looked up to {a:?}"
+                );
+            }
+        }
+        // Reopened, the dialog shows that look, and a loaded .cube file
+        // (a red/blue swap) replaces it.
+        let mut cube = String::from("TITLE \"Swap\"\nLUT_3D_SIZE 2\n");
+        for b in 0..2 {
+            for g in 0..2 {
+                for r in 0..2 {
+                    cube.push_str(&format!("{b} {g} {r}\n"));
+                }
+            }
+        }
+        let depth = ed.active().unwrap().history_depth();
+        edit_adjustment_layer_via_dialog(&mut ed, |d| {
+            assert!(!d.choose_lut(99));
+            d.load_cube_text("swap", &cube).expect("the cube parses");
+        });
+        assert_eq!(ed.active().unwrap().history_depth(), depth + 1);
+        let swapped = composite(&mut ed);
+        for (a, b) in swapped
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(base.as_chunks::<4>().0)
+        {
+            assert!(
+                (i32::from(a[0]) - i32::from(b[2])).abs() <= 3
+                    && (i32::from(a[2]) - i32::from(b[0])).abs() <= 3,
+                "{b:?} swapped to {a:?}"
+            );
+        }
+        // Undo walks back to the look, then to the identity.
+        ed.active_mut().unwrap().undo().unwrap();
+        assert_eq!(composite(&mut ed), inverted);
+    }
+
+    #[test]
+    fn the_properties_panels_open_editor_on_a_color_lookup_layer_opens_its_dialog() {
+        // The button is the real one, drawn by the real Properties panel in
+        // the real chrome and pressed with a pointer; what it opens is the
+        // Color Lookup dialog aimed at the layer, and its Enter edits the
+        // layer as one undo step.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = painted(dir.path(), |x, y| [(x * 5) as u8, (y * 7) as u8, 90, 255]);
+        let base = composite(&mut ed);
+        let layer = new_adjustment_layer(&mut ed, ui::menu::AdjustmentId::ColorLookup);
+        let ctx = egui::Context::default();
+        crate::chrome::install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = crate::chrome::Chrome::new();
+        chrome.workspace_for_test().emit(ui::Intent::SetPanelOpen {
+            panel: ui::PanelId::Properties,
+            open: true,
+        });
+        for _ in 0..5 {
+            let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+                let _ = chrome.ui(ctx, &mut ed);
+            });
+        }
+        let pos = ctx
+            .read_response(ui::view::ids::adjustment_editor())
+            .expect("the Properties panel drew no \"Open editor\" for the Color Lookup layer")
+            .rect
+            .center();
+        let events = vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            },
+        ];
+        let _ = ctx.run(raw_input(events), |ctx| {
+            let _ = chrome.ui(ctx, &mut ed);
+        });
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            let _ = chrome.ui(ctx, &mut ed);
+        });
+        assert!(chrome.dialog_open(), "Open editor opened no dialog");
+        let dialog = chrome
+            .dialogs_for_test()
+            .active_adjustment_dialog_for_test();
+        assert_eq!(dialog.id(), ui::menu::AdjustmentId::ColorLookup);
+        assert_eq!(dialog.edit_layer(), Some(layer));
+        assert!(dialog.choose_lut(1), "Invert is not listed");
+        let depth = ed.active().unwrap().history_depth();
+        let out = press_in_dialog(&mut chrome, egui::Key::Enter);
+        assert!(
+            out.menu.is_empty(),
+            "the layer's edit baked pixels: {out:?}"
+        );
+        for edit in out.layer_kind {
+            ed.apply_kind_edit(edit);
+        }
+        assert_eq!(ed.active().unwrap().history_depth(), depth + 1);
+        let after = composite(&mut ed);
+        let (a, b) = (&after[..4], &base[..4]);
+        assert!(
+            (i32::from(a[2]) - (255 - i32::from(b[2]))).abs() <= 3,
+            "{b:?} looked up to {a:?}"
+        );
+    }
+
+    #[test]
+    fn edit_adjustment_on_a_dock_edited_layer_still_reveals_the_properties_panel() {
+        // The dock-edited kinds keep their road: no dialog, the panel opens.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = painted(dir.path(), |_, _| [90, 90, 90, 255]);
+        new_adjustment_layer(&mut ed, ui::menu::AdjustmentId::BrightnessContrast);
+        assert!(!crate::dialog_host::DialogHost::default()
+            .open_for_menu_action(&MenuAction::EditAdjustmentLayer, &ed));
+        let menu_ctx = context(&mut ed, &Workspace::new());
+        assert!(matches!(
+            resolve(MenuAction::EditAdjustmentLayer, &menu_ctx, &ed),
+            Ok(Pick::Workspace(_))
+        ));
+    }
+
+    #[test]
+    fn equalize_inside_a_selection_reads_only_the_selected_pixels() {
+        // The left half is dark, the right half bright. Equalising with the
+        // left half selected must spread the *left half's* tones over the
+        // whole range; read over the whole layer, the dark half would own
+        // only the lower half of it.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = painted(dir.path(), |x, y| {
+            if x < 24 {
+                let v = ((x + y * 24) % 40) as u8;
+                [v, v, v, 255]
+            } else {
+                let v = 200 + ((x + y) % 56) as u8;
+                [v, v, v, 255]
+            }
+        });
+        let (w, h) = canvas_of(&ed).unwrap();
+        ed.active_mut().unwrap().document.selection = editor_core::Selection::Rect {
+            min: glam::IVec2::ZERO,
+            max: glam::IVec2::new(24, h as i32),
+        };
+        let before = active_pixels(&ed);
+        let depth = ed.active().unwrap().history_depth();
+        apply_from_menu_bar(&mut ed, ui::menu::AdjustmentId::Equalize, |_| {}).unwrap();
+        assert_eq!(ed.active().unwrap().history_depth(), depth + 1);
+        let after = active_pixels(&ed);
+        let mut left_max = 0u8;
+        for (i, (a, b)) in after
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(before.as_chunks::<4>().0)
+            .enumerate()
+        {
+            if (i as u32 % w) < 24 {
+                left_max = left_max.max(a[0]);
+            } else {
+                assert_eq!(a, b, "a pixel outside the selection moved");
+            }
+        }
+        assert!(
+            left_max >= 240,
+            "the selected dark half only reached {left_max}: the histogram was not the selection's"
+        );
+    }
+
+    #[test]
+    fn shadows_highlights_at_its_identity_says_so_in_one_clean_sentence() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = painted(dir.path(), |_, _| [90, 90, 90, 255]);
+        // Both amounts at zero: nothing to lift or darken.
+        let identity =
+            adjustments::Adjustment::from(&layer_model::AdjustmentKind::ShadowsHighlights {
+                shadows: [0.0, 0.5, 9.0],
+                highlights: [0.0, 0.5, 9.0],
+            });
+        let message = run_adjustment_kind(&mut ed, &identity, "Shadows/Highlights").unwrap_err();
+        assert!(
+            !message.contains("  "),
+            "the message has a run of spaces: {message:?}"
+        );
+        assert!(message.contains("would change nothing"), "{message:?}");
+    }
+
     #[test]
     fn no_enabled_menu_item_resolves_to_a_no_op() {
         // The bar this whole wave is measured against: an item that is *not*
@@ -6400,6 +7424,13 @@ mod tests {
                 // and in this fixture both layers fill the canvas.
                 || action == MenuAction::SaveAsPsd
                 || matches!(action, MenuAction::AlignLayers(_))
+                // W4-H: Export Slices refuses loudly with no slices drawn;
+                // Purge Histories/All only ASK on the first choice (history
+                // is not in the digest, and dropping it is the point) —
+                // `purging_histories_asks_first_then_drops_every_step` pins
+                // the real sequence.
+                || action == MenuAction::ExportSlices
+                || matches!(action, MenuAction::Purge(_))
             {
                 match perform(action, &mut ed) {
                     Ok(_) | Err(_) => checked += 1,
@@ -6531,6 +7562,8 @@ mod tests {
             MenuAction::AlignLayers(ui::menu::AlignEdge::Top),
             MenuAction::AlignLayers(ui::menu::AlignEdge::VerticalCenter),
             MenuAction::AlignLayers(ui::menu::AlignEdge::Bottom),
+            // W4-H: no slices have been drawn in this fixture.
+            MenuAction::ExportSlices,
         ];
 
         let mut broken = Vec::new();
@@ -6610,10 +7643,13 @@ mod tests {
             // pinned by `the_select_menu_questions_open_from_the_menu_bar_...`.
             MenuAction::ColorRange,
         ];
+        // Every adjustment that asks something; Desaturate and Equalize
+        // (W4-E) apply on the click, so they are performed by the walk.
         asked.extend(
             ui::menu::AdjustmentId::ALL
                 .iter()
                 .copied()
+                .filter(|id| id.has_dialog())
                 .map(MenuAction::ApplyAdjustment),
         );
         // W3-E: the Photopea-parity filter rows. Each opens the generated

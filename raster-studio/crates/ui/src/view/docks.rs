@@ -1621,10 +1621,99 @@ fn class_icon(class: crate::menu::LayerClass) -> &'static str {
 // History
 // ---------------------------------------------------------------------------
 
+/// W4-I: the History Brush source cell of history row `index`.
+pub(crate) fn history_source_id(index: usize) -> egui::Id {
+    super::ids::history_source(index)
+}
+
+/// W4-G: the History panel row the History Brush paints from: the `source`
+/// option it holds (`0`, the default, being the document as opened, which is
+/// only row 0 while the oldest steps have not been compacted away).
+fn history_brush_source_row(w: &Workspace, ctx: &egui::Context) -> Option<usize> {
+    match w.options.get(
+        tools::ToolId::HistoryBrush,
+        tools::history_brush::SOURCE_KEY,
+    ) {
+        Some(crate::OptionValue::Int(row)) if row > 0 => usize::try_from(row).ok(),
+        _ => crate::panels::history::HistoryThumbs::opened_row(ctx),
+    }
+}
+
+/// W4-I: the History Brush source column's cell, a hit target wide, painting
+/// the brush glyph on the row the History Brush paints from. W4-G: a click
+/// sets that row as the source — the History Brush's `source` option, through
+/// the same [`Intent::SetToolOption`] the options bar sends, which the shell
+/// reads at the press of each History Brush stroke.
+fn history_source_cell(
+    w: &mut Workspace,
+    ui: &mut Ui,
+    index: usize,
+    source: Option<usize>,
+) -> egui::Response {
+    let side = current_tokens(ui).metrics.min_hit_target;
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
+    let response = ui
+        .interact(rect, history_source_id(index), Sense::click())
+        .on_hover_text(crate::strings::tr("ui.docks.history.source"));
+    if response.clicked() {
+        let tool = tools::ToolId::HistoryBrush;
+        let key = tools::history_brush::SOURCE_KEY;
+        let value = crate::OptionValue::Int(i32::try_from(index).unwrap_or(i32::MAX));
+        if w.options.set(tool, key, value) {
+            w.emit(Intent::SetToolOption { tool, key, value });
+        }
+    }
+    let role = (source == Some(index)).then_some(TextRole::Primary);
+    if let (Some(role), true) = (role, ui.is_rect_visible(rect)) {
+        // The Brush tool's own drawing: the column is about a brush.
+        let t = current_tokens(ui);
+        crate::icons::icon_for("brush").paint(
+            &ui.painter_at(rect),
+            rect.shrink(Space::Hair.pt()),
+            color32(t.palette.text(role)),
+            crate::icons::icon_stroke_width(t),
+        );
+    }
+    response
+}
+
+/// W4-I: a history row's picture — the composite as it was at that row, when
+/// the application captured one ([`crate::panels::history::HistoryThumbs`]).
+/// Nothing is allocated for a row with no picture, so its glyph and label sit
+/// where they always did.
+fn history_thumbnail(ui: &mut Ui, index: usize) {
+    let Some(tex) = crate::panels::history::HistoryThumbs::texture(ui.ctx(), index) else {
+        return;
+    };
+    let t = current_tokens(ui);
+    let height = t.metrics.list_row_height - Space::XSmall.pt();
+    let [tw, th] = tex.size();
+    let aspect = if th == 0 { 1.0 } else { tw as f32 / th as f32 };
+    let size = Vec2::new((height * aspect).clamp(height * 0.5, height * 2.0), height);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    super::checkerboard(ui.painter(), rect, Space::XSmall.pt());
+    let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0));
+    ui.painter()
+        .image(tex.id(), rect, uv, crate::dialogs::controls::UNTINTED);
+    let radius = Radius::Small.resolve(&t.radii, size.y);
+    ui.painter().rect_stroke(
+        rect,
+        rounding(radius),
+        egui::Stroke::new(
+            t.borders.hairline,
+            color32(t.palette.color(ColorRole::ControlStroke)),
+        ),
+    );
+}
+
 fn history_body(w: &mut Workspace, ui: &mut Ui, history: &History) {
     let model = HistoryModel::new(history);
     let current = model.current();
     let mut jump = None;
+    let source = history_brush_source_row(w, ui.ctx());
 
     for step in model.steps() {
         let selected = step.index == current;
@@ -1632,6 +1721,9 @@ fn history_body(w: &mut Workspace, ui: &mut Ui, history: &History) {
         // whole line is the click target and the whole line takes the
         // selection fill, painted *under* the label rather than over it.
         let response = list_row_layout(ui, super::ids::history_row(step.index), selected, |ui| {
+            // W4-I: the History Brush source column, then the row's picture.
+            history_source_cell(w, ui, step.index, source);
+            history_thumbnail(ui, step.index);
             ui.add_space(Space::XSmall.pt());
             let side = current_tokens(ui).metrics.min_hit_target;
             let (marker, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
@@ -2689,11 +2781,77 @@ fn swatches_body(w: &mut Workspace, ui: &mut Ui) {
 // Brushes
 // ---------------------------------------------------------------------------
 
-/// The Brushes panel: the preset list, then Edit / Save.
+/// W4-I: the id of one brush preset's tile in the Brushes grid.
+pub(crate) fn brush_tile_id(index: usize) -> egui::Id {
+    egui::Id::new(("raster-brush-tile", index))
+}
+
+/// W4-I: how many rings a soft tip's falloff is drawn with.
+const TIP_RINGS: usize = 8;
+
+/// W4-I: paint one brush tip's stamp into `rect` — an ellipse the preset's
+/// roundness and angle shape, solid to the hardness radius and fading to the
+/// rim, scaled by the preset's size on a log scale so a 1px pencil and a
+/// 100px soft round are told apart at a glance. Painted as filled convex
+/// polygons, outermost first, so the rings compose into the falloff.
+pub(crate) fn paint_brush_tip(ui: &Ui, rect: egui::Rect, settings: &tools::BrushSettings) {
+    let t = current_tokens(ui);
+    let colour = color32(t.palette.text(TextRole::Primary));
+    let reach = rect.width().min(rect.height()) * 0.5 - Space::XSmall.pt();
+    if reach <= 0.0 {
+        return;
+    }
+    // 1px maps to a third of the reach, the largest presets fill it.
+    let scale = (settings.size.max(1.0).ln() / 200f32.ln()).clamp(0.0, 1.0);
+    let radius = reach * (0.3 + 0.7 * scale);
+    let minor = settings.roundness.clamp(0.05, 1.0);
+    let (sin, cos) = settings.angle.sin_cos();
+    let ellipse = |r: f32| -> Vec<egui::Pos2> {
+        (0..32)
+            .map(|k| {
+                let a = k as f32 / 32.0 * std::f32::consts::TAU;
+                let (x, y) = (a.cos() * r, a.sin() * r * minor);
+                rect.center() + Vec2::new(x * cos - y * sin, x * sin + y * cos)
+            })
+            .collect()
+    };
+    let hardness = settings.hardness.clamp(0.0, 1.0);
+    let rings = if hardness >= 0.99 || settings.aliased {
+        1
+    } else {
+        TIP_RINGS
+    };
+    let painter = ui.painter_at(rect);
+    for k in 0..rings {
+        // Ring k spans from the rim (k = 0) in to the hardness radius.
+        let f = k as f32 / rings as f32;
+        let r = radius * (1.0 - f * (1.0 - hardness));
+        let alpha = if rings == 1 { 1.0 } else { 1.0 / rings as f32 };
+        painter.add(egui::Shape::convex_polygon(
+            ellipse(r),
+            colour.gamma_multiply(alpha),
+            egui::Stroke::NONE,
+        ));
+    }
+    if rings > 1 {
+        painter.add(egui::Shape::convex_polygon(
+            ellipse(radius * hardness.max(0.05)),
+            colour,
+            egui::Stroke::NONE,
+        ));
+    }
+}
+
+/// The Brushes panel: a grid of tip previews, then Edit / Save.
+///
+/// W4-I: each preset is a tile showing its stamp and its size, named in the
+/// tooltip — Photopea's grid, rather than a text list that said "Soft Round
+/// 24" and left the eye to imagine it. A click applies, a right-click
+/// removes.
 ///
 /// `fill_bottom` is set when this group is its column's flexible one — in
 /// Essentials the Brushes group is the narrow column's last, so it is — and
-/// then the list gets exactly the height between the top of the body and the
+/// then the grid gets exactly the height between the top of the body and the
 /// two footer buttons and scrolls inside it, the way the Layers rows do. Left
 /// to its natural height the list pushed the group past the column's bottom
 /// at 900pt, and the footer with it.
@@ -2701,47 +2859,65 @@ fn brushes_body(w: &mut Workspace, ui: &mut Ui, fill_bottom: Option<f32>) {
     let tool = w.palette.active();
     w.brushes.sync(&w.options, tool);
     let active = w.brushes.active();
-    let presets: Vec<(usize, String, f32)> = w
+    let presets: Vec<(usize, String, tools::BrushSettings)> = w
         .brushes
         .presets()
         .iter()
         .enumerate()
-        .map(|(i, p)| (i, p.name.clone(), p.settings.size))
+        .map(|(i, p)| (i, p.name.clone(), p.settings))
         .collect();
 
     let mut apply: Option<usize> = None;
     let mut remove: Option<usize> = None;
     let list_ui = |ui: &mut Ui, apply: &mut Option<usize>, remove: &mut Option<usize>| {
-        for (i, name, size) in &presets {
-            let response = row_layout(ui, |ui| {
-                ui.add_space(Space::XSmall.pt());
-                ui.label(body(ui, name.clone()));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(hint(ui, format!("{size:.0} px")));
-                });
-            })
-            .response
-            .interact(Sense::click());
-            if ui.is_rect_visible(response.rect) && (Some(*i) == active || response.hovered()) {
-                let t = current_tokens(ui);
-                let radius = Radius::Medium.resolve(&t.radii, response.rect.height());
-                let fill = if Some(*i) == active {
-                    ColorRole::SelectionFill
-                } else {
-                    ColorRole::ControlFillHovered
-                };
-                ui.painter().rect_filled(
-                    response.rect,
-                    rounding(radius),
-                    color32(t.palette.color(fill)),
-                );
-            }
-            if response.clicked() {
-                *apply = Some(*i);
-            }
-            if response.secondary_clicked() {
-                *remove = Some(*i);
-            }
+        let t = current_tokens(ui);
+        let side = t.metrics.control_height * 2.0;
+        let gap = Space::Hair.pt();
+        let per_row = ((ui.available_width() / (side + gap)).floor() as usize).max(1);
+        for chunk in presets.chunks(per_row) {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                for (i, name, settings) in chunk {
+                    let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
+                    let response = ui
+                        .interact(rect, brush_tile_id(*i), Sense::click())
+                        .on_hover_text(name.as_str());
+                    if ui.is_rect_visible(rect) {
+                        let radius = Radius::Medium.resolve(&t.radii, side);
+                        if Some(*i) == active || response.hovered() {
+                            let fill = if Some(*i) == active {
+                                ColorRole::SelectionFill
+                            } else {
+                                ColorRole::ControlFillHovered
+                            };
+                            ui.painter().rect_filled(
+                                rect,
+                                rounding(radius),
+                                color32(t.palette.color(fill)),
+                            );
+                        }
+                        let label_h = t.metrics.control_height * 0.5;
+                        let stamp = egui::Rect::from_min_max(
+                            rect.min,
+                            egui::pos2(rect.max.x, rect.max.y - label_h),
+                        );
+                        paint_brush_tip(ui, stamp, settings);
+                        ui.painter().text(
+                            egui::pos2(rect.center().x, rect.max.y - label_h * 0.5),
+                            egui::Align2::CENTER_CENTER,
+                            format!("{:.0}", settings.size),
+                            design::egui_theme::font_id(t, TypeRole::Caption),
+                            color32(t.palette.text(TextRole::Secondary)),
+                        );
+                    }
+                    if response.clicked() {
+                        *apply = Some(*i);
+                    }
+                    if response.secondary_clicked() {
+                        *remove = Some(*i);
+                    }
+                }
+            });
         }
     };
 
@@ -3969,11 +4145,49 @@ fn channel_footer(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Hist
     }
 }
 
+/// W4-I: the Paths panel's Work Path row.
+pub(crate) fn work_path_row_id() -> egui::Id {
+    egui::Id::new("raster-paths-work-path")
+}
+
+/// W4-I: the Paths footer's buttons, in Photoshop's order.
+pub(crate) const PATH_ACTIONS: [&str; 6] = [
+    "fill",
+    "stroke",
+    "load-selection",
+    "from-selection",
+    "new",
+    "delete",
+];
+
+/// W4-I: the id of one Paths footer button.
+pub(crate) fn path_action_id(name: &str) -> egui::Id {
+    egui::Id::new(("raster-paths-action", name))
+}
+
+/// The Paths panel: the Work Path (when there is one), a row per shape
+/// layer's path, and Photoshop's footer.
 fn paths_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     let rows = PathsState::rows(doc);
-    if rows.is_empty() {
+    w.paths.prune(doc);
+    if w.paths.work_path.is_none() {
+        w.paths.work_selected = false;
+    }
+    if rows.is_empty() && w.paths.work_path.is_none() {
         empty_state(ui, PathsState::empty_message());
-        return;
+    }
+    // The Work Path: a temporary path no layer owns, listed first and in
+    // italics as Photoshop does, selectable like any other row.
+    if w.paths.work_path.is_some() {
+        let response = list_row_layout(ui, work_path_row_id(), w.paths.work_selected, |ui| {
+            ui.add_space(Space::XSmall.pt());
+            ui.label(body(ui, crate::strings::tr("ui.docks.paths.work.path")).italics());
+        })
+        .response;
+        if response.clicked() {
+            w.paths.work_selected = true;
+            w.paths.selected = None;
+        }
     }
     let mut select = None;
     let mut toggle: Option<(LayerId, bool)> = None;
@@ -4003,7 +4217,10 @@ fn paths_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
         if response.clicked() {
             select = Some(row.layer);
         }
-        if w.paths.selected == Some(row.layer) && ui.is_rect_visible(response.rect) {
+        if !w.paths.work_selected
+            && w.paths.selected == Some(row.layer)
+            && ui.is_rect_visible(response.rect)
+        {
             let t = current_tokens(ui);
             let radius = Radius::Medium.resolve(&t.radii, response.rect.height());
             ui.painter().rect_filled(
@@ -4018,40 +4235,331 @@ fn paths_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     }
     if let Some(layer) = select {
         w.paths.selected = Some(layer);
+        w.paths.work_selected = false;
         w.emit(Intent::SelectLayers {
             layers: vec![layer],
             active: Some(layer),
         });
     }
+    ui.add_space(Space::XSmall.pt());
+    hairline(ui);
+    paths_footer(w, ui, doc);
 }
 
-/// The Actions panel: record, stop, and replay a command sequence.
+/// W4-I: the name the footer's New gives a path layer — "Path N" in the
+/// active locale, with the smallest N from one past the row count that no
+/// layer of the document is already called.
+pub(crate) fn new_path_name(doc: &Document) -> String {
+    let stem = crate::strings::tr("ui.docks.paths.default.name");
+    let taken: Vec<String> = doc
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .filter_map(|id| doc.layers.get(id).map(|l| l.name.clone()))
+        .collect();
+    (PathsState::rows(doc).len() + 1..)
+        .map(|n| format!("{stem} {n}"))
+        .find(|name| !taken.contains(name))
+        .unwrap_or_default()
+}
+
+/// One Paths footer button's outcome when clicked.
+enum PathAction {
+    Emit(Command),
+    /// The footer's New: a path layer, which also retires the Work Path when
+    /// the Work Path is what it saved.
+    SavePath(Command),
+    MakeWorkPath(vector::Path),
+    DropWorkPath,
+}
+
+/// W4-I: Photoshop's Paths footer — fill with the foreground, stroke with
+/// the brush, load as a selection, work path from the selection, new path,
+/// delete path. Each button is live when it has something to act on and
+/// greyed with the reason when it does not; see [`crate::panels::paths`] for
+/// what each one emits.
+fn paths_footer(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
+    use crate::panels::paths as ops;
+    let tr = crate::strings::tr;
+    let path = w.paths.selected_path(doc).filter(|p| !p.is_empty());
+    let no_path = tr("ui.docks.paths.no.path");
+    let foreground = w.color.foreground();
+    let brush_size = w.options.brush_settings(tools::ToolId::Brush).size;
+
+    let fill = path
+        .as_ref()
+        .map(|p| PathAction::Emit(ops::fill_layer(p, foreground)))
+        .ok_or(no_path);
+    let stroke = path
+        .as_ref()
+        .map(|p| PathAction::Emit(ops::stroke_layer(p, foreground, brush_size)))
+        .ok_or(no_path);
+    let load = match &path {
+        None => Err(no_path),
+        Some(p) => ops::load_as_selection(doc, p)
+            .map(PathAction::Emit)
+            .ok_or(tr("ui.docks.paths.encloses.nothing")),
+    };
+    let from_selection = ops::selection_to_path(doc)
+        .map(PathAction::MakeWorkPath)
+        .ok_or(tr("ui.docks.channels.no.selection"));
+    let new_path = {
+        let work = if w.paths.work_selected {
+            w.paths.work_path.as_ref()
+        } else {
+            None
+        };
+        let name = new_path_name(doc);
+        Ok(PathAction::SavePath(ops::new_path_layer(work, &name)))
+    };
+    let delete = if w.paths.work_selected {
+        Ok(PathAction::DropWorkPath)
+    } else {
+        match w.paths.selected {
+            Some(layer) if doc.layers.contains(layer) => {
+                Ok(PathAction::Emit(Command::DeleteLayer { layer_id: layer }))
+            }
+            _ => Err(no_path),
+        }
+    };
+
+    let actions: [(&str, &str, &str, Result<PathAction, &str>); 6] = [
+        (
+            PATH_ACTIONS[0],
+            "step-filled",
+            tr("ui.docks.paths.fill"),
+            fill,
+        ),
+        (
+            PATH_ACTIONS[1],
+            "step-painted",
+            tr("ui.docks.paths.stroke"),
+            stroke,
+        ),
+        (
+            PATH_ACTIONS[2],
+            "target",
+            tr("ui.docks.paths.load.selection"),
+            load,
+        ),
+        (
+            PATH_ACTIONS[3],
+            "layer-shape",
+            tr("ui.docks.paths.from.selection"),
+            from_selection,
+        ),
+        (PATH_ACTIONS[4], "plus", tr("ui.docks.paths.new"), new_path),
+        (
+            PATH_ACTIONS[5],
+            "trash",
+            tr("ui.docks.paths.delete"),
+            delete,
+        ),
+    ];
+    let mut fire: Option<PathAction> = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = Space::Hair.pt();
+        for (name, icon, tip, route) in actions {
+            let (state, tooltip): (ActionState, String) = match &route {
+                Ok(_) => (ActionState::Idle, tip.to_string()),
+                Err(reason) => (ActionState::Disabled, format!("{tip} — {reason}")),
+            };
+            let response = icon_action_id(ui, icon, &tooltip, state, Some(path_action_id(name)));
+            if let Ok(action) = route {
+                if response.clicked() {
+                    fire = Some(action);
+                }
+            }
+        }
+    });
+    match fire {
+        Some(PathAction::Emit(command)) => w.emit(Intent::Document(command)),
+        Some(PathAction::SavePath(command)) => {
+            // Saving the Work Path turns it into the new path layer, as
+            // Photoshop's Save Path does.
+            if w.paths.work_selected {
+                w.paths.work_path = None;
+                w.paths.work_selected = false;
+            }
+            w.emit(Intent::Document(command));
+        }
+        Some(PathAction::MakeWorkPath(path)) => {
+            w.paths.work_path = Some(path);
+            w.paths.work_selected = true;
+            w.paths.work_from_pen = false;
+            w.paths.selected = None;
+        }
+        Some(PathAction::DropWorkPath) => {
+            w.paths.work_path = None;
+            w.paths.work_selected = false;
+        }
+        None => {}
+    }
+}
+
+/// W4-I: the id of one row of the Actions list, and of its twirl.
+pub(crate) fn action_row_id(index: usize) -> egui::Id {
+    egui::Id::new(("raster-actions-row", index))
+}
+
+pub(crate) fn action_twirl_id(index: usize) -> egui::Id {
+    egui::Id::new(("raster-actions-twirl", index))
+}
+
+/// The Actions panel: record, stop and replay, then the named actions the
+/// application keeps — each one expands to its recorded steps — with Play,
+/// Delete, Save and Load under the list.
 ///
-/// The recording itself lives on the [`crate::Editor`](super) — the shell
-/// owns it; the panel only speaks. Three buttons, always enabled: the shell
-/// refuses what makes no sense (starting a second recording restarts it;
-/// replaying with nothing captured reports it in the status bar) and says so
-/// through the same channel every other panel answer uses.
+/// The recordings live on the application's editor: the panel draws the
+/// [`crate::panels::actions::ActionsView`] it publishes and queues an
+/// [`crate::panels::actions::ActionsRequest`] per footer click. Record /
+/// Stop / Replay stay [`Intent`]s, always enabled: the shell refuses what
+/// makes no sense (a second Record restarts; Replay with nothing captured
+/// says so in the status bar).
 fn actions_body(w: &mut Workspace, ui: &mut Ui) {
+    use crate::panels::actions::{self as actions, ActionsPanelState, ActionsRequest};
+    let tr = crate::strings::tr;
+    let view = actions::ActionsView::published(ui.ctx());
+    let mut state = ActionsPanelState::load(ui.ctx());
+    state.clamp(view.actions.len());
+
     ui.add_space(Space::XSmall.pt());
     ui.horizontal(|ui| {
-        if super::labelled_button(ui, "Record", true, egui::Id::new("raster-actions-record"))
-            .clicked()
+        if super::labelled_button(
+            ui,
+            tr("actions.record"),
+            true,
+            egui::Id::new("raster-actions-record"),
+        )
+        .clicked()
         {
             w.emit(Intent::StartRecording);
         }
-        if super::labelled_button(ui, "Stop", true, egui::Id::new("raster-actions-stop")).clicked()
+        if super::labelled_button(
+            ui,
+            tr("actions.stop"),
+            true,
+            egui::Id::new("raster-actions-stop"),
+        )
+        .clicked()
         {
             w.emit(Intent::StopRecording);
         }
-        if super::labelled_button(ui, "Replay", true, egui::Id::new("raster-actions-replay"))
-            .clicked()
+        if super::labelled_button(
+            ui,
+            tr("actions.replay"),
+            true,
+            egui::Id::new("raster-actions-replay"),
+        )
+        .clicked()
         {
             w.emit(Intent::ReplayRecording);
         }
     });
+    if view.recording {
+        ui.label(hint(ui, tr("ui.docks.actions.recording")));
+    }
     ui.add_space(Space::XSmall.pt());
-    empty_state(ui, crate::strings::tr("actions.hint"));
+    if view.actions.is_empty() {
+        empty_state(ui, tr("actions.hint"));
+    }
+    let mut toggle = None;
+    for (i, action) in view.actions.iter().enumerate() {
+        let expanded = state.is_expanded(i);
+        let response = list_row_layout(ui, action_row_id(i), state.selected == Some(i), |ui| {
+            let twirl = icon_toggle_id(
+                ui,
+                if expanded {
+                    "chevron-down"
+                } else {
+                    "chevron-right"
+                },
+                true,
+                tr("ui.docks.actions.show.steps"),
+                Some(action_twirl_id(i)),
+            );
+            if twirl.clicked() {
+                toggle = Some(i);
+            }
+            ui.label(body(ui, action.name.clone()));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.label(hint(ui, format!("{}", action.steps.len())));
+            });
+        })
+        .response;
+        if response.clicked() {
+            state.selected = Some(i);
+        }
+        if expanded {
+            for step in &action.steps {
+                row_layout(ui, |ui| {
+                    ui.add_space(current_tokens(ui).metrics.control_height);
+                    ui.label(hint(ui, step.clone()));
+                });
+            }
+        }
+    }
+    if let Some(i) = toggle {
+        state.toggle(i);
+    }
+
+    ui.add_space(Space::XSmall.pt());
+    hairline(ui);
+    let selected = state.selected.filter(|i| *i < view.actions.len());
+    let ctx = ui.ctx().clone();
+    ui.horizontal(|ui| {
+        if super::labelled_button(
+            ui,
+            tr("ui.docks.actions.play"),
+            selected.is_some(),
+            action_play_id(),
+        )
+        .clicked()
+        {
+            if let Some(i) = selected {
+                actions::request(&ctx, ActionsRequest::Play(i));
+            }
+        }
+        if icon_action_id(
+            ui,
+            "trash",
+            tr("ui.docks.actions.delete"),
+            ActionState::enabled_if(selected.is_some()),
+            Some(egui::Id::new("raster-actions-delete")),
+        )
+        .clicked()
+        {
+            if let Some(i) = selected {
+                actions::request(&ctx, ActionsRequest::Delete(i));
+            }
+        }
+        if super::labelled_button(
+            ui,
+            tr("ui.docks.actions.save"),
+            !view.actions.is_empty(),
+            egui::Id::new("raster-actions-save"),
+        )
+        .clicked()
+        {
+            actions::request(&ctx, ActionsRequest::Save);
+        }
+        if super::labelled_button(
+            ui,
+            tr("ui.docks.actions.load"),
+            true,
+            egui::Id::new("raster-actions-load"),
+        )
+        .clicked()
+        {
+            actions::request(&ctx, ActionsRequest::Load);
+        }
+    });
+    state.store(ui.ctx());
+}
+
+/// W4-I: the Actions footer's Play button.
+pub fn action_play_id() -> egui::Id {
+    egui::Id::new("raster-actions-play")
 }
 
 #[cfg(test)]
@@ -4233,5 +4741,263 @@ mod tests {
         let flat = egui::Rect::from_min_size(egui::pos2(0.0, 10.0), egui::vec2(240.0, 0.0));
         // Any answer will do; not panicking is the assertion.
         let _ = drop_position(true, id, flat, 10.0);
+    }
+
+    // -----------------------------------------------------------------
+    // W4-I: Paths footer, Actions library, History thumbnails, Brushes.
+    // -----------------------------------------------------------------
+
+    fn screen() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(360.0, 700.0),
+            )),
+            ..Default::default()
+        }
+    }
+
+    /// Run `body` in a central panel for one frame of `input`.
+    fn frame_of(
+        ctx: &egui::Context,
+        w: &mut Workspace,
+        input: egui::RawInput,
+        body: &mut dyn FnMut(&mut Workspace, &mut Ui),
+    ) -> egui::FullOutput {
+        ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| body(w, ui));
+        })
+    }
+
+    /// Press and release the primary button on the widget `id` drew last.
+    fn click_id(
+        ctx: &egui::Context,
+        w: &mut Workspace,
+        id: egui::Id,
+        body: &mut dyn FnMut(&mut Workspace, &mut Ui),
+    ) {
+        let rect = ctx
+            .read_response(id)
+            .unwrap_or_else(|| panic!("{id:?} was not drawn"))
+            .rect;
+        let button = |pressed: bool| egui::Event::PointerButton {
+            pos: rect.center(),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut input = screen();
+        input.events = vec![egui::Event::PointerMoved(rect.center()), button(true)];
+        let _ = frame_of(ctx, w, input, body);
+        let mut input = screen();
+        input.events = vec![button(false)];
+        let _ = frame_of(ctx, w, input, body);
+    }
+
+    fn painted_texts(out: &egui::FullOutput) -> Vec<String> {
+        out.shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A headless Paths panel over a document with a square path layer: the
+    /// footer's "load as selection" emits a selection command that, applied,
+    /// selects the square; "work path from selection" then lists a Work Path.
+    /// The footer's New names a path layer through the string table, and
+    /// never after a layer the document already has.
+    #[test]
+    fn a_new_path_takes_the_next_free_localized_name() {
+        let mut doc = Document::new(32, 32, "paths");
+        let shape = layer_model::Layer::with_kind(
+            "Path 2",
+            layer_model::LayerKind::Shape(layer_model::ShapeLayer::from_svg("M0 0 L4 4")),
+        );
+        doc.layers.push_root(shape).unwrap();
+        let stem = crate::strings::tr("ui.docks.paths.default.name");
+        assert!(!stem.is_empty());
+        // One path row, so "Path 2" is next in line; it is taken, so 3.
+        assert_eq!(new_path_name(&doc), format!("{stem} 3"));
+    }
+
+    #[test]
+    fn the_paths_footer_loads_a_path_as_the_selection() {
+        let mut doc = Document::new(32, 32, "paths");
+        let layer = layer_model::Layer::with_kind(
+            "Square",
+            layer_model::LayerKind::Shape(layer_model::ShapeLayer::from_svg(
+                "M4 4 L12 4 L12 12 L4 12 Z",
+            )),
+        );
+        let id = doc.layers.push_root(layer).unwrap();
+        let mut w = Workspace::new();
+        w.paths.selected = Some(id);
+        let ctx = egui::Context::default();
+        let snapshot = doc.clone();
+        let mut body = |w: &mut Workspace, ui: &mut Ui| paths_body(w, ui, &snapshot);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let _ = w.drain_intents();
+
+        click_id(&ctx, &mut w, path_action_id("load-selection"), &mut body);
+        let intents = w.drain_intents();
+        let command = match intents.as_slice() {
+            [Intent::Document(c @ Command::SetSelection { .. })] => c.clone(),
+            other => panic!("load as selection emitted {other:?}"),
+        };
+        assert!(doc.selection.is_none());
+        command.apply(&mut doc).unwrap();
+        assert_eq!(
+            doc.selection.bounds(),
+            Some((glam::IVec2::new(4, 4), glam::IVec2::new(12, 12))),
+            "the selection is the path's square"
+        );
+        assert_eq!(doc.selection.coverage_at(glam::IVec2::new(8, 8)), 1.0);
+
+        // With that selection in place, "work path from selection" makes the
+        // Work Path, and the panel lists it.
+        let snapshot = doc.clone();
+        let mut body = |w: &mut Workspace, ui: &mut Ui| paths_body(w, ui, &snapshot);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        click_id(&ctx, &mut w, path_action_id("from-selection"), &mut body);
+        assert!(w.paths.work_path.is_some(), "no Work Path was made");
+        assert!(w.paths.work_selected);
+        let out = frame_of(&ctx, &mut w, screen(), &mut body);
+        assert!(
+            painted_texts(&out).iter().any(|t| t == "Work Path"),
+            "{:?}",
+            painted_texts(&out)
+        );
+    }
+
+    /// With no path selected, the path buttons are greyed (not clickable)
+    /// and emit nothing.
+    #[test]
+    fn the_paths_footer_is_inert_without_a_path() {
+        let doc = Document::new(16, 16, "none");
+        let mut w = Workspace::new();
+        let ctx = egui::Context::default();
+        let mut body = |w: &mut Workspace, ui: &mut Ui| paths_body(w, ui, &doc);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let _ = w.drain_intents();
+        for name in [
+            "fill",
+            "stroke",
+            "load-selection",
+            "from-selection",
+            "delete",
+        ] {
+            click_id(&ctx, &mut w, path_action_id(name), &mut body);
+            assert!(w.drain_intents().is_empty(), "{name} fired with no path");
+        }
+    }
+
+    /// The Actions panel lists a published action, expands it to its two
+    /// steps, and queues Play for the selected action.
+    #[test]
+    fn the_actions_panel_shows_recorded_steps_and_plays_the_selection() {
+        use crate::panels::actions::{self as actions, ActionSummary, ActionsRequest, ActionsView};
+        let ctx = egui::Context::default();
+        ActionsView {
+            recording: false,
+            actions: vec![ActionSummary {
+                name: "Action 1".into(),
+                steps: vec!["Create Layer".into(), "Set Selection".into()],
+            }],
+        }
+        .publish(&ctx);
+        let mut w = Workspace::new();
+        let mut body = |w: &mut Workspace, ui: &mut Ui| actions_body(w, ui);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let out = frame_of(&ctx, &mut w, screen(), &mut body);
+        let texts = painted_texts(&out);
+        assert!(texts.iter().any(|t| t == "Action 1"), "{texts:?}");
+        assert!(!texts.iter().any(|t| t == "Set Selection"), "collapsed");
+
+        click_id(&ctx, &mut w, action_twirl_id(0), &mut body);
+        let out = frame_of(&ctx, &mut w, screen(), &mut body);
+        let texts = painted_texts(&out);
+        for step in ["Create Layer", "Set Selection"] {
+            assert!(
+                texts.iter().any(|t| t == step),
+                "{step} not shown: {texts:?}"
+            );
+        }
+
+        // Play is off until an action is selected.
+        click_id(&ctx, &mut w, action_play_id(), &mut body);
+        assert!(actions::take_requests(&ctx).is_empty());
+        click_id(&ctx, &mut w, action_row_id(0), &mut body);
+        click_id(&ctx, &mut w, action_play_id(), &mut body);
+        assert_eq!(actions::take_requests(&ctx), vec![ActionsRequest::Play(0)]);
+    }
+
+    /// A history row whose state was captured draws that picture: a mesh
+    /// textured with the captured texture, inside the row.
+    #[test]
+    fn a_history_row_draws_its_captured_thumbnail() {
+        let history = History::default();
+        let ctx = egui::Context::default();
+        let rgba = vec![128u8; 8 * 6 * 4];
+        crate::panels::history::HistoryThumbs::capture(&ctx, 7, &history, [8, 6], &rgba);
+        let tex = crate::panels::history::HistoryThumbs::texture(&ctx, 0).unwrap();
+        let mut w = Workspace::new();
+        let mut body = |w: &mut Workspace, ui: &mut Ui| history_body(w, ui, &history);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let out = frame_of(&ctx, &mut w, screen(), &mut body);
+        let row = ctx
+            .read_response(super::super::ids::history_row(0))
+            .unwrap()
+            .rect;
+        let drawn = out.shapes.iter().any(|c| match &c.shape {
+            egui::Shape::Mesh(m) => {
+                m.texture_id == tex.id() && m.vertices.iter().all(|v| row.contains(v.pos))
+            }
+            _ => false,
+        });
+        assert!(drawn, "the row did not draw its thumbnail texture");
+
+        // The source column marks the opened state, the History Brush's
+        // source: the brush glyph is painted inside row 0's cell.
+        let cell = ctx.read_response(history_source_id(0)).unwrap().rect;
+        let marked = out.shapes.iter().any(|c| {
+            !matches!(c.shape, egui::Shape::Noop | egui::Shape::Text(_))
+                && cell.contains_rect(c.shape.visual_bounding_rect())
+        });
+        assert!(marked, "row 0's source cell painted no marker");
+    }
+
+    /// Every brush preset is a tile in the grid with its stamp painted.
+    #[test]
+    fn the_brushes_panel_is_a_grid_of_tip_previews() {
+        let ctx = egui::Context::default();
+        let mut w = Workspace::new();
+        let mut body = |w: &mut Workspace, ui: &mut Ui| brushes_body(w, ui, None);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let out = frame_of(&ctx, &mut w, screen(), &mut body);
+        let n = w.brushes.len();
+        let mut tops = Vec::new();
+        for i in 0..n {
+            let rect = ctx.read_response(brush_tile_id(i)).unwrap().rect;
+            let stamps = out
+                .shapes
+                .iter()
+                .filter(|c| match &c.shape {
+                    egui::Shape::Path(p) => p.closed && p.points.iter().all(|q| rect.contains(*q)),
+                    _ => false,
+                })
+                .count();
+            assert!(stamps >= 1, "tile {i} painted no stamp");
+            tops.push(rect.top());
+        }
+        tops.dedup();
+        assert!(
+            tops.len() < n,
+            "the presets were laid out as a list, not a grid"
+        );
     }
 }

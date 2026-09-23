@@ -139,10 +139,19 @@ impl PreviewSource {
     ///
     /// The returned pixels are what the file will look like; `bytes` is the
     /// real encoded length of the *proxy*.
+    ///
+    /// An SVG shows the raster it embeds; an ICO shows its largest entry,
+    /// which is the one an icon viewer opens.
     pub fn render(&self, format: ExportFormat) -> Result<RenderedPreview, CodecError> {
         self.encodes.set(self.encodes.get() + 1);
         let bytes = encode(format, self.width, self.height, &self.rgba)?;
-        let decoded = raster::decode_bytes(&bytes)?;
+        let decoded = match format {
+            // No payload decodes as an empty buffer, which the codec refuses.
+            ExportFormat::Svg => raster::decode_bytes(
+                &raster::codec::svg_raster_payload(&bytes).unwrap_or_default(),
+            )?,
+            _ => raster::decode_bytes(&bytes)?,
+        };
         Ok(RenderedPreview {
             width: decoded.width,
             height: decoded.height,
@@ -187,6 +196,40 @@ impl ExportEntry {
         let stem = raster::sanitize_file_stem(base);
         format!("{}{}.{}", stem, self.suffix, self.preset.format.extension())
     }
+}
+
+thread_local! {
+    /// The first row of the last Export As that was actually sent to be
+    /// written (the folder picker answered). Set by [`remember_exported_job`].
+    static LAST_CONFIRMED: std::cell::RefCell<Option<ExportEntry>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The settings File > Export > Slices writes with: the first row of the last
+/// Export As that was sent to be written (format, quality, scale, resampling,
+/// depth), or a plain PNG at 100% before any has been.
+///
+/// Remembered per UI thread, which is the thread every dialog and every menu
+/// action runs on.
+pub fn last_confirmed_entry() -> ExportEntry {
+    LAST_CONFIRMED
+        .with(|last| last.borrow().clone())
+        .unwrap_or_else(|| ExportEntry::new("", ExportFormat::Png, 1.0))
+}
+
+/// Remember `job`'s first row as the settings File > Export > Slices writes
+/// with. The shell calls this where an Export As job is handed to the writer —
+/// after the folder picker answered — so a dialog confirmed and then cancelled
+/// at the folder picker changes nothing. [`Dialog::confirm`] stays pure.
+pub fn remember_exported_job(job: &ExportJob) {
+    if let Some(first) = job.entries.first() {
+        LAST_CONFIRMED.with(|last| *last.borrow_mut() = Some(first.clone()));
+    }
+}
+
+/// Forget the remembered Export As settings (tests start from the default).
+pub fn forget_last_confirmed_entry() {
+    LAST_CONFIRMED.with(|last| *last.borrow_mut() = None);
 }
 
 /// What the dialog commits to.
@@ -889,6 +932,8 @@ pub fn format_name(format: ExportFormat) -> String {
         ExportFormat::Tiff => "TIFF".to_string(),
         ExportFormat::Gif => "GIF".to_string(),
         ExportFormat::Bmp => "BMP".to_string(),
+        ExportFormat::Ico => "ICO".to_string(),
+        ExportFormat::Svg => "SVG".to_string(),
     }
 }
 
@@ -903,7 +948,10 @@ impl Dialog for ExportAsDialog {
 
     fn confirm(&self) -> Option<DialogAction> {
         let job = self.job();
-        job.is_valid().then(|| DialogAction::Export(Box::new(job)))
+        if !job.is_valid() {
+            return None;
+        }
+        Some(DialogAction::Export(Box::new(job)))
     }
 
     fn blocked_reason(&self) -> Option<String> {
@@ -943,8 +991,10 @@ mod tests {
             let preview = proxy
                 .render(format)
                 .unwrap_or_else(|e| panic!("{format:?} failed to round-trip: {e}"));
-            assert_eq!((preview.width, preview.height), (32, 32), "{format:?}");
-            assert_eq!(preview.rgba.len(), 32 * 32 * 4, "{format:?}");
+            // An icon previews its largest entry.
+            let side = if format == ExportFormat::Ico { 256 } else { 32 };
+            assert_eq!((preview.width, preview.height), (side, side), "{format:?}");
+            assert_eq!(preview.rgba.len(), (side * side * 4) as usize, "{format:?}");
             assert!(preview.bytes > 0, "{format:?} encoded to nothing");
         }
     }
@@ -1122,6 +1172,41 @@ mod tests {
         dialog.set_show_preview(false);
         assert!(!dialog.show_preview());
         assert!(dialog.cached.is_none());
+    }
+
+    #[test]
+    fn an_exported_job_is_what_slices_export_with() {
+        forget_last_confirmed_entry();
+        assert_eq!(last_confirmed_entry().preset.format, ExportFormat::Png);
+        let mut dialog = dialog();
+        dialog.set_format(ExportFormat::Jpeg(90));
+        dialog.set_quality(40);
+        dialog.set_scale(0.5);
+        // Choosing settings is not exporting them, and neither is confirming:
+        // `confirm` is pure, the shell remembers only a job it hands on.
+        assert_eq!(last_confirmed_entry().preset.format, ExportFormat::Png);
+        let Some(DialogAction::Export(job)) = dialog.confirm() else {
+            panic!("a valid job");
+        };
+        assert_eq!(last_confirmed_entry().preset.format, ExportFormat::Png);
+        remember_exported_job(&job);
+        let remembered = last_confirmed_entry();
+        assert_eq!(remembered.preset.format, ExportFormat::Jpeg(40));
+        assert_eq!(remembered.preset.scale, 0.5);
+        forget_last_confirmed_entry();
+    }
+
+    #[test]
+    fn the_ico_and_svg_rows_preview_what_the_file_holds() {
+        let proxy = PreviewSource::placeholder(20, 10);
+        let svg = proxy.render(ExportFormat::Svg).unwrap();
+        // The SVG's raster is the proxy, pixel for pixel.
+        assert_eq!((svg.width, svg.height), (20, 10));
+        assert_eq!(svg.rgba, proxy.rgba());
+        let ico = proxy.render(ExportFormat::Ico).unwrap();
+        assert_eq!((ico.width, ico.height), (256, 256));
+        assert_eq!(format_name(ExportFormat::Ico), "ICO");
+        assert_eq!(format_name(ExportFormat::Svg), "SVG");
     }
 
     #[test]

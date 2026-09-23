@@ -494,6 +494,23 @@ impl Tool for PenTool {
         !self.anchors.is_empty()
     }
 
+    /// W4-A: the path being authored — its anchors and their handles, from
+    /// the first press until Enter publishes it or Escape drops it.
+    fn live_geometry(&self) -> Option<crate::tool::SessionGeometry> {
+        if self.anchors.is_empty() {
+            return None;
+        }
+        Some(crate::tool::SessionGeometry::Path {
+            anchors: self.anchors.iter().map(|a| a.pos).collect(),
+            handles: self
+                .anchors
+                .iter()
+                .map(|a| [a.pos + a.handle_in, a.pos + a.handle_out])
+                .collect(),
+            closing: self.dragging == Some(Dragging::Closing),
+        })
+    }
+
     /// Every option the registry declares for the pen reaches it: `mode`,
     /// `combine`, and the five paint keys ([`crate::shape::PAINT_KEYS`]).
     fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {

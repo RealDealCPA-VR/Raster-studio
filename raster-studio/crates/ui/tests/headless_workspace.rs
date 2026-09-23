@@ -289,8 +289,8 @@ fn no_opaque_rect_is_painted_over_a_visible_tool_slot_at_either_viewport() {
     let model = ui::PaletteModel::build();
     let slot_count = model.slots().len();
     assert_eq!(
-        slot_count, 19,
-        "Photopea's column is nineteen slots; the registry gave {slot_count}"
+        slot_count, 20,
+        "Photopea's column is twenty slots; the registry gave {slot_count}"
     );
 
     for size in [egui::vec2(1440.0, 900.0), egui::vec2(1280.0, 720.0)] {
@@ -563,6 +563,7 @@ fn the_column_is_photopeas_and_q_and_f_sit_under_the_wells() {
             "heal",
             "brush",
             "clone",
+            "history",
             "eraser",
             "gradient",
             "blur",

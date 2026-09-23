@@ -101,6 +101,12 @@ pub mod ids {
         egui::Id::new(("raster-history-row", index))
     }
 
+    /// W4-G: the History Brush source cell of history row `index` — a click
+    /// sets the brush to paint from that state.
+    pub fn history_source(index: usize) -> egui::Id {
+        egui::Id::new(("raster-history-source", index))
+    }
+
     /// The options bar's Reset button, for the active tool.
     pub fn tool_options_reset(tool: tools::ToolId) -> egui::Id {
         egui::Id::new(("raster-tool-reset", tool))

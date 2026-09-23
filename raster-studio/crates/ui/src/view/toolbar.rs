@@ -10,7 +10,7 @@ use crate::icons::icon_for;
 use crate::intent::Intent;
 use crate::menu::MenuAction;
 use crate::palette::{group_label, tooltip, PaletteModel};
-use crate::tool_options::{schema_for, wants_gradient_stops, OptionValue, BLEND_MODE_KEY};
+use crate::tool_options::{wants_gradient_stops, OptionValue, BLEND_MODE_KEY};
 use crate::Workspace;
 
 use super::{body, hint, overlay_frame, rgba_to_color32, swatch, text};
@@ -552,7 +552,7 @@ pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
     let Some(info) = crate::palette::info(tool) else {
         return;
     };
-    let specs = schema_for(info);
+    let specs = crate::tool_options::shown_schema(&w.options, info);
     let t = design::current_theme(ctx).tokens();
 
     egui::TopBottomPanel::top("raster-tool-options")
@@ -576,6 +576,12 @@ pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
                         ui.spacing_mut().item_spacing.x = Space::Small.pt();
                         ui.label(text(ui, info.name, TextRole::Primary, TypeRole::Headline));
                         separator(ui);
+                        // W4-G: the Ruler has no settings, only its one
+                        // action.
+                        if tool == ToolId::Ruler {
+                            straighten_button(w, ui);
+                            return;
+                        }
                         if specs.is_empty() && !wants_gradient_stops(info) {
                             ui.label(hint(
                                 ui,
@@ -614,6 +620,33 @@ pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
                     });
                 });
         });
+}
+
+/// The Ruler options bar's pseudo-key for its Straighten Layer button, under
+/// which the button is marked (`ids::tool_option(ToolId::Ruler, ..)`).
+pub const STRAIGHTEN_KEY: &str = "straighten";
+
+/// W4-G: the Ruler's **Straighten Layer**: rotate the active layer so the
+/// measured line is level, as one undo step. It confirms the ruler's held
+/// measurement exactly as Enter does ([`Intent::ConfirmTool`]), and is off
+/// while there is no measurement to confirm (the Info panel's Distance row is
+/// the same value).
+fn straighten_button(w: &mut Workspace, ui: &mut Ui) {
+    let measured = w.info.measure.is_some();
+    let response = super::labelled_button(
+        ui,
+        crate::strings::tr("ui.toolbar.straighten.layer"),
+        measured,
+        super::ids::tool_option(ToolId::Ruler, STRAIGHTEN_KEY),
+    )
+    .on_hover_text(crate::strings::tr(if measured {
+        "ui.toolbar.straighten.layer.hint"
+    } else {
+        "ui.toolbar.straighten.layer.nothing"
+    }));
+    if measured && response.clicked() {
+        w.emit(Intent::ConfirmTool);
+    }
 }
 
 fn separator(ui: &mut Ui) {

@@ -313,6 +313,94 @@ impl Tool for DirectSelectionTool {
     }
 }
 
+/// Which anchor edit an [`AnchorTool`] performs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorEdit {
+    /// Click on the outline: split the segment there, the outline unmoved.
+    Add,
+    /// Click on an anchor: remove it (never below a line or a triangle).
+    Delete,
+    /// Click on an anchor: smooth becomes corner, corner grows handles.
+    Convert,
+}
+
+impl AnchorEdit {
+    fn tool_id(self) -> ToolId {
+        match self {
+            AnchorEdit::Add => ToolId::AddAnchor,
+            AnchorEdit::Delete => ToolId::DeleteAnchor,
+            AnchorEdit::Convert => ToolId::ConvertAnchor,
+        }
+    }
+}
+
+/// Add Anchor Point, Delete Anchor Point and Convert Point — the Pen slot's
+/// three path-editing tools. A plain click does what Direct Selection's
+/// Shift/Ctrl/Alt-click does, on the active shape layer's path, as ONE
+/// [`Command::SetLayerKind`] step; a click that finds nothing to edit emits
+/// nothing.
+pub struct AnchorTool {
+    edit: AnchorEdit,
+}
+
+impl AnchorTool {
+    pub fn new(edit: AnchorEdit) -> Self {
+        Self { edit }
+    }
+
+    pub fn edit(&self) -> AnchorEdit {
+        self.edit
+    }
+}
+
+impl Tool for AnchorTool {
+    fn id(&self) -> ToolId {
+        self.edit.tool_id()
+    }
+
+    fn on_pointer_down(
+        &mut self,
+        ctx: &mut ToolContext<'_>,
+        event: PointerEvent,
+    ) -> Result<(), ToolError> {
+        let p = Point::new(event.pos.x as f64, event.pos.y as f64);
+        if !p.is_finite() {
+            return Ok(());
+        }
+        let edit = self.edit;
+        edit_anchors(ctx, |sps| match edit {
+            AnchorEdit::Add => anchors::insert_anchor(sps, p, HIT_TOLERANCE).is_some(),
+            AnchorEdit::Delete => anchors::anchor_near(sps, p, ANCHOR_RADIUS)
+                .is_some_and(|at| anchors::delete_anchor(sps, at)),
+            AnchorEdit::Convert => anchors::anchor_near(sps, p, ANCHOR_RADIUS)
+                .is_some_and(|at| anchors::convert_anchor(sps, at)),
+        });
+        Ok(())
+    }
+
+    fn on_pointer_move(
+        &mut self,
+        _ctx: &mut ToolContext<'_>,
+        _event: PointerEvent,
+    ) -> Result<(), ToolError> {
+        Ok(())
+    }
+
+    fn on_pointer_up(
+        &mut self,
+        _ctx: &mut ToolContext<'_>,
+        _event: PointerEvent,
+    ) -> Result<(), ToolError> {
+        Ok(())
+    }
+
+    fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {}
+
+    fn is_active(&self) -> bool {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,6 +484,40 @@ mod tests {
             .iter()
             .any(|e| matches!(e, PathEl::CurveTo(..))));
         assert!(!tool.is_active(), "a modifier click left a drag open");
+    }
+
+    fn plain_click(tool: &mut AnchorTool, ctx: &mut ToolContext<'_>, x: f32, y: f32) {
+        tool.on_pointer_down(ctx, PointerEvent::at(x, y)).unwrap();
+        tool.on_pointer_up(ctx, PointerEvent::at(x, y)).unwrap();
+    }
+
+    #[test]
+    fn the_anchor_tools_edit_with_a_plain_click() {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = square_ctx(&mut tiles);
+        let mut add = AnchorTool::new(AnchorEdit::Add);
+        assert_eq!(add.id(), ToolId::AddAnchor);
+        plain_click(&mut add, &mut ctx, 60.0, 11.0);
+        assert_eq!(anchors::anchor_points(&edited_path(&mut ctx)).len(), 5);
+
+        let mut delete = AnchorTool::new(AnchorEdit::Delete);
+        assert_eq!(delete.id(), ToolId::DeleteAnchor);
+        plain_click(&mut delete, &mut ctx, 110.0, 110.0);
+        assert_eq!(anchors::anchor_points(&edited_path(&mut ctx)).len(), 3);
+
+        let mut convert = AnchorTool::new(AnchorEdit::Convert);
+        assert_eq!(convert.id(), ToolId::ConvertAnchor);
+        plain_click(&mut convert, &mut ctx, 110.0, 10.0);
+        assert!(edited_path(&mut ctx)
+            .elements()
+            .iter()
+            .any(|e| matches!(e, PathEl::CurveTo(..))));
+
+        // Away from the path, none of them edits anything.
+        for t in [&mut add, &mut delete, &mut convert] {
+            plain_click(t, &mut ctx, 60.0, 60.0);
+        }
+        assert!(ctx.commands().is_empty(), "{:?}", ctx.commands());
     }
 
     #[test]

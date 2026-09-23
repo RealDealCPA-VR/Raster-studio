@@ -53,7 +53,8 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | --- | --- | --- |
 | Undo / redo with a history panel | ✅ | clickable stack with snapshots; a stroke is one step |
 | Command journal + crash recovery | ✅ | anchored to a save marker, so replay cannot duplicate work |
-| Cut / copy / paste / clear | ✅ | incl. Copy Merged, Paste Into, Layer Via Cut/Copy |
+| Cut / copy / paste / clear | ✅ | incl. Copy Merged, Paste Special (Paste in Place, Paste Into, Paste Outside), Layer Via Cut/Copy |
+| Edit ▸ Purge (Clipboard / Histories / All) | ✅ | W4-H; Histories and All ask first — the second choice within 10 s confirms (a status-line confirmation, not a modal: the dialog seam has no yes/no question for it yet) |
 | Free transform (scale/rotate/skew/distort/perspective/warp) | ✅ | interactive gestures apply real, undoable commands; singular matrices are refused rather than writing NaN |
 | Crop, trim, image size, canvas size, rotate canvas | ✅ | crop and the fixed transforms apply real edits; image/canvas size dialogs remain partial |
 
@@ -87,13 +88,18 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | B&W, Photo Filter, Channel Mixer, Invert | ✅ | |
 | Posterize, Threshold, Gradient Map, Selective Colour | ✅ | |
 | Auto tone / contrast / colour | ✅ | |
+| Desaturate, Equalize | ✅ | W4-E: Image ▸ Adjustments, no dialog, one undo step; Desaturate is Shift+Ctrl+U and keeps linear luminance; Equalize reads the histogram of the selected pixels. Destructive-only, as in Photopea |
+| Shadows/Highlights, Replace Color | ✅ | W4-E: dialogs with live preview; Shadows/Highlights reads a blurred luminance over its radius; Replace Color has a selection preview and samples from a click. Destructive-only, as in Photopea |
+| Color Lookup (3D LUT) | ✅ | W4-E: a `.cube` file (file picker) or one of five built-in looks (Invert, Warm, Cool, Sepia, High Contrast). Image ▸ Adjustments bakes it as one undo step; Layer ▸ New Adjustment Layer ▸ Color Lookup creates the layer at the identity table, and Layer ▸ Edit Adjustment… or the Properties panel's "Open editor…" reopens the same dialog on that layer, whose OK rewrites the layer's table as one undo step |
 
 ### File
 | Capability | Status | Notes |
 | --- | --- | --- |
 | Save / open the native `.rstudio` project | ✅ | integrity-sealed, version-gated, crash-safe swap |
 | Pixel data persisted | ✅ | reopening composites to byte-identical output |
-| Export PNG / JPEG / WebP / TIFF / GIF / BMP with presets | ✅ | correct un-premultiply and linear→sRGB on the way out |
+| Export PNG / JPEG / WebP / TIFF / GIF / BMP / ICO / SVG with presets | ✅ | correct un-premultiply and linear→sRGB on the way out; ICO carries 16/32/48/256 px entries; SVG wraps the raster composite as an embedded PNG (vector shape layers are not written as paths yet) |
+| WebP lossy with a quality slider | ❌ | W4-H: kept lossless on purpose. The WebP encoder already in the tree (`image-webp` 0.2, behind `image` 0.25) writes lossless VP8L only. Pure-Rust lossy encoders exist on crates.io and were evaluated on 2026-09-23 (encode 256×128 and 257×131 RGBA test images at quality 50 and 90, decode with `image-webp` 0.2.4, measure RGB PSNR; `cargo audit` on a lockfile holding the three permissively licensed crates found no advisories): `zenwebp` 0.4 is AGPL-3.0-only (or a commercial licence), so it is out on licence; `webp-rust` 0.3.1 (MIT) measured 15–17 dB PSNR at every quality, and its quality-90 stream for the 257×131 image was rejected by `image-webp` with `BitStreamError`; `vaam-image-webp` 0.1.0 (MIT/Apache-2.0) reached 30–40 dB on the 256×128 images but 22–23 dB on the 257×131 ones, and was first published on 2026-09-22; `tiny-webp` 0.1.0 (MIT/Apache-2.0, no dependencies with `default-features = false`) measured 34–44 dB on all four images, but it is a single 0.1.0 release first published on 2026-09-04 with 23 downloads. `tiny-webp` is the candidate to adopt once it has a track record; adopting it means a workspace manifest change and a quality slider in Export As. Until then the Export As row is labelled “WebP (lossless)” and has no quality control |
+| File ▸ Export ▸ Slices | ✅ | W4-H: one file per committed Slice-tool region, `<document>_01.<ext>`…, in the last confirmed Export As format and settings (PNG before any) |
 | Drag-and-drop open, recent files | ✅ | |
 
 ### Application
@@ -124,7 +130,7 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Channels panel | 🔶 | isolation is real and changes the canvas; per-channel *editing* is still not implemented — see the gaps list |
 | Paths panel | 🔶 | |
 | Colour management | ✅ | sRGB and Display P3 are real; an embedded ICC profile is carried, composites through its profile and re-tags on export — `a_tagged_image_composites_through_its_profile_and_retags_on_export` |
-| 16-bit per channel | 🔶 | a 16-bit source is recognized, exported at 16 bits to the formats that carry them (PNG/TIFF) and `.rstudio` records the depth (`a_rstudio_package_round_trips_the_bit_depth`); in-app tiles still composite at 8-bit-equivalent precision (P2.5b, open) |
+| 16-bit per channel | 🔶 | a user can work at 16 bits: New Document accepts 16 bits (RGBA16 base tiles), Image > Mode > 8/16 Bits/Channel converts every raster tile in one undoable step (8 -> 16 lossless, 16 -> 8 rounded), a tool stroke on a 16-bit layer lands as RGBA16 tiles keeping the untouched pixels' 16-bit codes, the compositor composites RGBA16 tiles in `f32`, and a 16-bit document exports 16 bits to PNG/TIFF (`mode_sixteen_then_a_brush_stroke_then_a_png_export_round_trips_at_sixteen_bits`); the whole-layer edits (transforms, filters, adjustments, fills, Image Size, Canvas Size, Grayscale) read a 16-bit tile rounded to 8 bits and land 16-bit tiles again, so they compute at 8-bit precision (P2.5b, see the gaps list) |
 | Actions / recorded command replay | 🔶 | commands are serialisable and replayable; there is no recording UI |
 | Batch export | 🔶 | multiple presets in one run |
 | Brush / gradient / layer-style editors | 🔶 | |
@@ -144,6 +150,9 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Liquify, Vanishing Point, Puppet Warp | Deep mesh-warp tooling, beyond the transform mesh that exists. |
 | Content-aware fill / Select Subject | Requires ML inference we deliberately do not bundle. |
 | Filter ▸ Render ▸ Lighting Effects | A per-pixel light rig (spot/omni/infinite lights, a bump channel, material gloss) with an interactive on-canvas light editor; the parameter-schema dialog cannot express the light handles, and a slider-only version would not be Lighting Effects. |
+| Image ▸ Adjustments ▸ HDR Toning | Photoshop's HDR Toning flattens the image and runs a local-adaptation tone mapper (edge glow, detail, shadow/highlight, a curve) meant for 32-bit merges; this build has no 32-bit document mode for it to act on, and a slider set without the local adaptation would not be HDR Toning. |
+| Image ▸ Adjustments ▸ Match Color | Matches statistics against *another open document or layer* as source; that needs a cross-document source picker and luminance/colour-intensity/fade model this build does not have, and Photopea's own implementation is minimal. |
+| Vertical Type tool | Deferred by W4-G. The text engine lays out horizontal lines only: `crates/text-engine/src/lib.rs` states "Vertical writing modes are not implemented", and neither `text_engine::TextRun` nor `layer_model::TextLayer` carries an orientation. Adding a Vertical Type entry to the palette would create an ordinary horizontal text layer under a vertical tool's name, so no `ToolId` exists for it. It needs vertical shaping and line layout (glyph rotation for Latin runs, upright CJK, right-to-left column order) plus a stored orientation on the layer; the tool can then be a Type variant. |
 | Smart Filters (non-destructive filter stacks on smart objects) | The smart-object layer kind carries no filter stack and the compositor has no re-apply pass; Convert for Smart Filters stays greyed with that reason until both exist. |
 | Licensing and auto-update crates | Dropped from the workspace (P3.2): both were complete and tested with zero dependents — entitlement checks and update feeds are release-engineering for a shipped product, not this build. |
 | Video and animation timeline | Out of scope for a raster editor v1. |
@@ -156,24 +165,47 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 
 Kept here rather than buried, because a ✅ with a footnote is still a claim:
 
-- **Live editing composites at 8-bit-equivalent precision (P2.5b, open).**
-  Deep sources are honoured on export (a 16-bit source writes 16 bits to
-  PNG/TIFF; an 8-bit source keeps the byte-exact path), `.rstudio` records
-  each layer's depth (`a_rstudio_package_round_trips_the_bit_depth`).
+- **16-bit editing is reachable; not every pixel path is deep yet (P2.5b, partly done).**
   *Done (W3-H):* the compositor reads an RGBA16 tile at its own depth and
-  composites it in `f32` (`fill_layer`), so a 16-bit ramp comes out of the
-  composite, and out of a 16-bit PNG export of that composite, within one
-  code of its source (`a_sixteen_bit_ramp_composites_at_sixteen_bit_precision`,
-  `a_sixteen_bit_ramp_composited_then_exported_equals_its_source`).
-  *Still open, and why no user reaches the done part yet:* nothing a user
-  can do produces an RGBA16 tile. `open_path` decodes a 16-bit source to
-  RGBA8 tiles; the New Document dialog refuses 16-bit
-  (`new_document.rs`); the paint tools, filters and adjustments read and
-  write RGBA8 tiles, so no test shows a brush stroke keeping a 16-bit layer
-  16-bit; and there is no depth-conversion command, so Image > Mode >
-  8 / 16 Bits/Channel are greyed with that reason. Closing P2.5b needs a
-  depth-generic pixel path in `editor-core::pixels` and the tools/filters
-  that write through it, then the importer and New Document emitting RGBA16.
+  composites it in `f32` (`fill_layer`) -
+  `a_sixteen_bit_ramp_composites_at_sixteen_bit_precision`,
+  `a_sixteen_bit_ramp_composited_then_exported_equals_its_source`.
+  *Done (W4-F):* users reach it. New Document accepts 16 bits and builds the
+  base layer from RGBA16 tiles (`a_sixteen_bit_new_document_is_created_at_sixteen_bits`);
+  Image > Mode > 8/16 Bits/Channel is enabled (the current depth is the
+  checked, greyed row) and runs one undoable Transaction
+  (`Command::SetMetaBitDepth` plus a per-layer tile rewrite; undo is
+  byte-exact - `converting_to_eight_bits_then_undoing_restores_the_sixteen_bit_tiles_byte_exact`);
+  the tools read a 16-bit tile rounded to 8 bits and their output is widened
+  back at the apply boundary, keeping the exact 16-bit code of every pixel
+  the tool did not change; export follows the document's depth, not only the
+  source's (`mode_sixteen_then_a_brush_stroke_then_a_png_export_round_trips_at_sixteen_bits`).
+  The app-shell's whole-layer reader (`pixels::read_layer`, behind Edit >
+  Transform, filters, adjustments baked to pixels, fill, stroke, clear,
+  layer via copy/cut, apply mask, defringe) and the other tile readers
+  (Image Size, Canvas Size's background fill, Reveal All's bounds, Image >
+  Mode > Grayscale, channel-limited painting) read an RGBA16 tile rounded to
+  8 bits, and their RGBA8 output is widened back to RGBA16 at the apply
+  boundary (`mode_sixteen_then_flip_rotate_filter_and_adjustment_match_the_eight_bit_document`,
+  `an_opened_sixteen_bit_png_flipped_twice_is_the_identity`,
+  `image_size_on_a_sixteen_bit_document_matches_the_eight_bit_document`,
+  `canvas_size_fill_on_a_sixteen_bit_document_keeps_the_old_pixels`,
+  `grayscale_on_a_sixteen_bit_document_converts_its_tiles`). Image > Mode >
+  8 Bits/Channel dithers (Photoshop's default "Use Dither";
+  `mode_eight_from_the_menu_dithers_between_codes_and_keeps_exact_codes`).
+  *Still open:* every one of those edits computes at 8-bit precision: a
+  pixel it changes (and every pixel a transform moves) comes back as a
+  widened 8-bit code, so the 16-bit depth survives only in the pixels an edit
+  leaves in place. There is no user switch for the 16 -> 8 dither (it is always
+  on from the menu). `open_path` still decodes a 16-bit source to RGBA8 tiles
+  (the document's depth says 16, the first edit of a tile widens it). `.psd`
+  export is 8-bit: RGBA16 layer tiles are rounded to RGBA8 on the way out
+  (`import::rgba_from_tiles` reads through `raster::rgba8_view`; pinned by
+  `a_sixteen_bit_document_saves_as_psd_with_the_eight_bit_twins_layer_pixels`),
+  so a 16-bit document saved as PSD loses its 16-bit precision. The tile
+  readers that need only coverage (the compositor's `alpha_bounds` for the
+  Move tool and the Properties panel, the Move tool's auto-select pick) read
+  RGBA16 alpha through `raster::tile_alpha16`.
 - **Native tablet events need a pen.** Pressure is wired through the shell
   seam (`Shell::set_pen_pressure`) and the stroke engine is pressure-aware,
   but subscribing to one device's winit tablet events requires hardware on

@@ -481,6 +481,19 @@ impl DialogHost {
                 }
                 None => false,
             },
+            // W4-E round 2: Layer ▸ Edit Adjustment… (and the Properties
+            // panel's "Open editor…", the same intent) on a Color Lookup
+            // layer reopens its dialog — the built-in looks and the .cube
+            // loader — on the layer's own table; confirming edits the layer
+            // in place. Every other adjustment layer falls through to the
+            // bridge, which reveals the Properties panel as before.
+            ui::menu::MenuAction::EditAdjustmentLayer => match adjustment_layer_dialog(editor) {
+                Some(dialog) => {
+                    self.open(dialog);
+                    true
+                }
+                None => false,
+            },
             // Image ▸ Rotation ▸ Arbitrary… asks for the angle.
             ui::menu::MenuAction::RotateCanvas(ui::menu::CanvasRotation::Arbitrary) => {
                 self.open(ActiveDialog::Rotation(
@@ -927,8 +940,45 @@ impl DialogHost {
         // in place of the defaults, and lands as the same single undo step.
         if let ActiveDialog::Adjustment(dialog) = active {
             match dialog.show(ctx, sampler) {
-                DialogOutcome::Open => {}
+                // W4-E: Color Lookup's "Load .cube file" asks the host for a
+                // file; the dialog parses it and shows why when it cannot.
+                DialogOutcome::Open => {
+                    if dialog.take_lut_file_request() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("3D LUT", &["cube", "CUBE"])
+                            .set_title("Load Color Lookup")
+                            .pick_file()
+                        {
+                            let name = path
+                                .file_stem()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .unwrap_or_default();
+                            match std::fs::read_to_string(&path) {
+                                Ok(text) => {
+                                    let _ = dialog.load_cube_text(&name, &text);
+                                }
+                                Err(e) => dialog.set_lut_error(e.to_string()),
+                            }
+                        }
+                    }
+                }
                 DialogOutcome::Cancelled => self.active = None,
+                // Opened on an adjustment layer: the confirmed parameters
+                // replace that layer's, as one kind edit (one undo step).
+                DialogOutcome::Confirmed(_) if dialog.edit_layer().is_some() => {
+                    if let Some(layer) = dialog.edit_layer() {
+                        out.layer_kind.push(crate::chrome::KindEdit {
+                            layer,
+                            kind: Box::new(layer_model::LayerKind::Adjustment(
+                                layer_model::AdjustmentLayer {
+                                    kind: dialog.kind().clone(),
+                                },
+                            )),
+                            gesture: None,
+                        });
+                    }
+                    self.active = None;
+                }
                 DialogOutcome::Confirmed(_) => {
                     let invocation = dialog.invocation();
                     let id = invocation.id;
@@ -1362,12 +1412,54 @@ fn filter_dialog_for(editor: &crate::Editor, id: ui::menu::FilterId) -> Option<A
 /// confirmation could not edit. The preview source is the same buffer the
 /// filter dialogs preview against; the dialog bounds it itself.
 fn adjustment_dialog(editor: &crate::Editor, id: AdjustmentId) -> Option<ActiveDialog> {
+    // Desaturate and Equalize ask nothing (W4-E): the pick falls through to
+    // the bridge, which applies them on the click.
+    if !id.has_dialog() {
+        return None;
+    }
     pixel_layer_available(editor)?;
     let source = crate::menu_bridge::filter_source(editor)?;
     let space = editor.active()?.document.meta.color_space.clone();
     Some(ActiveDialog::Adjustment(Box::new(AdjustmentDialog::new(
         id, source, space,
     ))))
+}
+
+/// W4-E round 2: the dialog for the active Color Lookup layer's own table,
+/// previewing over the composite with that layer hidden (what the layer
+/// adjusts). `None` when the active layer is not a Color Lookup adjustment
+/// layer.
+fn adjustment_layer_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
+    let open = editor.active()?;
+    let layer = open.document.active_layer()?;
+    let layer_model::LayerKind::Adjustment(adjustment) = &open.document.layers.get(layer)?.kind
+    else {
+        return None;
+    };
+    // Only Color Lookup for now: its table cannot be chosen anywhere else.
+    // The other dialog-only kinds keep the Properties road — Curves' dialog
+    // resamples a curve to five points, which would lose a layer's own.
+    if !matches!(
+        adjustment.kind,
+        layer_model::AdjustmentKind::ColorLookup { .. }
+    ) {
+        return None;
+    }
+    let mut beneath = open.document.clone();
+    beneath.layers.get_mut(layer)?.visible = false;
+    let (w, h) = (open.document.width(), open.document.height());
+    let canvas = compositor::composite_region(
+        &beneath,
+        &open.tiles,
+        open.canvas_rect(),
+        0,
+        compositor::CompositeOptions::default(),
+    )
+    .ok()?;
+    let space = open.document.meta.color_space.clone();
+    let source = filters::FilterBuffer::from_rgba8(w, h, &canvas.to_rgba8(&space)).ok()?;
+    let dialog = AdjustmentDialog::for_layer(layer, adjustment.kind.clone(), source, space)?;
+    Some(ActiveDialog::Adjustment(Box::new(dialog)))
 }
 
 /// Card 060: a [`RefineMaskDialog`] over the active layer's RAW pixels
@@ -1643,6 +1735,15 @@ mod tests {
         );
         for id in AdjustmentId::ALL {
             host.close();
+            if !id.has_dialog() {
+                // Desaturate and Equalize apply on the click, as in Photopea.
+                assert!(
+                    !host.open_for_menu_action(&ui::menu::MenuAction::ApplyAdjustment(*id), &ed),
+                    "{id:?} opened a dialog"
+                );
+                assert!(!host.is_open());
+                continue;
+            }
             assert!(
                 host.open_for_menu_action(&ui::menu::MenuAction::ApplyAdjustment(*id), &ed),
                 "{id:?} opened no dialog"

@@ -55,6 +55,30 @@
 //! * **Precise Cursor** — a crosshair at the pointer while it is over the
 //!   canvas and not over a panel or a menu.
 //!
+//! # The pointer over the canvas (W4-C)
+//!
+//! The `ui` host's `CanvasView::show` is where the brush ring, the per-tool
+//! cursor and the right-click menu live, and the application never calls it.
+//! So they are here too, gated on the pointer being over the bare canvas —
+//! not a panel, a ruler gutter (an egui area while unlocked guides can be
+//! pulled from it, and left out by its rectangle while Rulers is on
+//! otherwise), a guide band, a menu — and no modal up:
+//!
+//! * **The cursor** — [`ui::canvas::cursor_for_tool_id`] for the tool that
+//!   is acting (the hand while Space is held), with View ▸ Precise Cursor as
+//!   the precise toggle: a grab hand for the Hand tool (closed mid-drag, and
+//!   for a middle-button pan under any tool), the zoom glass (out with Alt),
+//!   the move arrows, the I-beam for Type. Set with `ctx.set_cursor_icon`,
+//!   which egui-winit hands the platform.
+//! * **The brush ring** — for every tool whose cursor is the brush ring, the
+//!   [`brush_cursor::build`] outline at the brush's size times the zoom, and
+//!   the hardness ring inside it; the system pointer is hidden under it.
+//! * **The canvas context menu** — a right-click opens
+//!   [`ui::context_menu`]'s canvas menu at the pointer. The shell does not
+//!   route the right button to the tool (`shell::pointer_button`), so this is
+//!   the one thing it does on the canvas; the rows post intents the chrome
+//!   harvests through `Chrome::route` the same frame.
+//!
 //! **Selection Edges** is not painted here: the marching ants are GPU
 //! segments `Shell::redraw` gets from `Chrome::selection_ants`, which returns
 //! nothing while the flag is off.
@@ -74,8 +98,9 @@ use design::Space;
 use glam::Vec2;
 use ui::canvas::geom::{from_pos2, to_pos2};
 use ui::canvas::{
-    paint, rulers, Axis, CanvasStyle, DocRect, GuideDrag, GuideGesture, GuideGrab, Guides,
-    PanelInsets, RulerSpec, SnapHit, Viewport,
+    brush_cursor, cursor_for_tool_id, paint, rulers, Axis, CanvasCursor, CanvasStyle,
+    CursorOverride, DocRect, GuideDrag, GuideGesture, GuideGrab, Guides, PanelInsets, RulerSpec,
+    SnapHit, Viewport,
 };
 use ui::ViewFlag;
 
@@ -146,6 +171,13 @@ pub struct ExtrasReport {
     pub precise_cursor: bool,
     /// A guide drag is in progress.
     pub dragging_guide: bool,
+    /// The cursor installed for the pointer over the canvas, or `None` when
+    /// the pointer is not the canvas's (a panel, a menu, a modal, outside).
+    pub cursor: Option<CanvasCursor>,
+    /// The brush ring was painted at the pointer.
+    pub brush_ring: bool,
+    /// A right-click on the canvas opened the canvas context menu.
+    pub context_menu: bool,
 }
 
 impl CanvasExtras {
@@ -355,8 +387,94 @@ impl CanvasExtras {
             }
         }
 
+        // ---- the tool's cursor, the brush ring, the context menu (W4-C) ----
+        // The ruler gutters are egui areas only while unlocked guides can be
+        // pulled from them (`drive_guides`); with Guides off or locked they
+        // are painted but own no area, so they are left out by rectangle.
+        let gutters = if rulers_on {
+            rulers::gutters(content, style.ruler_thickness_pt)
+        } else {
+            [egui::Rect::NOTHING; 2]
+        };
+        let on_canvas = pointer.filter(|p| {
+            let at = to_pos2(*p);
+            !over_chrome
+                && !modal_open
+                && content.contains(at)
+                && !gutters.iter().any(|g| g.contains(at))
+        });
+        if let Some(p) = on_canvas {
+            let cursor = self.tool_cursor(ctx, editor, flags.get(ViewFlag::PreciseCursor));
+            ctx.set_cursor_icon(cursor.to_egui());
+            report.cursor = Some(cursor);
+            if cursor == CanvasCursor::BrushOutline {
+                let brush = editor.brush_for(editor.effective_tool());
+                let at = camera.doc_of_screen_pt(&viewport, p);
+                // A mouse has no pressure: the ring is the full-size dab.
+                let ring = brush_cursor::build(&brush, 1.0, at, &camera, &viewport);
+                paint::brush(&painter, &ring, &style);
+                let inner = brush_cursor::hardness_ring(&ring, brush.hardness);
+                if !inner.is_empty() {
+                    let points: Vec<egui::Pos2> = inner.into_iter().map(to_pos2).collect();
+                    // The outer ring's two strokes: a base for contrast
+                    // under the over-colour hairline.
+                    painter.add(egui::Shape::closed_line(
+                        points.clone(),
+                        style.thick(style.brush_ring_base),
+                    ));
+                    painter.add(egui::Shape::closed_line(
+                        points,
+                        style.hairline(style.brush_ring_over),
+                    ));
+                }
+                report.brush_ring = !ring.outline.is_empty();
+            }
+            let right_click = ctx.input(|i| {
+                if i.pointer.button_clicked(egui::PointerButton::Secondary) {
+                    i.pointer.interact_pos()
+                } else {
+                    None
+                }
+            });
+            if let Some(pos) = right_click {
+                ui::context_menu::open(workspace, ui::context_menu::ContextTarget::Canvas, pos);
+                report.context_menu = true;
+            }
+        }
+
         self.last = report;
         report
+    }
+
+    /// The cursor the acting tool shows over the canvas this frame.
+    ///
+    /// The tool's own ([`cursor_for_tool_id`], `precise` swapping the
+    /// pictorial ones for a crosshair), with the gestures that override it: a
+    /// held middle button is a pan under any tool, the Hand closes while its
+    /// press on the canvas is held, and Alt turns the zoom glass round.
+    fn tool_cursor(&self, ctx: &egui::Context, editor: &Editor, precise: bool) -> CanvasCursor {
+        let tool = editor.effective_tool();
+        let (primary, middle, alt) = ctx.input(|i| {
+            (
+                i.pointer.primary_down(),
+                i.pointer.middle_down(),
+                i.modifiers.alt,
+            )
+        });
+        let base = cursor_for_tool_id(tool, precise);
+        if middle {
+            return ui::canvas::cursor::resolve(base, CursorOverride::Hand { dragging: true });
+        }
+        match tool {
+            tools::ToolId::Hand => ui::canvas::cursor::resolve(
+                base,
+                CursorOverride::Hand {
+                    dragging: primary && self.canvas_press,
+                },
+            ),
+            tools::ToolId::Zoom if alt => CanvasCursor::ZoomOut,
+            _ => base,
+        }
     }
 
     /// The box a plain Move-tool drag is carrying this frame, in document
@@ -623,4 +741,307 @@ fn smart_guide_hits(doc: &OpenDocument, corners: &[Vec2; 4], policy: SnapPolicy)
             distance_pt: 0.0,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    //! W4-C through the real chrome: `Chrome::ui` on a headless egui frame,
+    //! with the pointer where a user's would be, reading back the painted
+    //! shapes and the platform output egui-winit would hand the OS.
+    use crate::chrome::{install_theme, Chrome};
+    use crate::dialogs::ScriptedDialogs;
+    use crate::editor::Editor;
+    use crate::prefs::{AppPaths, Preferences};
+    use crate::recent::RecentFiles;
+    use tools::ToolId;
+
+    /// The window is 1400x900 points; an 8x8 document centred at zoom 4
+    /// puts document (4, 4) at the window's centre, well clear of the docks.
+    const CENTRE: egui::Pos2 = egui::pos2(700.0, 450.0);
+    const ZOOM: f32 = 4.0;
+
+    struct Rig {
+        _dir: tempfile::TempDir,
+        editor: Editor,
+        chrome: Chrome,
+        ctx: egui::Context,
+    }
+
+    fn rig(tool: ToolId) -> Rig {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.png");
+        std::fs::write(
+            &p,
+            raster::encode(raster::ExportFormat::Png, 8, 8, &[9u8; 8 * 8 * 4]).unwrap(),
+        )
+        .unwrap();
+        let mut editor = Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        editor.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+        editor.open_path(&p).unwrap();
+        {
+            let doc = editor.active_mut().unwrap();
+            doc.set_viewport(glam::Vec2::new(1400.0, 900.0));
+            doc.camera.zoom = ZOOM;
+            doc.camera.center = glam::Vec2::new(4.0, 4.0);
+        }
+        editor.set_tool(tool);
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut rig = Rig {
+            _dir: dir,
+            editor,
+            chrome: Chrome::new(),
+            ctx,
+        };
+        // Let the layout settle before the pointer arrives.
+        for _ in 0..3 {
+            rig.step(Vec::new());
+        }
+        rig
+    }
+
+    impl Rig {
+        /// One frame with `events`; the chrome's commands, actions and menu
+        /// picks are applied as the shell applies them.
+        fn step(&mut self, events: Vec<egui::Event>) -> egui::FullOutput {
+            let mut out = None;
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let editor = &mut self.editor;
+            let chrome = &mut self.chrome;
+            let full = self.ctx.run(input, |ctx| {
+                out = Some(chrome.ui(ctx, editor));
+            });
+            let out = out.expect("a frame ran");
+            for command in out.commands {
+                self.editor.apply_command(command);
+            }
+            for action in out.actions {
+                let _ = self.editor.dispatch(action);
+            }
+            // A menu row's pick, performed as `Shell` performs it.
+            for action in out.menu {
+                let _ = crate::menu_bridge::perform(action, &mut self.editor);
+            }
+            full
+        }
+
+        fn hover(&mut self, at: egui::Pos2) -> egui::FullOutput {
+            let _ = self.step(vec![egui::Event::PointerMoved(at)]);
+            self.step(vec![egui::Event::PointerMoved(at)])
+        }
+
+        fn click(&mut self, at: egui::Pos2, button: egui::PointerButton) -> egui::FullOutput {
+            let press = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            };
+            let _ = self.step(vec![egui::Event::PointerMoved(at)]);
+            self.step(vec![press(true), press(false)])
+        }
+    }
+
+    /// The mean radius about `centre` of every closed ring painted in the
+    /// brush ring's over-colour.
+    fn rings(full: &egui::FullOutput, ctx: &egui::Context, centre: egui::Pos2) -> Vec<f32> {
+        let over = ui::canvas::CanvasStyle::from_context(ctx).brush_ring_over;
+        full.shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Path(p)
+                    if p.closed
+                        && p.points.len() == ui::canvas::brush_cursor::OUTLINE_SEGMENTS
+                        && p.stroke.color == egui::epaint::ColorMode::Solid(over) =>
+                {
+                    let sum: f32 = p.points.iter().map(|q| (*q - centre).length()).sum();
+                    Some(sum / p.points.len() as f32)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_brush_tool_paints_a_ring_of_size_times_zoom_at_the_pointer() {
+        let mut rig = rig(ToolId::Brush);
+        let brush = tools::BrushSettings {
+            size: 20.0,
+            hardness: 0.5,
+            size_pressure: false,
+            ..rig.editor.brush_for(ToolId::Brush)
+        };
+        rig.editor.set_brush(brush);
+        let full = rig.hover(CENTRE);
+        let radii = rings(&full, &rig.ctx, CENTRE);
+        let expected = 20.0 * ZOOM / 2.0;
+        assert!(
+            radii.iter().any(|r| (r - expected).abs() < 0.5),
+            "a ring of radius {expected} at the pointer: {radii:?}"
+        );
+        assert!(
+            radii.iter().any(|r| (r - expected * 0.5).abs() < 0.5),
+            "the hardness ring at half the radius: {radii:?}"
+        );
+        let report = rig.chrome.extras_report();
+        assert!(report.brush_ring);
+        assert_eq!(report.cursor, Some(ui::canvas::CanvasCursor::BrushOutline));
+        // The ring *is* the cursor: the system pointer is hidden under it.
+        assert_eq!(full.platform_output.cursor_icon, egui::CursorIcon::None);
+
+        // Off the canvas, over the left tool palette: no ring at all.
+        let off = egui::pos2(4.0, 450.0);
+        let full = rig.hover(off);
+        assert!(rings(&full, &rig.ctx, off).is_empty());
+        assert!(!rig.chrome.extras_report().brush_ring);
+    }
+
+    /// The first point along `line` (x or y from 0 up) where the extras put
+    /// the tool's cursor, or `None` if none does within 300pt.
+    fn first_on_canvas(rig: &mut Rig, along_x: bool) -> Option<f32> {
+        (0..300).map(|i| i as f32).find(|&v| {
+            let at = if along_x {
+                egui::pos2(v, CENTRE.y)
+            } else {
+                egui::pos2(CENTRE.x, v)
+            };
+            let _ = rig.hover(at);
+            rig.chrome.extras_report().cursor.is_some()
+        })
+    }
+
+    #[test]
+    fn the_ruler_gutters_are_not_canvas_with_guides_off() {
+        // Rulers off: where the bare canvas starts on each edge.
+        let mut rig = rig(ToolId::Brush);
+        for (flag, on) in [(ui::ViewFlag::Rulers, false), (ui::ViewFlag::Guides, false)] {
+            rig.chrome.emit(ui::Intent::SetViewFlag { flag, on });
+        }
+        let _ = rig.step(Vec::new());
+        let left = first_on_canvas(&mut rig, true).expect("the canvas starts on the left");
+        let top = first_on_canvas(&mut rig, false).expect("the canvas starts at the top");
+
+        // Rulers on, Guides off: the gutters own no egui area, and still are
+        // not canvas — no ring, no tool cursor, no canvas menu on a right-click.
+        rig.chrome.emit(ui::Intent::SetViewFlag {
+            flag: ui::ViewFlag::Rulers,
+            on: true,
+        });
+        let _ = rig.step(Vec::new());
+        let _ = rig.step(Vec::new());
+        let t = ui::canvas::CanvasStyle::from_context(&rig.ctx).ruler_thickness_pt;
+        assert!(t > 1.0, "a ruler of some thickness: {t}");
+        for at in [
+            egui::pos2(left + t / 2.0, CENTRE.y),
+            egui::pos2(CENTRE.x, top + t / 2.0),
+        ] {
+            let full = rig.hover(at);
+            let report = rig.chrome.extras_report();
+            assert!(report.rulers, "the rulers are painted");
+            assert_eq!(
+                report.cursor, None,
+                "no tool cursor over the gutter at {at:?}"
+            );
+            assert!(
+                !report.brush_ring,
+                "no brush ring over the gutter at {at:?}"
+            );
+            assert!(rings(&full, &rig.ctx, at).is_empty());
+            let _ = rig.click(at, egui::PointerButton::Secondary);
+            assert!(
+                !rig.chrome.extras_report().context_menu,
+                "a right-click on the gutter at {at:?} is not the canvas menu"
+            );
+        }
+        // Just past the gutters it is canvas again (the scan is in whole
+        // points, the edges need not be).
+        for (edge, along_x) in [(left, true), (top, false)] {
+            let inside = first_on_canvas(&mut rig, along_x).expect("canvas past the gutter");
+            assert!(
+                (inside - (edge + t)).abs() <= 1.0,
+                "canvas resumes at {inside}, the gutter ends at {}",
+                edge + t
+            );
+        }
+    }
+
+    #[test]
+    fn each_tool_sets_its_own_cursor_over_the_canvas() {
+        for (tool, icon) in [
+            (ToolId::Hand, egui::CursorIcon::Grab),
+            (ToolId::Zoom, egui::CursorIcon::ZoomIn),
+            (ToolId::Move, egui::CursorIcon::Move),
+            (ToolId::Type, egui::CursorIcon::Text),
+        ] {
+            let mut rig = rig(tool);
+            let full = rig.hover(CENTRE);
+            assert_eq!(full.platform_output.cursor_icon, icon, "{tool:?}");
+        }
+    }
+
+    #[test]
+    fn a_right_click_on_the_canvas_opens_its_menu_and_a_row_performs() {
+        let mut rig = rig(ToolId::Brush);
+        assert!(matches!(
+            rig.editor.active().unwrap().document.selection,
+            editor_core::Selection::None
+        ));
+        let _ = rig.click(CENTRE, egui::PointerButton::Secondary);
+        assert!(rig.chrome.extras_report().context_menu);
+        // The drawer shows it; one quiet frame lays it out.
+        let _ = rig.step(Vec::new());
+        let actions: Vec<ui::menu::MenuAction> =
+            ui::context_menu::canvas_items(&ui::MenuContext::default())
+                .into_iter()
+                .map(|i| i.action)
+                .collect();
+        for i in 0..actions.len() {
+            assert!(
+                rig.ctx
+                    .read_response(ui::context_menu::ids::context_item(i))
+                    .is_some(),
+                "row {i} of the canvas menu was drawn"
+            );
+        }
+        let select_all = actions
+            .iter()
+            .position(|a| *a == ui::menu::MenuAction::SelectAll)
+            .expect("the canvas menu offers Select All");
+        let row = rig
+            .ctx
+            .read_response(ui::context_menu::ids::context_item(select_all))
+            .unwrap()
+            .rect
+            .center();
+        let _ = rig.click(row, egui::PointerButton::Primary);
+        let _ = rig.step(Vec::new());
+        assert!(
+            !matches!(
+                rig.editor.active().unwrap().document.selection,
+                editor_core::Selection::None
+            ),
+            "choosing the row selected the canvas"
+        );
+        // `read_response` answers from the frame before: one more frame so
+        // the one it reads is a frame the menu was not drawn in.
+        let _ = rig.step(Vec::new());
+        assert!(
+            rig.ctx
+                .read_response(ui::context_menu::ids::context_item(0))
+                .is_none(),
+            "the menu closed after the choice"
+        );
+    }
 }

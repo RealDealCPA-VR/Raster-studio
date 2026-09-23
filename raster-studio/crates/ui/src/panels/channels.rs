@@ -235,6 +235,17 @@ pub struct PathRow {
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct PathsState {
     pub selected: Option<LayerId>,
+    /// W4-I: Photoshop's Work Path — a temporary path that belongs to no
+    /// layer, in document pixels. Fed by the pen's uncommitted path while
+    /// the pen is authoring one ([`PathsState::follow_pen`]), or made by the
+    /// footer's "work path from selection"; saved to a path layer by the
+    /// footer's New.
+    pub work_path: Option<vector::Path>,
+    /// The Work Path row is the selected one (rather than a layer's path).
+    pub work_selected: bool,
+    /// The Work Path is the pen's live path (so it goes when the pen's
+    /// session ends), not one the footer made.
+    pub work_from_pen: bool,
 }
 
 impl PathsState {
@@ -267,6 +278,47 @@ impl PathsState {
         "Draw with a shape or pen tool to create a path"
     }
 
+    /// The selected path in document pixels: the Work Path when its row is
+    /// selected, otherwise the selected shape layer's path mapped through
+    /// that layer's transform. `None` when nothing is selected or the layer's
+    /// path data does not parse.
+    pub fn selected_path(&self, doc: &Document) -> Option<vector::Path> {
+        if self.work_selected {
+            return self.work_path.clone();
+        }
+        let id = self.selected?;
+        let layer = doc.layers.get(id)?;
+        let LayerKind::Shape(shape) = &layer.kind else {
+            return None;
+        };
+        let path = vector::parse_svg(&shape.path_svg).ok()?;
+        Some(path.transform(&crate::panels::paths::affine_of(layer.transform)))
+    }
+
+    /// W4-I: follow the pen's live session, as the shell publishes it
+    /// ([`tools::Tool::live_geometry`]). While the pen is authoring a path
+    /// the Work Path *is* that path, anchor for anchor. When the session
+    /// ends the Work Path it fed goes with it: a committed pen path has its
+    /// own row (the path layer the commit made), and a cancelled one is
+    /// gone. A Work Path the footer made from a selection is not touched.
+    pub fn follow_pen(&mut self, live: Option<&tools::SessionGeometry>) {
+        if let Some(tools::SessionGeometry::Path {
+            anchors, handles, ..
+        }) = live
+        {
+            if !anchors.is_empty() {
+                self.work_path = Some(pen_path(anchors, handles));
+                self.work_from_pen = true;
+                return;
+            }
+        }
+        if self.work_from_pen {
+            self.work_path = None;
+            self.work_selected = false;
+            self.work_from_pen = false;
+        }
+    }
+
     /// Drop a selection whose layer has left the document.
     pub fn prune(&mut self, doc: &Document) {
         if let Some(id) = self.selected {
@@ -275,6 +327,30 @@ impl PathsState {
             }
         }
     }
+}
+
+/// The path a pen session's anchors describe: `handles[i]` are anchor `i`'s
+/// absolute `[in, out]` control points, equal to the anchor when straight,
+/// so a segment is a line when both of its inner handles sit on their
+/// anchors and a cubic otherwise (the same rule as `tools::pen`).
+fn pen_path(anchors: &[glam::Vec2], handles: &[[glam::Vec2; 2]]) -> vector::Path {
+    let pt = |v: glam::Vec2| vector::Point::new(f64::from(v.x), f64::from(v.y));
+    let mut path = vector::Path::new();
+    let Some(first) = anchors.first() else {
+        return path;
+    };
+    path.move_to(pt(*first));
+    for i in 1..anchors.len() {
+        let (a, b) = (anchors[i - 1], anchors[i]);
+        let out = handles.get(i - 1).map_or(a, |h| h[1]);
+        let into = handles.get(i).map_or(b, |h| h[0]);
+        if out == a && into == b {
+            path.line_to(pt(b));
+        } else {
+            path.curve_to(pt(out), pt(into), pt(b));
+        }
+    }
+    path
 }
 
 #[cfg(test)]

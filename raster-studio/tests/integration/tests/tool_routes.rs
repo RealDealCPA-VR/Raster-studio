@@ -19,7 +19,7 @@ use app_shell::action::Action;
 use app_shell::edit_target::EditTargetKind;
 use app_shell::editor::Editor;
 use app_shell::tool_input::{PointerOutcome, ToolPointer};
-use app_shell::{menu_bridge, ChromeOutput};
+use app_shell::{menu_bridge, Chrome, ChromeOutput};
 use editor_core::Selection;
 use glam::{IVec2, Vec2};
 use integration_tests::app::{self, DocExt};
@@ -1468,6 +1468,736 @@ fn refine_boundary_regrades_the_mask_band_and_leaves_the_layer_pixels_alone() {
     );
 }
 
+// ------------------------------------------------------------- W4-G tools --
+
+/// The opened layer's own transform, as the document holds it.
+fn layer_transform(ed: &Editor, layer: layer_model::LayerId) -> glam::Affine2 {
+    ed.active()
+        .unwrap()
+        .document
+        .layers
+        .get(layer)
+        .expect("the layer exists")
+        .transform
+}
+
+#[test]
+fn ruler_drag_measures_without_editing_then_enter_straightens_the_layer_as_one_step() {
+    use ui::canvas::PointerPhase;
+    let id = ToolId::Ruler;
+    let (_dir, mut ed) = open(&halves);
+    let layer = app::the_opened_layer(&ed);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+    let (a, b) = (v(20.0, 70.0), v(100.0, 54.0));
+
+    // The drag: the shell's readout route shows the line's extent while the
+    // button is down, and takes it down on release.
+    let down = app::shell_pointer(&mut pointer, &mut ed, PointerPhase::Down, a);
+    let moved = app::shell_pointer(&mut pointer, &mut ed, PointerPhase::Move, b);
+    let (_, readout) = pointer.live_readout().expect("the ruler shows its extent");
+    assert_eq!((readout.width_px, readout.height_px), (80.0, 16.0));
+    let up = app::shell_pointer(&mut pointer, &mut ed, PointerPhase::Up, b);
+    all_reached(id, &[down, moved, up]);
+    assert!(
+        pointer.live_readout().is_none(),
+        "the label outlived the drag"
+    );
+    assert_eq!(depth(&ed), d0, "measuring is not an edit");
+    assert_eq!(composite(&mut ed), before, "measuring moved pixels");
+    assert!(
+        pointer.has_pending_commit(),
+        "the measurement is not held for Straighten Layer"
+    );
+
+    // The held measurement, through the chrome the shell publishes it to: the
+    // Info panel's Distance and Angle rows, and the line over the canvas.
+    let mut chrome = info_chrome();
+    let (frame, painted) = chrome_frame(&mut chrome, &mut pointer, &mut ed);
+    let rows = info_tool_rows(&chrome);
+    assert_eq!(
+        rows,
+        vec![
+            ("Distance", "81.6 px".to_owned()),
+            ("Angle", "11.3°".to_owned())
+        ],
+        "the Info panel does not show the measurement"
+    );
+    assert!(
+        drawn_info_row(&frame, &painted, "Distance", "81.6 px")
+            && drawn_info_row(&frame, &painted, "Angle", "11.3°"),
+        "the Info panel did not draw the Distance and Angle rows"
+    );
+    let zoom = ed.active().unwrap().camera.zoom;
+    assert!(
+        has_segment(&painted, (b - a) * zoom),
+        "the ruler line was not drawn over the canvas"
+    );
+
+    // Enter: Straighten Layer — one undoable rotation that lays the measured
+    // line level.
+    let commit = pointer.commit(&mut ed);
+    assert!(commit.had_pending);
+    assert_eq!(commit.failed, None, "{commit:?}");
+    assert_eq!(commit.steps, 1, "straightening is one step: {commit:?}");
+    assert_eq!(depth(&ed), d0 + 1);
+    let t = layer_transform(&ed, layer);
+    let (a2, b2) = (t.transform_point2(a), t.transform_point2(b));
+    assert!(
+        (a2.y - b2.y).abs() < 1e-3,
+        "the measured line is not level after straightening: {a2:?} {b2:?}"
+    );
+    assert_ne!(composite(&mut ed), before, "the layer did not turn");
+    assert!(
+        !pointer.has_pending_commit(),
+        "the measurement was consumed"
+    );
+    chrome_frame(&mut chrome, &mut pointer, &mut ed);
+    assert!(
+        info_tool_rows(&chrome).is_empty(),
+        "the Info rows outlived the measurement"
+    );
+
+    undo(&mut ed);
+    assert_eq!(depth(&ed), d0);
+    assert_eq!(layer_transform(&ed, layer), glam::Affine2::IDENTITY);
+    assert_eq!(composite(&mut ed), before, "undo did not restore the layer");
+}
+
+/// Publish the pointer's live geometry through the production publisher —
+/// the call `shell.rs` makes after every pointer sample — then draw three
+/// chrome frames (the first is where egui learns sizes and the posted layout
+/// lands) and return every shape the last one painted, `Shape::Vec`s flattened.
+fn chrome_frame(
+    chrome: &mut Chrome,
+    pointer: &mut ToolPointer,
+    ed: &mut Editor,
+) -> (egui::Context, Vec<egui::Shape>) {
+    fn flat(shapes: Vec<egui::Shape>, out: &mut Vec<egui::Shape>) {
+        for s in shapes {
+            match s {
+                egui::Shape::Vec(inner) => flat(inner, out),
+                other => out.push(other),
+            }
+        }
+    }
+    let geometry = pointer.live_geometry();
+    let active = ed.active().map(|d| d.id());
+    chrome.publish_tool_geometry(geometry, active);
+    let ctx = egui::Context::default();
+    app_shell::chrome::install_theme(&ctx, design::Theme::Dark);
+    let mut painted = Vec::new();
+    for _ in 0..3 {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..Default::default()
+        };
+        let output = ctx.run(input, |ctx| {
+            chrome.ui(ctx, ed);
+        });
+        painted.clear();
+        flat(
+            output.shapes.into_iter().map(|c| c.shape).collect(),
+            &mut painted,
+        );
+    }
+    (ctx, painted)
+}
+
+/// A chrome with the Info panel on screen, alone in the Minimal layout, the
+/// way a user shows it from the Window menu (in the default layout it is a
+/// background tab behind the Navigator).
+fn info_chrome() -> Chrome {
+    let mut chrome = Chrome::new();
+    chrome.emit(ui::Intent::ApplyLayout(ui::LayoutId::Minimal));
+    chrome.emit(ui::Intent::SetPanelOpen {
+        panel: ui::dock::PanelId::Info,
+        open: true,
+    });
+    chrome
+}
+
+/// The Info panel's tool rows (Ruler, Colour Sampler) as the chrome holds
+/// them — the rows `ui::view::docks` draws after the fixed five.
+fn info_tool_rows(chrome: &Chrome) -> Vec<(&'static str, String)> {
+    chrome
+        .workspace()
+        .info
+        .tool_readouts()
+        .into_iter()
+        .map(|r| (r.label, r.value))
+        .collect()
+}
+
+/// Whether the frame drew the Info panel row `label` reading `value`: the
+/// row's value label (`dock::ids::info_value`) was laid out, and a painted
+/// text with exactly that value sits inside it.
+fn drawn_info_row(
+    frame: &egui::Context,
+    painted: &[egui::Shape],
+    label: &'static str,
+    value: &str,
+) -> bool {
+    let Some(row) = frame.read_response(ui::dock::ids::info_value(label)) else {
+        return false;
+    };
+    painted.iter().any(|s| match s {
+        egui::Shape::Text(t) => t.galley.text() == value && row.rect.expand(1.0).contains(t.pos),
+        _ => false,
+    })
+}
+
+/// A painted straight segment whose screen extent is `extent`.
+fn has_segment(painted: &[egui::Shape], extent: Vec2) -> bool {
+    painted.iter().any(|s| match s {
+        egui::Shape::LineSegment { points, .. } => {
+            let d = points[1] - points[0];
+            (d.x - extent.x).abs() < 0.5 && (d.y - extent.y).abs() < 0.5
+        }
+        _ => false,
+    })
+}
+
+/// The centres of every painted circle outline.
+fn circle_centres(painted: &[egui::Shape]) -> Vec<egui::Pos2> {
+    painted
+        .iter()
+        .filter_map(|s| match s {
+            egui::Shape::Circle(c) => Some(c.center),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether some two painted circles sit `offset` apart on screen.
+fn circles_apart(painted: &[egui::Shape], offset: Vec2) -> bool {
+    let centres = circle_centres(painted);
+    centres.iter().any(|p| {
+        centres.iter().any(|q| {
+            let d = *q - *p;
+            (d.x - offset.x).abs() < 0.5 && (d.y - offset.y).abs() < 0.5
+        })
+    })
+}
+
+#[test]
+fn color_sampler_clicks_place_points_the_info_panel_reads_and_the_canvas_marks() {
+    let id = ToolId::ColorSampler;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+    let points = [v(10.0, 10.0), v(100.0, 10.0), v(64.0, 100.0)];
+    for at in points {
+        let outcomes = click(&mut pointer, &mut ed, at);
+        all_reached(id, &outcomes);
+        assert!(
+            outcomes.iter().all(|o| o.steps == 0 && o.picked.is_none()),
+            "{outcomes:?}"
+        );
+    }
+    assert_eq!(pointer.live_tool(), Some(id));
+    assert_eq!(depth(&ed), d0, "placing samplers is not an edit");
+    assert_eq!(composite(&mut ed), before);
+
+    // The three points, their colours read off the composite, in the Info
+    // panel's #1..#3 rows; a numbered marker for each over the canvas.
+    let mut chrome = info_chrome();
+    let (frame, painted) = chrome_frame(&mut chrome, &mut pointer, &mut ed);
+    assert_eq!(
+        info_tool_rows(&chrome),
+        vec![
+            ("#1", "255, 0, 0 at 10, 10".to_owned()),
+            ("#2", "0, 0, 255 at 100, 10".to_owned()),
+            ("#3", "0, 0, 255 at 64, 100".to_owned()),
+        ],
+        "the Info panel does not show the sample points"
+    );
+    assert!(
+        drawn_info_row(&frame, &painted, "#1", "255, 0, 0 at 10, 10")
+            && drawn_info_row(&frame, &painted, "#3", "0, 0, 255 at 64, 100"),
+        "the Info panel did not draw the sampler rows"
+    );
+    let zoom = ed.active().unwrap().camera.zoom;
+    assert!(
+        circles_apart(&painted, (points[1] - points[0]) * zoom)
+            && circles_apart(&painted, (points[2] - points[1]) * zoom),
+        "the sample points are not marked on the canvas: {:?}",
+        circle_centres(&painted)
+    );
+
+    // Alt-click takes the first one away; the rows renumber.
+    let outcomes = alt_click(&mut pointer, &mut ed, points[0]);
+    all_reached(id, &outcomes);
+    chrome_frame(&mut chrome, &mut pointer, &mut ed);
+    assert_eq!(
+        info_tool_rows(&chrome),
+        vec![
+            ("#1", "0, 0, 255 at 100, 10".to_owned()),
+            ("#2", "0, 0, 255 at 64, 100".to_owned()),
+        ]
+    );
+    assert_eq!(depth(&ed), d0);
+
+    // The points are the document's: switch to another tool and use it (the
+    // pointer rebuilds its live tool), and the rows and the markers stay.
+    select_tool(&mut ed, ToolId::Ruler);
+    let outcomes = drag(&mut pointer, &mut ed, &[v(5.0, 120.0), v(40.0, 120.0)]);
+    all_reached(ToolId::Ruler, &outcomes);
+    assert_eq!(pointer.live_tool(), Some(ToolId::Ruler));
+    let (_, painted) = chrome_frame(&mut chrome, &mut pointer, &mut ed);
+    let rows = info_tool_rows(&chrome);
+    assert!(
+        rows.contains(&("#1", "0, 0, 255 at 100, 10".to_owned()))
+            && rows.contains(&("#2", "0, 0, 255 at 64, 100".to_owned())),
+        "a tool switch lost the sample points: {rows:?}"
+    );
+    assert!(
+        circles_apart(&painted, (points[2] - points[1]) * zoom),
+        "a tool switch took the sample markers off the canvas: {:?}",
+        circle_centres(&painted)
+    );
+    // And back: the same points, grabbed rather than re-placed.
+    select_tool(&mut ed, id);
+    let outcomes = drag(&mut pointer, &mut ed, &[points[2], v(20.0, 100.0)]);
+    all_reached(id, &outcomes);
+    assert_eq!(
+        ed.active().unwrap().samplers(),
+        &[v(100.5, 10.5), v(20.5, 100.5)],
+        "the second tool instance did not see the first one's points"
+    );
+}
+
+/// Publish the pointer's geometry, settle three chrome frames on one context
+/// (the dock widths land on the second; the rects are read after the third),
+/// then press and release the primary button over the centre of the widget
+/// marked `id` — the frames a real click produces — and return every frame's
+/// output.
+fn chrome_click(
+    chrome: &mut Chrome,
+    pointer: &mut ToolPointer,
+    ed: &mut Editor,
+    id: egui::Id,
+) -> Vec<ChromeOutput> {
+    let geometry = pointer.live_geometry();
+    let active = ed.active().map(|d| d.id());
+    chrome.publish_tool_geometry(geometry, active);
+    let ctx = egui::Context::default();
+    app_shell::chrome::install_theme(&ctx, design::Theme::Dark);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
+    let mut frame = |events: Vec<egui::Event>| {
+        let input = egui::RawInput {
+            screen_rect: Some(screen),
+            events,
+            ..Default::default()
+        };
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(input, |ctx| {
+            out = chrome.ui(ctx, ed);
+        });
+        out
+    };
+    let mut outs = vec![frame(Vec::new()), frame(Vec::new()), frame(Vec::new())];
+    let rect = ctx
+        .read_response(id)
+        .unwrap_or_else(|| panic!("{id:?} was never drawn"))
+        .rect;
+    let pos = rect.center();
+    let button = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    outs.push(frame(vec![egui::Event::PointerMoved(pos), button(true)]));
+    outs.push(frame(vec![button(false)]));
+    outs.push(frame(Vec::new()));
+    outs
+}
+
+/// The Ruler options bar's Straighten Layer button, as drawn.
+fn straighten_button() -> egui::Id {
+    ui::view::ids::tool_option(ToolId::Ruler, "straighten")
+}
+
+#[test]
+fn ruler_straighten_layer_button_in_the_options_bar_straightens_as_one_step() {
+    let id = ToolId::Ruler;
+    let (_dir, mut ed) = open(&halves);
+    let layer = app::the_opened_layer(&ed);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+    let mut chrome = info_chrome();
+
+    // With nothing measured the button is there but does nothing.
+    let outs = chrome_click(&mut chrome, &mut pointer, &mut ed, straighten_button());
+    assert!(
+        outs.iter().all(|o| !o.confirm_tool),
+        "the button confirmed with no measurement"
+    );
+
+    let (a, b) = (v(20.0, 70.0), v(100.0, 54.0));
+    let outcomes = drag(&mut pointer, &mut ed, &[a, b]);
+    all_reached(id, &outcomes);
+    assert_eq!(depth(&ed), d0, "measuring is not an edit");
+
+    // The click: the options bar raises the confirm; the shell performs it
+    // through `Chrome::confirm_tool` (its chrome-output step).
+    let outs = chrome_click(&mut chrome, &mut pointer, &mut ed, straighten_button());
+    assert_eq!(
+        outs.iter().filter(|o| o.confirm_tool).count(),
+        1,
+        "one click, one confirm"
+    );
+    let commit = chrome.confirm_tool(&mut pointer, &mut ed);
+    assert!(commit.had_pending, "{commit:?}");
+    assert_eq!(commit.failed, None, "{commit:?}");
+    assert_eq!(commit.steps, 1, "straightening is one step: {commit:?}");
+    assert_eq!(depth(&ed), d0 + 1);
+    let t = layer_transform(&ed, layer);
+    let (a2, b2) = (t.transform_point2(a), t.transform_point2(b));
+    assert!(
+        (a2.y - b2.y).abs() < 1e-3,
+        "the measured line is not level: {a2:?} {b2:?}"
+    );
+    assert!(
+        chrome.workspace().info.measure.is_none(),
+        "the consumed measurement is still published"
+    );
+    undo(&mut ed);
+    assert_eq!(depth(&ed), d0);
+    assert_eq!(composite(&mut ed), before, "undo did not restore the layer");
+}
+
+#[test]
+fn history_brush_paints_the_opened_state_back_under_the_stroke_as_one_step() {
+    let id = ToolId::HistoryBrush;
+    // The document opened white; `open` then painted it red|blue as an edit.
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+    let outcomes = drag(&mut pointer, &mut ed, &[v(20.0, 64.0), v(100.0, 64.0)]);
+    all_reached(id, &outcomes);
+    assert_eq!(depth(&ed), d0 + 1, "one stroke, one step");
+    let after = composite(&mut ed);
+    for x in [30, 60, 70, 90] {
+        assert!(
+            near(px(&after, x, 64), WHITE, 2),
+            "({x}, 64) was not painted back to the opened white: {:?}",
+            px(&after, x, 64)
+        );
+    }
+    assert_eq!(px(&after, 30, 10), RED, "outside the stroke untouched");
+    assert_eq!(px(&after, 90, 10), BLUE, "outside the stroke untouched");
+    undo(&mut ed);
+    assert_eq!(depth(&ed), d0);
+    assert_eq!(
+        composite(&mut ed),
+        before,
+        "undo did not restore the stroke"
+    );
+}
+
+/// The History Brush's options as the shell hands them to every sample:
+/// `Chrome::tool_options`, converted at the boundary exactly as `shell.rs`
+/// converts them.
+fn history_brush_seed(chrome: &Chrome) -> Vec<(String, tools::ToolSetting)> {
+    chrome
+        .tool_options(ToolId::HistoryBrush)
+        .into_iter()
+        .map(|(key, value)| {
+            let setting = match value {
+                ui::OptionValue::Float(v) => tools::ToolSetting::Float(v),
+                ui::OptionValue::Int(v) => tools::ToolSetting::Int(v),
+                ui::OptionValue::Bool(v) => tools::ToolSetting::Bool(v),
+                ui::OptionValue::Choice(v) => tools::ToolSetting::Choice(v),
+                ui::OptionValue::Color(v) => tools::ToolSetting::Color(v),
+            };
+            (key, setting)
+        })
+        .collect()
+}
+
+/// One stroke through `ToolPointer::handle` with the options seed `seed`.
+fn seeded_stroke(
+    pointer: &mut ToolPointer,
+    ed: &mut Editor,
+    pts: &[Vec2],
+    seed: &[(String, tools::ToolSetting)],
+) -> Vec<PointerOutcome> {
+    use ui::canvas::PointerPhase;
+    let mut out = Vec::new();
+    for (i, p) in pts.iter().enumerate() {
+        let phase = if i == 0 {
+            PointerPhase::Down
+        } else {
+            PointerPhase::Move
+        };
+        let pos = app::shell_screen_pt(ed.active().unwrap(), p.x, p.y);
+        out.push(pointer.handle(ed, ui::canvas::PointerInput::at(phase, pos), false, seed));
+    }
+    let last = *pts.last().expect("a stroke has points");
+    let pos = app::shell_screen_pt(ed.active().unwrap(), last.x, last.y);
+    out.push(pointer.handle(
+        ed,
+        ui::canvas::PointerInput::at(PointerPhase::Up, pos),
+        false,
+        seed,
+    ));
+    out
+}
+
+#[test]
+fn history_brush_paints_from_the_state_picked_in_the_history_panel() {
+    let id = ToolId::HistoryBrush;
+    // Row 0: opened white. Row 1: `open` painted it red|blue. Row 2: grey.
+    let (_dir, mut ed) = open(&halves);
+    let layer = app::the_opened_layer(&ed);
+    ed.active_mut().unwrap().paint_canvas(layer, &mid_grey);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let d0 = depth(&ed);
+    assert_eq!(d0, 2, "the fixture's history");
+
+    // The History panel's source column, row 1: the click sets the brush's
+    // source and does not step the document through history.
+    let mut chrome = Chrome::new();
+    chrome.emit(ui::Intent::ApplyLayout(ui::LayoutId::Minimal));
+    chrome.emit(ui::Intent::SetPanelOpen {
+        panel: ui::dock::PanelId::History,
+        open: true,
+    });
+    let outs = chrome_click(
+        &mut chrome,
+        &mut pointer,
+        &mut ed,
+        ui::view::ids::history_source(1),
+    );
+    assert!(
+        outs.iter().all(|o| o.history_jump.is_none()),
+        "the source click stepped through history"
+    );
+    assert_eq!(depth(&ed), d0);
+    assert_eq!(
+        chrome
+            .workspace()
+            .options
+            .get(id, tools::history_brush::SOURCE_KEY),
+        Some(ui::OptionValue::Int(1)),
+        "the click did not set the History Brush source"
+    );
+
+    let before = composite(&mut ed);
+    let seed = history_brush_seed(&chrome);
+    let outcomes = seeded_stroke(
+        &mut pointer,
+        &mut ed,
+        &[v(20.0, 64.0), v(100.0, 64.0)],
+        &seed,
+    );
+    all_reached(id, &outcomes);
+    assert_eq!(depth(&ed), d0 + 1, "one stroke, one step");
+    let after = composite(&mut ed);
+    for (x, want) in [(30, RED), (50, RED), (80, BLUE), (95, BLUE)] {
+        assert!(
+            near(px(&after, x, 64), want, 2),
+            "({x}, 64) was not painted from row 1: {:?}",
+            px(&after, x, 64)
+        );
+    }
+    assert_eq!(px(&after, 30, 10), MID_GREY, "outside the stroke untouched");
+    undo(&mut ed);
+    assert_eq!(
+        composite(&mut ed),
+        before,
+        "undo did not restore the stroke"
+    );
+}
+
+#[test]
+fn history_brush_refuses_a_layer_the_source_state_does_not_have() {
+    let id = ToolId::HistoryBrush;
+    let (_dir, mut ed) = open(&halves);
+    // A layer added after the document was opened, with pixels on it.
+    let added = {
+        let doc = ed.active_mut().unwrap();
+        let added = doc.add_layer(layer_model::Layer::raster("Added"));
+        doc.paint_canvas(added, &mid_grey);
+        added
+    };
+    ed.set_active_layer(added);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+    let outcomes = drag(&mut pointer, &mut ed, &[v(20.0, 64.0), v(100.0, 64.0)]);
+    let refused = outcomes
+        .iter()
+        .find_map(|o| o.failed.clone())
+        .expect("the stroke was not refused");
+    assert!(
+        refused.contains("does not contain a corresponding layer"),
+        "{refused}"
+    );
+    assert_eq!(depth(&ed), d0, "a refused stroke made a history entry");
+    assert_eq!(composite(&mut ed), before, "the added layer was erased");
+}
+
+/// A rectangle shape layer drawn through the real Rectangle route, made the
+/// active layer the way a Layers-panel click does, and its path data.
+fn rectangle_shape(pointer: &mut ToolPointer, ed: &mut Editor) -> layer_model::LayerId {
+    select_tool(ed, ToolId::Rectangle);
+    let outcomes = drag(pointer, ed, &[v(20.0, 20.0), v(40.0, 40.0), v(60.0, 60.0)]);
+    all_reached(ToolId::Rectangle, &outcomes);
+    let doc = &ed.active().unwrap().document;
+    let shape = doc
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|id| {
+            doc.layers
+                .get(*id)
+                .is_some_and(|l| matches!(l.kind, layer_model::LayerKind::Shape(_)))
+        })
+        .expect("the drag made a shape layer");
+    ed.set_active_layer(shape);
+    shape
+}
+
+fn path_svg(ed: &Editor, layer: layer_model::LayerId) -> String {
+    match &ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .get(layer)
+        .unwrap()
+        .kind
+    {
+        layer_model::LayerKind::Shape(shape) => shape.path_svg.clone(),
+        other => panic!("not a shape layer: {other:?}"),
+    }
+}
+
+/// The anchors a path's SVG data names: one per move/line/curve command.
+fn anchor_commands(svg: &str) -> usize {
+    svg.chars()
+        .filter(|c| matches!(c, 'M' | 'L' | 'Q' | 'C'))
+        .count()
+}
+
+/// Select an anchor tool, click once, and check the route contract: the click
+/// reached the tool, landed as ONE history entry that rewrote the path, and
+/// one Undo put the path back. Returns the edited path.
+fn anchor_click(ed: &mut Editor, pointer: &mut ToolPointer, id: ToolId, at: Vec2) -> String {
+    let layer = rectangle_shape(pointer, ed);
+    let original = path_svg(ed, layer);
+    select_tool(ed, id);
+    let d0 = depth(ed);
+    let outcomes = click(pointer, ed, at);
+    all_reached(id, &outcomes);
+    assert_eq!(depth(ed), d0 + 1, "{id:?}: one click is one history entry");
+    let edited = path_svg(ed, layer);
+    assert_ne!(edited, original, "{id:?}: the path did not change");
+    undo(ed);
+    assert_eq!(
+        path_svg(ed, layer),
+        original,
+        "{id:?}: undo did not restore"
+    );
+    edited
+}
+
+#[test]
+fn add_anchor_click_on_the_outline_adds_one_anchor_as_one_step() {
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    let layer = rectangle_shape(&mut pointer, &mut ed);
+    let before = anchor_commands(&path_svg(&ed, layer));
+    undo(&mut ed);
+    let edited = anchor_click(&mut ed, &mut pointer, ToolId::AddAnchor, v(40.0, 20.5));
+    assert_eq!(anchor_commands(&edited), before + 1, "{edited}");
+}
+
+#[test]
+fn delete_anchor_click_on_a_corner_removes_it_as_one_step() {
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    let layer = rectangle_shape(&mut pointer, &mut ed);
+    let before = anchor_commands(&path_svg(&ed, layer));
+    undo(&mut ed);
+    let edited = anchor_click(&mut ed, &mut pointer, ToolId::DeleteAnchor, v(60.0, 60.0));
+    assert_eq!(anchor_commands(&edited), before - 1, "{edited}");
+}
+
+#[test]
+fn convert_point_click_on_a_corner_grows_handles_as_one_step() {
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    let edited = anchor_click(&mut ed, &mut pointer, ToolId::ConvertAnchor, v(60.0, 20.0));
+    assert!(
+        edited.contains('C'),
+        "the corner did not become a curve: {edited}"
+    );
+}
+
+#[test]
+fn pencil_auto_erase_paints_the_background_where_the_stroke_starts_on_the_foreground() {
+    let id = ToolId::Pencil;
+    let (_dir, mut ed) = open(&white);
+    ed.set_foreground([0.0, 0.0, 0.0, 1.0]);
+    ed.set_background([1.0, 1.0, 1.0, 1.0]);
+    let mut pointer = ToolPointer::new();
+    // A black pixel, drawn with the Pencil itself.
+    let first = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| {
+        click(p, ed, v(64.5, 64.5))
+    });
+    assert_eq!(px(&first.after, 64, 64), BLACK);
+    // Auto Erase on, through the options seed the shell hands every sample.
+    let auto_erase = [("auto_erase".to_string(), tools::ToolSetting::Bool(true))];
+    let at = |ed: &Editor, x: f32, y: f32| app::shell_screen_pt(ed.active().unwrap(), x, y);
+    let d0 = depth(&ed);
+    let mut outcomes = Vec::new();
+    for phase in [ui::canvas::PointerPhase::Down, ui::canvas::PointerPhase::Up] {
+        let pos = at(&ed, 64.5, 64.5);
+        outcomes.push(pointer.handle(
+            &mut ed,
+            ui::canvas::PointerInput::at(phase, pos),
+            false,
+            &auto_erase,
+        ));
+    }
+    all_reached(id, &outcomes);
+    assert_eq!(depth(&ed), d0 + 1, "one click, one entry");
+    let after = composite(&mut ed);
+    assert_eq!(
+        px(&after, 64, 64),
+        WHITE,
+        "a stroke that starts on the foreground paints the background"
+    );
+    // Started on white, the same option still paints the foreground.
+    for phase in [ui::canvas::PointerPhase::Down, ui::canvas::PointerPhase::Up] {
+        let pos = at(&ed, 20.5, 20.5);
+        pointer.handle(
+            &mut ed,
+            ui::canvas::PointerInput::at(phase, pos),
+            false,
+            &auto_erase,
+        );
+    }
+    assert_eq!(px(&composite(&mut ed), 20, 20), BLACK);
+}
+
 // ---------------------------------------------------------- completeness --
 
 /// Every tool in the palette is accounted for: tested here, tested by another
@@ -1516,6 +2246,13 @@ fn every_palette_tool_has_a_real_route_test_or_an_owner() {
         Pencil,
         Slice,
         RefineBoundary,
+        // W4-G
+        Ruler,
+        ColorSampler,
+        HistoryBrush,
+        AddAnchor,
+        DeleteAnchor,
+        ConvertAnchor,
     ];
     // Real-route tests in `thumbnail_workflow.rs` / `thumbnail_reproducers.rs`.
     let elsewhere = [Move, Brush, Eraser, FreeTransform];

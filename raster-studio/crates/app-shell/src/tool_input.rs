@@ -88,9 +88,11 @@
 //! key.
 //!
 //! A [`tools::ToolRequest`] is not a command, so the two that arrive here are
-//! performed rather than applied: a crop becomes the transaction
-//! [`crop_command`] builds (a canvas resize plus one translation per root
-//! layer, one undo step), and a slice set is reported.
+//! performed rather than applied: a crop becomes the one-undo-step
+//! transaction `crate::crop_apply::crop` builds (a canvas resize, one
+//! transform per root layer carrying the offset, the straighten rotation and
+//! the W x H x Resolution scale, plus a `PaintTiles` per raster layer when
+//! Delete Cropped Pixels is on), and a slice set is reported.
 //!
 //! # What this cannot do yet
 //!
@@ -114,33 +116,39 @@
 //!   (the polygonal lasso's rubber band, the brush ring), and building a
 //!   [`ToolContext`] per mouse-move would clone the selection mask sixty times
 //!   a second for nobody.
-//! * **A stroke is invisible until the button is released.**
-//!   [`tools::StrokeTool::commit`] is what emits the single
-//!   `Command::PaintTiles`, and it is called only from `on_pointer_up`, so every
-//!   Move sample of a drag emits nothing, adds no history step and asks for no
-//!   repaint. The document's [`editor_core::PixelStore`] references — the thing
-//!   the compositor reads — are rewritten by that command and by nothing else,
-//!   so there is no live preview to show in the meantime: the canvas is
-//!   unchanged for the whole drag and the stroke appears at the release. Every
-//!   stamping tool routed here (Brush, Pencil, Eraser, Clone, Blur, Smudge,
-//!   Dodge and the rest) is a `StrokeTool` and behaves the same way. Pinned by
-//!   `a_stroke_is_invisible_until_the_button_is_released`.
-//! * **A slice set has nowhere to go.** [`ToolPointer::commit`] performs a
-//!   crop and hands the caller the slices, and the caller — the shell — has no
-//!   route that exports them: slicing means writing one file per region and
-//!   nothing in this build asks for a folder. The status bar says so rather
-//!   than letting the gesture look like it worked. Pinned by
-//!   `committing_slices_reports_them_and_says_they_cannot_be_exported`.
-//! * **A crop does not straighten and does not delete.**
-//!   [`tools::CropRequest::straighten`] would need every layer resampled and
-//!   `delete_cropped` would need the off-canvas pixels thrown away; the crop
-//!   this performs resizes the canvas and slides the layers under it, which is
-//!   the whole of what [`crop_command`] claims. Both are reported in the status
-//!   bar when the user asked for them.
+//! * **A stroke is visible while it is dragged (W4-B).** The single
+//!   `Command::PaintTiles` is still emitted only from `on_pointer_up`, so a
+//!   Move sample adds no history step. But every Move asks the tool for
+//!   [`tools::Tool::live_paint`] — the tiles the new dabs can change (for
+//!   blur, sharpen and the healing brushes, those within the op's reach of
+//!   them), computed by the release's own code into a side store — and
+//!   hands them to [`crate::doc::OpenDocument::update_paint_preview`], a lens
+//!   the compositor lays over the committed target for display only. Of the
+//!   tiles an answer lists, only those whose previewed hash changed are
+//!   invalidated. The release commits exactly the previewed pixels and drops
+//!   the lens; Escape drops it and leaves no history. Every stamping tool
+//!   routed here (Brush, Pencil, Eraser, Clone, Blur, Smudge, Dodge and the
+//!   rest) is a `StrokeTool` and behaves the same way. Pinned by
+//!   `a_stroke_is_visible_while_it_is_dragged` and its neighbours.
+//! * **A slice set is kept, not written, on commit.** [`ToolPointer::commit`]
+//!   hands the committed slices to [`crate::slices_export::remember_committed`],
+//!   which stores them per document and puts the count in the status bar; no
+//!   file is written until File > Export > Slices…
+//!   ([`crate::slices_export::export_slices`]) asks for a folder. A slice set
+//!   is not a document edit and leaves no history step. Pinned by
+//!   `committing_slices_keeps_them_for_export_slices`.
+//! * **A straightened or resized crop is carried by the layer transforms.**
+//!   The crop (W4-D, `crate::crop_apply`) straightens, scales to the
+//!   W x H x Resolution size and deletes the cut pixels on request, but the
+//!   rotation and the scale ride on each root layer's transform rather than
+//!   being baked into its pixels.
 
-use glam::{UVec2, Vec2};
+use glam::Vec2;
 
-use compositor::{MemoryTileSource, TileSource};
+use compositor::MemoryTileSource;
+// The tests read tile bytes back; the lib reads them through `NarrowedReads`.
+#[cfg(test)]
+use compositor::TileSource;
 use editor_core::{Command, Document, PixelKey, PixelStore};
 use raster::{PixelRect, TileCoord, TileHash};
 use render::{Camera, MAX_ZOOM, MIN_ZOOM};
@@ -169,11 +177,19 @@ use layer_model::text::Frame;
 pub struct DocumentTiles<'a> {
     refs: &'a PixelStore,
     bytes: &'a mut MemoryTileSource,
+    /// W4-F: tools read RGBA8; a 16-bit tile is handed over rounded to 8
+    /// bits (`doc_depth.rs`), and the apply boundary widens the result back.
+    narrowed: crate::doc::NarrowedReads,
 }
 
 impl<'a> DocumentTiles<'a> {
     pub fn new(refs: &'a PixelStore, bytes: &'a mut MemoryTileSource) -> Self {
-        Self { refs, bytes }
+        let narrowed = crate::doc::NarrowedReads::scan(refs, bytes);
+        Self {
+            refs,
+            bytes,
+            narrowed,
+        }
     }
 }
 
@@ -564,7 +580,7 @@ impl TileAccess for DocumentTiles<'_> {
     }
 
     fn bytes(&self, hash: TileHash) -> Option<&[u8]> {
-        self.bytes.tile(hash)
+        self.narrowed.read(hash, self.bytes)
     }
 
     fn store(&mut self, data: Vec<u8>) -> TileHash {
@@ -747,6 +763,9 @@ pub struct PointerOutcome {
     pub picked: Option<[f32; 4]>,
     /// What the tool refused, if it refused.
     pub failed: Option<String>,
+    /// W4-B: canvas tiles whose live stroke preview changed with this
+    /// sample. Nonzero asks for a repaint without touching the document.
+    pub preview_tiles: usize,
 }
 
 impl PointerOutcome {
@@ -757,7 +776,10 @@ impl PointerOutcome {
 
     /// `true` when the window has to be drawn again.
     pub fn needs_repaint(&self) -> bool {
-        self.changed_document() || self.view_changed || self.picked.is_some()
+        self.changed_document()
+            || self.view_changed
+            || self.picked.is_some()
+            || self.preview_tiles > 0
     }
 }
 
@@ -786,47 +808,25 @@ impl CommitOutcome {
     }
 }
 
-/// The one undoable command that performs `req`, or `None` when the request
-/// describes no canvas at all.
+/// The non-destructive command that performs `req`, or `None` when the
+/// request describes no canvas at all.
 ///
-/// A crop is two things at once: the canvas becomes the kept rectangle, and
-/// every layer slides so the pixel that was at the rectangle's top-left is now
-/// at the origin. Both are commands ([`Command::SetCanvasSize`] and one
-/// [`Command::TransformLayer`] per **root** layer — a group's transform already
-/// carries its whole subtree, so translating the children as well would move
-/// them twice), and wrapping them in a [`Command::Transaction`] is what makes
-/// the whole crop a single Ctrl+Z.
+/// A crop is two things at once: the canvas becomes the new size, and every
+/// **root** layer is mapped so the kept region lands on it — a translation for
+/// a plain crop, plus the straighten rotation and the W x H x Resolution scale
+/// when the request carries them (W4-D; a group's transform already carries
+/// its whole subtree, so transforming the children as well would move them
+/// twice). Wrapped in a [`Command::Transaction`], the whole crop is a single
+/// Ctrl+Z. The pixels outside the new canvas stay in their layers.
 ///
-/// # What a crop still does not do
-///
-/// * [`CropRequest::straighten`] is **not** applied. The angle rides along in
-///   the request and [`CropRequest::straightened_corners`] says exactly which
-///   quad it means, but resampling that quad back into an axis-aligned document
-///   is a re-render of every layer, not a translation. The caller reports it
-///   rather than silently cutting the un-straightened rectangle in silence.
-/// * [`CropRequest::delete_cropped`] is **not** honoured. The pixels outside
-///   the new canvas stay in their layers, off-canvas — which is the
-///   non-destructive behaviour, and the one that makes the undo above exact.
+/// This is the geometry half only: [`ToolPointer::commit`] performs the whole
+/// request through `crate::crop_apply::crop`, which adds Delete Cropped
+/// Pixels ([`CropRequest::delete_cropped`]) to the same transaction.
 pub fn crop_command(document: &Document, req: &CropRequest) -> Option<Command> {
-    let rect = req.rect;
-    if rect.width == 0 || rect.height == 0 {
-        return None;
-    }
-    let mut commands = vec![Command::SetCanvasSize {
-        size: UVec2::new(rect.width, rect.height),
-    }];
-    if rect.x != 0 || rect.y != 0 {
-        let delta = Vec2::new(-(rect.x as f32), -(rect.y as f32));
-        for id in document.layers.root() {
-            commands.push(Command::TransformLayer {
-                layer_id: *id,
-                matrix: tools::edit::translation_matrix(delta),
-            });
-        }
-    }
+    let plan = crate::crop_apply::plan(req)?;
     Some(Command::Transaction {
         label: "Crop".into(),
-        commands,
+        commands: crate::crop_apply::geometry_commands(document, &plan),
     })
 }
 
@@ -1072,6 +1072,9 @@ impl ToolPointer {
         let had = self.router.is_gesture_active() || self.is_tool_active();
         self.router.cancel();
         self.aimed_at = None;
+        // W4-B: an abandoned stroke takes its live preview with it — the
+        // canvas returns to the committed pixels and history is untouched.
+        Self::clear_paint_previews(editor);
         if let Some((_, tool)) = &mut self.current {
             match editor.active_mut() {
                 Some(doc) => {
@@ -1649,10 +1652,12 @@ impl ToolPointer {
     /// commands go through [`Editor::apply_command`], so Free Transform's
     /// resample is one Ctrl+Z. A [`ToolRequest`] is *not* a command, so this is
     /// where each is performed — a crop becomes the transaction
-    /// [`crop_command`] builds and lands on the same history, and a slice set
-    /// is reported (see [`CommitOutcome::slices`]; nothing in this build
-    /// exports one yet, so it reaches the status bar and the caller and no
-    /// further).
+    /// `crate::crop_apply::crop` builds (the geometry [`crop_command`] also
+    /// builds, plus Delete Cropped Pixels) and lands on the same history as
+    /// one step, and a slice set is reported (see [`CommitOutcome::slices`])
+    /// and `crate::slices_export::remember_committed` keeps it in the
+    /// editor's slice store under the active document's id, from where File
+    /// > Export > Slices… writes one file per slice.
     pub fn commit(&mut self, editor: &mut Editor) -> CommitOutcome {
         let mut out = CommitOutcome::default();
         if !self.has_pending_commit() {
@@ -1698,27 +1703,29 @@ impl ToolPointer {
                     out.steps += Self::perform_transform_layers(editor, &layers, delta);
                 }
                 ToolRequest::Crop(req) => {
+                    // W4-D: the whole request — straighten, W x H x
+                    // Resolution size, Delete Cropped Pixels — as one
+                    // transaction (see `crate::crop_apply`).
                     let command = editor
-                        .active()
-                        .and_then(|doc| crop_command(&doc.document, &req));
+                        .active_mut()
+                        .and_then(|doc| crate::crop_apply::crop(doc, &req));
                     match command {
-                        Some(command) => {
+                        Some(Ok(command)) => {
+                            let depth = editor.active().map(|d| d.history_depth());
                             editor.apply_command(command);
-                            out.cropped_to = Some(req.rect);
-                            // Both halves of the request this build cannot
-                            // perform are said out loud rather than left to
-                            // look like they happened. See `crop_command`.
-                            if req.straighten != 0.0 && req.straighten.is_finite() {
-                                editor.set_status("Cropped; the straighten angle was not applied");
-                            } else if req.delete_cropped {
-                                editor
-                                    .set_status("Cropped; the pixels outside the canvas were kept");
-                            } else {
-                                editor.set_status(format!(
-                                    "Cropped to {} x {}",
-                                    req.rect.width, req.rect.height
-                                ));
+                            // A refused transaction (a locked layer) has
+                            // already said why in the status bar.
+                            if editor.active().map(|d| d.history_depth()) != depth {
+                                out.cropped_to = Some(req.rect);
+                                if let Some(doc) = editor.active() {
+                                    let (w, h) = (doc.document.width(), doc.document.height());
+                                    editor.set_status(format!("Cropped to {w} x {h}"));
+                                }
                             }
+                        }
+                        Some(Err(reason)) => {
+                            out.failed = Some(reason.clone());
+                            editor.set_status(reason);
                         }
                         None => {
                             let reason = "That crop region is empty".to_string();
@@ -1728,10 +1735,9 @@ impl ToolPointer {
                     }
                 }
                 ToolRequest::Slices(slices) => {
-                    editor.set_status(format!(
-                        "{} slice(s) defined; this build cannot export them yet",
-                        slices.len()
-                    ));
+                    // W4-H: kept per document for File > Export > Slices.
+                    let status = crate::slices_export::remember_committed(editor, &slices);
+                    editor.set_status(status);
                     out.slices = slices;
                 }
                 ToolRequest::SelectLayer(id) => {
@@ -1746,6 +1752,16 @@ impl ToolPointer {
         let after = editor.active().map(|d| d.history_depth()).unwrap_or(0);
         out.steps = after.saturating_sub(before);
         out
+    }
+
+    /// W4-B: drop every document's live stroke preview. Only a running
+    /// stroke of this pointer ever sets one, so clearing them all is exact.
+    fn clear_paint_previews(editor: &mut Editor) {
+        for doc in editor.documents_mut() {
+            if doc.has_paint_preview() {
+                doc.clear_paint_preview();
+            }
+        }
     }
 
     /// Abandon the gesture without touching any document.
@@ -1811,6 +1827,8 @@ impl ToolPointer {
             // one that is would rasterise the stroke into the wrong image and
             // push the step onto the wrong history. Same rule as the branch
             // above: a gesture does not outlive the document it was aimed at.
+            // W4-B: nor does its live preview, on whichever tab it was shown.
+            Self::clear_paint_previews(editor);
             self.cancel_detached();
             out.refused = Some(Refusal::WrongDocument);
             return out;
@@ -1928,6 +1946,8 @@ impl ToolPointer {
             }
         }
 
+        // W4-B: the live stroke preview a Move sample produced, if any.
+        let mut live_paint: Option<tools::stroke::LivePaint> = None;
         let (result, commands, selection_edits, requests, picked, canvas_rect) = {
             let doc = editor.active_mut().expect("checked above");
             let canvas = doc.canvas_rect();
@@ -2033,9 +2053,30 @@ impl ToolPointer {
                     .get(id)
                     .is_some_and(|l| l.kind.parametric())
             });
+            // W4-G: the History Brush's source state, rebuilt at the press
+            // that begins a stroke (the stroke keeps it): the History panel
+            // row its `source` option names, 0 (the default) being the
+            // document as opened.
+            let history_source = (routed.phase == PointerPhase::Down && id == ToolId::HistoryBrush)
+                .then(|| {
+                    let row = settings
+                        .iter()
+                        .find_map(|(key, setting)| match (key.as_str(), setting) {
+                            (tools::history_brush::SOURCE_KEY, tools::ToolSetting::Int(v)) => {
+                                Some(usize::try_from(*v).unwrap_or(0))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+                    doc.history_state(row)
+                })
+                .flatten();
             let mut access = DocumentTiles::new(&doc.document.pixels, &mut doc.tiles);
             let mut ctx = ToolContext::new(&mut access, canvas);
             ctx.shape_paths = shape_paths;
+            ctx.history_source = history_source;
+            // W4-G: the document's Colour Sampler points, lent for the sample.
+            ctx.samplers = Some(&mut doc.samplers);
             // Card 055: the pinned target routes everything - the layer the
             // edits land on, the mask they mask with, and the surface they
             // paint. Quick mask is a temporary mode above the sticky target:
@@ -2132,6 +2173,17 @@ impl ToolPointer {
                 PointerPhase::Move => tool.on_pointer_move(&mut ctx, routed.event),
                 PointerPhase::Up => tool.on_pointer_up(&mut ctx, routed.event),
             };
+            // W4-B: every Move of a stroke asks the tool for the tiles the
+            // new dabs reached — computed exactly as the release will compute
+            // them, into a side store — and the document shows them through
+            // its preview lens. A failure here is not reported: the release
+            // runs the same computation and reports it once.
+            if routed.phase == PointerPhase::Move && result.is_ok() {
+                match tool.live_paint(&mut ctx) {
+                    Ok(live) => live_paint = live,
+                    Err(e) => tracing::debug!("live stroke preview skipped: {e}"),
+                }
+            }
             // `ctx.view` is deliberately not read back: navigation belongs to
             // the router, which drove the camera before the tool ever saw this
             // sample, and the tools routed here are not the navigation ones.
@@ -2220,6 +2272,18 @@ impl ToolPointer {
         }
         let after = editor.active().map(|d| d.history_depth()).unwrap_or(0);
         out.steps = after.saturating_sub(before);
+
+        // W4-B: publish the stroke so far, or end the preview. A press starts
+        // clean; a release has just committed exactly the previewed pixels,
+        // so dropping the lens changes nothing on screen.
+        match routed.phase {
+            PointerPhase::Move => {
+                if let (Some(live), Some(doc)) = (live_paint, editor.active_mut()) {
+                    out.preview_tiles = doc.update_paint_preview(live);
+                }
+            }
+            PointerPhase::Down | PointerPhase::Up => Self::clear_paint_previews(editor),
+        }
 
         if let Some(rgba) = picked {
             editor.set_foreground(rgba);
@@ -2772,7 +2836,10 @@ mod tests {
             mode,
             active: _,
             layer: _,
-        } = &geometry;
+        } = &geometry
+        else {
+            panic!("a free transform publishes a transform: {geometry:?}");
+        };
 
         assert_eq!(*mode, tools::transform::TransformMode::Scale);
         assert_eq!(
@@ -2796,7 +2863,10 @@ mod tests {
             state: after,
             active,
             ..
-        } = geometry;
+        } = geometry
+        else {
+            panic!("a free transform publishes a transform");
+        };
         assert_ne!(after.corners, before, "the drag moved the published state");
         assert!(active.is_some(), "the grabbed handle is published");
 
@@ -4738,11 +4808,12 @@ mod tests {
         assert_eq!(up.refused, Some(Refusal::WrongDocument));
     }
 
-    /// A stroke is committed once, at the release — so nothing is on the canvas
-    /// while the button is held. Stated in the module docs; pinned here so it
-    /// cannot quietly stop being true.
+    /// W4-B: a stroke shows on the canvas while the button is held — through
+    /// the real pointer route and the document's own composite — without a
+    /// single history step until the release. This test used to pin the
+    /// opposite (`a_stroke_is_invisible_until_the_button_is_released`).
     #[test]
-    fn a_stroke_is_invisible_until_the_button_is_released() {
+    fn a_stroke_is_visible_while_it_is_dragged() {
         let dir = tempfile::tempdir().unwrap();
         let mut editor = editor(dir.path());
         editor.set_tool(ToolId::Brush);
@@ -4758,18 +4829,8 @@ mod tests {
         );
         assert!(down.reached_tool, "the press never reached the brush");
         assert_eq!(down.steps, 0);
-        assert!(
-            !down.needs_repaint(),
-            "the press asked for a repaint that would draw the same frame"
-        );
-        let pressed = composite(&mut editor);
-        assert!(
-            changed_pixels(&before, &pressed).is_empty(),
-            "the press painted {} pixels, so this limit is over and the doc \
-             bullet must go",
-            changed_pixels(&before, &pressed).len()
-        );
 
+        let mut shown = 0;
         for at in [(28.0, 28.0), (36.0, 36.0)] {
             let moved = pointer.handle(
                 &mut editor,
@@ -4777,34 +4838,364 @@ mod tests {
                 false,
                 &[],
             );
+            assert!(moved.reached_tool);
+            assert_eq!(moved.steps, 0, "a move sample committed a step");
+            assert!(moved.needs_repaint(), "a changed preview asks for a frame");
+            assert!(moved.preview_tiles > 0);
             let mid = composite(&mut editor);
             let live = changed_pixels(&before, &mid);
             assert!(
-                live.is_empty(),
-                "the drag showed a live preview of {} pixels at {at:?}, so the \
-                 doc bullet must go",
+                live.len() > shown,
+                "the drag to {at:?} showed {} pixels, no more than before",
                 live.len()
             );
-            assert!(moved.reached_tool);
-            assert_eq!(moved.steps, 0, "a move sample committed a step");
-            assert!(!moved.needs_repaint());
+            assert!(
+                live.contains(&(at.0 as i64, at.1 as i64)),
+                "the pixel under the pointer at {at:?} is not painted"
+            );
+            shown = live.len();
+            assert_eq!(
+                editor.active().unwrap().history_depth(),
+                0,
+                "the preview wrote history"
+            );
+            assert!(editor.active().unwrap().has_paint_preview());
         }
 
-        // ...and the release is where the whole stroke arrives at once.
         let up = pointer.handle(
             &mut editor,
             sample(PointerPhase::Up, screen(36.0, 36.0)),
             false,
             &[],
         );
-        assert_eq!(up.steps, 1);
-        assert!(up.needs_repaint());
-        let released = composite(&mut editor);
-        assert!(
-            !changed_pixels(&before, &released).is_empty(),
-            "the release painted nothing, so the stroke is lost rather than \
-             merely late"
+        assert_eq!(up.steps, 1, "the release is one undoable step");
+        assert!(!editor.active().unwrap().has_paint_preview());
+    }
+
+    /// W4-B: what the release commits is byte-for-byte what the last preview
+    /// showed — measured against the document's pixels after the lens is
+    /// gone, so the committed tiles alone must reproduce the frame. Undo then
+    /// puts the baseline back.
+    #[test]
+    fn the_committed_stroke_is_byte_equal_to_its_last_preview() {
+        // Blur, Sharpen and Spot Healing are the neighbourhood cases
+        // (recomputed per tile within their reach of the new dabs), Smudge the
+        // sequential one (a walk kept across samples); the rest are pointwise
+        // (recomputed per tile). A black base stroke gives the retouching
+        // tools an edge to work on the white fixture.
+        // Each runs in an 8-bit and a 16-bit document: in 16 bits the release
+        // is widened at the apply boundary, and so must the preview be.
+        let runs = [
+            ToolId::Brush,
+            ToolId::Pencil,
+            ToolId::Eraser,
+            ToolId::Blur,
+            ToolId::Sharpen,
+            ToolId::SpotHealing,
+            ToolId::Smudge,
+        ]
+        .into_iter()
+        .flat_map(|tool| [(tool, 8u8), (tool, 16u8)]);
+        for (tool, bits) in runs {
+            let dir = tempfile::tempdir().unwrap();
+            let mut editor = editor(dir.path());
+            if bits == 16 {
+                editor
+                    .active_mut()
+                    .unwrap()
+                    .convert_depth(16, false)
+                    .unwrap();
+            }
+            let tool_bits = format!("{tool:?} at {bits} bits");
+            editor.set_tool(ToolId::Brush);
+            editor.set_foreground([0.0, 0.0, 0.0, 1.0]);
+            stroke(
+                &mut ToolPointer::new(),
+                &mut editor,
+                &[(8.0, 24.0), (56.0, 24.0)],
+            );
+            editor.set_tool(tool);
+            editor.set_foreground([0.0, 0.2, 1.0, 1.0]);
+            let mut pointer = ToolPointer::new();
+            let before = composite(&mut editor);
+
+            let path = [(10.0, 12.0), (22.0, 30.0), (40.0, 33.0), (52.0, 20.0)];
+            pointer.handle(
+                &mut editor,
+                sample(PointerPhase::Down, screen(path[0].0, path[0].1)),
+                false,
+                &[],
+            );
+            for (x, y) in &path[1..] {
+                pointer.handle(
+                    &mut editor,
+                    sample(PointerPhase::Move, screen(*x, *y)),
+                    false,
+                    &[],
+                );
+            }
+            let previewed = composite(&mut editor);
+            assert_ne!(previewed, before, "{tool_bits}: the drag showed nothing");
+            let (key, shown) = editor
+                .active()
+                .unwrap()
+                .paint_preview_tiles()
+                .expect("a live preview");
+            assert!(!shown.is_empty(), "{tool_bits}: an empty preview");
+            let (x, y) = path[path.len() - 1];
+            let up = pointer.handle(
+                &mut editor,
+                sample(PointerPhase::Up, screen(x, y)),
+                false,
+                &[],
+            );
+            assert_eq!(up.steps, 1, "{tool_bits}");
+            assert!(!editor.active().unwrap().has_paint_preview());
+            // The stored tiles themselves: every previewed hash is the hash
+            // the release put at that coordinate, at the document's depth.
+            let doc = editor.active().unwrap();
+            for (coord, hash) in &shown {
+                assert_eq!(
+                    doc.document.pixels.tile(key, *coord),
+                    *hash,
+                    "{tool_bits}: tile {coord:?} committed other bytes than it previewed"
+                );
+            }
+            let committed = composite(&mut editor);
+            assert!(
+                committed == previewed,
+                "{tool_bits}: the release differs from its preview at {} pixels",
+                changed_pixels(&previewed, &committed).len()
+            );
+            assert!(ed_undo(&mut editor));
+            assert_eq!(composite(&mut editor), before, "{tool_bits}: undo");
+        }
+    }
+
+    /// W4-B: Escape in the middle of a previewed stroke puts the canvas back
+    /// byte for byte and leaves no history, and the tiles the preview covered
+    /// are invalidated so the presenter redraws them.
+    #[test]
+    fn cancelling_a_previewed_stroke_restores_the_baseline_and_leaves_no_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(ToolId::Brush);
+        editor.set_foreground([0.0, 0.0, 0.0, 1.0]);
+        let mut pointer = ToolPointer::new();
+        let before = composite(&mut editor);
+        let pixels_before = editor.active().unwrap().document.pixels.clone();
+
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Down, screen(8.0, 8.0)),
+            false,
+            &[],
         );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Move, screen(50.0, 50.0)),
+            false,
+            &[],
+        );
+        assert_ne!(composite(&mut editor), before, "nothing was previewed");
+        let _ = editor.active_mut().unwrap().take_dirty();
+
+        assert!(pointer.cancel(&mut editor));
+        let doc = editor.active_mut().unwrap();
+        assert!(!doc.has_paint_preview(), "the lens outlived the cancel");
+        assert!(
+            !doc.take_dirty().is_empty(),
+            "the cancel invalidated nothing, so the presenter keeps the stroke"
+        );
+        assert_eq!(doc.history_depth(), 0, "a cancelled stroke wrote history");
+        assert_eq!(
+            doc.document.pixels, pixels_before,
+            "the committed pixel references moved"
+        );
+        assert_eq!(composite(&mut editor), before, "the baseline came back");
+    }
+
+    /// W4-B review round 3: an undo while a Smudge button is held must not be
+    /// undone again by the release. The smudge walk caches every tile it
+    /// loads; a walk loaded before the undo still holds the undone pixels, and
+    /// committing it would put them back as a new step. The Brush line here is
+    /// far from every smudge dab, and smudging a white canvas changes nothing,
+    /// so after the release (and during the drag after the undo) the canvas
+    /// must be the white baseline. Both orders are run: a sample after the
+    /// undo (the preview must restart the walk) and a release straight after
+    /// it (the release must).
+    #[test]
+    fn an_undo_during_a_smudge_drag_is_not_reverted_by_the_release() {
+        for move_after_undo in [true, false] {
+            undo_during_a_smudge_drag(move_after_undo);
+        }
+    }
+
+    fn undo_during_a_smudge_drag(move_after_undo: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        let white = composite(&mut editor);
+        editor.set_tool(ToolId::Brush);
+        editor.set_foreground([0.0, 0.0, 0.0, 1.0]);
+        stroke(
+            &mut ToolPointer::new(),
+            &mut editor,
+            &[(8.0, 8.0), (56.0, 8.0)],
+        );
+        assert_eq!(editor.active().unwrap().history_depth(), 1);
+        assert_ne!(composite(&mut editor), white, "the brush line is missing");
+
+        editor.set_tool(ToolId::Smudge);
+        let mut pointer = ToolPointer::new();
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Down, screen(10.0, 54.0)),
+            false,
+            &[],
+        );
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Move, screen(16.0, 54.0)),
+            false,
+            &[],
+        );
+        assert!(ed_undo(&mut editor), "the brush step did not undo");
+        let end = if move_after_undo {
+            pointer.handle(
+                &mut editor,
+                sample(PointerPhase::Move, screen(22.0, 54.0)),
+                false,
+                &[],
+            );
+            assert_eq!(
+                changed_pixels(&white, &composite(&mut editor)),
+                Vec::<(i64, i64)>::new(),
+                "the live smudge preview shows the undone brush line"
+            );
+            22.0
+        } else {
+            16.0
+        };
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Up, screen(end, 54.0)),
+            false,
+            &[],
+        );
+        assert!(!editor.active().unwrap().has_paint_preview());
+        assert_eq!(
+            changed_pixels(&white, &composite(&mut editor)),
+            Vec::<(i64, i64)>::new(),
+            "the smudge release committed the undone brush line back (move after undo: {move_after_undo})"
+        );
+    }
+
+    /// W4-B: the preview is cheap because it is incremental — a 200-sample
+    /// drag along one tile row of a 1024x1024 canvas invalidates only the
+    /// tiles under the stroke, never the whole canvas, and once the stroke is
+    /// deep in the next tile the tile it left is no longer touched. That
+    /// holds for the neighbourhood ops (Blur, Sharpen) and Smudge exactly as
+    /// for the Brush: their answers are incremental too, and a replacing
+    /// answer is diffed by hash rather than invalidating the whole preview.
+    #[test]
+    fn a_long_drag_invalidates_only_the_tiles_under_the_stroke() {
+        for tool in [ToolId::Brush, ToolId::Blur, ToolId::Sharpen, ToolId::Smudge] {
+            let dir = tempfile::tempdir().unwrap();
+            let side = 1024u32;
+            let png = dir.path().join("big.png");
+            // Vertical stripes, so every op has something to change.
+            let pixels: Vec<u8> = (0..side * side)
+                .flat_map(|i| {
+                    let v = if (i % side / 4).is_multiple_of(2) {
+                        255u8
+                    } else {
+                        40
+                    };
+                    [v, v, v, 255]
+                })
+                .collect();
+            std::fs::write(
+                &png,
+                raster::encode(raster::ExportFormat::Png, side, side, &pixels).unwrap(),
+            )
+            .unwrap();
+            let mut editor = Editor::with_state(
+                AppPaths::rooted(dir.path().join("config")),
+                Preferences::default(),
+                RecentFiles::new(),
+                Box::new(ScriptedDialogs::new()),
+            );
+            editor.open_path(&png).unwrap();
+            let zoom = 0.5;
+            let centre = Vec2::new(500.0, 380.0);
+            {
+                let doc = editor.active_mut().unwrap();
+                doc.set_viewport(VIEWPORT);
+                doc.camera.zoom = zoom;
+                doc.camera.center = centre;
+            }
+            let at = |x: f32, y: f32| VIEWPORT * 0.5 + (Vec2::new(x, y) - centre) * zoom;
+            editor.set_tool(tool);
+            let mut pointer = ToolPointer::new();
+            // The open is a full upload; start the count clean.
+            let _ = editor.active_mut().unwrap().take_dirty();
+
+            pointer.handle(
+                &mut editor,
+                sample(PointerPhase::Down, at(300.0, 380.0)),
+                false,
+                &[],
+            );
+            let left = raster::TileCoord::new(1, 1, 0);
+            let mut union = std::collections::BTreeSet::new();
+            let mut invalidations = 0usize;
+            let mut deep_samples = 0usize;
+            for i in 1..=200 {
+                let x = 300.0 + i as f32 * 2.0;
+                let out = pointer.handle(
+                    &mut editor,
+                    sample(PointerPhase::Move, at(x, 380.0)),
+                    false,
+                    &[],
+                );
+                assert_eq!(out.steps, 0, "{tool:?}");
+                let dirty = editor.active_mut().unwrap().take_dirty();
+                assert!(
+                    !dirty.is_all(),
+                    "{tool:?}: sample {i} invalidated the whole canvas"
+                );
+                invalidations += dirty.tiles().count();
+                union.extend(dirty.tiles());
+                if x > 640.0 {
+                    deep_samples += 1;
+                    assert!(
+                        !dirty.tiles().any(|c| c == left),
+                        "{tool:?}: sample {i} at x = {x}, deep in tile (2, 1), \
+                         invalidated tile (1, 1) the stroke had left"
+                    );
+                }
+            }
+            assert_eq!(deep_samples, 30);
+            let expected: std::collections::BTreeSet<raster::TileCoord> =
+                [left, raster::TileCoord::new(2, 1, 0)]
+                    .into_iter()
+                    .collect();
+            assert_eq!(
+                union, expected,
+                "{tool:?}: the drag invalidated tiles off the stroke"
+            );
+            assert!(
+                invalidations <= 2 * 200,
+                "{tool:?}: {invalidations} tile invalidations over 200 samples"
+            );
+            let up = pointer.handle(
+                &mut editor,
+                sample(PointerPhase::Up, at(700.0, 380.0)),
+                false,
+                &[],
+            );
+            assert_eq!(up.steps, 1, "{tool:?}");
+        }
     }
 
     /// The seven shape tools run, create a layer, **and** put it on the canvas.
@@ -5479,10 +5870,10 @@ mod tests {
         );
     }
 
-    /// Slices reach the caller and the status bar, and go no further — this
-    /// build cannot export them. An honest gap, said out loud.
+    /// Committed slices reach the caller and the status bar, and are kept per
+    /// document for File > Export > Slices…; committing leaves no history step.
     #[test]
-    fn committing_slices_reports_them_and_says_they_cannot_be_exported() {
+    fn committing_slices_keeps_them_for_export_slices() {
         let dir = tempfile::tempdir().unwrap();
         let mut editor = editor(dir.path());
         editor.set_tool(ToolId::Slice);
@@ -5500,7 +5891,11 @@ mod tests {
         assert_eq!(outcome.steps, 0, "a slice set is not a document edit");
         assert!(editor
             .status()
-            .is_some_and(|s| s.contains("2 slice(s)") && s.contains("cannot export")));
+            .is_some_and(|s| s.contains("2 slice(s)") && s.contains("Export > Slices")));
+        // W4-H: the set is kept for File > Export > Slices.
+        let id = editor.active().unwrap().id();
+        assert_eq!(editor.slices.get(id).len(), 2);
+        assert_eq!(editor.slices.get(id)[0].width, 16);
         // Committing twice does not publish the same slices again.
         assert!(!pointer.commit(&mut editor).had_pending);
     }
@@ -6264,6 +6659,7 @@ mod tests {
         let editor = editor(dir.path());
         let document = &editor.active().unwrap().document;
         let empty = tools::CropRequest {
+            output_size: None,
             rect: PixelRect::new(0, 0, 0, 10),
             straighten: 0.0,
             delete_cropped: false,
@@ -6272,6 +6668,7 @@ mod tests {
 
         // A crop at the origin needs no translation at all.
         let at_origin = tools::CropRequest {
+            output_size: None,
             rect: PixelRect::new(0, 0, 32, 32),
             straighten: 0.0,
             delete_cropped: false,
@@ -6284,6 +6681,7 @@ mod tests {
 
         // ...and one away from it moves each root layer once.
         let moved = tools::CropRequest {
+            output_size: None,
             rect: PixelRect::new(4, 6, 32, 32),
             straighten: 0.0,
             delete_cropped: false,

@@ -12,6 +12,10 @@ use crate::color_ops::{
 };
 use crate::curve::Curve;
 use crate::error::{lenient, AdjustmentError};
+use crate::extended::{
+    desaturate, EqualizeMap, Lut3d, ReplaceColor, ShadowsHighlights, MAX_LUT_SIZE,
+    MAX_SHADOWS_HIGHLIGHTS_RADIUS,
+};
 use crate::space::{EncodedRgb, LinearRgb, WorkingSpace};
 use crate::tone::{
     invert, BrightnessContrast, Curves, ExposureParams, Levels, LevelsChannel, Posterize,
@@ -68,6 +72,19 @@ pub enum Adjustment {
     /// Auto Tone / Auto Contrast / Auto Color. Needs an [`ImageStats`] before
     /// it means anything — see [`PreparedAdjustment::with_stats`].
     Auto(AutoMode),
+    /// Desaturate to linear luminance, linear.
+    Desaturate,
+    /// Histogram equalisation, encoded. Like [`Adjustment::Auto`] it needs an
+    /// [`ImageStats`] and is the identity without one.
+    Equalize,
+    /// Shadows/Highlights, encoded. Per pixel it reads the pixel's own luma;
+    /// the radius is honoured by
+    /// [`ShadowsHighlights::apply_premultiplied_rgba_spatial`].
+    ShadowsHighlights(ShadowsHighlights),
+    /// Replace Color, encoded.
+    ReplaceColor(ReplaceColor),
+    /// A 3D colour lookup table, encoded.
+    ColorLookup(Lut3d),
 }
 
 impl Adjustment {
@@ -79,9 +96,10 @@ impl Adjustment {
     /// against each other by a test.
     pub fn working_space(&self) -> WorkingSpace {
         match self {
-            Adjustment::Exposure(_) | Adjustment::PhotoFilter(_) | Adjustment::GradientMap(_) => {
-                WorkingSpace::Linear
-            }
+            Adjustment::Exposure(_)
+            | Adjustment::PhotoFilter(_)
+            | Adjustment::GradientMap(_)
+            | Adjustment::Desaturate => WorkingSpace::Linear,
             _ => WorkingSpace::Encoded,
         }
     }
@@ -103,6 +121,10 @@ impl Adjustment {
             Adjustment::PhotoFilter(p) => p.is_identity(),
             Adjustment::ChannelMixer(p) => p.is_identity(),
             Adjustment::SelectiveColor(p) => p.is_identity(),
+            Adjustment::ShadowsHighlights(p) => p.is_identity(),
+            Adjustment::ReplaceColor(p) => p.is_identity(),
+            Adjustment::ColorLookup(p) => p.is_identity(),
+            Adjustment::Desaturate | Adjustment::Equalize => false,
             Adjustment::BlackAndWhite(_)
             | Adjustment::Invert
             | Adjustment::Posterize(_)
@@ -242,8 +264,48 @@ impl Adjustment {
                 mode: to_stored_auto(m.kind()),
                 clip: m.clip(),
             },
+            Adjustment::Desaturate => AdjustmentKind::Desaturate,
+            Adjustment::Equalize => AdjustmentKind::Equalize,
+            Adjustment::ShadowsHighlights(p) => AdjustmentKind::ShadowsHighlights {
+                shadows: p.shadows(),
+                highlights: p.highlights(),
+            },
+            Adjustment::ReplaceColor(p) => AdjustmentKind::ReplaceColor {
+                color: p.color(),
+                fuzziness: p.fuzziness(),
+                hue: p.shift().hue_degrees(),
+                saturation: p.shift().saturation(),
+                lightness: p.shift().lightness(),
+            },
+            Adjustment::ColorLookup(p) => AdjustmentKind::ColorLookup {
+                name: p.name().to_string(),
+                size: p.size() as u32,
+                table: p.table().to_vec(),
+            },
         }
     }
+
+    /// Whether this adjustment is an *analysis* of the image — it needs an
+    /// [`ImageStats`] ([`PreparedAdjustment::with_stats`]) and is the identity
+    /// without one. Auto Tone/Contrast/Color and Equalize.
+    pub fn needs_stats(&self) -> bool {
+        matches!(self, Adjustment::Auto(_) | Adjustment::Equalize)
+    }
+}
+
+/// Lenient: each band's `[amount, tone, radius]` pulled into range.
+fn sh_band_lenient(b: [f32; 3], default: [f32; 3]) -> [f32; 3] {
+    [
+        lenient(b[0], 0.0, 1.0, default[0]),
+        lenient(b[1], 0.0, 1.0, default[1]),
+        lenient(b[2], 0.0, MAX_SHADOWS_HIGHLIGHTS_RADIUS, default[2]),
+    ]
+}
+
+/// The stored edge as a `usize`, capped just past the largest accepted edge
+/// so a corrupt size is refused by [`Lut3d::new`] rather than cubed.
+fn lut_edge(size: u32) -> usize {
+    (size as usize).min(MAX_LUT_SIZE + 1)
 }
 
 /// The stored `[input_black, input_white, gamma, output_black, output_white]`
@@ -546,6 +608,57 @@ impl From<&AdjustmentKind> for Adjustment {
                     AutoAdjustment::Color => AutoMode::COLOR,
                 }),
             ),
+            AdjustmentKind::Desaturate => Adjustment::Desaturate,
+            AdjustmentKind::Equalize => Adjustment::Equalize,
+            AdjustmentKind::ShadowsHighlights {
+                shadows,
+                highlights,
+            } => Adjustment::ShadowsHighlights(
+                ShadowsHighlights::new(
+                    sh_band_lenient(*shadows, ShadowsHighlights::IDENTITY.shadows()),
+                    sh_band_lenient(*highlights, ShadowsHighlights::IDENTITY.highlights()),
+                )
+                .unwrap_or(ShadowsHighlights::IDENTITY),
+            ),
+            AdjustmentKind::ReplaceColor {
+                color,
+                fuzziness,
+                hue,
+                saturation,
+                lightness,
+            } => {
+                let color = color.map(|c| lenient(c, 0.0, 1.0, 0.0));
+                let fuzz = lenient(
+                    *fuzziness,
+                    0.0,
+                    ReplaceColor::MAX_FUZZINESS,
+                    ReplaceColor::DEFAULT_FUZZINESS,
+                );
+                Adjustment::ReplaceColor(
+                    ReplaceColor::new(
+                        color,
+                        fuzz,
+                        lenient(*hue, -3600.0, 3600.0, 0.0),
+                        lenient(*saturation, -1.0, 1.0, 0.0),
+                        lenient(*lightness, -1.0, 1.0, 0.0),
+                    )
+                    .or_else(|_| ReplaceColor::new(color, fuzz, 0.0, 0.0, 0.0))
+                    .unwrap_or(ReplaceColor::IDENTITY),
+                )
+            }
+            // A table that does not fit its edge renders as no lookup at all,
+            // the way a corrupt Levels renders as no levels.
+            AdjustmentKind::ColorLookup { name, size, table } => Adjustment::ColorLookup(
+                Lut3d::new(
+                    name.clone(),
+                    lut_edge(*size),
+                    table
+                        .iter()
+                        .map(|e| e.map(|v| if v.is_finite() { v } else { 0.0 }))
+                        .collect(),
+                )
+                .unwrap_or_else(|_| Lut3d::identity(2)),
+            ),
         }
     }
 }
@@ -675,6 +788,28 @@ impl Adjustment {
             AdjustmentKind::Auto { mode, clip } => {
                 Adjustment::Auto(AutoMode::new(from_stored_auto(*mode), *clip)?)
             }
+            AdjustmentKind::Desaturate => Adjustment::Desaturate,
+            AdjustmentKind::Equalize => Adjustment::Equalize,
+            AdjustmentKind::ShadowsHighlights {
+                shadows,
+                highlights,
+            } => Adjustment::ShadowsHighlights(ShadowsHighlights::new(*shadows, *highlights)?),
+            AdjustmentKind::ReplaceColor {
+                color,
+                fuzziness,
+                hue,
+                saturation,
+                lightness,
+            } => Adjustment::ReplaceColor(ReplaceColor::new(
+                *color,
+                *fuzziness,
+                *hue,
+                *saturation,
+                *lightness,
+            )?),
+            AdjustmentKind::ColorLookup { name, size, table } => {
+                Adjustment::ColorLookup(Lut3d::new(name.clone(), lut_edge(*size), table.clone())?)
+            }
         })
     }
 }
@@ -691,6 +826,7 @@ enum LinearOp {
     PhotoFilter(PhotoFilter, [f32; 3]),
     /// The map with its ramp, resolved once per layer.
     GradientMap(GradientMap, Vec<(f32, [f32; 3])>),
+    Desaturate,
 }
 
 impl LinearOp {
@@ -699,6 +835,7 @@ impl LinearOp {
             LinearOp::Exposure(e) => e.apply(px),
             LinearOp::PhotoFilter(f, mul) => f.apply_with(px, *mul),
             LinearOp::GradientMap(g, ramp) => g.apply_with(px, ramp),
+            LinearOp::Desaturate => desaturate(px),
         }
     }
 }
@@ -721,6 +858,11 @@ enum EncodedOp {
     Posterize(Posterize),
     Threshold(Threshold),
     SelectiveColor(SelectiveColor),
+    /// The remap resolved from the image's histogram.
+    Equalize(EqualizeMap),
+    ShadowsHighlights(ShadowsHighlights),
+    ReplaceColor(ReplaceColor),
+    ColorLookup(Lut3d),
 }
 
 impl EncodedOp {
@@ -738,6 +880,10 @@ impl EncodedOp {
             EncodedOp::Posterize(p) => p.apply(px),
             EncodedOp::Threshold(p) => p.apply(px),
             EncodedOp::SelectiveColor(p) => p.apply(px),
+            EncodedOp::Equalize(p) => p.apply(px),
+            EncodedOp::ShadowsHighlights(p) => p.apply(px),
+            EncodedOp::ReplaceColor(p) => p.apply(px),
+            EncodedOp::ColorLookup(p) => p.apply(px),
         }
     }
 }
@@ -844,6 +990,16 @@ impl PreparedAdjustment {
                 }
                 None => return Self::identity(),
             },
+            Adjustment::Desaturate => Op::Linear(LinearOp::Desaturate),
+            Adjustment::Equalize => match stats.and_then(EqualizeMap::from_stats) {
+                Some(map) => Op::Encoded(Box::new(EncodedOp::Equalize(map))),
+                None => return Self::identity(),
+            },
+            Adjustment::ShadowsHighlights(p) => {
+                Op::Encoded(Box::new(EncodedOp::ShadowsHighlights(*p)))
+            }
+            Adjustment::ReplaceColor(p) => Op::Encoded(Box::new(EncodedOp::ReplaceColor(*p))),
+            Adjustment::ColorLookup(p) => Op::Encoded(Box::new(EncodedOp::ColorLookup(p.clone()))),
         };
         Self { op: Some(op) }
     }

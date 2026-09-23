@@ -51,6 +51,10 @@
 //!   `highlights_stay_distinct_through_color_balance`,
 //!   `..._through_selective_color` and `..._through_black_and_white` pin
 //!   against [`ChannelMixer`] as an unclamped control.
+//! * [`EqualizeMap`], [`Lut3d`] and [`ReplaceColor`] — a histogram remap and
+//!   a lookup cube are defined over `0..=1`, and Replace Color shifts through
+//!   [`HueSaturation`]; see [`extended`] for the five adjustments added there
+//!   (Desaturate and Shadows/Highlights do not clamp).
 //!
 //! Everything else — brightness/contrast, levels, curves, exposure, photo
 //! filter, channel mixer, invert, the auto commands — passes scene-referred
@@ -136,6 +140,7 @@ pub mod auto;
 pub mod color_ops;
 pub mod curve;
 pub mod error;
+pub mod extended;
 pub mod prepared;
 pub mod space;
 pub mod tone;
@@ -147,6 +152,10 @@ pub use color_ops::{
 };
 pub use curve::Curve;
 pub use error::AdjustmentError;
+pub use extended::{
+    desaturate, BuiltinLut, EqualizeMap, Lut3d, ReplaceColor, ShadowsHighlights, MAX_LUT_SIZE,
+    MAX_SHADOWS_HIGHLIGHTS_RADIUS, MIN_LUT_SIZE,
+};
 pub use prepared::{apply, apply_adjustment, Adjustment, PreparedAdjustment};
 pub use space::{EncodedRgb, LinearRgb, WorkingSpace};
 pub use tone::{

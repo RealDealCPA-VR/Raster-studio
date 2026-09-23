@@ -1527,9 +1527,12 @@ fn rgba_from_tiles(map: &TileMap, tiles: &MemoryTileSource, rect: DocRect) -> Ve
         if coord.level != 0 {
             continue;
         }
-        let Some(data) = tiles.tile(hash) else {
+        let Some(stored) = tiles.tile(hash) else {
             continue;
         };
+        // The PSD writer is 8-bit: a 16-bit layer's RGBA16 tile is rounded to
+        // RGBA8 here rather than copied at a 4-byte stride as if it were one.
+        let data = raster::rgba8_view(stored);
         if data.len() < stride * TILE_SIZE as usize {
             continue;
         }

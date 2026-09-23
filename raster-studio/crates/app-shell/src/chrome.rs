@@ -282,6 +282,10 @@ pub struct ChromeOutput {
     /// The Brushes panel asked for the brush editor. The chrome opens the
     /// dialog and clears this.
     pub brush_editor: bool,
+    /// W4-G: an options-bar button (the Ruler's Straighten Layer) asked the
+    /// shell to confirm the gesture the live tool is holding — exactly what
+    /// Enter does.
+    pub confirm_tool: bool,
     /// The Preferences dialog confirmed a new [`ui::dialogs::UiPreferences`].
     /// The shell maps it onto the app's own preferences and applies it.
     pub set_ui_preferences: Option<Box<ui::dialogs::UiPreferences>>,
@@ -470,6 +474,91 @@ pub fn chord_from_egui(key: egui::Key, mods: egui::Modifiers) -> Option<Chord> {
     })
 }
 
+/// W4-A: how many points a live elliptical marquee's rubber band is drawn with.
+const LIVE_ELLIPSE_STEPS: usize = 64;
+/// W4-A: how many chords a live pen curve segment is flattened into.
+const LIVE_CURVE_STEPS: usize = 16;
+
+/// W4-G: the composited colour of one document pixel, straight-alpha sRGB in
+/// `0..=1` — what the Info panel's Colour Sampler rows show. `None` off the
+/// image or when the composite fails.
+fn document_colour_at(doc: &crate::doc::OpenDocument, x: i64, y: i64) -> Option<[f32; 4]> {
+    let (w, h) = (
+        i64::from(doc.document.width()),
+        i64::from(doc.document.height()),
+    );
+    if x < 0 || y < 0 || x >= w || y >= h {
+        return None;
+    }
+    let canvas = compositor::composite_region(
+        &doc.document,
+        &doc.tiles,
+        raster::PixelRect::new(x, y, 1, 1),
+        0,
+        compositor::CompositeOptions::default(),
+    )
+    .ok()?;
+    let rgba = canvas.to_rgba8(&doc.document.meta.color_space);
+    Some([
+        f32::from(rgba[0]) / 255.0,
+        f32::from(rgba[1]) / 255.0,
+        f32::from(rgba[2]) / 255.0,
+        f32::from(rgba[3]) / 255.0,
+    ])
+}
+
+/// W4-A: what a live session is painted with — the overlay painter and the
+/// camera, viewport, style and handle sizes the canvas was drawn with.
+#[derive(Clone, Copy)]
+struct LiveFrame<'a> {
+    painter: &'a egui::Painter,
+    camera: &'a ui::canvas::CanvasCamera,
+    viewport: &'a ui::canvas::Viewport,
+    style: &'a ui::canvas::CanvasStyle,
+    layout: &'a ui::canvas::HandleLayout,
+}
+
+/// W4-A: a screen-space polyline as marching ants — the unbroken base run,
+/// then the "on" halves of the dash pattern, shifted by `phase` so the band
+/// marches the way the selection's ants do.
+fn marching(
+    outline: Vec<glam::Vec2>,
+    style: &ui::canvas::AntsStyle,
+    phase: f32,
+) -> ui::canvas::AntsGeometry {
+    let mut out = ui::canvas::AntsGeometry::default();
+    if outline.len() < 2 || !outline.iter().all(|p| p.is_finite()) {
+        return out;
+    }
+    let dash = style.dash();
+    let period = dash * 2.0;
+    let mut walked = phase.rem_euclid(period);
+    for pair in outline.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let length = (b - a).length();
+        if length <= f32::EPSILON {
+            continue;
+        }
+        let dir = (b - a) / length;
+        let mut t = 0.0;
+        while t < length && out.dashes.len() < ui::canvas::ants::MAX_SEGMENTS {
+            let into = walked.rem_euclid(period);
+            let on = into < dash;
+            let step = if on { dash - into } else { period - into }
+                .min(length - t)
+                .max(f32::EPSILON);
+            if on {
+                out.dashes
+                    .push([a + dir * t, a + dir * (t + step).min(length)]);
+            }
+            t += step;
+            walked += step;
+        }
+    }
+    out.outlines.push(outline);
+    out
+}
+
 /// The chrome's view state: the whole `ui` workspace, plus "which row of the
 /// shortcut editor is listening for a key press".
 ///
@@ -483,6 +572,11 @@ pub struct Chrome {
     /// the shell's pointer handler (`Shell::on_pointer`, after each tool
     /// sample) through [`Chrome::publish_tool_readout`].
     live_readout: Option<(crate::doc::DocumentId, tools::tool::LiveReadout)>,
+    /// W4-A: the live session that is not a transform — a crop box, a
+    /// marquee's rubber band, a lasso outline, a pen path, the slice set —
+    /// published by [`Chrome::publish_tool_geometry`] and painted by
+    /// `paint_live_tool_geometry`. `None` when no such session is live.
+    live_session: Option<tools::SessionGeometry>,
     /// W3-A: View ▸ Extras — rulers, guides, grid, layer edges, precise
     /// cursor — painted over the composite. See [`crate::canvas_extras`].
     extras: crate::canvas_extras::CanvasExtras,
@@ -911,6 +1005,7 @@ impl Chrome {
         let Some(open) = editor.active_mut() else {
             self.workspace.clear_composite_preview();
             self.preview_revision = None;
+            ui::panels::history::HistoryThumbs::clear(ctx);
             return;
         };
         if self.preview_revision == Some(revision) && self.workspace.navigator_texture.is_some() {
@@ -921,6 +1016,16 @@ impl Chrome {
             self.preview_revision = Some(revision);
             return;
         };
+        // W4-I: the same picture becomes the History panel's thumbnail of
+        // the row the document is at now (the stored ones follow their
+        // states when the stack is rewritten or compacted).
+        ui::panels::history::HistoryThumbs::capture(
+            ctx,
+            open.id().0,
+            &open.history,
+            [w as usize, h as usize],
+            &small,
+        );
         self.workspace
             .set_composite_preview(ctx, revision, w as usize, h as usize, &small);
         self.preview_revision = Some(revision);
@@ -1029,6 +1134,10 @@ impl Chrome {
         self.read_gesture(ctx);
         self.sync_workspace(editor);
         self.refresh_layer_thumbs(ctx, editor);
+        // W4-I: the Actions panel's clicks and library, and the Swatches /
+        // Brushes lists kept in the preferences file (restored on start).
+        editor.sync_actions_panel(ctx);
+        editor.sync_panel_presets(&mut self.workspace);
         // View > Flip Horizontal / Vertical: the checkmarks are the
         // authority, the document camera is what the renderer and the pointer
         // read. A change owes one more frame so the picture follows at once.
@@ -1158,6 +1267,8 @@ impl Chrome {
         // The Info panel's colour under the pointer, read through the frame
         // just recorded — the same route the dialogs' eyedropper takes.
         self.refresh_info_sample(ctx, editor);
+        // W4-G: and the colour under each Colour Sampler point.
+        self.refresh_sampler_colours(editor);
         // The right-click menu floats above everything; its rows post intents
         // the harvest below turns into actions the same frame.
         let menu_ctx = crate::menu_bridge::context(editor, &self.workspace);
@@ -1355,26 +1466,120 @@ impl Chrome {
         active_document: Option<crate::doc::DocumentId>,
     ) {
         let sessions = &mut self.workspace.canvas.sessions;
+        let geometry = geometry
+            .filter(|(doc, _)| Some(*doc) == active_document)
+            .map(|(_, geometry)| geometry);
+        Self::publish_tool_info(&mut self.workspace.info, geometry.as_ref());
         match geometry {
-            Some((
-                doc,
-                tools::SessionGeometry::Transform {
-                    state,
-                    mode,
-                    active,
-                    layer: _,
-                },
-            )) if Some(doc) == active_document => {
+            Some(tools::SessionGeometry::Transform {
+                state,
+                mode,
+                active,
+                layer: _,
+            }) => {
                 sessions.transform = Some((state, mode));
                 sessions.active_handle = active;
+                self.live_session = None;
             }
-            _ => {
+            other => {
                 if sessions.transform.is_some() {
                     sessions.transform = None;
                     sessions.active_handle = None;
                 }
+                // W4-A: a crop box and a pen path also go into the canvas
+                // sessions, so the guide grab bands stand down under their
+                // handles exactly as they do under a transform's.
+                let crop = match &other {
+                    Some(tools::SessionGeometry::Crop { rect, .. }) => {
+                        Some(ui::canvas::DocRect::from_corners(rect[0], rect[1]))
+                    }
+                    _ => None,
+                };
+                let path = match &other {
+                    Some(tools::SessionGeometry::Path {
+                        anchors, handles, ..
+                    }) => Some((Self::live_path_topology(anchors, handles), Vec::new())),
+                    _ => None,
+                };
+                if sessions.crop != crop {
+                    sessions.crop = crop;
+                }
+                if sessions.path != path {
+                    sessions.path = path;
+                }
+                self.live_session = other;
             }
         }
+        // W4-I: the Paths panel's Work Path row follows the pen's
+        // uncommitted path through the same publication.
+        self.workspace.paths.follow_pen(self.live_session.as_ref());
+    }
+
+    /// W4-A: the non-transform session geometry the overlay paints this frame
+    /// — what a shell-level test reads to prove Escape and Enter take a crop
+    /// box, pen path, slice set or lasso outline down with no pointer sample.
+    #[cfg(test)]
+    pub(crate) fn live_session(&self) -> Option<&tools::SessionGeometry> {
+        self.live_session.as_ref()
+    }
+
+    /// W4-G: perform an options-bar confirm ([`ChromeOutput::confirm_tool`],
+    /// the Ruler's Straighten Layer button) — Enter by another door: the live
+    /// tool's held gesture is committed through
+    /// [`crate::tool_input::ToolPointer::commit`], the preview settles, and
+    /// the consumed geometry is un-published now rather than on the next
+    /// pointer sample. The shell calls this from its chrome-output step.
+    pub fn confirm_tool(
+        &mut self,
+        pointer: &mut crate::tool_input::ToolPointer,
+        editor: &mut Editor,
+    ) -> crate::tool_input::CommitOutcome {
+        let outcome = pointer.commit(editor);
+        pointer.settle_preview(editor);
+        let geometry = pointer.live_geometry();
+        self.publish_tool_geometry(geometry, editor.active().map(|d| d.id()));
+        outcome
+    }
+
+    /// W4-G: the Ruler's line, from the same published geometry the canvas
+    /// draws, into the Info panel's Distance and Angle rows. (The sampler rows
+    /// come from the document itself: see [`Chrome::refresh_sampler_colours`].)
+    fn publish_tool_info(
+        info: &mut ui::panels::navigator::InfoState,
+        geometry: Option<&tools::SessionGeometry>,
+    ) {
+        info.measure = match geometry {
+            Some(tools::SessionGeometry::Measure { start, end }) => {
+                Some(tools::measure::Measurement {
+                    start: *start,
+                    end: *end,
+                })
+            }
+            _ => None,
+        };
+    }
+
+    /// W4-G: the Info panel's #1..#4 rows, from the active document's Colour
+    /// Sampler points whatever tool is selected (the points are the
+    /// document's, so they outlive a tool switch), each with the colour of a
+    /// 1x1 composite at it — an edit under a point shows in its row on the
+    /// next frame. No document, no rows.
+    fn refresh_sampler_colours(&mut self, editor: &Editor) {
+        let Some(doc) = editor.active() else {
+            self.workspace.info.samplers.clear();
+            return;
+        };
+        if doc.samplers().is_empty() && self.workspace.info.samplers.is_empty() {
+            return;
+        }
+        self.workspace.info.samplers = doc
+            .samplers()
+            .iter()
+            .map(|p| ui::panels::navigator::SamplerReadout {
+                position: (p.x, p.y),
+                color: document_colour_at(doc, p.x.floor() as i64, p.y.floor() as i64),
+            })
+            .collect();
     }
 
     /// XB: publish (or clear, with `None`) the live tool's pointer readout —
@@ -1467,9 +1672,16 @@ impl Chrome {
     fn paint_live_tool_geometry(&mut self, ctx: &egui::Context, editor: &Editor) {
         use ui::canvas::{handles::HandleLayout, paint, style::CanvasStyle};
 
-        let Some((state, mode)) = self.workspace.canvas.sessions.transform.clone() else {
+        let transform = self.workspace.canvas.sessions.transform.clone();
+        // W4-G: the document's Colour Sampler points are marked whatever tool
+        // is selected; they are not a tool session.
+        let samplers: Vec<glam::Vec2> = editor
+            .active()
+            .map(|d| d.samplers().to_vec())
+            .unwrap_or_default();
+        if transform.is_none() && self.live_session.is_none() && samplers.is_empty() {
             return;
-        };
+        }
         let Some(doc) = editor.active() else {
             return;
         };
@@ -1477,19 +1689,291 @@ impl Chrome {
         let viewport = crate::tool_input::canvas_viewport(doc.camera.viewport_size);
         let style = CanvasStyle::from_context(ctx);
         let layout = HandleLayout::default();
-        let active = self.workspace.canvas.sessions.active_handle;
-        let session = ui::canvas::paint::TransformPaint {
-            state: &state,
-            mode,
-            layout: &layout,
-            active,
-        };
         // The extras' layer, painted after them: the handles sit over the
         // grid and guides deterministically (one layer draws in order), and
         // an open dialog and its scrim sit over both.
         let mut painter = ctx.layer_painter(crate::canvas_extras::overlay_layer());
         painter.set_clip_rect(ctx.available_rect());
-        paint::transform(&painter, &camera, &viewport, &session, &style);
+        if let Some((state, mode)) = transform {
+            let active = self.workspace.canvas.sessions.active_handle;
+            let session = ui::canvas::paint::TransformPaint {
+                state: &state,
+                mode,
+                layout: &layout,
+                active,
+            };
+            paint::transform(&painter, &camera, &viewport, &session, &style);
+        }
+        if let Some(session) = self.live_session.as_ref() {
+            let frame = LiveFrame {
+                painter: &painter,
+                camera: &camera,
+                viewport: &viewport,
+                style: &style,
+                layout: &layout,
+            };
+            Self::paint_live_session(ctx, &frame, session);
+        }
+        if !samplers.is_empty() {
+            let frame = LiveFrame {
+                painter: &painter,
+                camera: &camera,
+                viewport: &viewport,
+                style: &style,
+                layout: &layout,
+            };
+            Self::paint_samplers(ctx, &frame, &samplers);
+        }
+    }
+
+    /// W4-G: each Colour Sampler point as a numbered crosshair.
+    fn paint_samplers(ctx: &egui::Context, frame: &LiveFrame<'_>, points: &[glam::Vec2]) {
+        let LiveFrame {
+            painter,
+            camera,
+            viewport,
+            style,
+            ..
+        } = *frame;
+        let tokens = design::current_theme(ctx).tokens();
+        let font = design::egui_theme::font_id(tokens, TypeRole::Caption);
+        let stroke = style.hairline(style.path_stroke);
+        let arm = Space::Small.pt();
+        for (i, p) in points.iter().enumerate() {
+            let at = camera.screen_pt_of(viewport, *p);
+            if !at.is_finite() {
+                continue;
+            }
+            let c = egui::pos2(at.x, at.y);
+            for d in [egui::vec2(arm, 0.0), egui::vec2(0.0, arm)] {
+                painter.line_segment([c - d, c + d], stroke);
+            }
+            painter.circle_stroke(c, arm * 0.5, stroke);
+            painter.text(
+                c + egui::vec2(arm, arm),
+                egui::Align2::LEFT_TOP,
+                format!("{}", i + 1),
+                font.clone(),
+                style.path_stroke,
+            );
+        }
+    }
+
+    /// W4-A: paint a live session that is not a transform, with the `ui`
+    /// canvas painters: the crop box with its shaded surround and thirds
+    /// guide, a marquee's marching rubber band, a lasso's outline, a pen
+    /// path's segments, anchors and handles (plus the rubber segment to the
+    /// pointer between presses), and the numbered slice regions.
+    fn paint_live_session(
+        ctx: &egui::Context,
+        frame: &LiveFrame<'_>,
+        session: &tools::SessionGeometry,
+    ) {
+        use ui::canvas::paint;
+        let LiveFrame {
+            painter,
+            camera,
+            viewport,
+            style,
+            layout,
+        } = *frame;
+        let to_screen = |p: glam::Vec2| camera.screen_pt_of(viewport, p);
+        let pos = |v: glam::Vec2| egui::pos2(v.x, v.y);
+        // The rubber segment follows the pointer only between presses: while
+        // the button is held the gesture itself is at the pointer.
+        let hover = ctx.input(|i| {
+            if i.pointer.primary_down() {
+                None
+            } else {
+                i.pointer.hover_pos()
+            }
+        });
+        let ants = ui::canvas::AntsStyle::default();
+        let phase = ui::canvas::ants_phase(ctx.input(|i| i.time), &ants);
+        match session {
+            tools::SessionGeometry::Transform { .. } => {}
+            tools::SessionGeometry::Crop {
+                rect,
+                guide,
+                straighten,
+            } => {
+                // W4-D: the Overlay the options bar chose, drawn as asked.
+                let guide = ui::canvas::CropGuide::from(*guide);
+                let overlay = ui::canvas::crop::build(
+                    ui::canvas::DocRect::from_corners(rect[0], rect[1]),
+                    camera,
+                    viewport,
+                    guide,
+                    layout.handle_pt,
+                );
+                paint::crop(painter, &overlay, style);
+                // W4-D round 2: the Straighten line as it is dragged, and the
+                // rotation it asks for, by its far end.
+                if let Some([from, to]) = straighten {
+                    let (a, b) = (to_screen(*from), to_screen(*to));
+                    if a.is_finite() && b.is_finite() {
+                        painter.line_segment([pos(a), pos(b)], style.hairline(style.path_stroke));
+                        if let Some(angle) = tools::edit::straighten_angle(*from, *to) {
+                            let tokens = design::current_theme(ctx).tokens();
+                            let font = design::egui_theme::font_id(tokens, TypeRole::Caption);
+                            let pad = Space::Small.pt();
+                            painter.text(
+                                pos(b) + egui::vec2(pad, pad),
+                                egui::Align2::LEFT_TOP,
+                                format!("{:.1}°", angle.to_degrees()),
+                                font,
+                                style.path_stroke,
+                            );
+                        }
+                    }
+                }
+            }
+            tools::SessionGeometry::Marquee { shape, rect } => {
+                let mut outline: Vec<glam::Vec2> = match shape {
+                    tools::select::MarqueeShape::Ellipse => {
+                        let centre = (rect[0] + rect[1]) * 0.5;
+                        let radii = (rect[1] - rect[0]) * 0.5;
+                        (0..LIVE_ELLIPSE_STEPS)
+                            .map(|i| {
+                                let t =
+                                    std::f32::consts::TAU * i as f32 / LIVE_ELLIPSE_STEPS as f32;
+                                to_screen(centre + radii * glam::Vec2::new(t.cos(), t.sin()))
+                            })
+                            .collect()
+                    }
+                    _ => ui::canvas::DocRect::from_corners(rect[0], rect[1])
+                        .corners()
+                        .into_iter()
+                        .map(to_screen)
+                        .collect(),
+                };
+                if let Some(first) = outline.first().copied() {
+                    outline.push(first);
+                }
+                paint::ants(painter, &marching(outline, &ants, phase), style);
+            }
+            tools::SessionGeometry::Lasso { points, closed } => {
+                let mut outline: Vec<glam::Vec2> = points.iter().copied().map(to_screen).collect();
+                if *closed {
+                    if let Some(first) = outline.first().copied() {
+                        outline.push(first);
+                    }
+                } else if let Some(h) = hover {
+                    outline.push(glam::Vec2::new(h.x, h.y));
+                }
+                paint::ants(painter, &marching(outline, &ants, phase), style);
+            }
+            tools::SessionGeometry::Path {
+                anchors,
+                handles,
+                closing,
+            } => {
+                let n = anchors.len().min(handles.len());
+                if n == 0 {
+                    return;
+                }
+                let mut line: Vec<egui::Pos2> = vec![pos(to_screen(anchors[0]))];
+                let mut join = |i: usize, j: usize| {
+                    let (a, b) = (anchors[i], anchors[j]);
+                    let (c1, c2) = (handles[i][1], handles[j][0]);
+                    if c1 == a && c2 == b {
+                        line.push(pos(to_screen(b)));
+                        return;
+                    }
+                    for k in 1..=LIVE_CURVE_STEPS {
+                        let t = k as f32 / LIVE_CURVE_STEPS as f32;
+                        let u = 1.0 - t;
+                        let p = a * (u * u * u)
+                            + c1 * (3.0 * u * u * t)
+                            + c2 * (3.0 * u * t * t)
+                            + b * (t * t * t);
+                        line.push(pos(to_screen(p)));
+                    }
+                };
+                for i in 1..n {
+                    join(i - 1, i);
+                }
+                if *closing && n > 2 {
+                    join(n - 1, 0);
+                } else if let Some(h) = hover {
+                    line.push(h);
+                }
+                if line.len() > 1 && line.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+                    painter.add(egui::Shape::line(line, style.hairline(style.path_stroke)));
+                }
+                let topology = Self::live_path_topology(&anchors[..n], &handles[..n]);
+                let projected = ui::canvas::paths::project(&topology, &[n - 1], camera, viewport);
+                let control = Space::XSmall.pt();
+                paint::path(painter, &projected, control * 1.5, control, style);
+            }
+            tools::SessionGeometry::Slices { rects } => {
+                let tokens = design::current_theme(ctx).tokens();
+                let font = design::egui_theme::font_id(tokens, TypeRole::Caption);
+                let stroke = style.hairline(style.guide);
+                let pad = Space::XSmall.pt();
+                for (i, r) in rects.iter().enumerate() {
+                    let (a, b) = (to_screen(r[0]), to_screen(r[1]));
+                    if !a.is_finite() || !b.is_finite() {
+                        continue;
+                    }
+                    let rect = egui::Rect::from_two_pos(pos(a), pos(b));
+                    painter.rect_stroke(rect, egui::Rounding::ZERO, stroke);
+                    painter.text(
+                        rect.min + egui::vec2(pad, pad),
+                        egui::Align2::LEFT_TOP,
+                        format!("{:02}", i + 1),
+                        font.clone(),
+                        style.guide,
+                    );
+                }
+            }
+            // W4-G: the Ruler's line, with a cross at each end.
+            tools::SessionGeometry::Measure { start, end } => {
+                let (a, b) = (to_screen(*start), to_screen(*end));
+                if !a.is_finite() || !b.is_finite() {
+                    return;
+                }
+                let stroke = style.hairline(style.path_stroke);
+                painter.line_segment([pos(a), pos(b)], stroke);
+                let arm = Space::XSmall.pt();
+                for p in [pos(a), pos(b)] {
+                    for d in [egui::vec2(arm, 0.0), egui::vec2(0.0, arm)] {
+                        painter.line_segment([p - d, p + d], stroke);
+                    }
+                }
+            }
+        }
+    }
+
+    /// W4-A: a pen path's anchors and handles as the `ui` path painter's
+    /// topology — one open subpath, a control only where a handle is pulled.
+    fn live_path_topology(
+        anchors: &[glam::Vec2],
+        handles: &[[glam::Vec2; 2]],
+    ) -> ui::canvas::PathTopology {
+        use ui::canvas::paths::{Anchor, ControlHandle, ControlSide};
+        let mut topology = ui::canvas::PathTopology::default();
+        for (index, (&doc, [h_in, h_out])) in anchors.iter().zip(handles).enumerate() {
+            topology.anchors.push(Anchor {
+                index,
+                subpath: 0,
+                doc,
+                closes: false,
+            });
+            for (side, h) in [
+                (ControlSide::Incoming, *h_in),
+                (ControlSide::Outgoing, *h_out),
+            ] {
+                if h != doc {
+                    topology.controls.push(ControlHandle {
+                        anchor: index,
+                        side,
+                        doc: h,
+                    });
+                }
+            }
+        }
+        topology
     }
 
     fn record_viewport(&mut self, ctx: &egui::Context) {
@@ -4059,6 +4543,560 @@ mod tests {
                 _ => false,
             });
         assert!(!quad, "the ended session paints no quad: {painted:?}");
+    }
+
+    /// W4-A: a live-gesture rig — one 8x8 document at 2000% centred in the
+    /// 1400x900 test window (doc `(x, y)` lands at screen
+    /// `(700 + 20(x-4), 450 + 20(y-4))`), a real [`ToolPointer`] with `tool`
+    /// selected, and a chrome with Layer Edges off so the only closed paths
+    /// and rectangles near the document are the session's.
+    struct LiveRig {
+        _dir: tempfile::TempDir,
+        ed: Editor,
+        pointer: ToolPointer,
+        chrome: Chrome,
+    }
+
+    const LIVE_ZOOM: f32 = 20.0;
+
+    fn live_screen(x: f32, y: f32) -> egui::Pos2 {
+        egui::pos2(700.0 + (x - 4.0) * LIVE_ZOOM, 450.0 + (y - 4.0) * LIVE_ZOOM)
+    }
+
+    impl LiveRig {
+        fn new(tool: tools::ToolId) -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let p = png(dir.path(), "a.png");
+            let mut ed = editor(&dir.path().join("config"));
+            ed.open_path(&p).unwrap();
+            {
+                let doc = ed.active_mut().unwrap();
+                doc.set_viewport(glam::Vec2::new(1400.0, 900.0));
+                doc.camera.zoom = LIVE_ZOOM;
+                doc.camera.center = glam::Vec2::new(4.0, 4.0);
+            }
+            ed.set_tool(tool);
+            let mut chrome = Chrome::new();
+            chrome.emit(ui::Intent::SetViewFlag {
+                flag: ui::ViewFlag::LayerEdges,
+                on: false,
+            });
+            Self {
+                _dir: dir,
+                ed,
+                pointer: ToolPointer::new(),
+                chrome,
+            }
+        }
+
+        /// One pointer sample at document `(x, y)`, through the real route.
+        fn send(&mut self, phase: ui::canvas::PointerPhase, x: f32, y: f32) {
+            let at = live_screen(x, y);
+            self.pointer.handle(
+                &mut self.ed,
+                ui::canvas::PointerInput::at(phase, glam::Vec2::new(at.x, at.y)),
+                false,
+                &[],
+            );
+        }
+
+        fn down(&mut self, x: f32, y: f32) {
+            self.send(ui::canvas::PointerPhase::Down, x, y);
+        }
+        fn drag(&mut self, x: f32, y: f32) {
+            self.send(ui::canvas::PointerPhase::Move, x, y);
+        }
+        fn up(&mut self, x: f32, y: f32) {
+            self.send(ui::canvas::PointerPhase::Up, x, y);
+        }
+
+        /// Escape: the pointer's own cancel route.
+        fn escape(&mut self) {
+            self.pointer.cancel(&mut self.ed);
+        }
+
+        /// Publish through the production publisher, then draw a frame and
+        /// return what the chrome painted.
+        fn frame(&mut self) -> Vec<egui::Shape> {
+            let geometry = self.pointer.live_geometry();
+            let active = self.ed.active().map(|d| d.id());
+            self.chrome.publish_tool_geometry(geometry, active);
+            painted_shapes(&mut self.chrome, &mut self.ed)
+        }
+    }
+
+    fn near(p: egui::Pos2, q: egui::Pos2) -> bool {
+        (p.x - q.x).abs() < 1.5 && (p.y - q.y).abs() < 1.5
+    }
+
+    /// Every egui shape, with `Shape::Vec`s flattened.
+    fn flat(shapes: &[egui::Shape]) -> Vec<egui::Shape> {
+        let mut out = Vec::new();
+        for s in shapes {
+            match s {
+                egui::Shape::Vec(inner) => out.extend(flat(inner)),
+                other => out.push(other.clone()),
+            }
+        }
+        out
+    }
+
+    /// A painted rectangle whose corners are the two screen points.
+    fn has_rect(shapes: &[egui::Shape], min: egui::Pos2, max: egui::Pos2) -> bool {
+        flat(shapes).iter().any(|s| match s {
+            egui::Shape::Rect(r) => near(r.rect.min, min) && near(r.rect.max, max),
+            _ => false,
+        })
+    }
+
+    /// A painted polyline passing through every one of `points`.
+    fn has_polyline_through(shapes: &[egui::Shape], points: &[egui::Pos2]) -> bool {
+        flat(shapes).iter().any(|s| match s {
+            egui::Shape::Path(path) => points
+                .iter()
+                .all(|want| path.points.iter().any(|p| near(*p, *want))),
+            _ => false,
+        })
+    }
+
+    /// A painted square (an anchor) centred on `centre`.
+    fn has_square_at(shapes: &[egui::Shape], centre: egui::Pos2) -> bool {
+        flat(shapes).iter().any(|s| match s {
+            egui::Shape::Rect(r) => near(r.rect.center(), centre) && r.rect.width() < 20.0,
+            _ => false,
+        })
+    }
+
+    fn painted_texts(shapes: &[egui::Shape]) -> Vec<String> {
+        flat(shapes)
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// W4-A: a crop drag paints its box (outline and shaded surround) while
+    /// the button is down; released, the box stays up waiting for Enter;
+    /// Escape takes it down.
+    #[test]
+    fn a_crop_drag_paints_its_box_until_escape() {
+        let mut rig = LiveRig::new(tools::ToolId::Crop);
+        // Mid-drag the box follows the pointer; released it snaps outward
+        // to whole pixels, (1, 1)..(6, 5).
+        let (min, max) = (live_screen(1.25, 1.25), live_screen(5.75, 4.75));
+        assert!(
+            !has_rect(&rig.frame(), min, max),
+            "nothing before the press"
+        );
+        rig.down(1.25, 1.25);
+        rig.drag(5.75, 4.75);
+        let painted = rig.frame();
+        assert!(
+            has_rect(&painted, min, max),
+            "mid-drag the crop box is painted at {min:?}..{max:?}: {painted:?}"
+        );
+        // The shaded surround: a scrim band above the box, full width.
+        assert!(
+            flat(&painted).iter().any(|s| matches!(
+                s,
+                egui::Shape::Rect(r) if (r.rect.max.y - min.y).abs() < 1.5
+                    && r.rect.width() > 1000.0
+            )),
+            "the outside of the crop is shaded: {painted:?}"
+        );
+        rig.up(5.75, 4.75);
+        let (min, max) = (live_screen(1.0, 1.0), live_screen(6.0, 5.0));
+        let painted = rig.frame();
+        assert!(
+            has_rect(&painted, min, max),
+            "released, the crop box waits for Enter: {painted:?}"
+        );
+        rig.escape();
+        let painted = rig.frame();
+        assert!(
+            !has_rect(&painted, min, max),
+            "Escape takes the crop box down: {painted:?}"
+        );
+    }
+
+    /// W4-D round 2: one pointer sample at document `(x, y)` with the Crop
+    /// options the chrome's own options bar holds — the settings a real
+    /// press is seeded with.
+    fn crop_send(rig: &mut LiveRig, phase: ui::canvas::PointerPhase, x: f32, y: f32) {
+        let settings: Vec<(String, tools::ToolSetting)> = rig
+            .chrome
+            .tool_options(tools::ToolId::Crop)
+            .into_iter()
+            .map(|(key, value)| {
+                let setting = match value {
+                    ui::OptionValue::Float(v) => tools::ToolSetting::Float(v),
+                    ui::OptionValue::Int(v) => tools::ToolSetting::Int(v),
+                    ui::OptionValue::Bool(v) => tools::ToolSetting::Bool(v),
+                    ui::OptionValue::Choice(v) => tools::ToolSetting::Choice(v),
+                    ui::OptionValue::Color(v) => tools::ToolSetting::Color(v),
+                };
+                (key, setting)
+            })
+            .collect();
+        let at = live_screen(x, y);
+        let out = rig.pointer.handle(
+            &mut rig.ed,
+            ui::canvas::PointerInput::at(phase, glam::Vec2::new(at.x, at.y)),
+            false,
+            &settings,
+        );
+        assert!(out.failed.is_none(), "the press refused: {:?}", out.failed);
+    }
+
+    /// The crop-guide lines a frame painted inside the screen box `keep`.
+    fn crop_guide_lines(shapes: &[egui::Shape], keep: egui::Rect) -> usize {
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let style = ui::canvas::CanvasStyle::from_context(&ctx);
+        segments_in(&flat(shapes), style.crop_guide, keep.shrink(0.5)).len()
+    }
+
+    /// W4-D round 2: the Overlay chosen in the options bar is the guide the
+    /// chrome paints inside the crop box — through the chrome's real
+    /// painter, not a rebuilt overlay: Grid's fourteen lines, Diagonal's two,
+    /// None's none, and the default Rule of Thirds' four.
+    #[test]
+    fn the_crop_overlay_choice_is_the_guide_the_chrome_paints() {
+        use ui::canvas::PointerPhase::{Down, Move, Up};
+        let index = |label: &str| {
+            tools::edit::CROP_OVERLAY_LABELS
+                .iter()
+                .position(|l| *l == label)
+                .unwrap()
+        };
+        let keep = egui::Rect::from_two_pos(live_screen(1.0, 1.0), live_screen(7.0, 7.0));
+        for (choice, want) in [
+            (Some("Grid"), 14usize),
+            (Some("Diagonal"), 2),
+            (Some("None"), 0),
+            (None, 4),
+        ] {
+            let mut rig = LiveRig::new(tools::ToolId::Crop);
+            if let Some(label) = choice {
+                rig.chrome.set_tool_option(
+                    tools::ToolId::Crop,
+                    "overlay",
+                    ui::OptionValue::Choice(index(label)),
+                );
+            }
+            // Off the pixel grid, as a real hand is: the release snaps the
+            // box outward to (1, 1)..(7, 7).
+            crop_send(&mut rig, Down, 1.25, 1.25);
+            crop_send(&mut rig, Move, 6.75, 6.75);
+            let held = rig.frame();
+            let dragged =
+                egui::Rect::from_two_pos(live_screen(1.25, 1.25), live_screen(6.75, 6.75));
+            assert!(has_rect(&held, dragged.min, dragged.max), "{held:?}");
+            assert_eq!(
+                crop_guide_lines(&held, dragged),
+                want,
+                "{choice:?} mid-drag: {held:?}"
+            );
+            crop_send(&mut rig, Up, 6.75, 6.75);
+            let released = rig.frame();
+            assert!(has_rect(&released, keep.min, keep.max), "{released:?}");
+            assert_eq!(
+                crop_guide_lines(&released, keep),
+                want,
+                "{choice:?} released"
+            );
+        }
+    }
+
+    /// W4-D round 2: in Straighten mode the line is painted while it is
+    /// dragged, with the rotation it asks for printed by its far end, and it
+    /// stays up with the whole-canvas box once released, until Escape.
+    #[test]
+    fn a_straighten_drag_paints_its_line_and_angle_until_escape() {
+        use ui::canvas::PointerPhase::{Down, Move, Up};
+        let mut rig = LiveRig::new(tools::ToolId::Crop);
+        rig.chrome.set_tool_option(
+            tools::ToolId::Crop,
+            "straighten_line",
+            ui::OptionValue::Bool(true),
+        );
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let style = ui::canvas::CanvasStyle::from_context(&ctx);
+        // A 10 degree line from doc (1, 2).
+        let (x0, y0) = (1.0f32, 2.0f32);
+        let (x1, y1) = (7.0f32, 2.0 + 6.0 * 10f32.to_radians().tan());
+        let (a, b) = (live_screen(x0, y0), live_screen(x1, y1));
+        let has_line = |shapes: &[egui::Shape]| {
+            segments_in(&flat(shapes), style.path_stroke, egui::Rect::EVERYTHING)
+                .iter()
+                .any(|[p, q]| near(*p, a) && near(*q, b))
+        };
+        let angle_label =
+            |shapes: &[egui::Shape]| painted_texts(shapes).into_iter().any(|t| t == "10.0\u{b0}");
+        crop_send(&mut rig, Down, x0, y0);
+        crop_send(&mut rig, Move, x1, y1);
+        let held = rig.frame();
+        assert!(has_line(&held), "no straighten line mid-drag: {held:?}");
+        assert!(
+            angle_label(&held),
+            "no angle mid-drag: {:?}",
+            painted_texts(&held)
+        );
+        // The box shown is the whole canvas: what Enter will keep.
+        let canvas = (live_screen(0.0, 0.0), live_screen(8.0, 8.0));
+        assert!(has_rect(&held, canvas.0, canvas.1), "{held:?}");
+        crop_send(&mut rig, Up, x1, y1);
+        let released = rig.frame();
+        assert!(has_line(&released), "released, the line waits for Enter");
+        assert!(angle_label(&released));
+        rig.escape();
+        let gone = rig.frame();
+        assert!(
+            !has_line(&gone) && !angle_label(&gone),
+            "Escape takes it down"
+        );
+    }
+
+    /// W4-A: a rectangular marquee drag paints its marching rubber band while
+    /// the button is down, and nothing once the release has made the
+    /// selection.
+    #[test]
+    fn a_marquee_drag_paints_its_rubber_band_until_release() {
+        let mut rig = LiveRig::new(tools::ToolId::RectMarquee);
+        let corners = [
+            live_screen(1.0, 1.0),
+            live_screen(6.0, 1.0),
+            live_screen(6.0, 5.0),
+            live_screen(1.0, 5.0),
+        ];
+        rig.down(1.0, 1.0);
+        rig.drag(6.0, 5.0);
+        let painted = rig.frame();
+        assert!(
+            has_polyline_through(&painted, &corners),
+            "mid-drag the rubber band is painted through {corners:?}: {painted:?}"
+        );
+        assert!(
+            flat(&painted)
+                .iter()
+                .any(|s| matches!(s, egui::Shape::LineSegment { .. })),
+            "the band marches (dashes over the base run)"
+        );
+        rig.up(6.0, 5.0);
+        let painted = rig.frame();
+        assert!(
+            !has_polyline_through(&painted, &corners),
+            "released, no rubber band remains: {painted:?}"
+        );
+    }
+
+    /// W4-A: an elliptical marquee's band is the ellipse, not its box.
+    #[test]
+    fn an_elliptical_marquee_drag_paints_an_ellipse() {
+        let mut rig = LiveRig::new(tools::ToolId::EllipseMarquee);
+        rig.down(1.0, 1.0);
+        rig.drag(7.0, 5.0);
+        let painted = rig.frame();
+        // The ellipse's right and bottom extremes, and not the box's corner.
+        let (right, bottom) = (live_screen(7.0, 3.0), live_screen(4.0, 5.0));
+        assert!(
+            has_polyline_through(&painted, &[right, bottom]),
+            "the ellipse is painted: {painted:?}"
+        );
+        assert!(!has_polyline_through(&painted, &[live_screen(7.0, 5.0)]));
+        rig.up(7.0, 5.0);
+        assert!(!has_polyline_through(&rig.frame(), &[right, bottom]));
+    }
+
+    /// W4-A: a freehand lasso paints the path it has traced while the
+    /// button is down; the release closes it into a selection and the path
+    /// is gone.
+    #[test]
+    fn a_lasso_drag_paints_its_path_until_release() {
+        let mut rig = LiveRig::new(tools::ToolId::Lasso);
+        let traced = [
+            live_screen(1.0, 1.0),
+            live_screen(6.0, 1.0),
+            live_screen(6.0, 6.0),
+        ];
+        rig.down(1.0, 1.0);
+        rig.drag(6.0, 1.0);
+        rig.drag(6.0, 6.0);
+        let painted = rig.frame();
+        assert!(
+            has_polyline_through(&painted, &traced),
+            "mid-drag the lasso path is painted through {traced:?}: {painted:?}"
+        );
+        rig.up(6.0, 6.0);
+        let painted = rig.frame();
+        assert!(
+            !has_polyline_through(&painted, &traced),
+            "released, no lasso path remains: {painted:?}"
+        );
+    }
+
+    /// W4-A: a polygonal lasso's vertices stay painted between clicks (its
+    /// release is not the end of the gesture); Escape takes them down.
+    #[test]
+    fn a_polygonal_lasso_paints_its_vertices_until_escape() {
+        let mut rig = LiveRig::new(tools::ToolId::PolygonalLasso);
+        let placed = [live_screen(1.0, 1.0), live_screen(6.0, 2.0)];
+        rig.down(1.0, 1.0);
+        rig.up(1.0, 1.0);
+        rig.down(6.0, 2.0);
+        rig.up(6.0, 2.0);
+        let painted = rig.frame();
+        assert!(
+            has_polyline_through(&painted, &placed),
+            "the polygon so far is painted: {painted:?}"
+        );
+        rig.escape();
+        assert!(!has_polyline_through(&rig.frame(), &placed));
+    }
+
+    /// W4-A: the pen paints its anchors and the path between them as they
+    /// are placed — not only after Enter — plus the handles a drag pulls;
+    /// Escape takes them down.
+    #[test]
+    fn a_pen_path_paints_anchors_and_handles_until_escape() {
+        let mut rig = LiveRig::new(tools::ToolId::Pen);
+        let (a, b, c) = (
+            live_screen(1.0, 1.0),
+            live_screen(6.0, 1.0),
+            live_screen(6.0, 6.0),
+        );
+        rig.down(1.0, 1.0);
+        rig.up(1.0, 1.0);
+        rig.down(6.0, 1.0);
+        rig.up(6.0, 1.0);
+        // The third press is dragged: it pulls the anchor's handles out.
+        rig.down(6.0, 6.0);
+        rig.drag(6.0, 3.0);
+        let painted = rig.frame();
+        for (name, at) in [("first", a), ("second", b), ("third", c)] {
+            assert!(
+                has_square_at(&painted, at),
+                "the {name} anchor is painted at {at:?}: {painted:?}"
+            );
+        }
+        assert!(
+            has_polyline_through(&painted, &[a, b, c]),
+            "the path between the anchors is painted: {painted:?}"
+        );
+        // The dragged anchor's handles: out at (6, 3), in mirrored at (6, 9).
+        let handle = live_screen(6.0, 3.0);
+        assert!(
+            flat(&painted).iter().any(|s| matches!(
+                s,
+                egui::Shape::LineSegment { points, .. }
+                    if near(points[0], c) && near(points[1], handle)
+            )),
+            "the pulled handle's direction line is painted: {painted:?}"
+        );
+        rig.up(6.0, 3.0);
+        assert!(has_square_at(&rig.frame(), a), "released, still authoring");
+        rig.escape();
+        let painted = rig.frame();
+        assert!(
+            !has_square_at(&painted, a) && !has_square_at(&painted, c),
+            "Escape takes the anchors down: {painted:?}"
+        );
+    }
+
+    /// W4-I: the pen's uncommitted path is the Paths panel's Work Path,
+    /// through the production publisher: the row appears with the first
+    /// anchors, holds exactly the segments placed so far, and goes with
+    /// Escape.
+    #[test]
+    fn the_pens_uncommitted_path_is_the_paths_panels_work_path() {
+        use vector::{PathEl, Point};
+        let mut rig = LiveRig::new(tools::ToolId::Pen);
+        rig.chrome
+            .workspace
+            .dock
+            .set_open(ui::dock::PanelId::Paths, true);
+        rig.chrome.workspace.dock.raise(ui::dock::PanelId::Paths);
+        let work = ui::strings::tr("ui.docks.paths.work.path");
+        let has_row = |shapes: &[egui::Shape]| {
+            flat(shapes)
+                .iter()
+                .any(|s| matches!(s, egui::Shape::Text(t) if t.galley.text() == work))
+        };
+        assert!(!has_row(&rig.frame()), "no pen path, no Work Path row");
+
+        rig.down(1.0, 1.0);
+        rig.up(1.0, 1.0);
+        rig.down(6.0, 1.0);
+        rig.up(6.0, 1.0);
+        let painted = rig.frame();
+        assert!(
+            has_row(&painted),
+            "the Paths panel lists the pen's path as the Work Path"
+        );
+        let path = rig
+            .chrome
+            .workspace
+            .paths
+            .work_path
+            .clone()
+            .expect("the pen's path is the Work Path");
+        let close = |p: &Point, x: f64, y: f64| (p.x - x).abs() < 1e-3 && (p.y - y).abs() < 1e-3;
+        assert!(
+            matches!(
+                path.elements(),
+                [PathEl::MoveTo(a), PathEl::LineTo(b)] if close(a, 1.0, 1.0) && close(b, 6.0, 1.0)
+            ),
+            "the Work Path is the pen's anchors, in document pixels: {:?}",
+            path.elements()
+        );
+
+        rig.escape();
+        assert!(!has_row(&rig.frame()), "Escape takes the Work Path down");
+        assert!(rig.chrome.workspace.paths.work_path.is_none());
+    }
+
+    /// W4-A: the slice tool paints each drawn slice with its number, and the
+    /// one being dragged; Escape drops the set and its regions.
+    #[test]
+    fn slices_paint_numbered_regions_until_escape() {
+        let mut rig = LiveRig::new(tools::ToolId::Slice);
+        let dragged = (live_screen(1.25, 1.25), live_screen(2.75, 2.75));
+        // Released, the slice snaps outward to whole pixels.
+        let first = (live_screen(1.0, 1.0), live_screen(3.0, 3.0));
+        let second = (live_screen(4.0, 4.0), live_screen(7.0, 6.0));
+        rig.down(1.25, 1.25);
+        rig.drag(2.75, 2.75);
+        let painted = rig.frame();
+        assert!(
+            has_rect(&painted, dragged.0, dragged.1),
+            "the slice being dragged is painted: {painted:?}"
+        );
+        rig.up(2.75, 2.75);
+        rig.down(4.0, 4.0);
+        rig.drag(7.0, 6.0);
+        let painted = rig.frame();
+        assert!(
+            has_rect(&painted, first.0, first.1),
+            "the drawn slice stays"
+        );
+        assert!(
+            has_rect(&painted, second.0, second.1),
+            "the second slice, mid-drag"
+        );
+        let texts = painted_texts(&painted);
+        assert!(
+            texts.iter().any(|t| t == "01") && texts.iter().any(|t| t == "02"),
+            "the slices are numbered: {texts:?}"
+        );
+        rig.escape();
+        let painted = rig.frame();
+        assert!(
+            !has_rect(&painted, first.0, first.1) && !has_rect(&painted, second.0, second.1),
+            "Escape takes the slices down: {painted:?}"
+        );
     }
 
     /// XB: a real shape drag, published through the production publisher,
@@ -7890,6 +8928,198 @@ mod tests {
         let mut out = Vec::new();
         shapes.iter().for_each(|s| walk(s, &mut out));
         out
+    }
+
+    /// W4-I: through the real chrome, the composite preview of each state
+    /// the document reaches is uploaded as that History row's thumbnail, and
+    /// the History panel paints it.
+    #[test]
+    fn history_rows_get_the_composite_of_each_state_they_were_at() {
+        use ui::panels::history::HistoryThumbs;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, _) = editor_with_layers(dir.path(), 1);
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        chrome
+            .workspace
+            .dock
+            .set_open(ui::dock::PanelId::History, true);
+        for _ in 0..3 {
+            thumb_frame(&ctx, &mut chrome, &mut ed);
+        }
+        let opened = HistoryThumbs::texture(&ctx, 0).expect("row 0 was captured");
+
+        ed.apply_command(Command::create_layer(layer_model::Layer::raster("next")));
+        let mut shapes = Vec::new();
+        for _ in 0..3 {
+            shapes = thumb_frame(&ctx, &mut chrome, &mut ed);
+        }
+        let edited = HistoryThumbs::texture(&ctx, 1).expect("row 1 was captured");
+        assert_ne!(opened.id(), edited.id());
+        let painted = painted_texture_ids(&shapes);
+        assert!(
+            painted.contains(&opened.id()) && painted.contains(&edited.id()),
+            "the History panel did not paint both rows' thumbnails"
+        );
+    }
+
+    /// W4-I: the Actions panel through the real chrome: a two-step
+    /// recording is listed by name, its twirl shows both steps, and
+    /// selecting it and pressing Play replays both on the active document.
+    #[test]
+    fn the_actions_panel_lists_expands_and_plays_a_recording_through_the_chrome() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(dir.path());
+        ed.open_path(&png(dir.path(), "a.png")).unwrap();
+        ed.open_path(&png(dir.path(), "b.png")).unwrap();
+        ed.activate(0).unwrap();
+        let rect = editor_core::Selection::Rect {
+            min: glam::IVec2::new(1, 1),
+            max: glam::IVec2::new(3, 3),
+        };
+        let make = Command::create_layer(layer_model::Layer::raster("Recorded"));
+        let select = Command::SetSelection {
+            selection: rect.clone(),
+        };
+        let labels = [make.label(), select.label()];
+        ed.start_recording();
+        ed.apply_command(make);
+        ed.apply_command(select);
+        assert_eq!(ed.stop_recording().map(|e| e.len()), Some(2));
+        ed.activate(1).unwrap();
+        let before = ed.active().unwrap().document.layers.len();
+
+        let mut win = Window::new(&mut ed);
+        win.chrome
+            .workspace
+            .dock
+            .set_open(ui::dock::PanelId::Actions, true);
+        win.chrome.workspace.dock.raise(ui::dock::PanelId::Actions);
+        win.settle(&mut ed);
+        let texts = win.painted_texts(&mut ed);
+        assert!(
+            texts.iter().any(|t| t == "Action 1"),
+            "the recording is not listed: {texts:?}"
+        );
+        // A step's label can also be painted elsewhere (a menu title, the
+        // History panel), so the twirl is judged by what it adds.
+        let count = |texts: &[String], label: &str| texts.iter().filter(|t| *t == label).count();
+        let collapsed = labels.clone().map(|l| count(&texts, &l));
+
+        win.click(&mut ed, egui::Id::new(("raster-actions-twirl", 0usize)));
+        win.settle(&mut ed);
+        let texts = win.painted_texts(&mut ed);
+        for (label, was) in labels.iter().zip(collapsed) {
+            assert!(
+                count(&texts, label) > was,
+                "the expanded action does not show the step {label:?}: {texts:?}"
+            );
+        }
+
+        win.click(&mut ed, egui::Id::new(("raster-actions-row", 0usize)));
+        win.frame(&mut ed);
+        win.click(&mut ed, egui::Id::new("raster-actions-play"));
+        win.frame(&mut ed);
+        let doc = &ed.active().unwrap().document;
+        assert_eq!(doc.layers.len(), before + 1, "the layer step replayed");
+        assert_eq!(doc.selection, rect, "the selection step replayed");
+    }
+
+    /// W4-I: a swatch added in the Swatches panel through the real chrome is
+    /// written to the preferences file, and a fresh editor built the way the
+    /// application starts ([`Editor::new`] reads that file) shows it again.
+    #[test]
+    fn a_swatch_added_in_the_panel_survives_a_restart_through_the_chrome() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(dir.path());
+        ed.open_path(&png(dir.path(), "a.png")).unwrap();
+        let mut win = Window::new(&mut ed);
+        win.chrome
+            .workspace
+            .dock
+            .set_open(ui::dock::PanelId::Swatches, true);
+        win.chrome.workspace.dock.raise(ui::dock::PanelId::Swatches);
+        let odd = [0.125, 0.75, 0.375, 1.0];
+        ed.set_foreground(odd);
+        win.settle(&mut ed);
+        let before = win.chrome.workspace.swatches.len();
+        assert!(win.chrome.workspace.swatches.index_of(odd).is_none());
+        win.click_text(&mut ed, ui::strings::tr("ui.docks.add.current.colour"));
+        win.frame(&mut ed);
+        assert_eq!(win.chrome.workspace.swatches.len(), before + 1);
+
+        let paths = AppPaths::rooted(dir.path());
+        let saved = Preferences::load(&paths.preferences_file());
+        assert!(
+            saved
+                .swatches
+                .as_ref()
+                .is_some_and(|s| s.iter().any(|w| w.rgba == odd)),
+            "the added swatch was not written to the preferences file"
+        );
+
+        let mut fresh = Editor::new(paths, Box::new(ScriptedDialogs::new()));
+        fresh.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+        let mut win = Window::new(&mut fresh);
+        win.frame(&mut fresh);
+        let swatches = &win.chrome.workspace.swatches;
+        assert_eq!(swatches.len(), before + 1, "{:?}", swatches.swatches());
+        assert!(
+            swatches.index_of(odd).is_some(),
+            "the added swatch did not survive the restart"
+        );
+    }
+
+    /// W4-I: at the history limit each edit compacts the oldest entry off
+    /// the stack and every surviving state moves down one row; the pictures
+    /// move with their states instead of staying on row numbers that now
+    /// name other states, and the opened state stops being marked as the
+    /// History Brush's source row.
+    #[test]
+    fn history_thumbnails_follow_their_states_when_the_limit_compacts_the_stack() {
+        use ui::panels::history::HistoryThumbs;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, _) = editor_with_layers(dir.path(), 1);
+        ed.active_mut().unwrap().history.set_limit(3);
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        let settle = |chrome: &mut Chrome, ed: &mut Editor| {
+            for _ in 0..3 {
+                thumb_frame(&ctx, chrome, ed);
+            }
+        };
+        settle(&mut chrome, &mut ed);
+        let mut pictures = vec![HistoryThumbs::texture(&ctx, 0).unwrap().id()];
+        for name in ["a", "b", "c"] {
+            ed.apply_command(Command::create_layer(layer_model::Layer::raster(name)));
+            settle(&mut chrome, &mut ed);
+            let row = ed.active().unwrap().history.undo_depth();
+            pictures.push(HistoryThumbs::texture(&ctx, row).unwrap().id());
+        }
+        assert_eq!(ed.active().unwrap().history.undo_depth(), 3);
+        assert_eq!(HistoryThumbs::opened_row(&ctx), Some(0));
+
+        // One more edit: the entry for "a" is compacted away, so row 0 is
+        // now the state after "a", row 1 after "b", row 2 after "c".
+        ed.apply_command(Command::create_layer(layer_model::Layer::raster("d")));
+        settle(&mut chrome, &mut ed);
+        assert_eq!(ed.active().unwrap().history.undo_depth(), 3);
+        for row in 0..3 {
+            assert_eq!(
+                HistoryThumbs::texture(&ctx, row).map(|t| t.id()),
+                Some(pictures[row + 1]),
+                "row {row} does not show the picture of the state it now is"
+            );
+        }
+        let newest = HistoryThumbs::texture(&ctx, 3).unwrap().id();
+        assert!(!pictures.contains(&newest), "row 3 is the new state");
+        assert_eq!(
+            HistoryThumbs::opened_row(&ctx),
+            None,
+            "the opened state is no longer in the list"
+        );
     }
 
     #[test]

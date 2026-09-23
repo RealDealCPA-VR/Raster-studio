@@ -28,6 +28,11 @@ use render::Camera;
 use crate::dirty::DirtyTiles;
 use crate::import::{DecodedImage, ImportError, ImportedDocument};
 
+/// Image ▸ Mode ▸ 8/16 Bits/Channel and the 16-bit apply boundary.
+#[path = "doc_depth.rs"]
+mod depth;
+pub use depth::NarrowedReads;
+
 /// Identity of an open document, stable while it is open. Tabs are addressed by
 /// this rather than by index, so closing one does not silently re-target
 /// another.
@@ -193,6 +198,13 @@ pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()>
 /// A document the user has open.
 pub struct OpenDocument {
     id: DocumentId,
+    /// W4-G: the document as opened — the History Brush's default source.
+    /// Hashes only: the bytes stay in `tiles`, as undo needs them.
+    opened: std::sync::Arc<tools::history_brush::HistorySource>,
+    /// W4-G: the Colour Sampler's points, document pixels, placement order.
+    /// The document's, as in Photoshop, so they outlive a tool switch; lent to
+    /// the tool as `ToolContext::samplers` and read by the Info panel.
+    pub(crate) samplers: Vec<glam::Vec2>,
     pub document: Document,
     pub history: History,
     pub tiles: MemoryTileSource,
@@ -203,6 +215,10 @@ pub struct OpenDocument {
     /// Bumped by every `set_preview`, so each preview frame's tiles are
     /// cached under keys no earlier frame can serve.
     pub(crate) preview_generation: u64,
+    /// W4-B: the live stroke preview — the in-flight stroke's tiles, laid
+    /// over their target for display only. Never journaled, never saved,
+    /// never in history; cleared when the stroke is released or abandoned.
+    pub(crate) paint_preview: Option<PaintPreview>,
     /// Where the `.rstudio` package lives, once it has one.
     project_path: Option<PathBuf>,
     /// The modification times linked asset sources were read at, by asset id:
@@ -344,6 +360,51 @@ pub struct PreviewOverride {
     pub transform: glam::Affine2,
 }
 
+/// W4-B: a running stroke's tiles, held beside the document the way
+/// [`PreviewOverride`] is: a lens, not an edit. `tiles` maps each previewed
+/// coordinate of `key` to the hash the stroke leaves there (`None` = cleared);
+/// `bytes` holds exactly the blobs those hashes name, so a preview never adds
+/// a blob to the document's own store and drops its bytes with itself.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PaintPreview {
+    target: Option<editor_core::PixelTarget>,
+    key: Option<editor_core::PixelKey>,
+    tiles: std::collections::BTreeMap<raster::TileCoord, Option<TileHash>>,
+    bytes: std::collections::HashMap<TileHash, Vec<u8>>,
+}
+
+impl PaintPreview {
+    /// The previewed tiles as a delta over the committed target.
+    fn delta(&self) -> Option<editor_core::TileDelta> {
+        editor_core::TileDelta::new(self.tiles.iter().map(|(coord, hash)| match hash {
+            Some(h) => editor_core::pixels::TileEdit::set(*coord, *h),
+            None => editor_core::pixels::TileEdit::clear(*coord),
+        }))
+        .ok()
+    }
+}
+
+/// W4-B: the coordinates a stroke preview shows and the hash at each.
+#[cfg(test)]
+pub(crate) type PreviewedTiles = Vec<(raster::TileCoord, Option<TileHash>)>;
+
+/// The document's tile store with a live stroke's own blobs in front of it
+/// (W4-B). Content-addressed on both sides, so a hash names the same bytes
+/// wherever it is found and the compositor's cache keys stay honest.
+struct PreviewTileSource<'a> {
+    base: &'a MemoryTileSource,
+    extra: Option<&'a std::collections::HashMap<TileHash, Vec<u8>>>,
+}
+
+impl TileSource for PreviewTileSource<'_> {
+    fn tile(&self, hash: TileHash) -> Option<&[u8]> {
+        self.extra
+            .and_then(|extra| extra.get(&hash))
+            .map(Vec::as_slice)
+            .or_else(|| self.base.tile(hash))
+    }
+}
+
 impl OpenDocument {
     /// Wrap an imported document, with a camera waiting to be fitted.
     ///
@@ -358,12 +419,17 @@ impl OpenDocument {
         );
         OpenDocument {
             id,
+            opened: std::sync::Arc::new(tools::history_brush::HistorySource::of(
+                &imported.document,
+            )),
+            samplers: Vec::new(),
             document: imported.document,
             history: imported.history,
             tiles: imported.tiles,
             camera: Camera::new(size, size),
             preview: None,
             preview_generation: 0,
+            paint_preview: None,
             project_path: None,
             asset_stamps: std::collections::HashMap::new(),
             source_path: None,
@@ -468,12 +534,15 @@ impl OpenDocument {
         let size = glam::Vec2::new(document.width() as f32, document.height() as f32);
         Ok(OpenDocument {
             id,
+            opened: std::sync::Arc::new(tools::history_brush::HistorySource::of(&document)),
+            samplers: Vec::new(),
             document,
             history: History::with_limit(history_depth),
             tiles,
             camera: Camera::new(size, size),
             preview: None,
             preview_generation: 0,
+            paint_preview: None,
             project_path: Some(path.to_path_buf()),
             asset_stamps: std::collections::HashMap::new(),
             source_path: None,
@@ -515,10 +584,16 @@ impl OpenDocument {
         history_depth: usize,
         background: crate::import::BlankBackground,
     ) -> Result<Self, DocumentError> {
-        Ok(OpenDocument::from_import(
+        let mut doc = OpenDocument::from_import(
             id,
             crate::import::blank_document(width, height, title, history_depth, background)?,
-        ))
+        );
+        // A 16-bit solid background arrives as RGBA16 tiles; the document's
+        // depth says so, so edits and exports stay at 16 bits.
+        if let crate::import::BlankBackground::Solid { depth, .. } = background {
+            doc.set_initial_bit_depth(depth);
+        }
+        Ok(doc)
     }
 
     /// Tell the document how big the area it is drawn in actually is.
@@ -586,12 +661,15 @@ impl OpenDocument {
         let size = glam::Vec2::new(doc.width() as f32, doc.height() as f32);
         OpenDocument {
             id: new_id,
+            opened: std::sync::Arc::new(tools::history_brush::HistorySource::of(&doc)),
+            samplers: Vec::new(),
             document: doc,
             history: History::default(),
             tiles: self.tiles.clone(),
             camera: Camera::new(size, size),
             preview: None,
             preview_generation: 0,
+            paint_preview: None,
             project_path: None,
             asset_stamps: std::collections::HashMap::new(),
             source_path: None,
@@ -617,10 +695,12 @@ impl OpenDocument {
         self.source_path.as_deref()
     }
 
-    /// Whether this document was opened from a 16-bit source — drives the
-    /// File Info window and the 16-bit export route.
+    /// Whether the document works at 16 bits per channel — a 16-bit source,
+    /// a 16-bit New Document, or Image ▸ Mode ▸ 16 Bits/Channel. Drives the
+    /// File Info window and the 16-bit export route; Image ▸ Mode ▸ 8
+    /// Bits/Channel turns it off again.
     pub fn is_sixteen_bit(&self) -> bool {
-        self.source_sixteen_bit
+        self.document.meta.bit_depth == 16
     }
 
     /// The label on this document's tab: a bullet marks unsaved changes.
@@ -670,6 +750,9 @@ impl OpenDocument {
     /// Run a command through history. The **only** way this type's document is
     /// mutated, which is what keeps undo/redo uniform.
     pub fn apply(&mut self, command: Command) -> Result<(), CommandError> {
+        // A 16-bit document keeps its layer tiles 16-bit when a tool hands it
+        // RGBA8 output (see `doc_depth.rs`); an 8-bit document is untouched.
+        let command = depth::fit_to_document_depth(&self.document, &mut self.tiles, command);
         self.history.apply(&mut self.document, command.clone())?;
         // A new command drops the redo stack (standard linear history), so the
         // labels mirroring it go too.
@@ -892,6 +975,57 @@ impl OpenDocument {
         self.history.undo_depth()
     }
 
+    /// W4-G: the document as it was opened (or created, or duplicated) —
+    /// what the History Brush paints back by default.
+    pub fn opened_state(&self) -> std::sync::Arc<tools::history_brush::HistorySource> {
+        std::sync::Arc::clone(&self.opened)
+    }
+
+    /// W4-G: the History Brush source the user picked: History panel row
+    /// `row` (`0` is the document as opened, always available even once the
+    /// oldest steps have been compacted away; `n` is the state after the
+    /// `n`th step of [`OpenDocument::history_timeline`], undone steps
+    /// included). The state is rebuilt on a copy — the document and its
+    /// history are not touched — by undoing or redoing from where the
+    /// document stands. `None` for a row past the end of the timeline.
+    pub fn history_state(
+        &self,
+        row: usize,
+    ) -> Option<std::sync::Arc<tools::history_brush::HistorySource>> {
+        if row == 0 {
+            return Some(self.opened_state());
+        }
+        let here = self.history.undo_depth();
+        if row > here + self.history.redo_depth() {
+            return None;
+        }
+        if row == here {
+            return Some(std::sync::Arc::new(
+                tools::history_brush::HistorySource::of(&self.document),
+            ));
+        }
+        let mut document = self.document.clone();
+        let mut history = self.history.clone();
+        for _ in row..here {
+            if !history.undo(&mut document).ok()? {
+                return None;
+            }
+        }
+        for _ in here..row {
+            if !history.redo(&mut document).ok()? {
+                return None;
+            }
+        }
+        Some(std::sync::Arc::new(
+            tools::history_brush::HistorySource::of(&document),
+        ))
+    }
+
+    /// W4-G: the Colour Sampler's points on this document.
+    pub fn samplers(&self) -> &[glam::Vec2] {
+        &self.samplers
+    }
+
     /// Every step of this document's timeline, oldest first, undone steps
     /// included.
     ///
@@ -994,7 +1128,33 @@ impl OpenDocument {
     /// serve; the override reaches the compositor through
     /// `composite_region_with`, which reads the committed document and writes
     /// nothing.
+    ///
+    /// W4-B: a live stroke preview is laid over its target for the length of
+    /// this call — its tiles swapped into the target's map, composited, and
+    /// swapped straight back — so the frame shows the stroke while the
+    /// committed document is, on return, exactly what it was. The tile cache
+    /// is keyed by content hashes, so only the tiles the stroke reaches are
+    /// recomposited.
     pub fn composite(&mut self, region: PixelRect) -> Result<Vec<u8>, DocumentError> {
+        let lens = self
+            .paint_preview
+            .as_ref()
+            .and_then(|p| Some((p.key?, p.delta()?)));
+        let restore = lens.map(|(key, delta)| (key, self.document.pixels.apply(key, &delta)));
+        let result = self.composite_lensed(region);
+        if let Some((key, previous)) = restore {
+            self.document.pixels.apply(key, &previous);
+        }
+        result
+    }
+
+    /// [`Self::composite`] against the document as it stands right now, the
+    /// transform preview's override and the stroke preview's blobs included.
+    fn composite_lensed(&mut self, region: PixelRect) -> Result<Vec<u8>, DocumentError> {
+        let source = PreviewTileSource {
+            base: &self.tiles,
+            extra: self.paint_preview.as_ref().map(|p| &p.bytes),
+        };
         let opts = CompositeOptions {
             preview_generation: self.preview_generation,
             ..Default::default()
@@ -1007,16 +1167,15 @@ impl OpenDocument {
         let canvas = match over {
             Some(over) => compositor::composite_region_with(
                 &self.document,
-                &self.tiles,
+                &source,
                 region,
                 0,
                 opts,
                 Some(over),
             )?,
-            None => {
-                self.compositor
-                    .composite_region(&self.document, &self.tiles, region, 0, opts)?
-            }
+            None => self
+                .compositor
+                .composite_region(&self.document, &source, region, 0, opts)?,
         };
         Ok(canvas.to_rgba8(&self.document.meta.color_space))
     }
@@ -1038,6 +1197,139 @@ impl OpenDocument {
     /// Card 039: whether a preview lens is live on this document.
     pub fn has_preview(&self) -> bool {
         self.preview.is_some()
+    }
+
+    /// W4-B: fold one live stroke answer into this document's stroke
+    /// preview, and invalidate the tiles whose previewed hash changed —
+    /// through the same reach machinery an undo uses, so the presenter
+    /// recomposites and re-uploads only what the stroke reached. An answer
+    /// that replaces the preview on the same target is diffed against the
+    /// preview it replaces, hash by hash, so a tile that comes back
+    /// unchanged is not invalidated; only a preview of another target is
+    /// dropped wholesale. No history entry, no dirty flag, nothing journaled.
+    ///
+    /// Reports how many tile coordinates of the target changed.
+    pub fn update_paint_preview(&mut self, live: tools::stroke::LivePaint) -> usize {
+        use tools::stroke::LiveTile;
+        let mut touched = std::collections::BTreeSet::new();
+        let same_target = self
+            .paint_preview
+            .as_ref()
+            .is_some_and(|p| p.key == Some(live.key) && p.target == Some(live.target));
+        // What a replacing answer is diffed against: the tiles it replaces.
+        let mut replaced = None;
+        if live.replace || !same_target {
+            if let Some(old) = self.paint_preview.take() {
+                if same_target {
+                    replaced = Some(old.tiles);
+                } else if let Some(target) = old.target {
+                    self.mark_preview_tiles(target, old.tiles.keys().copied());
+                }
+            }
+            self.paint_preview = Some(PaintPreview {
+                target: Some(live.target),
+                key: Some(live.key),
+                ..PaintPreview::default()
+            });
+        }
+        let preview = self.paint_preview.as_mut().expect("installed above");
+        for (coord, tile) in live.tiles {
+            let now = match tile {
+                LiveTile::Committed => None,
+                LiveTile::Cleared => Some(None),
+                LiveTile::Bytes(bytes) => {
+                    // In a 16-bit document the release's RGBA8 tiles are
+                    // widened at the apply boundary (`depth::fit_to_document_depth`,
+                    // via `raster::widen_rgba8_over`); the preview widens its
+                    // tiles the same way, so what it shows is what commits.
+                    let bytes = match live.target {
+                        editor_core::PixelTarget::Layer(layer)
+                            if self.document.meta.bit_depth == 16 =>
+                        {
+                            let old = self
+                                .document
+                                .layer_tiles(layer)
+                                .and_then(|m| m.get(coord))
+                                .and_then(|h| self.tiles.tile(h));
+                            raster::widen_rgba8_over(&bytes, old).unwrap_or(bytes)
+                        }
+                        _ => bytes,
+                    };
+                    let hash = TileHash::of(&bytes);
+                    preview.bytes.entry(hash).or_insert(bytes);
+                    Some(Some(hash))
+                }
+            };
+            let before = match now {
+                Some(state) => preview.tiles.insert(coord, state),
+                None => preview.tiles.remove(&coord),
+            };
+            if before != now {
+                touched.insert(coord);
+            }
+        }
+        if let Some(replaced) = replaced {
+            touched = replaced
+                .keys()
+                .chain(preview.tiles.keys())
+                .copied()
+                .filter(|coord| replaced.get(coord) != preview.tiles.get(coord))
+                .collect();
+        }
+        let live_hashes: std::collections::HashSet<TileHash> =
+            preview.tiles.values().flatten().copied().collect();
+        preview.bytes.retain(|hash, _| live_hashes.contains(hash));
+        let count = touched.len();
+        self.mark_preview_tiles(live.target, touched);
+        count
+    }
+
+    /// W4-B: end the stroke preview, invalidating the tiles it covered. The
+    /// committed document is exactly what it was before the stroke started
+    /// (or what the release committed).
+    pub fn clear_paint_preview(&mut self) {
+        if let Some(old) = self.paint_preview.take() {
+            if let Some(target) = old.target {
+                self.mark_preview_tiles(target, old.tiles.keys().copied());
+            }
+        }
+    }
+
+    /// W4-B: whether a stroke preview is live on this document.
+    pub fn has_paint_preview(&self) -> bool {
+        self.paint_preview.is_some()
+    }
+
+    /// W4-B: the live stroke preview's tiles — its pixel key and, per
+    /// coordinate, the hash it shows (`None` = cleared). For tests that pin
+    /// the preview against what the release commits.
+    #[cfg(test)]
+    pub(crate) fn paint_preview_tiles(&self) -> Option<(editor_core::PixelKey, PreviewedTiles)> {
+        let p = self.paint_preview.as_ref()?;
+        Some((p.key?, p.tiles.iter().map(|(c, h)| (*c, *h)).collect()))
+    }
+
+    /// Invalidate the canvas tiles `coords` of `target` reach, with the reach
+    /// machinery undo and redo use (`reach_tiles`).
+    fn mark_preview_tiles(
+        &mut self,
+        target: editor_core::PixelTarget,
+        coords: impl IntoIterator<Item = raster::TileCoord>,
+    ) {
+        let edits: Vec<editor_core::pixels::TileEdit> = coords
+            .into_iter()
+            .map(editor_core::pixels::TileEdit::clear)
+            .collect();
+        if edits.is_empty() {
+            return;
+        }
+        let Ok(delta) = editor_core::TileDelta::new(edits) else {
+            self.dirty.mark_all();
+            return;
+        };
+        let reach = Command::PaintTiles { target, delta }.dirty_reach();
+        let tiles = self.reach_tiles(&reach);
+        self.dirty.merge(&tiles);
     }
 
     /// Apply a live text draft (card 025): the layer's kind becomes `kind`
@@ -1486,9 +1778,14 @@ impl OpenDocument {
             let mut y1 = i64::MIN;
             let ts = TILE_SIZE as usize;
             for (coord, hash) in map.iter() {
-                let Some(bytes) = self.tiles.tile(hash) else {
+                let Some(stored) = self.tiles.tile(hash) else {
                     continue;
                 };
+                // W4-F: a 16-bit tile's alpha is read at 8 bits.
+                let bytes = raster::rgba8_view(stored);
+                if bytes.len() < ts * ts * 4 {
+                    continue;
+                }
                 let (ox, oy) = coord.pixel_origin();
                 let (mut lx0, mut ly0) = (ts, ts);
                 let (mut lx1, mut ly1) = (0usize, 0usize);
@@ -1706,7 +2003,7 @@ impl OpenDocument {
             }
             _ => raster::EncodeOptions::default(),
         };
-        if self.source_sixteen_bit && format.supports_16_bit() {
+        if self.is_sixteen_bit() && format.supports_16_bit() {
             let rgba16 = self.composite_rgba16(rect)?;
             raster::encode_to_path(
                 path,
@@ -1793,8 +2090,17 @@ impl OpenDocument {
                         )?;
                         let grid = raster::TileGrid::from_rgba8(dw, dh, &out)
                             .map_err(DocumentError::Grid)?;
+                        let deep = self.document.meta.bit_depth == 16;
                         for (coord, tile) in grid.iter() {
-                            let hash = self.tiles.insert_tile(tile);
+                            // W4-F: a 16-bit document keeps 16-bit tiles (the
+                            // resample itself runs at 8 bits).
+                            let hash = match deep
+                                .then(|| raster::widen_rgba8_tile(tile.data()))
+                                .flatten()
+                            {
+                                Some(wide) => self.tiles.insert_bytes(wide),
+                                None => self.tiles.insert_tile(tile),
+                            };
                             edits.push(editor_core::TileEdit::set(coord, hash));
                         }
                     }
@@ -1859,9 +2165,14 @@ impl OpenDocument {
         let mut out = vec![0u8; (rect.width as usize) * (rect.height as usize) * 4];
         let ts = TILE_SIZE as i64;
         for (coord, hash) in map.iter() {
-            let Some(bytes) = self.tiles.tile(hash) else {
+            let Some(stored) = self.tiles.tile(hash) else {
                 continue;
             };
+            // W4-F: a 16-bit tile is materialised rounded to 8 bits.
+            let bytes = raster::rgba8_view(stored);
+            if bytes.len() != raster::depth::RGBA8_TILE_BYTES {
+                continue;
+            }
             let (ox, oy) = coord.pixel_origin();
             let (x0, y0) = (rect.x.max(ox), rect.y.max(oy));
             let (x1, y1) = (rect.right().min(ox + ts), rect.bottom().min(oy + ts));
@@ -2008,10 +2319,23 @@ impl OpenDocument {
                             let cy0 = (rect.y.max(toy) - toy) as usize;
                             let cx1 = (rect.right().min(tox + ts) - tox) as usize;
                             let cy1 = (rect.bottom().min(toy + ts) - toy) as usize;
+                            // W4-F: a 16-bit tile (a 16-bit document) takes
+                            // the colour widened, at its own 8-byte stride.
+                            let wide: Vec<u8> = color
+                                .iter()
+                                .flat_map(|c| raster::depth::widen_sample(*c).to_ne_bytes())
+                                .collect();
+                            let px: &[u8] = if data.len() == raster::depth::RGBA16_TILE_BYTES {
+                                &wide
+                            } else {
+                                &color
+                            };
+                            let bpp = px.len();
                             for y in cy0..cy1 {
                                 let row = y * TILE_SIZE as usize;
                                 for x in cx0..cx1 {
-                                    data[(row + x) * 4..(row + x) * 4 + 4].copy_from_slice(&color);
+                                    data[(row + x) * bpp..(row + x) * bpp + bpp]
+                                        .copy_from_slice(px);
                                 }
                             }
                             let hash = self.tiles.insert_bytes(data.clone());

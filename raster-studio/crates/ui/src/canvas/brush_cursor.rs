@@ -178,11 +178,51 @@ pub fn build(
     out
 }
 
+/// The hardness ring: the part of the dab painted at full strength, drawn
+/// inside the outline so a soft brush reads as soft before it is used.
+///
+/// The camera's projection is affine, so scaling the outline's screen points
+/// about the centre is the same as scaling the dab's ellipse in document
+/// space — rotation, flip and roundness are already in the outline. Empty
+/// when there is no outline, and for a hard (`>= 1`) or fully soft (`<= 0`)
+/// brush, where a second ring would sit on the first or on the centre.
+pub fn hardness_ring(cursor: &BrushCursor, hardness: f32) -> Vec<Vec2> {
+    if cursor.outline.is_empty() || !hardness.is_finite() || hardness <= 0.0 || hardness >= 1.0 {
+        return Vec::new();
+    }
+    cursor
+        .outline
+        .iter()
+        .map(|p| cursor.center_pt + (*p - cursor.center_pt) * hardness)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::canvas::viewport::PanelInsets;
     use std::f32::consts::{FRAC_PI_2, FRAC_PI_4};
+
+    #[test]
+    fn the_hardness_ring_sits_inside_the_outline_at_the_hardness_fraction() {
+        let camera = CanvasCamera::for_document(Vec2::new(100.0, 100.0));
+        let viewport = vp(1.0);
+        let b = brush(40.0);
+        let cursor = build(&b, 1.0, Vec2::new(50.0, 50.0), &camera, &viewport);
+        let inner = hardness_ring(&cursor, 0.5);
+        assert_eq!(inner.len(), cursor.outline.len());
+        for (o, i) in cursor.outline.iter().zip(&inner) {
+            let ro = (*o - cursor.center_pt).length();
+            let ri = (*i - cursor.center_pt).length();
+            assert!((ri - ro * 0.5).abs() < 1e-3, "{ri} vs {ro}");
+        }
+        assert!(
+            hardness_ring(&cursor, 1.0).is_empty(),
+            "a hard brush has one ring"
+        );
+        assert!(hardness_ring(&cursor, 0.0).is_empty());
+        assert!(hardness_ring(&BrushCursor::default(), 0.5).is_empty());
+    }
 
     fn vp(scale: f32) -> Viewport {
         Viewport::new(

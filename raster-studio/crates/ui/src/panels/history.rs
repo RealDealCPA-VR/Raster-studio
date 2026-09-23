@@ -16,10 +16,22 @@
 //!   but only the top of its undone stack ([`editor_core::History::redo_label`]).
 //!   Rows past the first redoable step are therefore shown as numbered steps
 //!   rather than by name. Naming them needs an accessor this crate cannot add.
-//! * Photoshop paints a rendered thumbnail per row. That needs a composited
-//!   snapshot per history state, and nothing stores one. Each row instead
-//!   carries a [`StepKind`] — derived from the command — which the panel paints
-//!   as a glyph. It says what the step *was*, which is what the row is for.
+//! * Photoshop paints a rendered thumbnail per row. Nothing stores a
+//!   composited snapshot per history state, so W4-I keeps one as the states
+//!   go by: each time the application rebuilds its composite preview it hands
+//!   the same small image to [`HistoryThumbs::capture`] under the row the
+//!   document is at, and moves the pictures already stored to the rows their
+//!   states are at now (a rewrite past the cursor drops them; compaction at
+//!   the history limit shifts them down). A row with no picture — a redo row
+//!   never visited, or every row when the shift could not be told — shows
+//!   only its [`StepKind`] glyph, which says what the step *was*.
+//! * The History Brush (`tools::history_brush`) paints from the state its
+//!   `source` option names — a row of this panel, `0` (the default) being
+//!   the document as opened. The panel's source column marks that row (for
+//!   `0`, [`HistoryThumbs::opened_row`]), and W4-G made a click in the
+//!   column set it: the cell writes the option through the same
+//!   `Intent::SetToolOption` the options bar sends, and the shell rebuilds
+//!   that state (on a copy of the document) at the press of each stroke.
 
 use editor_core::{Command, History};
 
@@ -126,6 +138,7 @@ impl StepKind {
             // geometry step rather than as a layer edit.
             Command::SetSelection { .. }
             | Command::SetMetaColorMode { .. }
+            | Command::SetMetaBitDepth { .. }
             | Command::TransformLayer { .. }
             | Command::SetCanvasSize { .. } => StepKind::Transformed,
             // Image ▸ Image Size resamples every layer — a geometry step on
@@ -165,6 +178,256 @@ pub struct Snapshot {
     pub name: String,
     /// The row this snapshot was taken at.
     pub index: usize,
+}
+
+/// W4-I: one small composite picture per history row the document has been
+/// at, kept in egui's frame data (the textures belong to the context).
+///
+/// A row index is not a state's identity, for two reasons, and each
+/// [`HistoryThumbs::capture`] handles both before it stores the current row:
+///
+/// * **Rewrites.** Undo, then a new edit, makes the row past the cursor a
+///   different state. The rows past the stack's end are dropped, and the
+///   rewritten row is the current one, which is captured again.
+/// * **Compaction.** Once the done stack is at the history limit, every new
+///   edit drops the *oldest* entry ([`editor_core::History::limit`]), so each
+///   surviving state moves down one row. Every stored picture remembers a
+///   fingerprint of the command that led into its row; the capture finds the
+///   one shift under which every stored fingerprint still matches the
+///   journal and moves the pictures with it. When no shift — or more than
+///   one, as with a run of identical commands — explains the journal, the
+///   pictures are dropped rather than risk showing one state under another
+///   state's row.
+#[derive(Clone, Default)]
+pub struct HistoryThumbs {
+    document: u64,
+    rows: Vec<Thumb>,
+    /// The opened document may no longer be row 0: entries have been
+    /// compacted off the bottom of the stack (or may have been, when the
+    /// shift could not be told).
+    compacted: bool,
+}
+
+/// One stored picture.
+#[derive(Clone)]
+struct Thumb {
+    index: usize,
+    /// Fingerprint of the command that led into this row; `None` for row 0.
+    lead: Option<u64>,
+    tex: egui::TextureHandle,
+}
+
+/// A stable fingerprint of one command: its full `Debug` form, hashed as it
+/// is written (tile edits carry content hashes, so two different strokes do
+/// not collide), with no string built.
+fn fingerprint(command: &Command) -> u64 {
+    use std::hash::Hasher as _;
+    struct Sink(std::collections::hash_map::DefaultHasher);
+    impl std::fmt::Write for Sink {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.write(s.as_bytes());
+            Ok(())
+        }
+    }
+    let mut sink = Sink(std::collections::hash_map::DefaultHasher::new());
+    let _ = std::fmt::write(&mut sink, format_args!("{command:?}"));
+    sink.0.finish()
+}
+
+/// The journal's fingerprints, computed only for the rows a check asks for.
+struct Leads<'a> {
+    journal: Vec<&'a Command>,
+    memo: Vec<Option<u64>>,
+}
+
+impl<'a> Leads<'a> {
+    fn new(history: &'a History) -> Self {
+        let journal: Vec<&Command> = history.journal().collect();
+        let memo = vec![None; journal.len()];
+        Self { journal, memo }
+    }
+
+    /// The fingerprint of the command that led into row `row` (`row >= 1`).
+    fn of_row(&mut self, row: usize) -> Option<u64> {
+        let at = row.checked_sub(1)?;
+        let command = self.journal.get(at)?;
+        Some(*self.memo[at].get_or_insert_with(|| fingerprint(command)))
+    }
+}
+
+/// Nearest-neighbour shrink of an RGBA image to at most `edge` texels on its
+/// longer side — a history row's picture is a few dozen points wide, and a
+/// deep stack of full-size previews would hold megabytes of textures.
+fn downsample(size: [usize; 2], rgba: &[u8], edge: usize) -> egui::ColorImage {
+    let [w, h] = size;
+    let scale = (edge as f32 / w.max(h) as f32).min(1.0);
+    let (dw, dh) = (
+        ((w as f32 * scale).round() as usize).max(1),
+        ((h as f32 * scale).round() as usize).max(1),
+    );
+    let mut out = Vec::with_capacity(dw * dh * 4);
+    for y in 0..dh {
+        let sy = (y * h / dh).min(h - 1);
+        for x in 0..dw {
+            let sx = (x * w / dw).min(w - 1);
+            let at = (sy * w + sx) * 4;
+            out.extend_from_slice(&rgba[at..at + 4]);
+        }
+    }
+    egui::ColorImage::from_rgba_unmultiplied([dw, dh], &out)
+}
+
+impl HistoryThumbs {
+    /// The longest edge of a stored picture, in texels.
+    pub const EDGE: usize = 64;
+
+    fn slot() -> egui::Id {
+        egui::Id::new("raster-history-thumbs")
+    }
+
+    /// Store `rgba` (unmultiplied, `size[0] x size[1]`) as the picture of the
+    /// row `history` is at now, for document `document`, after moving the
+    /// stored pictures to the rows their states are at (see the type's note).
+    pub fn capture(
+        ctx: &egui::Context,
+        document: u64,
+        history: &History,
+        size: [usize; 2],
+        rgba: &[u8],
+    ) {
+        if size[0] == 0 || size[1] == 0 || rgba.len() < size[0] * size[1] * 4 {
+            return;
+        }
+        let index = history.undo_depth();
+        let last = index + history.redo_depth();
+        let image = downsample(size, rgba, HistoryThumbs::EDGE);
+        let mut thumbs = ctx
+            .data(|d| d.get_temp::<Self>(Self::slot()))
+            .unwrap_or_default();
+        if thumbs.document != document {
+            thumbs = Self {
+                document,
+                ..Self::default()
+            };
+        }
+        let mut leads = Leads::new(history);
+        thumbs.realign(&mut leads, index, history.limit());
+        thumbs.rows.retain(|t| t.index <= last);
+        let lead = leads.of_row(index);
+        match thumbs.rows.iter_mut().find(|t| t.index == index) {
+            Some(t) => {
+                t.tex.set(image, egui::TextureOptions::LINEAR);
+                t.lead = lead;
+            }
+            None => {
+                let tex = ctx.load_texture(
+                    format!("raster-history-thumb-{document}-{index}"),
+                    image,
+                    egui::TextureOptions::LINEAR,
+                );
+                thumbs.rows.push(Thumb { index, lead, tex });
+            }
+        }
+        ctx.data_mut(|d| d.insert_temp(Self::slot(), thumbs));
+    }
+
+    /// How many stored pictures' fingerprints match the journal once each
+    /// row moves down by `shift`, or `None` when one of them does not. The
+    /// row the document is at now is not checked (it is captured again),
+    /// nor are redo rows (their commands are not in the journal); a row that
+    /// falls to 0 or below has no command to check.
+    fn matches(&self, leads: &mut Leads<'_>, shift: usize, current: usize) -> Option<usize> {
+        let mut matched = 0;
+        for t in &self.rows {
+            let Some(row) = t.index.checked_sub(shift) else {
+                continue;
+            };
+            if row == current || row == 0 || row > leads.journal.len() {
+                continue;
+            }
+            if t.lead.is_none() || leads.of_row(row) != t.lead {
+                return None;
+            }
+            matched += 1;
+        }
+        Some(matched)
+    }
+
+    /// Move the stored pictures down by the one shift that explains the
+    /// journal, or drop them when none or several do.
+    ///
+    /// No shift is the default whenever nothing contradicts it. A shift of
+    /// `n > 0` is only a candidate with the done stack at its limit (the
+    /// only time compaction runs) and with at least one picture positively
+    /// matching after the move — a shift that pushes every checkable picture
+    /// off the bottom explains nothing.
+    fn realign(&mut self, leads: &mut Leads<'_>, current: usize, limit: usize) {
+        if self.rows.is_empty() {
+            return;
+        }
+        let deepest = self.rows.iter().map(|t| t.index).max().unwrap_or(0);
+        let mut shifts = Vec::new();
+        for n in 0..=deepest {
+            let candidate = match self.matches(leads, n, current) {
+                Some(_) if n == 0 => true,
+                Some(matched) => current >= limit && matched > 0,
+                None => false,
+            };
+            if candidate {
+                shifts.push(n);
+                if shifts.len() > 1 {
+                    break;
+                }
+            }
+        }
+        match shifts.as_slice() {
+            [0] => {}
+            [n] => {
+                let n = *n;
+                self.rows.retain(|t| t.index >= n);
+                for t in &mut self.rows {
+                    t.index -= n;
+                    if t.index == 0 {
+                        t.lead = None;
+                    }
+                }
+                self.compacted = true;
+            }
+            _ => {
+                self.rows.clear();
+                // Compaction only happens with the stack at its limit; below
+                // it, row 0 is still the opened document.
+                if current >= limit {
+                    self.compacted = true;
+                }
+            }
+        }
+    }
+
+    /// W4-I: the row that is the document as opened — what the History
+    /// Brush paints from (the shell hands the tool the opened state as
+    /// `tools::ToolContext::history_source`) — or `None` once that state has
+    /// been compacted off the bottom of the stack.
+    pub fn opened_row(ctx: &egui::Context) -> Option<usize> {
+        let compacted = ctx
+            .data(|d| d.get_temp::<Self>(Self::slot()))
+            .is_some_and(|t| t.compacted);
+        (!compacted).then_some(0)
+    }
+
+    /// Forget every picture (no document open).
+    pub fn clear(ctx: &egui::Context) {
+        ctx.data_mut(|d| d.remove::<Self>(Self::slot()));
+    }
+
+    /// The picture of row `index`, when one was captured.
+    pub fn texture(ctx: &egui::Context, index: usize) -> Option<egui::TextureHandle> {
+        ctx.data(|d| d.get_temp::<Self>(Self::slot()))?
+            .rows
+            .into_iter()
+            .find(|t| t.index == index)
+            .map(|t| t.tex)
+    }
 }
 
 /// The history, flattened for drawing.
@@ -261,6 +524,57 @@ mod tests {
     use super::*;
     use editor_core::{Command, Document, History};
     use layer_model::Layer;
+
+    /// W4-I: when a run of identical commands makes the compaction shift
+    /// impossible to tell, the pictures are dropped — never shown under a
+    /// row whose state they are not — and the opened row is no longer
+    /// claimed; a distinct run is realigned instead.
+    #[test]
+    fn thumbnails_are_realigned_or_dropped_when_the_limit_compacts() {
+        let px = [8usize, 8];
+        let image = |v: u8| vec![v; 8 * 8 * 4];
+        let select = |x: i32| Command::SetSelection {
+            selection: editor_core::Selection::Rect {
+                min: glam::IVec2::new(x, 0),
+                max: glam::IVec2::new(x + 2, 2),
+            },
+        };
+        let run = |commands: Vec<Command>| {
+            let ctx = egui::Context::default();
+            let mut doc = Document::new(16, 16, "Test");
+            let mut history = History::with_limit(2);
+            HistoryThumbs::capture(&ctx, 1, &history, px, &image(0));
+            let mut ids = vec![HistoryThumbs::texture(&ctx, 0).unwrap().id()];
+            for (i, command) in commands.into_iter().enumerate() {
+                history.apply(&mut doc, command).unwrap();
+                HistoryThumbs::capture(&ctx, 1, &history, px, &image(i as u8 + 1));
+                let row = history.undo_depth();
+                ids.push(HistoryThumbs::texture(&ctx, row).unwrap().id());
+            }
+            (ctx, ids)
+        };
+
+        // Distinct commands: after the third edit row 0 is the state after
+        // the first, row 1 after the second.
+        let (ctx, ids) = run(vec![select(0), select(3), select(6)]);
+        assert_eq!(
+            HistoryThumbs::texture(&ctx, 0).map(|t| t.id()),
+            Some(ids[1])
+        );
+        assert_eq!(
+            HistoryThumbs::texture(&ctx, 1).map(|t| t.id()),
+            Some(ids[2])
+        );
+        assert_eq!(HistoryThumbs::opened_row(&ctx), None);
+
+        // Identical commands: the shift cannot be told, so no older picture
+        // survives; only the current row has one.
+        let (ctx, _) = run(vec![select(0), select(0), select(0)]);
+        assert!(HistoryThumbs::texture(&ctx, 0).is_none());
+        assert!(HistoryThumbs::texture(&ctx, 1).is_none());
+        assert!(HistoryThumbs::texture(&ctx, 2).is_some());
+        assert_eq!(HistoryThumbs::opened_row(&ctx), None);
+    }
 
     fn document_with(edits: usize) -> (Document, History) {
         let mut doc = Document::new(32, 32, "Test");

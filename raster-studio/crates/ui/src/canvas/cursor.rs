@@ -170,6 +170,12 @@ pub fn cursor_for_tool(cursor: ToolCursor, precise: bool) -> CanvasCursor {
 /// happen for a `ToolId` that came from the registry but keeps the function
 /// total.
 pub fn cursor_for_tool_id(id: ToolId, precise: bool) -> CanvasCursor {
+    // The type tool's registry cursor is the crosshair it aims a new text box
+    // with; on the canvas it is the I-beam every editor shows over a place
+    // text will go, and the precise toggle leaves it alone (it is aimable).
+    if id == ToolId::Type {
+        return CanvasCursor::Text;
+    }
     match tools::registry::info(id) {
         Some(info) => cursor_for_tool(info.cursor, precise),
         None => CanvasCursor::Arrow,
@@ -234,6 +240,11 @@ mod tests {
             // its own glyph.
             if c.to_egui() == egui::CursorIcon::None {
                 assert!(c.draws_its_own(), "{:?} has no cursor", info.id);
+            }
+            if info.id == ToolId::Type {
+                assert_eq!(cursor_for_tool_id(info.id, false), CanvasCursor::Text);
+                assert_eq!(cursor_for_tool_id(info.id, true), CanvasCursor::Text);
+                continue;
             }
             assert_eq!(cursor_for_tool_id(info.id, false), c, "{:?}", info.id);
         }

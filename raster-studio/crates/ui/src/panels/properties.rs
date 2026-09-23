@@ -130,6 +130,11 @@ pub fn adjustment_id_of(kind: &AdjustmentKind) -> Option<AdjustmentId> {
         AdjustmentKind::Threshold { .. } => AdjustmentId::Threshold,
         AdjustmentKind::GradientMap { .. } => AdjustmentId::GradientMap,
         AdjustmentKind::SelectiveColor { .. } => AdjustmentId::SelectiveColor,
+        AdjustmentKind::Desaturate => AdjustmentId::Desaturate,
+        AdjustmentKind::Equalize => AdjustmentId::Equalize,
+        AdjustmentKind::ShadowsHighlights { .. } => AdjustmentId::ShadowsHighlights,
+        AdjustmentKind::ReplaceColor { .. } => AdjustmentId::ReplaceColor,
+        AdjustmentKind::ColorLookup { .. } => AdjustmentId::ColorLookup,
         AdjustmentKind::Auto { .. } => return None,
     })
 }
@@ -216,9 +221,11 @@ pub fn edit_adjustment(doc: &Document, layer: LayerId, kind: AdjustmentKind) -> 
 pub struct AdjustmentsPanel;
 
 impl AdjustmentsPanel {
-    /// Every button, in panel order.
+    /// Every button, in panel order: the adjustments that can be layers.
+    /// Desaturate, Equalize, Shadows/Highlights and Replace Color are
+    /// destructive-only (Image ▸ Adjustments), as in Photopea.
     pub fn entries() -> &'static [AdjustmentId] {
-        AdjustmentId::ALL
+        AdjustmentId::LAYERS
     }
 
     /// The command a button emits.
@@ -249,6 +256,11 @@ impl AdjustmentsPanel {
             AdjustmentId::Threshold => "adj-threshold",
             AdjustmentId::GradientMap => "adj-gradient-map",
             AdjustmentId::SelectiveColor => "adj-selective-color",
+            AdjustmentId::Desaturate => "adj-desaturate",
+            AdjustmentId::Equalize => "adj-equalize",
+            AdjustmentId::ShadowsHighlights => "adj-shadows-highlights",
+            AdjustmentId::ReplaceColor => "adj-replace-color",
+            AdjustmentId::ColorLookup => "adj-color-lookup",
         }
     }
 }
@@ -1220,7 +1232,11 @@ mod tests {
 
     #[test]
     fn the_adjustments_panel_offers_every_adjustment_with_an_icon_key() {
-        assert_eq!(AdjustmentsPanel::entries().len(), AdjustmentId::ALL.len());
+        // Every adjustment that can be a layer; the four destructive-only
+        // ones are Image > Adjustments items, not panel buttons.
+        assert_eq!(AdjustmentsPanel::entries(), AdjustmentId::LAYERS);
+        assert!(AdjustmentsPanel::entries().contains(&AdjustmentId::ColorLookup));
+        assert!(!AdjustmentsPanel::entries().contains(&AdjustmentId::Desaturate));
         let mut keys: Vec<&str> = AdjustmentId::ALL
             .iter()
             .map(|id| AdjustmentsPanel::icon(*id))

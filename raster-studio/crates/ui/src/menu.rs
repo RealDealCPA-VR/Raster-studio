@@ -59,6 +59,12 @@ pub enum AdjustmentId {
     Threshold,
     GradientMap,
     SelectiveColor,
+    // W4-E: the five Photopea has beyond the classic set.
+    Desaturate,
+    Equalize,
+    ShadowsHighlights,
+    ReplaceColor,
+    ColorLookup,
 }
 
 impl AdjustmentId {
@@ -78,7 +84,48 @@ impl AdjustmentId {
         AdjustmentId::Threshold,
         AdjustmentId::GradientMap,
         AdjustmentId::SelectiveColor,
+        AdjustmentId::Desaturate,
+        AdjustmentId::Equalize,
+        AdjustmentId::ShadowsHighlights,
+        AdjustmentId::ReplaceColor,
+        AdjustmentId::ColorLookup,
     ];
+
+    /// The adjustments Layer ▸ New Adjustment Layer and the Adjustments panel
+    /// offer: every one in [`Self::ALL`] except the four Photopea keeps
+    /// destructive-only — Desaturate, Equalize, Shadows/Highlights and
+    /// Replace Color live in Image ▸ Adjustments alone.
+    pub const LAYERS: &'static [AdjustmentId] = &[
+        AdjustmentId::BrightnessContrast,
+        AdjustmentId::Levels,
+        AdjustmentId::Curves,
+        AdjustmentId::Exposure,
+        AdjustmentId::Vibrance,
+        AdjustmentId::HueSaturation,
+        AdjustmentId::ColorBalance,
+        AdjustmentId::BlackAndWhite,
+        AdjustmentId::PhotoFilter,
+        AdjustmentId::ChannelMixer,
+        AdjustmentId::Invert,
+        AdjustmentId::Posterize,
+        AdjustmentId::Threshold,
+        AdjustmentId::GradientMap,
+        AdjustmentId::SelectiveColor,
+        AdjustmentId::ColorLookup,
+    ];
+
+    /// Whether this adjustment can be an adjustment layer (it is in
+    /// [`Self::LAYERS`]).
+    pub fn is_layer(self) -> bool {
+        Self::LAYERS.contains(&self)
+    }
+
+    /// Whether Image ▸ Adjustments opens a dialog for this adjustment.
+    /// Desaturate and Equalize ask nothing, in Photopea as here: the click
+    /// applies them.
+    pub const fn has_dialog(self) -> bool {
+        !matches!(self, AdjustmentId::Desaturate | AdjustmentId::Equalize)
+    }
 
     pub const fn label(self) -> &'static str {
         match self {
@@ -97,6 +144,11 @@ impl AdjustmentId {
             AdjustmentId::Threshold => "Threshold",
             AdjustmentId::GradientMap => "Gradient Map",
             AdjustmentId::SelectiveColor => "Selective Color",
+            AdjustmentId::Desaturate => "Desaturate",
+            AdjustmentId::Equalize => "Equalize",
+            AdjustmentId::ShadowsHighlights => "Shadows/Highlights",
+            AdjustmentId::ReplaceColor => "Replace Color",
+            AdjustmentId::ColorLookup => "Color Lookup",
         }
     }
 
@@ -165,6 +217,32 @@ impl AdjustmentId {
                 ranges: [[0.0; 4]; 9],
                 relative: true,
             },
+            AdjustmentId::Desaturate => AdjustmentKind::Desaturate,
+            AdjustmentId::Equalize => AdjustmentKind::Equalize,
+            // Photoshop's opening setting: shadows 35%, tonal width 50%,
+            // radius 30 px; highlights off.
+            AdjustmentId::ShadowsHighlights => AdjustmentKind::ShadowsHighlights {
+                shadows: [0.35, 0.5, 30.0],
+                highlights: [0.0, 0.5, 30.0],
+            },
+            // Photoshop's fuzziness of 40; the dialog replaces the colour
+            // with one sampled from the layer when it opens.
+            AdjustmentId::ReplaceColor => AdjustmentKind::ReplaceColor {
+                color: [1.0, 0.0, 0.0],
+                fuzziness: 40.0 / 255.0,
+                hue: 0.0,
+                saturation: 0.0,
+                lightness: 0.0,
+            },
+            // The identity cube: nothing is looked up until a table is chosen.
+            AdjustmentId::ColorLookup => {
+                let lut = adjustments::Lut3d::identity(2);
+                AdjustmentKind::ColorLookup {
+                    name: String::new(),
+                    size: lut.size() as u32,
+                    table: lut.table().to_vec(),
+                }
+            }
         }
     }
 
@@ -601,6 +679,49 @@ impl Arrange {
     }
 }
 
+/// What Edit ▸ Purge drops.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub enum PurgeTarget {
+    /// The application's own copied pixels.
+    Clipboard,
+    /// Every open document's undo and redo stacks. Cannot be undone, so the
+    /// application asks for a confirmation first.
+    Histories,
+    /// Both of the above.
+    All,
+}
+
+impl PurgeTarget {
+    pub const ALL: &'static [PurgeTarget] = &[
+        PurgeTarget::Clipboard,
+        PurgeTarget::Histories,
+        PurgeTarget::All,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            PurgeTarget::Clipboard => "Clipboard",
+            PurgeTarget::Histories => "Histories",
+            PurgeTarget::All => "All",
+        }
+    }
+
+    /// Why this purge has nothing to drop in `ctx`, or `None` when it has.
+    fn unavailable_reason(self, ctx: &MenuContext) -> Option<&'static str> {
+        let clipboard = ctx.clipboard.has_internal_pixels();
+        // Every open document's history, not the active one's: that is what
+        // the purge drops.
+        let history = ctx.has_document && ctx.any_history;
+        match self {
+            PurgeTarget::Clipboard => (!clipboard).then_some("The clipboard is empty"),
+            PurgeTarget::Histories => ctx
+                .need_document()
+                .or((!history).then_some("There is no history to purge")),
+            PurgeTarget::All => (!clipboard && !history).then_some("There is nothing to purge"),
+        }
+    }
+}
+
 /// A transform offered under Edit ▸ Transform.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum TransformOp {
@@ -801,27 +922,29 @@ impl ChannelDepth {
         }
     }
 
+    /// The depth as `DocumentMeta::bit_depth` stores it.
+    pub const fn bits(self) -> u8 {
+        match self {
+            ChannelDepth::Eight => 8,
+            ChannelDepth::Sixteen => 16,
+        }
+    }
+
     /// Why converting a document at `current` into `self` is unavailable,
     /// or `None` when it is.
     ///
-    /// Neither conversion exists in this build, and each says exactly why:
-    /// the paint tools, filters and adjustments write RGBA8 tiles, so a
-    /// 16-bit working document would be undone by its first edit; and a
-    /// 16-bit source is already crushed to 8-bit tiles on import, keeping
-    /// only its 16-bit *export* depth, which the export route reads from the
-    /// source rather than from the document's depth.
+    /// Both conversions exist (W4-F: `OpenDocument::depth_conversion`, one
+    /// undoable step that widens or rounds every raster tile), so the only
+    /// refusal is the row for the depth the document is already at — the
+    /// checked row, as in Photoshop.
     pub const fn conversion_reason(self, current: ChannelDepth) -> Option<&'static str> {
         match (current, self) {
             (ChannelDepth::Eight, ChannelDepth::Eight)
             | (ChannelDepth::Sixteen, ChannelDepth::Sixteen) => {
                 Some("The document is already at that depth")
             }
-            (ChannelDepth::Eight, ChannelDepth::Sixteen) => Some(
-                "16-bit editing is not in this build: the paint tools, filters and adjustments write 8-bit tiles",
-            ),
-            (ChannelDepth::Sixteen, ChannelDepth::Eight) => Some(
-                "The pixels are already edited at 8 bits; a 16-bit source keeps only its 16-bit export depth, which this build cannot drop yet",
-            ),
+            (ChannelDepth::Eight, ChannelDepth::Sixteen)
+            | (ChannelDepth::Sixteen, ChannelDepth::Eight) => None,
         }
     }
 }
@@ -1145,6 +1268,9 @@ pub enum MenuAction {
     SaveAsPsd,
     Export(ExportFormat),
     ExportLayers,
+    /// File ▸ Export ▸ Slices…: one file per Slice-tool region, written with
+    /// the last confirmed Export As settings.
+    ExportSlices,
     PlaceEmbedded,
     PlaceLinked,
     FileInfo,
@@ -1163,6 +1289,14 @@ pub enum MenuAction {
     CopyMerged,
     Paste,
     PasteInto,
+    /// Edit ▸ Paste Special ▸ Paste in Place: the copied pixels land where
+    /// they were copied from.
+    PasteInPlace,
+    /// Edit ▸ Paste Special ▸ Paste Outside: masked by the inverse of the
+    /// selection.
+    PasteOutside,
+    /// Edit ▸ Purge ▸ …
+    Purge(PurgeTarget),
     ClearPixels,
     FillDialog,
     StrokeDialog,
@@ -1489,6 +1623,9 @@ pub struct MenuContext {
     pub open_documents: usize,
     pub can_undo: bool,
     pub can_redo: bool,
+    /// Some open document — not only the active one — has an undo or redo
+    /// step, so Edit > Purge > Histories has something to drop.
+    pub any_history: bool,
     pub undo_label: Option<String>,
     pub redo_label: Option<String>,
     pub clipboard: ClipboardState,
@@ -1532,6 +1669,7 @@ impl Default for MenuContext {
             open_documents: 0,
             can_undo: false,
             can_redo: false,
+            any_history: false,
             undo_label: None,
             redo_label: None,
             clipboard: ClipboardState::EMPTY,
@@ -1569,6 +1707,7 @@ impl MenuContext {
             open_documents: 1,
             can_undo: history.can_undo(),
             can_redo: history.can_redo(),
+            any_history: history.can_undo() || history.can_redo(),
             undo_label: history.undo_label().map(str::to_owned),
             redo_label: history.redo_label().map(str::to_owned),
             // Deliberately not `!selection.is_empty()`. `Selection::None`
@@ -1697,6 +1836,7 @@ impl MenuAction {
         out.extend(ExportFormat::ALL.iter().copied().map(MenuAction::Export));
         out.extend([
             MenuAction::ExportLayers,
+            MenuAction::ExportSlices,
             MenuAction::PlaceEmbedded,
             MenuAction::PlaceLinked,
             MenuAction::FileInfo,
@@ -1712,11 +1852,14 @@ impl MenuAction {
             MenuAction::CopyMerged,
             MenuAction::Paste,
             MenuAction::PasteInto,
+            MenuAction::PasteInPlace,
+            MenuAction::PasteOutside,
             MenuAction::ClearPixels,
             MenuAction::FillDialog,
             MenuAction::StrokeDialog,
             MenuAction::FreeTransform,
         ]);
+        out.extend(PurgeTarget::ALL.iter().copied().map(MenuAction::Purge));
         out.extend(TransformOp::ALL.iter().copied().map(MenuAction::Transform));
         out.extend([
             MenuAction::DefinePattern,
@@ -1767,7 +1910,7 @@ impl MenuAction {
                 .map(MenuAction::NewFillLayer),
         );
         out.extend(
-            AdjustmentId::ALL
+            AdjustmentId::LAYERS
                 .iter()
                 .copied()
                 .map(MenuAction::NewAdjustmentLayer),
@@ -1892,6 +2035,7 @@ impl MenuAction {
             MenuAction::SaveAsPsd => "Save as PSD…".into(),
             MenuAction::Export(f) => format!("{}…", f.extension().to_uppercase()),
             MenuAction::ExportLayers => "Export Layers…".into(),
+            MenuAction::ExportSlices => "Slices…".into(),
             MenuAction::PlaceEmbedded => "Place Embedded…".into(),
             MenuAction::PlaceLinked => "Place Linked…".into(),
             MenuAction::FileInfo => "File Info…".into(),
@@ -1907,6 +2051,9 @@ impl MenuAction {
             MenuAction::CopyMerged => "Copy Merged".into(),
             MenuAction::Paste => "Paste".into(),
             MenuAction::PasteInto => "Paste Into".into(),
+            MenuAction::PasteInPlace => "Paste in Place".into(),
+            MenuAction::PasteOutside => "Paste Outside".into(),
+            MenuAction::Purge(target) => target.label().into(),
             MenuAction::ClearPixels => "Clear".into(),
             MenuAction::FillDialog => "Fill…".into(),
             MenuAction::StrokeDialog => "Stroke…".into(),
@@ -1919,6 +2066,9 @@ impl MenuAction {
 
             MenuAction::SetColorMode(m) => m.label().into(),
             MenuAction::SetBitDepth(d) => d.label().into(),
+            // The ellipsis promises a dialog: Desaturate and Equalize ask
+            // nothing, so their rows read bare, as Photopea's do (W4-E).
+            MenuAction::ApplyAdjustment(a) if !a.has_dialog() => a.label().to_string(),
             MenuAction::ApplyAdjustment(a) => format!("{}…", a.label()),
             MenuAction::AutoTone => "Auto Tone".into(),
             MenuAction::AutoContrast => "Auto Contrast".into(),
@@ -2063,6 +2213,7 @@ impl MenuAction {
             MenuAction::KeyboardShortcuts => Shortcut::ctrl_alt_shift('k'),
             MenuAction::Preferences => Shortcut::ctrl('k'),
 
+            MenuAction::ApplyAdjustment(AdjustmentId::Desaturate) => Shortcut::ctrl_shift('u'),
             MenuAction::AutoTone => Shortcut::ctrl_shift('l'),
             MenuAction::AutoContrast => Shortcut::ctrl_alt_shift('l'),
             MenuAction::AutoColor => Shortcut::ctrl_shift('b'),
@@ -2149,6 +2300,7 @@ impl MenuAction {
             | MenuAction::Save
             | MenuAction::SaveAs
             | MenuAction::ExportLayers
+            | MenuAction::ExportSlices
             | MenuAction::PlaceEmbedded
             | MenuAction::PlaceLinked
             | MenuAction::FileInfo
@@ -2196,6 +2348,20 @@ impl MenuAction {
                     .or((!ctx.has_selection).then_some("Paste Into needs a selection")),
                 act(self),
             ),
+            // Paste in Place needs the copy's origin, which only the
+            // application's own store records.
+            MenuAction::PasteInPlace => gate(
+                ctx.need_document()
+                    .or((!ctx.clipboard.has_internal_pixels()).then_some("The clipboard is empty")),
+                act(self),
+            ),
+            MenuAction::PasteOutside => gate(
+                ctx.need_document()
+                    .or((!ctx.clipboard.has_internal_pixels()).then_some("The clipboard is empty"))
+                    .or((!ctx.has_selection).then_some("Paste Outside needs a selection")),
+                act(self),
+            ),
+            MenuAction::Purge(target) => gate(target.unavailable_reason(ctx), act(self)),
             MenuAction::FillDialog | MenuAction::StrokeDialog => match ctx.need_editable_pixels() {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
@@ -2794,6 +2960,7 @@ fn file_menu(recent_files: usize) -> Menu {
                     .collect(),
             ),
             item(MenuAction::ExportLayers),
+            Entry::submenu("Export", vec![item(MenuAction::ExportSlices)]),
             Entry::Separator,
             item(MenuAction::PlaceEmbedded),
             item(MenuAction::PlaceLinked),
@@ -2819,7 +2986,14 @@ fn edit_menu() -> Menu {
             item(MenuAction::Copy),
             item(MenuAction::CopyMerged),
             item(MenuAction::Paste),
-            item(MenuAction::PasteInto),
+            Entry::submenu(
+                "Paste Special",
+                vec![
+                    item(MenuAction::PasteInPlace),
+                    item(MenuAction::PasteInto),
+                    item(MenuAction::PasteOutside),
+                ],
+            ),
             item(MenuAction::ClearPixels),
             Entry::Separator,
             item(MenuAction::FillDialog),
@@ -2830,6 +3004,8 @@ fn edit_menu() -> Menu {
             Entry::Separator,
             item(MenuAction::DefinePattern),
             item(MenuAction::DefineBrush),
+            Entry::Separator,
+            Entry::submenu("Purge", items(PurgeTarget::ALL, MenuAction::Purge)),
             Entry::Separator,
             item(MenuAction::KeyboardShortcuts),
             item(MenuAction::Preferences),
@@ -2892,7 +3068,7 @@ fn layer_menu() -> Menu {
             ),
             Entry::submenu(
                 "New Adjustment Layer",
-                items(AdjustmentId::ALL, MenuAction::NewAdjustmentLayer),
+                items(AdjustmentId::LAYERS, MenuAction::NewAdjustmentLayer),
             ),
             item(MenuAction::EditAdjustmentLayer),
             item(MenuAction::DuplicateLayer),
@@ -3564,7 +3740,7 @@ mod tests {
     }
 
     #[test]
-    fn image_mode_lists_both_depths_ticks_the_documents_and_says_why_neither_converts() {
+    fn image_mode_lists_both_depths_ticks_the_documents_and_greys_only_that_one() {
         let mode = image_menu()
             .entries
             .into_iter()
@@ -3602,21 +3778,37 @@ mod tests {
             MenuAction::SetBitDepth(ChannelDepth::Eight).checked(&ctx),
             Some(false)
         );
-        for depth in ChannelDepth::ALL {
-            let reason = MenuAction::SetBitDepth(*depth).resolve(&ctx).reason();
-            assert!(reason.is_some(), "{depth:?} has no reason: {reason:?}");
-        }
+        // W4-F: the row for the other depth is live; the checked row is the
+        // one greyed, with the reason.
         assert_eq!(
             MenuAction::SetBitDepth(ChannelDepth::Sixteen)
                 .resolve(&ctx)
                 .reason(),
             Some("The document is already at that depth")
         );
+        assert_eq!(
+            MenuAction::SetBitDepth(ChannelDepth::Eight)
+                .resolve(&ctx)
+                .reason(),
+            None,
+            "16 -> 8 is enabled on a 16-bit document"
+        );
         let shallow = MenuContext::from_document(&Document::new(8, 8, "s"), &History::default());
-        assert!(MenuAction::SetBitDepth(ChannelDepth::Sixteen)
+        assert_eq!(
+            MenuAction::SetBitDepth(ChannelDepth::Sixteen)
+                .resolve(&shallow)
+                .reason(),
+            None,
+            "8 -> 16 is enabled on an 8-bit document"
+        );
+        assert_eq!(
+            MenuAction::SetBitDepth(ChannelDepth::Eight).checked(&shallow),
+            Some(true)
+        );
+        assert!(MenuAction::SetBitDepth(ChannelDepth::Eight)
             .resolve(&shallow)
             .reason()
-            .is_some_and(|r| r.contains("8-bit tiles")));
+            .is_some());
         // Every reason is one clean sentence: a lost `\` continuation
         // once left a run of indentation mid-sentence in the greyed row.
         for from in ChannelDepth::ALL {
@@ -3954,7 +4146,7 @@ mod tests {
         // The set is derived and compared whole rather than asserted per item,
         // so a sixth appearing is a failure that names it.
         let mut visible_on_creation = Vec::new();
-        for id in AdjustmentId::ALL {
+        for id in AdjustmentId::LAYERS {
             let resolution = MenuAction::NewAdjustmentLayer(*id).resolve(&ctx);
             let Some(Intent::Document(Command::CreateLayer { layer })) = resolution.intent() else {
                 panic!("{id:?} did not resolve to a create");
@@ -4301,8 +4493,72 @@ mod tests {
             })
             .collect();
         let all: HashSet<AdjustmentId> = AdjustmentId::ALL.iter().copied().collect();
+        let layers: HashSet<AdjustmentId> = AdjustmentId::LAYERS.iter().copied().collect();
         assert_eq!(image, all);
-        assert_eq!(layer, all);
+        assert_eq!(layer, layers);
+        // Photopea's split: four are destructive-only, Color Lookup is a
+        // layer too, and nothing else is missing from the Layer menu.
+        let destructive_only: HashSet<AdjustmentId> = all.difference(&layers).copied().collect();
+        assert_eq!(
+            destructive_only,
+            HashSet::from([
+                AdjustmentId::Desaturate,
+                AdjustmentId::Equalize,
+                AdjustmentId::ShadowsHighlights,
+                AdjustmentId::ReplaceColor,
+            ])
+        );
+        assert!(layers.contains(&AdjustmentId::ColorLookup));
+    }
+
+    #[test]
+    fn desaturate_wears_shift_ctrl_u_and_only_two_adjustments_skip_the_dialog() {
+        assert_eq!(
+            MenuAction::ApplyAdjustment(AdjustmentId::Desaturate).shortcut(),
+            Some(Shortcut::ctrl_shift('u'))
+        );
+        let no_dialog: Vec<AdjustmentId> = AdjustmentId::ALL
+            .iter()
+            .copied()
+            .filter(|id| !id.has_dialog())
+            .collect();
+        assert_eq!(
+            no_dialog,
+            vec![AdjustmentId::Desaturate, AdjustmentId::Equalize]
+        );
+    }
+
+    #[test]
+    fn an_adjustment_row_wears_the_ellipsis_only_when_it_opens_a_dialog() {
+        // W4-E round 2: the ellipsis promises a dialog, so Desaturate and
+        // Equalize (applied on the click) read bare, and every other row keeps
+        // it — in the menu model the bar actually paints.
+        let rows: Vec<MenuAction> = image_menu()
+            .actions()
+            .into_iter()
+            .filter(|a| matches!(a, MenuAction::ApplyAdjustment(_)))
+            .collect();
+        assert_eq!(rows.len(), AdjustmentId::ALL.len());
+        for action in rows {
+            let MenuAction::ApplyAdjustment(id) = action else {
+                unreachable!()
+            };
+            let label = action.label();
+            assert_eq!(
+                label.ends_with('…'),
+                id.has_dialog(),
+                "{id:?} is labelled {label:?}"
+            );
+            assert_eq!(label.trim_end_matches('…'), id.label());
+        }
+        assert_eq!(
+            MenuAction::ApplyAdjustment(AdjustmentId::Desaturate).label(),
+            "Desaturate"
+        );
+        assert_eq!(
+            MenuAction::ApplyAdjustment(AdjustmentId::ShadowsHighlights).label(),
+            "Shadows/Highlights…"
+        );
     }
 
     #[test]

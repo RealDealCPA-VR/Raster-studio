@@ -300,6 +300,41 @@ pub struct Preferences {
     /// wheel pans and Ctrl+wheel zooms.
     #[serde(default = "default_true")]
     pub scroll_wheel_zooms: bool,
+    /// W4-I: the Swatches panel's palette. `None` until the user first
+    /// changes it, so a file that never names it keeps the shipped palette.
+    /// Read leniently: an entry this build cannot read drops the list, never
+    /// the whole file.
+    #[serde(deserialize_with = "lenient")]
+    pub swatches: Option<Vec<SavedSwatch>>,
+    /// W4-I: the Brushes panel's presets, on the same terms as `swatches`.
+    #[serde(deserialize_with = "lenient")]
+    pub brush_presets: Option<Vec<SavedBrushPreset>>,
+}
+
+/// W4-I: read an optional list, answering `None` for anything malformed —
+/// a brush preset written by a build whose `BrushSettings` had other fields
+/// must not make the whole preferences file unreadable.
+fn lenient<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(value.and_then(|v| serde_json::from_value(v).ok()))
+}
+
+/// W4-I: one swatch as the preferences file keeps it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedSwatch {
+    pub name: String,
+    pub rgba: [f32; 4],
+}
+
+/// W4-I: one brush preset as the preferences file keeps it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedBrushPreset {
+    pub name: String,
+    pub settings: tools::BrushSettings,
 }
 
 impl Default for Preferences {
@@ -315,6 +350,8 @@ impl Default for Preferences {
             units: UnitChoice::default(),
             language: default_language(),
             scroll_wheel_zooms: true,
+            swatches: None,
+            brush_presets: None,
         }
     }
 }
@@ -358,7 +395,69 @@ impl Preferences {
         {
             self.scratch_dir = None;
         }
+        // W4-I: a non-finite colour or size would compare unequal to itself
+        // and could never be drawn; drop such entries on the way in.
+        if let Some(list) = &mut self.swatches {
+            list.retain(|s| s.rgba.iter().all(|c| c.is_finite()));
+        }
+        if let Some(list) = &mut self.brush_presets {
+            list.retain(|p| p.settings.size.is_finite() && p.settings.hardness.is_finite());
+        }
         self
+    }
+
+    /// W4-I: keep the Swatches and Brushes panels and these preferences in
+    /// step. Called once a frame with the live workspace.
+    ///
+    /// A panel the user has not edited this session (`edits() == 0`) takes
+    /// the list stored here — that is the load on start. A panel the user has
+    /// edited writes its list here. Answers `true` when these preferences
+    /// changed, i.e. when the file should be written.
+    pub fn sync_panel_presets(&mut self, w: &mut ui::Workspace) -> bool {
+        let mut changed = false;
+        let live: Vec<SavedSwatch> = w
+            .swatches
+            .swatches()
+            .iter()
+            .map(|s| SavedSwatch {
+                name: s.name.clone(),
+                rgba: s.rgba,
+            })
+            .collect();
+        if w.swatches.edits() == 0 {
+            if let Some(saved) = self.swatches.as_ref().filter(|s| **s != live) {
+                w.swatches
+                    .restore(saved.iter().map(|s| ui::panels::color::Swatch {
+                        name: s.name.clone(),
+                        rgba: s.rgba,
+                    }));
+            }
+        } else if self.swatches.as_ref() != Some(&live) {
+            self.swatches = Some(live);
+            changed = true;
+        }
+        let live: Vec<SavedBrushPreset> = w
+            .brushes
+            .presets()
+            .iter()
+            .map(|p| SavedBrushPreset {
+                name: p.name.clone(),
+                settings: p.settings,
+            })
+            .collect();
+        if w.brushes.edits() == 0 {
+            if let Some(saved) = self.brush_presets.as_ref().filter(|s| **s != live) {
+                w.brushes
+                    .restore(saved.iter().map(|p| ui::panels::brushes::BrushPreset {
+                        name: p.name.clone(),
+                        settings: p.settings,
+                    }));
+            }
+        } else if self.brush_presets.as_ref() != Some(&live) {
+            self.brush_presets = Some(live);
+            changed = true;
+        }
+        changed
     }
 
     /// The catalogue locale the language code names (English for any code the
@@ -436,11 +535,72 @@ mod tests {
             units: UnitChoice::Cm,
             language: "en".to_string(),
             scroll_wheel_zooms: false,
+            swatches: Some(vec![SavedSwatch {
+                name: "Teal".to_string(),
+                rgba: [0.0, 0.5, 0.5, 1.0],
+            }]),
+            brush_presets: Some(vec![SavedBrushPreset {
+                name: "Mine".to_string(),
+                settings: tools::BrushSettings::default(),
+            }]),
         };
 
         prefs.save(&paths.preferences_file()).unwrap();
         let back = Preferences::load(&paths.preferences_file());
         assert_eq!(back, prefs);
+    }
+
+    /// W4-I: a swatch and a brush preset the user adds in the panels reach
+    /// the preferences file, and a fresh start (a new workspace over the
+    /// reloaded file) shows them.
+    #[test]
+    fn swatches_and_brush_presets_added_survive_a_prefs_save_and_load() {
+        let dir = tmp();
+        let path = dir.path().join("preferences.json");
+        let mut prefs = Preferences::default();
+        let mut w = ui::Workspace::new();
+        // An untouched workspace writes nothing.
+        assert!(!prefs.sync_panel_presets(&mut w));
+        assert_eq!(prefs.swatches, None);
+
+        let teal = [0.0, 0.5, 0.5, 1.0];
+        assert!(w.swatches.add("Teal", teal));
+        let tool = tools::ToolId::Brush;
+        w.brushes.capture("My Brush", &w.options, tool).unwrap();
+        assert!(prefs.sync_panel_presets(&mut w), "the edit must be written");
+        prefs.save(&path).unwrap();
+
+        let mut back = Preferences::load(&path);
+        let mut fresh = ui::Workspace::new();
+        assert!(fresh.swatches.index_of(teal).is_none());
+        assert!(
+            !back.sync_panel_presets(&mut fresh),
+            "a load writes nothing"
+        );
+        assert!(
+            fresh.swatches.index_of(teal).is_some(),
+            "the added swatch did not survive: {:?}",
+            fresh.swatches.swatches()
+        );
+        assert!(fresh.brushes.presets().iter().any(|p| p.name == "My Brush"));
+        assert_eq!(fresh.swatches.len(), w.swatches.len());
+        assert_eq!(fresh.brushes.len(), w.brushes.len());
+    }
+
+    /// W4-I: a brush preset this build cannot read drops the list, not the
+    /// whole preferences file.
+    #[test]
+    fn an_unreadable_preset_list_keeps_the_rest_of_the_file() {
+        let dir = tmp();
+        let path = dir.path().join("preferences.json");
+        std::fs::write(
+            &path,
+            r#"{"theme":"light","brush_presets":[{"name":"x","settings":{"size":"big"}}]}"#,
+        )
+        .unwrap();
+        let p = Preferences::load(&path);
+        assert_eq!(p.theme, ThemeChoice::Light);
+        assert_eq!(p.brush_presets, None);
     }
 
     #[test]

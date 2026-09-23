@@ -310,6 +310,11 @@ pub enum Command {
     /// carries the mode that was there, so the mode rides the same undo step
     /// as the pixel rewrite it accompanies instead of drifting after an undo.
     SetMetaColorMode { from: u8, to: u8 },
+    /// Change the document's bits per channel (Image ▸ Mode ▸ 8/16
+    /// Bits/Channel). Rides one Transaction with the per-layer tile rewrite,
+    /// exactly like [`Command::SetMetaColorMode`], so a single undo restores
+    /// both the depth and the tiles.
+    SetMetaBitDepth { from: u8, to: u8 },
     TransformLayer {
         layer_id: LayerId,
         /// **Pre**-multiplied onto the layer's current transform:
@@ -583,6 +588,10 @@ pub enum CommandError {
     CannotClearMask(LayerId),
     #[error("fill value does not match its target's storage format")]
     FillValueMismatch,
+    /// A [`Command::SetMetaBitDepth`] named a depth the tile store does not
+    /// hold (only 8 and 16 bits per channel exist).
+    #[error("{0} bits per channel is not a depth this build stores")]
+    UnsupportedBitDepth(u8),
     /// A [`Command::SetLayerKind`] carried a payload that does not satisfy
     /// its own schema — a text layer with non-finite numbers, a span outside
     /// the text, or a range cutting a code point (card 017). Refused before
@@ -753,6 +762,19 @@ impl Command {
             Command::SetMetaColorMode { from, to } => {
                 doc.meta.color_mode = *to;
                 Ok(Command::SetMetaColorMode {
+                    from: *to,
+                    to: *from,
+                })
+            }
+
+            Command::SetMetaBitDepth { from, to } => {
+                // Journals are untrusted input: only the two depths the tile
+                // store holds are accepted.
+                if !matches!(*to, 8 | 16) {
+                    return Err(CommandError::UnsupportedBitDepth(*to));
+                }
+                doc.meta.bit_depth = *to;
+                Ok(Command::SetMetaBitDepth {
                     from: *to,
                     to: *from,
                 })
@@ -1211,6 +1233,7 @@ impl Command {
             // row says what happened.
             Command::SetSelection { .. } => "Select".into(),
             Command::SetMetaColorMode { .. } => "Change Colour Mode".into(),
+            Command::SetMetaBitDepth { .. } => "Change Bit Depth".into(),
             Command::PaintTiles { target, .. } => match target {
                 PixelTarget::Layer(_) => "Paint".into(),
                 PixelTarget::Mask(_) => "Paint Mask".into(),
@@ -1548,6 +1571,7 @@ impl Command {
             Command::SetSelection { .. }
             | Command::SetGuides { .. }
             | Command::SetMetaColorMode { .. }
+            | Command::SetMetaBitDepth { .. }
             | Command::SetAssetSourceSize { .. }
             | Command::ReplaceAssetSource { .. } => DirtyReach::nothing(),
             // One layer's whole extent, before and after. A create has no
@@ -4205,9 +4229,31 @@ mod tests {
                 guides: Guides::default(),
             },
             Command::SetMetaColorMode { from: 0, to: 1 },
+            Command::SetMetaBitDepth { from: 8, to: 16 },
         ] {
             assert!(cmd.dirty_reach().is_nothing(), "{cmd:?}");
         }
+    }
+
+    #[test]
+    fn the_bit_depth_change_inverts_and_refuses_a_depth_the_store_cannot_hold() {
+        let mut doc = Document::new(8, 8, "deep");
+        assert_eq!(doc.meta.bit_depth, 8);
+        let inverse = Command::SetMetaBitDepth { from: 8, to: 16 }
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(doc.meta.bit_depth, 16);
+        assert_eq!(inverse, Command::SetMetaBitDepth { from: 16, to: 8 });
+        inverse.apply(&mut doc).unwrap();
+        assert_eq!(doc.meta.bit_depth, 8);
+        assert!(matches!(
+            Command::SetMetaBitDepth { from: 8, to: 32 }.apply(&mut doc),
+            Err(CommandError::UnsupportedBitDepth(32))
+        ));
+        assert_eq!(
+            doc.meta.bit_depth, 8,
+            "a refused depth leaves the document alone"
+        );
     }
 
     #[test]

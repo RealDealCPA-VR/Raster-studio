@@ -980,8 +980,14 @@ pub enum ExportFormat {
     /// JPEG at the given quality. **Must be `1..=100`**; [`encode`] rejects
     /// anything else rather than letting a codec clamp it silently.
     Jpeg(u8),
-    /// WebP. Lossless only — the backing encoder has no lossy mode — so a
-    /// quality knob here would be a lie.
+    /// WebP. Lossless only — the backing encoder (`image-webp` 0.2, already in
+    /// the tree behind `image`) writes VP8L and has no lossy VP8 mode, so a
+    /// quality knob here would be a lie. Pure-Rust lossy encoders do exist on
+    /// crates.io; none was adopted yet (`zenwebp` is AGPL-3.0, `webp-rust`
+    /// 0.3.1 measured about 17 dB PSNR at quality 90 and wrote one stream
+    /// `image-webp` rejects, `vaam-image-webp` and `tiny-webp` are 0.1.0
+    /// releases weeks or days old). `docs/parity-matrix.md` records the
+    /// evaluation and the gap.
     WebP,
     /// TIFF. Lossless, alpha, 8 or 16 bit, ICC.
     Tiff,
@@ -989,17 +995,32 @@ pub enum ExportFormat {
     Gif,
     /// BMP. Lossless, alpha, 8 bit, no ICC.
     Bmp,
+    /// Windows icon. One file carrying the image at every size in
+    /// [`ICO_SIZES`] (16, 32, 48 and 256 px square), each a PNG entry with
+    /// full alpha. A non-square image is fitted inside each square, centred,
+    /// on transparency. 8 bit, no ICC.
+    Ico,
+    /// SVG wrapping the raster: an `<svg>` document whose one `<image>` element
+    /// carries the pixels as an embedded PNG, at the image's own pixel size —
+    /// what Photopea writes for a raster document. Lossless, alpha, 8 bit, no
+    /// ICC. The raster payload is readable back with [`svg_raster_payload`].
+    Svg,
 }
+
+/// The square sizes an [`ExportFormat::Ico`] file carries, smallest first.
+pub const ICO_SIZES: [u32; 4] = [16, 32, 48, 256];
 
 impl ExportFormat {
     /// Every format the exporter can write.
-    pub const ALL: [ExportFormat; 6] = [
+    pub const ALL: [ExportFormat; 8] = [
         ExportFormat::Png,
         ExportFormat::Jpeg(90),
         ExportFormat::WebP,
         ExportFormat::Tiff,
         ExportFormat::Gif,
         ExportFormat::Bmp,
+        ExportFormat::Ico,
+        ExportFormat::Svg,
     ];
 
     /// The inclusive range a JPEG quality value must fall in.
@@ -1033,9 +1054,12 @@ impl ExportFormat {
     /// a background.
     pub fn alpha_support(self) -> AlphaSupport {
         match self {
-            ExportFormat::Png | ExportFormat::Tiff | ExportFormat::WebP | ExportFormat::Bmp => {
-                AlphaSupport::Full
-            }
+            ExportFormat::Png
+            | ExportFormat::Tiff
+            | ExportFormat::WebP
+            | ExportFormat::Bmp
+            | ExportFormat::Ico
+            | ExportFormat::Svg => AlphaSupport::Full,
             ExportFormat::Gif => AlphaSupport::Binary,
             ExportFormat::Jpeg(_) => AlphaSupport::None,
         }
@@ -1071,6 +1095,8 @@ impl ExportFormat {
             ExportFormat::Tiff => "tif",
             ExportFormat::Gif => "gif",
             ExportFormat::Bmp => "bmp",
+            ExportFormat::Ico => "ico",
+            ExportFormat::Svg => "svg",
         }
     }
 
@@ -1083,6 +1109,8 @@ impl ExportFormat {
             ExportFormat::Tiff => "image/tiff",
             ExportFormat::Gif => "image/gif",
             ExportFormat::Bmp => "image/bmp",
+            ExportFormat::Ico => "image/vnd.microsoft.icon",
+            ExportFormat::Svg => "image/svg+xml",
         }
     }
 }
@@ -1264,8 +1292,179 @@ pub fn encode_into<W: Write + Seek>(
             let mut enc = image::codecs::bmp::BmpEncoder::new(&mut *out);
             enc.encode(rgba, width, height, ExtendedColorType::Rgba8)?;
         }
+        ExportFormat::Ico => {
+            let rgba = pixels.require_rgba8(format)?;
+            let mut frames = Vec::with_capacity(ICO_SIZES.len());
+            for side in ICO_SIZES {
+                let square = fit_into_square(rgba, width, height, side);
+                frames.push(image::codecs::ico::IcoFrame::as_png(
+                    &square,
+                    side,
+                    side,
+                    ExtendedColorType::Rgba8,
+                )?);
+            }
+            image::codecs::ico::IcoEncoder::new(&mut *out).encode_images(&frames)?;
+        }
+        ExportFormat::Svg => {
+            let rgba = pixels.require_rgba8(format)?;
+            let mut png = Vec::new();
+            image::codecs::png::PngEncoder::new(&mut png).write_image(
+                rgba,
+                width,
+                height,
+                ExtendedColorType::Rgba8,
+            )?;
+            let document = svg_document(width, height, &png);
+            out.write_all(document.as_bytes())
+                .map_err(image::ImageError::IoError)?;
+        }
     }
     Ok(())
+}
+
+/// The data-URI prefix of the raster an [`ExportFormat::Svg`] file embeds.
+const SVG_PNG_PREFIX: &str = "data:image/png;base64,";
+
+/// The SVG document [`ExportFormat::Svg`] writes around an encoded PNG.
+fn svg_document(width: u32, height: u32, png: &[u8]) -> String {
+    format!(
+        concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" ",
+            "xmlns:xlink=\"http://www.w3.org/1999/xlink\" ",
+            "width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\">\n",
+            "<image width=\"{w}\" height=\"{h}\" preserveAspectRatio=\"none\" ",
+            "xlink:href=\"{prefix}{data}\"/>\n",
+            "</svg>\n"
+        ),
+        w = width,
+        h = height,
+        prefix = SVG_PNG_PREFIX,
+        data = base64_encode(png)
+    )
+}
+
+/// The PNG bytes an [`ExportFormat::Svg`] file written by this module embeds,
+/// or `None` for any other document.
+///
+/// Not an SVG reader: it finds the one `data:image/png;base64,` URI this
+/// module writes and decodes it, which is what the Export As preview and the
+/// round-trip tests need to see the pixels the file carries.
+pub fn svg_raster_payload(svg: &[u8]) -> Option<Vec<u8>> {
+    let text = std::str::from_utf8(svg).ok()?;
+    if !text.contains("<svg") {
+        return None;
+    }
+    let start = text.find(SVG_PNG_PREFIX)? + SVG_PNG_PREFIX.len();
+    let end = start + text[start..].find('"')?;
+    base64_decode(&text[start..end])
+}
+
+const BASE64_ALPHABET: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// Standard (RFC 4648) base64 with padding.
+fn base64_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            chunk.get(1).copied().unwrap_or(0),
+            chunk.get(2).copied().unwrap_or(0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for (i, shift) in [18u32, 12, 6, 0].into_iter().enumerate() {
+            if i <= chunk.len() {
+                out.push(BASE64_ALPHABET[((n >> shift) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// The inverse of [`base64_encode`]; `None` on any character outside the
+/// alphabet or a length that is not a multiple of four.
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let bytes = text.as_bytes();
+    if !bytes.len().is_multiple_of(4) {
+        return None;
+    }
+    let value = |c: u8| {
+        BASE64_ALPHABET
+            .iter()
+            .position(|a| *a == c)
+            .map(|v| v as u32)
+    };
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+    for quad in bytes.chunks(4) {
+        let pad = quad.iter().rev().take_while(|c| **c == b'=').count();
+        if pad > 2 {
+            return None;
+        }
+        let mut n = 0u32;
+        for (i, c) in quad.iter().enumerate() {
+            let v = if i >= 4 - pad { 0 } else { value(*c)? };
+            n = (n << 6) | v;
+        }
+        let decoded = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
+        out.extend_from_slice(&decoded[..3 - pad]);
+    }
+    Some(out)
+}
+
+/// `rgba` (straight RGBA8, `width` x `height`) fitted inside a `side` x
+/// `side` square: scaled so the long edge meets the square, centred, the rest
+/// transparent. Area-weighted in premultiplied space, so a downscale averages
+/// every source pixel it covers and a transparent pixel's colour never bleeds
+/// into an opaque neighbour. The averaging is in the file's encoded values —
+/// this module knows nothing about colour; `crate::export` resamples in linear
+/// light before anything reaches here.
+fn fit_into_square(rgba: &[u8], width: u32, height: u32, side: u32) -> Vec<u8> {
+    let scale = f64::from(side) / f64::from(width.max(height));
+    let dw = ((f64::from(width) * scale).round() as u32).clamp(1, side);
+    let dh = ((f64::from(height) * scale).round() as u32).clamp(1, side);
+    let (ox, oy) = ((side - dw) / 2, (side - dh) / 2);
+    let mut out = vec![0u8; (side * side * 4) as usize];
+    let sx = f64::from(width) / f64::from(dw);
+    let sy = f64::from(height) / f64::from(dh);
+    for y in 0..dh {
+        let (y0, y1) = (f64::from(y) * sy, f64::from(y + 1) * sy);
+        for x in 0..dw {
+            let (x0, x1) = (f64::from(x) * sx, f64::from(x + 1) * sx);
+            let mut acc = [0f64; 4];
+            let mut area = 0f64;
+            let mut py = y0.floor() as u32;
+            while f64::from(py) < y1 && py < height {
+                let wy = (y1.min(f64::from(py + 1)) - y0.max(f64::from(py))).max(0.0);
+                let mut px = x0.floor() as u32;
+                while f64::from(px) < x1 && px < width {
+                    let wx = (x1.min(f64::from(px + 1)) - x0.max(f64::from(px))).max(0.0);
+                    let w = wx * wy;
+                    let i = ((py * width + px) * 4) as usize;
+                    let a = f64::from(rgba[i + 3]) / 255.0;
+                    for c in 0..3 {
+                        acc[c] += f64::from(rgba[i + c]) * a * w;
+                    }
+                    acc[3] += a * w;
+                    area += w;
+                    px += 1;
+                }
+                py += 1;
+            }
+            if area <= 0.0 || acc[3] <= 0.0 {
+                continue;
+            }
+            let o = (((oy + y) * side + ox + x) * 4) as usize;
+            for c in 0..3 {
+                out[o + c] = (acc[c] / acc[3]).round().clamp(0.0, 255.0) as u8;
+            }
+            out[o + 3] = (acc[3] / area * 255.0).round().clamp(0.0, 255.0) as u8;
+        }
+    }
+    out
 }
 
 /// Encode display-encoded, straight-alpha pixels to the requested format.
@@ -1513,6 +1712,11 @@ mod tests {
             let bytes = encode(format, w, h, &px)
                 .unwrap_or_else(|e| panic!("{format:?} failed to encode: {e}"));
             assert!(!bytes.is_empty(), "{format:?} produced no bytes");
+            // The two containers that are not one raster at the image's size
+            // have their own round-trip tests below.
+            if matches!(format, ExportFormat::Ico | ExportFormat::Svg) {
+                continue;
+            }
 
             let decoded =
                 decode_bytes(&bytes).unwrap_or_else(|e| panic!("{format:?} failed to decode: {e}"));
@@ -1524,7 +1728,12 @@ mod tests {
 
             match format {
                 // Lossless, full colour, alpha preserved.
-                ExportFormat::Png | ExportFormat::Tiff | ExportFormat::WebP | ExportFormat::Bmp => {
+                ExportFormat::Png
+                | ExportFormat::Tiff
+                | ExportFormat::WebP
+                | ExportFormat::Bmp
+                | ExportFormat::Ico
+                | ExportFormat::Svg => {
                     assert_eq!(decoded.rgba8, px, "{format:?} is supposed to be lossless");
                 }
                 // Palettised: only two colours are used, so a 256-entry palette
@@ -1553,6 +1762,85 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// File > Export As > ICO writes one icon carrying all four sizes, each a
+    /// real scaled copy of the image with its alpha.
+    #[test]
+    fn ico_export_carries_every_icon_size() {
+        // A 64x32 image: left half opaque red, right half transparent.
+        let (w, h) = (64u32, 32u32);
+        let mut px = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w / 2 {
+                let i = ((y * w + x) * 4) as usize;
+                px[i..i + 4].copy_from_slice(&[255, 0, 0, 255]);
+            }
+        }
+        let bytes = encode(ExportFormat::Ico, w, h, &px).unwrap();
+        // ICONDIR: reserved 0, type 1 (icon), four entries.
+        assert_eq!(&bytes[0..4], &[0, 0, 1, 0], "not an icon directory");
+        assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 4);
+        let mut sides = Vec::new();
+        for entry in 0..4usize {
+            let at = 6 + entry * 16;
+            // 0 in the directory means 256.
+            let side = |b: u8| if b == 0 { 256u32 } else { u32::from(b) };
+            sides.push((side(bytes[at]), side(bytes[at + 1])));
+            let len = u32::from_le_bytes(bytes[at + 8..at + 12].try_into().unwrap()) as usize;
+            let offset = u32::from_le_bytes(bytes[at + 12..at + 16].try_into().unwrap()) as usize;
+            let frame = decode_bytes(&bytes[offset..offset + len]).unwrap();
+            let s = sides[entry].0;
+            assert_eq!((frame.width, frame.height), (s, s));
+            // The 2:1 image is fitted: top quarter band is transparent padding,
+            // the centre-left is opaque red, the centre-right transparent.
+            let at_px = |x: u32, y: u32| {
+                let i = ((y * s + x) * 4) as usize;
+                frame.rgba8[i..i + 4].to_vec()
+            };
+            assert_eq!(
+                at_px(s / 4, s / 2),
+                vec![255, 0, 0, 255],
+                "{s}px lost the red"
+            );
+            assert_eq!(at_px(3 * s / 4, s / 2)[3], 0, "{s}px filled the clear half");
+            assert_eq!(at_px(s / 4, 0)[3], 0, "{s}px did not pad the short side");
+        }
+        assert_eq!(sides, vec![(16, 16), (32, 32), (48, 48), (256, 256)]);
+        // And the whole file opens as an ICO through the import path.
+        let info = probe_bytes(&bytes, ImportLimits::default()).unwrap();
+        assert_eq!(info.format, ImportFormat::Ico);
+    }
+
+    /// File > Export As > SVG wraps the raster, pixel for pixel, in an SVG
+    /// document of the image's own size.
+    #[test]
+    fn svg_export_wraps_the_raster_losslessly() {
+        let (w, h) = (8u32, 6u32);
+        let px = checker_rgba8(w, h);
+        let bytes = encode(ExportFormat::Svg, w, h, &px).unwrap();
+        let text = std::str::from_utf8(&bytes).expect("an SVG is text");
+        assert!(text.starts_with("<?xml"), "{text}");
+        assert!(text.contains("<svg xmlns=\"http://www.w3.org/2000/svg\""));
+        assert!(text.contains("width=\"8\" height=\"6\" viewBox=\"0 0 8 6\""));
+        let png = svg_raster_payload(&bytes).expect("an embedded raster");
+        let decoded = decode_bytes(&png).unwrap();
+        assert_eq!((decoded.width, decoded.height), (w, h));
+        assert_eq!(decoded.rgba8, px);
+        assert_eq!(svg_raster_payload(b"not an svg"), None);
+    }
+
+    #[test]
+    fn base64_round_trips_every_padding_length() {
+        for len in 0..10usize {
+            let data: Vec<u8> = (0..len as u8).map(|b| b.wrapping_mul(37)).collect();
+            let text = base64_encode(&data);
+            assert_eq!(text.len() % 4, 0);
+            assert_eq!(base64_decode(&text).as_deref(), Some(data.as_slice()));
+        }
+        assert_eq!(base64_encode(b"Man"), "TWFu");
+        assert_eq!(base64_encode(b"Ma"), "TWE=");
+        assert_eq!(base64_encode(b"M"), "TQ==");
     }
 
     /// A WebP file really is a WebP file, not a PNG that happened to decode.
@@ -2131,8 +2419,13 @@ mod tests {
             assert_eq!(from_file, in_memory, "{format:?} differed on disk");
 
             // ...and the file on disk is decodable through the streaming path.
-            let decoded = decode_surface_path(&path, ImportLimits::default()).unwrap();
-            assert_eq!((decoded.width, decoded.height), (8, 8));
+            // (An SVG is not an import format; an ICO decodes to its largest
+            // entry.)
+            if format != ExportFormat::Svg {
+                let decoded = decode_surface_path(&path, ImportLimits::default()).unwrap();
+                let side = if format == ExportFormat::Ico { 256 } else { 8 };
+                assert_eq!((decoded.width, decoded.height), (side, side));
+            }
             let _ = std::fs::remove_file(&path);
         }
         let _ = std::fs::remove_dir(&dir);

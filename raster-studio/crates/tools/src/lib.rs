@@ -75,6 +75,9 @@
 //! | [`edit`] | move, crop, slice, eyedropper, red-eye, patch, magic eraser |
 //! | [`text`] | the Type tool: click to place a text layer, then type into it |
 //! | [`pen`] | the Pen tool: author a path one click at a time |
+//! | [`pencil`] | the Pencil and its Auto Erase |
+//! | [`measure`] | the Ruler and the Colour Sampler |
+//! | [`history_brush`] | the History Brush: paint from an earlier state |
 //! | [`view`] | hand, zoom and rotate-view — the tools that emit nothing |
 //! | [`registry`] | metadata and construction for every tool in the palette |
 //!
@@ -113,9 +116,12 @@ pub mod bucket;
 pub mod edit;
 pub mod error;
 pub mod gradient;
+pub mod history_brush;
+pub mod measure;
 pub mod patch;
 pub mod path_select;
 pub mod pen;
+pub mod pencil;
 pub mod registry;
 pub mod select;
 pub mod shape;

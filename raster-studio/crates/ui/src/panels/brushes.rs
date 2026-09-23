@@ -25,6 +25,9 @@ pub struct BrushesState {
     /// Index of the preset last applied, cleared as soon as the live brush
     /// stops matching it.
     active: Option<usize>,
+    /// W4-I: user edits (capture, remove) this session; `0` lets a preset
+    /// list restored from the preferences file replace the defaults.
+    edits: u64,
 }
 
 impl Default for BrushesState {
@@ -32,6 +35,7 @@ impl Default for BrushesState {
         Self {
             presets: default_presets(),
             active: None,
+            edits: 0,
         }
     }
 }
@@ -43,6 +47,22 @@ impl BrushesState {
 
     pub fn presets(&self) -> &[BrushPreset] {
         &self.presets
+    }
+
+    /// W4-I: user edits this session; see the field.
+    pub fn edits(&self) -> u64 {
+        self.edits
+    }
+
+    /// W4-I: replace the presets with a list read back from the preferences
+    /// file. Unnamed entries are dropped, as [`Self::capture`] refuses them.
+    /// Not a user edit.
+    pub fn restore(&mut self, presets: impl IntoIterator<Item = BrushPreset>) {
+        self.presets = presets
+            .into_iter()
+            .filter(|p| !p.name.trim().is_empty())
+            .collect();
+        self.active = None;
     }
 
     pub fn get(&self, index: usize) -> Option<&BrushPreset> {
@@ -75,6 +95,7 @@ impl BrushesState {
         });
         let index = self.presets.len() - 1;
         self.active = Some(index);
+        self.edits += 1;
         Some(index)
     }
 
@@ -89,6 +110,7 @@ impl BrushesState {
                 self.active = Some(a - 1);
             }
         }
+        self.edits += 1;
         Some(self.presets.remove(index))
     }
 

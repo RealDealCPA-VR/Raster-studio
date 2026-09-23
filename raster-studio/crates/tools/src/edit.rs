@@ -433,21 +433,132 @@ impl Tool for MoveTool {
 
 // ---------------------------------------------------------------- crop ----
 
+/// W4-D: the Crop options bar's Ratio presets, in bar order, with the
+/// width/height each one locks the box to. `0.0` marks the three that are not
+/// a fixed number: Free (no lock), Original (the canvas's own ratio) and the
+/// W x H x Resolution preset (the W and H fields' ratio).
+pub const CROP_RATIO_PRESETS: [(&str, f32); 8] = [
+    ("Free", 0.0),
+    ("Original", 0.0),
+    ("1:1", 1.0),
+    ("4:3", 4.0 / 3.0),
+    ("16:9", 16.0 / 9.0),
+    ("3:2", 1.5),
+    ("5:4", 1.25),
+    ("W x H x Resolution", 0.0),
+];
+
+/// W4-D: the Ratio choice labels, derived from [`CROP_RATIO_PRESETS`].
+pub const CROP_RATIO_LABELS: [&str; 8] = {
+    let mut out = [""; 8];
+    let mut i = 0;
+    while i < 8 {
+        out[i] = CROP_RATIO_PRESETS[i].0;
+        i += 1;
+    }
+    out
+};
+
+/// W4-D: index of the Original preset in [`CROP_RATIO_PRESETS`].
+pub const CROP_RATIO_ORIGINAL: usize = 1;
+/// W4-D: index of the W x H x Resolution preset in [`CROP_RATIO_PRESETS`].
+pub const CROP_RATIO_SIZE: usize = 7;
+
+/// W4-D: the Overlay choice, in bar order.
+pub const CROP_OVERLAYS: [(&str, crate::tool::CropGuide); 5] = [
+    ("None", crate::tool::CropGuide::None),
+    ("Rule of Thirds", crate::tool::CropGuide::Thirds),
+    ("Grid", crate::tool::CropGuide::Grid),
+    ("Diagonal", crate::tool::CropGuide::Diagonals),
+    ("Golden Ratio", crate::tool::CropGuide::GoldenRatio),
+];
+
+/// W4-D: the Overlay choice labels, derived from [`CROP_OVERLAYS`].
+pub const CROP_OVERLAY_LABELS: [&str; 5] = {
+    let mut out = [""; 5];
+    let mut i = 0;
+    while i < 5 {
+        out[i] = CROP_OVERLAYS[i].0;
+        i += 1;
+    }
+    out
+};
+
+/// W4-D round 2: the options only the W x H x Resolution preset reads.
+pub const CROP_SIZE_OPTION_KEYS: [&str; 4] = ["width", "height", "units", "resolution"];
+
+/// W4-D round 2: whether the Crop options bar shows `key` under the Ratio
+/// preset `ratio` — W, H, Units and Resolution only under W x H x
+/// Resolution, the preset that reads them; everything else always.
+pub fn crop_option_shown(key: &str, ratio: usize) -> bool {
+    !CROP_SIZE_OPTION_KEYS.contains(&key) || ratio == CROP_RATIO_SIZE
+}
+
+/// W4-D: the largest edge the W x H x Resolution preset may ask for.
+pub const CROP_MAX_OUTPUT_PX: f32 = 30_000.0;
+
+/// W4-D: the straighten angle a drawn line asks for, radians clockwise in a
+/// y-down document: the rotation that makes the line level (or plumb, for a
+/// line nearer vertical than horizontal). `None` for a line too short to
+/// have a direction.
+pub fn straighten_angle(from: Vec2, to: Vec2) -> Option<f32> {
+    use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+    let d = to - from;
+    if !d.is_finite() || d.length() < 2.0 {
+        return None;
+    }
+    let mut angle = d.y.atan2(d.x);
+    // Direction does not matter: a line dragged right-to-left is the same line.
+    if angle > FRAC_PI_2 {
+        angle -= PI;
+    } else if angle <= -FRAC_PI_2 {
+        angle += PI;
+    }
+    // A near-vertical line is straightened to plumb, not laid flat.
+    if angle > FRAC_PI_4 {
+        angle -= FRAC_PI_2;
+    } else if angle < -FRAC_PI_4 {
+        angle += FRAC_PI_2;
+    }
+    Some(angle)
+}
+
 /// Crop: drag a keep-region, constrain its shape, straighten, commit.
 pub struct CropTool {
     /// Width divided by height the box is locked to, if any.
     pub aspect: Option<f32>,
-    /// Rotation the crop asks for before the cut, radians clockwise.
-    ///
-    /// Reported, not performed: it rides along in the emitted
-    /// [`CropRequest`], whose [`CropRequest::straightened_corners`] gives the
-    /// quad it means. Actually resampling that quad needs the canvas-resize
-    /// command `editor-core` does not have yet, which is the same reason a crop
-    /// is a request rather than a command at all.
+    /// Rotation the crop asks for before the cut, radians clockwise. It rides
+    /// in the emitted [`CropRequest`]; the application performs it (W4-D).
+    /// A line drawn in Straighten mode overrides it for the next commit.
     pub straighten: f32,
     pub delete_cropped: bool,
+    /// W4-D: the Ratio preset, an index into [`CROP_RATIO_PRESETS`].
+    pub ratio: usize,
+    /// W4-D: the W x H x Resolution preset's width and height, in pixels or
+    /// (with `output_in_inches`) inches.
+    pub output_width: f32,
+    pub output_height: f32,
+    /// W4-D: W and H are inches, converted at `resolution`.
+    pub output_in_inches: bool,
+    /// W4-D: pixels per inch for the W x H x Resolution preset.
+    pub resolution: f32,
+    /// W4-D: the composition guide the live box is drawn with.
+    pub overlay: crate::tool::CropGuide,
+    /// W4-D: Straighten mode — a drag draws a line instead of a box, and the
+    /// line's angle becomes the straighten angle of the next commit.
+    pub straighten_line: bool,
+    /// W4-D: the angle the last straighten line asked for; commit and cancel
+    /// clear it.
+    line_angle: Option<f32>,
+    /// W4-D round 2: the straighten line as drawn, `[from, to]` in document
+    /// pixels — published with the crop box while it is dragged and after
+    /// release, so the gesture and its angle are on screen before Enter.
+    line: Option<[Vec2; 2]>,
     anchor: Option<Vec2>,
     current: Option<Vec2>,
+    /// W4-A: the canvas at pointer-down, so the live box is clipped the
+    /// same way the released one is.
+    canvas: Option<PixelRect>,
     /// The committed box, once the drag has ended and before Enter.
     pub box_rect: Option<PixelRect>,
 }
@@ -458,58 +569,199 @@ impl Default for CropTool {
             aspect: None,
             straighten: 0.0,
             delete_cropped: false,
+            ratio: 0,
+            output_width: 1920.0,
+            output_height: 1080.0,
+            output_in_inches: false,
+            resolution: 72.0,
+            overlay: crate::tool::CropGuide::Thirds,
+            straighten_line: false,
+            line_angle: None,
+            line: None,
             anchor: None,
             current: None,
+            canvas: None,
             box_rect: None,
         }
     }
 }
 
 impl CropTool {
-    /// Apply the aspect lock to a drag.
-    fn constrained(&self, a: Vec2, b: Vec2) -> (Vec2, Vec2) {
-        let Some(aspect) = self.aspect.filter(|r| r.is_finite() && *r > 0.0) else {
+    /// W4-D: the width/height the box is locked to right now: the Ratio
+    /// preset's, the canvas's own for Original, the W and H fields' for the
+    /// W x H x Resolution preset, and the bare `aspect` for Free.
+    pub fn effective_aspect(&self) -> Option<f32> {
+        let ratio = match self.ratio {
+            0 => self.aspect?,
+            CROP_RATIO_ORIGINAL => {
+                let c = self.canvas?;
+                c.width as f32 / c.height.max(1) as f32
+            }
+            CROP_RATIO_SIZE => self.output_width / self.output_height,
+            i => CROP_RATIO_PRESETS.get(i)?.1,
+        };
+        (ratio.is_finite() && ratio > 0.0).then_some(ratio)
+    }
+
+    /// W4-D: the exact pixel size the W x H x Resolution preset asks for, or
+    /// `None` under every other preset.
+    pub fn output_size(&self) -> Option<(u32, u32)> {
+        if self.ratio != CROP_RATIO_SIZE {
+            return None;
+        }
+        let scale = if self.output_in_inches {
+            self.resolution
+        } else {
+            1.0
+        };
+        let px = |v: f32| {
+            let p = (v * scale).round();
+            (p.is_finite() && p >= 1.0).then(|| p.min(CROP_MAX_OUTPUT_PX) as u32)
+        };
+        Some((px(self.output_width)?, px(self.output_height)?))
+    }
+
+    /// Apply the aspect lock to a drag, inside `canvas`.
+    ///
+    /// Round 2 (W4-D): the lock used to be applied first and the canvas clip
+    /// after it, one axis at a time, so a locked box that ran past an edge
+    /// lost its ratio (a 16:9 drag to the far corner came out 60x56). The
+    /// anchor is now brought onto the canvas, and the locked box is shrunk
+    /// *uniformly* until it fits the room between the anchor and the canvas
+    /// edges it is dragged towards — the ratio survives the clip.
+    fn constrained(&self, a: Vec2, b: Vec2, canvas: Option<PixelRect>) -> (Vec2, Vec2) {
+        let Some(aspect) = self.effective_aspect() else {
             return (a, b);
         };
+        let a = match canvas {
+            Some(c) => a.clamp(
+                Vec2::new(c.x as f32, c.y as f32),
+                Vec2::new(c.right() as f32, c.bottom() as f32),
+            ),
+            None => a,
+        };
         let d = b - a;
+        let (sx, sy) = (
+            if d.x < 0.0 { -1.0 } else { 1.0 },
+            if d.y < 0.0 { -1.0 } else { 1.0 },
+        );
         // Keep whichever extent the user dragged further, and derive the other.
-        let (w, h) = if (d.x.abs() / aspect) >= d.y.abs() {
+        let (mut w, mut h) = if (d.x.abs() / aspect) >= d.y.abs() {
             (d.x.abs(), d.x.abs() / aspect)
         } else {
             (d.y.abs() * aspect, d.y.abs())
         };
-        (
-            a,
-            Vec2::new(
-                a.x + w * if d.x < 0.0 { -1.0 } else { 1.0 },
-                a.y + h * if d.y < 0.0 { -1.0 } else { 1.0 },
-            ),
-        )
+        if let Some(c) = canvas {
+            let room_x = if sx < 0.0 {
+                a.x - c.x as f32
+            } else {
+                c.right() as f32 - a.x
+            };
+            let room_y = if sy < 0.0 {
+                a.y - c.y as f32
+            } else {
+                c.bottom() as f32 - a.y
+            };
+            let fit = (room_x / w).min(room_y / h).min(1.0);
+            if fit.is_finite() {
+                w *= fit.max(0.0);
+                h *= fit.max(0.0);
+            }
+        }
+        (a, Vec2::new(a.x + w * sx, a.y + h * sy))
     }
 
-    /// The keep-region a drag describes, clipped to the canvas.
+    /// The keep-region a drag describes, on the canvas. With a ratio lock
+    /// the box keeps its ratio to the nearest whole pixel however far past
+    /// the canvas the drag ran.
     pub fn rect_for(&self, ctx: &ToolContext<'_>, a: Vec2, b: Vec2) -> Option<PixelRect> {
-        let (a, b) = self.constrained(a, b);
+        let (a, b) = self.constrained(a, b, Some(ctx.canvas));
         if !a.x.is_finite() || !b.x.is_finite() || !a.y.is_finite() || !b.y.is_finite() {
             return None;
         }
-        let x0 = (a.x.min(b.x).floor() as i64).max(ctx.canvas.x);
-        let y0 = (a.y.min(b.y).floor() as i64).max(ctx.canvas.y);
-        let x1 = (a.x.max(b.x).ceil() as i64).min(ctx.canvas.right());
-        let y1 = (a.y.max(b.y).ceil() as i64).min(ctx.canvas.bottom());
+        let (x0, y0, x1, y1) = if self.effective_aspect().is_some() {
+            // Locked: round both corners, so the whole-pixel box is off the
+            // ratio by under a pixel rather than by an outward snap on each
+            // side.
+            (
+                a.x.min(b.x).round() as i64,
+                a.y.min(b.y).round() as i64,
+                a.x.max(b.x).round() as i64,
+                a.y.max(b.y).round() as i64,
+            )
+        } else {
+            (
+                a.x.min(b.x).floor() as i64,
+                a.y.min(b.y).floor() as i64,
+                a.x.max(b.x).ceil() as i64,
+                a.y.max(b.y).ceil() as i64,
+            )
+        };
+        let x0 = x0.max(ctx.canvas.x);
+        let y0 = y0.max(ctx.canvas.y);
+        let x1 = x1.min(ctx.canvas.right());
+        let y1 = y1.min(ctx.canvas.bottom());
         if x1 <= x0 || y1 <= y0 {
             return None;
         }
         Some(PixelRect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
     }
 
+    /// W4-A: the box to draw, `[min, max]` in document pixels — the drag in
+    /// progress (aspect-locked, clipped to the canvas), else the released
+    /// box waiting for Enter.
+    fn live_box(&self) -> Option<[Vec2; 2]> {
+        // W4-D round 2: while a Straighten line is dragged with no box yet,
+        // the box shown is the whole canvas — exactly what Enter will keep.
+        if let (true, None, Some(c)) = (
+            self.straighten_line && self.anchor.is_some(),
+            self.box_rect,
+            self.canvas,
+        ) {
+            return Some([
+                Vec2::new(c.x as f32, c.y as f32),
+                Vec2::new(c.right() as f32, c.bottom() as f32),
+            ]);
+        }
+        // W4-D: a Straighten line is not a box; the released box stays up.
+        if let (false, Some(a), Some(b)) = (self.straighten_line, self.anchor, self.current) {
+            let (a, b) = self.constrained(a, b, self.canvas);
+            let (mut lo, mut hi) = (a.min(b), a.max(b));
+            if let Some(c) = self.canvas {
+                let (cmin, cmax) = (
+                    Vec2::new(c.x as f32, c.y as f32),
+                    Vec2::new(c.right() as f32, c.bottom() as f32),
+                );
+                lo = lo.clamp(cmin, cmax);
+                hi = hi.clamp(cmin, cmax);
+            }
+            return (lo.is_finite() && hi.is_finite()).then_some([lo, hi]);
+        }
+        let r = self.box_rect?;
+        Some([
+            Vec2::new(r.x as f32, r.y as f32),
+            Vec2::new(r.right() as f32, r.bottom() as f32),
+        ])
+    }
+
+    /// W4-D round 2: the straighten line to draw — the one being dragged in
+    /// Straighten mode, else the released one waiting for Enter.
+    fn live_line(&self) -> Option<[Vec2; 2]> {
+        if let (true, Some(a), Some(b)) = (self.straighten_line, self.anchor, self.current) {
+            return (a.is_finite() && b.is_finite()).then_some([a, b]);
+        }
+        self.line
+    }
+
     /// Confirm the crop (Enter).
     pub fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
         let rect = self.box_rect.take().ok_or(ToolError::Degenerate)?;
+        self.line = None;
         ctx.emit_request(ToolRequest::Crop(CropRequest {
             rect,
-            straighten: self.straighten,
+            straighten: self.line_angle.take().unwrap_or(self.straighten),
             delete_cropped: self.delete_cropped,
+            output_size: self.output_size(),
         }));
         Ok(())
     }
@@ -522,13 +774,24 @@ impl Tool for CropTool {
 
     fn on_pointer_down(
         &mut self,
-        _ctx: &mut ToolContext<'_>,
+        ctx: &mut ToolContext<'_>,
         event: PointerEvent,
     ) -> Result<(), ToolError> {
         crate::error::finite_pt("crop anchor", event.pos)?;
         self.anchor = Some(event.pos);
         self.current = Some(event.pos);
+        self.canvas = Some(ctx.canvas);
         Ok(())
+    }
+
+    /// W4-A: the crop box while it is dragged and while it waits for Enter;
+    /// `None` once committed or cancelled.
+    fn live_geometry(&self) -> Option<crate::tool::SessionGeometry> {
+        Some(crate::tool::SessionGeometry::Crop {
+            rect: self.live_box()?,
+            guide: self.overlay,
+            straighten: self.live_line(),
+        })
     }
 
     fn on_pointer_move(
@@ -551,6 +814,19 @@ impl Tool for CropTool {
             return Ok(());
         };
         self.current = None;
+        // W4-D: in Straighten mode the drag was a line along something that
+        // should be level. Its angle is the straighten of the next commit, and
+        // with no box yet the whole canvas is kept, so Enter straightens it.
+        if self.straighten_line {
+            if let Some(angle) = straighten_angle(a, event.pos) {
+                self.line_angle = Some(angle);
+                self.line = Some([a, event.pos]);
+                if self.box_rect.is_none() {
+                    self.box_rect = Some(ctx.canvas);
+                }
+            }
+            return Ok(());
+        }
         // Releasing sets the box; the crop itself waits for Enter, so the user
         // can nudge the edges first.
         self.box_rect = self.rect_for(ctx, a, event.pos);
@@ -561,11 +837,15 @@ impl Tool for CropTool {
         self.anchor = None;
         self.current = None;
         self.box_rect = None;
+        self.line_angle = None;
+        self.line = None;
     }
 
-    /// The registry's three Crop options. `aspect` is the bar's width/height
-    /// ratio, where `0` means unconstrained; `straighten` and
-    /// `delete_cropped` ride into the emitted [`CropRequest`].
+    /// The registry's Crop options (W4-D): the Ratio preset, the W x H x
+    /// Resolution fields, the Overlay, Straighten mode and Delete Cropped
+    /// Pixels. `aspect` (width/height, `0` = unconstrained, used under the
+    /// Free preset) and `straighten` (radians) are still answered for callers
+    /// that set them directly.
     fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
         match (key, setting) {
             ("aspect", ToolSetting::Float(v)) => {
@@ -581,7 +861,42 @@ impl Tool for CropTool {
                 self.delete_cropped = v;
                 Ok(())
             }
-            ("aspect" | "straighten" | "delete_cropped", _) => Err(kind_mismatch(key)),
+            ("ratio", ToolSetting::Choice(i)) => {
+                self.ratio = i.min(CROP_RATIO_PRESETS.len() - 1);
+                Ok(())
+            }
+            ("width", ToolSetting::Float(v)) => {
+                self.output_width = finite("crop width", v)?.clamp(0.001, CROP_MAX_OUTPUT_PX);
+                Ok(())
+            }
+            ("height", ToolSetting::Float(v)) => {
+                self.output_height = finite("crop height", v)?.clamp(0.001, CROP_MAX_OUTPUT_PX);
+                Ok(())
+            }
+            ("units", ToolSetting::Choice(i)) => {
+                self.output_in_inches = i == 1;
+                Ok(())
+            }
+            ("resolution", ToolSetting::Float(v)) => {
+                self.resolution = finite("crop resolution", v)?.clamp(1.0, 10_000.0);
+                Ok(())
+            }
+            ("overlay", ToolSetting::Choice(i)) => {
+                self.overlay = CROP_OVERLAYS
+                    .get(i)
+                    .map(|(_, guide)| *guide)
+                    .unwrap_or_default();
+                Ok(())
+            }
+            ("straighten_line", ToolSetting::Bool(v)) => {
+                self.straighten_line = v;
+                Ok(())
+            }
+            (
+                "aspect" | "straighten" | "delete_cropped" | "ratio" | "width" | "height" | "units"
+                | "resolution" | "overlay" | "straighten_line",
+                _,
+            ) => Err(kind_mismatch(key)),
             _ => Err(unknown_option(key)),
         }
     }
@@ -619,6 +934,8 @@ impl Tool for CropTool {
 pub struct SliceTool {
     slices: Vec<Slice>,
     anchor: Option<Vec2>,
+    /// W4-A: the pointer during a drag, for the live region.
+    current: Option<Vec2>,
 }
 
 impl SliceTool {
@@ -651,15 +968,38 @@ impl Tool for SliceTool {
     ) -> Result<(), ToolError> {
         crate::error::finite_pt("slice anchor", event.pos)?;
         self.anchor = Some(event.pos);
+        self.current = Some(event.pos);
         Ok(())
     }
 
     fn on_pointer_move(
         &mut self,
         _ctx: &mut ToolContext<'_>,
-        _event: PointerEvent,
+        event: PointerEvent,
     ) -> Result<(), ToolError> {
+        if self.anchor.is_some() && event.pos.is_finite() {
+            self.current = Some(event.pos);
+        }
         Ok(())
+    }
+
+    /// W4-A: every slice waiting for Enter, then the one being dragged.
+    /// `None` when there are none — committed, cancelled or never drawn.
+    fn live_geometry(&self) -> Option<crate::tool::SessionGeometry> {
+        let mut rects: Vec<[Vec2; 2]> = self
+            .slices
+            .iter()
+            .map(|s| {
+                [
+                    Vec2::new(s.rect.x as f32, s.rect.y as f32),
+                    Vec2::new(s.rect.right() as f32, s.rect.bottom() as f32),
+                ]
+            })
+            .collect();
+        if let (Some(a), Some(b)) = (self.anchor, self.current) {
+            rects.push([a.min(b), a.max(b)]);
+        }
+        (!rects.is_empty()).then_some(crate::tool::SessionGeometry::Slices { rects })
     }
 
     /// Records the drag as one more slice. Publishing waits for
@@ -669,6 +1009,7 @@ impl Tool for SliceTool {
         ctx: &mut ToolContext<'_>,
         event: PointerEvent,
     ) -> Result<(), ToolError> {
+        self.current = None;
         let Some(a) = self.anchor.take() else {
             return Ok(());
         };
@@ -690,6 +1031,7 @@ impl Tool for SliceTool {
 
     fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {
         self.anchor = None;
+        self.current = None;
         self.slices.clear();
     }
 
@@ -1547,7 +1889,10 @@ mod tests {
                 layer: framed,
                 active,
                 ..
-            } = geometry;
+            } = geometry
+            else {
+                panic!("a Move session publishes a transform");
+            };
             assert_eq!(framed, Some(layer));
             assert!(active.is_none(), "no handle is being dragged");
             assert_eq!(state.source, PixelRect::new(20, 24, 30, 18));

@@ -2262,7 +2262,12 @@ mod tests {
                 &ExportMetadata::default(),
             )
             .unwrap();
-            let decoded = decode_surface_bytes(&file.bytes, ImportLimits::default()).unwrap();
+            // An SVG carries its pixels as an embedded PNG.
+            let raster = match format {
+                ExportFormat::Svg => crate::codec::svg_raster_payload(&file.bytes).unwrap(),
+                _ => file.bytes.clone(),
+            };
+            let decoded = decode_surface_bytes(&raster, ImportLimits::default()).unwrap();
             let SurfacePixels::Rgba8(px) = decoded.pixels else {
                 unreachable!()
             };
@@ -2801,7 +2806,11 @@ mod tests {
         for format in ExportFormat::ALL {
             let preset = ExportPreset::new("c", format);
             let file = export(&big, &preset, &metadata).unwrap();
-            let decoded = decode_surface_bytes(&file.bytes, ImportLimits::default()).unwrap();
+            let raster = match format {
+                ExportFormat::Svg => crate::codec::svg_raster_payload(&file.bytes).unwrap(),
+                _ => file.bytes.clone(),
+            };
+            let decoded = decode_surface_bytes(&raster, ImportLimits::default()).unwrap();
             if format.supports_icc() {
                 assert_eq!(
                     decoded.icc_profile.as_deref(),

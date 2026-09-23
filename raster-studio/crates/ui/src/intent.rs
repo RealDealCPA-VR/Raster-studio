@@ -132,6 +132,9 @@ pub enum Intent {
     OpenGradientEditor,
     /// Open the brush editor dialog over the effective tool's brush.
     OpenBrushEditor,
+    /// W4-G: confirm the gesture the live tool is holding, as Enter does —
+    /// the Ruler options bar's Straighten Layer button.
+    ConfirmTool,
     /// Set the zoom's centre, in document pixels — the Navigator's pan.
     SetViewCenter((f32, f32)),
     /// Show or hide one colour channel, or the whole composite.

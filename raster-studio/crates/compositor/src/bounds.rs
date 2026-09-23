@@ -305,7 +305,9 @@ pub fn alpha_bounds<S: TileSource + ?Sized>(
     Ok(answer)
 }
 
-/// A tile's alpha ink box from RGBA8 bytes, tile-local.
+/// A tile's alpha ink box, tile-local, from RGBA8 or RGBA16 bytes (the
+/// depth is read by [`raster::tile_alpha16`], so a 16-bit layer's tile is
+/// never mis-strided as RGBA8).
 fn tile_alpha_ink(bytes: &[u8]) -> Option<TileInk> {
     let stride = TILE_SIZE as usize;
     let mut min_x = stride;
@@ -315,7 +317,7 @@ fn tile_alpha_ink(bytes: &[u8]) -> Option<TileInk> {
     let mut any = false;
     for y in 0..stride {
         for x in 0..stride {
-            if bytes[(y * stride + x) * 4 + 3] != 0 {
+            if raster::tile_alpha16(bytes, y * stride + x).is_some_and(|a| a != 0) {
                 any = true;
                 min_x = min_x.min(x);
                 max_x = max_x.max(x);
@@ -525,6 +527,32 @@ mod tests {
             .expect("the new ink");
         assert_eq!(moved, PixelRect::new(100, 100, 10, 10));
         assert_ne!(moved, ink);
+    }
+
+    /// W4-F: a 16-bit layer's RGBA16 tile is read at its own 8-byte stride.
+    /// Read as RGBA8, this tile gave `PixelRect { x: 0, y: 0, width: 32,
+    /// height: 255 }` — the Move tool's tight bounds and the Properties
+    /// panel's measurement were wrong for every 16-bit document.
+    #[test]
+    fn alpha_bounds_reads_an_rgba16_tile_at_sixteen_bits() {
+        let mut t = TestDoc::linear(512, 256);
+        let id = t.push_raster("Deep");
+        let mut samples = Vec::with_capacity((TILE_SIZE * TILE_SIZE * 4) as usize);
+        for _y in 0..TILE_SIZE {
+            for x in 0..TILE_SIZE {
+                if x < 16 {
+                    samples.extend_from_slice(&[51_400, 25_700, 12_850, u16::MAX]);
+                } else {
+                    samples.extend_from_slice(&[0, 0, 0, 0]);
+                }
+            }
+        }
+        let hash = t.src.insert_bytes(raster::rgba16_to_tile_bytes(&samples));
+        t.set_tile_hash(id, TileCoord::new(0, 0, 0), hash);
+        let ink = alpha_bounds(&t.doc, &t.src, id, 0, CompositeOptions::default())
+            .unwrap()
+            .expect("there is visible ink");
+        assert_eq!(ink, PixelRect::new(0, 0, 16, 256));
     }
 
     #[test]

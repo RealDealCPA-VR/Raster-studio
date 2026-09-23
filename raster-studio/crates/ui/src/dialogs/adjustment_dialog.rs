@@ -44,7 +44,10 @@
 //! way an all-identity setting is refused with a reason rather than confirmed
 //! into a no-op.
 
-use adjustments::{Adjustment, Curve, ImageStats, PreparedAdjustment, HISTOGRAM_BINS};
+use adjustments::{
+    Adjustment, BuiltinLut, Curve, EncodedRgb, ImageStats, Lut3d, PreparedAdjustment, ReplaceColor,
+    ShadowsHighlights, HISTOGRAM_BINS,
+};
 use color::ColorSpace;
 use design::tokens::palette::ColorRole;
 use design::tokens::{grid, Radius, Space};
@@ -87,7 +90,30 @@ pub enum ColorTarget {
     PhotoFilter,
     /// One stop of the Gradient Map ramp, by index.
     GradientStop(usize),
+    /// Replace Color's sampled colour.
+    ReplaceColor,
 }
+
+/// The Replace Color dialog's selection preview: the coverage of the sampled
+/// colour over the preview source, white replaced and black kept.
+pub fn replace_color_mask_id() -> egui::Id {
+    egui::Id::new(("raster-dialogs", "adjustment-replace-mask"))
+}
+
+/// The Color Lookup dialog's "Load .cube file" button.
+pub fn lut_load_button_id() -> egui::Id {
+    egui::Id::new(("raster-dialogs", "adjustment-lut-load"))
+}
+
+/// The Color Lookup table choices the dialog lists: `0` is "none", `1..`
+/// index [`BuiltinLut::ALL`].
+const LUT_CHOICES: [usize; 6] = [0, 1, 2, 3, 4, 5];
+
+/// The Color Lookup choice a loaded `.cube` file (or a layer's stored table
+/// that is none of the built-in looks) stands at. It is not in
+/// [`LUT_CHOICES`], so every listed row, "None" included, differs from it and
+/// can be picked.
+const LUT_LOADED: usize = usize::MAX;
 
 /// What the dialog commits: which adjustment, with which parameters.
 #[derive(Clone, PartialEq, Debug)]
@@ -104,8 +130,13 @@ impl AdjustmentInvocation {
     }
 
     /// Whether these parameters provably change nothing.
+    ///
+    /// Equalize is an analysis of the image, like the auto commands: it has
+    /// no settings and is never an identity *setting*, whatever it would do
+    /// to one particular image.
     pub fn is_identity(&self) -> bool {
-        PreparedAdjustment::new(&self.adjustment()).is_identity()
+        let adjustment = self.adjustment();
+        !adjustment.needs_stats() && PreparedAdjustment::new(&adjustment).is_identity()
     }
 
     /// The adjustment, ready to prepare and apply.
@@ -155,6 +186,27 @@ pub struct AdjustmentDialog {
     mixer_output: usize,
     /// Selective Color: which colour range the four sliders edit.
     selective_range: usize,
+    /// How many layer pixels one proxy pixel stands for, so a radius in
+    /// layer pixels previews at the right size.
+    proxy_scale: f32,
+    /// Equalize: the preview source's histogram, measured once.
+    stats: Option<ImageStats>,
+    /// Replace Color: the selection preview and the parameters it shows.
+    mask_texture: Option<TextureHandle>,
+    mask_cached_for: Option<AdjustmentKind>,
+    /// Color Lookup: which listed table is chosen (see [`LUT_CHOICES`]), or
+    /// [`LUT_LOADED`] for a loaded file.
+    lut_choice: usize,
+    /// Color Lookup: the "Load .cube file" button was pressed and the host
+    /// has not answered yet.
+    lut_file_requested: bool,
+    /// Color Lookup: why the last file did not load.
+    lut_error: Option<String>,
+    /// W4-E round 2: the adjustment layer this dialog edits in place, when it
+    /// was opened by Layer > Edit Adjustment (or the Properties panel's
+    /// "Open editor") rather than by Image > Adjustments. Confirming then
+    /// rewrites that layer's parameters instead of baking pixels.
+    edit_layer: Option<LayerId>,
 }
 
 impl std::fmt::Debug for AdjustmentDialog {
@@ -174,15 +226,28 @@ impl AdjustmentDialog {
     /// hands over the layer as it is and the dialog decides what it can
     /// afford to adjust per frame.
     pub fn new(id: AdjustmentId, source: FilterBuffer, space: ColorSpace) -> Self {
+        let full_width = source.dimensions().0.max(1);
         let source = preview_proxy(&source, MAX_PREVIEW_SIDE);
+        let proxy_scale = full_width as f32 / source.dimensions().0.max(1) as f32;
         let histogram = (id == AdjustmentId::Levels).then(|| {
             *ImageStats::from_premultiplied_rgba(source.pixels(), &space)
                 .luma
                 .bins()
         });
+        let stats = (id == AdjustmentId::Equalize)
+            .then(|| ImageStats::from_premultiplied_rgba(source.pixels(), &space));
+        let mut kind = editable_kind(id, id.identity_kind());
+        // Replace Color opens sampling the middle of the layer, the way
+        // Photopea's opens on the colour under its eyedropper.
+        if let AdjustmentKind::ReplaceColor { color, .. } = &mut kind {
+            let (w, h) = source.dimensions();
+            if let Some(sampled) = sample_encoded(&source, &space, w / 2, h / 2) {
+                *color = sampled;
+            }
+        }
         Self {
             id,
-            kind: editable_kind(id, id.identity_kind()),
+            kind,
             layer_id: LayerId::new(),
             space,
             source,
@@ -194,7 +259,72 @@ impl AdjustmentDialog {
             balance_tone: 1,
             mixer_output: 0,
             selective_range: 0,
+            proxy_scale,
+            stats,
+            mask_texture: None,
+            mask_cached_for: None,
+            lut_choice: 0,
+            lut_file_requested: false,
+            lut_error: None,
+            edit_layer: None,
         }
+    }
+
+    /// Open the dialog on an existing adjustment layer's parameters, so
+    /// confirming edits `layer` in place. `source` is what the layer adjusts
+    /// (the composite beneath it). `None` when `kind` has no dialog.
+    ///
+    /// For Color Lookup the listed choice follows the table's name, so a
+    /// layer holding a built-in look reopens with that look selected.
+    pub fn for_layer(
+        layer: LayerId,
+        kind: AdjustmentKind,
+        source: FilterBuffer,
+        space: ColorSpace,
+    ) -> Option<Self> {
+        let id = adjustment_id_of(&kind)?;
+        if !id.has_dialog() {
+            return None;
+        }
+        let mut dialog = Self::new(id, source, space);
+        if let AdjustmentKind::ColorLookup { name, .. } = &kind {
+            dialog.lut_choice = match BuiltinLut::ALL.iter().position(|b| b.name() == name) {
+                Some(i) => i + 1,
+                None if name.is_empty() => 0,
+                None => LUT_LOADED,
+            };
+        }
+        dialog.set_kind(kind);
+        dialog.edit_layer = Some(layer);
+        Some(dialog)
+    }
+
+    /// The adjustment layer a confirmation edits in place, if the dialog
+    /// was opened on one (see [`Self::for_layer`]).
+    pub fn edit_layer(&self) -> Option<LayerId> {
+        self.edit_layer
+    }
+
+    /// Color Lookup: pick entry `choice` of the listed tables — `0` is the
+    /// identity, `1..` index [`BuiltinLut::ALL`]. The dialog's "Lookup table"
+    /// combo calls this (from `params`) when a row is picked. Returns whether
+    /// the choice was known.
+    pub fn choose_lut(&mut self, choice: usize) -> bool {
+        if !matches!(self.kind, AdjustmentKind::ColorLookup { .. })
+            || choice > BuiltinLut::ALL.len()
+        {
+            return false;
+        }
+        if choice == self.lut_choice {
+            return true;
+        }
+        self.lut_choice = choice;
+        self.lut_error = None;
+        let next = match choice.checked_sub(1).and_then(|i| BuiltinLut::ALL.get(i)) {
+            Some(builtin) => lut_kind(&builtin.lut()),
+            None => AdjustmentId::ColorLookup.identity_kind(),
+        };
+        self.set_kind(next)
     }
 
     /// Open `id`'s dialog over a generated proxy, for a caller with no pixels.
@@ -233,6 +363,8 @@ impl AdjustmentDialog {
 
     /// Put every parameter back to the adjustment's starting setting.
     pub fn reset(&mut self) {
+        self.lut_choice = 0;
+        self.lut_error = None;
         let identity = editable_kind(self.id, self.id.identity_kind());
         if identity != self.kind {
             self.kind = identity;
@@ -266,11 +398,99 @@ impl AdjustmentDialog {
     }
 
     /// Run the adjustment over the proxy and return the result.
+    ///
+    /// Equalize is resolved against the proxy's own histogram, and
+    /// Shadows/Highlights runs its neighbourhood form with the radius scaled
+    /// down to the proxy, so both preview what applying them would do.
     pub fn preview_buffer(&self) -> FilterBuffer {
         let mut out = self.source.clone();
-        PreparedAdjustment::new(&Adjustment::from(&self.kind))
-            .apply_premultiplied_rgba(out.pixels_mut(), &self.space);
+        let adjustment = Adjustment::from(&self.kind);
+        if let Adjustment::ShadowsHighlights(sh) = &adjustment {
+            let scale = self.proxy_scale.max(1.0);
+            let [sa, st, sr] = sh.shadows();
+            let [ha, ht, hr] = sh.highlights();
+            let scaled =
+                ShadowsHighlights::new([sa, st, sr / scale], [ha, ht, hr / scale]).unwrap_or(*sh);
+            let (w, h) = out.dimensions();
+            let _ = scaled.apply_premultiplied_rgba_spatial(
+                out.pixels_mut(),
+                w as usize,
+                h as usize,
+                &self.space,
+            );
+            return out;
+        }
+        let prepared = match &self.stats {
+            Some(stats) => PreparedAdjustment::with_stats(&adjustment, stats),
+            None => PreparedAdjustment::new(&adjustment),
+        };
+        prepared.apply_premultiplied_rgba(out.pixels_mut(), &self.space);
         out
+    }
+
+    /// Replace Color: the coverage of the sampled colour over the preview
+    /// source, one byte per pixel (255 fully replaced, 0 kept). Empty for any
+    /// other adjustment.
+    pub fn replace_color_coverage(&self) -> Vec<u8> {
+        let Adjustment::ReplaceColor(rc) = Adjustment::from(&self.kind) else {
+            return Vec::new();
+        };
+        self.source
+            .pixels()
+            .iter()
+            .map(|px| {
+                if px[3] <= color::UNPREMULTIPLY_ALPHA_EPSILON {
+                    return 0;
+                }
+                let s = color::unpremultiply(*px);
+                let enc = EncodedRgb(color::from_linear(&self.space, [s[0], s[1], s[2]]));
+                (rc.coverage(enc) * 255.0).round() as u8
+            })
+            .collect()
+    }
+
+    /// Replace Color: sample the preview source at `(x, y)` (proxy pixels)
+    /// as the colour to replace. Returns whether a colour was taken.
+    pub fn sample_preview(&mut self, x: u32, y: u32) -> bool {
+        let Some(sampled) = sample_encoded(&self.source, &self.space, x, y) else {
+            return false;
+        };
+        let mut next = self.kind.clone();
+        let AdjustmentKind::ReplaceColor { color, .. } = &mut next else {
+            return false;
+        };
+        *color = sampled;
+        self.set_kind(next)
+    }
+
+    /// Color Lookup: whether the "Load .cube file" button was pressed since
+    /// the last call. The host answers with [`Self::load_cube_text`].
+    pub fn take_lut_file_request(&mut self) -> bool {
+        std::mem::take(&mut self.lut_file_requested)
+    }
+
+    /// Color Lookup: use the `.cube` file `text`, named `name` unless it has
+    /// a `TITLE`. A file that does not parse leaves the table as it was and
+    /// is reported in the dialog; the error is returned too.
+    pub fn load_cube_text(&mut self, name: &str, text: &str) -> Result<(), String> {
+        match Lut3d::parse_cube(name, text) {
+            Ok(lut) => {
+                self.lut_error = None;
+                self.lut_choice = LUT_LOADED;
+                self.set_kind(lut_kind(&lut));
+                Ok(())
+            }
+            Err(e) => {
+                let message = e.to_string();
+                self.lut_error = Some(message.clone());
+                Err(message)
+            }
+        }
+    }
+
+    /// Color Lookup: report a file that could not even be read.
+    pub fn set_lut_error(&mut self, message: impl Into<String>) {
+        self.lut_error = Some(message.into());
     }
 
     /// The invocation the dialog would commit.
@@ -352,6 +572,9 @@ impl AdjustmentDialog {
                     stop.1 = rgb;
                 }
             }
+            (AdjustmentKind::ReplaceColor { color, .. }, ColorTarget::ReplaceColor) => {
+                *color = rgb.map(|c| c.clamp(0.0, 1.0));
+            }
             _ => return,
         }
         self.set_kind(next);
@@ -389,11 +612,22 @@ impl AdjustmentDialog {
                 let size = texture.size_vec2();
                 let scale = (sizes::filter_preview_width() / size.x.max(1.0)).min(2.0);
                 let response = ui.image((texture.id(), size * scale));
-                let _ = ui.interact(
-                    response.rect,
-                    ids::adjustment_preview(),
-                    egui::Sense::hover(),
-                );
+                // Replace Color samples its colour from a click on the
+                // preview, as Color Range does.
+                let sense = if self.id == AdjustmentId::ReplaceColor {
+                    egui::Sense::click()
+                } else {
+                    egui::Sense::hover()
+                };
+                let clicked = ui.interact(response.rect, ids::adjustment_preview(), sense);
+                if clicked.clicked() {
+                    if let Some(pos) = clicked.interact_pointer_pos() {
+                        let local = (pos - response.rect.min) / scale.max(f32::EPSILON);
+                        if local.x >= 0.0 && local.y >= 0.0 {
+                            self.sample_preview(local.x as u32, local.y as u32);
+                        }
+                    }
+                }
             }
             (_, true) => {
                 caption(ui, tr("ui.adjustment.nothing.to.preview"));
@@ -419,6 +653,9 @@ impl AdjustmentDialog {
         if self.histogram.is_some() {
             self.histogram_row(ui);
         }
+        if self.id == AdjustmentId::ReplaceColor {
+            self.replace_mask_row(ui);
+        }
         self.params(ui);
         ui.add_space(Space::Small.pt());
         action_row(
@@ -427,6 +664,32 @@ impl AdjustmentDialog {
             self.blocked_reason().as_deref(),
             &[tr("ui.adjustment.reset")],
         )
+    }
+
+    /// Replace Color's selection preview, rebuilt when the parameters move.
+    fn replace_mask_row(&mut self, ui: &mut egui::Ui) {
+        if self.mask_cached_for.as_ref() != Some(&self.kind) || self.mask_texture.is_none() {
+            let (w, h) = self.source.dimensions();
+            let coverage = self.replace_color_coverage();
+            if w == 0 || h == 0 || coverage.len() != (w * h) as usize {
+                self.mask_texture = None;
+            } else {
+                let image = egui::ColorImage::from_gray([w as usize, h as usize], &coverage);
+                self.mask_texture = Some(ui.ctx().load_texture(
+                    "adjustment-replace-mask",
+                    image,
+                    egui::TextureOptions::NEAREST,
+                ));
+                self.mask_cached_for = Some(self.kind.clone());
+            }
+        }
+        if let Some(texture) = &self.mask_texture {
+            let size = texture.size_vec2();
+            let scale = (sizes::filter_preview_width() / size.x.max(1.0)).min(2.0);
+            let response = ui.image((texture.id(), size * scale));
+            let _ = ui.interact(response.rect, replace_color_mask_id(), egui::Sense::hover());
+            caption(ui, tr("ui.adjustment.replace.selection"));
+        }
     }
 
     /// The luma histogram, with the black and white points marked on it.
@@ -492,6 +755,7 @@ impl AdjustmentDialog {
         let mut changed = false;
         let mut open_picker: Option<(ColorTarget, [f32; 3])> = None;
         let mut promote: Option<AdjustmentKind> = None;
+        let mut lut_pick: Option<usize> = None;
 
         match &mut next {
             K::BrightnessContrast {
@@ -784,13 +1048,119 @@ impl AdjustmentDialog {
             | K::CurvesFull { .. }
             | K::ExposureFull { .. }
             | K::HueSaturationFull { .. }
-            | K::Auto { .. } => {
+            | K::Auto { .. }
+            | K::Desaturate
+            | K::Equalize => {
                 caption(ui, tr("ui.adjustment.no.settings"));
+            }
+            K::ShadowsHighlights {
+                shadows,
+                highlights,
+            } => {
+                for (heading, band) in [
+                    ("ui.adjustment.shadows", shadows),
+                    ("ui.adjustment.highlights", highlights),
+                ] {
+                    caption(ui, tr(heading));
+                    let (mut amount, mut tone) = (band[0] * 100.0, band[1] * 100.0);
+                    changed |= design::slider_row(
+                        ui,
+                        tr("ui.adjustment.amount"),
+                        &mut amount,
+                        0.0..=100.0,
+                    )
+                    .changed();
+                    changed |= design::slider_row(
+                        ui,
+                        tr("ui.adjustment.tonal.width"),
+                        &mut tone,
+                        0.0..=100.0,
+                    )
+                    .changed();
+                    changed |= design::slider_row(
+                        ui,
+                        tr("ui.adjustment.radius"),
+                        &mut band[2],
+                        0.0..=adjustments::MAX_SHADOWS_HIGHLIGHTS_RADIUS,
+                    )
+                    .changed();
+                    band[0] = amount / 100.0;
+                    band[1] = tone / 100.0;
+                }
+            }
+            K::ReplaceColor {
+                color,
+                fuzziness,
+                hue,
+                saturation,
+                lightness,
+            } => {
+                let rgba = [color[0], color[1], color[2], 1.0];
+                design::inspector_field(ui, tr("ui.adjustment.sampled.color"), |ui| {
+                    if super::controls::swatch(
+                        ui,
+                        ids::adjustment_color(ColorTarget::ReplaceColor),
+                        rgba,
+                        sizes::swatch(),
+                    )
+                    .clicked()
+                    {
+                        open_picker = Some((ColorTarget::ReplaceColor, *color));
+                    }
+                });
+                caption(ui, tr("ui.adjustment.replace.click"));
+                let mut fuzz = *fuzziness * 255.0;
+                changed |=
+                    design::slider_row(ui, tr("ui.adjustment.fuzziness"), &mut fuzz, 0.0..=200.0)
+                        .changed();
+                *fuzziness = (fuzz / 255.0).clamp(0.0, ReplaceColor::MAX_FUZZINESS);
+                changed |=
+                    design::slider_row(ui, tr("ui.adjustment.hue"), hue, -180.0..=180.0).changed();
+                changed |=
+                    design::slider_row(ui, tr("ui.adjustment.saturation"), saturation, -1.0..=1.0)
+                        .changed();
+                changed |=
+                    design::slider_row(ui, tr("ui.adjustment.lightness"), lightness, -1.0..=1.0)
+                        .changed();
+            }
+            K::ColorLookup { name, .. } => {
+                let mut choice = self.lut_choice;
+                design::inspector_field(ui, tr("ui.adjustment.lut"), |ui| {
+                    combo(
+                        ui,
+                        ("adjustment", "lut"),
+                        &mut choice,
+                        &LUT_CHOICES,
+                        lut_choice_label,
+                        |_| None,
+                    );
+                });
+                if choice != self.lut_choice {
+                    lut_pick = Some(choice);
+                }
+                let load = design::secondary_button(ui, tr("ui.adjustment.lut.load"));
+                // A stable id over the button, so the click can be found and
+                // driven by a test; it takes the press the button would.
+                let named = ui.interact(load.rect, lut_load_button_id(), egui::Sense::click());
+                if load.clicked() || named.clicked() {
+                    self.lut_file_requested = true;
+                }
+                if !name.is_empty() {
+                    caption(ui, format!("{} {}", tr("ui.adjustment.lut.using"), name));
+                }
+                if let Some(error) = &self.lut_error {
+                    caption(ui, format!("{} {}", tr("ui.adjustment.lut.error"), error));
+                }
             }
         }
 
         if let Some((target, rgb)) = open_picker {
             self.color_edit.open(target, [rgb[0], rgb[1], rgb[2], 1.0]);
+        }
+        if let Some(choice) = lut_pick {
+            // The combo's pick goes through the one path tests and hosts use.
+            self.choose_lut(choice);
+            return;
         }
         if let Some(wide) = promote {
             next = wide;
@@ -824,6 +1194,43 @@ fn balance_sliders(ui: &mut egui::Ui, range: &mut [f32; 3]) -> bool {
         *amount = percent / 100.0;
     }
     changed
+}
+
+/// The stored form of a lookup table.
+fn lut_kind(lut: &Lut3d) -> AdjustmentKind {
+    AdjustmentKind::ColorLookup {
+        name: lut.name().to_string(),
+        size: lut.size() as u32,
+        table: lut.table().to_vec(),
+    }
+}
+
+/// The encoded colour of `source` at `(x, y)`, or `None` off the buffer or
+/// on a fully transparent pixel.
+fn sample_encoded(source: &FilterBuffer, space: &ColorSpace, x: u32, y: u32) -> Option<[f32; 3]> {
+    let (w, h) = source.dimensions();
+    if x >= w || y >= h {
+        return None;
+    }
+    let px = source.get(x, y);
+    if px[3] <= color::UNPREMULTIPLY_ALPHA_EPSILON {
+        return None;
+    }
+    let s = color::unpremultiply(px);
+    Some(color::from_linear(space, [s[0], s[1], s[2]]).map(|c| c.clamp(0.0, 1.0)))
+}
+
+fn lut_choice_label(index: usize) -> String {
+    tr(match index {
+        1 => "ui.adjustment.lut.invert",
+        2 => "ui.adjustment.lut.warm",
+        3 => "ui.adjustment.lut.cool",
+        4 => "ui.adjustment.lut.sepia",
+        5 => "ui.adjustment.lut.high.contrast",
+        LUT_LOADED => "ui.adjustment.lut.file",
+        _ => "ui.adjustment.lut.none",
+    })
+    .to_string()
 }
 
 fn tone_label(index: usize) -> String {
@@ -938,13 +1345,15 @@ impl Dialog for AdjustmentDialog {
 
     fn confirm(&self) -> Option<DialogAction> {
         let invocation = self.invocation();
-        invocation
-            .is_valid()
+        // An adjustment layer may be set back to its identity: the layer
+        // stays and simply stops changing pixels, as Photopea's does.
+        (self.edit_layer.is_some() || invocation.is_valid())
             .then(|| DialogAction::Command(Box::new(invocation.layer_command(self.layer_id))))
     }
 
     fn blocked_reason(&self) -> Option<String> {
-        (!self.invocation().is_valid()).then(|| tr("ui.adjustment.blocked.identity").to_string())
+        (self.edit_layer.is_none() && !self.invocation().is_valid())
+            .then(|| tr("ui.adjustment.blocked.identity").to_string())
     }
 }
 
@@ -971,8 +1380,11 @@ mod tests {
                 "{id:?}: confirm() disagrees with the identity of its start"
             );
             assert_eq!(dialog.blocked_reason().is_some(), starts_identity, "{id:?}");
+            // An analysis (Equalize) is never an identity *setting*; every
+            // other adjustment's start is judged by `adjustments` itself.
+            let start = Adjustment::from(&id.identity_kind());
             assert_eq!(
-                PreparedAdjustment::new(&Adjustment::from(&id.identity_kind())).is_identity(),
+                !start.needs_stats() && PreparedAdjustment::new(&start).is_identity(),
                 starts_identity,
                 "{id:?}: the dialog and `adjustments` disagree about the start"
             );
@@ -1119,6 +1531,210 @@ mod tests {
                 assert!(dialog.show(ctx, None).is_open());
             });
         }
+    }
+
+    #[test]
+    fn replace_color_draws_its_selection_preview_and_samples_from_a_click() {
+        let harness = Harness::new();
+        let mut dialog = AdjustmentDialog::with_placeholder(AdjustmentId::ReplaceColor);
+        let mask = harness.settle(replace_color_mask_id(), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        assert!(mask.width() > 0.0 && mask.height() > 0.0);
+        let preview = harness.settle(ids::adjustment_preview(), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        assert!(
+            mask.top() >= preview.bottom(),
+            "the selection preview {mask:?} is not below the image {preview:?}"
+        );
+        // The coverage is a real selection: the sampled pixel is fully in it
+        // and something on the placeholder is out of it.
+        let coverage = dialog.replace_color_coverage();
+        assert_eq!(coverage.len(), {
+            let (w, h) = dialog.source().dimensions();
+            (w * h) as usize
+        });
+        assert!(
+            coverage.contains(&255) && coverage.contains(&0),
+            "{coverage:?}"
+        );
+        // A click on the preview's corner samples that pixel's colour.
+        let before = dialog.kind().clone();
+        let corner = preview.min + egui::vec2(1.0, 1.0);
+        harness.frame(Harness::click_events(corner), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        assert_ne!(dialog.kind(), &before, "the click sampled nothing");
+        // No other adjustment draws the selection preview.
+        let harness = Harness::new();
+        let mut other = AdjustmentDialog::with_placeholder(AdjustmentId::HueSaturation);
+        harness.settle(ids::adjustment_preview(), |ctx| {
+            let _ = other.show(ctx, None);
+        });
+        assert!(!harness.was_drawn(replace_color_mask_id()));
+    }
+
+    #[test]
+    fn color_lookup_asks_the_host_for_a_file_and_reports_a_bad_one() {
+        let harness = Harness::new();
+        let mut dialog = AdjustmentDialog::with_placeholder(AdjustmentId::ColorLookup);
+        assert!(!dialog.take_lut_file_request());
+        harness.click_widget(lut_load_button_id(), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        assert!(
+            dialog.take_lut_file_request(),
+            "the click asked for no file"
+        );
+        assert!(!dialog.take_lut_file_request(), "the request is taken once");
+        // A file that is not a cube leaves the table alone and says why.
+        let before = dialog.kind().clone();
+        assert!(dialog.load_cube_text("junk", "not a lut").is_err());
+        assert_eq!(dialog.kind(), &before);
+        assert!(dialog.invocation().is_identity());
+        // A real one takes, previews and unblocks Apply.
+        let cube = "LUT_3D_SIZE 2
+1 1 1
+0 1 1
+1 0 1
+0 0 1
+1 1 0
+0 1 0
+1 0 0
+0 0 0
+";
+        dialog.load_cube_text("invert", cube).unwrap();
+        assert!(dialog.confirm().is_some());
+        assert_ne!(
+            dialog.preview_buffer().to_rgba8(),
+            dialog.source().to_rgba8()
+        );
+    }
+
+    /// The "Lookup table" combo is the only route to the built-in looks.
+    /// Click the drawn combo, then the drawn row, and read the table the
+    /// dialog now holds; then load a file and pick "None" through the same
+    /// combo to return to identity.
+    #[test]
+    fn the_lookup_table_combo_picks_a_built_in_look_and_returns_to_none_after_a_file() {
+        use crate::dialogs::chrome::test_support::Harness;
+        let h = Harness::new();
+        let mut dialog = AdjustmentDialog::with_placeholder(AdjustmentId::ColorLookup);
+        let text_rect = |h: &Harness, dialog: &mut AdjustmentDialog, text: &str| {
+            let mut found = None;
+            for _ in 0..Harness::STABLE_FRAMES {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Harness::SCREEN)),
+                    ..Default::default()
+                };
+                let output = h.ctx.run(input, |ctx| {
+                    let _ = dialog.show(ctx, None);
+                });
+                found = output
+                    .shapes
+                    .iter()
+                    .find_map(|clipped| match &clipped.shape {
+                        egui::Shape::Text(t) if t.galley.text() == text => {
+                            Some(egui::Rect::from_min_size(t.pos, t.galley.size()))
+                        }
+                        _ => None,
+                    });
+            }
+            found
+        };
+        let pick = |h: &Harness, dialog: &mut AdjustmentDialog, current: &str, row: &str| {
+            let combo = text_rect(h, dialog, current)
+                .unwrap_or_else(|| panic!("the combo does not show {current:?}"));
+            h.frame(Harness::click_events(combo.center()), |ctx| {
+                let _ = dialog.show(ctx, None);
+            });
+            let row_rect = text_rect(h, dialog, row)
+                .unwrap_or_else(|| panic!("the open list draws no {row:?} row"));
+            h.frame(Harness::click_events(row_rect.center()), |ctx| {
+                let _ = dialog.show(ctx, None);
+            });
+        };
+        let none = tr("ui.adjustment.lut.none").to_string();
+        let sepia = tr("ui.adjustment.lut.sepia").to_string();
+        assert!(dialog.invocation().is_identity());
+        pick(&h, &mut dialog, &none, &sepia);
+        assert_eq!(
+            dialog.kind(),
+            &lut_kind(&BuiltinLut::Sepia.lut()),
+            "clicking the Sepia row did not choose the Sepia table"
+        );
+        assert!(dialog.confirm().is_some());
+        // A loaded file shows as such, and "None" can then be picked.
+        let cube = "LUT_3D_SIZE 2
+1 1 1
+0 1 1
+1 0 1
+0 0 1
+1 1 0
+0 1 0
+1 0 0
+0 0 0
+";
+        dialog.load_cube_text("invert", cube).unwrap();
+        assert!(!dialog.invocation().is_identity());
+        let loaded = tr("ui.adjustment.lut.file").to_string();
+        pick(&h, &mut dialog, &loaded, &none);
+        assert!(
+            dialog.invocation().is_identity(),
+            "picking None after a loaded file left the table in place"
+        );
+    }
+
+    #[test]
+    fn a_dialog_opened_on_a_color_lookup_layer_reopens_its_look_and_may_return_to_identity() {
+        let layer = LayerId::new();
+        let source = super::super::filter_dialog::placeholder_buffer(32, 32);
+        let sepia = lut_kind(&BuiltinLut::Sepia.lut());
+        let mut dialog = AdjustmentDialog::for_layer(
+            layer,
+            sepia.clone(),
+            source.clone(),
+            ColorSpace::default(),
+        )
+        .expect("Color Lookup has a dialog");
+        assert_eq!(dialog.edit_layer(), Some(layer));
+        assert_eq!(dialog.kind(), &sepia);
+        // The listed choice follows the stored name: Sepia is the fourth.
+        assert_eq!(dialog.lut_choice, 4);
+        // Choosing another look swaps the table; choosing none is allowed on
+        // a layer (it stops changing pixels) though Image > Adjustments
+        // refuses to bake an identity.
+        assert!(dialog.choose_lut(1));
+        assert_eq!(dialog.kind(), &lut_kind(&BuiltinLut::Invert.lut()));
+        assert!(dialog.choose_lut(0));
+        assert!(dialog.invocation().is_identity());
+        assert!(dialog.confirm().is_some());
+        assert!(dialog.blocked_reason().is_none());
+        assert!(!dialog.choose_lut(BuiltinLut::ALL.len() + 1));
+        // A kind with no dialog opens none: Desaturate asks nothing.
+        assert!(AdjustmentDialog::for_layer(
+            layer,
+            AdjustmentKind::Desaturate,
+            source,
+            ColorSpace::default()
+        )
+        .is_none());
+        // Image > Adjustments' dialog has no layer and still refuses identity.
+        let menu = AdjustmentDialog::with_placeholder(AdjustmentId::ColorLookup);
+        assert_eq!(menu.edit_layer(), None);
+        assert!(menu.confirm().is_none());
+    }
+
+    #[test]
+    fn equalize_previews_against_the_layer_histogram_and_confirms() {
+        let dialog = AdjustmentDialog::with_placeholder(AdjustmentId::Equalize);
+        assert!(!dialog.invocation().is_identity());
+        assert!(dialog.confirm().is_some());
+        assert_ne!(
+            dialog.preview_buffer().to_rgba8(),
+            dialog.source().to_rgba8()
+        );
     }
 
     #[test]

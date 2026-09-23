@@ -342,12 +342,18 @@ pub struct Swatch {
 #[derive(Clone, PartialEq, Debug)]
 pub struct SwatchesState {
     swatches: Vec<Swatch>,
+    /// W4-I: how many user edits (add, remove, reorder) the palette has had
+    /// this session. `0` means it still holds what it started with, so a
+    /// palette restored from the preferences file may replace it; anything
+    /// else means the user has changed it and the preferences should follow.
+    edits: u64,
 }
 
 impl Default for SwatchesState {
     fn default() -> Self {
         Self {
             swatches: default_swatches(),
+            edits: 0,
         }
     }
 }
@@ -359,6 +365,29 @@ impl SwatchesState {
 
     pub fn swatches(&self) -> &[Swatch] {
         &self.swatches
+    }
+
+    /// W4-I: user edits this session; see the field.
+    pub fn edits(&self) -> u64 {
+        self.edits
+    }
+
+    /// W4-I: replace the palette with one read back from the preferences
+    /// file. Every colour goes through the same clean-up [`Self::add`] does,
+    /// so a corrupt entry is dropped rather than drawn. Not a user edit.
+    pub fn restore(&mut self, swatches: impl IntoIterator<Item = Swatch>) {
+        self.swatches.clear();
+        for s in swatches {
+            let Some(clean) = sanitise(s.rgba) else {
+                continue;
+            };
+            if self.index_of(clean).is_none() {
+                self.swatches.push(Swatch {
+                    name: s.name,
+                    rgba: clean,
+                });
+            }
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -382,6 +411,7 @@ impl SwatchesState {
             name: name.into(),
             rgba: clean,
         });
+        self.edits += 1;
         true
     }
 
@@ -395,7 +425,11 @@ impl SwatchesState {
     }
 
     pub fn remove(&mut self, index: usize) -> Option<Swatch> {
-        (index < self.swatches.len()).then(|| self.swatches.remove(index))
+        let removed = (index < self.swatches.len()).then(|| self.swatches.remove(index));
+        if removed.is_some() {
+            self.edits += 1;
+        }
+        removed
     }
 
     /// Move a swatch. Both indices are clamped, so a drag past the end lands on
@@ -410,6 +444,7 @@ impl SwatchesState {
         }
         let s = self.swatches.remove(from);
         self.swatches.insert(to, s);
+        self.edits += 1;
         true
     }
 

@@ -2280,6 +2280,39 @@ fn hash_adjustment(kind: &layer_model::AdjustmentKind, h: &mut DefaultHasher) {
             }
             preserve_luminosity.hash(h);
         }
+        // W4-E: the five appended adjustment kinds.
+        A::Desaturate => 21u8.hash(h),
+        A::Equalize => 22u8.hash(h),
+        A::ShadowsHighlights {
+            shadows,
+            highlights,
+        } => {
+            23u8.hash(h);
+            for v in shadows.iter().chain(highlights) {
+                hash_f32(*v, h);
+            }
+        }
+        A::ReplaceColor {
+            color,
+            fuzziness,
+            hue,
+            saturation,
+            lightness,
+        } => {
+            24u8.hash(h);
+            for v in color.iter().chain([fuzziness, hue, saturation, lightness]) {
+                hash_f32(*v, h);
+            }
+        }
+        A::ColorLookup { name, size, table } => {
+            25u8.hash(h);
+            name.hash(h);
+            size.hash(h);
+            table.len().hash(h);
+            for v in table.iter().flatten() {
+                hash_f32(*v, h);
+            }
+        }
     }
 }
 

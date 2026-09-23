@@ -123,6 +123,7 @@ pub fn touched_by(command: &Command) -> DirtyTiles {
         // other members carry the dirtiness.
         Command::SetSelection { .. }
         | Command::SetMetaColorMode { .. }
+        | Command::SetMetaBitDepth { .. }
         | Command::SetAssetSourceSize { .. }
         // Card 069: the replace's asset-row swap is bookkeeping the same way
         // the recorded size is — it always rides inside a replace Transaction

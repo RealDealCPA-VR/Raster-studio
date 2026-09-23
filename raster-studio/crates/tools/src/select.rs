@@ -180,6 +180,11 @@ pub struct MarqueeTool {
     pub options: SelectionOptions,
     anchor: Option<Vec2>,
     current: Option<Vec2>,
+    /// W4-A: whether Shift was held on the last sample, so the published
+    /// rubber band shows the square the release would make.
+    shift: bool,
+    /// W4-A: the canvas at pointer-down, for the single-row/column band.
+    canvas: Option<raster::PixelRect>,
     op: BooleanOp,
 }
 
@@ -191,8 +196,40 @@ impl MarqueeTool {
             options: SelectionOptions::default(),
             anchor: None,
             current: None,
+            shift: false,
+            canvas: None,
             op: BooleanOp::Replace,
         }
+    }
+
+    /// W4-A: the rubber band the release would select, `[min, max]` in
+    /// document pixels: the constrained box for Rect/Ellipse, the one-pixel
+    /// line across the canvas for the single-row/column marquees.
+    fn band(&self) -> Option<[Vec2; 2]> {
+        let (anchor, current) = (self.anchor?, self.current?);
+        let rect = match self.shape {
+            MarqueeShape::SingleRow => {
+                let c = self.canvas?;
+                let y = anchor.y.floor();
+                [
+                    Vec2::new(c.x as f32, y),
+                    Vec2::new(c.right() as f32, y + 1.0),
+                ]
+            }
+            MarqueeShape::SingleColumn => {
+                let c = self.canvas?;
+                let x = anchor.x.floor();
+                [
+                    Vec2::new(x, c.y as f32),
+                    Vec2::new(x + 1.0, c.bottom() as f32),
+                ]
+            }
+            MarqueeShape::Rect | MarqueeShape::Ellipse => {
+                let (a, b) = self.corners(anchor, current, self.shift);
+                [a.min(b), a.max(b)]
+            }
+        };
+        (rect[0].is_finite() && rect[1].is_finite()).then_some(rect)
     }
 
     /// The rubber-band rectangle, for the overlay.
@@ -230,7 +267,7 @@ impl Tool for MarqueeTool {
 
     fn on_pointer_down(
         &mut self,
-        _ctx: &mut ToolContext<'_>,
+        ctx: &mut ToolContext<'_>,
         event: PointerEvent,
     ) -> Result<(), ToolError> {
         crate::error::finite_pt("marquee anchor", event.pos)?;
@@ -239,6 +276,8 @@ impl Tool for MarqueeTool {
         self.op = gesture_op(self.options.mode, event.modifiers);
         self.anchor = Some(event.pos);
         self.current = Some(event.pos);
+        self.shift = false;
+        self.canvas = Some(ctx.canvas);
         Ok(())
     }
 
@@ -249,8 +288,18 @@ impl Tool for MarqueeTool {
     ) -> Result<(), ToolError> {
         if self.anchor.is_some() {
             self.current = Some(event.pos);
+            self.shift = event.modifiers.shift;
         }
         Ok(())
+    }
+
+    /// W4-A: the rubber band while the button is down; `None` once the
+    /// release has emitted the selection or Escape dropped it.
+    fn live_geometry(&self) -> Option<crate::tool::SessionGeometry> {
+        Some(crate::tool::SessionGeometry::Marquee {
+            shape: self.shape,
+            rect: self.band()?,
+        })
     }
 
     fn on_pointer_up(
@@ -447,6 +496,19 @@ impl Tool for LassoTool {
             _ => self.points.push(event.pos),
         }
         Ok(())
+    }
+
+    /// W4-A: the outline so far, while there is one. A freehand or magnetic
+    /// lasso closes on release, so it is published closed; a polygonal one
+    /// is open until its first vertex is clicked again.
+    fn live_geometry(&self) -> Option<crate::tool::SessionGeometry> {
+        if self.points.is_empty() {
+            return None;
+        }
+        Some(crate::tool::SessionGeometry::Lasso {
+            points: self.points.clone(),
+            closed: self.kind != LassoKind::Polygonal,
+        })
     }
 
     fn on_pointer_up(

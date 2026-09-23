@@ -443,6 +443,41 @@ pub enum AdjustmentKind {
     /// Auto Tone / Auto Contrast / Auto Color, with the fraction of pixels
     /// clipped at *each* end of the histogram (`0.0..=0.1`).
     Auto { mode: AutoAdjustment, clip: f32 },
+    // ---- Appended (W4-E). Serde is append-only: every variant above keeps
+    // its spelling, so a document written before these existed still opens.
+    /// Desaturate: every pixel to its own linear luminance (`R = G = B = Y`).
+    /// Photopea offers it destructively only (Image ▸ Adjustments).
+    Desaturate,
+    /// Equalize: histogram equalisation of the image it is applied to. Like
+    /// [`AdjustmentKind::Auto`] it is an analysis, re-decided per image.
+    /// Destructive-only in Photopea.
+    Equalize,
+    /// Shadows/Highlights. Each band is `[amount, tone, radius_px]`, amount
+    /// and tone (tonal width) in `0.0..=1.0`, radius in `0.0..=2500.0`.
+    /// Destructive-only in Photopea.
+    ShadowsHighlights {
+        shadows: [f32; 3],
+        highlights: [f32; 3],
+    },
+    /// Replace Color: pixels near `color` (encoded in the document's space,
+    /// `0.0..=1.0`), with a soft falloff reaching zero at `fuzziness`
+    /// (`0.0..=200/255`), shifted by `hue` degrees and `saturation` /
+    /// `lightness` in `-1.0..=1.0`. Destructive-only in Photopea.
+    ReplaceColor {
+        color: [f32; 3],
+        fuzziness: f32,
+        hue: f32,
+        saturation: f32,
+        lightness: f32,
+    },
+    /// Color Lookup: a 3D LUT of edge `size` (`2..=65`), `size³` encoded
+    /// output colours in `.cube` order (red fastest), named `name`. An
+    /// adjustment layer in Photopea, and one here.
+    ColorLookup {
+        name: String,
+        size: u32,
+        table: Vec<[f32; 3]>,
+    },
 }
 
 /// Editable text layer. Postponed (Phase 3); shape reserved so the enum and
@@ -844,6 +879,33 @@ mod tests {
             AdjustmentKind::Auto {
                 mode: AutoAdjustment::Color,
                 clip: 0.01,
+            },
+            AdjustmentKind::Desaturate,
+            AdjustmentKind::Equalize,
+            AdjustmentKind::ShadowsHighlights {
+                shadows: [0.35, 0.5, 30.0],
+                highlights: [0.1, 0.4, 12.0],
+            },
+            AdjustmentKind::ReplaceColor {
+                color: [0.8, 0.1, 0.1],
+                fuzziness: 0.15,
+                hue: 120.0,
+                saturation: 0.1,
+                lightness: -0.05,
+            },
+            AdjustmentKind::ColorLookup {
+                name: "Invert".to_string(),
+                size: 2,
+                table: vec![
+                    [1.0, 1.0, 1.0],
+                    [0.0, 1.0, 1.0],
+                    [1.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 1.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                ],
             },
         ];
         for kind in &all {

@@ -195,8 +195,11 @@ fn sample_alpha(
     let coord = tile_coord_of(pt);
     let hash = pixels.tiles(PixelKey::Layer(layer))?.get(coord)?;
     let bytes = source.tile(hash)?;
-    let alpha = tile_byte(bytes, pt, 4, 3)?;
-    Some(f32::from(alpha) / 255.0)
+    // Depth-aware: a 16-bit layer's RGBA16 tile is read at its own stride.
+    let t = TILE_SIZE as i32;
+    let index = (pt.y.rem_euclid(t) * t + pt.x.rem_euclid(t)) as usize;
+    let alpha = raster::tile_alpha16(bytes, index)?;
+    Some(f32::from(alpha) / 65_535.0)
 }
 
 /// A mask's coverage byte at mask-space coordinates, as a `0..=1` sample.
@@ -294,6 +297,41 @@ mod tests {
             .is_none(),
             "a point outside every layer's bounds is no pick"
         );
+    }
+
+    /// W4-F: the Move tool's auto-select on a 16-bit layer. The same ink,
+    /// stored as an RGBA16 tile, picks where the ink is; read at an RGBA8
+    /// stride, (30,30) sampled pixel (15,15)'s bytes — transparent — and the
+    /// pick missed.
+    #[test]
+    fn the_pick_reads_an_rgba16_tile_at_sixteen_bits() {
+        let (mut doc, id, mut source) = doc_with_ink();
+        let coord = raster::TileCoord::new(0, 0, 0);
+        let hash8 = doc.document.layer_tiles(id).unwrap().get(coord).unwrap();
+        let deep = raster::widen_rgba8_tile(source.tile(hash8).unwrap()).unwrap();
+        let hash16 = source.insert_bytes(deep);
+        doc.apply(
+            Command::paint_tiles(PixelTarget::Layer(id), vec![TileEdit::set(coord, hash16)])
+                .unwrap(),
+        )
+        .unwrap();
+        let hit = visible_content_at(
+            &doc.document,
+            &doc.document.pixels,
+            &source,
+            Vec2::new(30.0, 30.0),
+            0.5,
+        )
+        .expect("the 16-bit ink is picked");
+        assert_eq!(hit.layer, id);
+        assert!(visible_content_at(
+            &doc.document,
+            &doc.document.pixels,
+            &source,
+            Vec2::new(60.0, 60.0),
+            0.5
+        )
+        .is_none());
     }
 
     #[test]

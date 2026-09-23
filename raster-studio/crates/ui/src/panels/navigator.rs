@@ -165,6 +165,19 @@ pub struct InfoReadout {
     pub value: String,
 }
 
+/// W4-G: one Colour Sampler point as the Info panel reports it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct SamplerReadout {
+    /// The sample point, in document pixels (a pixel centre).
+    pub position: (f32, f32),
+    /// The colour there, straight-alpha sRGB, when the application read one.
+    pub color: Option<[f32; 4]>,
+}
+
+/// The Info panel's labels for the Colour Sampler rows, one per point
+/// (`tools::measure::MAX_SAMPLERS` of them).
+pub const SAMPLER_LABELS: [&str; tools::measure::MAX_SAMPLERS] = ["#1", "#2", "#3", "#4"];
+
 /// Everything the Info panel reports.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct InfoState {
@@ -172,6 +185,10 @@ pub struct InfoState {
     pub pointer: Option<(f32, f32)>,
     /// Colour under the pointer, straight-alpha sRGB.
     pub sampled: Option<[f32; 4]>,
+    /// W4-G: the Ruler's measurement, while there is one.
+    pub measure: Option<tools::measure::Measurement>,
+    /// W4-G: the Colour Sampler's points, in placement order.
+    pub samplers: Vec<SamplerReadout>,
 }
 
 impl InfoState {
@@ -203,7 +220,7 @@ impl InfoState {
             ),
             None => (NOTHING.to_string(), NOTHING.to_string()),
         };
-        vec![
+        let mut rows = vec![
             InfoReadout {
                 label: "Pointer",
                 value: pointer,
@@ -229,8 +246,47 @@ impl InfoState {
                 label: "Selection",
                 value: format_selection(&doc.selection),
             },
-        ]
+        ];
+        rows.extend(self.tool_readouts());
+        rows
     }
+
+    /// W4-G: the Ruler's and the Colour Sampler's rows. Appended after the
+    /// fixed five and present only while there is something to report — a
+    /// measurement, a placed point — so they never shift the rows above.
+    pub fn tool_readouts(&self) -> Vec<InfoReadout> {
+        let mut rows = Vec::new();
+        if let Some(m) = self.measure {
+            rows.push(InfoReadout {
+                label: "Distance",
+                value: format!("{:.1} px", m.distance()),
+            });
+            rows.push(InfoReadout {
+                label: "Angle",
+                value: format!("{:.1}°", m.angle_degrees()),
+            });
+        }
+        for (label, sampler) in SAMPLER_LABELS.iter().zip(&self.samplers) {
+            let (x, y) = sampler.position;
+            let at = format!("{}, {}", x.floor() as i64, y.floor() as i64);
+            let value = match sampler.color {
+                Some(c) => format!("{} at {at}", format_rgb(c)),
+                None => format!("— at {at}"),
+            };
+            rows.push(InfoReadout { label, value });
+        }
+        rows
+    }
+}
+
+/// A straight-alpha colour as the Info panel writes it: `R, G, B` in 0..=255.
+fn format_rgb(c: [f32; 4]) -> String {
+    format!(
+        "{}, {}, {}",
+        (c[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (c[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (c[2].clamp(0.0, 1.0) * 255.0).round() as u8
+    )
 }
 
 /// How a selection's extent is written, everywhere it is written.
@@ -430,11 +486,49 @@ mod tests {
         let state = InfoState {
             pointer: Some((12.7, 40.2)),
             sampled: Some([1.0, 0.5, 0.0, 1.0]),
+            ..InfoState::default()
         };
         let rows = state.readouts(&doc);
         assert_eq!(rows[0].value, "12, 40");
         assert_eq!(rows[1].value, "255, 128, 0");
         assert_eq!(rows[2].value, "#FF8000");
+    }
+
+    #[test]
+    fn the_ruler_and_the_samplers_add_rows_after_the_fixed_five() {
+        let doc = Document::new(640, 480, "Test");
+        let state = InfoState {
+            measure: Some(tools::measure::Measurement {
+                start: glam::Vec2::new(10.0, 50.0),
+                end: glam::Vec2::new(40.0, 10.0),
+            }),
+            samplers: vec![
+                SamplerReadout {
+                    position: (12.5, 40.5),
+                    color: Some([1.0, 0.5, 0.0, 1.0]),
+                },
+                SamplerReadout {
+                    position: (3.5, 4.5),
+                    color: None,
+                },
+            ],
+            ..InfoState::default()
+        };
+        let rows = state.readouts(&doc);
+        assert_eq!(rows.len(), 5 + 2 + 2);
+        assert_eq!(rows[4].label, "Selection", "the fixed rows stay put");
+        assert_eq!(
+            (rows[5].label, rows[5].value.as_str()),
+            ("Distance", "50.0 px")
+        );
+        assert_eq!((rows[6].label, rows[6].value.as_str()), ("Angle", "53.1°"));
+        assert_eq!(
+            (rows[7].label, rows[7].value.as_str()),
+            ("#1", "255, 128, 0 at 12, 40")
+        );
+        assert_eq!((rows[8].label, rows[8].value.as_str()), ("#2", "— at 3, 4"));
+        // Nothing measured, nothing sampled: no extra rows.
+        assert_eq!(InfoState::default().readouts(&doc).len(), 5);
     }
 
     #[test]

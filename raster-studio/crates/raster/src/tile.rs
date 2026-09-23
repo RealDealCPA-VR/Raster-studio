@@ -193,9 +193,9 @@ impl Tile {
 }
 
 /// Pack RGBA16 samples into tile bytes: native-endian, two bytes a sample —
-/// the layout `app-shell`'s 16-bit solid background writes (reached only by
-/// a 16-bit New Document, which the dialog still refuses: see P2.5b in
-/// `docs/parity-matrix.md`) and the compositor reads back
+/// the layout `app-shell`'s 16-bit solid background writes (a 16-bit New
+/// Document), [`crate::depth`] writes (Image > Mode > 16 Bits/Channel and a
+/// tool's output landing in a 16-bit document) and the compositor reads back
 /// (`compositor::composite`'s `fill_layer`). One spelling of the convention,
 /// so a writer and a reader cannot disagree about byte order.
 pub fn rgba16_to_tile_bytes(samples: &[u16]) -> Vec<u8> {

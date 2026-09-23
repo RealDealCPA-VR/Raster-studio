@@ -88,6 +88,27 @@ pub enum AdjustmentError {
         /// Number of entries in the mask.
         mask: usize,
     },
+
+    /// A whole-buffer operation was handed a pixel slice that is not
+    /// `width × height` long.
+    #[error("the buffer has {pixels} pixels, not {width}x{height}")]
+    BufferShape {
+        /// Number of pixels in the buffer.
+        pixels: usize,
+        /// The width it was said to have.
+        width: usize,
+        /// The height it was said to have.
+        height: usize,
+    },
+
+    /// A 3D lookup table that cannot be used: the wrong number of entries,
+    /// an edge outside the accepted range, or a `.cube` file that does not
+    /// parse.
+    #[error("unusable colour lookup table: {reason}")]
+    InvalidLut {
+        /// What is wrong with it.
+        reason: String,
+    },
 }
 
 /// Reject `NaN` and infinities.

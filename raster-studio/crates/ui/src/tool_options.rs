@@ -226,6 +226,32 @@ pub fn schema_for(info: &ToolInfo) -> Vec<OptionSpec> {
     specs
 }
 
+/// W4-D round 2: whether the options bar shows `key` for `tool` given what
+/// the tool's other options hold now. The Crop tool's W, H, Units and
+/// Resolution appear only under its W x H x Resolution Ratio preset
+/// ([`tools::edit::crop_option_shown`]); every other option always shows.
+pub fn is_shown(options: &ToolOptions, tool: ToolId, key: &str) -> bool {
+    match tool {
+        ToolId::Crop => {
+            let ratio = options
+                .get(tool, "ratio")
+                .and_then(OptionValue::as_choice)
+                .unwrap_or(0);
+            tools::edit::crop_option_shown(key, ratio)
+        }
+        _ => true,
+    }
+}
+
+/// W4-D round 2: [`schema_for`] less the options [`is_shown`] hides right
+/// now — what the options bar draws.
+pub fn shown_schema(options: &ToolOptions, info: &ToolInfo) -> Vec<OptionSpec> {
+    schema_for(info)
+        .into_iter()
+        .filter(|spec| is_shown(options, info.id, spec.key))
+        .collect()
+}
+
 /// The settings a selection tool is currently configured with.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct SelectionOptions {
@@ -496,6 +522,61 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// W4-D: the Crop bar is Photopea's — a Ratio preset, W / H / Units /
+    /// Resolution, the Overlay, Straighten and Delete Cropped Pixels — not a
+    /// bare 0-100 aspect slider, and every one of them forwards to the tool
+    /// once touched.
+    #[test]
+    fn the_crop_bar_offers_presets_size_overlay_and_straighten_and_forwards_them() {
+        let keys: Vec<&str> = info(ToolId::Crop).options.iter().map(|o| o.key).collect();
+        assert_eq!(
+            keys,
+            [
+                "ratio",
+                "width",
+                "height",
+                "units",
+                "resolution",
+                "overlay",
+                "straighten_line",
+                "delete_cropped"
+            ]
+        );
+        let spec = ToolOptions::spec_for_test(ToolId::Crop, "ratio").unwrap();
+        let OptionKind::Choice { choices, default } = spec.kind else {
+            panic!("the ratio is not a preset choice");
+        };
+        assert_eq!(choices[default], "Free");
+        for preset in [
+            "Original",
+            "1:1",
+            "4:3",
+            "16:9",
+            "3:2",
+            "5:4",
+            "W x H x Resolution",
+        ] {
+            assert!(choices.contains(&preset), "no {preset} preset");
+        }
+
+        let mut opts = ToolOptions::new();
+        assert!(opts.set(ToolId::Crop, "ratio", OptionValue::Choice(4)));
+        assert!(opts.set(ToolId::Crop, "width", OptionValue::Float(3.0)));
+        assert!(opts.set(ToolId::Crop, "overlay", OptionValue::Choice(2)));
+        assert!(opts.set(ToolId::Crop, "straighten_line", OptionValue::Bool(true)));
+        let mut held = opts.held(ToolId::Crop);
+        held.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            held,
+            vec![
+                ("overlay".to_string(), OptionValue::Choice(2)),
+                ("ratio".to_string(), OptionValue::Choice(4)),
+                ("straighten_line".to_string(), OptionValue::Bool(true)),
+                ("width".to_string(), OptionValue::Float(3.0)),
+            ]
+        );
     }
 
     #[test]
@@ -1116,6 +1197,64 @@ mod type_reaches_the_engine_tests {
                     .map(|r| (spec.key, r.rect))
             })
             .collect()
+    }
+
+    /// W4-D round 2: one frame of the real options bar for the Crop tool
+    /// under the Ratio preset `ratio`, returning the keys it drew.
+    fn crop_bar_keys(ratio: Option<usize>) -> Vec<&'static str> {
+        let mut w = crate::Workspace::new();
+        w.palette
+            .activate(&crate::PaletteModel::build(), ToolId::Crop);
+        if let Some(ratio) = ratio {
+            assert!(w
+                .options
+                .set(ToolId::Crop, "ratio", OptionValue::Choice(ratio)));
+        }
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let input = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(6000.0, 400.0),
+            )),
+            ..Default::default()
+        };
+        let _ = ctx.run(input(), |ctx| crate::view::tool_options(&mut w, ctx));
+        let _ = ctx.run(input(), |ctx| crate::view::tool_options(&mut w, ctx));
+        tools::registry::info(ToolId::Crop)
+            .expect("in the registry")
+            .options
+            .iter()
+            .filter(|spec| {
+                ctx.read_response(crate::view::ids::tool_option(ToolId::Crop, spec.key))
+                    .is_some()
+            })
+            .map(|spec| spec.key)
+            .collect()
+    }
+
+    /// W4-D round 2: W, H, Units and Resolution are drawn only under the
+    /// W x H x Resolution preset, the one that reads them; under Free and
+    /// 16:9 the bar is the preset, the overlay and the two switches.
+    #[test]
+    fn the_crop_size_fields_show_only_under_the_w_x_h_x_resolution_preset() {
+        let without = ["ratio", "overlay", "straighten_line", "delete_cropped"];
+        assert_eq!(crop_bar_keys(None), without, "Free (default)");
+        assert_eq!(crop_bar_keys(Some(4)), without, "16:9");
+        assert_eq!(
+            crop_bar_keys(Some(tools::edit::CROP_RATIO_SIZE)),
+            [
+                "ratio",
+                "width",
+                "height",
+                "units",
+                "resolution",
+                "overlay",
+                "straighten_line",
+                "delete_cropped"
+            ],
+            "W x H x Resolution"
+        );
     }
 
     /// W3-B: the Pen's options bar is no longer empty, and every shape tool

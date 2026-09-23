@@ -19,6 +19,7 @@
 //!   darken nor bleed color out of transparent pixels.
 
 pub mod codec;
+pub mod depth;
 pub mod export;
 pub mod format;
 pub mod grid;
@@ -33,6 +34,7 @@ pub use codec::{
     DecodedSurface, EncodeOptions, EncodedPixels, ExportFormat, ImageInfo, ImportFormat,
     ImportLimits, SurfacePixels,
 };
+pub use depth::{narrow_rgba16_tile, rgba8_view, tile_alpha16, widen_rgba8_over, widen_rgba8_tile};
 pub use export::{
     export, export_batch, export_batch_to_dir, flatten_onto, linear_from_rgba16,
     linear_from_rgba16_pass_through, linear_from_rgba8, linear_from_rgba8_pass_through, resample,

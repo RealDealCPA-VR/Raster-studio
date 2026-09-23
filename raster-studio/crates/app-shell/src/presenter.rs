@@ -2225,6 +2225,105 @@ mod tests {
         plan
     }
 
+    /// W4-B: the live stroke preview reaches the screen through the
+    /// presenter's partial-upload path — the tiles it covers are re-uploaded
+    /// and hold the stroke, the rest of the texture is untouched — and ending
+    /// the preview re-uploads the same tiles back to the committed pixels.
+    /// After each step the incrementally maintained texture is byte-identical
+    /// to a full recomposite.
+    #[test]
+    fn a_live_stroke_preview_uploads_only_its_tiles_and_clears_the_same_way() {
+        use tools::stroke::{LivePaint, LiveTile};
+        let mut doc = framed(1024, 768); // 4 x 3 tiles
+        let base = doc.document.layers.root()[0];
+        let full = PixelRect::new(0, 0, 1024, 768);
+        let mut texture = vec![0u8; 1024 * 768 * 4];
+        assert_eq!(sync_cpu(&mut doc, &mut texture), UploadPlan::Whole);
+        let baseline = texture.clone();
+        let depth = doc.history_depth();
+
+        let ink = vec![90u8; raster::Tile::byte_len(raster::PixelFormat::Rgba8)];
+        let live = |tiles: Vec<(TileCoord, LiveTile)>, replace: bool| LivePaint {
+            target: editor_core::PixelTarget::Layer(base),
+            key: editor_core::PixelKey::Layer(base),
+            replace,
+            tiles,
+        };
+
+        let changed = doc.update_paint_preview(live(
+            vec![(TileCoord::new(1, 1, 0), LiveTile::Bytes(ink.clone()))],
+            true,
+        ));
+        assert_eq!(changed, 1);
+        let plan = sync_cpu(&mut doc, &mut texture);
+        assert_eq!(plan.tile_count(), 1, "the first preview frame: {plan:?}");
+        assert!(texture == doc.composite(full).unwrap());
+        assert_ne!(texture, baseline, "the preview never reached the texture");
+
+        // The stroke grows into the next tile: only that tile moves again,
+        // and a re-sent unchanged tile costs nothing.
+        let changed = doc.update_paint_preview(live(
+            vec![
+                (TileCoord::new(1, 1, 0), LiveTile::Bytes(ink.clone())),
+                (TileCoord::new(2, 1, 0), LiveTile::Bytes(ink.clone())),
+            ],
+            false,
+        ));
+        assert_eq!(changed, 1, "the unchanged tile was invalidated again");
+        let plan = sync_cpu(&mut doc, &mut texture);
+        let UploadPlan::Tiles(tiles) = &plan else {
+            panic!("the growing preview re-uploaded everything: {plan:?}");
+        };
+        assert_eq!(
+            tiles.iter().map(|(c, _)| *c).collect::<Vec<_>>(),
+            vec![TileCoord::new(2, 1, 0)]
+        );
+        assert!(texture == doc.composite(full).unwrap());
+
+        // A replacing answer on the same target is diffed hash by hash: the
+        // tile it re-sends unchanged costs nothing, the one it changes is
+        // re-uploaded, and a tile it drops goes back to the committed pixels.
+        let ink2 = vec![160u8; raster::Tile::byte_len(raster::PixelFormat::Rgba8)];
+        let changed = doc.update_paint_preview(live(
+            vec![
+                (TileCoord::new(1, 1, 0), LiveTile::Bytes(ink.clone())),
+                (TileCoord::new(2, 1, 0), LiveTile::Bytes(ink2.clone())),
+            ],
+            true,
+        ));
+        assert_eq!(changed, 1, "a replacing answer invalidated unchanged tiles");
+        let plan = sync_cpu(&mut doc, &mut texture);
+        let UploadPlan::Tiles(tiles) = &plan else {
+            panic!("the replacing answer re-uploaded everything: {plan:?}");
+        };
+        assert_eq!(
+            tiles.iter().map(|(c, _)| *c).collect::<Vec<_>>(),
+            vec![TileCoord::new(2, 1, 0)]
+        );
+        assert!(texture == doc.composite(full).unwrap());
+        let changed = doc.update_paint_preview(live(
+            vec![(TileCoord::new(2, 1, 0), LiveTile::Bytes(ink2.clone()))],
+            true,
+        ));
+        assert_eq!(changed, 1, "only the dropped tile changed");
+        let plan = sync_cpu(&mut doc, &mut texture);
+        let UploadPlan::Tiles(tiles) = &plan else {
+            panic!("dropping a tile re-uploaded everything: {plan:?}");
+        };
+        assert_eq!(
+            tiles.iter().map(|(c, _)| *c).collect::<Vec<_>>(),
+            vec![TileCoord::new(1, 1, 0)]
+        );
+        assert!(texture == doc.composite(full).unwrap());
+
+        doc.clear_paint_preview();
+        let plan = sync_cpu(&mut doc, &mut texture);
+        assert_eq!(plan.tile_count(), 1, "ending the preview: {plan:?}");
+        assert!(texture == baseline, "the texture kept the abandoned stroke");
+        assert_eq!(doc.history_depth(), depth, "a preview wrote history");
+        assert!(!doc.is_dirty(), "a preview marked the document unsaved");
+    }
+
     /// The correctness pin for partial invalidation: after every step — a
     /// stroke, its undo and redo, a moved layer's undo (the spot it left has
     /// to clear), a property change, a text keystroke, a delete's undo — the
@@ -2233,6 +2332,10 @@ mod tests {
     /// uploaded fewer tiles than the canvas has.
     #[test]
     fn partial_uploads_after_undo_match_a_full_recomposite_byte_for_byte() {
+        // The text step names DejaVu Sans; load it so the test never depends on
+        // the host's fonts (a fontless runner drew no text at all, so the
+        // keystroke produced no dirty tiles and the step failed).
+        compositor::load_font(dejavu::sans::regular().to_vec());
         let mut doc = framed(1024, 768); // 4 x 3 tiles
         let base = doc.document.layers.root()[0];
         let full = PixelRect::new(0, 0, 1024, 768);

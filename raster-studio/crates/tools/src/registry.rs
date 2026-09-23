@@ -410,8 +410,22 @@ const TOOLS: &[ToolInfo] = &[
         Cursor::CropMarks,
         Some('c'),
         &[
-            f("aspect", "Aspect Ratio", 0.0, 100.0, 0.0),
-            f("straighten", "Straighten", -3.15, 3.15, 0.0),
+            // W4-D: Photopea's crop bar — a ratio preset, the W x H x
+            // Resolution fields the last preset reads, the overlay, the
+            // Straighten line mode and Delete Cropped Pixels.
+            c("ratio", "Ratio", &crate::edit::CROP_RATIO_LABELS, 0),
+            f("width", "W", 0.001, crate::edit::CROP_MAX_OUTPUT_PX, 1920.0),
+            f(
+                "height",
+                "H",
+                0.001,
+                crate::edit::CROP_MAX_OUTPUT_PX,
+                1080.0,
+            ),
+            c("units", "Units", &["px", "in"], 0),
+            f("resolution", "Resolution (px/in)", 1.0, 10_000.0, 72.0),
+            c("overlay", "Overlay", &crate::edit::CROP_OVERLAY_LABELS, 1),
+            b("straighten_line", "Straighten", false),
             b("delete_cropped", "Delete Cropped Pixels", false),
         ],
     ),
@@ -437,6 +451,27 @@ const TOOLS: &[ToolInfo] = &[
             i("sample_radius", "Sample Size", 0, 64, 0),
             b("sample_all_layers", "Sample All Layers", true),
         ],
+    ),
+    // W4-G: Photoshop's order inside the Eyedropper slot, on the same `I`.
+    t(
+        ToolId::ColorSampler,
+        "Colour Sampler",
+        ToolGroup::Crop,
+        Some("eyedropper"),
+        "color-sampler",
+        Cursor::Eyedropper,
+        Some('i'),
+        &[],
+    ),
+    t(
+        ToolId::Ruler,
+        "Ruler",
+        ToolGroup::Crop,
+        Some("eyedropper"),
+        "ruler",
+        Cursor::Crosshair,
+        Some('i'),
+        &[],
     ),
     t(
         ToolId::SpotHealing,
@@ -510,6 +545,9 @@ const TOOLS: &[ToolInfo] = &[
             f("size", "Size", 1.0, 1000.0, 1.0),
             f("opacity", "Opacity", 0.0, 1.0, 1.0),
             f("spacing", "Spacing", 0.01, 10.0, 0.1),
+            // W4-G: a stroke that starts on the foreground paints the
+            // background (`crate::pencil::PencilTool`).
+            b(crate::pencil::AUTO_ERASE_KEY, "Auto Erase", false),
         ],
     ),
     t(
@@ -548,6 +586,31 @@ const TOOLS: &[ToolInfo] = &[
             f("size", "Size", 1.0, 5000.0, 40.0),
             f("opacity", "Opacity", 0.0, 1.0, 1.0),
             f("spacing", "Spacing", 0.01, 10.0, 0.1),
+        ],
+    ),
+    // W4-G: Photoshop's own slot, straight after the Clone slot, on `Y`.
+    t(
+        ToolId::HistoryBrush,
+        "History Brush",
+        ToolGroup::Paint,
+        Some("history"),
+        "history-brush",
+        Cursor::BrushRing,
+        Some('y'),
+        &[
+            f("size", "Size", 1.0, 5000.0, 24.0),
+            f("hardness", "Hardness", 0.0, 1.0, 0.5),
+            f("spacing", "Spacing", 0.01, 10.0, 0.1),
+            f("opacity", "Opacity", 0.0, 1.0, 1.0),
+            // The History panel row to paint from; 0 is the document as
+            // opened. The panel's source column writes it too.
+            i(
+                crate::history_brush::SOURCE_KEY,
+                "Source state",
+                0,
+                10_000,
+                0,
+            ),
         ],
     ),
     t(
@@ -728,6 +791,37 @@ const TOOLS: &[ToolInfo] = &[
             c("mode", "Mode", PenMode::CHOICES, 1),
             c("combine", "Combine", Combine::CHOICES, 0),
         ),
+    ),
+    // W4-G: the Pen slot's path-editing tools, letterless as in Photoshop.
+    t(
+        ToolId::AddAnchor,
+        "Add Anchor Point",
+        ToolGroup::Draw,
+        Some("pen"),
+        "anchor-add",
+        Cursor::Crosshair,
+        None,
+        &[],
+    ),
+    t(
+        ToolId::DeleteAnchor,
+        "Delete Anchor Point",
+        ToolGroup::Draw,
+        Some("pen"),
+        "anchor-delete",
+        Cursor::Crosshair,
+        None,
+        &[],
+    ),
+    t(
+        ToolId::ConvertAnchor,
+        "Convert Point",
+        ToolGroup::Draw,
+        Some("pen"),
+        "anchor-convert",
+        Cursor::Crosshair,
+        None,
+        &[],
     ),
     t(
         ToolId::Type,
@@ -1011,13 +1105,7 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
                 color: [0.0, 0.0, 0.0, 1.0],
             },
         )),
-        ToolId::Pencil => Box::new(StrokeTool::new(
-            id,
-            BrushSettings::pencil(1.0),
-            StrokeOp::Paint {
-                color: [0.0, 0.0, 0.0, 1.0],
-            },
-        )),
+        ToolId::Pencil => Box::new(crate::pencil::PencilTool::default()),
         ToolId::ColorReplacement => Box::new(StrokeTool::new(
             id,
             brush(30.0, 0.8, 0.1),
@@ -1136,6 +1224,18 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
         ToolId::Zoom => Box::new(ViewTool::new(ViewGesture::Zoom)),
         ToolId::RotateView => Box::new(ViewTool::new(ViewGesture::Rotate)),
         ToolId::FreeTransform => Box::new(TransformTool::default()),
+        ToolId::Ruler => Box::new(crate::measure::RulerTool::default()),
+        ToolId::ColorSampler => Box::new(crate::measure::ColorSamplerTool::default()),
+        ToolId::HistoryBrush => Box::new(crate::history_brush::HistoryBrushTool::default()),
+        ToolId::AddAnchor => Box::new(crate::path_select::AnchorTool::new(
+            crate::path_select::AnchorEdit::Add,
+        )),
+        ToolId::DeleteAnchor => Box::new(crate::path_select::AnchorTool::new(
+            crate::path_select::AnchorEdit::Delete,
+        )),
+        ToolId::ConvertAnchor => Box::new(crate::path_select::AnchorTool::new(
+            crate::path_select::AnchorEdit::Convert,
+        )),
     }
 }
 
@@ -1242,6 +1342,7 @@ mod tests {
         "heal",
         "brush",
         "clone",
+        "history",
         "eraser",
         "gradient",
         "blur",
@@ -1303,6 +1404,26 @@ mod tests {
             ]
         );
         assert_eq!(mates("type"), vec![ToolId::Type]);
+        // W4-G: Photoshop's order inside the slots that grew, and the
+        // History Brush in a slot of its own.
+        assert_eq!(
+            mates("eyedropper"),
+            vec![ToolId::Eyedropper, ToolId::ColorSampler, ToolId::Ruler]
+        );
+        assert_eq!(
+            mates("clone"),
+            vec![ToolId::CloneStamp, ToolId::PatternStamp]
+        );
+        assert_eq!(mates("history"), vec![ToolId::HistoryBrush]);
+        assert_eq!(
+            mates("pen"),
+            vec![
+                ToolId::Pen,
+                ToolId::AddAnchor,
+                ToolId::DeleteAnchor,
+                ToolId::ConvertAnchor
+            ]
+        );
         assert_eq!(
             mates("path"),
             vec![ToolId::PathSelect, ToolId::DirectSelection]

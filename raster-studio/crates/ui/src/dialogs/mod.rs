@@ -293,6 +293,29 @@ pub(crate) mod tests_support {
                     relative: false,
                 }
             }
+            // W4-E. Desaturate and Equalize have no control to move: their
+            // starting kind already changes pixels.
+            I::Desaturate => K::Desaturate,
+            I::Equalize => K::Equalize,
+            I::ShadowsHighlights => K::ShadowsHighlights {
+                shadows: [0.9, 0.9, 0.0],
+                highlights: [0.0, 0.5, 0.0],
+            },
+            I::ReplaceColor => K::ReplaceColor {
+                color: [0.5, 0.5, 0.5],
+                fuzziness: adjustments::ReplaceColor::MAX_FUZZINESS,
+                hue: 0.0,
+                saturation: 0.0,
+                lightness: 0.8,
+            },
+            I::ColorLookup => {
+                let lut = adjustments::BuiltinLut::Invert.lut();
+                K::ColorLookup {
+                    name: lut.name().to_string(),
+                    size: lut.size() as u32,
+                    table: lut.table().to_vec(),
+                }
+            }
         }
     }
 
