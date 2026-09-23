@@ -81,6 +81,10 @@ thread_local! {
     /// [`ui::menu::MenuAction::Trim`] pick that rides out of the same frame
     /// — the same shape as the parked adjustment, for the same reason.
     static CONFIRMED_TRIM: RefCell<Option<ui::dialogs::TrimSpec>> = const { RefCell::new(None) };
+    /// W7-D: the palette/count/dither the Indexed Color dialog confirmed,
+    /// waiting for the `SetColorMode(Indexed)` pick of the same frame.
+    static CONFIRMED_INDEXED: RefCell<Option<ui::dialogs::IndexedSpec>> =
+        const { RefCell::new(None) };
     /// The parameters the Refine Edge dialog confirmed, waiting for the
     /// [`ui::menu::MenuAction::RefineEdge`] pick.
     static CONFIRMED_REFINE_EDGE: RefCell<Option<ui::dialogs::refine_mask::RefineMaskSpec>> =
@@ -102,6 +106,26 @@ thread_local! {
     /// W3-H: the entry and operation the Load Selection dialog confirmed.
     static CONFIRMED_LOAD_SELECTION: RefCell<Option<ui::dialogs::LoadSelectionSpec>> =
         const { RefCell::new(None) };
+    /// W7-H: the warp the Liquify dialog confirmed, waiting for the
+    /// [`ui::menu::MenuAction::Liquify`] pick.
+    static CONFIRMED_LIQUIFY: RefCell<Option<ui::dialogs::LiquifySpec>> =
+        const { RefCell::new(None) };
+    /// W7-H: the deformation the Puppet Warp dialog confirmed, waiting for
+    /// the [`ui::menu::MenuAction::PuppetWarp`] pick.
+    static CONFIRMED_PUPPET_WARP: RefCell<Option<ui::dialogs::PuppetWarpSpec>> =
+        const { RefCell::new(None) };
+}
+
+/// W7-H: the warp a Liquify dialog confirmed, if one did since the last take.
+/// Consumed on read, so a confirmation is applied exactly once.
+pub(crate) fn take_confirmed_liquify() -> Option<ui::dialogs::LiquifySpec> {
+    CONFIRMED_LIQUIFY.with(|slot| slot.borrow_mut().take())
+}
+
+/// W7-H: the deformation a Puppet Warp dialog confirmed, if one did since
+/// the last take. Consumed on read.
+pub(crate) fn take_confirmed_puppet_warp() -> Option<ui::dialogs::PuppetWarpSpec> {
+    CONFIRMED_PUPPET_WARP.with(|slot| slot.borrow_mut().take())
 }
 
 /// The Color Range spec a dialog confirmed, if one did since the last take.
@@ -143,6 +167,17 @@ pub const LICENCE_POINTER: &str =
     "Proprietary. The licence terms are in LICENSES/ beside the source.";
 /// Where the third-party notices live, relative to the source tree.
 pub const THIRD_PARTY_NOTICES: &str = "LICENSES/THIRD_PARTY_NOTICES.md";
+
+fn stage_confirmed_indexed(spec: ui::dialogs::IndexedSpec) {
+    CONFIRMED_INDEXED.with(|slot| *slot.borrow_mut() = Some(spec));
+}
+
+/// W7-D: the spec an Indexed Color dialog confirmed, if one did since the
+/// last take. Consumed on read; the `SetColorMode(Indexed)` arm with nothing
+/// parked converts at the dialog's defaults.
+pub(crate) fn take_confirmed_indexed() -> Option<ui::dialogs::IndexedSpec> {
+    CONFIRMED_INDEXED.with(|slot| slot.borrow_mut().take())
+}
 
 fn stage_confirmed_trim(spec: ui::dialogs::TrimSpec) {
     CONFIRMED_TRIM.with(|slot| *slot.borrow_mut() = Some(spec));
@@ -237,6 +272,10 @@ pub enum ActiveDialog {
     /// [`ui::dialogs::TrimSpec`] parked for the `Trim` menu arm, the way an
     /// adjustment's parameters are.
     Trim(Box<ui::dialogs::TrimDialog>),
+    /// Image ▸ Mode ▸ Indexed Color… (W7-D): palette source, colour count and
+    /// dither. Its confirmed spec is parked for the `SetColorMode(Indexed)`
+    /// arm, which quantises the document as one undo step.
+    IndexedColor(Box<ui::dialogs::IndexedColorDialog>),
     /// Help ▸ About Raster Studio — a window with one button (W2-F).
     About(Box<ui::dialogs::AboutDialog>),
     /// View ▸ New Guide… (W2-F). Confirms to a `SetGuides` command.
@@ -263,6 +302,12 @@ pub enum ActiveDialog {
     /// Select > Load Selection... (W3-H): which saved selection, and how it
     /// meets the live one. Parked for the `LoadSelection` arm.
     LoadSelection(Box<ui::dialogs::LoadSelectionDialog>),
+    /// Filter > Liquify... (W7-H): brush warping over a preview. Its
+    /// confirmed field is parked for the `Liquify` arm.
+    Liquify(Box<ui::dialogs::LiquifyDialog>),
+    /// Edit > Puppet Warp (W7-H): pins on a mesh over the layer's ink. Its
+    /// confirmed deformation is parked for the `PuppetWarp` arm.
+    PuppetWarp(Box<ui::dialogs::PuppetWarpDialog>),
 }
 
 impl ActiveDialog {
@@ -305,12 +350,15 @@ impl ActiveDialog {
             // `about_opens_from_the_menu_and_escape_closes_it` drive both
             // through `ui` to prove the arm below is never the one that runs.
             Self::Trim(_)
+            | Self::IndexedColor(_)
             | Self::About(_)
             | Self::DuplicateLayer(_)
             | Self::ColorRange(_)
             | Self::SelectionModify(_)
             | Self::SaveSelection(_)
-            | Self::LoadSelection(_) => DialogOutcome::Open,
+            | Self::LoadSelection(_)
+            | Self::Liquify(_)
+            | Self::PuppetWarp(_) => DialogOutcome::Open,
         }
     }
 
@@ -322,6 +370,7 @@ impl ActiveDialog {
             self,
             Self::Adjustment(_)
                 | Self::Trim(_)
+                | Self::IndexedColor(_)
                 | Self::About(_)
                 | Self::RefineEdge(_)
                 | Self::DuplicateLayer(_)
@@ -329,6 +378,8 @@ impl ActiveDialog {
                 | Self::SelectionModify(_)
                 | Self::SaveSelection(_)
                 | Self::LoadSelection(_)
+                | Self::Liquify(_)
+                | Self::PuppetWarp(_)
         )
     }
 }
@@ -375,6 +426,8 @@ impl DialogHost {
     /// Close whatever is open, keeping nothing.
     pub fn close(&mut self) {
         self.active = None;
+        // W7-E: a smart-filter re-edit is armed only while its dialog is open.
+        crate::menu_bridge::disarm_smart_filter_edit();
     }
 
     /// Open the dialog a [`ui::menu::MenuAction`] names, if this host has one
@@ -468,6 +521,29 @@ impl DialogHost {
             ui::menu::MenuAction::RemoveColorFringe => match defringe_dialog(editor) {
                 Some(dialog) => {
                     self.open(dialog);
+                    true
+                }
+                None => false,
+            },
+            // W7-H: Filter > Liquify... and Edit > Puppet Warp open over the
+            // active layer's pixels; with nothing to warp they fall through
+            // to the bridge, whose message names the reason.
+            ui::menu::MenuAction::Liquify => match crate::menu_bridge::warp_source(editor) {
+                Some(source) => {
+                    self.open(ActiveDialog::Liquify(Box::new(
+                        ui::dialogs::LiquifyDialog::new(&source),
+                    )));
+                    true
+                }
+                None => false,
+            },
+            ui::menu::MenuAction::PuppetWarp => match crate::menu_bridge::warp_source(editor) {
+                Some(source) => {
+                    let dialog = ui::dialogs::PuppetWarpDialog::new(&source);
+                    if dialog.mesh().is_none() {
+                        return false;
+                    }
+                    self.open(ActiveDialog::PuppetWarp(Box::new(dialog)));
                     true
                 }
                 None => false,
@@ -572,6 +648,21 @@ impl DialogHost {
                     return false;
                 }
                 self.open(ActiveDialog::Trim(Box::<ui::dialogs::TrimDialog>::default()));
+                true
+            }
+            // W7-D: Image ▸ Mode ▸ Indexed Color asks for the palette first;
+            // the confirmed spec is parked for the `SetColorMode` arm. A
+            // document already indexed asks nothing (the arm refuses loudly).
+            ui::menu::MenuAction::SetColorMode(ui::menu::ColorMode::Indexed) => {
+                let Some(doc) = editor.active() else {
+                    return false;
+                };
+                if doc.document.meta.color_mode == ui::menu::ColorMode::Indexed as u8 {
+                    return false;
+                }
+                self.open(ActiveDialog::IndexedColor(Box::<
+                    ui::dialogs::IndexedColorDialog,
+                >::default()));
                 true
             }
             // Help ▸ About: the executable's stamp and the licence pointers.
@@ -770,6 +861,26 @@ impl DialogHost {
         }
     }
 
+    /// W7-H: the open Liquify dialog, for host-path tests.
+    #[cfg(test)]
+    pub(crate) fn active_liquify_dialog_for_test(&mut self) -> &mut ui::dialogs::LiquifyDialog {
+        match self.active_for_test() {
+            ActiveDialog::Liquify(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the Liquify dialog"),
+        }
+    }
+
+    /// W7-H: the open Puppet Warp dialog, for host-path tests.
+    #[cfg(test)]
+    pub(crate) fn active_puppet_warp_dialog_for_test(
+        &mut self,
+    ) -> &mut ui::dialogs::PuppetWarpDialog {
+        match self.active_for_test() {
+            ActiveDialog::PuppetWarp(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the Puppet Warp dialog"),
+        }
+    }
+
     /// Card 062: the opened Remove Color Fringe dialog, for host-path tests.
     #[cfg(test)]
     pub(crate) fn active_defringe_dialog_for_test(
@@ -835,6 +946,17 @@ impl DialogHost {
         match self.active_for_test() {
             ActiveDialog::Adjustment(dialog) => dialog,
             other => panic!("the active dialog is {other:?}, not the adjustment dialog"),
+        }
+    }
+
+    /// W7-D: the open Indexed Color dialog, for tests that drive its options.
+    #[cfg(test)]
+    pub(crate) fn active_indexed_dialog_for_test(
+        &mut self,
+    ) -> &mut ui::dialogs::IndexedColorDialog {
+        match self.active.as_mut() {
+            Some(ActiveDialog::IndexedColor(dialog)) => dialog,
+            other => panic!("expected the Indexed Color dialog, got {other:?}"),
         }
     }
 
@@ -1022,6 +1144,22 @@ impl DialogHost {
             }
             return;
         }
+        // W7-D: Indexed Color takes Trim's road — the spec is parked and the
+        // `SetColorMode(Indexed)` pick carries it to the converting arm.
+        if let ActiveDialog::IndexedColor(dialog) = active {
+            match dialog.show(ctx) {
+                DialogOutcome::Open => {}
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(spec) => {
+                    stage_confirmed_indexed(spec);
+                    out.menu.push(ui::menu::MenuAction::SetColorMode(
+                        ui::menu::ColorMode::Indexed,
+                    ));
+                    self.active = None;
+                }
+            }
+            return;
+        }
         // Refine Edge reuses the Refine Mask dialog, so its confirmation is
         // a `DialogAction::RefineMask` — which the shell would bake into a
         // layer MASK. Intercepted here: the spec is parked and the
@@ -1106,6 +1244,33 @@ impl DialogHost {
             }
             return;
         }
+        // W7-H: Liquify and Puppet Warp take Trim's road -- the confirmed
+        // warp is parked and the pick rides `out.menu` to the arm that warps
+        // the full-resolution layer as one undoable step.
+        if let ActiveDialog::Liquify(dialog) = active {
+            match dialog.show(ctx) {
+                DialogOutcome::Open => {}
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(spec) => {
+                    CONFIRMED_LIQUIFY.with(|slot| *slot.borrow_mut() = Some(spec));
+                    out.menu.push(ui::menu::MenuAction::Liquify);
+                    self.active = None;
+                }
+            }
+            return;
+        }
+        if let ActiveDialog::PuppetWarp(dialog) = active {
+            match dialog.show(ctx) {
+                DialogOutcome::Open => {}
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(spec) => {
+                    CONFIRMED_PUPPET_WARP.with(|slot| *slot.borrow_mut() = Some(spec));
+                    out.menu.push(ui::menu::MenuAction::PuppetWarp);
+                    self.active = None;
+                }
+            }
+            return;
+        }
         // About asks nothing: dismissed is closed.
         if let ActiveDialog::About(dialog) = active {
             if dialog.show(ctx) {
@@ -1122,6 +1287,8 @@ impl DialogHost {
             DialogOutcome::Cancelled => {
                 self.active = None;
                 self.color_target = None;
+                // W7-E: a cancelled re-edit must not arm a later filter run.
+                crate::menu_bridge::disarm_smart_filter_edit();
             }
             DialogOutcome::Confirmed(action) => {
                 self.active = None;
@@ -1160,8 +1327,10 @@ fn fold(action: DialogAction, out: &mut ChromeOutput) {
         // The dialog owns Preferences now; the shell maps the ui schema onto
         // the app's and applies it.
         DialogAction::SetPreferences(prefs) => out.set_ui_preferences = Some(prefs),
-        DialogAction::Fill(spec) => out.fill_spec = Some(spec),
-        DialogAction::Stroke(spec) => out.stroke_spec = Some(spec),
+        // W7-I: Fill and Stroke travel as `out.dialog`, which the shell's
+        // `apply_chrome` applies (`menu_bridge::fill_selection_with` /
+        // `stroke_selection_with`). They used to be parked in two fields no
+        // code read, so a confirmed Fill or Stroke changed nothing.
         other => out.dialog = Some(other),
     }
 }
@@ -1324,7 +1493,8 @@ fn layer_style_dialog(editor: &crate::Editor, blending: bool) -> Option<ActiveDi
     let id = open.document.active_layer()?;
     let layer = open.document.layers.get(id)?;
     let mut dialog = LayerStyleDialog::new(id, layer.name.clone(), layer.effects.clone())
-        .with_blending(layer.blend_mode, layer.opacity, layer.fill_opacity);
+        .with_blending(layer.blend_mode, layer.opacity, layer.fill_opacity)
+        .with_patterns(crate::doc::pattern_tiles(editor.presets()));
     if blending {
         dialog.show_blending();
     }
@@ -1422,10 +1592,15 @@ fn pixel_layer_available(editor: &crate::Editor) -> Option<()> {
 
 fn filter_dialog_for(editor: &crate::Editor, id: ui::menu::FilterId) -> Option<ActiveDialog> {
     let spec = ui::dialogs::filter_by_id(id)?;
-    let source = crate::menu_bridge::filter_source(editor)?;
-    Some(ActiveDialog::Filter(Box::new(FilterDialog::new(
-        spec, source,
-    ))))
+    // W7-E: a Layers-panel double-click on a smart filter re-opens its dialog
+    // at the parameters it stored (and arms the confirm to replace it).
+    let stored = crate::menu_bridge::arm_smart_filter_edit(editor, id);
+    let source = crate::menu_bridge::filter_dialog_source(editor, id)?;
+    let mut dialog = FilterDialog::new(spec, source);
+    for (key, value) in stored {
+        dialog.set_param(&key, value);
+    }
+    Some(ActiveDialog::Filter(Box::new(dialog)))
 }
 
 /// An [`AdjustmentDialog`] over the active pixel layer, previewing in the
@@ -1444,9 +1619,84 @@ fn adjustment_dialog(editor: &crate::Editor, id: AdjustmentId) -> Option<ActiveD
     pixel_layer_available(editor)?;
     let source = crate::menu_bridge::filter_source(editor)?;
     let space = editor.active()?.document.meta.color_space.clone();
-    Some(ActiveDialog::Adjustment(Box::new(AdjustmentDialog::new(
-        id, source, space,
-    ))))
+    let mut dialog = AdjustmentDialog::new(id, source, space);
+    // W7-G: Match Color's Source list — every open document and layer.
+    if id == AdjustmentId::MatchColor {
+        dialog.set_match_sources(match_color_sources(editor));
+    }
+    Some(ActiveDialog::Adjustment(Box::new(dialog)))
+}
+
+/// Largest side a Match Color source is measured at. Its statistics are
+/// taken from a box-downsampled copy, so opening the dialog over many large
+/// layers stays quick; the target is measured at full size when applied.
+const MATCH_SOURCE_SIDE: u32 = 1024;
+
+/// W7-G: what Match Color can take its colours from — every open document's
+/// merged image, then every pixel layer of every document except the layer
+/// being changed — each with its CIELAB statistics.
+fn match_color_sources(editor: &crate::Editor) -> Vec<ui::dialogs::adjustment_dialog::MatchSource> {
+    use ui::dialogs::adjustment_dialog::{preview_proxy, MatchSource};
+    let stats_of = |w: u32, h: u32, rgba: &[u8]| {
+        let buffer = filters::FilterBuffer::from_rgba8(w, h, rgba).ok()?;
+        adjustments::LabStats::measure(preview_proxy(&buffer, MATCH_SOURCE_SIDE).pixels(), None)
+    };
+    let active_doc = editor.active().map(|d| d.id());
+    let active_layer = editor.active().and_then(|d| d.document.active_layer());
+    let mut out = Vec::new();
+    for open in editor.documents() {
+        let (w, h) = (open.document.width(), open.document.height());
+        if w == 0 || h == 0 {
+            continue;
+        }
+        let space = open.document.meta.color_space.clone();
+        if let Ok(canvas) = compositor::composite_region(
+            &open.document,
+            &open.tiles,
+            open.canvas_rect(),
+            0,
+            compositor::CompositeOptions::default(),
+        ) {
+            if let Some(stats) = stats_of(w, h, &canvas.to_rgba8(&space)) {
+                out.push(MatchSource {
+                    label: format!(
+                        "{} ({})",
+                        open.title(),
+                        ui::strings::tr("ui.adjustment.match.merged")
+                    ),
+                    stats,
+                });
+            }
+        }
+    }
+    for open in editor.documents() {
+        let (w, h) = (open.document.width(), open.document.height());
+        if w == 0 || h == 0 {
+            continue;
+        }
+        for id in open.document.layers.iter_depth_first() {
+            if Some(open.id()) == active_doc && Some(id) == active_layer {
+                continue;
+            }
+            let Some(layer) = open.document.layers.get(id) else {
+                continue;
+            };
+            if !matches!(
+                layer.kind,
+                layer_model::LayerKind::Raster(_) | layer_model::LayerKind::Generator(_)
+            ) {
+                continue;
+            }
+            let rgba = crate::menu_bridge::pixels::read_layer(open, id);
+            if let Some(stats) = stats_of(w, h, &rgba) {
+                out.push(MatchSource {
+                    label: format!("{} / {}", open.title(), layer.name),
+                    stats,
+                });
+            }
+        }
+    }
+    out
 }
 
 /// W4-E round 2: the dialog for the active Color Lookup layer's own table,
@@ -1544,6 +1794,9 @@ fn defringe_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
 
 /// The [`FilterGalleryDialog`] over the active layer's pixels.
 fn filter_gallery_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
+    // W7-E: the Gallery always adds a filter; it never finishes an earlier
+    // smart-filter re-edit, so whatever was armed is dropped here.
+    crate::menu_bridge::disarm_smart_filter_edit();
     let source = crate::menu_bridge::filter_source(editor)?;
     Some(ActiveDialog::FilterGallery(Box::new(
         ui::dialogs::FilterGalleryDialog::new(source),
@@ -1577,6 +1830,8 @@ fn export_as_dialog(editor: &crate::Editor, format: raster::ExportFormat) -> Opt
     );
     let mut dialog = ui::dialogs::ExportAsDialog::new(w, h, name, proxy);
     dialog.set_format(format);
+    // W7-D: so the dialog can say how a Lab / CMYK / Indexed document goes out.
+    dialog.set_color_mode(open.document.meta.color_mode);
     Some(ActiveDialog::ExportAs(Box::new(dialog)))
 }
 

@@ -508,6 +508,12 @@ impl Default for GradientOverlayEffect {
 }
 
 /// A tiled pattern reference plus its placement.
+///
+/// W7-B: the pixels travel **with the fill** in [`PatternFill::tile`]. A
+/// document therefore saves, reopens, undoes, journals and copies a style
+/// with the pattern it draws, and the compositor needs no asset table to
+/// resolve it. `asset` is kept for a reference that names pixels this model
+/// does not carry; on its own it draws nothing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PatternFill {
@@ -515,6 +521,14 @@ pub struct PatternFill {
     /// must skip the effect rather than guess.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asset: Option<AssetId>,
+    /// W7-B: the pattern's own pixels. `None` draws nothing. A stored tile
+    /// that fails [`PatternTile::new`]'s checks loads as `None` rather than
+    /// refusing the whole document.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_tile"
+    )]
+    pub tile: Option<PatternTile>,
     /// Tile scale; 1.0 = the asset's native size. Expected `> 0.0`; the
     /// renderer clamps.
     pub scale: f32,
@@ -529,12 +543,259 @@ impl Default for PatternFill {
     fn default() -> Self {
         Self {
             asset: None,
+            tile: None,
             scale: 1.0,
             offset_px: [0.0, 0.0],
             angle_deg: 0.0,
             link_with_layer: true,
         }
     }
+}
+
+impl PatternFill {
+    /// W7-B: `true` when the fill carries pixels to draw.
+    pub fn is_drawable(&self) -> bool {
+        self.tile.is_some()
+    }
+}
+
+/// W7-B: the largest edge a [`PatternTile`] may have, in pixels.
+pub const MAX_PATTERN_EDGE: u32 = 16_384;
+/// W7-B: the most pixels a [`PatternTile`] may hold (256 MiB of RGBA8).
+pub const MAX_PATTERN_PIXELS: u64 = 1 << 26;
+
+/// Why a [`PatternTile`] could not be built.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PatternTileError {
+    #[error("a pattern needs at least one pixel")]
+    Empty,
+    #[error("a {width}x{height} pattern is over the size limit")]
+    TooLarge { width: u32, height: u32 },
+    #[error("a {width}x{height} pattern needs {expected} bytes, got {found}")]
+    WrongLength {
+        width: u32,
+        height: u32,
+        expected: u64,
+        found: u64,
+    },
+}
+
+/// W7-B: the pixels a pattern fill tiles: straight-alpha RGBA8 in the
+/// document's colour space, row-major, `width * height * 4` bytes.
+///
+/// Immutable once built, and cheap to clone (the bytes are shared), because
+/// every style edit, undo inverse and dialog copy clones the effect block.
+/// [`PatternTile::content_hash`] is computed once, here, and is what a tile
+/// cache keys on: two tiles with the same pixels share a key, and a change to
+/// any pixel changes it.
+#[derive(Clone)]
+pub struct PatternTile {
+    name: String,
+    width: u32,
+    height: u32,
+    rgba8: std::sync::Arc<[u8]>,
+    hash: u64,
+}
+
+impl PatternTile {
+    /// Build a tile, checking the size and the byte count.
+    pub fn new(
+        name: impl Into<String>,
+        width: u32,
+        height: u32,
+        rgba8: Vec<u8>,
+    ) -> Result<Self, PatternTileError> {
+        if width == 0 || height == 0 {
+            return Err(PatternTileError::Empty);
+        }
+        let pixels = u64::from(width) * u64::from(height);
+        if width > MAX_PATTERN_EDGE || height > MAX_PATTERN_EDGE || pixels > MAX_PATTERN_PIXELS {
+            return Err(PatternTileError::TooLarge { width, height });
+        }
+        let expected = pixels * 4;
+        if rgba8.len() as u64 != expected {
+            return Err(PatternTileError::WrongLength {
+                width,
+                height,
+                expected,
+                found: rgba8.len() as u64,
+            });
+        }
+        let hash = pattern_content_hash(width, height, &rgba8);
+        Ok(Self {
+            name: name.into(),
+            width,
+            height,
+            rgba8: rgba8.into(),
+            hash,
+        })
+    }
+
+    /// The name the pattern was defined under, for display only.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// The raw straight-alpha RGBA8 bytes.
+    pub fn rgba8(&self) -> &[u8] {
+        &self.rgba8
+    }
+
+    /// A hash of the dimensions and pixels (not the name), stable across
+    /// runs. What a cache keys a pattern by.
+    pub fn content_hash(&self) -> u64 {
+        self.hash
+    }
+
+    /// The pixel at `(x, y)` of the infinite tiling.
+    pub fn pixel(&self, x: i64, y: i64) -> [u8; 4] {
+        let tx = x.rem_euclid(i64::from(self.width)) as usize;
+        let ty = y.rem_euclid(i64::from(self.height)) as usize;
+        let i = (ty * self.width as usize + tx) * 4;
+        [
+            self.rgba8[i],
+            self.rgba8[i + 1],
+            self.rgba8[i + 2],
+            self.rgba8[i + 3],
+        ]
+    }
+}
+
+/// FNV-style mixing over the dimensions, then eight bytes at a time over the
+/// pixels (the tail folded in byte by byte), so a whole-canvas pattern hashes
+/// in one pass.
+fn pattern_content_hash(width: u32, height: u32, bytes: &[u8]) -> u64 {
+    const PRIME: u64 = 0x0000_0100_0000_01B3;
+    let mut h: u64 = 0xCBF2_9CE4_8422_2325;
+    let mut mix = |v: u64| {
+        h ^= v;
+        h = h.wrapping_mul(PRIME);
+        h ^= h >> 29;
+    };
+    mix(u64::from(width));
+    mix(u64::from(height));
+    let (words, tail) = bytes.as_chunks::<8>();
+    for w in words {
+        mix(u64::from_le_bytes(*w));
+    }
+    for b in tail {
+        mix(u64::from(*b));
+    }
+    mix(bytes.len() as u64);
+    h
+}
+
+impl std::fmt::Debug for PatternTile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PatternTile")
+            .field("name", &self.name)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("hash", &format_args!("{:016x}", self.hash))
+            .finish()
+    }
+}
+
+impl PartialEq for PatternTile {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash
+            && self.width == other.width
+            && self.height == other.height
+            && self.name == other.name
+            && (std::sync::Arc::ptr_eq(&self.rgba8, &other.rgba8) || self.rgba8 == other.rgba8)
+    }
+}
+
+/// Bytes written as one binary blob (MessagePack `bin`) rather than one
+/// integer per byte.
+struct TileBytesOut<'a>(&'a [u8]);
+
+impl Serialize for TileBytesOut<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_bytes(self.0)
+    }
+}
+
+/// Reads what [`TileBytesOut`] wrote: a blob, or (from a format with no blob
+/// type, such as JSON) a sequence of integers.
+struct TileBytesIn(Vec<u8>);
+
+impl<'de> Deserialize<'de> for TileBytesIn {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = TileBytesIn;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("pattern bytes")
+            }
+            fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+                Ok(TileBytesIn(v.to_vec()))
+            }
+            fn visit_byte_buf<E: serde::de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
+                Ok(TileBytesIn(v))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                // A size hint comes from the file, so it reserves at most a
+                // megabyte; the loop refuses anything past a valid tile.
+                let cap = seq.size_hint().unwrap_or(0).min(1 << 20);
+                let mut out = Vec::with_capacity(cap);
+                while let Some(b) = seq.next_element::<u8>()? {
+                    if out.len() as u64 >= MAX_PATTERN_PIXELS * 4 {
+                        return Err(serde::de::Error::custom("pattern bytes over the limit"));
+                    }
+                    out.push(b);
+                }
+                Ok(TileBytesIn(out))
+            }
+        }
+        d.deserialize_bytes(V)
+    }
+}
+
+impl Serialize for PatternTile {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("PatternTile", 4)?;
+        st.serialize_field("name", &self.name)?;
+        st.serialize_field("width", &self.width)?;
+        st.serialize_field("height", &self.height)?;
+        st.serialize_field("rgba8", &TileBytesOut(&self.rgba8))?;
+        st.end()
+    }
+}
+
+#[derive(Deserialize)]
+struct PatternTileRepr {
+    #[serde(default)]
+    name: String,
+    width: u32,
+    height: u32,
+    rgba8: TileBytesIn,
+}
+
+impl<'de> Deserialize<'de> for PatternTile {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let r = PatternTileRepr::deserialize(d)?;
+        PatternTile::new(r.name, r.width, r.height, r.rgba8.0).map_err(serde::de::Error::custom)
+    }
+}
+
+/// `PatternFill::tile`'s reader: a stored tile whose size and bytes disagree
+/// loads as no tile, so one bad pattern costs its overlay, not the file.
+fn lenient_tile<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<PatternTile>, D::Error> {
+    let r = Option::<PatternTileRepr>::deserialize(d)?;
+    Ok(r.and_then(|r| PatternTile::new(r.name, r.width, r.height, r.rgba8.0).ok()))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -730,5 +991,98 @@ mod tests {
         assert_eq!(BevelEffect::default().angle_deg, DEFAULT_GLOBAL_LIGHT_DEG);
         assert!(ShadowEffect::default().use_global_light);
         assert!(BevelEffect::default().use_global_light);
+    }
+
+    // ---- W7-B: pattern tiles ride the fill -------------------------------
+
+    fn checker() -> PatternTile {
+        PatternTile::new(
+            "Checker",
+            2,
+            2,
+            vec![
+                255, 0, 0, 255, 0, 0, 255, 255, //
+                0, 0, 255, 255, 255, 0, 0, 255,
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_pattern_tile_checks_its_size_and_bytes() {
+        assert_eq!(
+            PatternTile::new("x", 0, 2, Vec::new()).unwrap_err(),
+            PatternTileError::Empty
+        );
+        assert!(matches!(
+            PatternTile::new("x", 2, 2, vec![0; 15]).unwrap_err(),
+            PatternTileError::WrongLength {
+                expected: 16,
+                found: 15,
+                ..
+            }
+        ));
+        assert!(matches!(
+            PatternTile::new("x", MAX_PATTERN_EDGE + 1, 1, Vec::new()).unwrap_err(),
+            PatternTileError::TooLarge { .. }
+        ));
+        let t = checker();
+        assert_eq!(t.pixel(0, 0), [255, 0, 0, 255]);
+        assert_eq!(t.pixel(2, 2), [255, 0, 0, 255], "the tiling wraps");
+        assert_eq!(t.pixel(-1, 0), [0, 0, 255, 255], "and wraps below zero");
+    }
+
+    #[test]
+    fn the_content_hash_follows_the_pixels_not_the_name() {
+        let a = checker();
+        let renamed = PatternTile::new("Other", 2, 2, a.rgba8().to_vec()).unwrap();
+        assert_eq!(a.content_hash(), renamed.content_hash());
+        let mut bytes = a.rgba8().to_vec();
+        bytes[5] = 1;
+        let changed = PatternTile::new("Checker", 2, 2, bytes).unwrap();
+        assert_ne!(a.content_hash(), changed.content_hash());
+        assert_ne!(a, changed);
+        // The same bytes at a different shape are a different pattern.
+        let wide = PatternTile::new("Checker", 4, 1, a.rgba8().to_vec()).unwrap();
+        assert_ne!(a.content_hash(), wide.content_hash());
+    }
+
+    #[test]
+    fn a_pattern_fill_round_trips_with_its_pixels() {
+        let fill = PatternFill {
+            tile: Some(checker()),
+            scale: 2.0,
+            ..PatternFill::default()
+        };
+        assert!(fill.is_drawable());
+        let e = LayerEffects {
+            pattern_overlay: Some(PatternOverlayEffect {
+                pattern: fill.clone(),
+                ..Default::default()
+            }),
+            stroke: Some(StrokeEffect {
+                fill: FillStyle::Pattern(fill.clone()),
+                ..Default::default()
+            }),
+            ..LayerEffects::default()
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        let back: LayerEffects = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, e);
+        let tile = back.pattern_overlay.unwrap().pattern.tile.unwrap();
+        assert_eq!(tile.rgba8(), checker().rgba8());
+        assert_eq!(tile.name(), "Checker");
+        // An untiled fill writes no tile key at all.
+        let bare = serde_json::to_string(&PatternFill::default()).unwrap();
+        assert!(!bare.contains("tile"), "{bare}");
+        assert!(!PatternFill::default().is_drawable());
+    }
+
+    #[test]
+    fn a_malformed_stored_tile_loads_as_no_tile_not_as_a_refusal() {
+        let json = r#"{"tile":{"name":"Bad","width":2,"height":2,"rgba8":[1,2,3]},"scale":3.0}"#;
+        let fill: PatternFill = serde_json::from_str(json).unwrap();
+        assert!(fill.tile.is_none());
+        assert_eq!(fill.scale, 3.0, "the rest of the fill still loads");
     }
 }

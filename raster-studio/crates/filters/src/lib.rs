@@ -66,13 +66,17 @@
 
 pub mod blur;
 pub mod buffer;
+pub mod content_aware;
 pub mod defringe;
 pub mod displace;
 pub mod distort;
+pub mod liquify;
 pub mod noise;
 pub mod other;
+pub mod patchmatch;
 pub mod pixelate;
 pub mod pixelate_extra;
+pub mod puppet;
 pub mod quick;
 pub mod render;
 pub mod rng;
@@ -89,6 +93,7 @@ pub use blur::{
     box_blur, gaussian_blur, lens_blur, motion_blur, radial_blur, surface_blur, RadialBlur,
     RadialBlurKind,
 };
+pub use content_aware::{content_aware_fill, content_aware_scale, ContentAwareError, FillOptions};
 pub use displace::{displace, DisplaceFit};
 pub use distort::{
     pinch, polar_coordinates, ripple, shear, spherize, twirl, wave, zigzag, PolarMode, Wave,

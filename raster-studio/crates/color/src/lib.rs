@@ -85,8 +85,10 @@
 #![forbid(unsafe_code)]
 
 pub mod alpha;
+pub mod cmyk;
 pub mod icc;
 pub mod model;
+pub mod quantize;
 pub mod space;
 pub mod transfer;
 

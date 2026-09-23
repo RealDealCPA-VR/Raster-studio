@@ -557,6 +557,8 @@ fn layers_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, fill_bottom: Opti
         let mut hovered: Option<DropPosition> = None;
         for row in &rows {
             let response = layer_row(w, ui, row, &rows);
+            // W7-E: a smart object's filter stack hangs under its row.
+            smart_filter_rows(w, ui, doc, row);
             if let Some(position) = row_drag_position(w, ui, doc, row, &response) {
                 hovered = Some(position);
             }
@@ -898,6 +900,119 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
         });
     }
     response
+}
+
+/// W7-E: the id of one smart-filter sub-row's part — `"eye"`, `"name"` or
+/// `"delete"` — for filter `index` (bottom of the stack = 0) of `layer`.
+pub(crate) fn smart_filter_part_id(layer: LayerId, index: usize, part: &str) -> egui::Id {
+    egui::Id::new(("raster-smart-filter", layer, index, part))
+}
+
+/// W7-E: the "Smart Filters" block under a smart object's row — a header,
+/// then one row per filter with the most recently applied on top (Photopea's
+/// order). Each row's eye switches the filter off or on, its trash button
+/// deletes it, and a double-click on its name re-opens its dialog at the
+/// parameters it stored. Every change is one [`Command::SetLayerKind`]
+/// carrying the object with its new stack, so each is one undo step and the
+/// source pixels are never touched.
+fn smart_filter_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document, row: &LayerRow) {
+    let Some(layer_model::LayerKind::SmartObject(so)) = doc.layers.get(row.id).map(|l| &l.kind)
+    else {
+        return;
+    };
+    if so.filters.is_empty() {
+        return;
+    }
+    let t = current_tokens(ui);
+    let height = t.metrics.list_row_height;
+    let indent = (row.depth as f32 + 1.0) * Space::Medium.pt() + t.metrics.min_hit_target;
+    let emit_stack = |w: &mut Workspace, filters: Vec<layer_model::SmartFilter>| {
+        let mut next = so.clone();
+        next.filters = filters;
+        w.emit(Intent::Document(Command::SetLayerKind {
+            layer_id: row.id,
+            kind: Box::new(layer_model::LayerKind::SmartObject(next)),
+        }));
+    };
+    ui.allocate_ui_with_layout(
+        Vec2::new(ui.available_width(), height),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            ui.add_space(indent);
+            ui.label(hint(ui, crate::strings::tr("ui.docks.smart.filters")));
+        },
+    );
+    for index in (0..so.filters.len()).rev() {
+        let filter = &so.filters[index];
+        let id = crate::menu::FilterId::ALL
+            .iter()
+            .copied()
+            .find(|id| format!("{id:?}") == filter.filter);
+        let name = id
+            .and_then(crate::dialogs::filter_by_id)
+            .map(|spec| spec.name().to_string())
+            .unwrap_or_else(|| filter.filter.clone());
+        ui.allocate_ui_with_layout(
+            Vec2::new(ui.available_width(), height),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.add_space(indent);
+                if icon_toggle_id(
+                    ui,
+                    "eye",
+                    filter.enabled,
+                    crate::strings::tr("ui.docks.smart.filter.eye"),
+                    Some(smart_filter_part_id(row.id, index, "eye")),
+                )
+                .clicked()
+                {
+                    let mut stack = so.filters.clone();
+                    stack[index].enabled = !filter.enabled;
+                    emit_stack(w, stack);
+                }
+                let label = ui.label(body(ui, name));
+                let label = ui.interact(
+                    label.rect,
+                    smart_filter_part_id(row.id, index, "name"),
+                    Sense::click(),
+                );
+                if label.double_clicked() {
+                    if let Some(id) = id {
+                        // The request tells the application which entry of
+                        // which object the dialog edits. The Filter intent is
+                        // routed in this frame, before the selection lands,
+                        // so the application opens and confirms the dialog
+                        // against the request's layer, not the active one.
+                        compositor::smart::request_edit(compositor::smart::EditRequest {
+                            layer: row.id,
+                            index,
+                        });
+                        w.emit(Intent::SelectLayers {
+                            layers: vec![row.id],
+                            active: Some(row.id),
+                        });
+                        w.emit(Intent::Action(crate::menu::MenuAction::Filter(id)));
+                    }
+                }
+                label.on_hover_text(crate::strings::tr("ui.docks.smart.filter.edit"));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if icon_action_id(
+                        ui,
+                        "trash",
+                        crate::strings::tr("ui.docks.smart.filter.delete"),
+                        ActionState::Idle,
+                        Some(smart_filter_part_id(row.id, index, "delete")),
+                    )
+                    .clicked()
+                    {
+                        let mut stack = so.filters.clone();
+                        stack.remove(index);
+                        emit_stack(w, stack);
+                    }
+                });
+            },
+        );
+    }
 }
 
 /// W3-J: the inline rename, drawn where the name label was.
@@ -2728,6 +2843,17 @@ fn color_body(w: &mut Workspace, ui: &mut Ui) {
             changed |= design::slider_row(ui, "a", &mut lab[1], -128.0..=127.0).changed();
             changed |= design::slider_row(ui, "b", &mut lab[2], -128.0..=127.0).changed();
             if changed && w.color.set_lab(lab) {
+                emit_color(w);
+            }
+        }
+        // W7-D: ink percentages through `color::cmyk`'s documented model.
+        ColorNotation::Cmyk => {
+            let mut ink = w.color.cmyk_percent().map(f32::from);
+            let mut changed = false;
+            for (i, label) in ["C", "M", "Y", "K"].into_iter().enumerate() {
+                changed |= design::slider_row(ui, label, &mut ink[i], 0.0..=100.0).changed();
+            }
+            if changed && w.color.set_cmyk_percent(ink) {
                 emit_color(w);
             }
         }
@@ -5301,6 +5427,72 @@ mod tests {
         assert_eq!(value_in("Alpha"), "100");
     }
 
+    /// W7-D: the Color panel's CMYK notation draws C, M, Y and K fields
+    /// holding the ink model's percentages, and the Info panel of a CMYK or
+    /// Lab document draws that mode's row.
+    #[test]
+    fn the_color_panel_reads_cmyk_and_info_reads_the_documents_mode() {
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut w = Workspace::new();
+        w.color
+            .set_well(ColorWell::Foreground, [1.0, 0.0, 0.0, 1.0]);
+        w.color.notation = ColorNotation::Cmyk;
+        let mut body = |w: &mut Workspace, ui: &mut Ui| color_body(w, ui);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let out = frame_of(&ctx, &mut w, screen(), &mut body);
+        let text_in = |out: &egui::FullOutput, rect: egui::Rect| -> Option<String> {
+            out.shapes.iter().find_map(|c| match &c.shape {
+                egui::Shape::Text(t) if rect.contains(t.pos + t.galley.size() * 0.5) => {
+                    Some(t.galley.text().to_string())
+                }
+                _ => None,
+            })
+        };
+        let inks = color::cmyk::rgb8_to_cmyk([255, 0, 0]).percentages();
+        for (label, ink) in ["C", "M", "Y", "K"].into_iter().zip(inks) {
+            let field = ctx
+                .read_response(egui::Id::new(("raster-numeric-field", label)))
+                .unwrap_or_else(|| panic!("no {label} field"))
+                .rect;
+            assert_eq!(
+                text_in(&out, field).as_deref(),
+                Some(ink.to_string().as_str()),
+                "{label}"
+            );
+        }
+
+        let mut doc = Document::new(64, 64, "cmyk");
+        doc.meta.color_mode = editor_core::color_mode::mode::CMYK;
+        let history = History::default();
+        let mut w = Workspace::new();
+        w.info.sampled = Some([1.0, 0.0, 0.0, 1.0]);
+        let mut body =
+            |w: &mut Workspace, ui: &mut Ui| body_of(w, ui, &doc, &history, PanelId::Info, None);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let out = frame_of(&ctx, &mut w, screen(), &mut body);
+        let row = ctx
+            .read_response(crate::dock::ids::info_value("CMYK"))
+            .expect("a CMYK document's Info panel draws a CMYK row")
+            .rect;
+        let [c, m, y, k] = inks;
+        let expected = format!("{c}%, {m}%, {y}%, {k}%");
+        let drawn: Vec<String> = out
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) if row.contains(t.pos + t.galley.size() * 0.5) => {
+                    Some(t.galley.text().to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(drawn.contains(&expected), "the CMYK row drew {drawn:?}");
+        assert!(ctx
+            .read_response(crate::dock::ids::info_value("Lab"))
+            .is_none());
+    }
+
     /// W5-E: with no document open the History panel lists nothing — no
     /// "Open" row, no snapshot button — and Properties offers no Layer|Mask
     /// choice over a layer that does not exist.
@@ -5735,5 +5927,138 @@ mod tests {
             let _ = frame(&mut w, &doc);
         }
         assert_eq!(reads(), (2, 4), "a new family is read once, then served");
+    }
+
+    /// W7-E: a smart object's filter stack is drawn under its row in the
+    /// headless Layers panel — the header and one row per filter, top row the
+    /// last applied — and each control emits the one command (or the dialog
+    /// request) it promises.
+    #[test]
+    fn a_smart_objects_filters_are_rows_under_it_with_eye_delete_and_re_edit() {
+        use layer_model::{SmartFilter, SmartParam};
+        use std::collections::BTreeMap;
+        let mut doc = Document::new(64, 64, "Smart");
+        let mut radius = BTreeMap::new();
+        radius.insert("radius".to_string(), SmartParam::Float(3.0));
+        let stack = vec![
+            SmartFilter::new("GaussianBlur", radius),
+            SmartFilter::new("Median", BTreeMap::new()),
+        ];
+        let id = doc
+            .layers
+            .push_root(layer_model::Layer::with_kind(
+                "Smart",
+                layer_model::LayerKind::SmartObject(layer_model::SmartObjectLayer {
+                    asset: layer_model::AssetId::new(),
+                    linked: false,
+                    filters: stack.clone(),
+                }),
+            ))
+            .unwrap();
+        let ctx = egui::Context::default();
+        let mut w = Workspace::new();
+        let mut body = |w: &mut Workspace, ui: &mut Ui| layers_body(w, ui, &doc, None);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let out = frame_of(&ctx, &mut w, screen(), &mut body);
+        let texts = painted_texts(&out);
+        for want in ["Smart Filters", "Gaussian Blur", "Median"] {
+            assert!(
+                texts.iter().any(|t| t == want),
+                "{want:?} not drawn: {texts:?}"
+            );
+        }
+        let rect = |index: usize, part: &str| {
+            ctx.read_response(smart_filter_part_id(id, index, part))
+                .unwrap_or_else(|| panic!("{part} of filter {index} was not drawn"))
+                .rect
+        };
+        let layer_row = ctx
+            .read_response(super::super::ids::layer_row(id))
+            .unwrap()
+            .rect;
+        // Under the layer's row, most recently applied (Median, index 1) on
+        // top, each row's eye left of its name left of its delete button.
+        assert!(rect(1, "eye").top() >= layer_row.bottom());
+        assert!(rect(0, "eye").top() >= rect(1, "eye").bottom());
+        for i in 0..2 {
+            assert!(rect(i, "eye").right() <= rect(i, "name").left());
+            assert!(rect(i, "name").right() <= rect(i, "delete").left());
+        }
+        let _ = w.drain_intents();
+
+        let set_kind = |intents: Vec<Intent>| -> Vec<SmartFilter> {
+            match intents.as_slice() {
+                [Intent::Document(Command::SetLayerKind { layer_id, kind })] => {
+                    assert_eq!(*layer_id, id);
+                    match kind.as_ref() {
+                        layer_model::LayerKind::SmartObject(so) => so.filters.clone(),
+                        other => panic!("not a smart object: {other:?}"),
+                    }
+                }
+                other => panic!("expected one SetLayerKind, got {other:?}"),
+            }
+        };
+
+        // The eye: the same stack with that filter switched off.
+        click_id(&ctx, &mut w, smart_filter_part_id(id, 0, "eye"), &mut body);
+        let mut off = stack.clone();
+        off[0].enabled = false;
+        assert_eq!(set_kind(w.drain_intents()), off);
+
+        // The trash: the stack without that filter.
+        click_id(
+            &ctx,
+            &mut w,
+            smart_filter_part_id(id, 1, "delete"),
+            &mut body,
+        );
+        assert_eq!(set_kind(w.drain_intents()), vec![stack[0].clone()]);
+
+        // A double-click on the name: select the object, open the filter's
+        // dialog, and leave the note saying which entry it edits.
+        let name = rect(0, "name").center();
+        let press = |pressed: bool| egui::Event::PointerButton {
+            pos: name,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let _ = compositor::smart::take_edit_request();
+        // Two clicks 50 ms apart, one event per frame, as a real pointer
+        // delivers them.
+        let mut intents = Vec::new();
+        for (frame, events) in [
+            vec![egui::Event::PointerMoved(name)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![press(true)],
+            vec![press(false)],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut input = screen();
+            input.time = Some(10.0 + frame as f64 * 0.05);
+            input.events = events;
+            let _ = frame_of(&ctx, &mut w, input, &mut body);
+            intents.extend(w.drain_intents());
+        }
+        assert!(
+            intents.contains(&Intent::Action(crate::menu::MenuAction::Filter(
+                crate::menu::FilterId::GaussianBlur
+            ))),
+            "{intents:?}"
+        );
+        assert!(intents.contains(&Intent::SelectLayers {
+            layers: vec![id],
+            active: Some(id),
+        }));
+        assert_eq!(
+            compositor::smart::take_edit_request(),
+            Some(compositor::smart::EditRequest {
+                layer: id,
+                index: 0
+            })
+        );
     }
 }

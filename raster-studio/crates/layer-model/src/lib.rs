@@ -33,20 +33,24 @@
 //! [`Layer::effective_fill_opacity`] apply it for the two fields the
 //! compositor multiplies on every pixel.
 
+pub mod artboard;
 pub mod blend;
 pub mod effects;
 pub mod ids;
 pub mod layer;
 pub mod mask;
+pub mod smart_filter;
 pub mod text;
 pub mod tree;
 
+pub use artboard::Artboard;
 pub use blend::{dissolve_keeps_source, BlendMode};
 pub use effects::{
     BevelDirection, BevelEffect, BevelStyle, BevelTechnique, ColorOverlayEffect, FillStyle,
     GlowEffect, GlowSource, GlowTechnique, Gradient, GradientOverlayEffect, GradientStop,
-    GradientStyle, LayerEffects, PatternFill, PatternOverlayEffect, Rgba, SatinEffect,
-    ShadowEffect, StrokeEffect, StrokePosition,
+    GradientStyle, LayerEffects, PatternFill, PatternOverlayEffect, PatternTile, PatternTileError,
+    Rgba, SatinEffect, ShadowEffect, StrokeEffect, StrokePosition, MAX_PATTERN_EDGE,
+    MAX_PATTERN_PIXELS,
 };
 pub use ids::{AssetId, LayerId, MaskId};
 pub use layer::{
@@ -55,4 +59,5 @@ pub use layer::{
     ShapeFillRule, ShapeJoin, ShapeLayer, ShapeStroke, SmartObjectLayer, TextLayer,
 };
 pub use mask::{LayerMask, MaskError, MaskKind};
+pub use smart_filter::{stack_is_active, SmartFilter, SmartParam};
 pub use tree::{ClippingGroup, DetachedSubtree, LayerTree, TreeError};

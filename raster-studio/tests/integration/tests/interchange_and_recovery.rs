@@ -1827,6 +1827,7 @@ fn the_full_scene_round_trips_through_the_native_package_field_by_field() {
             layer_model::LayerKind::SmartObject(layer_model::SmartObjectLayer {
                 asset,
                 linked: name.starts_with("Linked"),
+                filters: Vec::new(),
             }),
         ));
         let rgba = solid.repeat(64);
@@ -2025,6 +2026,7 @@ fn undo_redo_walks_the_whole_workflow_across_save_markers_and_recovery() {
         layer_model::LayerKind::SmartObject(layer_model::SmartObjectLayer {
             asset,
             linked: false,
+            filters: Vec::new(),
         }),
     )))
     .unwrap();

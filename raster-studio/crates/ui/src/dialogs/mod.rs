@@ -82,10 +82,13 @@ pub mod filter_gallery;
 pub mod gradient_editor;
 pub mod ids;
 pub mod image_size;
+pub mod indexed_color;
 pub mod layer_style;
+pub mod liquify;
 pub mod new_document;
 pub mod new_guide;
 pub mod preferences;
+pub mod puppet_warp;
 pub mod refine_mask;
 pub mod rename_layer;
 pub mod selection_modify;
@@ -118,7 +121,9 @@ pub use filter_dialog::{
 pub use filter_gallery::FilterGalleryDialog;
 pub use gradient_editor::{GradientEditorDialog, StopKind, StopRef};
 pub use image_size::{ImageSizeDialog, ImageSizeSpec};
+pub use indexed_color::{IndexedColorDialog, IndexedSpec};
 pub use layer_style::{shadow_offset, EffectKind, LayerStyleDialog};
+pub use liquify::{LiquifyDialog, LiquifySpec};
 pub use new_document::{
     BackgroundContents, ColorMode, DocumentPreset, NewDocumentDialog, NewDocumentSpec, PresetGroup,
 };
@@ -127,6 +132,7 @@ pub use preferences::{
     GeneralPrefs, HistoryPrefs, InterfacePrefs, Keymap, KeymapError, PreferencesDialog,
     PrefsSection, Shortcut, ThemeChoice, UiPreferences,
 };
+pub use puppet_warp::{PuppetWarpDialog, PuppetWarpSpec};
 pub use rename_layer::RenameLayerDialog;
 pub use selection_modify::{ModifySpec, SelectionModifyDialog};
 pub use selection_name::{
@@ -314,6 +320,30 @@ pub(crate) mod tests_support {
                     name: lut.name().to_string(),
                     size: lut.size() as u32,
                     table: lut.table().to_vec(),
+                }
+            }
+            // W7-G.
+            I::HdrToning => K::HdrToning {
+                radius: 4.0,
+                strength: 2.0,
+                gamma: 1.6,
+                exposure: 0.5,
+                detail: 1.0,
+                vibrance: 0.3,
+                saturation: 0.0,
+            },
+            // Neutralize alone is a change with no source picked.
+            I::MatchColor => {
+                let n = adjustments::LabStats::NEUTRAL;
+                K::MatchColor {
+                    source_mean: [60.0, 20.0, -20.0],
+                    source_std: [30.0, 10.0, 10.0],
+                    target_mean: n.mean,
+                    target_std: n.std,
+                    luminance: 1.2,
+                    color_intensity: 1.0,
+                    fade: 0.0,
+                    neutralize: true,
                 }
             }
         }

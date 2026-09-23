@@ -592,6 +592,13 @@ pub enum CommandError {
     /// hold (only 8 and 16 bits per channel exist).
     #[error("{0} bits per channel is not a depth this build stores")]
     UnsupportedBitDepth(u8),
+    /// A [`Command::SetMetaColorMode`] (or a conversion) named a colour mode
+    /// this build does not know (see [`crate::color_mode::mode`]).
+    #[error("{0} is not a colour mode this build knows")]
+    UnsupportedColorMode(u8),
+    /// A colour-mode conversion into the mode the document already has.
+    #[error("the document is already in that colour mode")]
+    ColorModeUnchanged(u8),
     /// A [`Command::SetLayerKind`] carried a payload that does not satisfy
     /// its own schema — a text layer with non-finite numbers, a span outside
     /// the text, or a range cutting a code point (card 017). Refused before
@@ -760,6 +767,10 @@ impl Command {
             }
 
             Command::SetMetaColorMode { from, to } => {
+                // Journals are untrusted input: only the known modes.
+                if !crate::color_mode::is_known_color_mode(*to) {
+                    return Err(CommandError::UnsupportedColorMode(*to));
+                }
                 doc.meta.color_mode = *to;
                 Ok(Command::SetMetaColorMode {
                     from: *to,

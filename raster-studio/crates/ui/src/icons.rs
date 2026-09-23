@@ -768,6 +768,112 @@ const ANCHOR_CONVERT: &[Prim] = &[
     Prim::Fill(&[[0.44, 0.12], [0.56, 0.12], [0.56, 0.24], [0.44, 0.24]]),
 ];
 
+/// W7-F: Perspective Crop — the crop marks around a trapezoid.
+const CROP_PERSPECTIVE: &[Prim] = &[
+    Prim::Poly(&[[0.28, 0.08], [0.28, 0.72], [0.92, 0.72]], false),
+    Prim::Poly(&[[0.08, 0.28], [0.72, 0.28], [0.72, 0.92]], false),
+    Prim::Poly(
+        &[[0.38, 0.38], [0.62, 0.38], [0.66, 0.62], [0.34, 0.62]],
+        true,
+    ),
+];
+
+/// W7-F: Vertical Type — the capital I laid on its side over a down arrow.
+const TYPE_VERTICAL: &[Prim] = &[
+    Prim::Line([0.20, 0.26], [0.20, 0.74]),
+    Prim::Line([0.20, 0.50], [0.62, 0.50]),
+    Prim::Line([0.62, 0.32], [0.62, 0.68]),
+    Prim::Line([0.82, 0.14], [0.82, 0.86]),
+    Prim::Poly(&[[0.72, 0.74], [0.82, 0.86], [0.92, 0.74]], false),
+];
+
+/// W7-F: Horizontal Type Mask — the Type I in a dashed selection box.
+const TYPE_MASK: &[Prim] = &[
+    Prim::Line([0.32, 0.28], [0.68, 0.28]),
+    Prim::Line([0.50, 0.28], [0.50, 0.72]),
+    Prim::Line([0.38, 0.72], [0.62, 0.72]),
+    Prim::Line([0.08, 0.08], [0.24, 0.08]),
+    Prim::Line([0.76, 0.08], [0.92, 0.08]),
+    Prim::Line([0.08, 0.92], [0.24, 0.92]),
+    Prim::Line([0.76, 0.92], [0.92, 0.92]),
+    Prim::Line([0.08, 0.08], [0.08, 0.24]),
+    Prim::Line([0.92, 0.76], [0.92, 0.92]),
+];
+
+/// W7-F: Vertical Type Mask — the vertical I in a dashed selection box.
+const TYPE_MASK_VERTICAL: &[Prim] = &[
+    Prim::Line([0.28, 0.32], [0.28, 0.68]),
+    Prim::Line([0.28, 0.50], [0.72, 0.50]),
+    Prim::Line([0.72, 0.38], [0.72, 0.62]),
+    Prim::Line([0.08, 0.08], [0.24, 0.08]),
+    Prim::Line([0.76, 0.08], [0.92, 0.08]),
+    Prim::Line([0.08, 0.92], [0.24, 0.92]),
+    Prim::Line([0.76, 0.92], [0.92, 0.92]),
+    Prim::Line([0.92, 0.08], [0.92, 0.24]),
+    Prim::Line([0.08, 0.76], [0.08, 0.92]),
+];
+
+/// W7-F: Mixer Brush — the brush over two mixing drops.
+const MIXER_BRUSH: &[Prim] = &[
+    Prim::Poly(
+        &[
+            [0.30, 0.70],
+            [0.34, 0.52],
+            [0.66, 0.20],
+            [0.80, 0.34],
+            [0.48, 0.66],
+        ],
+        true,
+    ),
+    Prim::Line([0.66, 0.20], [0.86, 0.10]),
+    Prim::Dot([0.16, 0.86], 0.08),
+    Prim::Circle([0.40, 0.88], 0.08),
+];
+
+/// W7-F: Artboard — a page with a label tab above its corner.
+const ARTBOARD: &[Prim] = &[
+    Prim::Poly(
+        &[[0.14, 0.30], [0.86, 0.30], [0.86, 0.90], [0.14, 0.90]],
+        true,
+    ),
+    Prim::Fill(&[[0.14, 0.10], [0.46, 0.10], [0.46, 0.22], [0.14, 0.22]]),
+];
+
+/// W7-F: Freeform Pen — the pen nib trailing a freehand squiggle.
+const PEN_FREEFORM: &[Prim] = &[
+    Prim::Poly(
+        &[[0.40, 0.70], [0.48, 0.40], [0.72, 0.16], [0.88, 0.32]],
+        true,
+    ),
+    Prim::Line([0.40, 0.70], [0.58, 0.48]),
+    Prim::Poly(
+        &[[0.40, 0.70], [0.30, 0.86], [0.20, 0.74], [0.12, 0.90]],
+        false,
+    ),
+];
+
+/// W7-F: Curvature Pen — the nib over a smooth arc through three points.
+const PEN_CURVATURE: &[Prim] = &[
+    Prim::Poly(
+        &[[0.46, 0.60], [0.54, 0.32], [0.76, 0.10], [0.90, 0.24]],
+        true,
+    ),
+    Prim::Line([0.46, 0.60], [0.62, 0.40]),
+    Prim::Poly(
+        &[
+            [0.08, 0.90],
+            [0.16, 0.76],
+            [0.28, 0.70],
+            [0.40, 0.76],
+            [0.48, 0.90],
+        ],
+        false,
+    ),
+    Prim::Dot([0.08, 0.90], 0.04),
+    Prim::Dot([0.28, 0.70], 0.04),
+    Prim::Dot([0.48, 0.90], 0.04),
+];
+
 /// The drawing for a registry icon key.
 ///
 /// Total over `tools::registry` — see the module note and the gate that keeps
@@ -831,6 +937,15 @@ pub fn icon_for(key: &str) -> Icon {
         "anchor-add" => ANCHOR_ADD,
         "anchor-delete" => ANCHOR_DELETE,
         "anchor-convert" => ANCHOR_CONVERT,
+        // W7-F
+        "crop-perspective" => CROP_PERSPECTIVE,
+        "type-vertical" => TYPE_VERTICAL,
+        "type-mask" => TYPE_MASK,
+        "type-mask-vertical" => TYPE_MASK_VERTICAL,
+        "mixer-brush" => MIXER_BRUSH,
+        "artboard" => ARTBOARD,
+        "pen-freeform" => PEN_FREEFORM,
+        "pen-curvature" => PEN_CURVATURE,
         _ => return Icon::UNKNOWN,
     })
 }
@@ -1294,6 +1409,27 @@ const ADJ_REPLACE_COLOR: &[Prim] = &[
     Prim::Poly(&[[0.50, 0.44], [0.60, 0.52], [0.50, 0.60]], false),
 ];
 
+/// Three bracketed exposures, the brightest solid (W7-G).
+const ADJ_HDR_TONING: &[Prim] = &[
+    Prim::Poly(
+        &[[0.10, 0.38], [0.52, 0.38], [0.52, 0.86], [0.10, 0.86]],
+        true,
+    ),
+    Prim::Poly(
+        &[[0.29, 0.26], [0.71, 0.26], [0.71, 0.74], [0.29, 0.74]],
+        true,
+    ),
+    Prim::Fill(&[[0.48, 0.14], [0.90, 0.14], [0.90, 0.62], [0.48, 0.62]]),
+];
+
+/// A hollow disc made equal to a solid one (W7-G).
+const ADJ_MATCH_COLOR: &[Prim] = &[
+    Prim::Circle([0.24, 0.5], 0.16),
+    Prim::Dot([0.76, 0.5], 0.16),
+    Prim::Line([0.44, 0.43], [0.56, 0.43]),
+    Prim::Line([0.44, 0.57], [0.56, 0.57]),
+];
+
 /// A cube: the 3D table.
 const ADJ_COLOR_LOOKUP: &[Prim] = &[
     Prim::Poly(
@@ -1517,6 +1653,8 @@ pub fn ui_icon(key: &str) -> Icon {
         "adj-shadows-highlights" => ADJ_SHADOWS_HIGHLIGHTS,
         "adj-replace-color" => ADJ_REPLACE_COLOR,
         "adj-color-lookup" => ADJ_COLOR_LOOKUP,
+        "adj-hdr-toning" => ADJ_HDR_TONING,
+        "adj-match-color" => ADJ_MATCH_COLOR,
         // history step kinds
         "step-open" => STEP_OPEN,
         "step-layer-added" => STEP_LAYER_ADDED,
@@ -1807,7 +1945,9 @@ mod tests {
             | AdjustmentId::Equalize
             | AdjustmentId::ShadowsHighlights
             | AdjustmentId::ReplaceColor
-            | AdjustmentId::ColorLookup => {}
+            | AdjustmentId::ColorLookup
+            | AdjustmentId::HdrToning
+            | AdjustmentId::MatchColor => {}
         }
         match StepKind::Open {
             StepKind::Open
@@ -1840,7 +1980,7 @@ mod tests {
 
         // One per arm above. If the compiler sent you here, these are what tell
         // you whether the matching `ALL` was extended as well.
-        assert_eq!(AdjustmentId::ALL.len(), 20, "extend the match above too");
+        assert_eq!(AdjustmentId::ALL.len(), 22, "extend the match above too");
         assert_eq!(StepKind::ALL.len(), 11, "extend the match above too");
         assert_eq!(LayerClass::ALL.len(), 7, "extend the match above too");
         assert_eq!(LockToggle::ALL.len(), 4, "extend the match above too");

@@ -296,6 +296,9 @@ pub struct ExportAsDialog {
     /// change rather than once per row per frame. Invalidated wherever
     /// `cached_for` is.
     measured: RefCell<Vec<(ExportFormat, Option<u64>)>>,
+    /// W7-D: the exported document's colour mode
+    /// (`editor_core::DocumentMeta::color_mode`), for [`Self::ink_note`].
+    color_mode: u8,
 }
 
 impl std::fmt::Debug for ExportAsDialog {
@@ -342,7 +345,34 @@ impl ExportAsDialog {
             cached_for: None,
             cached: None,
             measured: RefCell::new(Vec::new()),
+            color_mode: 0,
         }
+    }
+
+    /// W7-D: the colour mode of the document being exported, so the dialog
+    /// can say how the selected format writes it ([`Self::ink_note`]).
+    pub fn set_color_mode(&mut self, mode: u8) {
+        self.color_mode = mode;
+    }
+
+    /// W7-D: how the selected row's format writes a non-RGB document, or
+    /// `None` for an RGB (or Grayscale) one. A CMYK document goes out as a
+    /// CMYK JPEG/TIFF and an Indexed one as a palette PNG/GIF; every other
+    /// pairing — and every Lab document, since no encoder here writes Lab —
+    /// is converted back to RGB, and the dialog says so before the click.
+    pub fn ink_note(&self) -> Option<&'static str> {
+        use editor_core::color_mode::mode;
+        let ink = raster::export::ExportInk::for_color_mode(self.color_mode);
+        let carried = ink.carried_by(self.format());
+        let key = match self.color_mode {
+            mode::LAB => "ui.export_as.lab.as.rgb",
+            mode::CMYK if carried => "ui.export_as.cmyk.written",
+            mode::CMYK => "ui.export_as.cmyk.as.rgb",
+            mode::INDEXED if carried => "ui.export_as.indexed.written",
+            mode::INDEXED => "ui.export_as.indexed.as.rgb",
+            _ => return None,
+        };
+        Some(crate::strings::tr(key))
     }
 
     /// The export rows, including the disabled ones.
@@ -670,6 +700,9 @@ impl ExportAsDialog {
             ui,
             format!("Total: {}", format_bytes(self.total_estimated_bytes())),
         );
+        if let Some(note) = self.ink_note() {
+            caption(ui, note);
+        }
         if let Some(reason) = self.blocked_reason() {
             warning(ui, reason);
         }
@@ -1217,6 +1250,59 @@ mod tests {
             super::super::chrome::resolve(&dialog, DialogKeys::CANCEL),
             DialogOutcome::Cancelled
         );
+    }
+
+    #[test]
+    fn the_dialog_says_how_a_non_rgb_document_is_written_and_draws_it() {
+        use editor_core::color_mode::mode;
+        let mut dialog = dialog();
+        assert_eq!(dialog.ink_note(), None, "an RGB document needs no note");
+        let cases = [
+            (mode::LAB, ExportFormat::Tiff, "ui.export_as.lab.as.rgb"),
+            (
+                mode::CMYK,
+                ExportFormat::Jpeg(90),
+                "ui.export_as.cmyk.written",
+            ),
+            (mode::CMYK, ExportFormat::Tiff, "ui.export_as.cmyk.written"),
+            (mode::CMYK, ExportFormat::Png, "ui.export_as.cmyk.as.rgb"),
+            (
+                mode::INDEXED,
+                ExportFormat::Png,
+                "ui.export_as.indexed.written",
+            ),
+            (
+                mode::INDEXED,
+                ExportFormat::Gif,
+                "ui.export_as.indexed.written",
+            ),
+            (
+                mode::INDEXED,
+                ExportFormat::Jpeg(90),
+                "ui.export_as.indexed.as.rgb",
+            ),
+        ];
+        for (mode, format, key) in cases {
+            dialog.set_color_mode(mode);
+            dialog.set_format(format);
+            let note = crate::strings::tr(key);
+            assert!(!note.is_empty(), "{key} has no catalogue row");
+            assert_eq!(dialog.ink_note(), Some(note), "{mode} {format:?}");
+            // Drawn, not only computed.
+            let ctx = Context::default();
+            design::apply_theme(&ctx, design::Theme::Dark);
+            let mut drawn = false;
+            for _ in 0..3 {
+                let out = ctx.run(egui::RawInput::default(), |ctx| {
+                    let _ = dialog.show(ctx);
+                });
+                drawn = out.shapes.iter().any(|c| match &c.shape {
+                    egui::Shape::Text(t) => t.galley.text().contains(note),
+                    _ => false,
+                });
+            }
+            assert!(drawn, "{key} was never drawn");
+        }
     }
 
     #[test]

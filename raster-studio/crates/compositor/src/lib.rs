@@ -62,15 +62,16 @@
 //! Honest gaps, each of which changes what a document looks like and none of
 //! which is silently approximated:
 //!
-//! * **A pattern fill** ([`layer_model::PatternFill`]) names an `AssetId`, and
-//!   this crate has no asset store to resolve one against, so a pattern overlay
-//!   — and a glow or stroke filled with a pattern — draws nothing. Solid and
-//!   gradient fills draw. See the [`effects`] module docs for the rest of the
+//! * **A pattern fill** ([`layer_model::PatternFill`]) draws from the tile it
+//!   carries (W7-B); one that names only an `AssetId` and carries no pixels
+//!   draws nothing. See the [`effects`] module docs for the rest of the
 //!   layer-style gaps: contours, glow jitter, stroke overprint, the three bevel
 //!   techniques, and the clamp on how far an effect may reach.
-//! * **Smart-object layers** have no rasterizer here, so they contribute
-//!   nothing and cannot serve as a clipping base. Text and shape layers do
-//!   render — see [`text`] and [`shape`] for the limits of each.
+//! * **Smart-object layers** draw their stored source tiles, run through
+//!   their smart-filter stack when it has an active filter — see [`smart`],
+//!   including why that needs a filter runner the application installs.
+//!   Text and shape layers render too — see [`text`] and [`shape`] for the
+//!   limits of each.
 //! * **A vector layer mask** ([`layer_model::MaskKind::Vector`]) has no
 //!   rasterizer here either. Reading its (non-existent) coverage tiles would
 //!   report zero everywhere and hide the layer completely, so a vector mask
@@ -111,9 +112,12 @@ pub mod composite;
 pub mod effects;
 pub mod error;
 pub mod shape;
+pub mod smart;
 pub mod source;
 pub mod text;
 
+#[cfg(test)]
+mod pattern_tests;
 #[cfg(test)]
 mod testkit;
 #[cfg(test)]

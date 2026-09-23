@@ -135,6 +135,8 @@ pub fn adjustment_id_of(kind: &AdjustmentKind) -> Option<AdjustmentId> {
         AdjustmentKind::ShadowsHighlights { .. } => AdjustmentId::ShadowsHighlights,
         AdjustmentKind::ReplaceColor { .. } => AdjustmentId::ReplaceColor,
         AdjustmentKind::ColorLookup { .. } => AdjustmentId::ColorLookup,
+        AdjustmentKind::HdrToning { .. } => AdjustmentId::HdrToning,
+        AdjustmentKind::MatchColor { .. } => AdjustmentId::MatchColor,
         AdjustmentKind::Auto { .. } => return None,
     })
 }
@@ -261,6 +263,8 @@ impl AdjustmentsPanel {
             AdjustmentId::ShadowsHighlights => "adj-shadows-highlights",
             AdjustmentId::ReplaceColor => "adj-replace-color",
             AdjustmentId::ColorLookup => "adj-color-lookup",
+            AdjustmentId::HdrToning => "adj-hdr-toning",
+            AdjustmentId::MatchColor => "adj-match-color",
         }
     }
 }
@@ -1286,6 +1290,7 @@ mod tests {
         let (doc, id) = doc_with(LayerKind::SmartObject(layer_model::SmartObjectLayer {
             asset: layer_model::AssetId::new(),
             linked: false,
+            filters: Vec::new(),
         }));
         let s = PropertiesSubject::resolve(&doc, Some(id), PropertyFocus::Layer);
         assert_eq!(s, PropertiesSubject::SmartObject(id));
@@ -1685,6 +1690,7 @@ mod tests {
         let (mut doc, id) = doc_with(LayerKind::SmartObject(layer_model::SmartObjectLayer {
             asset,
             linked: false,
+            filters: Vec::new(),
         }));
         // No asset row yet: the page still resolves, with an empty name.
         assert_eq!(

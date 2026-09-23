@@ -93,6 +93,11 @@ pub struct ParagraphStyle {
     /// W3-J: indent of every line from the end edge, in layer pixels. A
     /// boxed frame wraps inside both indents.
     pub right_indent: f32,
+    /// W7-F: vertical type — each paragraph is a column read top to bottom,
+    /// and the columns advance right to left. See [`crate::shape`]. Omitted
+    /// from the JSON while `false`, so the serialised shape is unchanged.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub vertical: bool,
 }
 
 /// How the text is placed: a single anchor, or a box that text wraps inside.
@@ -345,6 +350,7 @@ fn paragraph_from_persisted(p: &layer_model::text::Paragraph) -> ParagraphStyle 
         space_after: p.space_after,
         left_indent: p.left_indent,
         right_indent: p.right_indent,
+        vertical: p.vertical,
     }
 }
 
@@ -461,6 +467,7 @@ impl From<&TextRun> for layer_model::TextLayer {
                 space_after: run.paragraph.space_after,
                 left_indent: run.paragraph.left_indent,
                 right_indent: run.paragraph.right_indent,
+                vertical: run.paragraph.vertical,
             },
             frame: match run.frame {
                 TextFrame::Point => layer_model::text::Frame::Point,

@@ -3453,6 +3453,7 @@ mod tests {
                 LayerKind::SmartObject(layer_model::SmartObjectLayer {
                     asset,
                     linked: false,
+                    filters: Vec::new(),
                 }),
             ))
             .unwrap();

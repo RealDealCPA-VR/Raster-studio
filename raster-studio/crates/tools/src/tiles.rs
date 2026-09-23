@@ -43,6 +43,35 @@ pub trait TileAccess {
         let hash = self.tile_hash(key, coord)?;
         self.bytes(hash)
     }
+
+    /// The bytes behind a hash exactly as stored, at the tile's own depth.
+    ///
+    /// W7-C: [`TileAccess::bytes`] may hand a tool an RGBA16 tile rounded to
+    /// RGBA8 (an application whose tools read 8 bits does that); this is the
+    /// unrounded read for the one plane that works at either depth,
+    /// [`crate::patch::ColorPatch::load_native`]. The default is `bytes`,
+    /// which is right for any store that never rounds.
+    fn native_bytes(&self, hash: TileHash) -> Option<&[u8]> {
+        self.bytes(hash)
+    }
+
+    /// Whether the document these tiles belong to works at 16 bits per
+    /// channel, whatever depth its tiles happen to be stored at.
+    ///
+    /// W7-C round 3: an opened 16-bit PNG or TIFF is a 16-bit document whose
+    /// tiles arrive RGBA8, so the depth cannot be inferred from tile lengths.
+    /// [`crate::patch::ColorPatch::load_native`] reads this and, when it is
+    /// `true`, works (and commits) at 16 bits even over RGBA8 tiles. The
+    /// default is `false`: a store that says nothing keeps today's rule.
+    fn sixteen_bit_document(&self) -> bool {
+        false
+    }
+
+    /// [`TileAccess::native_bytes`] at `coord`, resolving the reference first.
+    fn native_tile_bytes(&self, key: PixelKey, coord: TileCoord) -> Option<&[u8]> {
+        let hash = self.tile_hash(key, coord)?;
+        self.native_bytes(hash)
+    }
 }
 
 /// An in-memory [`TileAccess`]: a mirror of the document's tile references plus

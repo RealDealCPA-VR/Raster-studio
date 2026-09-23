@@ -65,6 +65,9 @@ pub enum AdjustmentId {
     ShadowsHighlights,
     ReplaceColor,
     ColorLookup,
+    // W7-G: the two Photopea has that were still missing.
+    HdrToning,
+    MatchColor,
 }
 
 impl AdjustmentId {
@@ -87,14 +90,17 @@ impl AdjustmentId {
         AdjustmentId::Desaturate,
         AdjustmentId::Equalize,
         AdjustmentId::ShadowsHighlights,
+        AdjustmentId::HdrToning,
+        AdjustmentId::MatchColor,
         AdjustmentId::ReplaceColor,
         AdjustmentId::ColorLookup,
     ];
 
     /// The adjustments Layer ▸ New Adjustment Layer and the Adjustments panel
-    /// offer: every one in [`Self::ALL`] except the four Photopea keeps
-    /// destructive-only — Desaturate, Equalize, Shadows/Highlights and
-    /// Replace Color live in Image ▸ Adjustments alone.
+    /// offer: every one in [`Self::ALL`] except the six Photopea keeps
+    /// destructive-only — Desaturate, Equalize, Shadows/Highlights, HDR
+    /// Toning, Match Color and Replace Color live in Image ▸ Adjustments
+    /// alone.
     pub const LAYERS: &'static [AdjustmentId] = &[
         AdjustmentId::BrightnessContrast,
         AdjustmentId::Levels,
@@ -152,6 +158,8 @@ impl AdjustmentId {
             AdjustmentId::ShadowsHighlights => "Shadows/Highlights",
             AdjustmentId::ReplaceColor => "Replace Color",
             AdjustmentId::ColorLookup => "Color Lookup",
+            AdjustmentId::HdrToning => "HDR Toning",
+            AdjustmentId::MatchColor => "Match Color",
         }
     }
 
@@ -244,6 +252,33 @@ impl AdjustmentId {
                     name: String::new(),
                     size: lut.size() as u32,
                     table: lut.table().to_vec(),
+                }
+            }
+            // Photoshop's opening "Default" preset: edge glow radius 15 px at
+            // strength 0.52, detail 30%, gamma 1, no exposure shift.
+            AdjustmentId::HdrToning => AdjustmentKind::HdrToning {
+                radius: 15.0,
+                strength: 0.52,
+                gamma: 1.0,
+                exposure: 0.0,
+                detail: 0.3,
+                vibrance: 0.0,
+                saturation: 0.0,
+            },
+            // No source picked: the target matched to itself, the identity.
+            // The dialog measures the layer and offers the open documents
+            // and layers as sources.
+            AdjustmentId::MatchColor => {
+                let n = adjustments::LabStats::NEUTRAL;
+                AdjustmentKind::MatchColor {
+                    source_mean: n.mean,
+                    source_std: n.std,
+                    target_mean: n.mean,
+                    target_std: n.std,
+                    luminance: 1.0,
+                    color_intensity: 1.0,
+                    fade: 0.0,
+                    neutralize: false,
                 }
             }
         }
@@ -725,6 +760,63 @@ impl PurgeTarget {
     }
 }
 
+/// W7-I: a step offered under Edit ▸ Content-Aware Scale — the active layer
+/// retargeted by seam carving (`filters::content_aware_scale`) to a fixed
+/// fraction of the canvas along one axis, centred, so the low-detail areas
+/// give way and the high-contrast content keeps its size. Fixed steps stand
+/// in for Photoshop's interactive handles, which this build does not draw.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub enum ContentAwareScaleStep {
+    Width80,
+    Width90,
+    Width110,
+    Width125,
+    Height80,
+    Height90,
+    Height110,
+    Height125,
+}
+
+impl ContentAwareScaleStep {
+    pub const ALL: &'static [ContentAwareScaleStep] = &[
+        ContentAwareScaleStep::Width80,
+        ContentAwareScaleStep::Width90,
+        ContentAwareScaleStep::Width110,
+        ContentAwareScaleStep::Width125,
+        ContentAwareScaleStep::Height80,
+        ContentAwareScaleStep::Height90,
+        ContentAwareScaleStep::Height110,
+        ContentAwareScaleStep::Height125,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            ContentAwareScaleStep::Width80 => "Width to 80%",
+            ContentAwareScaleStep::Width90 => "Width to 90%",
+            ContentAwareScaleStep::Width110 => "Width to 110%",
+            ContentAwareScaleStep::Width125 => "Width to 125%",
+            ContentAwareScaleStep::Height80 => "Height to 80%",
+            ContentAwareScaleStep::Height90 => "Height to 90%",
+            ContentAwareScaleStep::Height110 => "Height to 110%",
+            ContentAwareScaleStep::Height125 => "Height to 125%",
+        }
+    }
+
+    /// `(horizontal, vertical)` scale factors, in percent.
+    pub const fn percent(self) -> (u32, u32) {
+        match self {
+            ContentAwareScaleStep::Width80 => (80, 100),
+            ContentAwareScaleStep::Width90 => (90, 100),
+            ContentAwareScaleStep::Width110 => (110, 100),
+            ContentAwareScaleStep::Width125 => (125, 100),
+            ContentAwareScaleStep::Height80 => (100, 80),
+            ContentAwareScaleStep::Height90 => (100, 90),
+            ContentAwareScaleStep::Height110 => (100, 110),
+            ContentAwareScaleStep::Height125 => (100, 125),
+        }
+    }
+}
+
 /// A transform offered under Edit ▸ Transform.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum TransformOp {
@@ -861,38 +953,45 @@ impl ColorMode {
             ColorMode::Grayscale => "Grayscale",
             ColorMode::Lab => "Lab Color",
             ColorMode::Cmyk => "CMYK Color",
-            ColorMode::Indexed => "Indexed Color",
+            ColorMode::Indexed => "Indexed Color…",
         }
     }
 
     /// Whether this build can convert a document into the mode.
     ///
-    /// Tiles are stored RGBA, so only the two modes the pixel rewrite can
-    /// produce are supported: RGB and Grayscale (Rec.601 luma / replicate).
-    /// The unsupported ones are listed and *disabled with a reason* rather
-    /// than hidden, so the menu tells the truth about what the product does
-    /// and does not do yet.
+    /// W7-D: all five. Tiles stay RGBA (Photopea's approach): the mode is a
+    /// document flag plus a constraint on the pixels — Grayscale collapses to
+    /// Rec.601 luma, CMYK clamps every colour to what `color::cmyk`'s
+    /// documented ink model can print (no ICC press profile), Indexed maps
+    /// onto a palette of 2-256 colours (`color::quantize`), and RGB and Lab
+    /// keep every 8-bit sRGB colour. Each conversion is one undo step
+    /// (`editor_core::color_mode::convert_color_mode`).
     pub const fn is_supported(self) -> bool {
-        matches!(self, ColorMode::Rgb | ColorMode::Grayscale)
+        self.unsupported_reason().is_none()
     }
 
     /// Why this build cannot convert into the mode, or `None` when it can.
-    ///
-    /// Specific per mode, because "not yet" tells the user nothing about
-    /// what is missing: each of the three needs a pixel store the RGBA tile
-    /// model does not have.
+    /// `None` for every mode since W7-D; kept so a future mode that cannot be
+    /// honoured is greyed with a reason rather than hidden.
     pub const fn unsupported_reason(self) -> Option<&'static str> {
         match self {
-            ColorMode::Rgb | ColorMode::Grayscale => None,
-            ColorMode::Lab => {
-                Some("Lab needs L*a*b* channels; this build stores every layer as RGBA tiles")
-            }
-            ColorMode::Cmyk => Some(
-                "CMYK needs four ink channels and a press profile; this build stores RGBA tiles",
-            ),
-            ColorMode::Indexed => {
-                Some("Indexed colour needs a palette and index tiles; this build stores RGBA tiles")
-            }
+            ColorMode::Rgb
+            | ColorMode::Grayscale
+            | ColorMode::Lab
+            | ColorMode::Cmyk
+            | ColorMode::Indexed => None,
+        }
+    }
+
+    /// The mode a document's `meta.color_mode` byte names (the discriminant
+    /// order); an unknown byte reads as RGB, the mode its pixels are stored in.
+    pub const fn from_meta(byte: u8) -> Self {
+        match byte {
+            1 => ColorMode::Grayscale,
+            2 => ColorMode::Lab,
+            3 => ColorMode::Cmyk,
+            4 => ColorMode::Indexed,
+            _ => ColorMode::Rgb,
         }
     }
 }
@@ -1304,7 +1403,12 @@ pub enum MenuAction {
     FillDialog,
     StrokeDialog,
     FreeTransform,
+    /// Edit ▸ Puppet Warp (W7-H): pins on a mesh over the layer's ink; the
+    /// dialog's deformation lands on the active layer as one undo step.
+    PuppetWarp,
     Transform(TransformOp),
+    /// W7-I: Edit ▸ Content-Aware Scale ▸ one fixed step.
+    ContentAwareScale(ContentAwareScaleStep),
     DefinePattern,
     DefineBrush,
     KeyboardShortcuts,
@@ -1431,11 +1535,14 @@ pub enum MenuAction {
     // ---- Filter --------------------------------------------------------
     LastFilter,
     FilterGallery,
-    /// Filter ▸ Convert for Smart Filters. Greyed out in every state with
-    /// [`SMART_FILTERS_UNSUPPORTED`]: a smart object layer
-    /// (`layer_model::SmartObjectLayer`) carries an asset id and a link flag
-    /// and nothing else, so there is no filter stack for a conversion to put
-    /// the filter in, and the compositor renders the source unfiltered.
+    /// Filter ▸ Liquify… (W7-H): brush warping through a displacement field;
+    /// the dialog's warp lands on the active layer as one undo step.
+    Liquify,
+    /// Filter ▸ Convert for Smart Filters (W7-E). Converts the active layer
+    /// to a smart object, whose `layer_model::SmartObjectLayer::filters` stack
+    /// then receives every filter applied to it instead of its pixels being
+    /// rewritten. Greyed with [`SMART_FILTERS_ALREADY`] when the active layer
+    /// already is one.
     ConvertForSmartFilters,
     Filter(FilterId),
 
@@ -1729,12 +1836,10 @@ impl MenuContext {
             active,
             guides: doc.guides.clone(),
             // The Image ▸ Mode items read the document's own mode: the current
-            // mode's item is disabled as a no-op, and the meta's u8 maps onto
-            // the ui enum's discriminants (0 = RGB, 1 = Grayscale).
-            color_mode: match doc.meta.color_mode {
-                1 => ColorMode::Grayscale,
-                _ => ColorMode::Rgb,
-            },
+            // mode's item is checked, and the meta's u8 maps onto the ui
+            // enum's discriminants (0 RGB, 1 Grayscale, 2 Lab, 3 CMYK,
+            // 4 Indexed).
+            color_mode: ColorMode::from_meta(doc.meta.color_mode),
             bit_depth: ChannelDepth::of_bits(doc.meta.bit_depth),
             ..Self::default()
         }
@@ -1861,9 +1966,16 @@ impl MenuAction {
             MenuAction::FillDialog,
             MenuAction::StrokeDialog,
             MenuAction::FreeTransform,
+            MenuAction::PuppetWarp,
         ]);
         out.extend(PurgeTarget::ALL.iter().copied().map(MenuAction::Purge));
         out.extend(TransformOp::ALL.iter().copied().map(MenuAction::Transform));
+        out.extend(
+            ContentAwareScaleStep::ALL
+                .iter()
+                .copied()
+                .map(MenuAction::ContentAwareScale),
+        );
         out.extend([
             MenuAction::DefinePattern,
             MenuAction::DefineBrush,
@@ -1991,6 +2103,7 @@ impl MenuAction {
             // ---- Filter ----
             MenuAction::LastFilter,
             MenuAction::FilterGallery,
+            MenuAction::Liquify,
             MenuAction::ConvertForSmartFilters,
         ]);
         out.extend(FilterId::ALL.iter().copied().map(MenuAction::Filter));
@@ -2062,6 +2175,7 @@ impl MenuAction {
             MenuAction::StrokeDialog => "Stroke…".into(),
             MenuAction::FreeTransform => "Free Transform".into(),
             MenuAction::Transform(t) => t.label().into(),
+            MenuAction::ContentAwareScale(step) => step.label().into(),
             MenuAction::DefinePattern => "Define Pattern…".into(),
             MenuAction::DefineBrush => "Define Brush Preset…".into(),
             MenuAction::KeyboardShortcuts => "Keyboard Shortcuts…".into(),
@@ -2139,6 +2253,8 @@ impl MenuAction {
 
             MenuAction::LastFilter => "Last Filter".into(),
             MenuAction::FilterGallery => "Filter Gallery…".into(),
+            MenuAction::Liquify => "Liquify…".into(),
+            MenuAction::PuppetWarp => "Puppet Warp".into(),
             MenuAction::ConvertForSmartFilters => "Convert for Smart Filters".into(),
             MenuAction::RefineMask => "Refine Mask…".into(),
             MenuAction::RemoveColorFringe => "Remove Color Fringe…".into(),
@@ -2213,6 +2329,7 @@ impl MenuAction {
             MenuAction::ClearPixels => Shortcut::bare(Key::Delete),
             MenuAction::FillDialog => Shortcut::shift('f'),
             MenuAction::FreeTransform => Shortcut::ctrl('t'),
+            MenuAction::Liquify => Shortcut::ctrl_shift('x'),
             MenuAction::KeyboardShortcuts => Shortcut::ctrl_alt_shift('k'),
             MenuAction::Preferences => Shortcut::ctrl('k'),
 
@@ -2371,7 +2488,9 @@ impl MenuAction {
                 act(self),
             ),
             MenuAction::Purge(target) => gate(target.unavailable_reason(ctx), act(self)),
-            MenuAction::FillDialog | MenuAction::StrokeDialog => match ctx.need_editable_pixels() {
+            MenuAction::FillDialog
+            | MenuAction::StrokeDialog
+            | MenuAction::ContentAwareScale(_) => match ctx.need_editable_pixels() {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
             },
@@ -2708,8 +2827,32 @@ impl MenuAction {
                     act(MenuAction::RemoveColorFringe),
                 )
             }
-            MenuAction::ConvertForSmartFilters => Resolution::Disabled(SMART_FILTERS_UNSUPPORTED),
-            MenuAction::FilterGallery | MenuAction::Filter(_) => match ctx.need_editable_pixels() {
+            MenuAction::ConvertForSmartFilters => match ctx.need_layer() {
+                Ok(l) if l.class == LayerClass::SmartObject => {
+                    Resolution::Disabled(SMART_FILTERS_ALREADY)
+                }
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            // W7-E: a filter on a smart object is appended to its smart-filter
+            // stack rather than written into pixels, so the pixel gate does
+            // not apply; the blanket lock (which refuses the stack edit) does.
+            MenuAction::Filter(_)
+                if ctx
+                    .need_layer()
+                    .is_ok_and(|l| l.class == LayerClass::SmartObject) =>
+            {
+                gate(
+                    ctx.active
+                        .is_some_and(|l| l.locked.all)
+                        .then_some("The layer is locked"),
+                    act(self),
+                )
+            }
+            MenuAction::FilterGallery
+            | MenuAction::Filter(_)
+            | MenuAction::Liquify
+            | MenuAction::PuppetWarp => match ctx.need_editable_pixels() {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
             },
@@ -3009,7 +3152,12 @@ fn edit_menu() -> Menu {
             item(MenuAction::StrokeDialog),
             Entry::Separator,
             item(MenuAction::FreeTransform),
+            item(MenuAction::PuppetWarp),
             Entry::submenu("Transform", items(TransformOp::ALL, MenuAction::Transform)),
+            Entry::submenu(
+                "Content-Aware Scale",
+                items(ContentAwareScaleStep::ALL, MenuAction::ContentAwareScale),
+            ),
             Entry::Separator,
             item(MenuAction::DefinePattern),
             item(MenuAction::DefineBrush),
@@ -3166,19 +3314,18 @@ fn select_menu() -> Menu {
     }
 }
 
-/// Why Filter ▸ Convert for Smart Filters is greyed out. A smart object layer
-/// holds an asset id and a link flag and no filter stack, and the compositor
-/// renders its source with nothing re-applied, so a conversion would have
-/// nowhere to keep the filter. Recorded in docs/parity-matrix.md.
-pub const SMART_FILTERS_UNSUPPORTED: &str =
-    "Smart objects cannot carry a filter stack yet: the layer model stores only \
-     the source asset, and the compositor renders it with no filters re-applied";
+/// Why Filter ▸ Convert for Smart Filters is greyed out over a smart object:
+/// there is nothing to convert, and every filter applied to it already lands
+/// in its smart-filter stack.
+pub const SMART_FILTERS_ALREADY: &str =
+    "The layer is already a smart object: filters applied to it are smart filters";
 
 fn filter_menu() -> Menu {
     let mut entries = vec![
         item(MenuAction::LastFilter),
         Entry::Separator,
         item(MenuAction::FilterGallery),
+        item(MenuAction::Liquify),
         Entry::Separator,
         item(MenuAction::ConvertForSmartFilters),
         Entry::Separator,
@@ -3677,11 +3824,12 @@ mod tests {
             .is_enabled());
     }
 
-    /// Filter ▸ Convert for Smart Filters is in the Filter menu and greyed
-    /// out with its specific reason in every state — with a pixel layer
-    /// active, with a filter already run — never enabled as a silent no-op.
+    /// W7-E: Filter ▸ Convert for Smart Filters is in the Filter menu, live
+    /// over any layer, greyed with its reason over a smart object (which is
+    /// already converted) and without a layer. Over a smart object every
+    /// Filter row stays live, because the filter lands in its stack.
     #[test]
-    fn convert_for_smart_filters_is_listed_and_greyed_with_its_reason() {
+    fn convert_for_smart_filters_is_live_over_a_layer_and_greyed_over_a_smart_object() {
         assert!(filter_menu()
             .actions()
             .contains(&MenuAction::ConvertForSmartFilters));
@@ -3690,22 +3838,49 @@ mod tests {
             MenuAction::ConvertForSmartFilters.label(),
             "Convert for Smart Filters"
         );
-        let (doc, group, inside, _b) = stacked_document();
-        for ctx in [
-            MenuContext::default(),
-            ctx_with_layer(&doc, inside),
-            ctx_with_layer(&doc, group),
-            MenuContext {
-                last_filter: Some(FilterId::Mosaic),
-                ..ctx_with_layer(&doc, inside)
-            },
-        ] {
-            assert_eq!(
-                MenuAction::ConvertForSmartFilters.resolve(&ctx).reason(),
-                Some(SMART_FILTERS_UNSUPPORTED)
+        let (mut doc, group, inside, _b) = stacked_document();
+        for ctx in [ctx_with_layer(&doc, inside), ctx_with_layer(&doc, group)] {
+            assert!(MenuAction::ConvertForSmartFilters
+                .resolve(&ctx)
+                .is_enabled());
+        }
+        assert!(!MenuAction::ConvertForSmartFilters
+            .resolve(&MenuContext::default())
+            .is_enabled());
+
+        let smart = doc
+            .layers
+            .insert_at(
+                Layer::with_kind(
+                    "Smart",
+                    layer_model::LayerKind::SmartObject(layer_model::SmartObjectLayer {
+                        asset: layer_model::AssetId::new(),
+                        linked: false,
+                        filters: Vec::new(),
+                    }),
+                ),
+                None,
+                0,
+            )
+            .unwrap();
+        let ctx = ctx_with_layer(&doc, smart);
+        assert_eq!(
+            MenuAction::ConvertForSmartFilters.resolve(&ctx).reason(),
+            Some(SMART_FILTERS_ALREADY)
+        );
+        for id in [FilterId::GaussianBlur, FilterId::Mosaic] {
+            assert!(
+                MenuAction::Filter(id).resolve(&ctx).is_enabled(),
+                "{id:?} must be live over a smart object"
             );
         }
-        assert!(SMART_FILTERS_UNSUPPORTED.len() > 30);
+        // The Filter Gallery still edits pixels, so it stays greyed there.
+        assert!(!MenuAction::FilterGallery.resolve(&ctx).is_enabled());
+        // The blanket lock refuses the stack edit, so it greys the rows.
+        doc.layers.get_mut(smart).unwrap().locked.all = true;
+        assert!(!MenuAction::Filter(FilterId::GaussianBlur)
+            .resolve(&ctx_with_layer(&doc, smart))
+            .is_enabled());
     }
 
     /// The Photopea rows the parity audit found missing are in the submenu
@@ -3845,25 +4020,47 @@ mod tests {
     }
 
     #[test]
-    fn an_unsupported_colour_mode_is_disabled_rather_than_hidden() {
+    fn every_colour_mode_is_enabled_with_a_document() {
+        // W7-D: Lab, CMYK and Indexed were greyed with a reason; Photopea
+        // converts into all five, and so does this build now.
         let ctx = MenuContext {
             has_document: true,
             ..Default::default()
         };
-        assert!(MenuAction::SetColorMode(ColorMode::Rgb)
-            .resolve(&ctx)
-            .is_enabled());
+        for &mode in ColorMode::ALL {
+            assert!(
+                MenuAction::SetColorMode(mode).resolve(&ctx).is_enabled(),
+                "{mode:?} is greyed"
+            );
+            assert!(mode.is_supported(), "{mode:?}");
+            assert!(menu_actions().contains(&MenuAction::SetColorMode(mode)));
+            assert_eq!(ColorMode::from_meta(mode as u8), mode);
+        }
+        // No document still greys them, for that reason alone.
         assert_eq!(
             MenuAction::SetColorMode(ColorMode::Cmyk)
-                .resolve(&ctx)
+                .resolve(&MenuContext::default())
                 .reason(),
-            ColorMode::Cmyk.unsupported_reason()
+            Some("No document is open")
         );
-        assert!(ColorMode::Cmyk
-            .unsupported_reason()
-            .is_some_and(|r| r.contains("ink")));
-        // And it is still in the menu, so the user can see the product's edge.
-        assert!(menu_actions().contains(&MenuAction::SetColorMode(ColorMode::Cmyk)));
+    }
+
+    #[test]
+    fn only_the_mode_that_opens_a_dialog_has_an_ellipsis() {
+        // W7-D: Indexed Color asks for a palette first (like Trim…); the
+        // other four convert at once.
+        for &mode in ColorMode::ALL {
+            let label = MenuAction::SetColorMode(mode).label();
+            assert_eq!(
+                label.ends_with('…'),
+                mode == ColorMode::Indexed,
+                "{mode:?}: {label}"
+            );
+        }
+        assert_eq!(
+            MenuAction::SetColorMode(ColorMode::Indexed).label(),
+            "Indexed Color…"
+        );
     }
 
     #[test]
@@ -4505,7 +4702,7 @@ mod tests {
         let layers: HashSet<AdjustmentId> = AdjustmentId::LAYERS.iter().copied().collect();
         assert_eq!(image, all);
         assert_eq!(layer, layers);
-        // Photopea's split: four are destructive-only, Color Lookup is a
+        // Photopea's split: six are destructive-only, Color Lookup is a
         // layer too, and nothing else is missing from the Layer menu.
         let destructive_only: HashSet<AdjustmentId> = all.difference(&layers).copied().collect();
         assert_eq!(
@@ -4514,6 +4711,8 @@ mod tests {
                 AdjustmentId::Desaturate,
                 AdjustmentId::Equalize,
                 AdjustmentId::ShadowsHighlights,
+                AdjustmentId::HdrToning,
+                AdjustmentId::MatchColor,
                 AdjustmentId::ReplaceColor,
             ])
         );

@@ -247,24 +247,16 @@ fn rail_slot(side: DockSide) -> usize {
 /// Why a View flag cannot be turned on in this build, or `None` when it can.
 ///
 /// W3-A: **Proof Colors** and **Gamut Warning** were checkable and read by
-/// nothing. Neither can be honoured yet: the compositor already composites a
-/// tagged document *through* its ICC profile to the display, so there is no
-/// second output profile to soft-proof against, and the composite reaches the
-/// screen as clipped 8-bit sRGB, in which an out-of-gamut pixel is no longer
-/// distinguishable from a saturated in-gamut one. Rather than tick a flag and
-/// change nothing, [`Workspace::absorb`] refuses the toggle and the host shows
-/// this sentence. One table, so the menu, the shortcut and the status line
-/// cannot disagree about the reason.
-pub fn view_flag_unavailable(flag: ViewFlag) -> Option<&'static str> {
-    match flag {
-        ViewFlag::ProofColors => Some(
-            "Proof Colors is not available: there is no output profile to soft-proof against in this build",
-        ),
-        ViewFlag::GamutWarning => Some(
-            "Gamut Warning is not available: the composite reaches the screen as clipped sRGB, so out-of-gamut pixels cannot be told apart",
-        ),
-        _ => None,
-    }
+/// nothing, so they were refused here. W7-D made both real — a documented
+/// naive CMYK ink model (`color::cmyk`, no ICC press profile) and the
+/// presenter transform that shows its round trip or marks what it cannot
+/// print, fed from these very flags every frame
+/// (`app_shell::presenter::CanvasPresenter::read_view_settings`) — so every
+/// flag is honoured now. The table stays the one place a future flag the
+/// renderer cannot honour is refused, so the menu, the shortcut and the
+/// status line cannot disagree about the reason.
+pub fn view_flag_unavailable(_flag: ViewFlag) -> Option<&'static str> {
+    None
 }
 
 impl Workspace {

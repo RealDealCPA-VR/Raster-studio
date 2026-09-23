@@ -102,6 +102,23 @@ pub enum DocumentError {
     NoPath,
 }
 
+/// W7-B: the defined patterns (Edit > Define Pattern's preset store) as the
+/// tiles a pattern fill carries, in the store's order. A preset whose size
+/// and bytes disagree is left out rather than offered.
+///
+/// This is how a preset reaches compositing: the Layer Style dialog copies
+/// the chosen tile into the effect, so the document (and its saved file,
+/// undo history and journal) holds the pixels the compositor draws.
+pub fn pattern_tiles(presets: &asset_store::presets::PresetStore) -> Vec<layer_model::PatternTile> {
+    presets
+        .patterns()
+        .iter()
+        .filter_map(|p| {
+            layer_model::PatternTile::new(p.name.clone(), p.width, p.height, p.rgba8.clone()).ok()
+        })
+        .collect()
+}
+
 /// The name the next new layer gets.
 ///
 /// It increments rather than always saying "New Layer", and it skips names that
@@ -1666,6 +1683,11 @@ impl OpenDocument {
             size: glam::UVec2::new(new_w, new_h),
         });
         for id in ids {
+            // W7-C: a 16-bit document re-frames its layers at 16 bits.
+            if self.is_sixteen_bit() {
+                commands.push(self.reframed_layer16(id, (new_w, new_h), src_min)?);
+                continue;
+            }
             let rgba = self.layer_pixels(id)?;
             let mut out = vec![0u8; new_w as usize * new_h as usize * 4];
             for dy in 0..new_h {
@@ -1714,6 +1736,11 @@ impl OpenDocument {
             size: glam::UVec2::new(new_w, new_h),
         });
         for id in ids {
+            // W7-C: a 16-bit document turns its layers at 16 bits.
+            if self.is_sixteen_bit() {
+                commands.push(self.rotated90_layer16(id, clockwise)?);
+                continue;
+            }
             let rgba = self.layer_pixels(id)?;
             let mut out = vec![0u8; new_w as usize * new_h as usize * 4];
             for y in 0..old_h {
@@ -1768,6 +1795,11 @@ impl OpenDocument {
         let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
         let (ncx, ncy) = (new_w as f64 / 2.0, new_h as f64 / 2.0);
         for id in self.document.layers.iter_depth_first() {
+            // W7-C: a 16-bit document turns and interpolates at 16 bits.
+            if self.is_sixteen_bit() {
+                commands.push(self.rotated_layer16(id, (sin, cos), (new_w, new_h))?);
+                continue;
+            }
             let rgba = self.layer_pixels(id)?;
             let mut out = vec![0u8; new_w as usize * new_h as usize * 4];
             for y in 0..new_h {
@@ -2081,6 +2113,17 @@ impl OpenDocument {
         // out. The composite is `f32` either way; the depth only changes how it
         // is quantized into the file.
         let rect = self.canvas_rect();
+        // W7-D: a CMYK document writes a CMYK JPEG/TIFF and an Indexed one a
+        // palette PNG — the same bytes File > Export's worker writes.
+        let ink = raster::export::ExportInk::for_color_mode(self.document.meta.color_mode);
+        if ink != raster::export::ExportInk::Rgb {
+            let rgba8 = self.composite(rect)?;
+            let (w, h) = (self.document.width(), self.document.height());
+            if let Some(bytes) = raster::export::encode_rgba8_in_ink(format, ink, w, h, &rgba8)? {
+                write_atomically(path, &bytes).map_err(crate::import::ImportError::from)?;
+                return Ok(());
+            }
+        }
         // A tagged document re-tags: the profile it opened with rides back
         // into the file (the codec writes the iCCP chunk for the formats
         // that carry one).
@@ -2162,6 +2205,17 @@ impl OpenDocument {
                 };
                 let mut edits: Vec<editor_core::TileEdit> = Vec::new();
                 match key {
+                    // W7-C: a 16-bit document resamples at 16 bits.
+                    editor_core::PixelKey::Layer(_) if self.document.meta.bit_depth == 16 => {
+                        edits = depth::resample_layer16_edits(
+                            &mut self.tiles,
+                            &self.document.meta.color_space,
+                            map,
+                            (w, h),
+                            (dw, dh),
+                            filter,
+                        )?;
+                    }
                     editor_core::PixelKey::Layer(_) => {
                         let rgba = self.materialize_rgba(map, rect)?;
                         let image = raster::export::linear_from_rgba8(
@@ -2177,17 +2231,10 @@ impl OpenDocument {
                         )?;
                         let grid = raster::TileGrid::from_rgba8(dw, dh, &out)
                             .map_err(DocumentError::Grid)?;
-                        let deep = self.document.meta.bit_depth == 16;
+                        // An 8-bit document only: the arm above takes every
+                        // layer of a 16-bit one.
                         for (coord, tile) in grid.iter() {
-                            // W4-F: a 16-bit document keeps 16-bit tiles (the
-                            // resample itself runs at 8 bits).
-                            let hash = match deep
-                                .then(|| raster::widen_rgba8_tile(tile.data()))
-                                .flatten()
-                            {
-                                Some(wide) => self.tiles.insert_bytes(wide),
-                                None => self.tiles.insert_tile(tile),
-                            };
+                            let hash = self.tiles.insert_tile(tile);
                             edits.push(editor_core::TileEdit::set(coord, hash));
                         }
                     }
@@ -2526,7 +2573,12 @@ impl OpenDocument {
             .iter()
             .filter(|entry| entry.enabled)
             .map(|entry| {
-                let mut preset = entry.preset.clone();
+                // W7-D: a CMYK document goes out as CMYK JPEG/TIFF, an
+                // Indexed one as a palette PNG.
+                let mut preset = entry
+                    .preset
+                    .clone()
+                    .for_color_mode(self.document.meta.color_mode);
                 preset.name = format!("{}{}", job.base_name, entry.suffix);
                 preset
             })
@@ -3138,6 +3190,10 @@ impl LayerThumbCache {
         self.layers.is_empty()
     }
 }
+
+#[cfg(test)]
+#[path = "doc_pattern_tests.rs"]
+mod pattern_tests;
 
 #[cfg(test)]
 mod tests {

@@ -72,10 +72,11 @@
 //!   pixels; Delete Cropped Pixels clears raster layers' own pixels only
 //!   (layer masks, text and shape layers keep their content); and the
 //!   Resolution field converts to pixels but is not stored on the document.
-//! * **Stylus pressure has no source.** [`shell::Shell::set_pen_pressure`] is
-//!   the seam the pressure-aware stroke engine reads through, but only tests
-//!   call it: no winit tablet or touch event is subscribed, so a pen paints at
-//!   full pressure.
+//! * **Stylus pressure is verified with synthetic events only.** winit's
+//!   `Touch` events (a pen's force included) are routed by [`pen_input`]
+//!   through [`shell::Shell::set_pen_pressure`] onto the mouse's pointer
+//!   route; the shell's tests drive synthetic events, and a physical pen on
+//!   each platform is still needed to confirm the OS's event order.
 //! * **The right button never reaches a tool.** It opens the canvas context
 //!   menu ([`canvas_extras`]); [`shell::pointer_button`] refuses it as a tool
 //!   press, because [`ui::canvas::InputRouter`] would hand a `Secondary` press
@@ -108,6 +109,7 @@ pub mod jobs;
 pub mod keymap;
 pub mod layer_ops;
 pub mod menu_bridge;
+pub mod pen_input;
 pub mod placement;
 pub mod prefs;
 pub mod presenter;

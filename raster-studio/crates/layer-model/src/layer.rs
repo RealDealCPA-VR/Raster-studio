@@ -255,6 +255,12 @@ pub enum ClippingMode {
 pub struct RasterLayer {
     /// Optional origin asset this raster was imported from (for provenance).
     pub source_asset: Option<AssetId>,
+    /// W7-F: set when this raster is an artboard's background plate — its
+    /// parent group is then the artboard (see [`crate::artboard`]). Appended
+    /// and omitted while `None`, so documents that predate artboards load and
+    /// save unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artboard: Option<crate::artboard::Artboard>,
 }
 
 /// How a group composites its children.
@@ -478,6 +484,43 @@ pub enum AdjustmentKind {
         size: u32,
         table: Vec<[f32; 3]>,
     },
+    // ---- Appended (W7-G). Serde is append-only.
+    /// HDR Toning: local-adaptation tone mapping by a base/detail split of
+    /// log2 luminance (see `adjustments::hdr`). `radius` (px, `0.0..=500.0`)
+    /// and `strength` (`0.0..=4.0`) are the Edge Glow pair — the scale and
+    /// gain of the local contrast; `gamma` (`0.1..=5.0`, `1.0` neutral)
+    /// compresses the base; `exposure` is in stops (`-5.0..=5.0`); `detail`
+    /// (`-1.0..=3.0`) is the fine-detail gain; `vibrance` and `saturation`
+    /// are in `-1.0..=1.0`. Destructive-only in Photopea.
+    HdrToning {
+        radius: f32,
+        strength: f32,
+        gamma: f32,
+        exposure: f32,
+        detail: f32,
+        vibrance: f32,
+        saturation: f32,
+    },
+    /// Match Color: a Reinhard mean/standard-deviation transfer in CIELAB
+    /// from the target's statistics to a source's (`[L*, a*, b*]` means and
+    /// standard deviations). The source's are measured from the image picked
+    /// in the dialog; the target's from the pixels it is applied to (the
+    /// shell re-measures them when applying, from the pixels the selection
+    /// covers (the whole layer with no selection)).
+    /// `luminance` and `color_intensity` scale the matched L* and chroma
+    /// (`0.0..=2.0`, `1.0` neutral), `fade` blends back to the original
+    /// (`0.0..=1.0`, `1.0` is no change), `neutralize` matches toward a
+    /// source with no colour cast. Destructive-only in Photopea.
+    MatchColor {
+        source_mean: [f32; 3],
+        source_std: [f32; 3],
+        target_mean: [f32; 3],
+        target_std: [f32; 3],
+        luminance: f32,
+        color_intensity: f32,
+        fade: f32,
+        neutralize: bool,
+    },
 }
 
 /// Editable text layer. Postponed (Phase 3); shape reserved so the enum and
@@ -626,6 +669,12 @@ impl ShapeLayer {
 pub struct SmartObjectLayer {
     pub asset: AssetId,
     pub linked: bool,
+    /// The smart-filter stack, applied bottom-up over the object's source
+    /// when it is composited (see [`crate::smart_filter`]). Empty for an
+    /// object no filter was ever applied to, and then not written at all, so
+    /// documents that predate smart filters load and save unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<crate::smart_filter::SmartFilter>,
 }
 
 /// Where a smart object's pixels come from — the nested-source model. The
@@ -907,6 +956,25 @@ mod tests {
                     [0.0, 0.0, 0.0],
                 ],
             },
+            AdjustmentKind::HdrToning {
+                radius: 42.0,
+                strength: 0.75,
+                gamma: 1.3,
+                exposure: -0.25,
+                detail: 0.6,
+                vibrance: 0.2,
+                saturation: -0.1,
+            },
+            AdjustmentKind::MatchColor {
+                source_mean: [55.0, 4.5, -12.0],
+                source_std: [18.0, 7.5, 9.0],
+                target_mean: [48.0, -2.0, 6.0],
+                target_std: [21.0, 5.0, 4.0],
+                luminance: 1.2,
+                color_intensity: 0.8,
+                fade: 0.3,
+                neutralize: true,
+            },
         ];
         for kind in &all {
             let json = serde_json::to_string(kind).unwrap();
@@ -1142,6 +1210,7 @@ mod tests {
             LayerKind::SmartObject(SmartObjectLayer {
                 asset: AssetId::new(),
                 linked: false,
+                filters: Vec::new(),
             }),
             LayerKind::Generator(GeneratorLayer {
                 provenance_key: "prov".into(),

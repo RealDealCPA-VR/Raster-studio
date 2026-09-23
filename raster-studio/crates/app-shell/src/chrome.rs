@@ -289,10 +289,6 @@ pub struct ChromeOutput {
     /// The Preferences dialog confirmed a new [`ui::dialogs::UiPreferences`].
     /// The shell maps it onto the app's own preferences and applies it.
     pub set_ui_preferences: Option<Box<ui::dialogs::UiPreferences>>,
-    /// The Fill dialog's confirmed contents.
-    pub fill_spec: Option<Box<ui::dialogs::FillSpec>>,
-    /// The Stroke dialog's confirmed geometry.
-    pub stroke_spec: Option<Box<ui::dialogs::StrokeSpec>>,
     /// The gradient dialog confirmed with a ramp for one tool. The chrome
     /// writes it into the workspace's options (the options bar reads them
     /// back) and reports the ramp to the editor for the next stroke.
@@ -716,9 +712,9 @@ pub struct Chrome {
 /// W3-A: why a View toggle cannot be turned on in *this application*, or
 /// `None` when it can.
 ///
-/// Exactly the `ui` crate's own reasons ([`ui::view_flag_unavailable`]:
-/// Proof Colors, Gamut Warning). Flip View is honoured: `render::Camera`
-/// mirrors, and [`Chrome::ui`] copies the checkmarks onto the active
+/// Exactly the `ui` crate's own reasons ([`ui::view_flag_unavailable`];
+/// none since W7-D made Proof Colors and Gamut Warning real). Flip View is
+/// honoured: `render::Camera` mirrors, and [`Chrome::ui`] copies the checkmarks onto the active
 /// document's camera every frame through [`crate::tool_input::apply_view_flips`].
 pub fn view_flag_refusal(flag: ui::ViewFlag) -> Option<&'static str> {
     ui::view_flag_unavailable(flag)
@@ -1238,6 +1234,21 @@ impl Chrome {
         let tokens = self.workspace.theme.tokens();
         let c = tokens.palette.color(design::ColorRole::Accent);
         [c.r, c.g, c.b]
+    }
+
+    /// W7-D: View > Proof Colors / Gamut Warning, as the presenter applies
+    /// them. Like [`Self::mask_view`], a VIEW setting: the View menu's
+    /// checkmarks are the authority, and the gamut warning paints with the
+    /// theme's Warning token rather than a colour hard-coded in the painter.
+    pub fn proof_view(&self) -> crate::presenter::ProofView {
+        let flags = &self.workspace.view_flags;
+        let tokens = self.workspace.theme.tokens();
+        let c = tokens.palette.color(design::ColorRole::Warning);
+        crate::presenter::ProofView {
+            proof_colors: flags.get(ui::ViewFlag::ProofColors),
+            gamut_warning: flags.get(ui::ViewFlag::GamutWarning),
+            warning: [c.r, c.g, c.b],
+        }
     }
 
     /// Draw one frame of chrome.
@@ -4552,45 +4563,83 @@ mod tests {
         assert!((back.screen_to_image(probe) - upright).length() < 1e-3);
     }
 
-    /// W3-A: Proof Colors and Gamut Warning cannot be honoured by this
-    /// renderer: the toggle is refused (the item never ticks) and the status
-    /// line says why, rather than a tick that changes nothing.
+    /// W7-D (was W3-A's refusal): View > Proof Colors and View > Gamut
+    /// Warning are enabled menu rows, a tick lands on the workspace, and the
+    /// presenter's per-frame read ([`crate::presenter::CanvasPresenter::
+    /// read_view_settings`], the one call the shell makes) turns it into
+    /// pixels: saturated green shows as its CMYK round trip, then as the
+    /// theme's Warning token, while mid grey is left alone.
     #[test]
-    fn view_toggles_this_build_cannot_honour_are_refused_with_a_reason() {
-        for flag in [ui::ViewFlag::ProofColors, ui::ViewFlag::GamutWarning] {
-            let mut frame = extras_frame(&[], 1.0);
-            frame
-                .chrome
-                .emit(ui::Intent::SetViewFlag { flag, on: true });
+    fn proof_colors_and_gamut_warning_tick_from_the_menu_and_change_the_canvas_texture() {
+        let mut rgba = Vec::new();
+        for i in 0..64 {
+            if i % 8 < 4 {
+                rgba.extend_from_slice(&[0, 255, 0, 255]);
+            } else {
+                rgba.extend_from_slice(&[128, 128, 128, 255]);
+            }
+        }
+        let mut frame = extras_frame_of(&[], 1.0, &rgba);
+        let whole = raster::PixelRect::new(0, 0, 8, 8);
+        let mut presenter = crate::presenter::CanvasPresenter::new();
+        presenter.read_view_settings(&frame.chrome);
+        let plain = presenter
+            .composite_masked(frame.editor.active_mut().unwrap(), whole)
+            .unwrap();
+        assert_eq!(&plain[0..4], &[0, 255, 0, 255]);
+
+        let warning = frame.chrome.proof_view().warning;
+        let proofed_green = color::cmyk::ProofLut::shared().proof([0, 255, 0]);
+        assert_ne!(proofed_green, [0, 255, 0], "green is not printable");
+        for (flag, green) in [
+            (ui::ViewFlag::ProofColors, proofed_green),
+            (ui::ViewFlag::GamutWarning, warning),
+        ] {
+            // The menu row is enabled before any click.
+            let context = crate::menu_bridge::context(&mut frame.editor, frame.chrome.workspace());
+            let intent = crate::menu_bridge::resolve_intent(
+                ui::MenuAction::ToggleView(flag),
+                &context,
+                &frame.editor,
+            )
+            .unwrap_or_else(|e| panic!("{flag:?} is greyed: {e}"));
+            frame.chrome.emit(intent);
             let _ = painted_shapes(&mut frame.chrome, &mut frame.editor);
             assert!(
-                !frame.chrome.workspace().view_flags.get(flag),
-                "{flag:?} ticked and changes nothing"
+                frame.chrome.workspace().view_flags.get(flag),
+                "{flag:?} never ticked"
             );
-            let reason = view_flag_refusal(flag).expect("a reason");
-            assert_eq!(frame.editor.status(), Some(reason), "{flag:?}");
-            // And the menu row is greyed with that reason *before* any click:
-            // the enablement the menu bar paints from.
-            let context = crate::menu_bridge::context(&mut frame.editor, frame.chrome.workspace());
+            assert!(
+                presenter.read_view_settings(&frame.chrome),
+                "{flag:?} never reached the presenter"
+            );
+            let shown = presenter
+                .composite_masked(frame.editor.active_mut().unwrap(), whole)
+                .unwrap();
+            assert_eq!(&shown[0..3], &green, "{flag:?}: green");
             assert_eq!(
-                crate::menu_bridge::resolve_intent(
-                    ui::MenuAction::ToggleView(flag),
-                    &context,
-                    &frame.editor
-                ),
-                Err(reason.to_string()),
-                "{flag:?} is drawn enabled"
+                &shown[16..20],
+                &[128, 128, 128, 255],
+                "{flag:?}: grey prints"
+            );
+            // Off again: the plain composite.
+            frame
+                .chrome
+                .emit(ui::Intent::SetViewFlag { flag, on: false });
+            let _ = painted_shapes(&mut frame.chrome, &mut frame.editor);
+            assert!(presenter.read_view_settings(&frame.chrome));
+            assert_eq!(
+                presenter
+                    .composite_masked(frame.editor.active_mut().unwrap(), whole)
+                    .unwrap(),
+                plain
             );
         }
-        // A toggle this build honours stays enabled.
-        let mut frame = extras_frame(&[], 1.0);
-        let context = crate::menu_bridge::context(&mut frame.editor, frame.chrome.workspace());
-        assert!(crate::menu_bridge::resolve_intent(
-            ui::MenuAction::ToggleView(ui::ViewFlag::Grid),
-            &context,
-            &frame.editor
-        )
-        .is_ok());
+        // The document itself never moved: a proof is a view.
+        assert_eq!(
+            frame.editor.active_mut().unwrap().composite(whole).unwrap(),
+            plain
+        );
     }
 
     /// Card 012's check: a shell-published transform session is *visible* —

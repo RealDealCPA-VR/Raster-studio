@@ -817,12 +817,26 @@ mod tests {
             m.slots()[pen].tools,
             vec![
                 ToolId::Pen,
+                ToolId::FreeformPen,
+                ToolId::CurvaturePen,
                 ToolId::AddAnchor,
                 ToolId::DeleteAnchor,
                 ToolId::ConvertAnchor
             ]
         );
         assert_eq!(m.slots()[pen].shortcut, Some('p'));
+        // W7-F: the new tools fly out of their Photopea slots — no new
+        // palette button, so the column keeps its twenty slots.
+        for (host, tool) in [
+            (ToolId::Move, ToolId::Artboard),
+            (ToolId::Crop, ToolId::PerspectiveCrop),
+            (ToolId::Brush, ToolId::MixerBrush),
+            (ToolId::Type, ToolId::VerticalType),
+            (ToolId::Type, ToolId::HorizontalTypeMask),
+            (ToolId::Type, ToolId::VerticalTypeMask),
+        ] {
+            assert_eq!(slot(tool), slot(host), "{tool:?} is not in {host:?}'s slot");
+        }
         assert_eq!(m.slots().len(), 20, "nineteen plus the History slot");
         // Picking a fly-out variant makes the slot show it.
         let mut state = PaletteState::new();

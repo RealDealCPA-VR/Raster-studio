@@ -1444,6 +1444,7 @@ mod w3j {
             LayerKind::SmartObject(layer_model::SmartObjectLayer {
                 asset: layer_model::AssetId::new(),
                 linked: false,
+                filters: Vec::new(),
             }),
         )]);
         let mut h = Live::new(doc, PanelId::Properties);

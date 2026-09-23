@@ -2253,6 +2253,15 @@ fn every_palette_tool_has_a_real_route_test_or_an_owner() {
         AddAnchor,
         DeleteAnchor,
         ConvertAnchor,
+        // W7-F
+        PerspectiveCrop,
+        VerticalType,
+        HorizontalTypeMask,
+        VerticalTypeMask,
+        MixerBrush,
+        Artboard,
+        CurvaturePen,
+        FreeformPen,
     ];
     // Real-route tests in `thumbnail_workflow.rs` / `thumbnail_reproducers.rs`.
     let elsewhere = [Move, Brush, Eraser, FreeTransform];
@@ -2556,4 +2565,304 @@ fn show_transform_controls_draws_its_box_before_any_click() {
         &[],
     );
     assert!(transform_geometry(&mut pointer).is_none());
+}
+
+// ------------------------------------------------------------ W7-F tools --
+
+/// The composite of the whole (possibly resized) canvas, with its size.
+fn composite_sized(ed: &mut Editor) -> (u32, u32, Vec<u8>) {
+    let doc = ed.active_mut().expect("one document");
+    let (w, h) = (doc.document.width(), doc.document.height());
+    let buf = doc
+        .composite(raster::PixelRect::new(0, 0, w, h))
+        .expect("the canvas composites");
+    (w, h, buf)
+}
+
+fn px_in(buf: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
+    let i = ((y * w + x) * 4) as usize;
+    [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+}
+
+/// The DejaVu fixture face, so the type tools shape the same glyphs on
+/// every machine.
+fn load_fixture_font() {
+    compositor::load_font(dejavu::sans::regular().to_vec());
+}
+
+/// The inked bounding box of `after` against `before`: `(x0, y0, x1, y1)`.
+fn changed_box(before: &[u8], after: &[u8]) -> Option<(u32, u32, u32, u32)> {
+    let moved = changed(before, after);
+    let x0 = moved.iter().map(|p| p.0).min()?;
+    let x1 = moved.iter().map(|p| p.0).max()?;
+    let y0 = moved.iter().map(|p| p.1).min()?;
+    let y1 = moved.iter().map(|p| p.1).max()?;
+    Some((x0, y0, x1, y1))
+}
+
+#[test]
+fn perspective_crop_rectifies_a_dragged_and_adjusted_quad_as_one_step() {
+    let id = ToolId::PerspectiveCrop;
+    // A blue wall at x 60..68 on white: a vertical band in the photo.
+    let (_dir, mut ed) = open(&wall);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+    // Drag the quad, then pull the two top corners in towards the middle —
+    // a trapezoid, narrow at the top, as a photographed facade is.
+    all_reached(
+        id,
+        &drag(&mut pointer, &mut ed, &[v(28.0, 20.0), v(100.0, 100.0)]),
+    );
+    all_reached(
+        id,
+        &drag(&mut pointer, &mut ed, &[v(28.0, 20.0), v(56.0, 20.0)]),
+    );
+    all_reached(
+        id,
+        &drag(&mut pointer, &mut ed, &[v(100.0, 20.0), v(72.0, 20.0)]),
+    );
+    assert_eq!(depth(&ed), d0, "adjusting the quad commits nothing");
+    assert!(pointer.has_pending_commit(), "the quad is held for Enter");
+    let commit = pointer.commit(&mut ed);
+    assert_eq!(commit.failed, None, "{commit:?}");
+    assert_eq!(
+        depth(&ed),
+        d0 + 1,
+        "a perspective crop is ONE history entry"
+    );
+    let (w, h, out) = composite_sized(&mut ed);
+    // Average edges: (16 + 72) / 2 = 44 wide; the slanted sides are 84.76.
+    assert_eq!((w, h), (44, 85), "the canvas is the rectified quad");
+    // Rectified, the wall's constant width spreads over the narrow top of the
+    // quad and shrinks over its wide bottom: a plain crop would keep it the
+    // same width on every row.
+    let blue_in_row = |y: u32| {
+        (0..w)
+            .filter(|x| {
+                let p = px_in(&out, w, *x, y);
+                p[2] > 200 && p[0] < 60
+            })
+            .count()
+    };
+    let (top, bottom) = (blue_in_row(1), blue_in_row(h - 2));
+    assert!(
+        top > bottom * 3 && bottom > 0,
+        "the wall was not rectified: {top} blue px on top, {bottom} at the bottom"
+    );
+    undo(&mut ed);
+    let doc = ed.active().unwrap();
+    assert_eq!((doc.document.width(), doc.document.height()), (W, H));
+    assert_eq!(
+        composite(&mut ed),
+        before,
+        "undo did not restore the canvas"
+    );
+}
+
+#[test]
+fn vertical_type_lays_the_typed_run_down_a_column() {
+    load_fixture_font();
+    let id = ToolId::VerticalType;
+    let (_dir, mut ed) = open(&white);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+    all_reached(id, &click(&mut pointer, &mut ed, v(64.0, 8.0)));
+    assert!(pointer.is_text_editing(), "the run is open for typing");
+    pointer.text_edit(&mut ed, tools::TextEdit::Insert("W7FV"));
+    let out = pointer.text_edit(&mut ed, tools::TextEdit::Confirm);
+    assert_eq!(out.failed, None);
+    assert!(!pointer.is_text_editing());
+    let doc = &ed.active().unwrap().document;
+    let texts: Vec<_> = doc
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .filter_map(|id| match &doc.layers.get(id)?.kind {
+            layer_model::LayerKind::Text(t) => Some(t.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts.len(), 1, "one text layer");
+    assert!(texts[0].paragraph.vertical, "the layer is vertical type");
+    assert_eq!(texts[0].text, "W7FV");
+    assert_eq!(
+        depth(&ed),
+        d0 + 2,
+        "the click's layer and the confirmed run"
+    );
+    let after = composite(&mut ed);
+    let (x0, y0, x1, y1) = changed_box(&before, &after).expect("the run has ink");
+    assert!(
+        (y1 - y0) > 2 * (x1 - x0),
+        "four glyphs down a column are tall and narrow: x {x0}..{x1}, y {y0}..{y1}"
+    );
+}
+
+#[test]
+fn the_type_masks_turn_the_typed_glyphs_into_one_undoable_selection() {
+    load_fixture_font();
+    // The SAME string and style on purpose: the horizontal mask shapes and
+    // caches "WMW" first, so the vertical one only comes out a column when
+    // `compositor::text::hash_layer` keys on `Paragraph::vertical`.
+    for (id, tall, typed) in [
+        (ToolId::HorizontalTypeMask, false, "WMW"),
+        (ToolId::VerticalTypeMask, true, "WMW"),
+    ] {
+        let (_dir, mut ed) = open(&halves);
+        let mut pointer = ToolPointer::new();
+        select_tool(&mut ed, id);
+        let before = composite(&mut ed);
+        let d0 = depth(&ed);
+        all_reached(id, &click(&mut pointer, &mut ed, v(40.0, 20.0)));
+        assert!(pointer.is_text_editing(), "{id:?}: the run is open");
+        pointer.text_edit(&mut ed, tools::TextEdit::Insert(typed));
+        let out = pointer.text_edit(&mut ed, tools::TextEdit::Confirm);
+        assert_eq!(out.failed, None, "{id:?}");
+        assert!(!pointer.is_text_editing());
+        assert_eq!(
+            layers_of_kind(&ed, |k| matches!(k, layer_model::LayerKind::Text(_))),
+            0,
+            "{id:?}: a type mask leaves no text layer behind"
+        );
+        assert_eq!(
+            depth(&ed),
+            d0 + 1,
+            "{id:?}: the whole session is ONE history entry"
+        );
+        assert_eq!(composite(&mut ed), before, "{id:?}: a mask moves no pixel");
+        let sel = selection(&ed);
+        let Selection::Mask(mask) = &sel else {
+            panic!("{id:?}: the glyphs did not become a mask selection: {sel:?}");
+        };
+        let (lo, hi) = mask.bounds().expect("the selection covers something");
+        let (bw, bh) = (hi.x - lo.x, hi.y - lo.y);
+        let b = (lo, hi);
+        if tall {
+            assert!(bh > 2 * bw, "{id:?}: the vertical mask is a column: {b:?}");
+        } else {
+            assert!(bw > bh, "{id:?}: the horizontal mask is a line: {b:?}");
+        }
+        undo(&mut ed);
+        assert_eq!(selection(&ed), Selection::None, "{id:?}: undo clears it");
+        assert_eq!(depth(&ed), d0);
+    }
+}
+
+#[test]
+fn mixer_brush_carries_the_red_it_picked_up_into_the_blue() {
+    let id = ToolId::MixerBrush;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    let (a, b) = (v(30.0, 64.0), v(100.0, 64.0));
+    let pts: Vec<Vec2> = (0..=14).map(|i| a + (b - a) * (i as f32 / 14.0)).collect();
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| drag(p, ed, &pts));
+    // Past the border, the wet brush has dragged red into the blue half.
+    let p = px(&run.after, 72, 64);
+    assert!(
+        p[0] > 30 && p[2] > 30,
+        "the stroke did not mix the red it picked up with the blue: {p:?}"
+    );
+    changed_only_within(id, &run.before, &run.after, a, b, 17.0);
+    undo_restores(&mut ed, id, &run);
+}
+
+#[test]
+fn artboard_drag_makes_one_artboard_group_with_a_white_plate() {
+    let id = ToolId::Artboard;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| {
+        drag(p, ed, &[v(20.0, 20.0), v(40.0, 50.0), v(60.0, 70.0)])
+    });
+    assert_eq!(px(&run.after, 30, 40), WHITE, "the artboard is not drawn");
+    assert_eq!(px(&run.after, 10, 10), RED, "outside the artboard changed");
+    let doc = &ed.active().unwrap().document;
+    let boards = layer_model::artboard::artboards(&doc.layers);
+    assert_eq!(boards.len(), 1, "one artboard");
+    let board = boards[0].1;
+    assert_eq!(
+        (board.x, board.y, board.width, board.height),
+        (20, 20, 40, 50)
+    );
+    undo_restores(&mut ed, id, &run);
+    let doc = &ed.active().unwrap().document;
+    assert!(layer_model::artboard::artboards(&doc.layers).is_empty());
+}
+
+#[test]
+fn curvature_pen_clicks_then_enter_make_one_smooth_shape_layer() {
+    let id = ToolId::CurvaturePen;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let d0 = depth(&ed);
+    for at in [v(10.0, 60.0), v(50.0, 20.0), v(90.0, 60.0)] {
+        all_reached(id, &click(&mut pointer, &mut ed, at));
+        assert_eq!(depth(&ed), d0, "nothing is emitted while points are placed");
+    }
+    let commit = pointer.commit(&mut ed);
+    assert_eq!(commit.failed, None);
+    assert_eq!(depth(&ed), d0 + 1, "the path is ONE history entry");
+    let doc = &ed.active().unwrap().document;
+    let svg: Vec<String> = doc
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .filter_map(|id| match &doc.layers.get(id)?.kind {
+            layer_model::LayerKind::Shape(s) => Some(s.path_svg.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(svg.len(), 1, "one shape layer");
+    assert!(
+        svg[0].contains('C'),
+        "the path through the clicks is not curved: {}",
+        svg[0]
+    );
+    undo(&mut ed);
+    assert_eq!(
+        layers_of_kind(&ed, |k| matches!(k, layer_model::LayerKind::Shape(_))),
+        0
+    );
+}
+
+#[test]
+fn freeform_pen_drag_is_fitted_into_one_short_curved_shape_layer() {
+    let id = ToolId::FreeformPen;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let d0 = depth(&ed);
+    let pts: Vec<Vec2> = (0..=40)
+        .map(|i| {
+            let t = std::f32::consts::PI * i as f32 / 40.0;
+            v(64.0 - 40.0 * t.cos(), 90.0 - 50.0 * t.sin())
+        })
+        .collect();
+    let outcomes = drag(&mut pointer, &mut ed, &pts);
+    all_reached(id, &outcomes);
+    assert_eq!(depth(&ed), d0 + 1, "one freehand drag is ONE history entry");
+    let doc = &ed.active().unwrap().document;
+    let svg: Vec<String> = doc
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .filter_map(|id| match &doc.layers.get(id)?.kind {
+            layer_model::LayerKind::Shape(s) => Some(s.path_svg.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(svg.len(), 1, "one shape layer");
+    let curves = svg[0].matches('C').count();
+    assert!(
+        (2..20).contains(&curves),
+        "the 41 samples were not fitted into a short curve: {}",
+        svg[0]
+    );
+    undo(&mut ed);
+    assert_eq!(depth(&ed), d0);
 }

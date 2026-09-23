@@ -290,6 +290,9 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
     // box less the left and right indents.
     let h_scale = glyph_scale(run.style.horizontal_scale);
     let (wrap, width_opt) = match run.frame {
+        // W7-F: a vertical run is laid out as unwrapped lines that
+        // `verticalize` then turns into columns; a box does not wrap them.
+        _ if run.paragraph.vertical => (Wrap::None, None),
         TextFrame::Point => (Wrap::None, None),
         TextFrame::Box { width, .. } => {
             (Wrap::WordOrGlyph, Some(inner_width(run, width) / h_scale))
@@ -524,12 +527,80 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
     }
 
     extend_line_ends(&mut out, &paragraph_offsets, &run.text);
+    if run.paragraph.vertical {
+        verticalize(&mut out, run);
+        out.bounds = compute_bounds(&out.lines);
+        return out;
+    }
     place_last_lines(&mut out, run);
     align_point_text(&mut out, run);
     out.bounds = compute_bounds(&out.lines);
     let rules = decorations(library, &out);
     out.decorations = rules;
     out
+}
+
+/// W7-F: where an upright glyph's baseline sits below the top of its em
+/// cell in vertical type, as a fraction of the glyph's size — the ideographic
+/// em box's usual ascent.
+pub const VERTICAL_ASCENT: f32 = 0.88;
+
+/// W7-F: turn a horizontally shaped run into vertical type.
+///
+/// cosmic-text shapes horizontally only (it has no vertical writing mode, no
+/// `vert`/`vrt2` substitution and no vertical metrics), so the shaping of each
+/// paragraph is kept — clusters, fallback, ligatures, the glyph ids — and the
+/// glyphs are then **re-positioned one by one, upright**: each cluster gets
+/// an em cell of its own size stacked downwards, the glyph centred across the
+/// column, and each paragraph becomes one column, the first at the layer
+/// origin and each next one a line-height to its left (columns read right to
+/// left). The vertical advance is the full em for every cluster, which is the
+/// correct advance for CJK ideographs and kana; Latin set this way is upright
+/// in the same cells, as Photoshop's default "upright" vertical Roman does.
+/// Marks that share a cluster share its cell.
+///
+/// What this does not do, named: no rotated Latin runs (tate-chu-yoko), no
+/// vertical punctuation alternates, no underline/strikethrough rules (a
+/// vertical run has none), and wrapping is off — a box frame does not wrap
+/// vertical text. The caret and hit-test geometry in `edit` stay horizontal.
+fn verticalize(out: &mut ShapedText, run: &TextRun) {
+    let column = out.line_height;
+    let em = out.base_size_px;
+    let (x0, y0) = (run.origin[0], run.origin[1]);
+    for index in 0..out.lines.len() {
+        let center = x0 - index as f32 * column;
+        let range = out.lines[index].glyph_range();
+        // Logical order down the column, whatever the visual order across.
+        out.glyphs[range.clone()].sort_by_key(|g| g.cluster_start);
+        let mut cursor = y0;
+        let mut previous: Option<usize> = None;
+        let mut cell_top = y0;
+        for g in &mut out.glyphs[range] {
+            let size = if g.size_px.is_finite() && g.size_px > 0.0 {
+                g.size_px
+            } else {
+                em
+            };
+            if previous != Some(g.cluster_start) {
+                cell_top = cursor;
+                cursor += size;
+                previous = Some(g.cluster_start);
+            }
+            let x_offset = g.draw_x - g.x;
+            g.x = center - g.advance / 2.0;
+            g.draw_x = g.x + x_offset;
+            g.draw_y = cell_top + size * VERTICAL_ASCENT;
+            g.rtl = false;
+        }
+        let line = &mut out.lines[index];
+        line.x_min = center - column / 2.0;
+        line.x_max = center + column / 2.0;
+        line.top = y0;
+        line.bottom = cursor.max(y0 + em);
+        line.baseline_y = y0 + em * VERTICAL_ASCENT;
+        line.rtl = false;
+    }
+    out.decorations.clear();
 }
 
 /// Lines for a library that has no faces to shape with.
@@ -1423,5 +1494,72 @@ mod w3j_tests {
             hard.data.iter().all(|v| *v == 0 || *v == 255),
             "no grey edge"
         );
+    }
+}
+
+#[cfg(test)]
+mod vertical_tests {
+    use super::*;
+    use crate::model::ParagraphStyle;
+    use crate::raster::{rasterize, GlyphRasterCache};
+
+    fn library() -> FontLibrary {
+        let mut library = FontLibrary::empty();
+        library.load_bytes(dejavu::sans::regular().to_vec());
+        library
+    }
+
+    fn vertical(text: &str) -> TextRun {
+        TextRun::point(text, "DejaVu Sans", 32.0).with_paragraph(ParagraphStyle {
+            vertical: true,
+            ..ParagraphStyle::default()
+        })
+    }
+
+    /// W7-F: a column runs top to bottom, each cluster one em below the
+    /// last and centred on the column; the next paragraph is the next
+    /// column to the LEFT; the ink is taller than it is wide.
+    #[test]
+    fn vertical_type_stacks_glyphs_down_a_column_and_columns_advance_leftwards() {
+        let mut lib = library();
+        let shaped = shape(&mut lib, &vertical("ABC\nD"));
+        assert_eq!(shaped.lines.len(), 2, "one column per paragraph");
+        let first = &shaped.glyphs[shaped.lines[0].glyph_range()];
+        assert_eq!(first.len(), 3);
+        for pair in first.windows(2) {
+            let step = pair[1].draw_y - pair[0].draw_y;
+            assert!((step - 32.0).abs() < 1e-3, "one em per cell, got {step}");
+            let (ca, cb) = (
+                pair[0].x + pair[0].advance / 2.0,
+                pair[1].x + pair[1].advance / 2.0,
+            );
+            assert!((ca - cb).abs() < 1e-3, "glyphs share the column centre");
+        }
+        let d = &shaped.glyphs[shaped.lines[1].glyph_range()][0];
+        assert!(
+            d.x + d.advance / 2.0 < first[0].x,
+            "the second column sits to the left of the first"
+        );
+        assert!(
+            (d.draw_y - first[0].draw_y).abs() < 1e-3,
+            "columns start level"
+        );
+        let mut cache = GlyphRasterCache::new();
+        let tall = shape(&mut lib, &vertical("ABCD"));
+        let mask = rasterize(&mut lib, &mut cache, &tall);
+        let ink = mask.ink_bounds().expect("vertical text has ink");
+        assert!(
+            ink.height > ink.width * 2.0,
+            "four stacked glyphs are tall and narrow: {ink:?}"
+        );
+    }
+
+    #[test]
+    fn a_horizontal_run_is_unchanged_by_the_vertical_code_path() {
+        let mut lib = library();
+        let h = shape(&mut lib, &TextRun::point("ABCD", "DejaVu Sans", 32.0));
+        let mut cache = GlyphRasterCache::new();
+        let ink = rasterize(&mut lib, &mut cache, &h).ink_bounds().unwrap();
+        assert!(ink.width > ink.height, "horizontal text is wide: {ink:?}");
     }
 }

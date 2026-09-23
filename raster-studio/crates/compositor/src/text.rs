@@ -206,6 +206,9 @@ pub(crate) fn hash_layer(layer: &TextLayer) -> u64 {
     layer.paragraph.space_after.to_bits().hash(&mut h);
     layer.paragraph.left_indent.to_bits().hash(&mut h);
     layer.paragraph.right_indent.to_bits().hash(&mut h);
+    // W7-F: vertical type lays the same run out as a column, so the flag
+    // must split the run cache and the tile key from the horizontal layout.
+    layer.paragraph.vertical.hash(&mut h);
     match layer.frame {
         layer_model::text::Frame::Point => 0u8.hash(&mut h),
         layer_model::text::Frame::Box { width, height } => {

@@ -94,17 +94,31 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   modes; opacity and fill, locks, rename, align / distribute, Stamp Visible;
   Solid Color and Gradient fill layers, and a Pattern fill layer (tiled as
   pixels from the last Define Pattern); adjustment layers edited in
-  Properties; layer styles (ten effects, nine of which render on the canvas
-  — Pattern Overlay draws nothing, see the gaps below — plus Blending
-  Options), copy / paste style and style presets; smart objects
-  (embedded or linked; edit the contents, then commit); rasterize, merge,
-  flatten.
-- **Adjust:** the 20 Image ▸ Adjustments. Seventeen open a live-preview
+  Properties; layer styles (ten effects, all of which render on the canvas;
+  Pattern Overlay tiles a pattern picked from the ones Define Pattern made,
+  saved with the document — plus
+  Blending Options), copy / paste style and style presets; smart objects
+  (embedded or linked; edit the contents, then commit) with smart filters —
+  Filter ▸ Convert for Smart Filters, then a filter picked from the Filter
+  menu's filter rows joins the object's stack instead of rewriting its pixels
+  (the Filter Gallery, Last Filter, Liquify and Puppet Warp stay greyed over
+  a smart object): each shows as a row under the layer with an eye, a delete
+  button and double-click to re-open its dialog at its stored settings (the
+  object need not be the active layer), each change is one undo step, and
+  the stack saves with the project (a PSD export writes the filtered look as
+  pixels); rasterize,
+  merge, flatten.
+- **Adjust:** the 22 Image ▸ Adjustments. Nineteen open a live-preview
   dialog: Brightness/Contrast, Levels (with its histogram), Curves (a
   draggable curve over the histogram, per channel), Exposure, Vibrance,
   Hue/Saturation, Color Balance, Black & White, Photo Filter, Channel Mixer,
   Posterize, Threshold, Gradient Map, Selective Color, Shadows/Highlights,
-  Replace Color and Color Lookup (a `.cube` file or five built-in looks).
+  HDR Toning (local-adaptation tone mapping: a guided-filter base/detail split
+  of log luminance with edge-glow radius and strength, gamma, exposure,
+  detail, vibrance, saturation), Match Color (a mean/deviation transfer in
+  CIELAB from any open document's merged image or every other pixel layer, with
+  luminance, colour intensity, fade and neutralize), Replace Color and Color
+  Lookup (a `.cube` file or five built-in looks).
   Desaturate, Equalize and Invert ask nothing and apply at once. Auto Tone,
   Auto Contrast and Auto Color are separate items.
   Ctrl+L / M / U / B / I reach Levels, Curves, Hue/Saturation, Color Balance
@@ -122,12 +136,17 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   bake an adjustment into it alone.
 - **16-bit:** create a 16-bit document, or convert with Image ▸ Mode (one
   undoable step). It composites at 16 bits, saves and reopens as `.rstudio`
-  with its 16-bit tiles, and exports 16-bit PNG and TIFF. Most edits compute
-  at 8-bit precision (see below).
+  with its 16-bit tiles, and exports 16-bit PNG and TIFF. Filters,
+  adjustments, Fill, Clear, Free Transform, every flip and rotation, Image
+  Size, Canvas Size, Crop to Selection and Trim compute at 16 bits; a few
+  edits still round to 8 bits (see below).
 - **Edit:** Cut, Copy, Copy Merged, Paste, Paste in Place, Paste Into, Paste
   Outside, Clear (Delete or Backspace); Fill and Stroke dialogs, with
   Alt+Backspace / Ctrl+Backspace filling with the foreground / background
-  colour; Define Pattern and Define Brush; Step Forward / Backward; a History
+  colour; Fill ▸ Contents: Content-Aware (PatchMatch synthesis from the rest
+  of the layer, also the Spot Healing Brush's Content-Aware type) and Edit ▸
+  Content-Aware Scale (seam carving, 80/90/110/125% steps per axis); Define
+  Pattern and Define Brush; Step Forward / Backward; a History
   panel with thumbnails and a source marker; Purge; customisable keyboard
   shortcuts that apply at once; a right-click canvas menu.
 - **Record and replay** actions in the Actions panel; named actions show their
@@ -148,20 +167,15 @@ matrix, each with its reason there:
 
 | Missing | Why |
 | --- | --- |
-| CMYK, Lab and Indexed modes; spot colours | Tiles are stored as RGBA only; CMYK also needs an ICC engine and a print workflow. Image ▸ Mode ▸ Lab / CMYK / Indexed are greyed with that reason. |
-| Proof Colors and Gamut Warning | No output profile to soft-proof against, and the composite reaches the screen as clipped sRGB. Both View items are greyed with that reason. |
-| Smart Filters | The smart-object layer carries no filter stack and the compositor has no re-apply pass; Filter ▸ Convert for Smart Filters is greyed with that reason. |
-| Select Subject, Object Selection, Content-Aware Fill | No ML model ships. |
-| Liquify, Vanishing Point, Puppet Warp | Deep mesh-warp tooling beyond the transform mesh. |
+| ICC-accurate CMYK, spot colours, Lab files, L/a/b in Levels/Curves | Since W7-D: Image ▸ Mode ▸ Lab / CMYK / Indexed convert (one undo step each; CMYK on a documented naive ink model, not an ICC press profile; Indexed through its own dialog); File ▸ Export and Export As write a CMYK document as CMYK JPEG/TIFF and an Indexed one as a palette PNG (GIF keeps its colours); Export As says when a format writes the document as RGB instead (always, for Lab); Info adds a Lab or CMYK row for a document in that mode and the Color panel has a CMYK notation beside Lab; View ▸ Proof Colors and Gamut Warning are enabled and change the canvas. Still missing: a press profile and spot colours, any Lab file (Lab goes out as RGB, and the dialog says so), L/a/b channels in Levels/Curves, and Indexed flattening (semi-transparent layers can still blend colours outside the palette). |
+| Select Subject, Object Selection | No segmentation model ships. |
+| Vanishing Point | Perspective-plane tooling. (Liquify and Puppet Warp now exist: Filter ▸ Liquify… and Edit ▸ Puppet Warp, each applied as one undo step; their gaps are in the parity matrix.) |
 | Lighting Effects | Needs on-canvas light handles the parameter dialog cannot express. |
-| HDR Toning | No 32-bit mode; needs local adaptation. |
-| Match Color | Needs a cross-document source picker. |
-| Vertical Type | The text engine lays out horizontal lines only. |
 | Camera RAW, PDF / AI import, Sketch / XD / Figma | Per-sensor demosaic; a PDF interpreter; proprietary formats. |
 | Video and timeline; collaboration, cloud, mobile | Out of scope; non-goals. |
 
-**Absent, and not yet decided:** Perspective Crop, Freeform Pen,
-Content-Aware Move, the Type Mask tools, a separate Slice Select tool; Lens
+**Absent, and not yet decided:** Content-Aware Move, a separate Slice
+Select tool; Lens
 Correction, Adaptive Wide Angle and the Blur Gallery (Field / Iris /
 Tilt-Shift); Layer Comps and Tool Presets panels; File ▸ Automate / Batch and
 Scripts; XMP in File Info; vector masks (PSD import rasterises them); an
@@ -170,22 +184,47 @@ pure-Rust lossy encoder has passed evaluation yet, see the parity matrix).
 
 **Known gaps in what exists:**
 
-- **Stylus pressure is not read.** The stroke engine is pressure-aware and the
-  shell has a seam for it (`Shell::set_pen_pressure`), but only tests call it:
-  no tablet event feeds it, so a pen paints at full pressure.
+- **The W7-F tools have named limits.** Perspective Crop, Vertical Type, the two
+  Type Masks, Mixer Brush, Artboard, Curvature Pen and Freeform Pen are palette
+  tools now. Each is one undo step except Vertical Type, which is two like the
+  Type tool (the click's empty layer, then the confirmed run). Perspective Crop
+  rectifies the active raster layer only; vertical type is upright glyphs in
+  columns (no rotated Latin, no vertical punctuation forms, horizontal caret
+  geometry); the Mixer Brush has no live preview while
+  painting; artboards do not clip their contents and File > Export Artboards does
+  not exist. The parity matrix has the details.
+- **Stylus pressure is verified with synthetic events only.** winit's `Touch`
+  events (Windows `WM_POINTER` pens and fingers) now drive the same pointer
+  route as the mouse, with the force as the stroke's pressure
+  (`app-shell/src/pen_input.rs` through `Shell::set_pen_pressure`), and the
+  OS's emulated mouse for that contact is dropped. Losing window focus
+  mid-contact drops the contact and its pressure, since winit on Windows
+  never reports a cancelled contact. Tests drive synthetic
+  events; no physical pen has been tried. The options bar has Size from
+  Pressure and Flow from Pressure; there is no separate Opacity from Pressure
+  toggle, and pen tilt, rotation, hover and the eraser end are not read.
 - **Tab does not move keyboard focus.** Tab toggles the panels (Photopea's
   Hide/Show Panels) and is withheld from egui; controls are reached with the
   pointer. AccessKit is wired, but no screen-reader walk has been done on a
   real host.
-- **16-bit edits compute at 8-bit precision.** Transforms, filters,
-  adjustments, fills, Image Size and Canvas Size read a 16-bit tile rounded
-  to 8 bits; the pixels they leave alone keep their 16-bit codes. Opening a
-  16-bit PNG or TIFF decodes it to 8-bit tiles, and PSD export is 8-bit.
-- **Pattern Overlay draws nothing.** The Layer Style dialog offers all ten
-  effects, but the compositor has no asset store, so a Pattern Overlay, and a
-  glow or stroke filled with a pattern, render nothing
-  (`crates/compositor/src/effects.rs`, its "Honest gaps" and the
-  `pattern_overlay` branch of `render`). The other nine effects render.
+- **Some 16-bit edits still compute at 8-bit precision.** Filters,
+  adjustments, Fill, Clear, Free Transform (its resampling modes and a
+  floated selection, including on an opened 16-bit PNG or TIFF whose tiles
+  are still 8-bit), Edit ▸ Transform's flips and turns, every Image ▸
+  Image Rotation (90°, 180°, Arbitrary, flips), Image Size, Canvas Size,
+  Crop to Selection and Trim read and write a 16-bit layer at 16 bits. The
+  painting tools, Stroke, Apply Mask, Defringe, Layer via Copy/Cut,
+  Grayscale, Edit ▸ Fill ▸ Content-Aware (it synthesises the fill from an
+  8-bit read) and the Filter dialog's preview still read a 16-bit tile
+  rounded to 8 bits (the pixels they leave alone keep their 16-bit codes).
+  Opening a 16-bit PNG or TIFF decodes it to 8-bit tiles, and PSD export is
+  8-bit.
+- **Pattern effects do not cross PSD.** A Pattern Overlay (and a pattern-filled
+  glow or stroke) renders, and is saved inside the `.rstudio` document with its
+  pixels, but PSD import does not read Photoshop's pattern data (the fidelity
+  report lists "pattern overlay" as unmapped) and PSD export writes no pattern
+  effects. The Layer Style dialog picks the overlay's pattern, but has no
+  control yet that sets a glow's or stroke's fill to a pattern.
 - **Channels** cannot isolate alpha or a mask, and have no per-channel
   histogram.
 - **Localisation** covers the view and dialog code only; menu labels,
@@ -194,6 +233,11 @@ pure-Rust lossy encoder has passed evaluation yet, see the parity matrix).
   checked with an independent reader but not yet reopened in Photoshop or
   Photopea, and editable text export is blocked.
 - **Print** writes a PDF; there is no OS printer-spooler dialog.
+- **Content-aware:** Fill and Content-Aware Scale run on a job worker, but
+  the Spot Healing Brush's Content-Aware type still synthesises on the UI
+  thread at release; the fill refuses a context window over 2 M pixels, and
+  Content-Aware Scale has fixed steps, no interactive handles and no
+  protect-skin option.
 - **Packaging:** no runtime window icon, no macOS `.icns`, no notarisation,
   and the release job has never run (below).
 

@@ -29,6 +29,7 @@
 //! store it addresses cannot disagree about what a tile is. No rendering,
 //! compositing, or pixel buffer of any kind enters this crate.
 
+pub mod color_mode;
 pub mod command;
 pub mod document;
 pub mod history;

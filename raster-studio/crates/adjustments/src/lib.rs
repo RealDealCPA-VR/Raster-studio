@@ -141,6 +141,8 @@ pub mod color_ops;
 pub mod curve;
 pub mod error;
 pub mod extended;
+pub mod hdr;
+pub mod match_color;
 pub mod prepared;
 pub mod space;
 pub mod tone;
@@ -156,6 +158,8 @@ pub use extended::{
     desaturate, BuiltinLut, EqualizeMap, Lut3d, ReplaceColor, ShadowsHighlights, MAX_LUT_SIZE,
     MAX_SHADOWS_HIGHLIGHTS_RADIUS, MIN_LUT_SIZE,
 };
+pub use hdr::HdrToning;
+pub use match_color::{LabStats, MatchColor};
 pub use prepared::{apply, apply_adjustment, Adjustment, PreparedAdjustment};
 pub use space::{EncodedRgb, LinearRgb, WorkingSpace};
 pub use tone::{

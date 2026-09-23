@@ -323,6 +323,201 @@ impl PenTool {
     }
 }
 
+impl PenTool {
+    /// W7-F: publish a path authored by another pen — the Curvature Pen's
+    /// computed anchors, the Freeform Pen's fitted ones — through this pen's
+    /// mode, paint and combine, exactly as a path drawn here publishes.
+    /// Reports whether anything was emitted (too few anchors is nothing).
+    pub fn publish_anchors(
+        &mut self,
+        ctx: &mut ToolContext<'_>,
+        anchors: Vec<Anchor>,
+        closed: bool,
+    ) -> Result<bool, ToolError> {
+        self.anchors = anchors;
+        self.closed = closed;
+        self.dragging = None;
+        self.publish(ctx)
+    }
+}
+
+/// W7-F: the Freeform Pen's default curve-fit tolerance, in document pixels.
+pub const DEFAULT_CURVE_FIT_PX: f32 = 2.0;
+
+/// W7-F: the Freeform Pen — drag freehand, and the path is fitted from the
+/// polyline on release.
+///
+/// The drag's samples are simplified with Ramer-Douglas-Peucker at the
+/// `curve_fit` tolerance (a larger tolerance keeps fewer anchors and a looser
+/// fit), and the kept points are joined by the Curvature Pen's smooth
+/// handles ([`crate::curvature_pen::smooth_anchors`]), so the result is a
+/// short, editable Bezier path rather than one anchor per mouse sample. A
+/// drag that ends within [`CLOSE_RADIUS_PX`] of where it started closes the
+/// path. The path publishes on release through the Pen's mode, paint and
+/// combine — one history step per drag.
+pub struct FreeformPenTool {
+    pen: PenTool,
+    samples: Vec<Vec2>,
+    /// RDP tolerance, document pixels.
+    pub curve_fit: f32,
+}
+
+impl Default for FreeformPenTool {
+    fn default() -> Self {
+        Self {
+            pen: PenTool::default(),
+            samples: Vec::new(),
+            curve_fit: DEFAULT_CURVE_FIT_PX,
+        }
+    }
+}
+
+/// Ramer-Douglas-Peucker: the points of `pts` a polyline within `tolerance`
+/// of the original needs, first and last always kept.
+pub fn simplify(pts: &[Vec2], tolerance: f32) -> Vec<Vec2> {
+    if pts.len() < 3 {
+        return pts.to_vec();
+    }
+    let mut keep = vec![false; pts.len()];
+    keep[0] = true;
+    keep[pts.len() - 1] = true;
+    let mut stack = vec![(0usize, pts.len() - 1)];
+    while let Some((a, b)) = stack.pop() {
+        if b <= a + 1 {
+            continue;
+        }
+        let (pa, pb) = (pts[a], pts[b]);
+        let ab = pb - pa;
+        let len = ab.length();
+        let (mut worst, mut at) = (0.0f32, a);
+        for (i, p) in pts.iter().enumerate().take(b).skip(a + 1) {
+            let d = if len <= f32::EPSILON {
+                (*p - pa).length()
+            } else {
+                ((*p - pa).perp_dot(ab)).abs() / len
+            };
+            if d > worst {
+                worst = d;
+                at = i;
+            }
+        }
+        if worst > tolerance {
+            keep[at] = true;
+            stack.push((a, at));
+            stack.push((at, b));
+        }
+    }
+    pts.iter()
+        .zip(keep)
+        .filter_map(|(p, k)| k.then_some(*p))
+        .collect()
+}
+
+impl FreeformPenTool {
+    /// The drag's samples so far.
+    pub fn samples(&self) -> &[Vec2] {
+        &self.samples
+    }
+
+    /// The anchors a drag of `samples` fits to at this tolerance, and
+    /// whether it closes.
+    pub fn fit(&self, samples: &[Vec2]) -> (Vec<Anchor>, bool) {
+        let mut pts = simplify(samples, self.curve_fit.max(0.01));
+        let closed = pts.len() > MIN_CLOSED_ANCHORS
+            && (pts[pts.len() - 1] - pts[0]).length() <= CLOSE_RADIUS_PX;
+        if closed {
+            pts.pop();
+        }
+        (crate::curvature_pen::smooth_anchors(&pts, closed), closed)
+    }
+}
+
+impl Tool for FreeformPenTool {
+    fn id(&self) -> ToolId {
+        ToolId::FreeformPen
+    }
+
+    fn on_pointer_down(
+        &mut self,
+        _ctx: &mut ToolContext<'_>,
+        event: PointerEvent,
+    ) -> Result<(), ToolError> {
+        let pos = crate::error::finite_pt("freeform pen point", event.pos)?;
+        self.samples.clear();
+        self.samples.push(pos);
+        Ok(())
+    }
+
+    fn on_pointer_move(
+        &mut self,
+        _ctx: &mut ToolContext<'_>,
+        event: PointerEvent,
+    ) -> Result<(), ToolError> {
+        if self.samples.is_empty() || !event.pos.is_finite() {
+            return Ok(());
+        }
+        if self.samples.len() >= MAX_ANCHORS * 10 {
+            return Ok(());
+        }
+        if self
+            .samples
+            .last()
+            .is_some_and(|l| (event.pos - *l).length() >= 0.5)
+        {
+            self.samples.push(event.pos);
+        }
+        Ok(())
+    }
+
+    fn on_pointer_up(
+        &mut self,
+        ctx: &mut ToolContext<'_>,
+        event: PointerEvent,
+    ) -> Result<(), ToolError> {
+        if self.samples.is_empty() {
+            return Ok(());
+        }
+        self.on_pointer_move(ctx, event)?;
+        let samples = std::mem::take(&mut self.samples);
+        let (anchors, closed) = self.fit(&samples);
+        self.pen.publish_anchors(ctx, anchors, closed)?;
+        Ok(())
+    }
+
+    fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {
+        self.samples.clear();
+    }
+
+    fn is_active(&self) -> bool {
+        !self.samples.is_empty()
+    }
+
+    /// The freehand trail while the button is down.
+    fn live_geometry(&self) -> Option<crate::tool::SessionGeometry> {
+        if self.samples.is_empty() {
+            return None;
+        }
+        Some(crate::tool::SessionGeometry::Lasso {
+            points: self.samples.clone(),
+            closed: false,
+        })
+    }
+
+    /// `curve_fit`, plus every option the Pen answers.
+    fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        match (key, setting) {
+            ("curve_fit", ToolSetting::Float(v)) => {
+                self.curve_fit = crate::error::finite("curve fit", v)?.clamp(0.5, 10.0);
+                Ok(())
+            }
+            ("curve_fit", _) => Err(ToolError::OptionKindMismatch {
+                key: key.to_owned(),
+            }),
+            _ => self.pen.set_setting(key, setting),
+        }
+    }
+}
+
 /// The active layer when it is a shape layer, with its shape definition.
 fn active_shape(ctx: &ToolContext<'_>) -> Option<(layer_model::LayerId, layer_model::ShapeLayer)> {
     let active = ctx.active_layer?;
@@ -1063,5 +1258,79 @@ mod tests {
         assert!(tiles.pixel(key, 70, 20)[3] > 0, "the stroke is missing");
         let (tiles, key) = run(&|_| {});
         assert_eq!(tiles.pixel(key, 70, 70), [0, 0, 255, 255]);
+    }
+}
+
+#[cfg(test)]
+mod freeform_tests {
+    use super::*;
+    use crate::tiles::MemoryTiles;
+    use raster::PixelRect;
+    use vector::PathEl;
+
+    fn arc(n: usize) -> Vec<Vec2> {
+        (0..=n)
+            .map(|i| {
+                let t = std::f32::consts::PI * i as f32 / n as f32;
+                Vec2::new(64.0 - 40.0 * t.cos(), 64.0 - 40.0 * t.sin())
+            })
+            .collect()
+    }
+
+    /// W7-F: a freehand drag of 60 samples lands as ONE shape layer whose
+    /// path has far fewer anchors than samples and is curved.
+    #[test]
+    fn a_freehand_drag_is_fitted_into_a_short_curved_path_on_release() {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 128, 128));
+        let mut tool = FreeformPenTool::default();
+        let pts = arc(60);
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(pts[0].x, pts[0].y))
+            .unwrap();
+        for p in &pts[1..] {
+            tool.on_pointer_move(&mut ctx, PointerEvent::at(p.x, p.y))
+                .unwrap();
+        }
+        assert!(tool.live_geometry().is_some());
+        assert!(ctx.commands().is_empty());
+        let last = pts[pts.len() - 1];
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(last.x, last.y))
+            .unwrap();
+        let commands = ctx.drain();
+        assert_eq!(commands.len(), 1, "{commands:?}");
+        let Command::CreateLayer { layer } = &commands[0] else {
+            panic!("{commands:?}");
+        };
+        let LayerKind::Shape(shape) = &layer.kind else {
+            panic!("not a shape");
+        };
+        let path = svg::parse(&shape.path_svg).unwrap();
+        let curves = path
+            .elements()
+            .iter()
+            .filter(|e| matches!(e, PathEl::CurveTo(..)))
+            .count();
+        assert!(curves >= 2, "{}", shape.path_svg);
+        assert!(curves < 20, "not simplified: {curves} curves");
+        assert!(!tool.is_active());
+    }
+
+    #[test]
+    fn a_looser_curve_fit_keeps_fewer_anchors() {
+        let pts = arc(60);
+        let tight = FreeformPenTool {
+            curve_fit: 0.5,
+            ..FreeformPenTool::default()
+        };
+        let loose = FreeformPenTool {
+            curve_fit: 8.0,
+            ..FreeformPenTool::default()
+        };
+        assert!(loose.fit(&pts).0.len() < tight.fit(&pts).0.len());
+        let mut t = FreeformPenTool::default();
+        t.set_setting("curve_fit", ToolSetting::Float(5.0)).unwrap();
+        assert_eq!(t.curve_fit, 5.0);
+        assert!(t.set_setting("curve_fit", ToolSetting::Bool(true)).is_err());
+        t.set_setting("mode", ToolSetting::Choice(0)).unwrap();
     }
 }

@@ -467,6 +467,18 @@ fn run_file_export(
                 .unwrap_or_else(|| job.target.display().to_string()),
         )
     })?;
+    // W7-D: a CMYK document writes a CMYK JPEG/TIFF and an Indexed one a
+    // palette PNG (8 bits, `color::cmyk`'s documented ink model, no ICC
+    // press profile); every other pairing falls through to the RGB file.
+    let ink = raster::export::ExportInk::for_color_mode(doc.meta.color_mode);
+    if ink != raster::export::ExportInk::Rgb {
+        let rgba8 = canvas.to_rgba8(&doc.meta.color_space);
+        if let Some(bytes) = raster::export::encode_rgba8_in_ink(format, ink, w, h, &rgba8)? {
+            crate::doc::write_atomically(&job.target, &bytes)
+                .map_err(crate::import::ImportError::from)?;
+            return Ok(None);
+        }
+    }
     // A tagged document re-tags: the profile it opened with rides back into
     // the file (the codec writes the iCCP chunk for the formats that carry
     // one).
@@ -624,7 +636,9 @@ fn run_export(job: &ExportJob) -> Result<Vec<PathBuf>, crate::doc::DocumentError
         .iter()
         .filter(|entry| entry.enabled)
         .map(|entry| {
-            let mut preset = entry.preset.clone();
+            // W7-D: a CMYK document goes out as CMYK JPEG/TIFF, an
+            // Indexed one as a palette PNG.
+            let mut preset = entry.preset.clone().for_color_mode(doc.meta.color_mode);
             preset.name = format!("{}{}", job.job.base_name, entry.suffix);
             preset
         })

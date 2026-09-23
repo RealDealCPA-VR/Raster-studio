@@ -27,6 +27,9 @@ pub enum ColorNotation {
     Rgb,
     Hex,
     Lab,
+    /// W7-D: cyan, magenta, yellow and black in percent, through
+    /// `color::cmyk`'s documented ink model (no ICC press profile).
+    Cmyk,
 }
 
 impl ColorNotation {
@@ -35,6 +38,7 @@ impl ColorNotation {
         ColorNotation::Rgb,
         ColorNotation::Hex,
         ColorNotation::Lab,
+        ColorNotation::Cmyk,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -43,6 +47,7 @@ impl ColorNotation {
             ColorNotation::Rgb => "RGB",
             ColorNotation::Hex => "Hex",
             ColorNotation::Lab => "Lab",
+            ColorNotation::Cmyk => "CMYK",
         }
     }
 }
@@ -228,6 +233,23 @@ impl ColorState {
             rgb[2].clamp(0.0, 1.0),
             alpha,
         ])
+    }
+
+    /// W7-D: the current colour as whole ink percentages `[C, M, Y, K]`,
+    /// separated with `color::cmyk`'s documented ink model.
+    pub fn cmyk_percent(&self) -> [u8; 4] {
+        color::cmyk::rgb8_to_cmyk(self.rgb8()).percentages()
+    }
+
+    /// W7-D: set the current colour from ink percentages (each `0..=100`),
+    /// composed back through the same ink model — so what the panel sets is
+    /// always a printable colour.
+    pub fn set_cmyk_percent(&mut self, cmyk: [f32; 4]) -> bool {
+        if !cmyk.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let [c, m, y, k] = cmyk.map(|v| v.clamp(0.0, 100.0) / 100.0);
+        self.set_rgb8(color::cmyk::cmyk_to_rgb8(color::cmyk::Cmyk { c, m, y, k }))
     }
 
     /// The current colour as 8-bit RGB.
@@ -726,6 +748,30 @@ mod tests {
         assert_eq!(ColorWell::Foreground.other(), ColorWell::Background);
         assert_eq!(ColorWell::Background.other(), ColorWell::Foreground);
         assert_eq!(ColorWell::Foreground.other().other(), ColorWell::Foreground);
+    }
+
+    #[test]
+    fn cmyk_reads_the_ink_model_and_sets_a_printable_colour() {
+        let mut s = ColorState::new();
+        assert!(s.set_rgb8([255, 255, 255]));
+        assert_eq!(s.cmyk_percent(), [0, 0, 0, 0], "paper is no ink");
+        // Full black ink is black.
+        assert!(s.set_cmyk_percent([0.0, 0.0, 0.0, 100.0]));
+        assert_eq!(s.rgb8(), [0, 0, 0]);
+        assert_eq!(s.cmyk_percent()[3], 100);
+        // Full cyan is the model's cyan ink, and reads back as cyan.
+        assert!(s.set_cmyk_percent([100.0, 0.0, 0.0, 0.0]));
+        let cyan = color::cmyk::cmyk_to_rgb8(color::cmyk::Cmyk {
+            c: 1.0,
+            m: 0.0,
+            y: 0.0,
+            k: 0.0,
+        });
+        assert_eq!(s.rgb8(), cyan);
+        let [c, m, y, k] = s.cmyk_percent();
+        assert!(c >= 95 && m <= 5 && y <= 5 && k <= 5, "{c} {m} {y} {k}");
+        assert!(ColorNotation::ALL.contains(&ColorNotation::Cmyk));
+        assert!(!s.set_cmyk_percent([f32::NAN, 0.0, 0.0, 0.0]));
     }
 
     #[test]

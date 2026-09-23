@@ -45,8 +45,8 @@
 //! into a no-op.
 
 use adjustments::{
-    Adjustment, BuiltinLut, Curve, EncodedRgb, ImageStats, Lut3d, PreparedAdjustment, ReplaceColor,
-    ShadowsHighlights, HISTOGRAM_BINS,
+    Adjustment, BuiltinLut, Curve, EncodedRgb, ImageStats, LabStats, Lut3d, PreparedAdjustment,
+    ReplaceColor, ShadowsHighlights, HISTOGRAM_BINS,
 };
 use color::ColorSpace;
 use design::tokens::palette::ColorRole;
@@ -112,6 +112,16 @@ const LUT_CHOICES: [usize; 6] = [0, 1, 2, 3, 4, 5];
 /// [`LUT_CHOICES`], so every listed row, "None" included, differs from it and
 /// can be picked.
 const LUT_LOADED: usize = usize::MAX;
+
+/// W7-G: one image Match Color can take its statistics from — an open
+/// document's merged image or a pixel layer — named for the Source list.
+#[derive(Clone, PartialEq, Debug)]
+pub struct MatchSource {
+    /// What the Source list shows.
+    pub label: String,
+    /// Its CIELAB mean and deviation.
+    pub stats: LabStats,
+}
 
 /// What the dialog commits: which adjustment, with which parameters.
 #[derive(Clone, PartialEq, Debug)]
@@ -210,6 +220,10 @@ pub struct AdjustmentDialog {
     /// "Open editor") rather than by Image > Adjustments. Confirming then
     /// rewrites that layer's parameters instead of baking pixels.
     edit_layer: Option<LayerId>,
+    /// W7-G Match Color: the images the host offers as sources, and which
+    /// is picked (`0` is None — the layer matched to itself).
+    match_sources: Vec<MatchSource>,
+    match_choice: usize,
 }
 
 impl std::fmt::Debug for AdjustmentDialog {
@@ -249,6 +263,23 @@ impl AdjustmentDialog {
             ])
         });
         let mut kind = editable_kind(id, id.identity_kind());
+        // W7-G: Match Color measures the layer it will change; with no source
+        // picked the source is the layer itself, so it opens as the identity.
+        if let AdjustmentKind::MatchColor {
+            source_mean,
+            source_std,
+            target_mean,
+            target_std,
+            ..
+        } = &mut kind
+        {
+            if let Some(stats) = LabStats::measure(source.pixels(), None) {
+                *source_mean = stats.mean;
+                *source_std = stats.std;
+                *target_mean = stats.mean;
+                *target_std = stats.std;
+            }
+        }
         // Replace Color opens sampling the middle of the layer, the way
         // Photopea's opens on the colour under its eyedropper.
         if let AdjustmentKind::ReplaceColor { color, .. } = &mut kind {
@@ -281,7 +312,58 @@ impl AdjustmentDialog {
             lut_file_requested: false,
             lut_error: None,
             edit_layer: None,
+            match_sources: Vec::new(),
+            match_choice: 0,
         }
+    }
+
+    /// W7-G Match Color: offer `sources` in the Source list (the host passes
+    /// every open document's merged image and the pixel layers). The pick
+    /// goes back to None.
+    pub fn set_match_sources(&mut self, sources: Vec<MatchSource>) {
+        self.match_sources = sources;
+        self.choose_match_source(0);
+    }
+
+    /// Match Color: the offered sources.
+    pub fn match_sources(&self) -> &[MatchSource] {
+        &self.match_sources
+    }
+
+    /// Match Color: which source is picked, `0` for None.
+    pub fn match_choice(&self) -> usize {
+        self.match_choice
+    }
+
+    /// Match Color: pick source `choice` (`0` is None, `1..` index
+    /// [`Self::match_sources`]) — its statistics become the source's. The
+    /// Source combo calls this. Returns whether the choice was known.
+    pub fn choose_match_source(&mut self, choice: usize) -> bool {
+        if choice > self.match_sources.len() {
+            return false;
+        }
+        let mut next = self.kind.clone();
+        let AdjustmentKind::MatchColor {
+            source_mean,
+            source_std,
+            target_mean,
+            target_std,
+            ..
+        } = &mut next
+        else {
+            return false;
+        };
+        let stats = match choice.checked_sub(1) {
+            Some(i) => self.match_sources[i].stats,
+            None => LabStats {
+                mean: *target_mean,
+                std: *target_std,
+            },
+        };
+        *source_mean = stats.mean;
+        *source_std = stats.std;
+        self.match_choice = choice;
+        self.set_kind(next)
     }
 
     /// Open the dialog on an existing adjustment layer's parameters, so
@@ -435,6 +517,19 @@ impl AdjustmentDialog {
             let [ha, ht, hr] = sh.highlights();
             let scaled =
                 ShadowsHighlights::new([sa, st, sr / scale], [ha, ht, hr / scale]).unwrap_or(*sh);
+            let (w, h) = out.dimensions();
+            let _ = scaled.apply_premultiplied_rgba_spatial(
+                out.pixels_mut(),
+                w as usize,
+                h as usize,
+                &self.space,
+            );
+            return out;
+        }
+        // W7-G: HDR Toning runs its whole base/detail operator, the Edge
+        // Glow radius scaled down to the proxy like Shadows/Highlights'.
+        if let Adjustment::HdrToning(hdr) = &adjustment {
+            let scaled = hdr.with_radius(hdr.radius() / self.proxy_scale.max(1.0));
             let (w, h) = out.dimensions();
             let _ = scaled.apply_premultiplied_rgba_spatial(
                 out.pixels_mut(),
@@ -780,6 +875,7 @@ impl AdjustmentDialog {
         let mut open_picker: Option<(ColorTarget, [f32; 3])> = None;
         let mut promote: Option<AdjustmentKind> = None;
         let mut lut_pick: Option<usize> = None;
+        let mut match_pick: Option<usize> = None;
 
         match &mut next {
             K::BrightnessContrast {
@@ -1154,6 +1250,117 @@ impl AdjustmentDialog {
                     design::slider_row(ui, tr("ui.adjustment.lightness"), lightness, -1.0..=1.0)
                         .changed();
             }
+            // W7-G: Photopea's HDR Toning groups.
+            K::HdrToning {
+                radius,
+                strength,
+                gamma,
+                exposure,
+                detail,
+                vibrance,
+                saturation,
+            } => {
+                caption(ui, tr("ui.adjustment.hdr.edge.glow"));
+                changed |= design::slider_row(
+                    ui,
+                    tr("ui.adjustment.radius"),
+                    radius,
+                    1.0..=adjustments::hdr::MAX_HDR_RADIUS,
+                )
+                .changed();
+                changed |= design::slider_row(
+                    ui,
+                    tr("ui.adjustment.strength"),
+                    strength,
+                    0.0..=adjustments::hdr::MAX_HDR_STRENGTH,
+                )
+                .changed();
+                caption(ui, tr("ui.adjustment.hdr.tone.detail"));
+                changed |= design::slider_row(
+                    ui,
+                    tr("ui.adjustment.gamma"),
+                    gamma,
+                    adjustments::hdr::MIN_HDR_GAMMA..=adjustments::hdr::MAX_HDR_GAMMA,
+                )
+                .changed();
+                changed |= design::slider_row(
+                    ui,
+                    tr("ui.adjustment.exposure"),
+                    exposure,
+                    -adjustments::hdr::MAX_HDR_EXPOSURE..=adjustments::hdr::MAX_HDR_EXPOSURE,
+                )
+                .changed();
+                let mut percent = *detail * 100.0;
+                changed |= design::slider_row(
+                    ui,
+                    tr("ui.adjustment.detail"),
+                    &mut percent,
+                    adjustments::hdr::MIN_HDR_DETAIL * 100.0
+                        ..=adjustments::hdr::MAX_HDR_DETAIL * 100.0,
+                )
+                .changed();
+                *detail = percent / 100.0;
+                caption(ui, tr("ui.adjustment.hdr.advanced"));
+                let (mut v, mut s) = (*vibrance * 100.0, *saturation * 100.0);
+                changed |=
+                    design::slider_row(ui, tr("ui.adjustment.vibrance"), &mut v, -100.0..=100.0)
+                        .changed();
+                changed |=
+                    design::slider_row(ui, tr("ui.adjustment.saturation"), &mut s, -100.0..=100.0)
+                        .changed();
+                *vibrance = v / 100.0;
+                *saturation = s / 100.0;
+            }
+            // W7-G: Match Color — the source picker, then Image Options.
+            K::MatchColor {
+                luminance,
+                color_intensity,
+                fade,
+                neutralize,
+                ..
+            } => {
+                let mut choice = self.match_choice;
+                let choices: Vec<usize> = (0..=self.match_sources.len()).collect();
+                let sources = &self.match_sources;
+                design::inspector_field(ui, tr("ui.adjustment.match.source"), |ui| {
+                    combo(
+                        ui,
+                        ("adjustment", "match-source"),
+                        &mut choice,
+                        &choices,
+                        |i| match i.checked_sub(1).and_then(|i| sources.get(i)) {
+                            Some(source) => source.label.clone(),
+                            None => tr("ui.adjustment.match.none").to_string(),
+                        },
+                        |_| None,
+                    );
+                });
+                if choice != self.match_choice {
+                    match_pick = Some(choice);
+                }
+                if self.match_sources.is_empty() {
+                    caption(ui, tr("ui.adjustment.match.no.sources"));
+                }
+                caption(ui, tr("ui.adjustment.match.image.options"));
+                let (mut l, mut c, mut f) =
+                    (*luminance * 100.0, *color_intensity * 100.0, *fade * 100.0);
+                changed |=
+                    design::slider_row(ui, tr("ui.adjustment.luminance"), &mut l, 1.0..=200.0)
+                        .changed();
+                changed |= design::slider_row(
+                    ui,
+                    tr("ui.adjustment.color.intensity"),
+                    &mut c,
+                    0.0..=200.0,
+                )
+                .changed();
+                changed |=
+                    design::slider_row(ui, tr("ui.adjustment.fade"), &mut f, 0.0..=100.0).changed();
+                *luminance = l / 100.0;
+                *color_intensity = c / 100.0;
+                *fade = f / 100.0;
+                changed |= checkbox_row(ui, tr("ui.adjustment.neutralize"), neutralize).changed();
+            }
             K::ColorLookup { name, .. } => {
                 let mut choice = self.lut_choice;
                 design::inspector_field(ui, tr("ui.adjustment.lut"), |ui| {
@@ -1191,6 +1398,10 @@ impl AdjustmentDialog {
         if let Some(choice) = lut_pick {
             // The combo's pick goes through the one path tests and hosts use.
             self.choose_lut(choice);
+            return;
+        }
+        if let Some(choice) = match_pick {
+            self.choose_match_source(choice);
             return;
         }
         if let Some(wide) = promote {
@@ -1976,5 +2187,135 @@ mod tests {
             outcome.is_open(),
             "an identity Levels confirmed to {outcome:?}"
         );
+    }
+
+    /// W7-G: every text shape one frame of `dialog` draws, with its rect.
+    fn drawn_texts(h: &Harness, dialog: &mut AdjustmentDialog) -> Vec<(String, egui::Rect)> {
+        let mut found = Vec::new();
+        for _ in 0..Harness::STABLE_FRAMES {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Harness::SCREEN)),
+                ..Default::default()
+            };
+            let output = h.ctx.run(input, |ctx| {
+                let _ = dialog.show(ctx, None);
+            });
+            found = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(t) => Some((
+                        t.galley.text().to_string(),
+                        egui::Rect::from_min_size(t.pos, t.galley.size()),
+                    )),
+                    _ => None,
+                })
+                .collect();
+        }
+        found
+    }
+
+    /// W7-G: the HDR Toning page draws Photopea's three groups and every
+    /// control row, and its preview is the real local operator.
+    #[test]
+    fn the_hdr_toning_page_draws_its_groups_and_rows() {
+        let harness = Harness::new();
+        let mut dialog = AdjustmentDialog::with_placeholder(AdjustmentId::HdrToning);
+        let texts = drawn_texts(&harness, &mut dialog);
+        for key in [
+            "ui.adjustment.hdr.edge.glow",
+            "ui.adjustment.radius",
+            "ui.adjustment.strength",
+            "ui.adjustment.hdr.tone.detail",
+            "ui.adjustment.gamma",
+            "ui.adjustment.exposure",
+            "ui.adjustment.detail",
+            "ui.adjustment.hdr.advanced",
+            "ui.adjustment.vibrance",
+            "ui.adjustment.saturation",
+        ] {
+            assert!(
+                texts.iter().any(|(t, _)| t == tr(key)),
+                "{key} is not drawn: {texts:?}"
+            );
+        }
+        // It opens at Photoshop's default, not the identity, so OK is live.
+        assert!(dialog.confirm().is_some());
+    }
+
+    /// W7-G: Match Color's Source dropdown, clicked in a real frame, picks a
+    /// source the host offered and the source statistics follow it.
+    #[test]
+    fn the_match_color_source_dropdown_picks_an_offered_source() {
+        let harness = Harness::new();
+        let mut dialog = AdjustmentDialog::with_placeholder(AdjustmentId::MatchColor);
+        assert!(
+            dialog.invocation().is_identity(),
+            "None must be the identity"
+        );
+        let cool = LabStats {
+            mean: [40.0, -5.0, -30.0],
+            std: [25.0, 6.0, 12.0],
+        };
+        dialog.set_match_sources(vec![
+            MatchSource {
+                label: "Other (Merged)".to_string(),
+                stats: LabStats::NEUTRAL,
+            },
+            MatchSource {
+                label: "Cool / Layer 2".to_string(),
+                stats: cool,
+            },
+        ]);
+        let none = tr("ui.adjustment.match.none").to_string();
+        let texts = drawn_texts(&harness, &mut dialog);
+        let combo = texts
+            .iter()
+            .find(|(t, _)| *t == none)
+            .map(|(_, r)| *r)
+            .expect("the Source combo shows None");
+        for key in [
+            "ui.adjustment.match.image.options",
+            "ui.adjustment.luminance",
+            "ui.adjustment.color.intensity",
+            "ui.adjustment.fade",
+            "ui.adjustment.neutralize",
+        ] {
+            assert!(
+                texts.iter().any(|(t, _)| t == tr(key)),
+                "{key} is not drawn"
+            );
+        }
+        harness.frame(Harness::click_events(combo.center()), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        let row = drawn_texts(&harness, &mut dialog)
+            .into_iter()
+            .find(|(t, _)| t == "Cool / Layer 2")
+            .map(|(_, r)| r)
+            .expect("the open list has the offered layer");
+        harness.frame(Harness::click_events(row.center()), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        assert_eq!(dialog.match_choice(), 2);
+        let AdjustmentKind::MatchColor {
+            source_mean,
+            source_std,
+            ..
+        } = dialog.kind()
+        else {
+            panic!("not MatchColor");
+        };
+        assert_eq!((*source_mean, *source_std), (cool.mean, cool.std));
+        assert!(!dialog.invocation().is_identity());
+        assert!(dialog.confirm().is_some());
+        // Fade 100% is the identity again, and refused.
+        let mut faded = dialog.kind().clone();
+        if let AdjustmentKind::MatchColor { fade, .. } = &mut faded {
+            *fade = 1.0;
+        }
+        assert!(dialog.set_kind(faded));
+        assert!(dialog.invocation().is_identity());
+        assert!(dialog.confirm().is_none());
     }
 }

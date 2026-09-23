@@ -16,6 +16,8 @@ use crate::extended::{
     desaturate, EqualizeMap, Lut3d, ReplaceColor, ShadowsHighlights, MAX_LUT_SIZE,
     MAX_SHADOWS_HIGHLIGHTS_RADIUS,
 };
+use crate::hdr::HdrToning;
+use crate::match_color::{LabStats, MatchColor};
 use crate::space::{EncodedRgb, LinearRgb, WorkingSpace};
 use crate::tone::{
     invert, BrightnessContrast, Curves, ExposureParams, Levels, LevelsChannel, Posterize,
@@ -85,6 +87,13 @@ pub enum Adjustment {
     ReplaceColor(ReplaceColor),
     /// A 3D colour lookup table, encoded.
     ColorLookup(Lut3d),
+    /// HDR Toning, encoded (it decodes to linear luminance itself). Per pixel
+    /// it is the neighbourhood-free tone curve; the radius, strength and
+    /// detail are honoured by [`HdrToning::apply_premultiplied_rgba_spatial`].
+    HdrToning(HdrToning),
+    /// Match Color, linear (CIELAB from linear values), with the target
+    /// statistics it was resolved against.
+    MatchColor(MatchColor),
 }
 
 impl Adjustment {
@@ -99,7 +108,8 @@ impl Adjustment {
             Adjustment::Exposure(_)
             | Adjustment::PhotoFilter(_)
             | Adjustment::GradientMap(_)
-            | Adjustment::Desaturate => WorkingSpace::Linear,
+            | Adjustment::Desaturate
+            | Adjustment::MatchColor(_) => WorkingSpace::Linear,
             _ => WorkingSpace::Encoded,
         }
     }
@@ -124,6 +134,8 @@ impl Adjustment {
             Adjustment::ShadowsHighlights(p) => p.is_identity(),
             Adjustment::ReplaceColor(p) => p.is_identity(),
             Adjustment::ColorLookup(p) => p.is_identity(),
+            Adjustment::HdrToning(p) => p.is_identity(),
+            Adjustment::MatchColor(p) => p.is_identity(),
             Adjustment::Desaturate | Adjustment::Equalize => false,
             Adjustment::BlackAndWhite(_)
             | Adjustment::Invert
@@ -281,6 +293,25 @@ impl Adjustment {
                 name: p.name().to_string(),
                 size: p.size() as u32,
                 table: p.table().to_vec(),
+            },
+            Adjustment::HdrToning(p) => AdjustmentKind::HdrToning {
+                radius: p.radius(),
+                strength: p.strength(),
+                gamma: p.gamma(),
+                exposure: p.exposure(),
+                detail: p.detail(),
+                vibrance: p.vibrance(),
+                saturation: p.saturation(),
+            },
+            Adjustment::MatchColor(p) => AdjustmentKind::MatchColor {
+                source_mean: p.source().mean,
+                source_std: p.source().std,
+                target_mean: p.target().mean,
+                target_std: p.target().std,
+                luminance: p.luminance(),
+                color_intensity: p.color_intensity(),
+                fade: p.fade(),
+                neutralize: p.neutralize(),
             },
         }
     }
@@ -659,6 +690,59 @@ impl From<&AdjustmentKind> for Adjustment {
                 )
                 .unwrap_or_else(|_| Lut3d::identity(2)),
             ),
+            AdjustmentKind::HdrToning {
+                radius,
+                strength,
+                gamma,
+                exposure,
+                detail,
+                vibrance,
+                saturation,
+            } => {
+                use crate::hdr::{
+                    MAX_HDR_DETAIL, MAX_HDR_EXPOSURE, MAX_HDR_GAMMA, MAX_HDR_RADIUS,
+                    MAX_HDR_STRENGTH, MIN_HDR_DETAIL, MIN_HDR_GAMMA,
+                };
+                Adjustment::HdrToning(
+                    HdrToning::new(
+                        lenient(*radius, 0.0, MAX_HDR_RADIUS, 15.0),
+                        lenient(*strength, 0.0, MAX_HDR_STRENGTH, 0.0),
+                        lenient(*gamma, MIN_HDR_GAMMA, MAX_HDR_GAMMA, 1.0),
+                        lenient(*exposure, -MAX_HDR_EXPOSURE, MAX_HDR_EXPOSURE, 0.0),
+                        lenient(*detail, MIN_HDR_DETAIL, MAX_HDR_DETAIL, 0.0),
+                        lenient(*vibrance, -1.0, 1.0, 0.0),
+                        lenient(*saturation, -1.0, 1.0, 0.0),
+                    )
+                    .unwrap_or(HdrToning::IDENTITY),
+                )
+            }
+            AdjustmentKind::MatchColor {
+                source_mean,
+                source_std,
+                target_mean,
+                target_std,
+                luminance,
+                color_intensity,
+                fade,
+                neutralize,
+            } => {
+                let stats = |mean: &[f32; 3], std: &[f32; 3]| LabStats {
+                    mean: mean.map(|v| if v.is_finite() { v } else { 0.0 }),
+                    std: std.map(|v| lenient(v, 0.0, 1000.0, 1.0)),
+                };
+                let gain = crate::match_color::MAX_MATCH_GAIN;
+                Adjustment::MatchColor(
+                    MatchColor::new(
+                        stats(source_mean, source_std),
+                        stats(target_mean, target_std),
+                        lenient(*luminance, 0.0, gain, 1.0),
+                        lenient(*color_intensity, 0.0, gain, 1.0),
+                        lenient(*fade, 0.0, 1.0, 0.0),
+                        *neutralize,
+                    )
+                    .unwrap_or(MatchColor::IDENTITY),
+                )
+            }
         }
     }
 }
@@ -810,6 +894,46 @@ impl Adjustment {
             AdjustmentKind::ColorLookup { name, size, table } => {
                 Adjustment::ColorLookup(Lut3d::new(name.clone(), lut_edge(*size), table.clone())?)
             }
+            AdjustmentKind::HdrToning {
+                radius,
+                strength,
+                gamma,
+                exposure,
+                detail,
+                vibrance,
+                saturation,
+            } => Adjustment::HdrToning(HdrToning::new(
+                *radius,
+                *strength,
+                *gamma,
+                *exposure,
+                *detail,
+                *vibrance,
+                *saturation,
+            )?),
+            AdjustmentKind::MatchColor {
+                source_mean,
+                source_std,
+                target_mean,
+                target_std,
+                luminance,
+                color_intensity,
+                fade,
+                neutralize,
+            } => Adjustment::MatchColor(MatchColor::new(
+                LabStats {
+                    mean: *source_mean,
+                    std: *source_std,
+                },
+                LabStats {
+                    mean: *target_mean,
+                    std: *target_std,
+                },
+                *luminance,
+                *color_intensity,
+                *fade,
+                *neutralize,
+            )?),
         })
     }
 }
@@ -827,6 +951,7 @@ enum LinearOp {
     /// The map with its ramp, resolved once per layer.
     GradientMap(GradientMap, Vec<(f32, [f32; 3])>),
     Desaturate,
+    MatchColor(MatchColor),
 }
 
 impl LinearOp {
@@ -836,6 +961,7 @@ impl LinearOp {
             LinearOp::PhotoFilter(f, mul) => f.apply_with(px, *mul),
             LinearOp::GradientMap(g, ramp) => g.apply_with(px, ramp),
             LinearOp::Desaturate => desaturate(px),
+            LinearOp::MatchColor(p) => p.apply(px),
         }
     }
 }
@@ -863,6 +989,7 @@ enum EncodedOp {
     ShadowsHighlights(ShadowsHighlights),
     ReplaceColor(ReplaceColor),
     ColorLookup(Lut3d),
+    HdrToning(HdrToning),
 }
 
 impl EncodedOp {
@@ -884,6 +1011,7 @@ impl EncodedOp {
             EncodedOp::ShadowsHighlights(p) => p.apply(px),
             EncodedOp::ReplaceColor(p) => p.apply(px),
             EncodedOp::ColorLookup(p) => p.apply(px),
+            EncodedOp::HdrToning(p) => p.apply(px, space),
         }
     }
 }
@@ -1000,6 +1128,8 @@ impl PreparedAdjustment {
             }
             Adjustment::ReplaceColor(p) => Op::Encoded(Box::new(EncodedOp::ReplaceColor(*p))),
             Adjustment::ColorLookup(p) => Op::Encoded(Box::new(EncodedOp::ColorLookup(p.clone()))),
+            Adjustment::HdrToning(p) => Op::Encoded(Box::new(EncodedOp::HdrToning(*p))),
+            Adjustment::MatchColor(p) => Op::Linear(LinearOp::MatchColor(*p)),
         };
         Self { op: Some(op) }
     }

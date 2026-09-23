@@ -59,6 +59,12 @@ use crate::chrome::ChromeOutput;
 use crate::editor::Editor;
 use crate::prefs::{Preferences, ThemeChoice};
 
+// W7-D: Image > Mode conversions (RGB, Grayscale, Lab, CMYK, Indexed).
+mod color_mode;
+
+// W7-I: Content-Aware Fill and Content-Aware Scale, run on a worker.
+pub(crate) mod content_aware_job;
+
 /// Shown on an item the shared menu model allows but this build cannot perform.
 ///
 /// Kept as the *fallback* only. Every item this build genuinely cannot do now
@@ -190,6 +196,9 @@ pub fn menus(editor: &Editor) -> Vec<Menu> {
 /// Workspace and the View menu's checkmarks describe the window the user is
 /// looking at.
 pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
+    // W7-E: every frame builds this, so the smart-filter runner is in place
+    // before the canvas composites a smart object.
+    install_smart_filter_runner();
     let recent_files = editor
         .recent()
         .entries()
@@ -1304,7 +1313,16 @@ pub(crate) mod pixels {
     /// 1.0), so the no-selection case is the whole layer and needs no branch of
     /// its own — but it does get a fast path, because walking two million
     /// pixels to multiply each by one is a waste.
-    pub fn mask_by_selection(before: &[u8], after: &mut [u8], sel: &Selection, w: u32, h: u32) {
+    ///
+    /// W7-C: generic over the sample depth, so a 16-bit layer (`u16`) is
+    /// blended at 16 bits; the `u8` arithmetic is the 8-bit one unchanged.
+    pub fn mask_by_selection<S: raster::depth::DepthSample>(
+        before: &[S],
+        after: &mut [S],
+        sel: &Selection,
+        w: u32,
+        h: u32,
+    ) {
         if sel.is_none() {
             return;
         }
@@ -1316,8 +1334,8 @@ pub(crate) mod pixels {
                 }
                 let i = (y as usize * w as usize + x as usize) * 4;
                 for k in 0..4 {
-                    let mixed = before[i + k] as f32 * (1.0 - c) + after[i + k] as f32 * c;
-                    after[i + k] = mixed.round().clamp(0.0, 255.0) as u8;
+                    let mixed = before[i + k].to_f32() * (1.0 - c) + after[i + k].to_f32() * c;
+                    after[i + k] = S::from_f32_rounded(mixed);
                 }
             }
         }
@@ -1345,6 +1363,7 @@ pub(crate) mod pixels {
 /// wave exists to end.
 pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String> {
     use ui::menu::{CanvasRotation as CR, MaskOp, TransformOp as T};
+    install_smart_filter_runner();
 
     /// The Help destinations (P3.14): open the URL in the user's browser and
     /// report it. The open rides the injected [`UrlLauncher`] seam — the
@@ -1404,6 +1423,7 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::ReplaceContents => editor.replace_from_dialog(),
         MenuAction::CommitSmartObjectContents => editor.commit_smart_object_contents(),
         // ---- Filter --------------------------------------------------------
+        MenuAction::ConvertForSmartFilters => convert_for_smart_filters(editor),
         MenuAction::Filter(id) => run_filter(editor, id),
 
         // ---- Image ▸ Adjustments -------------------------------------------
@@ -1534,6 +1554,7 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::ClearPixels => clear_selection(editor),
         MenuAction::FillDialog => fill_selection(editor),
         MenuAction::StrokeDialog => stroke_selection(editor),
+        MenuAction::ContentAwareScale(step) => content_aware_scale_layer(editor, step),
         MenuAction::Copy => copy(editor, false),
         MenuAction::CopyMerged => copy(editor, true),
         MenuAction::Cut => cut(editor),
@@ -1570,7 +1591,17 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::LoadSelection => load_selection(editor),
         MenuAction::Reselect => reselect(editor),
         MenuAction::ToggleQuickMask => editor.toggle_quick_mask(),
-        MenuAction::SetColorMode(mode) => editor.set_color_mode(mode),
+        // W7-D: all five modes convert, each as one undo step
+        // (`color_mode.rs`). Indexed carries the Indexed Color dialog's
+        // parked spec; a pick with nothing parked converts at its defaults.
+        MenuAction::SetColorMode(mode) => {
+            let indexed = if mode == ui::menu::ColorMode::Indexed {
+                crate::dialog_host::take_confirmed_indexed()
+            } else {
+                None
+            };
+            color_mode::set_color_mode(editor, mode, indexed)
+        }
         // W4-F: Image > Mode > 8/16 Bits/Channel. Every raster tile is
         // widened (8 -> 16, lossless) or rounded (16 -> 8) in ONE undoable
         // Transaction that also carries the depth (`doc_depth.rs`). The row
@@ -1596,6 +1627,17 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         // dialog — no selection to refine — is answered with the reason.
         MenuAction::RefineEdge => match crate::dialog_host::take_confirmed_refine_edge() {
             Some(spec) => crate::layer_ops::refine_edge_with(editor, &spec),
+            None => Err(dialog_refused(action, editor)),
+        },
+        // W7-H: Filter > Liquify... and Edit > Puppet Warp confirmed. The
+        // warp is the dialog's (parked by `DialogHost::ui`); a click that
+        // opened no dialog is answered with the reason.
+        MenuAction::Liquify => match crate::dialog_host::take_confirmed_liquify() {
+            Some(spec) => liquify_with(editor, &spec),
+            None => Err(dialog_refused(action, editor)),
+        },
+        MenuAction::PuppetWarp => match crate::dialog_host::take_confirmed_puppet_warp() {
+            Some(spec) => puppet_warp_with(editor, &spec),
             None => Err(dialog_refused(action, editor)),
         },
 
@@ -1776,6 +1818,16 @@ fn dialog_refused(action: MenuAction, editor: &Editor) -> String {
                 Some(_) => "",
             },
         },
+        // W7-H: nothing to warp, or (Puppet Warp) no ink to pin.
+        MenuAction::Liquify | MenuAction::PuppetWarp => {
+            return match pixel_layer(editor) {
+                Ok(_) if action == MenuAction::PuppetWarp => {
+                    "The active layer has no ink to pin".to_string()
+                }
+                Ok(_) => format!("{}: its dialog could not open", action.label()),
+                Err(reason) => reason,
+            }
+        }
         MenuAction::FilterGallery => {
             return match pixel_layer(editor) {
                 Ok(_) => format!("{}: its dialog could not open", action.label()),
@@ -1838,29 +1890,54 @@ fn edit_active_pixels(
     if w == 0 || h == 0 {
         return Err("The canvas has no pixels".to_string());
     }
-    let (before, selection, space) = {
+    let (deep, selection, space) = {
         let doc = editor.active().ok_or("No document is open")?;
         (
-            pixels::read_layer(doc, layer),
+            doc.is_sixteen_bit(),
             doc.document.selection.clone(),
             doc.document.meta.color_space.clone(),
         )
     };
-    let mut buffer = filters::FilterBuffer::from_rgba8(w, h, &before).map_err(|e| e.to_string())?;
-    op(&mut buffer, &space)?;
-    if buffer.dimensions() != (w, h) {
-        return Err(format!(
+    let resized = |buffer: &filters::FilterBuffer| {
+        format!(
             "{label} changed the image from {w}x{h} to {:?}, and this build \
              cannot resize a layer",
             buffer.dimensions()
-        ));
-    }
-    let mut after = buffer.to_rgba8();
-    pixels::mask_by_selection(&before, &mut after, &selection, w, h);
-    if after == before {
-        return Err(format!("{label} changed nothing"));
-    }
-    let command = {
+        )
+    };
+    // W7-C: a 16-bit document's layer is read, filtered and written at 16
+    // bits (the buffer itself is f32); only an 8-bit one takes the RGBA8 road.
+    let command = if deep {
+        let before = editor
+            .active()
+            .ok_or("No document is open")?
+            .layer_rgba16(layer);
+        let mut buffer =
+            filters::FilterBuffer::from_rgba16(w, h, &before).map_err(|e| e.to_string())?;
+        op(&mut buffer, &space)?;
+        if buffer.dimensions() != (w, h) {
+            return Err(resized(&buffer));
+        }
+        let mut after = buffer.to_rgba16();
+        pixels::mask_by_selection(&before, &mut after, &selection, w, h);
+        if after == before {
+            return Err(format!("{label} changed nothing"));
+        }
+        let doc = editor.active_mut().ok_or("No document is open")?;
+        doc.layer_rgba16_command(layer, &after, label)?
+    } else {
+        let before = pixels::read_layer(editor.active().ok_or("No document is open")?, layer);
+        let mut buffer =
+            filters::FilterBuffer::from_rgba8(w, h, &before).map_err(|e| e.to_string())?;
+        op(&mut buffer, &space)?;
+        if buffer.dimensions() != (w, h) {
+            return Err(resized(&buffer));
+        }
+        let mut after = buffer.to_rgba8();
+        pixels::mask_by_selection(&before, &mut after, &selection, w, h);
+        if after == before {
+            return Err(format!("{label} changed nothing"));
+        }
         let doc = editor.active_mut().ok_or("No document is open")?;
         pixels::write_layer(doc, layer, &after, label)?
     };
@@ -1869,6 +1946,9 @@ fn edit_active_pixels(
 }
 
 fn run_filter(editor: &mut Editor, id: ui::menu::FilterId) -> Result<String, String> {
+    // W7-E: no dialog opened for this run, so no smart-filter re-edit is
+    // armed for it — it appends like any fresh filter.
+    SMART_FILTER_EDIT.with(|armed| armed.set(None));
     let spec = ui::dialogs::filter_by_id(id)
         .ok_or("ui::dialogs has no parameter schema for this filter")?;
     let params = ui::dialogs::FilterParams::defaults(spec.params);
@@ -1890,7 +1970,61 @@ pub(crate) fn filter_source(editor: &Editor) -> Option<filters::FilterBuffer> {
         return None;
     }
     let before = pixels::read_layer(doc, layer);
-    filters::FilterBuffer::from_rgba8(w, h, &before).ok()
+    let buffer = filters::FilterBuffer::from_rgba8(w, h, &before).ok()?;
+    // W7-E: a smart object's filter applies to what its stack produced below
+    // it — the whole stack for a new filter, the entries under it for a
+    // re-edit — so that is what the dialog previews over.
+    Some(smart_filter_input(editor, layer, buffer))
+}
+
+/// W7-H: the pixels Liquify and Puppet Warp open over — the active layer's,
+/// and only when it is a pixel layer (the menu gates the same way; this is
+/// the second line of defence).
+pub(crate) fn warp_source(editor: &Editor) -> Option<filters::FilterBuffer> {
+    pixel_layer(editor).ok()?;
+    filter_source(editor)
+}
+
+/// W7-H: apply the Liquify dialog's confirmed warp to the active layer at
+/// full resolution, folded by the selection, as one undoable step.
+pub(crate) fn liquify_with(
+    editor: &mut Editor,
+    spec: &ui::dialogs::LiquifySpec,
+) -> Result<String, String> {
+    let size = canvas_of(editor)?;
+    if spec.field.image_size() != size {
+        return Err("The document changed size since Liquify opened; open it again".to_string());
+    }
+    if spec.is_identity() {
+        return Err("Liquify moved nothing: paint a stroke on its canvas first".to_string());
+    }
+    edit_active_pixels(editor, "Liquify", |buffer, _| {
+        *buffer = spec.apply(buffer);
+        Ok(())
+    })?;
+    Ok("Liquify applied".to_string())
+}
+
+/// W7-H: apply the Puppet Warp dialog's confirmed deformation to the active
+/// layer at full resolution, folded by the selection, as one undoable step.
+pub(crate) fn puppet_warp_with(
+    editor: &mut Editor,
+    spec: &ui::dialogs::PuppetWarpSpec,
+) -> Result<String, String> {
+    let size = canvas_of(editor)?;
+    if spec.mesh.image_size() != size {
+        return Err(
+            "The document changed size since Puppet Warp opened; open it again".to_string(),
+        );
+    }
+    if spec.is_identity() {
+        return Err("Puppet Warp moved nothing: drag a pin first".to_string());
+    }
+    edit_active_pixels(editor, "Puppet Warp", |buffer, _| {
+        *buffer = spec.apply(buffer);
+        Ok(())
+    })?;
+    Ok("Puppet Warp applied".to_string())
 }
 
 /// Run one filter invocation — the dialog's confirmed answer — against the
@@ -1901,12 +2035,327 @@ pub(crate) fn run_filter_invocation(
 ) -> Result<String, String> {
     let spec = invocation.filter;
     let label = spec.name();
+    // W7-E: over a smart object the filter joins its smart-filter stack; the
+    // source pixels are never rewritten. Only the ACTIVE layer is ever the
+    // target: an armed re-edit replaces its entry only when it names this very
+    // object (checked in `apply_smart_filter`), so a stale arm can never pull
+    // a filter meant for another layer onto a smart object.
+    if let Some(layer) = active_smart_object(editor) {
+        return apply_smart_filter(editor, layer, invocation);
+    }
     edit_active_pixels(editor, label, |buffer, _| {
         let filtered = invocation.run(buffer);
         *buffer = filtered;
         Ok(())
     })?;
     Ok(format!("{label} applied"))
+}
+
+// ---------------------------------------------------------------------------
+// W7-E: smart filters
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// The smart-filter entry the open Filter dialog re-edits, armed by
+    /// [`arm_smart_filter_edit`] when the dialog opened from a Layers-panel
+    /// double-click; `None` for a dialog that adds a new filter.
+    static SMART_FILTER_EDIT: std::cell::Cell<Option<(LayerId, usize, ui::menu::FilterId)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Install the Filter dialogs' own table into the compositor as its
+/// smart-filter runner, so every composite — canvas, export, thumbnail —
+/// runs a stored smart filter exactly as the dialog that made it did.
+/// Idempotent; called from every entry point that can composite a document.
+pub(crate) fn install_smart_filter_runner() {
+    compositor::smart::install_runner(run_smart_filter);
+}
+
+/// The [`compositor::smart::SmartFilterRunner`] the application installs: the
+/// stored key names a [`ui::menu::FilterId`] (its variant name), the stored
+/// parameters are written over the schema's defaults (clamped by the schema,
+/// as the dialog's own are), and the filter's `apply` does the rest.
+pub(crate) fn run_smart_filter(
+    filter: &layer_model::SmartFilter,
+    src: &filters::FilterBuffer,
+) -> Option<filters::FilterBuffer> {
+    let id = filter_id_of_key(&filter.filter)?;
+    let spec = ui::dialogs::filter_by_id(id)?;
+    let mut params = ui::dialogs::FilterParams::defaults(spec.params);
+    for (key, value) in &filter.params {
+        params.set(key, dialog_param(*value));
+    }
+    Some((spec.apply)(src, &params))
+}
+
+/// The stable key a smart filter stores for `id`.
+fn filter_key(id: ui::menu::FilterId) -> String {
+    format!("{id:?}")
+}
+
+fn filter_id_of_key(key: &str) -> Option<ui::menu::FilterId> {
+    ui::menu::FilterId::ALL
+        .iter()
+        .copied()
+        .find(|id| filter_key(*id) == key)
+}
+
+fn dialog_param(value: layer_model::SmartParam) -> ui::dialogs::ParamValue {
+    use layer_model::SmartParam as S;
+    use ui::dialogs::ParamValue as P;
+    match value {
+        S::Float(v) => P::Float(v),
+        S::Int(v) => P::Int(v),
+        S::Bool(v) => P::Bool(v),
+        S::Choice(v) => P::Choice(v as usize),
+        S::Color(c) => P::Color(c),
+    }
+}
+
+fn smart_param(value: ui::dialogs::ParamValue) -> layer_model::SmartParam {
+    use layer_model::SmartParam as S;
+    use ui::dialogs::ParamValue as P;
+    match value {
+        P::Float(v) => S::Float(v),
+        P::Int(v) => S::Int(v),
+        P::Bool(v) => S::Bool(v),
+        P::Choice(v) => S::Choice(u32::try_from(v).unwrap_or(u32::MAX)),
+        P::Color(c) => S::Color(c),
+    }
+}
+
+/// The smart filter a confirmed dialog describes: its filter's key and every
+/// parameter the schema names.
+fn smart_filter_of(invocation: &ui::dialogs::FilterInvocation) -> layer_model::SmartFilter {
+    let params = invocation
+        .filter
+        .params
+        .iter()
+        .filter_map(|o| {
+            invocation
+                .params
+                .get(o.key)
+                .map(|v| (o.key.to_string(), smart_param(v)))
+        })
+        .collect();
+    layer_model::SmartFilter::new(filter_key(invocation.filter.id), params)
+}
+
+/// Forget any armed smart-filter re-edit. The dialog host calls this when a
+/// dialog is cancelled or closed and before any dialog opens, so the arm
+/// lives exactly as long as the re-edit dialog it was made for.
+pub(crate) fn disarm_smart_filter_edit() {
+    SMART_FILTER_EDIT.with(|armed| armed.set(None));
+}
+
+/// The smart object an armed re-edit of filter `id` targets, while it is
+/// still a smart object in the active document.
+fn armed_smart_filter_layer(editor: &Editor, id: ui::menu::FilterId) -> Option<LayerId> {
+    let (layer, _, armed) = SMART_FILTER_EDIT.with(|a| a.get())?;
+    (armed == id && smart_filters_of(editor, layer).is_some()).then_some(layer)
+}
+
+/// The pixels a Filter dialog for `id` previews over: the re-edited smart
+/// object's (its source run through the entries below the edited one) when
+/// [`arm_smart_filter_edit`] armed a re-edit, else [`filter_source`]'s. The
+/// armed object need not be the active layer: the Layers panel selects it in
+/// the same frame the dialog is routed, against the pre-selection editor.
+pub(crate) fn filter_dialog_source(
+    editor: &Editor,
+    id: ui::menu::FilterId,
+) -> Option<filters::FilterBuffer> {
+    let Some(layer) = armed_smart_filter_layer(editor, id) else {
+        return filter_source(editor);
+    };
+    let doc = editor.active()?;
+    let (w, h) = (doc.document.width(), doc.document.height());
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let before = pixels::read_layer(doc, layer);
+    let buffer = filters::FilterBuffer::from_rgba8(w, h, &before).ok()?;
+    Some(smart_filter_input(editor, layer, buffer))
+}
+
+/// The active layer, when it is a smart object.
+fn active_smart_object(editor: &Editor) -> Option<LayerId> {
+    let doc = editor.active()?;
+    let id = doc.document.active_layer()?;
+    matches!(
+        doc.document.layers.get(id)?.kind,
+        layer_model::LayerKind::SmartObject(_)
+    )
+    .then_some(id)
+}
+
+/// `layer`'s smart-filter stack, when it is a smart object.
+fn smart_filters_of(editor: &Editor, layer: LayerId) -> Option<Vec<layer_model::SmartFilter>> {
+    match &editor.active()?.document.layers.get(layer)?.kind {
+        layer_model::LayerKind::SmartObject(so) => Some(so.filters.clone()),
+        _ => None,
+    }
+}
+
+/// Replace `layer`'s smart-filter stack as ONE undoable step: a
+/// [`Command::SetLayerKind`] carrying the same smart object with the new
+/// stack. The source tiles are not touched.
+pub(crate) fn set_smart_filters(
+    editor: &mut Editor,
+    layer: LayerId,
+    filters: Vec<layer_model::SmartFilter>,
+) -> Result<(), String> {
+    install_smart_filter_runner();
+    let doc = editor.active().ok_or("No document is open")?;
+    let current = doc
+        .document
+        .layers
+        .get(layer)
+        .ok_or("The layer is not in the document")?;
+    if current.locked.all {
+        return Err("The layer is locked".to_string());
+    }
+    let layer_model::LayerKind::SmartObject(so) = &current.kind else {
+        return Err("Smart filters live on smart objects; this layer is not one".to_string());
+    };
+    let mut so = so.clone();
+    so.filters = filters;
+    let wanted = so.filters.clone();
+    editor.apply_command(Command::SetLayerKind {
+        layer_id: layer,
+        kind: Box::new(layer_model::LayerKind::SmartObject(so)),
+    });
+    if smart_filters_of(editor, layer).as_ref() == Some(&wanted) {
+        Ok(())
+    } else {
+        Err("The smart-filter change was refused".to_string())
+    }
+}
+
+/// A confirmed Filter dialog over a smart object: append the filter to its
+/// stack, or — when the dialog was opened to re-edit an entry — replace that
+/// entry's parameters, keeping its eye, opacity and blend mode.
+fn apply_smart_filter(
+    editor: &mut Editor,
+    layer: LayerId,
+    invocation: &ui::dialogs::FilterInvocation,
+) -> Result<String, String> {
+    let label = invocation.filter.name();
+    let mut stack = smart_filters_of(editor, layer).unwrap_or_default();
+    let fresh = smart_filter_of(invocation);
+    let armed = SMART_FILTER_EDIT.with(|armed| armed.take());
+    let message = match armed {
+        Some((l, index, id))
+            if l == layer
+                && id == invocation.filter.id
+                && stack.get(index).is_some_and(|f| f.filter == fresh.filter) =>
+        {
+            stack[index].params = fresh.params;
+            format!("{label} smart filter updated")
+        }
+        _ => {
+            stack.push(fresh);
+            format!("{label} added as a smart filter")
+        }
+    };
+    set_smart_filters(editor, layer, stack)?;
+    Ok(message)
+}
+
+/// Called as a Filter dialog for `id` opens: when the Layers panel asked to
+/// re-edit that very filter of a smart object (active or not), arm the re-edit and
+/// answer the stored parameters for the dialog to start from. Every other
+/// opening disarms, so a plain Filter-menu dialog always appends.
+pub(crate) fn arm_smart_filter_edit(
+    editor: &Editor,
+    id: ui::menu::FilterId,
+) -> Vec<(String, ui::dialogs::ParamValue)> {
+    let request = compositor::smart::take_edit_request();
+    let armed = request.and_then(|r| {
+        let stack = smart_filters_of(editor, r.layer)?;
+        let entry = stack.get(r.index)?;
+        // The object need not be active yet: the panel's double-click selects
+        // it in the same frame this dialog is routed.
+        (entry.filter == filter_key(id)).then(|| (r, entry.params.clone()))
+    });
+    match armed {
+        Some((r, params)) => {
+            SMART_FILTER_EDIT.with(|a| a.set(Some((r.layer, r.index, id))));
+            params
+                .into_iter()
+                .map(|(k, v)| (k, dialog_param(v)))
+                .collect()
+        }
+        None => {
+            SMART_FILTER_EDIT.with(|a| a.set(None));
+            Vec::new()
+        }
+    }
+}
+
+/// What a new (or re-edited) smart filter on the active layer applies to:
+/// `buffer` — the source — run through the stack entries below it. A layer
+/// that is not a smart object, or has no filters, answers `buffer` itself.
+fn smart_filter_input(
+    editor: &Editor,
+    layer: LayerId,
+    buffer: filters::FilterBuffer,
+) -> filters::FilterBuffer {
+    install_smart_filter_runner();
+    let Some(stack) = smart_filters_of(editor, layer) else {
+        return buffer;
+    };
+    let below = match SMART_FILTER_EDIT.with(|a| a.get()) {
+        Some((l, index, _)) if l == layer => index.min(stack.len()),
+        _ => stack.len(),
+    };
+    let (w, h) = buffer.dimensions();
+    let (Some(runner), false) = (compositor::smart::runner(), stack[..below].is_empty()) else {
+        return buffer;
+    };
+    let rect = raster::PixelRect::new(0, 0, w, h);
+    let Ok(canvas) = compositor::Canvas::from_pixels(rect, buffer.pixels().to_vec()) else {
+        return buffer;
+    };
+    let out = compositor::smart::apply_stack(&canvas, &stack[..below], runner);
+    filters::FilterBuffer::from_pixels(w, h, out.pixels().to_vec()).unwrap_or(buffer)
+}
+
+/// Filter ▸ Convert for Smart Filters: the active layer becomes a smart
+/// object (the same conversion as Layer ▸ Smart Object ▸ Convert to Smart
+/// Object), and every filter applied to it from then on joins its
+/// smart-filter stack.
+fn convert_for_smart_filters(editor: &mut Editor) -> Result<String, String> {
+    install_smart_filter_runner();
+    if active_smart_object(editor).is_some() {
+        return Err(ui::menu::SMART_FILTERS_ALREADY.to_string());
+    }
+    let (parent, index) = {
+        let doc = editor.active().ok_or("No document is open")?;
+        let layers = &doc.document.layers;
+        let source = doc.document.active_layer().ok_or("Select a layer first")?;
+        (
+            layers.parent_of(source),
+            layers
+                .index_in_parent(source)
+                .ok_or("The layer is not in the tree")?,
+        )
+    };
+    editor.convert_to_smart_object()?;
+    // The conversion puts the new smart object where the layer stood and
+    // removes the layer; make the object active, so the next filter lands in
+    // its stack rather than finding no layer.
+    let converted = editor.active().and_then(|doc| {
+        let layers = &doc.document.layers;
+        let siblings = match parent {
+            Some(p) => layers.get(p)?.children().to_vec(),
+            None => layers.root().to_vec(),
+        };
+        siblings.get(index).copied()
+    });
+    if let Some(id) = converted {
+        editor.set_active_layer(id);
+    }
+    Ok("Converted for Smart Filters: filters applied to this layer stay editable".to_string())
 }
 
 fn run_adjustment(
@@ -1934,7 +2383,7 @@ fn run_adjustment(
 /// histogram of the pixels it is about to change, and Shadows/Highlights reads
 /// each pixel's neighbourhood over its radius — and every other one is
 /// [`run_adjustment`]. Each lands as one undoable step.
-fn run_adjustment_kind(
+pub(crate) fn run_adjustment_kind(
     editor: &mut Editor,
     adjustment: &adjustments::Adjustment,
     label: &str,
@@ -1961,8 +2410,70 @@ fn run_adjustment_kind(
             })?;
             Ok(format!("{label} applied"))
         }
+        // W7-G: HDR Toning reads each pixel's neighbourhood over its Edge
+        // Glow radius (the base/detail split in `adjustments::hdr`).
+        adjustments::Adjustment::HdrToning(hdr) => {
+            if hdr.is_identity() {
+                return Err(format!(
+                    "{label} is at its identity setting, so applying it would change \
+                     nothing; move a control in its dialog first"
+                ));
+            }
+            let hdr = *hdr;
+            edit_active_pixels(editor, label, |buffer, space| {
+                let (w, h) = buffer.dimensions();
+                hdr.apply_premultiplied_rgba_spatial(
+                    buffer.pixels_mut(),
+                    w as usize,
+                    h as usize,
+                    space,
+                )
+                .map_err(|e| e.to_string())
+            })?;
+            Ok(format!("{label} applied"))
+        }
+        adjustments::Adjustment::MatchColor(mc) => run_match_color(editor, *mc, label),
         other => run_adjustment(editor, other, label),
     }
+}
+
+/// W7-G: Match Color over the active layer. The target statistics are
+/// measured here, from the full-resolution pixels the selection covers (all
+/// of them with no selection), replacing the dialog's proxy estimate — so the
+/// transfer lands the layer's own means on the source's, as Photopea's
+/// "use selection in target" does.
+fn run_match_color(
+    editor: &mut Editor,
+    mc: adjustments::MatchColor,
+    label: &str,
+) -> Result<String, String> {
+    if mc.is_identity() {
+        return Err(format!(
+            "{label} is at its identity setting, so applying it would change \
+             nothing; pick a source or move a control in its dialog first"
+        ));
+    }
+    let selection = editor
+        .active()
+        .map(|doc| doc.document.selection.clone())
+        .ok_or("No document is open")?;
+    edit_active_pixels(editor, label, |buffer, space| {
+        let (w, _) = buffer.dimensions();
+        let covered = |i: usize| {
+            let at = glam::IVec2::new((i as u32 % w) as i32, (i as u32 / w) as i32);
+            selection.coverage_at(at)
+        };
+        let coverage: Option<&dyn Fn(usize) -> f32> =
+            (!selection.is_none()).then_some(&covered as &dyn Fn(usize) -> f32);
+        let target = adjustments::LabStats::measure(buffer.pixels(), coverage)
+            .ok_or_else(|| format!("{label} found no pixels to match"))?;
+        let prepared = adjustments::PreparedAdjustment::new(&adjustments::Adjustment::MatchColor(
+            mc.with_target(target),
+        ));
+        prepared.apply_premultiplied_rgba(buffer.pixels_mut(), space);
+        Ok(())
+    })?;
+    Ok(format!("{label} applied"))
 }
 
 /// Equalize over the active layer: the histogram is taken from the pixels
@@ -2036,12 +2547,22 @@ fn remap_active_layer(
     let (w, h) = canvas_of(editor)?;
     let command = {
         let doc = editor.active_mut().ok_or("No document is open")?;
-        let before = pixels::read_layer(doc, layer);
-        let after = remap(&before, w, h, &map);
-        if after == before {
-            return Err(format!("{label} changed nothing"));
+        // W7-C: a 16-bit layer moves its 16-bit samples, not an 8-bit copy.
+        if doc.is_sixteen_bit() {
+            let before = doc.layer_rgba16(layer);
+            let after = remap(&before, w, h, &map);
+            if after == before {
+                return Err(format!("{label} changed nothing"));
+            }
+            doc.layer_rgba16_command(layer, &after, label)?
+        } else {
+            let before = pixels::read_layer(doc, layer);
+            let after = remap(&before, w, h, &map);
+            if after == before {
+                return Err(format!("{label} changed nothing"));
+            }
+            pixels::write_layer(doc, layer, &after, label)?
         }
-        pixels::write_layer(doc, layer, &after, label)?
     };
     editor.apply_command(command);
     Ok(format!("{label} applied"))
@@ -2068,6 +2589,15 @@ fn remap_all_layers(
         }
         let mut commands = Vec::new();
         for id in ids {
+            // W7-C: at the document's own depth, as `remap_active_layer`.
+            if doc.is_sixteen_bit() {
+                let before = doc.layer_rgba16(id);
+                let after = remap(&before, w, h, &map);
+                if after != before {
+                    commands.push(doc.layer_rgba16_command(id, &after, label)?);
+                }
+                continue;
+            }
             let before = pixels::read_layer(doc, id);
             let after = remap(&before, w, h, &map);
             if after == before {
@@ -2088,8 +2618,13 @@ fn remap_all_layers(
 }
 
 /// `dst[map(x, y)] = src[x, y]`, with anything landing off the canvas dropped.
-fn remap(src: &[u8], w: u32, h: u32, map: &impl Fn(i64, i64, i64, i64) -> (i64, i64)) -> Vec<u8> {
-    let mut out = vec![0u8; src.len()];
+fn remap<S: raster::depth::DepthSample>(
+    src: &[S],
+    w: u32,
+    h: u32,
+    map: &impl Fn(i64, i64, i64, i64) -> (i64, i64),
+) -> Vec<S> {
+    let mut out = vec![S::default(); src.len()];
     let (wi, hi) = (w as i64, h as i64);
     for y in 0..hi {
         for x in 0..wi {
@@ -2110,14 +2645,25 @@ fn clear_selection(editor: &mut Editor) -> Result<String, String> {
     let (w, h) = canvas_of(editor)?;
     let command = {
         let doc = editor.active_mut().ok_or("No document is open")?;
-        let before = pixels::read_layer(doc, layer);
         let selection = doc.document.selection.clone();
-        let mut after = vec![0u8; before.len()];
-        pixels::mask_by_selection(&before, &mut after, &selection, w, h);
-        if after == before {
-            return Err("There is nothing to clear here".to_string());
+        // W7-C: a partly selected 16-bit pixel keeps its 16-bit remainder.
+        if doc.is_sixteen_bit() {
+            let before = doc.layer_rgba16(layer);
+            let mut after = vec![0u16; before.len()];
+            pixels::mask_by_selection(&before, &mut after, &selection, w, h);
+            if after == before {
+                return Err("There is nothing to clear here".to_string());
+            }
+            doc.layer_rgba16_command(layer, &after, "Clear")?
+        } else {
+            let before = pixels::read_layer(doc, layer);
+            let mut after = vec![0u8; before.len()];
+            pixels::mask_by_selection(&before, &mut after, &selection, w, h);
+            if after == before {
+                return Err("There is nothing to clear here".to_string());
+            }
+            pixels::write_layer(doc, layer, &after, "Clear")?
         }
-        pixels::write_layer(doc, layer, &after, "Clear")?
     };
     editor.apply_command(command);
     Ok("Cleared".to_string())
@@ -2167,6 +2713,10 @@ pub(crate) fn fill_selection_with(
             });
         }
         ui::dialogs::FillContents::Gray50 => [0.5, 0.5, 0.5, 1.0],
+        // W7-I: synthesised from the rest of the layer, not a colour.
+        ui::dialogs::FillContents::ContentAware => {
+            return content_aware_fill_selection(editor, spec);
+        }
     };
     let hex = crate::editor::color_hex(rgba);
     // The wells and the dialog's Colour payload are normalized floats.
@@ -2178,6 +2728,39 @@ pub(crate) fn fill_selection_with(
         (spec.opacity * 100.0).round() as u32,
         spec.blend.label()
     ))
+}
+
+/// W7-I: Edit ▸ Fill ▸ Contents: Content-Aware. The selection's pixels (every
+/// pixel it covers at all) are synthesised from the rest of the active layer
+/// by PatchMatch ([`filters::content_aware_fill`], bounded to the selection's
+/// bounding box plus a context margin, fixed seed) ON A WORKER
+/// ([`content_aware_job`]), then painted through the same
+/// [`fill_selection_painting`] the colour fills use — so the dialog's blend
+/// mode, opacity and Preserve Transparency apply, the selection's soft edge
+/// feathers the result, and the whole fill is ONE undo step.
+fn content_aware_fill_selection(
+    editor: &mut Editor,
+    spec: &ui::dialogs::FillSpec,
+) -> Result<String, String> {
+    content_aware_job::start(
+        editor,
+        content_aware_job::Kind::Fill(Box::new(spec.clone())),
+    )
+}
+
+/// W7-I: Edit ▸ Content-Aware Scale ▸ one step. The active layer is seam
+/// carved ([`filters::content_aware_scale`], gradient-magnitude energy, so
+/// high-contrast content is carved last) ON A WORKER ([`content_aware_job`])
+/// to the step's fraction of the canvas along one axis and placed centred on
+/// the canvas; what a widening pushes past the canvas edge is cropped, and a
+/// narrowing leaves transparent bands. With a selection active only the
+/// selected part of the result lands (the same selection fold every filter
+/// takes). No protect-skin option.
+fn content_aware_scale_layer(
+    editor: &mut Editor,
+    step: ui::menu::ContentAwareScaleStep,
+) -> Result<String, String> {
+    content_aware_job::start(editor, content_aware_job::Kind::Scale(step))
 }
 
 /// The shared fill painter: `source` answers the paint colour (normalized
@@ -2247,6 +2830,59 @@ fn fill_mask_coverage(
     ))
 }
 
+/// The Fill composite over a whole layer at its own depth (W7-C): `S` is
+/// `u8` in an 8-bit document, with exactly the arithmetic the fill always
+/// used, and `u16` in a 16-bit one.
+fn fill_pixels<S: raster::depth::DepthSample>(
+    before: &[S],
+    selection: &editor_core::Selection,
+    spec: &ui::dialogs::FillSpec,
+    source: &dyn Fn(i64, i64) -> [f32; 4],
+    w: u32,
+    h: u32,
+) -> Vec<S> {
+    let mut after = before.to_vec();
+    for py in 0..i64::from(h) {
+        for px in 0..i64::from(w) {
+            let i = (py as usize * w as usize + px as usize) * 4;
+            let paint = source(px, py);
+            let src = [paint[0], paint[1], paint[2]];
+            let src_a = paint[3].clamp(0.0, 1.0);
+            let dst_a = before[i + 3].to_unit();
+            if spec.preserve_transparency && dst_a <= 0.0 {
+                continue;
+            }
+            let paint_a = if spec.preserve_transparency {
+                src_a * dst_a
+            } else {
+                src_a
+            };
+            let base = [
+                before[i].to_unit(),
+                before[i + 1].to_unit(),
+                before[i + 2].to_unit(),
+            ];
+            let blended = spec.blend.blend_rgb(base, src);
+            let out_a = paint_a + dst_a * (1.0 - paint_a);
+            let out_rgb = if out_a <= 0.0 {
+                [0.0; 3]
+            } else {
+                [
+                    (blended[0] * paint_a + base[0] * dst_a * (1.0 - paint_a)) / out_a,
+                    (blended[1] * paint_a + base[1] * dst_a * (1.0 - paint_a)) / out_a,
+                    (blended[2] * paint_a + base[2] * dst_a * (1.0 - paint_a)) / out_a,
+                ]
+            };
+            after[i] = S::from_unit(out_rgb[0]);
+            after[i + 1] = S::from_unit(out_rgb[1]);
+            after[i + 2] = S::from_unit(out_rgb[2]);
+            after[i + 3] = S::from_unit(out_a);
+        }
+    }
+    pixels::mask_by_selection(before, &mut after, selection, w, h);
+    after
+}
+
 pub(crate) fn fill_selection_painting(
     editor: &mut Editor,
     spec: &ui::dialogs::FillSpec,
@@ -2271,51 +2907,23 @@ pub(crate) fn fill_selection_painting(
     }
     let command = {
         let doc = editor.active_mut().ok_or("No document is open")?;
-        let before = pixels::read_layer(doc, layer);
         let selection = doc.document.selection.clone();
-        let mut after = before.clone();
-        for py in 0..i64::from(h) {
-            for px in 0..i64::from(w) {
-                let i = (py as usize * w as usize + px as usize) * 4;
-                let paint = source(px, py);
-                let src = [paint[0], paint[1], paint[2]];
-                let src_a = paint[3].clamp(0.0, 1.0);
-                let dst_a = f32::from(before[i + 3]) / 255.0;
-                if spec.preserve_transparency && dst_a <= 0.0 {
-                    continue;
-                }
-                let paint_a = if spec.preserve_transparency {
-                    src_a * dst_a
-                } else {
-                    src_a
-                };
-                let base = [
-                    f32::from(before[i]) / 255.0,
-                    f32::from(before[i + 1]) / 255.0,
-                    f32::from(before[i + 2]) / 255.0,
-                ];
-                let blended = spec.blend.blend_rgb(base, src);
-                let out_a = paint_a + dst_a * (1.0 - paint_a);
-                let out_rgb = if out_a <= 0.0 {
-                    [0.0; 3]
-                } else {
-                    [
-                        (blended[0] * paint_a + base[0] * dst_a * (1.0 - paint_a)) / out_a,
-                        (blended[1] * paint_a + base[1] * dst_a * (1.0 - paint_a)) / out_a,
-                        (blended[2] * paint_a + base[2] * dst_a * (1.0 - paint_a)) / out_a,
-                    ]
-                };
-                after[i] = (out_rgb[0] * 255.0).round().clamp(0.0, 255.0) as u8;
-                after[i + 1] = (out_rgb[1] * 255.0).round().clamp(0.0, 255.0) as u8;
-                after[i + 2] = (out_rgb[2] * 255.0).round().clamp(0.0, 255.0) as u8;
-                after[i + 3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
+        // W7-C: a 16-bit layer is filled at 16 bits.
+        if doc.is_sixteen_bit() {
+            let before = doc.layer_rgba16(layer);
+            let after = fill_pixels(&before, &selection, spec, source, w, h);
+            if after == before {
+                return Err("The fill would change nothing".to_string());
             }
+            doc.layer_rgba16_command(layer, &after, "Fill")?
+        } else {
+            let before = pixels::read_layer(doc, layer);
+            let after = fill_pixels(&before, &selection, spec, source, w, h);
+            if after == before {
+                return Err("The fill would change nothing".to_string());
+            }
+            pixels::write_layer(doc, layer, &after, "Fill")?
         }
-        pixels::mask_by_selection(&before, &mut after, &selection, w, h);
-        if after == before {
-            return Err("The fill would change nothing".to_string());
-        }
-        pixels::write_layer(doc, layer, &after, "Fill")?
     };
     editor.apply_command(command);
     Ok(format!(
@@ -6186,6 +6794,224 @@ mod tests {
         layer
     }
 
+    // ---- W7-H: Filter > Liquify... and Edit > Puppet Warp -----------------
+
+    fn w7h_frame(
+        host: &mut crate::dialog_host::DialogHost,
+        ctx: &egui::Context,
+        keys: &[egui::Key],
+    ) -> crate::chrome::ChromeOutput {
+        let events = keys
+            .iter()
+            .map(|key| egui::Event::Key {
+                key: *key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+            })
+            .collect();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut out = crate::chrome::ChromeOutput::default();
+        let _ = ctx.run(input, |ctx| host.ui(ctx, None, &mut out));
+        out
+    }
+
+    /// Paint `rgba` (48x32) onto the active layer and return it.
+    fn w7h_paint(ed: &mut Editor, rgba: &[u8]) -> LayerId {
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let paint = {
+            let doc = ed.active_mut().unwrap();
+            pixels::write_layer(doc, layer, rgba, "Fixture").unwrap()
+        };
+        ed.apply_command(paint);
+        layer
+    }
+
+    /// The darkness-weighted mean x of row `y` of a 48-wide RGBA buffer.
+    fn w7h_dark_centroid(rgba: &[u8], y: usize) -> f32 {
+        let (mut sum, mut total) = (0.0f32, 0.0f32);
+        for x in 0..48 {
+            let dark = 255.0 - rgba[(y * 48 + x) * 4] as f32;
+            sum += dark * x as f32;
+            total += dark;
+        }
+        sum / total
+    }
+
+    /// The alpha-weighted mean y of column `x` of a 48x32 RGBA buffer.
+    fn w7h_alpha_centroid(rgba: &[u8], x: usize) -> f32 {
+        let (mut sum, mut total) = (0.0f32, 0.0f32);
+        for y in 0..32 {
+            let a = rgba[(y * 48 + x) * 4 + 3] as f32;
+            sum += a * y as f32;
+            total += a;
+        }
+        sum / total
+    }
+
+    /// W7-H: Filter > Liquify... is a live row that opens its dialog; Escape
+    /// writes nothing; a stroke confirmed with Enter rides the parked-spec
+    /// road to the `Liquify` arm and lands as ONE history entry that moves
+    /// the ink in the stroke's direction, and undo restores the exact bytes.
+    #[test]
+    fn w7h_liquify_opens_from_the_menu_and_lands_as_one_undo_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let mut rgba = vec![255u8; 48 * 32 * 4];
+        for y in 0..32 {
+            for x in 20..22 {
+                let i = (y * 48 + x) * 4;
+                rgba[i..i + 3].copy_from_slice(&[0, 0, 0]);
+            }
+        }
+        let layer = w7h_paint(&mut ed, &rgba);
+        let before = pixels::read_layer(ed.active().unwrap(), layer);
+        let depth = ed.active().unwrap().history.undo_depth();
+        let live = context(&mut ed, &Workspace::new());
+        match resolve(MenuAction::Liquify, &live, &ed) {
+            Ok(Pick::Menu(MenuAction::Liquify)) => {}
+            other => panic!("Filter > Liquify... is not a live row: {other:?}"),
+        }
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut host = crate::dialog_host::DialogHost::default();
+        let brush = filters::liquify::LiquifyBrush {
+            size: 24.0,
+            pressure: 1.0,
+            density: 0.5,
+        };
+
+        // Cancel changes nothing.
+        assert!(host.open_for_menu_action(&MenuAction::Liquify, &ed));
+        host.active_liquify_dialog_for_test().set_brush(brush);
+        host.active_liquify_dialog_for_test()
+            .stroke([21.0, 16.0], [30.0, 16.0]);
+        let _ = w7h_frame(&mut host, &ctx, &[]);
+        let out = w7h_frame(&mut host, &ctx, &[egui::Key::Escape]);
+        assert!(!host.is_open() && out.menu.is_empty());
+        assert!(crate::dialog_host::take_confirmed_liquify().is_none());
+        assert!(perform(MenuAction::Liquify, &mut ed).is_err());
+        assert_eq!(ed.active().unwrap().history.undo_depth(), depth);
+        assert_eq!(pixels::read_layer(ed.active().unwrap(), layer), before);
+
+        // Confirm lands one step.
+        assert!(host.open_for_menu_action(&MenuAction::Liquify, &ed));
+        host.active_liquify_dialog_for_test().set_brush(brush);
+        host.active_liquify_dialog_for_test()
+            .stroke([21.0, 16.0], [30.0, 16.0]);
+        let _ = w7h_frame(&mut host, &ctx, &[]);
+        let out = w7h_frame(&mut host, &ctx, &[egui::Key::Enter]);
+        assert!(!host.is_open(), "Enter closed the dialog");
+        assert_eq!(out.menu, vec![MenuAction::Liquify]);
+        let message = perform(MenuAction::Liquify, &mut ed).unwrap();
+        assert!(message.contains("Liquify"), "{message}");
+        assert_eq!(
+            ed.active().unwrap().history.undo_depth(),
+            depth + 1,
+            "one confirmation is one history entry"
+        );
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        let (c0, c1) = (
+            w7h_dark_centroid(&before, 16),
+            w7h_dark_centroid(&after, 16),
+        );
+        assert!(c1 > c0 + 2.0, "the bar moved with the stroke: {c0} -> {c1}");
+        assert_eq!(
+            after[..48 * 4],
+            before[..48 * 4],
+            "a row outside the brush is untouched"
+        );
+        // A second perform has nothing parked: no second entry.
+        assert!(perform(MenuAction::Liquify, &mut ed).is_err());
+        assert_eq!(ed.active().unwrap().history.undo_depth(), depth + 1);
+        ed.active_mut().unwrap().undo().unwrap();
+        assert_eq!(pixels::read_layer(ed.active().unwrap(), layer), before);
+    }
+
+    /// W7-H: Edit > Puppet Warp is a live row that opens over the layer's
+    /// ink; confirming with the pins unmoved changes nothing and writes no
+    /// history; dragging one pin and pressing Enter lands ONE history entry
+    /// that moves the ink near that pin more than the ink by the held pin.
+    #[test]
+    fn w7h_puppet_warp_opens_from_the_menu_and_lands_as_one_undo_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let mut rgba = vec![0u8; 48 * 32 * 4];
+        for y in 12..20 {
+            for x in 6..42 {
+                let i = (y * 48 + x) * 4;
+                rgba[i..i + 4].copy_from_slice(&[200, 80, 40, 255]);
+            }
+        }
+        let layer = w7h_paint(&mut ed, &rgba);
+        let before = pixels::read_layer(ed.active().unwrap(), layer);
+        let depth = ed.active().unwrap().history.undo_depth();
+        let live = context(&mut ed, &Workspace::new());
+        match resolve(MenuAction::PuppetWarp, &live, &ed) {
+            Ok(Pick::Menu(MenuAction::PuppetWarp)) => {}
+            other => panic!("Edit > Puppet Warp is not a live row: {other:?}"),
+        }
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut host = crate::dialog_host::DialogHost::default();
+
+        // Pins placed but not moved: the identity, refused with no history.
+        assert!(host.open_for_menu_action(&MenuAction::PuppetWarp, &ed));
+        let dialog = host.active_puppet_warp_dialog_for_test();
+        assert!(dialog.add_pin([8.0, 16.0]).is_some());
+        assert!(dialog.add_pin([40.0, 16.0]).is_some());
+        let _ = w7h_frame(&mut host, &ctx, &[]);
+        let out = w7h_frame(&mut host, &ctx, &[egui::Key::Enter]);
+        assert_eq!(out.menu, vec![MenuAction::PuppetWarp]);
+        assert!(perform(MenuAction::PuppetWarp, &mut ed).is_err());
+        assert_eq!(ed.active().unwrap().history.undo_depth(), depth);
+        assert_eq!(pixels::read_layer(ed.active().unwrap(), layer), before);
+
+        // Drag the right pin down; Enter commits one step.
+        assert!(host.open_for_menu_action(&MenuAction::PuppetWarp, &ed));
+        let dialog = host.active_puppet_warp_dialog_for_test();
+        dialog.add_pin([8.0, 16.0]).unwrap();
+        let right = dialog.add_pin([40.0, 16.0]).unwrap();
+        let at = dialog.pins()[right].at;
+        dialog.move_pin(right, [at[0], at[1] + 8.0]);
+        let _ = w7h_frame(&mut host, &ctx, &[]);
+        let out = w7h_frame(&mut host, &ctx, &[egui::Key::Enter]);
+        assert!(!host.is_open());
+        assert_eq!(out.menu, vec![MenuAction::PuppetWarp]);
+        perform(MenuAction::PuppetWarp, &mut ed).unwrap();
+        assert_eq!(
+            ed.active().unwrap().history.undo_depth(),
+            depth + 1,
+            "one commit is one history entry"
+        );
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        let near = w7h_alpha_centroid(&after, 38) - w7h_alpha_centroid(&before, 38);
+        let far = w7h_alpha_centroid(&after, 9) - w7h_alpha_centroid(&before, 9);
+        assert!(
+            near > 3.0 && near > far.abs() * 2.0,
+            "near shift {near}, far shift {far}"
+        );
+        ed.active_mut().unwrap().undo().unwrap();
+        assert_eq!(pixels::read_layer(ed.active().unwrap(), layer), before);
+
+        // A layer with no ink opens no dialog, and the row says why.
+        let empty = vec![0u8; 48 * 32 * 4];
+        w7h_paint(&mut ed, &empty);
+        assert!(!host.open_for_menu_action(&MenuAction::PuppetWarp, &ed));
+        assert_eq!(
+            perform(MenuAction::PuppetWarp, &mut ed).unwrap_err(),
+            "The active layer has no ink to pin"
+        );
+    }
+
     /// Card 062: the fringe cleanup reduces the known colored-background
     /// fringe, keeps the interior's exact bytes and the coverage untouched,
     /// and is one undoable step whose undo restores the original RGB.
@@ -6953,6 +7779,133 @@ mod tests {
         );
     }
 
+    /// W7-G: log2 luminance of an 8-bit sRGB pixel.
+    fn log_luma8(px: &[u8]) -> f32 {
+        let lin = color::to_linear(
+            &color::ColorSpace::Srgb,
+            [0, 1, 2].map(|c| f32::from(px[c]) / 255.0),
+        );
+        (color::linear_srgb_luminance(lin).max(0.0) + 1.0 / 4096.0).log2()
+    }
+
+    /// W7-G: CIELAB means of an 8-bit sRGB buffer.
+    fn lab_means8(rgba: &[u8]) -> [f32; 3] {
+        let mut sum = [0.0f64; 3];
+        let mut n = 0.0f64;
+        for px in rgba.as_chunks::<4>().0 {
+            let lin = color::to_linear(
+                &color::ColorSpace::Srgb,
+                [0, 1, 2].map(|c| f32::from(px[c]) / 255.0),
+            );
+            let lab = color::linear_srgb_to_lab(lin);
+            for k in 0..3 {
+                sum[k] += f64::from(lab[k]);
+            }
+            n += 1.0;
+        }
+        sum.map(|v| (v / n) as f32)
+    }
+
+    #[test]
+    fn hdr_toning_confirmed_from_its_dialog_raises_local_contrast_as_one_step() {
+        let dir = tempfile::tempdir().unwrap();
+        // A dark and a light field with the same fine checker on both.
+        let mut ed = painted(dir.path(), |x, y| {
+            let base: i32 = if x < 24 { 60 } else { 170 };
+            let v = (base + if (x / 2 + y / 2) % 2 == 0 { 8 } else { -8 }) as u8;
+            [v, v, v, 255]
+        });
+        let before = active_pixels(&ed);
+        let depth = ed.active().unwrap().history_depth();
+        apply_from_menu_bar(&mut ed, ui::menu::AdjustmentId::HdrToning, |d| {
+            assert!(d.set_kind(layer_model::AdjustmentKind::HdrToning {
+                radius: 8.0,
+                strength: 2.0,
+                gamma: 1.0,
+                exposure: 0.0,
+                detail: 1.0,
+                vibrance: 0.0,
+                saturation: 0.0,
+            }));
+        })
+        .unwrap();
+        assert_eq!(ed.active().unwrap().history_depth(), depth + 1);
+        let after = active_pixels(&ed);
+        let (w, _) = canvas_of(&ed).unwrap();
+        // The checker's amplitude in stops, far from the step on both sides.
+        let amplitude = |rgba: &[u8], x0: u32| {
+            let a = log_luma8(&rgba[(x0 * 4) as usize..]);
+            let b = log_luma8(&rgba[((x0 + 2) * 4) as usize..]);
+            (a - b).abs()
+        };
+        for x0 in [4, 40] {
+            let (b, a) = (amplitude(&before, x0), amplitude(&after, x0));
+            assert!(a > b * 1.25, "x {x0}: checker {b} -> {a} stops (w {w})");
+        }
+        // Undo is the one step back.
+        assert!(ed.active_mut().unwrap().undo().unwrap());
+        assert_eq!(active_pixels(&ed), before);
+    }
+
+    #[test]
+    fn match_color_confirmed_from_its_dialog_moves_the_layer_means_to_the_source_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        // The target: warm, low contrast.
+        let mut ed = painted(dir.path(), |x, y| {
+            [150 + (x % 16) as u8, 110 + (y % 8) as u8, 70, 255]
+        });
+        let target = ed.active().unwrap().document.active_layer().unwrap();
+        // The source: a cool, contrasty layer beside it.
+        let source_layer = layer_model::Layer::raster("Cool source");
+        let source_id = source_layer.id;
+        ed.apply_command(Command::create_layer(source_layer));
+        let (w, h) = canvas_of(&ed).unwrap();
+        let mut cool = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                cool.extend_from_slice(&[40 + (x * 3) as u8, 90 + (y * 2) as u8, 200, 255]);
+            }
+        }
+        let seed = {
+            let doc = ed.active_mut().unwrap();
+            pixels::write_layer(doc, source_id, &cool, "Seed source").unwrap()
+        };
+        ed.apply_command(seed);
+        ed.set_active_layer(target);
+        let before = active_pixels(&ed);
+        let depth = ed.active().unwrap().history_depth();
+
+        apply_from_menu_bar(&mut ed, ui::menu::AdjustmentId::MatchColor, |d| {
+            // The host offered the other layer; with None picked the dialog
+            // is the identity and refuses to apply.
+            assert!(d.invocation().is_identity());
+            let pick = d
+                .match_sources()
+                .iter()
+                .position(|s| s.label.contains("Cool source"))
+                .unwrap_or_else(|| panic!("no source offered: {:?}", d.match_sources()));
+            assert!(d.choose_match_source(pick + 1));
+            assert!(!d.invocation().is_identity());
+        })
+        .unwrap();
+        assert_eq!(ed.active().unwrap().history_depth(), depth + 1);
+        let after = active_pixels(&ed);
+        let (want, was, got) = (lab_means8(&cool), lab_means8(&before), lab_means8(&after));
+        for k in 0..3 {
+            assert!(
+                (got[k] - want[k]).abs() < 2.0,
+                "channel {k}: {was:?} -> {got:?}, source {want:?}"
+            );
+            assert!(
+                (was[k] - want[k]).abs() > 5.0 || k == 0,
+                "fixture too close"
+            );
+        }
+        // The source layer is untouched.
+        let source_now = pixels::read_layer(ed.active().unwrap(), source_id);
+        assert_eq!(source_now, cool);
+    }
+
     #[test]
     fn replace_color_confirmed_from_its_dialog_shifts_only_the_sampled_colour() {
         let dir = tempfile::tempdir().unwrap();
@@ -7698,15 +8651,15 @@ mod tests {
                 .map(MenuAction::Filter),
             );
         }
-        // Convert for Smart Filters is drawn greyed with its reason, never
-        // enabled as a silent no-op.
+        // W7-E: Convert for Smart Filters is live over a pixel layer, and
+        // routes to `perform`.
         assert_eq!(
             resolve_intent(
                 MenuAction::ConvertForSmartFilters,
                 &menu_ctx,
                 &with_two_layers(dir.path())
             ),
-            Err(ui::menu::SMART_FILTERS_UNSUPPORTED.to_string())
+            Ok(Intent::Action(MenuAction::ConvertForSmartFilters))
         );
         for asked in asked {
             assert!(
@@ -7960,6 +8913,159 @@ mod tests {
         assert_eq!(
             host.active_stroke_dialog_for_test().spec().location,
             ui::dialogs::StrokeLocation::Inside
+        );
+    }
+
+    /// W7-I: paint the active layer of `ed` from `f(x, y)` (straight RGBA8).
+    fn paint_active(ed: &mut Editor, f: impl Fn(usize, usize) -> [u8; 4]) -> LayerId {
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let (w, h) = canvas_of(ed).unwrap();
+        let mut rgba = vec![0u8; w as usize * h as usize * 4];
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let i = (y * w as usize + x) * 4;
+                rgba[i..i + 4].copy_from_slice(&f(x, y));
+            }
+        }
+        let paint = {
+            let doc = ed.active_mut().unwrap();
+            pixels::write_layer(doc, layer, &rgba, "Probe").unwrap()
+        };
+        ed.apply_command(paint);
+        layer
+    }
+
+    /// W7-I: Fill ▸ Contents: Content-Aware (the spec the Fill dialog confirms
+    /// and the shell hands to `fill_selection_with`) rebuilds vertical stripes
+    /// inside the selection from the rest of the layer, in ONE undo step, and
+    /// leaves everything outside the selection alone.
+    #[test]
+    fn a_content_aware_fill_rebuilds_stripes_in_one_undo_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let stripe = |x: usize| if x % 8 < 4 { 0u8 } else { 255u8 };
+        // The stripes, with a red blotch where the selection will go.
+        let layer = paint_active(&mut ed, |x, y| {
+            if (18..30).contains(&x) && (10..22).contains(&y) {
+                [255, 0, 0, 255]
+            } else {
+                let v = stripe(x);
+                [v, v, v, 255]
+            }
+        });
+        select_rect(&mut ed, (18, 10), (30, 22));
+        let before = pixels::read_layer(ed.active().unwrap(), layer);
+        let steps = ed.active().unwrap().history.undo_depth();
+        let spec = ui::dialogs::FillSpec {
+            contents: ui::dialogs::FillContents::ContentAware,
+            ..Default::default()
+        };
+        fill_selection_with(&mut ed, &spec).unwrap();
+        assert_eq!(
+            ed.active().unwrap().history.undo_depth(),
+            steps + 1,
+            "a content-aware fill is exactly one undo step"
+        );
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        let w = 48usize;
+        let (mut good, mut total) = (0, 0);
+        for y in 10..22usize {
+            for x in 18..30usize {
+                let i = (y * w + x) * 4;
+                total += 1;
+                let want = stripe(x);
+                if after[i..i + 3].iter().all(|&c| c.abs_diff(want) < 48) {
+                    good += 1;
+                }
+            }
+        }
+        assert!(
+            good * 100 >= total * 90,
+            "only {good}/{total} filled pixels follow the stripes"
+        );
+        for y in 0..32usize {
+            for x in 0..w {
+                if (18..30).contains(&x) && (10..22).contains(&y) {
+                    continue;
+                }
+                let i = (y * w + x) * 4;
+                assert_eq!(after[i..i + 4], before[i..i + 4], "({x},{y}) moved");
+            }
+        }
+        // And one undo puts the blotch back.
+        ed.dispatch(crate::action::Action::Undo).unwrap();
+        assert_eq!(pixels::read_layer(ed.active().unwrap(), layer), before);
+    }
+
+    /// W7-I: with no selection there is nothing to synthesise, and the fill
+    /// says so rather than painting anything.
+    #[test]
+    fn a_content_aware_fill_without_a_selection_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        ed.active_mut().unwrap().document.selection = editor_core::Selection::None;
+        let spec = ui::dialogs::FillSpec {
+            contents: ui::dialogs::FillContents::ContentAware,
+            ..Default::default()
+        };
+        assert_eq!(
+            fill_selection_with(&mut ed, &spec).unwrap_err(),
+            "Content-Aware fill needs a selection to fill"
+        );
+    }
+
+    /// W7-I: Edit ▸ Content-Aware Scale is a real menu row, and picking
+    /// "Width to 80%" through the menu resolver keeps a high-contrast
+    /// object's width where a plain 80% resample would shrink it.
+    #[test]
+    fn the_content_aware_scale_row_keeps_an_objects_width() {
+        let step = ui::menu::ContentAwareScaleStep::Width80;
+        let edit = ui::menu::menu_bar(0)
+            .into_iter()
+            .find(|m| m.title == "Edit")
+            .expect("an Edit menu");
+        let row = edit.entries.iter().find_map(|e| match e {
+            Entry::Submenu { label, entries } if *label == "Content-Aware Scale" => {
+                Some(entries.iter().flat_map(Entry::actions).collect::<Vec<_>>())
+            }
+            _ => None,
+        });
+        assert!(
+            row.is_some_and(|actions| actions.contains(&MenuAction::ContentAwareScale(step))),
+            "Edit has no Content-Aware Scale row for {step:?}"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        ed.active_mut().unwrap().document.selection = editor_core::Selection::None;
+        // A black 12-px square near the left edge on a light ground with a
+        // faint grain: carving columns without an energy map would eat it.
+        let layer = paint_active(&mut ed, |x, y| {
+            if (3..15).contains(&x) && (10..22).contains(&y) {
+                [0, 0, 0, 255]
+            } else {
+                let v = 230 + ((x * 7 + y * 13) % 5) as u8;
+                [v, v, v, 255]
+            }
+        });
+        assert!(invoke(&mut ed, MenuAction::ContentAwareScale(step)).unwrap());
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        let w = 48usize;
+        let dark = (0..w)
+            .filter(|&x| {
+                let i = (16 * w + x) * 4;
+                after[i + 3] > 0 && after[i] < 128
+            })
+            .count();
+        // A plain resample to 80% leaves 12 * 0.8 = 9.6 dark columns.
+        assert_eq!(dark, 12, "the square is {dark} columns wide after carving");
+        // The canvas is 48 wide; the carved layer is 38 wide and centred, so
+        // the outer bands are transparent now.
+        assert_eq!(after[3], 0, "the left band is transparent");
+        assert_eq!(
+            after[(16 * w + 47) * 4 + 3],
+            0,
+            "the right band is transparent"
         );
     }
 
@@ -9100,5 +10206,514 @@ mod tests {
         );
         assert!(invoke(&mut ed, MenuAction::LockLayer(ui::menu::LayerLock::All)).unwrap());
         assert!(!locked(&ed).all);
+    }
+
+    /// W7-E: Filter > Convert for Smart Filters, then filters on the smart
+    /// object, through the same routes the shell drives: the menu's
+    /// resolve/perform, the Filter dialog host, the confirmed invocation the
+    /// shell hands `run_filter_invocation`, and the `SetLayerKind` command
+    /// the Layers panel's eye/delete rows emit.
+    mod smart_filters {
+        use super::*;
+
+        const W: u32 = 48;
+        const H: u32 = 32;
+
+        fn whole() -> raster::PixelRect {
+            raster::PixelRect::new(0, 0, W, H)
+        }
+
+        /// Opaque black left of x = 24, opaque white from it.
+        fn edge_rgba() -> Vec<u8> {
+            let mut rgba = vec![0u8; (W * H * 4) as usize];
+            for y in 0..H {
+                for x in 0..W {
+                    let i = ((y * W + x) * 4) as usize;
+                    let v = if x < 24 { 0 } else { 255 };
+                    rgba[i..i + 4].copy_from_slice(&[v, v, v, 255]);
+                }
+            }
+            rgba
+        }
+
+        /// The probe document, its layer repainted as a hard edge, then
+        /// converted for smart filters through the menu.
+        fn converted(dir: &std::path::Path) -> (Editor, LayerId) {
+            let mut ed = opened(dir);
+            let layer = ed.active().unwrap().document.active_layer().unwrap();
+            let paint =
+                pixels::write_layer(ed.active_mut().unwrap(), layer, &edge_rgba(), "Edge").unwrap();
+            ed.apply_command(paint);
+            let ctx = context(&mut ed, &Workspace::new());
+            assert_eq!(
+                resolve_intent(MenuAction::ConvertForSmartFilters, &ctx, &ed),
+                Ok(Intent::Action(MenuAction::ConvertForSmartFilters))
+            );
+            perform(MenuAction::ConvertForSmartFilters, &mut ed).unwrap();
+            let id = active_smart_object(&ed).expect("the active layer is a smart object now");
+            // Converting twice is refused with its reason.
+            let ctx = context(&mut ed, &Workspace::new());
+            assert_eq!(
+                resolve_intent(MenuAction::ConvertForSmartFilters, &ctx, &ed),
+                Err(ui::menu::SMART_FILTERS_ALREADY.to_string())
+            );
+            (ed, id)
+        }
+
+        fn composite(ed: &mut Editor) -> Vec<u8> {
+            ed.active_mut().unwrap().composite(whole()).unwrap()
+        }
+
+        /// Red channel of the composite at `(x, 10)`.
+        fn red(rgba: &[u8], x: u32) -> u8 {
+            rgba[((10 * W + x) * 4) as usize]
+        }
+
+        fn stack(ed: &Editor, id: LayerId) -> Vec<layer_model::SmartFilter> {
+            smart_filters_of(ed, id).expect("still a smart object")
+        }
+
+        fn radius(f: &layer_model::SmartFilter) -> f32 {
+            match f.params.get("radius") {
+                Some(layer_model::SmartParam::Float(r)) => *r,
+                other => panic!("no float radius: {other:?}"),
+            }
+        }
+
+        /// Open Gaussian Blur's dialog the way the menu does, move its radius
+        /// to `r`, and confirm it the way the shell does.
+        fn blur_through_the_dialog(ed: &mut Editor, r: f32) -> (f32, String) {
+            let mut host = crate::dialog_host::DialogHost::default();
+            assert!(host
+                .open_for_menu_action(&MenuAction::Filter(ui::menu::FilterId::GaussianBlur), ed));
+            let crate::dialog_host::ActiveDialog::Filter(dialog) = host.active_for_test() else {
+                panic!("not the filter dialog");
+            };
+            let opened_at = dialog.params().float("radius");
+            assert!(dialog.set_param("radius", ui::dialogs::ParamValue::Float(r)));
+            let invocation = dialog.invocation();
+            let message = run_filter_invocation(ed, &invocation).unwrap();
+            (opened_at, message)
+        }
+
+        fn set_kind(ed: &mut Editor, id: LayerId, filters: Vec<layer_model::SmartFilter>) {
+            // Exactly the command the Layers panel's sub-rows emit.
+            let mut so = match &ed.active().unwrap().document.layers.get(id).unwrap().kind {
+                layer_model::LayerKind::SmartObject(so) => so.clone(),
+                _ => unreachable!(),
+            };
+            so.filters = filters;
+            ed.apply_command(Command::SetLayerKind {
+                layer_id: id,
+                kind: Box::new(layer_model::LayerKind::SmartObject(so)),
+            });
+        }
+
+        #[test]
+        fn a_gaussian_blur_on_a_smart_object_is_a_live_editable_undoable_saved_smart_filter() {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut ed, id) = converted(dir.path());
+            let source = ed.active().unwrap().document.layer_tiles(id).cloned();
+            let sharp = composite(&mut ed);
+            assert_eq!(red(&sharp, 23), 0);
+            assert_eq!(red(&sharp, 24), 255);
+
+            // Apply: one stack entry, the source untouched, the composite soft.
+            let (_, message) = blur_through_the_dialog(&mut ed, 4.0);
+            assert!(message.contains("smart filter"), "{message}");
+            let filters = stack(&ed, id);
+            assert_eq!(filters.len(), 1);
+            assert_eq!(filters[0].filter, "GaussianBlur");
+            assert_eq!(radius(&filters[0]), 4.0);
+            assert_eq!(
+                ed.active().unwrap().document.layer_tiles(id).cloned(),
+                source,
+                "the smart object's source pixels were rewritten"
+            );
+            let soft4 = composite(&mut ed);
+            assert!(
+                red(&soft4, 23) > 20 && red(&soft4, 23) < 235,
+                "{}",
+                red(&soft4, 23)
+            );
+
+            // The eye off restores the unblurred composite; on again, soft.
+            let mut off = filters.clone();
+            off[0].enabled = false;
+            set_kind(&mut ed, id, off);
+            assert_eq!(composite(&mut ed), sharp);
+            set_kind(&mut ed, id, filters.clone());
+            assert_eq!(composite(&mut ed), soft4);
+
+            // Re-edit: the dialog re-opens at the stored radius, and the
+            // confirm replaces the entry rather than adding one.
+            compositor::smart::request_edit(compositor::smart::EditRequest {
+                layer: id,
+                index: 0,
+            });
+            let (opened_at, message) = blur_through_the_dialog(&mut ed, 10.0);
+            assert_eq!(opened_at, 4.0, "the dialog opened at the stored radius");
+            assert!(message.contains("updated"), "{message}");
+            let edited = stack(&ed, id);
+            assert_eq!(edited.len(), 1);
+            assert_eq!(radius(&edited[0]), 10.0);
+            let soft10 = composite(&mut ed);
+            assert_ne!(soft10, soft4, "a larger radius changes the composite");
+            assert!(red(&soft10, 17) > red(&soft4, 17));
+
+            // Each change is one undo step.
+            let doc = ed.active_mut().unwrap();
+            assert!(doc.undo().unwrap());
+            assert_eq!(stack(&ed, id), filters);
+            assert_eq!(composite(&mut ed), soft4);
+            assert!(ed.active_mut().unwrap().redo().unwrap());
+            assert_eq!(composite(&mut ed), soft10);
+
+            // Delete, then undo the delete.
+            set_kind(&mut ed, id, Vec::new());
+            assert_eq!(composite(&mut ed), sharp);
+            assert!(ed.active_mut().unwrap().undo().unwrap());
+            assert_eq!(composite(&mut ed), soft10);
+
+            // Save and reopen: the stack and its look come back.
+            let path = dir.path().join("smart.rstudio");
+            ed.active_mut().unwrap().save_to(&path, "test").unwrap();
+            let mut again = editor(dir.path());
+            again.open_path(&path).unwrap();
+            let reopened = again
+                .active()
+                .unwrap()
+                .document
+                .layers
+                .iter_depth_first()
+                .into_iter()
+                .find(|l| {
+                    matches!(
+                        again
+                            .active()
+                            .unwrap()
+                            .document
+                            .layers
+                            .get(*l)
+                            .map(|l| &l.kind),
+                        Some(layer_model::LayerKind::SmartObject(_))
+                    )
+                })
+                .expect("the smart object survived the round trip");
+            assert_eq!(stack(&again, reopened), stack(&ed, id));
+            assert_eq!(composite(&mut again), soft10);
+        }
+
+        /// The reviewer's route: the smart object is NOT the active layer, and
+        /// its filter's name is double-clicked in the real Layers panel. The
+        /// chrome routes the panel's Filter intent in the same frame as its
+        /// selection, against the pre-selection editor; the dialog must still
+        /// open at the stored parameters over the object's pixels, and the
+        /// confirm must replace that entry, not append a second one.
+        #[test]
+        fn double_clicking_a_non_active_smart_objects_filter_reopens_it_at_its_params() {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut ed, id) = converted(dir.path());
+            let (_, message) = blur_through_the_dialog(&mut ed, 7.0);
+            assert!(message.contains("added"), "{message}");
+            // A new, empty layer on top becomes the active one.
+            ed.dispatch(Action::NewLayer).unwrap();
+            let other = ed.active().unwrap().document.active_layer().unwrap();
+            assert_ne!(other, id, "setup: the smart object is not active");
+            let soft7 = composite(&mut ed);
+
+            let ctx = egui::Context::default();
+            crate::chrome::install_theme(&ctx, design::Theme::Dark);
+            let mut chrome = crate::chrome::Chrome::new();
+            let input = |time: f64, events: Vec<egui::Event>| egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            // What `Shell::apply_chrome` does first with a frame's output:
+            // the selection lands, then a confirmed dialog runs.
+            let apply = |ed: &mut Editor, out: crate::chrome::ChromeOutput| -> Option<String> {
+                if let Some((layers, active)) = out.select_layers {
+                    ed.set_layer_selection(layers, active);
+                }
+                match out.dialog {
+                    Some(ui::dialogs::DialogAction::RunFilter(invocation)) => {
+                        Some(run_filter_invocation(ed, &invocation).unwrap())
+                    }
+                    _ => None,
+                }
+            };
+            for frame in 0..3 {
+                let mut out = crate::chrome::ChromeOutput::default();
+                let _ = ctx.run(input(1.0 + frame as f64 * 0.05, Vec::new()), |ctx| {
+                    out = chrome.ui(ctx, &mut ed);
+                });
+                assert_eq!(apply(&mut ed, out), None);
+            }
+            // The same id `ui::view::docks::smart_filter_part_id` gives the
+            // name label of filter 0 of `id`.
+            let name_id = egui::Id::new(("raster-smart-filter", id, 0usize, "name"));
+            let name = ctx
+                .read_response(name_id)
+                .expect("the Layers panel drew the smart filter's row")
+                .rect
+                .center();
+            let press = |pressed: bool| egui::Event::PointerButton {
+                pos: name,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            for (frame, events) in [
+                vec![egui::Event::PointerMoved(name)],
+                vec![press(true)],
+                vec![press(false)],
+                vec![press(true)],
+                vec![press(false)],
+                Vec::new(),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut out = crate::chrome::ChromeOutput::default();
+                let _ = ctx.run(input(2.0 + frame as f64 * 0.05, events), |ctx| {
+                    out = chrome.ui(ctx, &mut ed);
+                });
+                assert_eq!(apply(&mut ed, out), None);
+            }
+            assert_eq!(
+                ed.active().unwrap().document.active_layer(),
+                Some(id),
+                "the double-click selected the smart object"
+            );
+            let crate::dialog_host::ActiveDialog::Filter(dialog) =
+                chrome.dialogs_for_test().active_for_test()
+            else {
+                panic!("the double-click did not open the filter dialog");
+            };
+            assert_eq!(
+                dialog.params().float("radius"),
+                7.0,
+                "the dialog opened at the stored radius"
+            );
+            // It previews over the object's source, not the empty layer that
+            // was active when the dialog was routed.
+            assert!(
+                dialog.preview_buffer().get(2, 10)[3] > 0.9,
+                "the dialog previews the previously active (empty) layer"
+            );
+            assert!(dialog.set_param("radius", ui::dialogs::ParamValue::Float(3.0)));
+
+            // Enter confirms; the shell runs the confirmed invocation.
+            let enter = egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let mut out = crate::chrome::ChromeOutput::default();
+            let _ = ctx.run(input(3.0, vec![enter]), |ctx| {
+                out = chrome.ui(ctx, &mut ed);
+            });
+            let message = apply(&mut ed, out).expect("Enter did not confirm the filter dialog");
+            assert!(message.contains("updated"), "{message}");
+            let edited = stack(&ed, id);
+            assert_eq!(edited.len(), 1, "the confirm appended instead of replacing");
+            assert_eq!(radius(&edited[0]), 3.0);
+            assert_ne!(composite(&mut ed), soft7, "the new radius changed nothing");
+            // One undo step brings radius 7 back.
+            assert!(ed.active_mut().unwrap().undo().unwrap());
+            assert_eq!(radius(&stack(&ed, id)[0]), 7.0);
+            assert_eq!(composite(&mut ed), soft7);
+        }
+
+        /// Open Gaussian Blur's dialog armed to re-edit entry 0 of `id` (the
+        /// panel's double-click), as the host does.
+        fn arm_reedit(ed: &Editor, id: LayerId) -> crate::dialog_host::DialogHost {
+            compositor::smart::request_edit(compositor::smart::EditRequest {
+                layer: id,
+                index: 0,
+            });
+            let mut host = crate::dialog_host::DialogHost::default();
+            assert!(host
+                .open_for_menu_action(&MenuAction::Filter(ui::menu::FilterId::GaussianBlur), ed));
+            assert_eq!(
+                armed_smart_filter_layer(ed, ui::menu::FilterId::GaussianBlur),
+                Some(id),
+                "setup: the re-edit is armed"
+            );
+            host
+        }
+
+        /// The Filter Gallery's confirm for Gaussian Blur: its defaults.
+        fn gallery_blur(ed: &mut Editor, host: &mut crate::dialog_host::DialogHost) -> String {
+            assert!(host.open_for_menu_action(&MenuAction::FilterGallery, ed));
+            assert!(matches!(
+                host.active_for_test(),
+                crate::dialog_host::ActiveDialog::FilterGallery(_)
+            ));
+            let spec = ui::dialogs::filter_by_id(ui::menu::FilterId::GaussianBlur).unwrap();
+            let invocation = ui::dialogs::FilterInvocation {
+                filter: spec,
+                params: ui::dialogs::FilterParams::defaults(spec.params),
+            };
+            run_filter_invocation(ed, &invocation).unwrap()
+        }
+
+        /// Round-3 review route: a re-edit dialog is cancelled (Escape through
+        /// the real host), a raster layer is selected, and the Filter Gallery
+        /// runs Gaussian Blur. The raster layer is the one filtered; the smart
+        /// object's stored entry keeps its radius.
+        #[test]
+        fn a_cancelled_reedit_never_captures_a_later_gallery_run_on_another_layer() {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut ed, id) = converted(dir.path());
+            blur_through_the_dialog(&mut ed, 7.0);
+            let mut host = arm_reedit(&ed, id);
+
+            // Escape cancels the dialog through the host's generic route.
+            let ctx = egui::Context::default();
+            crate::chrome::install_theme(&ctx, design::Theme::Dark);
+            let escape = egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let mut out = crate::chrome::ChromeOutput::default();
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![escape],
+                    ..Default::default()
+                },
+                |ctx| host.ui(ctx, None, &mut out),
+            );
+            assert!(out.dialog.is_none(), "Escape confirmed the dialog");
+            assert!(!host.is_open(), "Escape did not close the dialog");
+            assert_eq!(
+                armed_smart_filter_layer(&ed, ui::menu::FilterId::GaussianBlur),
+                None,
+                "cancelling left the re-edit armed"
+            );
+
+            // A painted raster layer on top becomes active; the Gallery
+            // blurs it.
+            ed.dispatch(Action::NewLayer).unwrap();
+            let raster = ed.active().unwrap().document.active_layer().unwrap();
+            assert_ne!(raster, id);
+            let paint = pixels::write_layer(ed.active_mut().unwrap(), raster, &edge_rgba(), "Edge")
+                .unwrap();
+            ed.apply_command(paint);
+            let message = gallery_blur(&mut ed, &mut host);
+            assert_eq!(message, "Gaussian Blur applied", "{message}");
+            assert_ne!(
+                pixels::read_layer(ed.active().unwrap(), raster),
+                edge_rgba(),
+                "the raster layer was not filtered"
+            );
+            let kept = stack(&ed, id);
+            assert_eq!(kept.len(), 1);
+            assert_eq!(radius(&kept[0]), 7.0, "the stored filter was overwritten");
+        }
+
+        /// Even with no cancel in between, the Gallery never finishes an armed
+        /// re-edit: over the same smart object it appends a new entry.
+        #[test]
+        fn the_filter_gallery_over_an_armed_smart_object_appends_not_replaces() {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut ed, id) = converted(dir.path());
+            blur_through_the_dialog(&mut ed, 7.0);
+            let mut host = arm_reedit(&ed, id);
+            let message = gallery_blur(&mut ed, &mut host);
+            assert!(message.contains("added"), "{message}");
+            let filters = stack(&ed, id);
+            assert_eq!(filters.len(), 2, "the Gallery replaced the armed entry");
+            assert_eq!(radius(&filters[0]), 7.0);
+        }
+
+        /// A filter run while a re-edit is armed but ANOTHER layer is active
+        /// filters that layer: the arm never redirects a run to its object.
+        #[test]
+        fn an_armed_reedit_never_redirects_a_run_to_an_inactive_smart_object() {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut ed, id) = converted(dir.path());
+            blur_through_the_dialog(&mut ed, 7.0);
+            let _host = arm_reedit(&ed, id);
+            ed.dispatch(Action::NewLayer).unwrap();
+            let raster = ed.active().unwrap().document.active_layer().unwrap();
+            let paint = pixels::write_layer(ed.active_mut().unwrap(), raster, &edge_rgba(), "Edge")
+                .unwrap();
+            ed.apply_command(paint);
+            let spec = ui::dialogs::filter_by_id(ui::menu::FilterId::GaussianBlur).unwrap();
+            let invocation = ui::dialogs::FilterInvocation {
+                filter: spec,
+                params: ui::dialogs::FilterParams::defaults(spec.params),
+            };
+            let message = run_filter_invocation(&mut ed, &invocation).unwrap();
+            assert_eq!(message, "Gaussian Blur applied", "{message}");
+            assert_eq!(radius(&stack(&ed, id)[0]), 7.0);
+        }
+
+        /// `DialogHost::close` ends an armed re-edit too.
+        #[test]
+        fn closing_the_host_disarms_a_smart_filter_reedit() {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut ed, id) = converted(dir.path());
+            blur_through_the_dialog(&mut ed, 7.0);
+            let mut host = arm_reedit(&ed, id);
+            host.close();
+            assert_eq!(
+                armed_smart_filter_layer(&ed, ui::menu::FilterId::GaussianBlur),
+                None
+            );
+        }
+
+        #[test]
+        fn the_filter_menu_on_a_smart_object_appends_and_never_paints() {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut ed, id) = converted(dir.path());
+            let source = ed.active().unwrap().document.layer_tiles(id).cloned();
+            // A stale re-edit note must not turn a plain menu run into an edit.
+            compositor::smart::request_edit(compositor::smart::EditRequest {
+                layer: id,
+                index: 0,
+            });
+            assert!(invoke(
+                &mut ed,
+                MenuAction::Filter(ui::menu::FilterId::GaussianBlur)
+            )
+            .unwrap());
+            assert!(invoke(&mut ed, MenuAction::Filter(ui::menu::FilterId::Median)).unwrap());
+            let keys: Vec<String> = stack(&ed, id).into_iter().map(|f| f.filter).collect();
+            assert_eq!(keys, ["GaussianBlur", "Median"]);
+            assert_eq!(
+                ed.active().unwrap().document.layer_tiles(id).cloned(),
+                source
+            );
+        }
+
+        #[test]
+        fn a_psd_export_writes_the_filtered_look() {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut ed, _) = converted(dir.path());
+            blur_through_the_dialog(&mut ed, 4.0);
+            let soft = composite(&mut ed);
+            let path = dir.path().join("smart.psd");
+            ed.active_mut().unwrap().export_psd_to(&path).unwrap();
+            let mut back = editor(dir.path());
+            back.open_path(&path).unwrap();
+            let flat = composite(&mut back);
+            for x in [20, 22, 23, 24, 25, 27] {
+                let (a, b) = (i32::from(red(&soft, x)), i32::from(red(&flat, x)));
+                assert!((a - b).abs() <= 2, "x = {x}: {a} vs {b}");
+            }
+            assert!(red(&flat, 23) > 20, "the PSD holds the blurred pixels");
+        }
     }
 }

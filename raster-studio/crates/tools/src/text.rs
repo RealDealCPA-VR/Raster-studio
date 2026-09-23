@@ -517,7 +517,67 @@ const PARAGRAPH_MIN_BOX_WIDTH_PX: f32 = 8.0;
 /// geometry or overflow the screen mapping.
 const PARAGRAPH_MAX_BOX_WIDTH_PX: f32 = 4096.0;
 
+/// W7-F: which of Photopea's four type tools a [`TypeTool`] is.
+///
+/// The vertical modes create text with
+/// [`layer_model::text::Paragraph::vertical`] set, which `text_engine`
+/// lays out in top-to-bottom columns. The mask modes run the same session —
+/// the typed run is drawn on the canvas while it is edited — but their
+/// confirm is performed by the shell as a **selection** from the glyph
+/// coverage, with the temporary layer taken away again
+/// (`app_shell::tool_input`, `perform_type_mask_confirm`): the session's
+/// layer never survives as a layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TypeMode {
+    #[default]
+    Horizontal,
+    Vertical,
+    HorizontalMask,
+    VerticalMask,
+}
+
+impl TypeMode {
+    /// The registry id this mode is.
+    pub fn tool_id(self) -> ToolId {
+        match self {
+            TypeMode::Horizontal => ToolId::Type,
+            TypeMode::Vertical => ToolId::VerticalType,
+            TypeMode::HorizontalMask => ToolId::HorizontalTypeMask,
+            TypeMode::VerticalMask => ToolId::VerticalTypeMask,
+        }
+    }
+
+    /// The mode a registry id names, for the four type tools.
+    pub fn of(id: ToolId) -> Option<Self> {
+        Some(match id {
+            ToolId::Type => TypeMode::Horizontal,
+            ToolId::VerticalType => TypeMode::Vertical,
+            ToolId::HorizontalTypeMask => TypeMode::HorizontalMask,
+            ToolId::VerticalTypeMask => TypeMode::VerticalMask,
+            _ => return None,
+        })
+    }
+
+    /// Columns rather than lines.
+    pub fn is_vertical(self) -> bool {
+        matches!(self, TypeMode::Vertical | TypeMode::VerticalMask)
+    }
+
+    /// Typing makes a selection rather than a layer.
+    pub fn is_mask(self) -> bool {
+        matches!(self, TypeMode::HorizontalMask | TypeMode::VerticalMask)
+    }
+}
+
+/// W7-F: `true` for the two Type Mask tools — the ids whose text confirm the
+/// shell turns into a selection.
+pub fn is_type_mask(id: ToolId) -> bool {
+    TypeMode::of(id).is_some_and(TypeMode::is_mask)
+}
+
 pub struct TypeTool {
+    /// W7-F: horizontal or vertical, layer or mask.
+    pub mode: TypeMode,
     pub font_family: String,
     pub size_px: f32,
     /// W3-J: the default character style the next created layer starts with.
@@ -533,6 +593,7 @@ pub struct TypeTool {
 impl Default for TypeTool {
     fn default() -> Self {
         Self {
+            mode: TypeMode::Horizontal,
             font_family: DEFAULT_FONT_FAMILY.to_string(),
             size_px: DEFAULT_SIZE_PX,
             style: layer_model::text::BaseStyle::default(),
@@ -555,7 +616,11 @@ impl TypeTool {
             font_family: self.font_family.clone(),
             size_px: self.size_px,
             style: self.style,
-            paragraph: self.paragraph,
+            // W7-F: the vertical tools create vertical type.
+            paragraph: layer_model::text::Paragraph {
+                vertical: self.mode.is_vertical(),
+                ..self.paragraph
+            },
             ..Default::default()
         }
     }
@@ -754,9 +819,19 @@ impl TypeTool {
     }
 }
 
+impl TypeTool {
+    /// W7-F: a type tool of the given mode, with the default style.
+    pub fn with_mode(mode: TypeMode) -> Self {
+        Self {
+            mode,
+            ..Self::default()
+        }
+    }
+}
+
 impl Tool for TypeTool {
     fn id(&self) -> ToolId {
-        ToolId::Type
+        self.mode.tool_id()
     }
 
     /// The press only aims: it records where the layer would go and ends the
@@ -2231,5 +2306,48 @@ mod tests {
                 height: Some(90.0)
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod w7f_tests {
+    use super::*;
+    use crate::tiles::MemoryTiles;
+    use raster::PixelRect;
+
+    /// W7-F: each type mode is its own registry tool, and the vertical ones
+    /// create vertical type.
+    #[test]
+    fn the_vertical_modes_create_vertical_text_and_each_mode_is_its_own_tool() {
+        for (mode, id, vertical, mask) in [
+            (TypeMode::Horizontal, ToolId::Type, false, false),
+            (TypeMode::Vertical, ToolId::VerticalType, true, false),
+            (
+                TypeMode::HorizontalMask,
+                ToolId::HorizontalTypeMask,
+                false,
+                true,
+            ),
+            (TypeMode::VerticalMask, ToolId::VerticalTypeMask, true, true),
+        ] {
+            let mut tool = TypeTool::with_mode(mode);
+            assert_eq!(tool.id(), id);
+            assert_eq!(TypeMode::of(id), Some(mode));
+            assert_eq!(is_type_mask(id), mask);
+            let mut tiles = MemoryTiles::new();
+            let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64));
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(10.0, 10.0))
+                .unwrap();
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(10.0, 10.0))
+                .unwrap();
+            let Some(Command::CreateLayer { layer }) = ctx.commands().first() else {
+                panic!("{mode:?} created no layer");
+            };
+            let LayerKind::Text(text) = &layer.kind else {
+                panic!("not text");
+            };
+            assert_eq!(text.paragraph.vertical, vertical, "{mode:?}");
+        }
+        assert!(!is_type_mask(ToolId::Brush));
     }
 }

@@ -250,6 +250,12 @@ pub struct Paragraph {
     pub left_indent: f32,
     /// W3-J: indent of every line from the end edge, in layer pixels.
     pub right_indent: f32,
+    /// W7-F: vertical type — the text runs top to bottom in columns that
+    /// advance right to left (the Vertical Type tools set it). Appended and
+    /// omitted while `false`, so documents that predate it load and save
+    /// unchanged.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub vertical: bool,
 }
 
 impl Default for Paragraph {
@@ -262,6 +268,7 @@ impl Default for Paragraph {
             space_after: 0.0,
             left_indent: 0.0,
             right_indent: 0.0,
+            vertical: false,
         }
     }
 }
@@ -928,4 +935,25 @@ fn the_w3j_fields_round_trip_and_validate() {
         layer.validate(),
         Err(TextError::NonFiniteParagraphSpacing { .. })
     ));
+}
+
+#[cfg(test)]
+mod vertical_tests {
+    use super::*;
+
+    /// W7-F: the vertical flag is append-only — absent from a horizontal
+    /// paragraph's JSON, absent-means-horizontal on load, and round-trips.
+    #[test]
+    fn the_vertical_flag_is_omitted_when_off_and_old_payloads_load_horizontal() {
+        let json = serde_json::to_string(&Paragraph::default()).unwrap();
+        assert!(!json.contains("vertical"), "{json}");
+        let old: Paragraph = serde_json::from_str(r#"{"alignment":"Left"}"#).unwrap();
+        assert!(!old.vertical);
+        let on = Paragraph {
+            vertical: true,
+            ..Paragraph::default()
+        };
+        let back: Paragraph = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert!(back.vertical);
+    }
 }

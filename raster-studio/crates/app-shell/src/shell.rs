@@ -542,6 +542,9 @@ pub struct Shell {
     /// engine's pressure-aware stroke (verified in `tools`) into a working
     /// tablet stroke.
     pen_pressure: f32,
+    /// W7-A: the touch/pen contact driving the pointer, and the gate that
+    /// drops the OS's emulated mouse events for that same contact.
+    pen: crate::pen_input::PenInput,
     /// When this shell started, which is the clock the marching ants crawl on.
     /// A wall-clock reading would jump when the system clock is adjusted; the
     /// dash phase is a pure function of this elapsed time, so a dropped frame
@@ -595,6 +598,7 @@ impl Shell {
             pointer: ToolPointer::new(),
             modifiers: ModifiersState::empty(),
             pen_pressure: 1.0,
+            pen: crate::pen_input::PenInput::new(),
             started: Instant::now(),
             ime_allowed_last: false,
             repaint_at: Some(Instant::now()),
@@ -1024,12 +1028,10 @@ impl Shell {
             // they are applied on the way to the texture rather than to the
             // document. Read every frame: the panel is the authority, and the
             // presenter re-uploads only when the answer actually changes.
-            state.presenter.set_channel_mask(self.chrome.channel_mask());
             // Card 059: the mask view rides the same per-frame read — the
             // panel owns it, the chrome exposes it, the presenter applies it.
-            state
-                .presenter
-                .set_mask_view(self.chrome.mask_view(), self.chrome.mask_overlay_tint());
+            // W7-D: so do View > Proof Colors / Gamut Warning.
+            state.presenter.read_view_settings(&self.chrome);
             match state.presenter.sync(&state.gpu, doc) {
                 Ok(report) => {
                     if report.texture_replaced {
@@ -2265,6 +2267,118 @@ impl Shell {
         }
     }
 
+    /// W7-A: one winit touch/pen sample, routed exactly as the mouse is.
+    /// The sample's pressure goes through [`Shell::set_pen_pressure`] before
+    /// the pointer sample is built, so every stroke sample carries it; once
+    /// the contact lifts the pointer returns to full (mouse) pressure.
+    fn on_touch(
+        &mut self,
+        id: u64,
+        phase: winit::event::TouchPhase,
+        location: PhysicalPosition<f64>,
+        force: Option<winit::event::Force>,
+        over_panel: bool,
+    ) {
+        let pos = Vec2::new(location.x as f32, location.y as f32);
+        let Some(sample) = self.pen.on_touch(id, phase, pos, force) else {
+            return;
+        };
+        self.cursor = sample.pos;
+        self.set_pen_pressure(sample.pressure);
+        self.on_pointer(sample.phase, PointerButton::Primary, over_panel);
+        if sample.phase == PointerPhase::Up {
+            self.set_pen_pressure(1.0);
+        }
+    }
+
+    /// The pointer half of `window_event`, after egui has seen the event:
+    /// mouse buttons, cursor moves, touch/pen contacts and focus changes.
+    /// `consumed` is egui's "the chrome wants this pointer". Any other event
+    /// is ignored here.
+    fn on_pointer_window_event(&mut self, event: WindowEvent, consumed: bool) {
+        match event {
+            WindowEvent::MouseInput { state, button, .. } => {
+                // `consumed` is only ever a veto on *claiming* a gesture — a
+                // drag already running keeps running over a panel.
+                self.on_mouse_button(state, button, consumed);
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.on_cursor_moved(position, consumed);
+            }
+            // W7-A: a pen or finger (winit's `Touch`, e.g. Windows
+            // `WM_POINTER`) drives the same pointer route, with its force as
+            // the stroke's pressure.
+            WindowEvent::Touch(winit::event::Touch {
+                id,
+                phase,
+                location,
+                force,
+                ..
+            }) => {
+                self.on_touch(id, phase, location, force, consumed);
+            }
+            // Card 052: a focus change is the moment the OS clipboard's
+            // content can have changed (another application copied while we
+            // were unfocused), so the menu-enablement probe is re-read.
+            WindowEvent::Focused(true) => {
+                self.editor.invalidate_os_image_probe();
+            }
+            WindowEvent::Focused(false) => {
+                self.editor.invalidate_os_image_probe();
+                self.on_focus_lost();
+            }
+            _ => {}
+        }
+    }
+
+    /// A drag cannot outlive the window's focus, and a gesture left claimed
+    /// would refuse every later press as somebody else's. Not `CursorLeft`:
+    /// dragging past the edge of the window and back is a gesture, and winit
+    /// keeps delivering its moves.
+    ///
+    /// W7-A: a touch/pen contact is dropped with it. winit 0.30 on Windows
+    /// never reports `TouchPhase::Cancelled` and ignores
+    /// `WM_POINTERCAPTURECHANGED`, so a contact whose lift was lost to Alt+Tab
+    /// or a system prompt would otherwise stay down for good — swallowing
+    /// every later mouse event and new contact — and leave its last pressure
+    /// on the next stroke.
+    fn on_focus_lost(&mut self) {
+        self.abandon_gesture();
+        self.pen.reset();
+        self.set_pen_pressure(1.0);
+    }
+
+    /// A winit mouse button, unless it is the OS emulating an active
+    /// touch/pen contact (W7-A), in which case it is dropped.
+    fn on_mouse_button(&mut self, state: ElementState, button: MouseButton, over_panel: bool) {
+        if self
+            .pen
+            .swallow_mouse_button(button, state == ElementState::Pressed)
+        {
+            return;
+        }
+        if let Some(button) = pointer_button(button) {
+            let phase = match state {
+                ElementState::Pressed => PointerPhase::Down,
+                ElementState::Released => PointerPhase::Up,
+            };
+            self.on_pointer(phase, button, over_panel);
+        }
+    }
+
+    /// A winit cursor move, unless a touch/pen contact is positioning the
+    /// pointer itself (W7-A).
+    fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>, over_panel: bool) {
+        if self.pen.swallow_cursor_move() {
+            return;
+        }
+        self.cursor = Vec2::new(position.x as f32, position.y as f32);
+        // The move belongs to whichever button went down, which winit
+        // does not repeat here; with none held it is a hover.
+        let button = self.held.unwrap_or(PointerButton::Primary);
+        self.on_pointer(PointerPhase::Move, button, over_panel);
+    }
+
     fn on_pointer(&mut self, phase: PointerPhase, button: PointerButton, over_panel: bool) {
         // A modal dialog owns the whole pointer while it is open: a press that
         // means "dismiss this modal" must never claim a canvas gesture. The
@@ -2591,38 +2705,13 @@ impl ApplicationHandler<crate::shell::AppEvent> for Shell {
                     key_event.repeat,
                 );
             }
-            WindowEvent::MouseInput { state, button, .. } => {
-                if let Some(button) = pointer_button(button) {
-                    let phase = match state {
-                        ElementState::Pressed => PointerPhase::Down,
-                        ElementState::Released => PointerPhase::Up,
-                    };
-                    // `consumed` is egui's "the chrome wants this pointer", and
-                    // it is only ever a veto on *claiming* a gesture — a drag
-                    // already running keeps running over a panel.
-                    self.on_pointer(phase, button, consumed);
-                }
-            }
-            WindowEvent::CursorMoved { position, .. } => {
-                self.cursor = Vec2::new(position.x as f32, position.y as f32);
-                // The move belongs to whichever button went down, which winit
-                // does not repeat here; with none held it is a hover.
-                let button = self.held.unwrap_or(PointerButton::Primary);
-                self.on_pointer(PointerPhase::Move, button, consumed);
-            }
-            // A drag cannot outlive the window's focus, and a gesture left
-            // claimed would refuse every later press as somebody else's. Not
-            // `CursorLeft`: dragging past the edge of the window and back is a
-            // gesture, and winit keeps delivering its moves.
-            // Card 052: a focus change is the moment the OS clipboard's
-            // content can have changed (another application copied while we
-            // were unfocused), so the menu-enablement probe is re-read.
-            WindowEvent::Focused(true) => {
-                self.editor.invalidate_os_image_probe();
-            }
-            WindowEvent::Focused(false) => {
-                self.editor.invalidate_os_image_probe();
-                self.abandon_gesture();
+            // Mouse, touch/pen and focus changes: one route, testable
+            // without an event loop (W7-A).
+            event @ (WindowEvent::MouseInput { .. }
+            | WindowEvent::CursorMoved { .. }
+            | WindowEvent::Touch(_)
+            | WindowEvent::Focused(_)) => {
+                self.on_pointer_window_event(event, consumed);
             }
             WindowEvent::MouseWheel { delta, .. } if !consumed => {
                 let lines = match delta {
@@ -2651,6 +2740,14 @@ mod w5d_tests;
 #[cfg(test)]
 #[path = "shell_w5c_tests.rs"]
 mod w5c_tests;
+
+#[cfg(test)]
+#[path = "shell_pen_tests.rs"]
+mod pen_tests;
+
+#[cfg(test)]
+#[path = "shell_w7i_tests.rs"]
+mod w7i_tests;
 
 #[cfg(test)]
 mod tests {

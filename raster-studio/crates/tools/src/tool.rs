@@ -100,6 +100,27 @@ pub enum ToolId {
     AddAnchor,
     DeleteAnchor,
     ConvertAnchor,
+    /// W7-F: drag a quad, adjust its corners, Enter rectifies the image into
+    /// the crop rect. See [`crate::perspective_crop::PerspectiveCropTool`].
+    PerspectiveCrop,
+    /// W7-F: text laid out in top-to-bottom columns. See
+    /// [`crate::text::TypeTool`] ([`crate::text::TypeMode::Vertical`]).
+    VerticalType,
+    /// W7-F: typing makes a selection from the glyph outlines, horizontal.
+    HorizontalTypeMask,
+    /// W7-F: the vertical Type Mask.
+    VerticalTypeMask,
+    /// W7-F: wet paint that picks up the colour under it. See
+    /// [`crate::mixer_brush::MixerBrushTool`].
+    MixerBrush,
+    /// W7-F: drag out an artboard. See [`crate::artboard::ArtboardTool`].
+    Artboard,
+    /// W7-F: clicks place points a smooth curve passes through. See
+    /// [`crate::curvature_pen::CurvaturePenTool`].
+    CurvaturePen,
+    /// W7-F: a freehand drag fitted into a path. See
+    /// [`crate::pen::FreeformPenTool`].
+    FreeformPen,
 }
 
 impl ToolId {
@@ -165,6 +186,14 @@ impl ToolId {
         ToolId::AddAnchor,
         ToolId::DeleteAnchor,
         ToolId::ConvertAnchor,
+        ToolId::PerspectiveCrop,
+        ToolId::VerticalType,
+        ToolId::HorizontalTypeMask,
+        ToolId::VerticalTypeMask,
+        ToolId::MixerBrush,
+        ToolId::Artboard,
+        ToolId::CurvaturePen,
+        ToolId::FreeformPen,
     ];
 }
 

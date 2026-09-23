@@ -160,10 +160,12 @@ pub struct DocumentMeta {
     /// Old packages default to 8.
     #[serde(default = "default_bit_depth")]
     pub bit_depth: u8,
-    /// The colour mode the document presents as: 0 = RGB, 1 = Grayscale (the
-    /// [`ui::menu::ColorMode`] discriminant order). Tiles are always stored
-    /// RGBA; the mode is how the pixels are read and what conversions target.
-    /// Set by Image ▸ Mode conversions; old packages default to RGB.
+    /// The colour mode the document presents as: 0 = RGB, 1 = Grayscale,
+    /// 2 = Lab, 3 = CMYK, 4 = Indexed (the [`ui::menu::ColorMode`]
+    /// discriminant order; [`crate::color_mode::mode`] names them). Tiles are
+    /// always stored RGBA; the mode is how the pixels are constrained and read
+    /// out, and what conversions target. Set by Image ▸ Mode conversions
+    /// ([`crate::color_mode::convert_color_mode`]); old packages default to RGB.
     #[serde(default)]
     pub color_mode: u8,
 }

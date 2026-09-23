@@ -65,7 +65,12 @@
 //!   answer with the paragraph's start. The text is invisible either way;
 //!   callers that care should check [`FontLibrary::is_empty`] and say so in the
 //!   UI.
-//! * Vertical writing modes are not implemented.
+//! * Vertical type ([`ParagraphStyle::vertical`], W7-F) is laid out by
+//!   re-positioning the horizontally shaped glyphs upright, one em cell per
+//!   cluster, one column per paragraph, columns right to left — cosmic-text
+//!   has no vertical writing mode. There are no rotated Latin runs, vertical
+//!   punctuation alternates or decorations there, a box frame does not wrap
+//!   it, and the caret/hit-test geometry stays horizontal.
 //!
 //! ```
 //! use text_engine::{shape, rasterize, FontLibrary, GlyphRasterCache, TextRun};

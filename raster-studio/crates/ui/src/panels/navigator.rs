@@ -247,6 +247,13 @@ impl InfoState {
                 value: format_selection(&doc.selection),
             },
         ];
+        // W7-D: a Lab or CMYK document also reads the pointer's colour in
+        // its own mode (pixels stay stored as RGB — the Photopea approach —
+        // so this is the conversion of what is under the pointer). One more
+        // fixed row, present for as long as the document wears the mode.
+        if let Some(row) = mode_readout(doc.meta.color_mode, self.sampled) {
+            rows.push(row);
+        }
         rows.extend(self.tool_readouts());
         rows
     }
@@ -277,6 +284,33 @@ impl InfoState {
         }
         rows
     }
+}
+
+/// W7-D: the Info row a Lab (`L, a, b`) or CMYK (`C%, M%, Y%, K%`, through
+/// `color::cmyk`'s documented ink model — no ICC press profile) document
+/// adds, or `None` for every other mode. `sampled` is straight-alpha sRGB.
+pub fn mode_readout(color_mode: u8, sampled: Option<[f32; 4]>) -> Option<InfoReadout> {
+    use editor_core::color_mode::mode;
+    let label = match color_mode {
+        mode::LAB => "Lab",
+        mode::CMYK => "CMYK",
+        _ => return None,
+    };
+    let value = match sampled {
+        None => "—".to_string(),
+        Some(c) => {
+            let rgb = [c[0], c[1], c[2]].map(|v| v.clamp(0.0, 1.0));
+            if color_mode == mode::LAB {
+                let [l, a, b] = color::rgb_to_lab(rgb);
+                format!("{}, {}, {}", l.round(), a.round(), b.round())
+            } else {
+                let rgb8 = rgb.map(|v| (v * 255.0).round() as u8);
+                let [c, m, y, k] = color::cmyk::rgb8_to_cmyk(rgb8).percentages();
+                format!("{c}%, {m}%, {y}%, {k}%")
+            }
+        }
+    };
+    Some(InfoReadout { label, value })
 }
 
 /// A straight-alpha colour as the Info panel writes it: `R, G, B` in 0..=255.
@@ -529,6 +563,41 @@ mod tests {
         assert_eq!((rows[8].label, rows[8].value.as_str()), ("#2", "— at 3, 4"));
         // Nothing measured, nothing sampled: no extra rows.
         assert_eq!(InfoState::default().readouts(&doc).len(), 5);
+    }
+
+    #[test]
+    fn a_lab_or_cmyk_document_reads_the_pointer_in_its_own_mode() {
+        let mut doc = Document::new(640, 480, "Test");
+        let state = InfoState {
+            sampled: Some([1.0, 0.0, 0.0, 1.0]),
+            ..InfoState::default()
+        };
+        assert_eq!(
+            state.readouts(&doc).len(),
+            5,
+            "an RGB document adds nothing"
+        );
+        doc.meta.color_mode = editor_core::color_mode::mode::LAB;
+        let rows = state.readouts(&doc);
+        assert_eq!(rows.len(), 6);
+        assert_eq!(rows[1].value, "255, 0, 0", "RGB stays");
+        // sRGB red is L 53, a 80, b 67 (D65).
+        assert_eq!(
+            (rows[5].label, rows[5].value.as_str()),
+            ("Lab", "53, 80, 67")
+        );
+        doc.meta.color_mode = editor_core::color_mode::mode::CMYK;
+        let rows = state.readouts(&doc);
+        let [c, m, y, k] = color::cmyk::rgb8_to_cmyk([255, 0, 0]).percentages();
+        assert_eq!(rows[5].label, "CMYK");
+        assert_eq!(rows[5].value, format!("{c}%, {m}%, {y}%, {k}%"));
+        assert!(
+            m > 80 && y > 80 && c < 10,
+            "red is magenta + yellow: {c} {m} {y} {k}"
+        );
+        // Nothing under the pointer: the row stays, with a dash.
+        let rows = InfoState::default().readouts(&doc);
+        assert_eq!((rows[5].label, rows[5].value.as_str()), ("CMYK", "—"));
     }
 
     #[test]

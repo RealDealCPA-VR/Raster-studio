@@ -75,6 +75,10 @@
 //! | [`edit`] | move, crop, slice, eyedropper, red-eye, patch, magic eraser |
 //! | [`text`] | the Type tool: click to place a text layer, then type into it |
 //! | [`pen`] | the Pen tool: author a path one click at a time |
+//! | [`curvature_pen`] | W7-F: the Curvature Pen (and the Freeform Pen lives in [`pen`]) |
+//! | [`perspective_crop`] | W7-F: drag a quad, Enter rectifies and crops |
+//! | [`mixer_brush`] | W7-F: wet paint that picks up the colour under it |
+//! | [`artboard`] | W7-F: drag out an artboard (a group with a background plate) |
 //! | [`pencil`] | the Pencil and its Auto Erase |
 //! | [`measure`] | the Ruler and the Colour Sampler |
 //! | [`history_brush`] | the History Brush: paint from an earlier state |
@@ -111,17 +115,21 @@
 
 #![forbid(unsafe_code)]
 
+pub mod artboard;
 pub mod brush;
 pub mod bucket;
+pub mod curvature_pen;
 pub mod edit;
 pub mod error;
 pub mod gradient;
 pub mod history_brush;
 pub mod measure;
+pub mod mixer_brush;
 pub mod patch;
 pub mod path_select;
 pub mod pen;
 pub mod pencil;
+pub mod perspective_crop;
 pub mod registry;
 pub mod select;
 pub mod shape;

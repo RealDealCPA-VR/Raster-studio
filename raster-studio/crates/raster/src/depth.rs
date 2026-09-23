@@ -156,6 +156,70 @@ pub fn widen_rgba8_over(new8: &[u8], old16: Option<&[u8]>) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// One channel sample of a whole-layer edit, at the document's working depth.
+///
+/// W7-C: the whole-layer edits of a document (fills, clears, flips and
+/// rotations, the selection blend of a filter or adjustment) are written once
+/// over this trait and run on `u8` in an 8-bit document and on `u16` in a
+/// 16-bit one, so a 16-bit layer is never rounded through 8 bits on the way.
+/// The `u8` implementation is the exact arithmetic those edits always used,
+/// so an 8-bit document's bytes do not move.
+pub trait DepthSample: Copy + PartialEq + Default + std::fmt::Debug + 'static {
+    /// The largest code, as `f32` (255 or 65535).
+    const MAX: f32;
+    /// The raw code as `f32` (not normalised).
+    fn to_f32(self) -> f32;
+    /// A raw code from `f32`: rounded to the nearest code, clamped into range.
+    fn from_f32_rounded(v: f32) -> Self;
+    /// The code as a `0..=1` fraction.
+    #[inline]
+    fn to_unit(self) -> f32 {
+        self.to_f32() / Self::MAX
+    }
+    /// A `0..=1` fraction as the nearest code.
+    #[inline]
+    fn from_unit(v: f32) -> Self {
+        Self::from_f32_rounded(v * Self::MAX)
+    }
+}
+
+impl DepthSample for u8 {
+    const MAX: f32 = 255.0;
+    #[inline]
+    fn to_f32(self) -> f32 {
+        f32::from(self)
+    }
+    #[inline]
+    fn from_f32_rounded(v: f32) -> Self {
+        v.round().clamp(0.0, 255.0) as u8
+    }
+}
+
+impl DepthSample for u16 {
+    const MAX: f32 = 65_535.0;
+    #[inline]
+    fn to_f32(self) -> f32 {
+        f32::from(self)
+    }
+    #[inline]
+    fn from_f32_rounded(v: f32) -> Self {
+        v.round().clamp(0.0, 65_535.0) as u16
+    }
+}
+
+/// A layer colour tile's samples at 16 bits, whatever depth it is stored at.
+///
+/// An RGBA16 tile is read as it is; an RGBA8 tile is widened losslessly by
+/// [`widen_sample`] (an opened 16-bit PNG arrives in RGBA8 tiles until its
+/// first edit). `None` for anything that is not a colour tile.
+pub fn rgba16_samples(bytes: &[u8]) -> Option<Vec<u16>> {
+    match bytes.len() {
+        RGBA16_TILE_BYTES => Some(crate::tile_bytes_to_rgba16(bytes)),
+        RGBA8_TILE_BYTES => Some(bytes.iter().map(|c| widen_sample(*c)).collect()),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,6 +249,32 @@ mod tests {
         let pixels = crate::TILE_SIZE as usize * crate::TILE_SIZE as usize;
         assert_eq!(tile_alpha16(&t16, pixels), None);
         assert_eq!(tile_alpha16(&t8, pixels), None);
+    }
+
+    #[test]
+    fn depth_samples_round_at_their_own_depth_and_rgba16_samples_reads_both_tiles() {
+        // The u8 arithmetic is the one the 8-bit edits always used.
+        for v in [-3.0f32, 0.0, 0.49, 0.5, 127.5, 254.6, 300.0] {
+            assert_eq!(u8::from_f32_rounded(v), v.round().clamp(0.0, 255.0) as u8);
+        }
+        assert_eq!(u8::from_unit(0.5), 128);
+        // u16 keeps what u8 cannot: half of an odd code is not an 8-bit code.
+        assert_eq!(u16::from_unit(0.5), 32_768);
+        assert_eq!(u16::from_f32_rounded(12_345.4), 12_345);
+        assert_eq!(u16::from_f32_rounded(70_000.0), 65_535);
+        assert_eq!(12_345u16.to_unit() * 65_535.0, 12_345.0);
+        let t8 = ramp8();
+        let wide = rgba16_samples(&t8).unwrap();
+        assert_eq!(
+            wide,
+            crate::tile_bytes_to_rgba16(&widen_rgba8_tile(&t8).unwrap())
+        );
+        let deep: Vec<u16> = (0..RGBA16_TILE_BYTES / 2)
+            .map(|i| (i * 7919) as u16)
+            .collect();
+        let bytes = crate::rgba16_to_tile_bytes(&deep);
+        assert_eq!(rgba16_samples(&bytes).unwrap(), deep);
+        assert!(rgba16_samples(&[0u8; 12]).is_none());
     }
 
     #[test]

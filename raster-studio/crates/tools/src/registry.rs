@@ -223,6 +223,49 @@ const TONE_OPTS: &[OptionSpec] = &[
 
 const SHAPE_OPTS: &[OptionSpec] = shape_opts!();
 
+/// The Type tools' options - shared by all four (W7-F): the vertical and
+/// mask variants take the same face, size and default style.
+const TYPE_OPTS: &[OptionSpec] = &[
+    f("size_px", "Size", 4.0, 512.0, 24.0),
+    // The three CSS generic families, which `text_engine` resolves to
+    // installed fonts (W1-B2). The installed family list cannot be
+    // offered here: an [`OptionKind::Choice`] is `&'static` const
+    // data and `text::TypeTool::set_setting` reads this very table
+    // back by index, so a live list needs a dynamic option kind first.
+    c(
+        "font_family",
+        "Font",
+        &["sans-serif", "serif", "monospace"],
+        0,
+    ),
+    // W3-J: the Type tool's DEFAULT style - what the Character and
+    // Paragraph panels edit with no text layer selected, held on the
+    // workspace like every option and seeded into the next layer the
+    // tool creates (`text::TypeTool::seed`). The keys and their
+    // mapping live in `text::TYPE_STYLE_KEYS`.
+    c("weight", "Weight", crate::text::TYPE_WEIGHTS, 3),
+    b("italic", "Italic", false),
+    b("underline", "Underline", false),
+    b("strikethrough", "Strike", false),
+    col("color", "Color", [0.0, 0.0, 0.0, 1.0]),
+    f("tracking", "Tracking", -100.0, 400.0, 0.0),
+    f("leading", "Leading (0 = auto)", 0.0, 400.0, 0.0),
+    f("horizontal_scale", "H scale %", 1.0, 1000.0, 100.0),
+    f("vertical_scale", "V scale %", 1.0, 1000.0, 100.0),
+    f("baseline_shift", "Baseline", -200.0, 200.0, 0.0),
+    c("script", "Position", crate::text::TYPE_SCRIPTS, 0),
+    c("caps", "Caps", crate::text::TYPE_CAPS, 0),
+    b("kerning", "Metrics kerning", true),
+    b("ligatures", "Ligatures", true),
+    c("anti_alias", "Edges", crate::text::TYPE_ANTI_ALIAS, 0),
+    c("alignment", "Align", crate::text::TYPE_ALIGNMENTS, 0),
+    f("left_indent", "Indent left", -200.0, 1000.0, 0.0),
+    f("right_indent", "Indent right", -200.0, 1000.0, 0.0),
+    f("first_line_indent", "First line", -200.0, 1000.0, 0.0),
+    f("space_before", "Space before", 0.0, 1000.0, 0.0),
+    f("space_after", "Space after", 0.0, 1000.0, 0.0),
+];
+
 /// Everything the UI needs to know about one tool.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ToolInfo {
@@ -302,6 +345,22 @@ const TOOLS: &[ToolInfo] = &[
             b("select_groups", "Select Groups", false),
             b("show_transform", "Show Transform Controls", false),
         ],
+    ),
+    // W7-F: Photoshop's Artboard tool shares the Move slot and `V`.
+    t(
+        ToolId::Artboard,
+        "Artboard",
+        ToolGroup::Select,
+        Some("move"),
+        "artboard",
+        Cursor::Crosshair,
+        Some('v'),
+        &[c(
+            "background",
+            "Background",
+            crate::artboard::BACKGROUND_CHOICES,
+            0,
+        )],
     ),
     t(
         ToolId::RectMarquee,
@@ -429,6 +488,33 @@ const TOOLS: &[ToolInfo] = &[
             b("delete_cropped", "Delete Cropped Pixels", false),
         ],
     ),
+    // W7-F: second in the Crop slot, as in Photopea.
+    t(
+        ToolId::PerspectiveCrop,
+        "Perspective Crop",
+        ToolGroup::Crop,
+        Some("crop"),
+        "crop-perspective",
+        Cursor::CropMarks,
+        Some('c'),
+        &[
+            // 0 = from the quad's own edge lengths.
+            i(
+                "width",
+                "W (0 = auto)",
+                0,
+                crate::perspective_crop::MAX_OUTPUT_PX,
+                0,
+            ),
+            i(
+                "height",
+                "H (0 = auto)",
+                0,
+                crate::perspective_crop::MAX_OUTPUT_PX,
+                0,
+            ),
+        ],
+    ),
     t(
         ToolId::Slice,
         "Slice",
@@ -484,6 +570,9 @@ const TOOLS: &[ToolInfo] = &[
         &[
             f("size", "Size", 1.0, 5000.0, 30.0),
             f("hardness", "Hardness", 0.0, 1.0, 0.6),
+            // W7-I: Proximity Match diffuses the surroundings inward;
+            // Content-Aware synthesises the brushed area by PatchMatch.
+            c("type", "Type", &["Proximity Match", "Content-Aware"], 0),
         ],
     ),
     t(
@@ -562,6 +651,28 @@ const TOOLS: &[ToolInfo] = &[
             f("size", "Size", 1.0, 5000.0, 30.0),
             f("tolerance", "Tolerance", 0.0, 1.0, 30.0 / 255.0),
             f("opacity", "Opacity", 0.0, 1.0, 1.0),
+        ],
+    ),
+    // W7-F: last in the Brush slot, as in Photoshop.
+    t(
+        ToolId::MixerBrush,
+        "Mixer Brush",
+        ToolGroup::Paint,
+        Some("brush"),
+        "mixer-brush",
+        Cursor::BrushRing,
+        Some('b'),
+        &[
+            f("size", "Size", 1.0, 5000.0, 30.0),
+            f("hardness", "Hardness", 0.0, 1.0, 0.6),
+            f("spacing", "Spacing", 0.01, 10.0, 0.1),
+            f("opacity", "Opacity", 0.0, 1.0, 1.0),
+            f("flow", "Flow", 0.0, 1.0, 1.0),
+            f("wet", "Wet", 0.0, 1.0, 0.5),
+            f("load", "Load", 0.0, 1.0, 0.5),
+            f("mix", "Mix", 0.0, 1.0, 0.5),
+            b("load_after", "Load Brush After Each Stroke", true),
+            b("clean_after", "Clean Brush After Each Stroke", false),
         ],
     ),
     t(
@@ -792,6 +903,40 @@ const TOOLS: &[ToolInfo] = &[
             c("combine", "Combine", Combine::CHOICES, 0),
         ),
     ),
+    // W7-F: Photoshop's order in the Pen slot, on `P`.
+    t(
+        ToolId::FreeformPen,
+        "Freeform Pen",
+        ToolGroup::Draw,
+        Some("pen"),
+        "pen-freeform",
+        Cursor::Crosshair,
+        Some('p'),
+        with_paint!(
+            c("mode", "Mode", PenMode::CHOICES, 1),
+            c("combine", "Combine", Combine::CHOICES, 0),
+            f(
+                "curve_fit",
+                "Curve Fit",
+                0.5,
+                10.0,
+                crate::pen::DEFAULT_CURVE_FIT_PX
+            ),
+        ),
+    ),
+    t(
+        ToolId::CurvaturePen,
+        "Curvature Pen",
+        ToolGroup::Draw,
+        Some("pen"),
+        "pen-curvature",
+        Cursor::Crosshair,
+        Some('p'),
+        with_paint!(
+            c("mode", "Mode", PenMode::CHOICES, 1),
+            c("combine", "Combine", Combine::CHOICES, 0),
+        ),
+    ),
     // W4-G: the Pen slot's path-editing tools, letterless as in Photoshop.
     t(
         ToolId::AddAnchor,
@@ -834,46 +979,38 @@ const TOOLS: &[ToolInfo] = &[
         // Transform, so a second press while typing left the text for a
         // transform box; Free Transform is `Ctrl+T` and the Edit menu now.
         Some('t'),
-        &[
-            f("size_px", "Size", 4.0, 512.0, 24.0),
-            // The three CSS generic families, which `text_engine` resolves to
-            // installed fonts (W1-B2). The installed family list cannot be
-            // offered here: an [`OptionKind::Choice`] is `&'static` const
-            // data and `text::TypeTool::set_setting` reads this very table
-            // back by index, so a live list needs a dynamic option kind first.
-            c(
-                "font_family",
-                "Font",
-                &["sans-serif", "serif", "monospace"],
-                0,
-            ),
-            // W3-J: the Type tool's DEFAULT style - what the Character and
-            // Paragraph panels edit with no text layer selected, held on the
-            // workspace like every option and seeded into the next layer the
-            // tool creates (`text::TypeTool::seed`). The keys and their
-            // mapping live in `text::TYPE_STYLE_KEYS`.
-            c("weight", "Weight", crate::text::TYPE_WEIGHTS, 3),
-            b("italic", "Italic", false),
-            b("underline", "Underline", false),
-            b("strikethrough", "Strike", false),
-            col("color", "Color", [0.0, 0.0, 0.0, 1.0]),
-            f("tracking", "Tracking", -100.0, 400.0, 0.0),
-            f("leading", "Leading (0 = auto)", 0.0, 400.0, 0.0),
-            f("horizontal_scale", "H scale %", 1.0, 1000.0, 100.0),
-            f("vertical_scale", "V scale %", 1.0, 1000.0, 100.0),
-            f("baseline_shift", "Baseline", -200.0, 200.0, 0.0),
-            c("script", "Position", crate::text::TYPE_SCRIPTS, 0),
-            c("caps", "Caps", crate::text::TYPE_CAPS, 0),
-            b("kerning", "Metrics kerning", true),
-            b("ligatures", "Ligatures", true),
-            c("anti_alias", "Edges", crate::text::TYPE_ANTI_ALIAS, 0),
-            c("alignment", "Align", crate::text::TYPE_ALIGNMENTS, 0),
-            f("left_indent", "Indent left", -200.0, 1000.0, 0.0),
-            f("right_indent", "Indent right", -200.0, 1000.0, 0.0),
-            f("first_line_indent", "First line", -200.0, 1000.0, 0.0),
-            f("space_before", "Space before", 0.0, 1000.0, 0.0),
-            f("space_after", "Space after", 0.0, 1000.0, 0.0),
-        ],
+        TYPE_OPTS,
+    ),
+    // W7-F: the other three type tools, in Photoshop's slot order.
+    t(
+        ToolId::VerticalType,
+        "Vertical Type",
+        ToolGroup::Draw,
+        Some("type"),
+        "type-vertical",
+        Cursor::Crosshair,
+        Some('t'),
+        TYPE_OPTS,
+    ),
+    t(
+        ToolId::VerticalTypeMask,
+        "Vertical Type Mask",
+        ToolGroup::Draw,
+        Some("type"),
+        "type-mask-vertical",
+        Cursor::Crosshair,
+        Some('t'),
+        TYPE_OPTS,
+    ),
+    t(
+        ToolId::HorizontalTypeMask,
+        "Horizontal Type Mask",
+        ToolGroup::Draw,
+        Some("type"),
+        "type-mask",
+        Cursor::Crosshair,
+        Some('t'),
+        TYPE_OPTS,
     ),
     t(
         ToolId::PathSelect,
@@ -1236,6 +1373,23 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
         ToolId::ConvertAnchor => Box::new(crate::path_select::AnchorTool::new(
             crate::path_select::AnchorEdit::Convert,
         )),
+        // W7-F.
+        ToolId::PerspectiveCrop => {
+            Box::new(crate::perspective_crop::PerspectiveCropTool::default())
+        }
+        ToolId::VerticalType => Box::new(crate::text::TypeTool::with_mode(
+            crate::text::TypeMode::Vertical,
+        )),
+        ToolId::HorizontalTypeMask => Box::new(crate::text::TypeTool::with_mode(
+            crate::text::TypeMode::HorizontalMask,
+        )),
+        ToolId::VerticalTypeMask => Box::new(crate::text::TypeTool::with_mode(
+            crate::text::TypeMode::VerticalMask,
+        )),
+        ToolId::MixerBrush => Box::new(crate::mixer_brush::MixerBrushTool::default()),
+        ToolId::Artboard => Box::new(crate::artboard::ArtboardTool::default()),
+        ToolId::CurvaturePen => Box::new(crate::curvature_pen::CurvaturePenTool::default()),
+        ToolId::FreeformPen => Box::new(crate::pen::FreeformPenTool::default()),
     }
 }
 
@@ -1403,7 +1557,22 @@ mod tests {
                 ToolId::RedEye
             ]
         );
-        assert_eq!(mates("type"), vec![ToolId::Type]);
+        // W7-F: Photoshop's four type tools, the Artboard under Move and
+        // the Perspective Crop inside the Crop slot.
+        assert_eq!(
+            mates("type"),
+            vec![
+                ToolId::Type,
+                ToolId::VerticalType,
+                ToolId::VerticalTypeMask,
+                ToolId::HorizontalTypeMask
+            ]
+        );
+        assert_eq!(mates("move"), vec![ToolId::Move, ToolId::Artboard]);
+        assert_eq!(
+            mates("crop"),
+            vec![ToolId::Crop, ToolId::PerspectiveCrop, ToolId::Slice]
+        );
         // W4-G: Photoshop's order inside the slots that grew, and the
         // History Brush in a slot of its own.
         assert_eq!(
@@ -1419,6 +1588,8 @@ mod tests {
             mates("pen"),
             vec![
                 ToolId::Pen,
+                ToolId::FreeformPen,
+                ToolId::CurvaturePen,
                 ToolId::AddAnchor,
                 ToolId::DeleteAnchor,
                 ToolId::ConvertAnchor
@@ -1440,9 +1611,18 @@ mod tests {
         assert_eq!(off, vec![ToolId::FreeTransform]);
         let ft = info(ToolId::FreeTransform).unwrap();
         assert_eq!(ft.shortcut, None, "Free Transform is Ctrl+T, not a letter");
-        // And `T` is the Type tool's alone: a second press stays on Type.
-        assert_eq!(by_shortcut('t'), vec![ToolId::Type]);
-        assert_eq!(cycle('t', Some(ToolId::Type)), Some(ToolId::Type));
+        // And `T` is the type tools' alone (W7-F: the four of them, as in
+        // Photoshop), never Free Transform's.
+        assert_eq!(
+            by_shortcut('t'),
+            vec![
+                ToolId::Type,
+                ToolId::VerticalType,
+                ToolId::VerticalTypeMask,
+                ToolId::HorizontalTypeMask
+            ]
+        );
+        assert_eq!(cycle('t', None), Some(ToolId::Type));
     }
 
     #[test]
@@ -1472,16 +1652,18 @@ mod tests {
         let brushes = by_shortcut('b');
         assert_eq!(
             brushes,
-            vec![ToolId::Brush, ToolId::Pencil, ToolId::ColorReplacement]
+            vec![
+                ToolId::Brush,
+                ToolId::Pencil,
+                ToolId::ColorReplacement,
+                ToolId::MixerBrush
+            ]
         );
         // Case-insensitive.
         assert_eq!(by_shortcut('B'), brushes);
         assert_eq!(cycle('b', None), Some(ToolId::Brush));
         assert_eq!(cycle('b', Some(ToolId::Brush)), Some(ToolId::Pencil));
-        assert_eq!(
-            cycle('b', Some(ToolId::ColorReplacement)),
-            Some(ToolId::Brush)
-        );
+        assert_eq!(cycle('b', Some(ToolId::MixerBrush)), Some(ToolId::Brush));
         // A key nothing claims selects nothing.
         assert_eq!(cycle('q', None), None);
         // A tool from another group jumps to the head of this one.

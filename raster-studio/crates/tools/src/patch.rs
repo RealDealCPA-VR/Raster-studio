@@ -214,7 +214,17 @@ pub struct ColorPatch {
     tb: TileBox,
     buf: FilterBuffer,
     dirty: Vec<bool>,
+    /// W7-C: the plane was read from RGBA16 tiles
+    /// ([`ColorPatch::load_native`]) and commits RGBA16 tiles.
+    sixteen: bool,
+    /// W7-C, a 16-bit plane only: the pixels as loaded and each slot's
+    /// stored 16-bit samples, so a pixel the edit left as it was is written
+    /// back with its exact stored code rather than a re-encoding of it.
+    seed: Option<Seed16>,
 }
+
+/// A 16-bit plane's pixels as loaded, and each slot's stored samples.
+type Seed16 = (Vec<[f32; 4]>, Vec<Option<Vec<u16>>>);
 
 impl ColorPatch {
     /// Read every tile covering `rect` into a working plane.
@@ -254,7 +264,86 @@ impl ColorPatch {
             tb,
             buf,
             dirty: vec![false; n],
+            sixteen: false,
+            seed: None,
         })
+    }
+
+    /// W7-C: read every tile covering `rect` at its OWN depth.
+    ///
+    /// [`ColorPatch::load`] takes RGBA8 tiles only (what
+    /// [`TileAccess::bytes`] hands a tool). This reads through
+    /// [`TileAccess::native_bytes`] instead: an RGBA16 tile is decoded at its
+    /// full precision, and when any covering tile is RGBA16 -- or the store
+    /// says the document is 16-bit ([`TileAccess::sixteen_bit_document`]),
+    /// in which case an RGBA8 tile is widened losslessly (`c * 257`) -- the
+    /// plane commits RGBA16 tiles, so a 16-bit layer is resampled without
+    /// passing through 8 bits. In an 8-bit document, a plane over RGBA8 (or
+    /// absent) tiles only is exactly [`ColorPatch::load`]'s, and commits the
+    /// same RGBA8 bytes.
+    pub fn load_native(
+        access: &dyn TileAccess,
+        key: PixelKey,
+        rect: PixelRect,
+    ) -> Result<Self, ToolError> {
+        let tb = TileBox::covering(rect)?;
+        let rgba8 = Tile::byte_len(PixelFormat::Rgba8);
+        let rgba16 = Tile::byte_len(PixelFormat::Rgba16);
+        // W7-C round 3: a 16-bit document works at 16 bits even where its
+        // tiles are still RGBA8 (an opened 16-bit PNG or TIFF).
+        let mut sixteen = access.sixteen_bit_document();
+        for (_, coord) in tb.coords() {
+            match access.native_tile_bytes(key, coord).map(<[u8]>::len) {
+                None => {}
+                Some(n) if n == rgba8 => {}
+                Some(n) if n == rgba16 => sixteen = true,
+                Some(got) => {
+                    return Err(ToolError::Tile(raster::TileError::BadLength {
+                        expected: rgba8,
+                        got,
+                    }))
+                }
+            }
+        }
+        if !sixteen {
+            return Self::load(&Native(access), key, rect);
+        }
+        let mut buf = FilterBuffer::transparent(tb.width(), tb.height())?;
+        let stride = tb.width() as usize;
+        let ts = TILE_SIZE as usize;
+        let mut stored = vec![None; tb.len()];
+        for (slot, coord) in tb.coords() {
+            let Some(samples) = access
+                .native_tile_bytes(key, coord)
+                .and_then(raster::depth::rgba16_samples)
+            else {
+                continue;
+            };
+            let tile = FilterBuffer::from_rgba16(TILE_SIZE, TILE_SIZE, &samples)?;
+            stored[slot] = Some(samples);
+            let tx = slot % tb.nx as usize;
+            let ty = slot / tb.nx as usize;
+            let px = buf.pixels_mut();
+            for row in 0..ts {
+                let dst = (ty * ts + row) * stride + tx * ts;
+                px[dst..dst + ts].copy_from_slice(&tile.pixels()[row * ts..row * ts + ts]);
+            }
+        }
+        let n = tb.len();
+        let loaded = buf.pixels().to_vec();
+        Ok(Self {
+            tb,
+            buf,
+            dirty: vec![false; n],
+            sixteen: true,
+            seed: Some((loaded, stored)),
+        })
+    }
+
+    /// Whether the plane commits RGBA16 tiles ([`ColorPatch::load_native`]
+    /// over a 16-bit layer).
+    pub fn is_sixteen_bit(&self) -> bool {
+        self.sixteen
     }
 
     pub fn tile_box(&self) -> TileBox {
@@ -341,12 +430,40 @@ impl ColorPatch {
         Ok(())
     }
 
-    /// Encode one tile back to straight-alpha sRGB8.
+    /// Encode one tile back to straight-alpha sRGB8 (sRGB16 for a 16-bit
+    /// plane).
     fn encode_tile(&self, slot: usize) -> Vec<u8> {
         let ts = TILE_SIZE as usize;
         let stride = self.width() as usize;
         let tx = slot % self.tb.nx as usize;
         let ty = slot / self.tb.nx as usize;
+        if self.sixteen {
+            let rows: Vec<[f32; 4]> = (0..ts)
+                .flat_map(|row| {
+                    let src = (ty * ts + row) * stride + tx * ts;
+                    self.buf.pixels()[src..src + ts].iter().copied()
+                })
+                .collect();
+            if let Ok(tile) = FilterBuffer::from_pixels(TILE_SIZE, TILE_SIZE, rows) {
+                let mut samples = tile.to_rgba16();
+                if let Some((loaded, Some(stored))) = self
+                    .seed
+                    .as_ref()
+                    .map(|(loaded, stored)| (loaded, stored[slot].as_ref()))
+                {
+                    for row in 0..ts {
+                        let src = (ty * ts + row) * stride + tx * ts;
+                        for i in 0..ts {
+                            if self.buf.pixels()[src + i] == loaded[src + i] {
+                                let k = (row * ts + i) * 4;
+                                samples[k..k + 4].copy_from_slice(&stored[k..k + 4]);
+                            }
+                        }
+                    }
+                }
+                return raster::rgba16_to_tile_bytes(&samples);
+            }
+        }
         let mut out = vec![0u8; Tile::byte_len(PixelFormat::Rgba8)];
         let px = self.buf.pixels();
         for row in 0..ts {
@@ -394,6 +511,26 @@ impl ColorPatch {
             }
         }
         Ok(TileDelta::new(edits)?)
+    }
+}
+
+/// The read-only view [`ColorPatch::load_native`] hands [`ColorPatch::load`]
+/// when no covering tile is RGBA16: `bytes` answers with the stored bytes.
+struct Native<'a>(&'a dyn TileAccess);
+
+impl TileAccess for Native<'_> {
+    fn tile_hash(&self, key: PixelKey, coord: TileCoord) -> Option<TileHash> {
+        self.0.tile_hash(key, coord)
+    }
+
+    fn bytes(&self, hash: TileHash) -> Option<&[u8]> {
+        self.0.native_bytes(hash)
+    }
+
+    fn store(&mut self, data: Vec<u8>) -> TileHash {
+        // Never called: `ColorPatch::load` only reads. Content addressing
+        // still holds for the hash it would name.
+        TileHash::of(&data)
     }
 }
 
@@ -742,6 +879,190 @@ mod tests {
         );
         let delta = patch.commit(&mut tiles, k).unwrap();
         assert!(delta.is_empty(), "a read-only patch must not emit edits");
+    }
+
+    /// One RGBA16 tile whose codes sit off the 8-bit grid (a multiple of 257
+    /// is an 8-bit code widened), so any trip through 8 bits shows.
+    fn busy16() -> Vec<u16> {
+        let ts = TILE_SIZE as usize;
+        (0..ts * ts)
+            .flat_map(|i| {
+                let (x, y) = (i % ts, i / ts);
+                [
+                    (20_000 + x * 37 + y * 5) as u16,
+                    (1_000 + y * 201 + x) as u16,
+                    (65_000 - x * 113 - y * 3) as u16,
+                    65_535,
+                ]
+            })
+            .collect()
+    }
+
+    /// W7-C: a 16-bit tile loads at its own precision and a plane that only
+    /// shifted its content by whole pixels commits RGBA16 tiles carrying the
+    /// same 16-bit codes, one pixel along; untouched it commits nothing.
+    #[test]
+    fn a_native_plane_over_a_sixteen_bit_tile_keeps_every_code() {
+        let mut tiles = MemoryTiles::new();
+        let k = key();
+        let src = busy16();
+        let coord = TileCoord::new(0, 0, 0);
+        tiles.put(k, coord, raster::rgba16_to_tile_bytes(&src));
+        assert!(
+            ColorPatch::load(&tiles, k, PixelRect::new(0, 0, 8, 8)).is_err(),
+            "the RGBA8 plane refuses a 16-bit tile"
+        );
+        let rect = PixelRect::new(0, 0, 8, 8);
+        let untouched = ColorPatch::load_native(&tiles, k, rect).unwrap();
+        assert!(untouched.is_sixteen_bit());
+        assert!(untouched.commit(&mut tiles, k).unwrap().is_empty());
+
+        let mut patch = ColorPatch::load_native(&tiles, k, rect).unwrap();
+        let ts = TILE_SIZE as i32;
+        let before = patch.buffer().clone();
+        for y in 0..ts {
+            for x in 1..ts {
+                patch.set(IVec2::new(x, y), before.get(x as u32 - 1, y as u32));
+            }
+        }
+        let delta = patch.commit(&mut tiles, k).unwrap();
+        assert_eq!(delta.len(), 1);
+        let bytes = tiles.bytes(delta.edits()[0].hash.unwrap()).unwrap();
+        assert_eq!(bytes.len(), Tile::byte_len(PixelFormat::Rgba16));
+        let got = raster::tile_bytes_to_rgba16(bytes);
+        let ts = ts as usize;
+        let mut off_grid = 0usize;
+        for y in 0..ts {
+            for x in 0..ts {
+                let g = &got[(y * ts + x) * 4..(y * ts + x) * 4 + 4];
+                let sx = x.saturating_sub(1);
+                let w = &src[(y * ts + sx) * 4..(y * ts + sx) * 4 + 4];
+                for c in 0..4 {
+                    assert!(
+                        g[c].abs_diff(w[c]) <= 1,
+                        "({x}, {y}) channel {c}: {} vs {}",
+                        g[c],
+                        w[c]
+                    );
+                }
+                off_grid += g[..3].iter().filter(|v| **v % 257 != 0).count();
+            }
+        }
+        assert!(
+            off_grid > ts * ts * 3 * 9 / 10,
+            "only {off_grid} off-grid codes"
+        );
+        // Column 0 was not written: its codes are the stored ones, exactly.
+        for y in 0..ts {
+            assert_eq!(
+                got[y * ts * 4..y * ts * 4 + 4],
+                src[y * ts * 4..y * ts * 4 + 4]
+            );
+        }
+    }
+
+    /// W7-C: a pixel the edit did not write keeps its stored 16-bit code
+    /// exactly, even where decoding and re-encoding would not return it (a
+    /// transparent pixel's colour, a faint pixel's rounding).
+    #[test]
+    fn a_native_plane_writes_untouched_sixteen_bit_pixels_back_exactly() {
+        let mut tiles = MemoryTiles::new();
+        let k = key();
+        let ts = TILE_SIZE as usize;
+        let src: Vec<u16> = (0..ts * ts)
+            .flat_map(|i| {
+                let a = [0u16, 3, 257, 1_001][i % 4];
+                [(i * 13 % 65_536) as u16, 40_000, (i * 7 % 65_536) as u16, a]
+            })
+            .collect();
+        tiles.put(
+            k,
+            TileCoord::new(0, 0, 0),
+            raster::rgba16_to_tile_bytes(&src),
+        );
+        let mut patch = ColorPatch::load_native(&tiles, k, PixelRect::new(0, 0, 4, 4)).unwrap();
+        patch.set(IVec2::new(0, 0), [0.5, 0.25, 0.125, 1.0]);
+        let delta = patch.commit(&mut tiles, k).unwrap();
+        assert_eq!(delta.len(), 1);
+        let got =
+            raster::tile_bytes_to_rgba16(tiles.bytes(delta.edits()[0].hash.unwrap()).unwrap());
+        assert_eq!(got[3], 65_535, "the written pixel is opaque");
+        assert_eq!(got[4..], src[4..], "every other pixel is its stored code");
+    }
+
+    /// A [`MemoryTiles`] that says its document is 16-bit.
+    struct DeepDoc(MemoryTiles);
+
+    impl TileAccess for DeepDoc {
+        fn tile_hash(&self, key: PixelKey, coord: TileCoord) -> Option<TileHash> {
+            self.0.tile_hash(key, coord)
+        }
+        fn bytes(&self, hash: TileHash) -> Option<&[u8]> {
+            self.0.bytes(hash)
+        }
+        fn store(&mut self, data: Vec<u8>) -> TileHash {
+            self.0.store(data)
+        }
+        fn sixteen_bit_document(&self) -> bool {
+            true
+        }
+    }
+
+    /// W7-C round 3: in a 16-bit document whose tiles are still RGBA8 (an
+    /// opened 16-bit PNG), the native plane works at 16 bits: an RGBA8 tile
+    /// is widened losslessly, a half-pixel blend lands off the 8-bit grid,
+    /// and the plane commits an RGBA16 tile.
+    #[test]
+    fn a_native_plane_in_a_sixteen_bit_document_widens_rgba8_tiles() {
+        let k = key();
+        let mut inner = MemoryTiles::new();
+        inner.put_pixel(k, 0, 0, [0, 0, 0, 255]);
+        inner.put_pixel(k, 1, 0, [255, 255, 255, 255]);
+        let mut tiles = DeepDoc(inner);
+        let rect = PixelRect::new(0, 0, 4, 4);
+        let mut patch = ColorPatch::load_native(&tiles, k, rect).unwrap();
+        assert!(
+            patch.is_sixteen_bit(),
+            "the document's depth, not the tile's"
+        );
+        // Half of each (in linear light, as the plane works): not an 8-bit code.
+        let a = patch.buffer().get(0, 0);
+        let b = patch.buffer().get(1, 0);
+        let mid = [0, 1, 2, 3].map(|c| (a[c] + b[c]) / 2.0);
+        patch.set(IVec2::new(2, 0), mid);
+        let delta = patch.commit(&mut tiles, k).unwrap();
+        assert_eq!(delta.len(), 1);
+        let bytes = tiles.bytes(delta.edits()[0].hash.unwrap()).unwrap();
+        assert_eq!(bytes.len(), Tile::byte_len(PixelFormat::Rgba16));
+        let got = raster::tile_bytes_to_rgba16(bytes);
+        assert_eq!(got[..4], [0, 0, 0, 65_535], "black widened exactly");
+        assert_eq!(got[4..8], [65_535; 4], "white widened exactly");
+        assert!(
+            got[8..11].iter().all(|v| v % 257 != 0),
+            "the blend {:?} is off the 8-bit grid",
+            &got[8..12]
+        );
+    }
+
+    /// W7-C: over RGBA8 tiles only, the native plane is the RGBA8 plane.
+    #[test]
+    fn a_native_plane_over_eight_bit_tiles_commits_the_same_rgba8_bytes() {
+        let k = key();
+        let mut a = MemoryTiles::new();
+        a.put_pixel(k, 3, 3, [200, 100, 50, 255]);
+        let mut b = a.clone();
+        let rect = PixelRect::new(0, 0, 16, 16);
+        let mut eight = ColorPatch::load(&a, k, rect).unwrap();
+        let mut native = ColorPatch::load_native(&b, k, rect).unwrap();
+        assert!(!native.is_sixteen_bit());
+        for p in [&mut eight, &mut native] {
+            p.set(IVec2::new(4, 4), decode([10, 20, 30, 255]));
+        }
+        let d8 = eight.commit(&mut a, k).unwrap();
+        let dn = native.commit(&mut b, k).unwrap();
+        assert_eq!(d8.edits(), dn.edits());
+        let bytes = b.bytes(dn.edits()[0].hash.unwrap()).unwrap();
+        assert_eq!(bytes.len(), Tile::byte_len(PixelFormat::Rgba8));
     }
 
     #[test]

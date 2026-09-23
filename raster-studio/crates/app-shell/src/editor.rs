@@ -549,6 +549,8 @@ pub struct Editor {
     save_jobs: Vec<PendingSave>,
     /// W2-G: Export As batches in flight.
     export_jobs: Vec<std::sync::mpsc::Receiver<crate::jobs::ExportOutcome>>,
+    /// W7-I: the Content-Aware Fill / Scale job in flight, if any.
+    content_aware_jobs: Vec<crate::menu_bridge::content_aware_job::Pending>,
     /// Fingerprint of what Edit ▸ Copy last wrote to the OS image clipboard
     /// (card 052's ownership policy): paste compares the OS payload against
     /// it, so the editor's OWN copy pastes through the internal route (same
@@ -887,6 +889,7 @@ impl Editor {
             spawner: crate::jobs::run_inline,
             save_jobs: Vec::new(),
             export_jobs: Vec::new(),
+            content_aware_jobs: Vec::new(),
             os_copy_fingerprint: None,
             os_image_probe: None,
             app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1087,6 +1090,7 @@ impl Editor {
                 layer_model::SmartObjectLayer {
                     asset,
                     linked: false,
+                    filters: Vec::new(),
                 },
             ));
             if let Some(active) = doc.document.active_layer() {
@@ -1915,7 +1919,11 @@ impl Editor {
             // The placed layer is a smart object over the registered asset,
             // keeping the builder's layer id.
             placement = placement.with_layer_kind(layer_model::LayerKind::SmartObject(
-                layer_model::SmartObjectLayer { asset, linked },
+                layer_model::SmartObjectLayer {
+                    asset,
+                    linked,
+                    filters: Vec::new(),
+                },
             ));
             // Insert ABOVE the active layer: same parent, its index. A
             // create lands at the root top, so the move makes the placement
@@ -2451,6 +2459,7 @@ impl Editor {
                 layer_model::LayerKind::SmartObject(layer_model::SmartObjectLayer {
                     asset: new_id_asset,
                     linked: false,
+                    filters: Vec::new(),
                 }),
             );
             let new_id = layer.id;
@@ -4269,7 +4278,10 @@ impl Editor {
     /// `true` while any job — import, save or export — is in flight, so the
     /// frame loop knows to keep polling.
     pub fn jobs_pending(&self) -> bool {
-        self.imports_pending() || self.saves_pending() || !self.export_jobs.is_empty()
+        self.imports_pending()
+            || self.saves_pending()
+            || !self.export_jobs.is_empty()
+            || !self.content_aware_jobs.is_empty()
     }
 
     /// Apply every finished job of every kind. Once a frame.
@@ -4277,6 +4289,7 @@ impl Editor {
         self.poll_imports();
         self.poll_saves();
         self.poll_exports();
+        crate::menu_bridge::content_aware_job::poll(self);
     }
 
     /// W2-G: apply every save that has finished, and refresh the status line
@@ -5253,6 +5266,13 @@ impl Editor {
     /// test's own queue. Jobs already in flight are unaffected.
     pub fn set_spawner(&mut self, spawner: crate::jobs::Spawner) {
         self.spawner = spawner;
+    }
+
+    /// W7-I: the Content-Aware Fill / Scale jobs in flight.
+    pub(crate) fn content_aware_jobs_mut(
+        &mut self,
+    ) -> &mut Vec<crate::menu_bridge::content_aware_job::Pending> {
+        &mut self.content_aware_jobs
     }
 
     /// W2-G: run an Export As batch (the dialog's job, into the folder the

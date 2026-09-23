@@ -1641,6 +1641,100 @@ pub struct StrokeTool {
     /// W4-B: the smudge walk so far, shared by the live preview and the
     /// release; `None` outside a smudge stroke.
     smudge: Option<SmudgeRun>,
+    /// W7-I: the Spot Healing Brush's Type — `false` is Proximity Match (the
+    /// surroundings diffused inward, [`StrokeOp::SpotHealing`]'s own
+    /// answer), `true` is Content-Aware: the release synthesises the brushed
+    /// area from the rest of the layer by PatchMatch
+    /// ([`filters::content_aware_fill`]). Set through [`Tool::set_setting`]
+    /// under [`SPOT_HEAL_TYPE_KEY`]. PatchMatch is too heavy to rerun on every
+    /// pointer sample, so while the button is down the live preview shows
+    /// the Proximity Match answer; only the release runs the synthesis, and
+    /// what it commits is the synthesis, not that preview.
+    pub spot_content_aware: bool,
+}
+
+/// W7-I: the Spot Healing Brush's Type option key (a Choice: 0 Proximity
+/// Match, 1 Content-Aware).
+pub const SPOT_HEAL_TYPE_KEY: &str = "type";
+
+/// W7-I: the fixed seed of a content-aware spot heal, so the same stroke over
+/// the same pixels commits the same bytes.
+const SPOT_CONTENT_AWARE_SEED: u64 = 0x5907_4EA1;
+
+/// W7-I: the Content-Aware spot heal. The brushed area (every pixel a dab
+/// covers) is synthesised by PatchMatch from the rest of `context` — the
+/// region of `patch` the synthesis may read, which the caller keeps inside
+/// the document so the transparent padding past a canvas edge is never
+/// copied in — then laid in exactly as the other retouching ops mix toward
+/// their target: by the dab's coverage, the stroke's opacity and the
+/// selection. Where there is no intact patch to copy from (a stroke covering
+/// nearly the whole context), the Proximity Match estimate is used instead,
+/// so the brush never refuses a stroke it could have healed.
+pub fn apply_content_aware_spot(
+    patch: &mut ColorPatch,
+    buf: &StrokeBuffer,
+    context: PixelRect,
+    opacity: f32,
+    selection: &Selection,
+) -> Result<(), ToolError> {
+    let mut px = Vec::with_capacity(context.width as usize * context.height as usize);
+    let mut covered = Vec::with_capacity(px.capacity());
+    for y in context.y..context.bottom() {
+        for x in context.x..context.right() {
+            let p = IVec2::new(x as i32, y as i32);
+            px.push(patch.get(p));
+            covered.push(buf.get(p));
+        }
+    }
+    let hole: Vec<bool> = covered.iter().map(|c| *c > 0.0).collect();
+    if !hole.iter().any(|&h| h) {
+        return Ok(());
+    }
+    let plane = FilterBuffer::from_pixels(context.width, context.height, px)?;
+    let target = match filters::content_aware_fill(
+        &plane,
+        &hole,
+        filters::FillOptions {
+            seed: SPOT_CONTENT_AWARE_SEED,
+            margin: None,
+        },
+    ) {
+        Ok(filled) => filled,
+        Err(filters::ContentAwareError::NoSource) => low_frequency_outside(&plane, &covered, 6.0)?,
+        Err(filters::ContentAwareError::Filter(e)) => return Err(ToolError::Filter(e)),
+        Err(_) => return Err(ToolError::Degenerate),
+    };
+    let rect = buf.rect();
+    let opacity = opacity.clamp(0.0, 1.0);
+    let cw = context.width as i64;
+    for y in rect.y..rect.bottom() {
+        for x in rect.x..rect.right() {
+            if x < context.x || y < context.y || x >= context.right() || y >= context.bottom() {
+                continue;
+            }
+            let p = IVec2::new(x as i32, y as i32);
+            let cov = buf.get(p);
+            if cov <= 0.0 {
+                continue;
+            }
+            let a = cov * opacity * selection.coverage_at(p);
+            if a <= 0.0 {
+                continue;
+            }
+            let dst = patch.get(p);
+            let s = target.pixels()[((y - context.y) * cw + (x - context.x)) as usize];
+            patch.set(
+                p,
+                [
+                    dst[0] + (s[0] - dst[0]) * a,
+                    dst[1] + (s[1] - dst[1]) * a,
+                    dst[2] + (s[2] - dst[2]) * a,
+                    dst[3] + (s[3] - dst[3]) * a,
+                ],
+            );
+        }
+    }
+    Ok(())
 }
 
 impl StrokeTool {
@@ -1657,7 +1751,34 @@ impl StrokeTool {
             offset: IVec2::ZERO,
             previewed: 0,
             smudge: None,
+            spot_content_aware: false,
         }
+    }
+
+    /// W7-I: the release of a Content-Aware spot heal: the stroke's bounds
+    /// grown by the synthesis's context margin (clipped to `clip`) are loaded,
+    /// synthesised and committed as one delta.
+    fn render_content_aware_spot(
+        &self,
+        access: &mut dyn TileAccess,
+        key: PixelKey,
+        dabs: &[Dab],
+        clip: PixelRect,
+        selection: &Selection,
+    ) -> Result<TileDelta, ToolError> {
+        let Some(rect) = StrokeBuffer::bounds_of(dabs, clip) else {
+            return Ok(TileDelta::new(Vec::new())?);
+        };
+        let extent = rect.width.max(rect.height);
+        let margin = i64::from(extent.clamp(
+            filters::content_aware::MIN_CONTEXT_MARGIN,
+            filters::content_aware::MAX_CONTEXT_MARGIN,
+        )) + filters::patchmatch::PATCH_SIZE as i64;
+        let context = intersect(grow(rect, margin), clip).unwrap_or(rect);
+        let buf = StrokeBuffer::rasterize(dabs, rect)?;
+        let mut patch = ColorPatch::load(access, key, context)?;
+        apply_content_aware_spot(&mut patch, &buf, context, self.settings.opacity, selection)?;
+        patch.commit(access, key)
     }
 
     /// The dabs stamped so far, for a live preview overlay.
@@ -1695,7 +1816,12 @@ impl StrokeTool {
         // the canvas expressed there — for a transformed mask, `ctx.canvas`
         // (document space) would clip a visible strip of the mask.
         let clip = ctx.paint_space_canvas.unwrap_or(ctx.canvas);
-        let delta = if let (PaintTarget::Layer, StrokeOp::Smudge { strength }) =
+        let delta = if let (PaintTarget::Layer, StrokeOp::SpotHealing, true) =
+            (ctx.paint_target, &self.op, self.spot_content_aware)
+        {
+            // W7-I: the Content-Aware type synthesises on release.
+            self.render_content_aware_spot(&mut *ctx.tiles, key, dabs, clip, &ctx.selection)?
+        } else if let (PaintTarget::Layer, StrokeOp::Smudge { strength }) =
             (ctx.paint_target, &self.op)
         {
             // W4-B: finish the walk the live preview began (or run it whole
@@ -2523,6 +2649,12 @@ impl Tool for StrokeTool {
                 self.clone.aligned = v;
                 Ok(())
             }
+            // W7-I: the Spot Healing Brush's Type — 0 Proximity Match,
+            // 1 Content-Aware (an index past the end clamps to the last).
+            (SPOT_HEAL_TYPE_KEY, ToolSetting::Choice(index), StrokeOp::SpotHealing) => {
+                self.spot_content_aware = index >= 1;
+                Ok(())
+            }
             // ----- a known key with the wrong kind of value ---------------
             ("strength", _, StrokeOp::RefineBoundary { .. } | StrokeOp::Smudge { .. })
             | ("radius", _, StrokeOp::Blur { .. })
@@ -2535,7 +2667,8 @@ impl Tool for StrokeTool {
             | ("softness", _, StrokeOp::Healing { .. })
             | ("exposure" | "range", _, StrokeOp::Dodge { .. } | StrokeOp::Burn { .. })
             | ("mode", _, StrokeOp::Sponge { .. })
-            | ("aligned", _, StrokeOp::CloneStamp | StrokeOp::Healing { .. }) => mismatch(),
+            | ("aligned", _, StrokeOp::CloneStamp | StrokeOp::Healing { .. })
+            | (SPOT_HEAL_TYPE_KEY, _, StrokeOp::SpotHealing) => mismatch(),
             _ => unknown(),
         }
     }
@@ -3170,6 +3303,117 @@ mod live_tests {
             preview == committed,
             "the folded heal preview is not what the release committed"
         );
+    }
+
+    /// W7-I: the Spot Healing Brush's Type. Over vertical stripes with a red
+    /// blotch, the Content-Aware type (set through the tool's own option key,
+    /// the one the registry declares) rebuilds the stripes under the stroke;
+    /// Proximity Match diffuses the surroundings into a flat grey there.
+    #[test]
+    fn a_content_aware_spot_heal_rebuilds_stripes_where_proximity_blurs_them() {
+        let layer = LayerId::new();
+        let ts = TILE_SIZE as usize;
+        let stripe = |x: usize| if x % 8 < 4 { 0u8 } else { 255u8 };
+        let blotch = |x: usize, y: usize| (96..106).contains(&x) && (96..146).contains(&y);
+        let canvas = PixelRect::new(0, 0, TILE_SIZE, TILE_SIZE);
+        let heal = |content_aware: bool| -> Vec<u8> {
+            let mut tiles = MemoryTiles::new();
+            let mut data = vec![0u8; Tile::byte_len(PixelFormat::Rgba8)];
+            for y in 0..ts {
+                for x in 0..ts {
+                    let i = (y * ts + x) * 4;
+                    let v = stripe(x);
+                    let px = if blotch(x, y) {
+                        [255, 0, 0, 255]
+                    } else {
+                        [v, v, v, 255]
+                    };
+                    data[i..i + 4].copy_from_slice(&px);
+                }
+            }
+            tiles.put(PixelKey::Layer(layer), TileCoord::new(0, 0, 0), data);
+            let mut tool = StrokeTool::new(
+                ToolId::SpotHealing,
+                BrushSettings {
+                    size: 24.0,
+                    hardness: 1.0,
+                    spacing: 0.1,
+                    ..BrushSettings::default()
+                },
+                StrokeOp::SpotHealing,
+            );
+            tool.set_setting(
+                SPOT_HEAL_TYPE_KEY,
+                ToolSetting::Choice(usize::from(content_aware)),
+            )
+            .unwrap();
+            let commands = {
+                let mut ctx = ToolContext::new(&mut tiles, canvas).with_layer(layer);
+                tool.on_pointer_down(&mut ctx, PointerEvent::at(101.0, 96.0))
+                    .unwrap();
+                tool.on_pointer_move(&mut ctx, PointerEvent::at(101.0, 145.0))
+                    .unwrap();
+                tool.on_pointer_up(&mut ctx, PointerEvent::at(101.0, 145.0))
+                    .unwrap();
+                ctx.drain()
+            };
+            let Some(Command::PaintTiles { delta, .. }) = commands.first() else {
+                panic!("the release emitted {commands:?}");
+            };
+            let edit = delta
+                .iter()
+                .find(|e| e.coord == TileCoord::new(0, 0, 0))
+                .expect("the stroke's tile");
+            tiles
+                .bytes(edit.hash.expect("painted"))
+                .expect("committed blob")
+                .to_vec()
+        };
+        let follows = |bytes: &[u8]| {
+            let (mut good, mut total) = (0usize, 0usize);
+            for y in 96..146usize {
+                for x in 96..106usize {
+                    let i = (y * ts + x) * 4;
+                    total += 1;
+                    if bytes[i..i + 3].iter().all(|&c| c.abs_diff(stripe(x)) < 48) {
+                        good += 1;
+                    }
+                }
+            }
+            (good, total)
+        };
+        let (ca_good, total) = follows(&heal(true));
+        let (px_good, _) = follows(&heal(false));
+        assert!(
+            ca_good * 100 >= total * 90,
+            "content-aware: only {ca_good}/{total} healed pixels follow the stripes"
+        );
+        assert!(
+            px_good * 100 < total * 50,
+            "proximity match rebuilt the stripes too ({px_good}/{total}): the test cannot tell the types apart"
+        );
+    }
+
+    #[test]
+    fn the_spot_heal_type_refuses_a_value_of_the_wrong_kind() {
+        let mut tool = StrokeTool::new(
+            ToolId::SpotHealing,
+            BrushSettings::default(),
+            StrokeOp::SpotHealing,
+        );
+        assert!(matches!(
+            tool.set_setting(SPOT_HEAL_TYPE_KEY, ToolSetting::Bool(true)),
+            Err(ToolError::OptionKindMismatch { .. })
+        ));
+        tool.set_setting(SPOT_HEAL_TYPE_KEY, ToolSetting::Choice(9))
+            .unwrap();
+        assert!(
+            tool.spot_content_aware,
+            "a past-the-end index clamps to Content-Aware"
+        );
+        tool.set_setting(SPOT_HEAL_TYPE_KEY, ToolSetting::Choice(0))
+            .unwrap();
+        assert!(!tool.spot_content_aware);
     }
 
     /// W4-B: the resumable smudge walk is the whole-patch walk. A stroke well

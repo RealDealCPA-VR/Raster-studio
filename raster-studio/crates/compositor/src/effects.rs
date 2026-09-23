@@ -51,9 +51,12 @@
 //!
 //! # Honest gaps
 //!
-//! * **Pattern fills.** A [`layer_model::PatternFill`] names an `AssetId`, and
-//!   this crate has no asset store: a pattern overlay, and a glow or stroke
-//!   filled with a pattern, draw nothing. Solid and gradient fills are drawn.
+//! * **Pattern fills draw from the tile the fill carries.** W7-B: a
+//!   [`layer_model::PatternFill`] holds its own pixels
+//!   ([`layer_model::PatternTile`]), decoded once per composite call into a
+//!   content-addressed [`PatternCache`] and sampled bilinearly with wrap-around.
+//!   A fill that names only an `AssetId` and carries no tile (nothing in this
+//!   build writes one) still draws nothing.
 //! * **Effect blend modes act inside the style buffer**, not against the
 //!   document beneath. A drop shadow is the first thing in an empty buffer, so
 //!   its own blend mode has nothing to blend with; the interior effects' modes
@@ -70,8 +73,9 @@ use color::{to_linear, ColorSpace};
 use filters::{box_blur, EdgeMode, FilterBuffer};
 use layer_model::{
     BevelDirection, BevelEffect, BevelStyle, BlendMode, ColorOverlayEffect, FillStyle, GlowEffect,
-    GlowSource, GlowTechnique, Gradient, GradientOverlayEffect, GradientStyle, LayerEffects, Rgba,
-    SatinEffect, ShadowEffect, StrokeEffect, StrokePosition,
+    GlowSource, GlowTechnique, Gradient, GradientOverlayEffect, GradientStyle, LayerEffects,
+    PatternFill, PatternOverlayEffect, PatternTile, Rgba, SatinEffect, ShadowEffect, StrokeEffect,
+    StrokePosition,
 };
 use raster::PixelRect;
 
@@ -166,6 +170,168 @@ pub(crate) struct StyleContext<'a> {
     pub layer_bounds: PixelRect,
     /// The document's canvas at this level.
     pub doc_bounds: PixelRect,
+    /// W7-B: the decoded pattern tiles, shared by every tile of one
+    /// composite call.
+    pub patterns: &'a PatternCache,
+    /// W7-B: where the layer's own origin (its transform's translation)
+    /// lands, in level pixels: the anchor of a pattern linked with the layer,
+    /// so the pattern travels exactly as far as the layer is moved.
+    pub layer_origin: [f32; 2],
+}
+
+/// W7-B: a pattern tile decoded into linear, **premultiplied** colour, ready
+/// to be sampled.
+pub(crate) struct LinearPattern {
+    w: usize,
+    h: usize,
+    px: Vec<[f32; 4]>,
+}
+
+impl LinearPattern {
+    fn decode(tile: &PatternTile, space: &ColorSpace) -> Self {
+        let (w, h) = (tile.width() as usize, tile.height() as usize);
+        // Per-channel transfer functions decode exactly through a table; a
+        // space that mixes channels goes through `to_linear` per pixel.
+        let lut = match space {
+            ColorSpace::Srgb | ColorSpace::LinearSrgb => {
+                let mut lut = [0.0f32; 256];
+                for (i, slot) in lut.iter_mut().enumerate() {
+                    *slot = to_linear(space, [i as f32 / 255.0; 3])[0];
+                }
+                Some(lut)
+            }
+            _ => None,
+        };
+        let px = tile
+            .rgba8()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| {
+                let rgb = match &lut {
+                    Some(l) => [l[c[0] as usize], l[c[1] as usize], l[c[2] as usize]],
+                    None => to_linear(
+                        space,
+                        [
+                            f32::from(c[0]) / 255.0,
+                            f32::from(c[1]) / 255.0,
+                            f32::from(c[2]) / 255.0,
+                        ],
+                    ),
+                };
+                let a = f32::from(c[3]) / 255.0;
+                [rgb[0] * a, rgb[1] * a, rgb[2] * a, a]
+            })
+            .collect();
+        Self { w, h, px }
+    }
+
+    /// Bilinear sample at tile coordinate `(u, v)` (texel centres at
+    /// integers), wrapping in both axes: premultiplied linear RGBA.
+    fn sample(&self, u: f32, v: f32) -> [f32; 4] {
+        let (x0, y0) = (u.floor(), v.floor());
+        let (tx, ty) = (u - x0, v - y0);
+        let (w, h) = (self.w as i64, self.h as i64);
+        let xa = (x0 as i64).rem_euclid(w) as usize;
+        let ya = (y0 as i64).rem_euclid(h) as usize;
+        let xb = (xa + 1) % self.w;
+        let yb = (ya + 1) % self.h;
+        let at = |x: usize, y: usize| self.px[y * self.w + x];
+        let (p00, p10, p01, p11) = (at(xa, ya), at(xb, ya), at(xa, yb), at(xb, yb));
+        let mut out = [0.0f32; 4];
+        for c in 0..4 {
+            let top = p00[c] + (p10[c] - p00[c]) * tx;
+            let bot = p01[c] + (p11[c] - p01[c]) * tx;
+            out[c] = top + (bot - top) * ty;
+        }
+        out
+    }
+}
+
+/// W7-B: pattern tiles decoded for one composite call, keyed by content
+/// (hash and size), so two layers using the same pixels decode once and a
+/// changed pattern can never be served from an old entry.
+#[derive(Default)]
+pub(crate) struct PatternCache {
+    map:
+        std::sync::Mutex<std::collections::HashMap<(u64, u32, u32), std::sync::Arc<LinearPattern>>>,
+}
+
+impl PatternCache {
+    fn get(&self, tile: &PatternTile, space: &ColorSpace) -> std::sync::Arc<LinearPattern> {
+        let key = (tile.content_hash(), tile.width(), tile.height());
+        if let Some(hit) = self
+            .map
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+        {
+            return std::sync::Arc::clone(hit);
+        }
+        // Decoded outside the lock: two workers racing on a miss both decode,
+        // and both results are the same pixels.
+        let decoded = std::sync::Arc::new(LinearPattern::decode(tile, space));
+        self.map
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(key)
+            .or_insert(decoded)
+            .clone()
+    }
+}
+
+/// W7-B: a pattern fill evaluated over the buffer: per-pixel straight linear
+/// colour and the pattern's own coverage. `None` when the fill carries no
+/// tile.
+///
+/// The tiling is anchored in **document** space so it does not depend on
+/// which region asked: at the document origin, or with `link_with_layer` at
+/// the layer's own origin (so it travels with the layer), then shifted by
+/// `offset_px`, rotated by `angle_deg` and scaled by `scale`.
+fn pattern_field(
+    p: &PatternFill,
+    g: &Geometry,
+    ctx: &StyleContext<'_>,
+) -> Option<(Vec<[f32; 3]>, Vec<f32>)> {
+    let tile = p.tile.as_ref()?;
+    let lin = ctx.patterns.get(tile, ctx.space);
+    let scale = if p.scale.is_finite() && p.scale > 0.0 {
+        p.scale.clamp(0.01, 1000.0)
+    } else {
+        1.0
+    };
+    let finite = |v: f32| if v.is_finite() { v } else { 0.0 };
+    // Level pixels per document pixel.
+    let s = g.scale;
+    let (mut ox, mut oy) = (0.0f32, 0.0f32);
+    if p.link_with_layer {
+        ox = finite(ctx.layer_origin[0] / s);
+        oy = finite(ctx.layer_origin[1] / s);
+    }
+    ox += finite(p.offset_px[0]);
+    oy += finite(p.offset_px[1]);
+    let a = finite(p.angle_deg).to_radians();
+    let (ca, sa) = (a.cos(), a.sin());
+    let mut rgb = Vec::with_capacity(g.len());
+    let mut cov = Vec::with_capacity(g.len());
+    for i in 0..g.len() {
+        // The pixel centre, in document pixels relative to the anchor.
+        let x = ((g.rect.x + (i % g.w) as i64) as f32 + 0.5) / s - ox;
+        let y = ((g.rect.y + (i / g.w) as i64) as f32 + 0.5) / s - oy;
+        // Into pattern space: undo the rotation, then the scale. Texel
+        // centres sit at integers, so a 1:1 pattern samples exactly.
+        let u = (x * ca + y * sa) / scale - 0.5;
+        let v = (-x * sa + y * ca) / scale - 0.5;
+        let px = lin.sample(u, v);
+        let alpha = px[3].clamp(0.0, 1.0);
+        rgb.push(if alpha > 0.0 {
+            [px[0] / alpha, px[1] / alpha, px[2] / alpha]
+        } else {
+            [0.0; 3]
+        });
+        cov.push(alpha);
+    }
+    Some((rgb, cov))
 }
 
 /// Draw `src` — the layer's shape, before opacity — with its style applied.
@@ -217,8 +383,9 @@ pub(crate) fn render(
         }
     }
     if let Some(e) = &effects.pattern_overlay {
-        // No asset store here; see the module docs.
-        let _ = e;
+        if let Some(ink) = pattern_overlay(e, &alpha, &g, ctx) {
+            draw(&mut interior, &ink, e.blend_mode, true, &ctx.blend);
+        }
     }
     if let Some(e) = &effects.gradient_overlay {
         if let Some(ink) = gradient_overlay(e, &alpha, &g, ctx) {
@@ -616,19 +783,46 @@ fn glow_falloff(e: &GlowEffect, sdf: &[f32], g: &Geometry, outward: bool) -> Vec
     f
 }
 
-fn glow_paint(fill: &FillStyle, f: &[f32], ctx: &StyleContext<'_>) -> Option<(Paint, f32)> {
+/// How much of a fill's own coverage an ink keeps: one number for a solid
+/// or a ramp, one per pixel for a pattern with transparency in it.
+enum Coverage {
+    Uniform(f32),
+    PerPixel(Vec<f32>),
+}
+
+impl Coverage {
+    fn at(&self, i: usize) -> f32 {
+        match self {
+            Coverage::Uniform(v) => *v,
+            Coverage::PerPixel(v) => v[i],
+        }
+    }
+}
+
+fn glow_paint(
+    fill: &FillStyle,
+    f: &[f32],
+    g: &Geometry,
+    ctx: &StyleContext<'_>,
+) -> Option<(Paint, Coverage)> {
     match fill {
-        FillStyle::Solid(c) => Some((Paint::Solid(linear_rgb(*c, ctx.space)), unit(c[3]))),
+        FillStyle::Solid(c) => Some((
+            Paint::Solid(linear_rgb(*c, ctx.space)),
+            Coverage::Uniform(unit(c[3])),
+        )),
         FillStyle::Gradient(grad) => {
             let ramp = Ramp::new(grad, ctx.space);
             // A glow's gradient runs along its own falloff: the edge of the
             // shape is one end of the ramp and the far end of the reach is the
             // other.
             let rgb = f.iter().map(|v| ramp.rgb(1.0 - *v)).collect();
-            Some((Paint::PerPixel(rgb), 1.0))
+            Some((Paint::PerPixel(rgb), Coverage::Uniform(1.0)))
         }
-        // No asset store here; see the module docs.
-        FillStyle::Pattern(_) => None,
+        // W7-B: the glow's falloff shaped, the pattern's pixels coloured.
+        FillStyle::Pattern(p) => {
+            let (rgb, cov) = pattern_field(p, g, ctx)?;
+            Some((Paint::PerPixel(rgb), Coverage::PerPixel(cov)))
+        }
     }
 }
 
@@ -639,9 +833,9 @@ fn outer_glow(e: &GlowEffect, sdf: &[f32], g: &Geometry, ctx: &StyleContext<'_>)
     }
     let mut f = glow_falloff(e, sdf, g, true);
     add_noise(&mut f, e.noise, g, ctx);
-    let (rgb, fill_alpha) = glow_paint(&e.fill, &f, ctx)?;
-    for v in f.iter_mut() {
-        *v *= opacity * fill_alpha;
+    let (rgb, fill_alpha) = glow_paint(&e.fill, &f, g, ctx)?;
+    for (i, v) in f.iter_mut().enumerate() {
+        *v *= opacity * fill_alpha.at(i);
     }
     Some(Ink { rgb, alpha: f })
 }
@@ -664,9 +858,9 @@ fn inner_glow(
         GlowSource::Center => sdf.iter().map(|s| (-*s / reach).clamp(0.0, 1.0)).collect(),
     };
     add_noise(&mut f, e.noise, g, ctx);
-    let (rgb, fill_alpha) = glow_paint(&e.fill, &f, ctx)?;
-    for (v, a) in f.iter_mut().zip(alpha) {
-        *v *= a * opacity * fill_alpha;
+    let (rgb, fill_alpha) = glow_paint(&e.fill, &f, g, ctx)?;
+    for (i, (v, a)) in f.iter_mut().zip(alpha).enumerate() {
+        *v *= a * opacity * fill_alpha.at(i);
     }
     Some(Ink { rgb, alpha: f })
 }
@@ -710,6 +904,28 @@ fn color_overlay(e: &ColorOverlayEffect, alpha: &[f32], ctx: &StyleContext<'_>) 
         rgb: Paint::Solid(linear_rgb(e.color, ctx.space)),
         alpha: alpha.iter().map(|a| a * k).collect(),
     }
+}
+
+/// W7-B: the pattern tiled across the layer, clipped to its shape.
+fn pattern_overlay(
+    e: &PatternOverlayEffect,
+    alpha: &[f32],
+    g: &Geometry,
+    ctx: &StyleContext<'_>,
+) -> Option<Ink> {
+    let opacity = unit(e.opacity);
+    if opacity <= 0.0 {
+        return None;
+    }
+    let (rgb, cov) = pattern_field(&e.pattern, g, ctx)?;
+    Some(Ink {
+        rgb: Paint::PerPixel(rgb),
+        alpha: alpha
+            .iter()
+            .zip(&cov)
+            .map(|(a, c)| a * c * opacity)
+            .collect(),
+    })
 }
 
 fn gradient_overlay(
@@ -796,7 +1012,10 @@ fn stroke(e: &StrokeEffect, sdf: &[f32], g: &Geometry, ctx: &StyleContext<'_>) -
         .map(|(a, b)| (a - b).clamp(0.0, 1.0))
         .collect();
     let (rgb, fill_alpha) = match &e.fill {
-        FillStyle::Solid(c) => (Paint::Solid(linear_rgb(*c, ctx.space)), unit(c[3])),
+        FillStyle::Solid(c) => (
+            Paint::Solid(linear_rgb(*c, ctx.space)),
+            Coverage::Uniform(unit(c[3])),
+        ),
         FillStyle::Gradient(grad) => {
             let ramp = Ramp::new(grad, ctx.space);
             // Across the stroke: the inner edge is 0, the outer edge 1.
@@ -804,12 +1023,16 @@ fn stroke(e: &StrokeEffect, sdf: &[f32], g: &Geometry, ctx: &StyleContext<'_>) -
                 .iter()
                 .map(|s| ramp.rgb(((s - inner) / (outer - inner)).clamp(0.0, 1.0)))
                 .collect();
-            (Paint::PerPixel(colors), 1.0)
+            (Paint::PerPixel(colors), Coverage::Uniform(1.0))
         }
-        FillStyle::Pattern(_) => return None,
+        // W7-B: the stroke's band, coloured by the pattern.
+        FillStyle::Pattern(p) => {
+            let (rgb, cov) = pattern_field(p, g, ctx)?;
+            (Paint::PerPixel(rgb), Coverage::PerPixel(cov))
+        }
     };
-    for v in f.iter_mut() {
-        *v *= opacity * fill_alpha;
+    for (i, v) in f.iter_mut().enumerate() {
+        *v *= opacity * fill_alpha.at(i);
     }
     Some(Ink { rgb, alpha: f })
 }

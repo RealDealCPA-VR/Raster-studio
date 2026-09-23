@@ -1659,3 +1659,58 @@ fn a_failing_second_save_leaves_the_reused_package_intact() {
         );
     }
 }
+
+// ------------------------------------------------------ W7-E: smart filters
+
+/// A smart object's smart-filter stack is part of the saved document: every
+/// field of every filter — key, parameters, eye, opacity, blend — comes back
+/// from `document.msgpack` exactly, in order.
+#[test]
+fn a_smart_objects_filter_stack_round_trips_through_the_package() {
+    use layer_model::{BlendMode, LayerKind, SmartFilter, SmartObjectLayer, SmartParam};
+    let dir = tempfile::tempdir().unwrap();
+    let pkg = dir.path().join("Smart.rstudio");
+
+    let mut blur = SmartFilter::new("GaussianBlur", Default::default());
+    blur.params
+        .insert("radius".to_string(), SmartParam::Float(6.5));
+    blur.params
+        .insert("edge".to_string(), SmartParam::Choice(1));
+    let mut noise = SmartFilter::new("AddNoise", Default::default());
+    noise
+        .params
+        .insert("mono".to_string(), SmartParam::Bool(true));
+    noise.enabled = false;
+    noise.opacity = 0.25;
+    noise.blend_mode = BlendMode::Screen;
+
+    let mut doc = Document::new(64, 64, "Smart");
+    let id = doc
+        .layers
+        .push_root(Layer::with_kind(
+            "Smart",
+            LayerKind::SmartObject(SmartObjectLayer {
+                asset: layer_model::AssetId::new(),
+                linked: false,
+                filters: vec![blur, noise],
+            }),
+        ))
+        .unwrap();
+
+    save_project(&pkg, &doc).unwrap();
+    let loaded = load_project(&pkg).unwrap();
+    assert_eq!(loaded, doc);
+    match &loaded.layers.get(id).unwrap().kind {
+        LayerKind::SmartObject(so) => {
+            assert_eq!(so.filters.len(), 2);
+            assert_eq!(so.filters[0].filter, "GaussianBlur");
+            assert_eq!(
+                so.filters[0].params.get("radius"),
+                Some(&SmartParam::Float(6.5))
+            );
+            assert!(!so.filters[1].enabled);
+            assert_eq!(so.filters[1].blend_mode, BlendMode::Screen);
+        }
+        other => panic!("not a smart object: {other:?}"),
+    }
+}

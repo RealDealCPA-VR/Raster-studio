@@ -1,6 +1,6 @@
 //! The pixel buffer every filter reads and writes.
 
-use color::{linear_to_srgb, premultiply, srgb8_to_linear, unpremultiply};
+use color::{linear_to_srgb, premultiply, srgb8_to_linear, srgb_to_linear, unpremultiply};
 use raster::{PixelFormat, TileGrid};
 
 use crate::support::{EdgeMode, Interpolation, Sampling};
@@ -145,6 +145,61 @@ impl FilterBuffer {
                 out.push(quantize8(linear_to_srgb(*c)));
             }
             out.push(quantize8(s[3]));
+        }
+        out
+    }
+
+    /// Decode packed straight-alpha sRGB16 (one `u16` a sample) into linear
+    /// premultiplied pixels.
+    ///
+    /// W7-C: the 16-bit twin of [`FilterBuffer::from_rgba8`], so a 16-bit
+    /// document's layer reaches a filter or an adjustment at its own
+    /// precision instead of rounded to 8 bits first. [`FilterBuffer::to_rgba16`]
+    /// is its inverse to within one 16-bit code.
+    pub fn from_rgba16(width: u32, height: u32, src: &[u16]) -> Result<Self, FilterError> {
+        let n = Self::area(width, height).ok_or(FilterError::TooLarge { width, height })?;
+        let expected = n
+            .checked_mul(4)
+            .ok_or(FilterError::TooLarge { width, height })?;
+        if src.len() != expected {
+            return Err(FilterError::BadLength {
+                width,
+                height,
+                expected,
+                got: src.len(),
+            });
+        }
+        let unit = |v: u16| f32::from(v) / 65_535.0;
+        let pixels = src
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| {
+                premultiply([
+                    srgb_to_linear(unit(p[0])),
+                    srgb_to_linear(unit(p[1])),
+                    srgb_to_linear(unit(p[2])),
+                    unit(p[3]),
+                ])
+            })
+            .collect();
+        Ok(Self {
+            width,
+            height,
+            pixels,
+        })
+    }
+
+    /// Encode back to packed straight-alpha sRGB16: the 16-bit twin of
+    /// [`FilterBuffer::to_rgba8`], with the same transfer and alpha rules.
+    pub fn to_rgba16(&self) -> Vec<u16> {
+        let mut out = Vec::with_capacity(self.pixels.len() * 4);
+        for px in &self.pixels {
+            let s = unpremultiply(*px);
+            for c in s.iter().take(3) {
+                out.push(quantize16(linear_to_srgb(*c)));
+            }
+            out.push(quantize16(s[3]));
         }
         out
     }
@@ -403,6 +458,11 @@ fn quantize8(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
+#[inline]
+fn quantize16(v: f32) -> u16 {
+    (v.clamp(0.0, 1.0) * 65_535.0 + 0.5) as u16
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,6 +486,51 @@ mod tests {
         }
         let buf = FilterBuffer::from_rgba8(16, 16, &bytes).unwrap();
         assert_eq!(buf.to_rgba8(), bytes);
+    }
+
+    /// Every 16-bit code on a 256 x 64 ramp (colour codes walk all 65536
+    /// values; alpha walks a quarter of its range): each one comes back
+    /// within one 16-bit code — so a 16-bit layer read through the buffer is
+    /// not rounded to 8 bits on the way.
+    fn ramp16() -> Vec<u16> {
+        (0..256 * 256u32)
+            .flat_map(|i| {
+                let v = i as u16;
+                [
+                    v,
+                    65_535 - v,
+                    v.wrapping_mul(7919),
+                    49_151 + (i % 16_385) as u16,
+                ]
+            })
+            .collect()
+    }
+
+    fn assert_within_one_code(got: &[u16], want: &[u16]) {
+        assert_eq!(got.len(), want.len());
+        for (i, (g, w)) in got.iter().zip(want).enumerate() {
+            assert!(
+                g.abs_diff(*w) <= 1,
+                "sample {i}: {g} is more than one code from {w}"
+            );
+        }
+    }
+
+    #[test]
+    fn rgba16_round_trips_within_one_code() {
+        let samples = ramp16();
+        let buf = FilterBuffer::from_rgba16(256, 256, &samples).unwrap();
+        assert_within_one_code(&buf.to_rgba16(), &samples);
+        let err = FilterBuffer::from_rgba16(2, 2, &[0; 3]).unwrap_err();
+        assert!(matches!(err, FilterError::BadLength { .. }));
+    }
+
+    #[test]
+    fn a_zero_radius_gaussian_on_a_sixteen_bit_ramp_keeps_every_code() {
+        let samples = ramp16();
+        let buf = FilterBuffer::from_rgba16(256, 256, &samples).unwrap();
+        let out = crate::blur::gaussian_blur(&buf, 0.0, crate::EdgeMode::Clamp);
+        assert_within_one_code(&out.to_rgba16(), &samples);
     }
 
     #[test]

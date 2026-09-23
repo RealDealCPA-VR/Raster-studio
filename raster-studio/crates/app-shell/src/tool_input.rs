@@ -180,6 +180,9 @@ pub struct DocumentTiles<'a> {
     /// W4-F: tools read RGBA8; a 16-bit tile is handed over rounded to 8
     /// bits (`doc_depth.rs`), and the apply boundary widens the result back.
     narrowed: crate::doc::NarrowedReads,
+    /// W7-C round 3: the document works at 16 bits per channel, whatever
+    /// depth its tiles are stored at (an opened 16-bit PNG's are RGBA8).
+    sixteen_bit: bool,
 }
 
 impl<'a> DocumentTiles<'a> {
@@ -189,7 +192,16 @@ impl<'a> DocumentTiles<'a> {
             refs,
             bytes,
             narrowed,
+            sixteen_bit: false,
         }
+    }
+
+    /// W7-C round 3: carry the document's depth (`meta.bit_depth == 16`) so
+    /// the free transform's plane works at 16 bits in a 16-bit document
+    /// even where its tiles are still RGBA8.
+    pub fn at_document_depth(mut self, bit_depth: u8) -> Self {
+        self.sixteen_bit = bit_depth == 16;
+        self
     }
 }
 
@@ -581,6 +593,15 @@ impl TileAccess for DocumentTiles<'_> {
 
     fn bytes(&self, hash: TileHash) -> Option<&[u8]> {
         self.narrowed.read(hash, self.bytes)
+    }
+
+    // W7-C: the free transform's plane reads a 16-bit tile at 16 bits.
+    fn native_bytes(&self, hash: TileHash) -> Option<&[u8]> {
+        compositor::TileSource::tile(&*self.bytes, hash)
+    }
+
+    fn sixteen_bit_document(&self) -> bool {
+        self.sixteen_bit
     }
 
     fn store(&mut self, data: Vec<u8>) -> TileHash {
@@ -1122,7 +1143,8 @@ impl ToolPointer {
             match editor.active_mut() {
                 Some(doc) => {
                     let canvas = doc.canvas_rect();
-                    let mut access = DocumentTiles::new(&doc.document.pixels, &mut doc.tiles);
+                    let mut access = DocumentTiles::new(&doc.document.pixels, &mut doc.tiles)
+                        .at_document_depth(doc.document.meta.bit_depth);
                     tool.cancel(&mut ToolContext::new(&mut access, canvas));
                 }
                 None => {
@@ -1240,7 +1262,8 @@ impl ToolPointer {
             .ok()
             .flatten()
         });
-        let mut access = DocumentTiles::new(&doc.document.pixels, &mut doc.tiles);
+        let mut access = DocumentTiles::new(&doc.document.pixels, &mut doc.tiles)
+            .at_document_depth(doc.document.meta.bit_depth);
         let mut ctx = ToolContext::new(&mut access, canvas);
         ctx.shape_paths = shape_paths;
         // Card 055: the ONE resolver, unconditionally — quick mask reroutes
@@ -1480,8 +1503,10 @@ impl ToolPointer {
         // Card 025: the live draft rides the request outbox and lands on the
         // document **outside history** — the canvas renders every keystroke,
         // undo stays clean until the session confirms.
+        // W7-F: a Type Mask session's confirm becomes a selection.
+        let type_mask = self.live_tool().is_some_and(tools::text::is_type_mask);
         for request in requests {
-            out.steps += Self::perform_text_request(editor, request);
+            out.steps += Self::perform_text_request(editor, request, type_mask);
         }
         out
     }
@@ -1622,7 +1647,11 @@ impl ToolPointer {
         }
     }
 
-    fn perform_text_request(editor: &mut Editor, request: tools::ToolRequest) -> usize {
+    fn perform_text_request(
+        editor: &mut Editor,
+        request: tools::ToolRequest,
+        type_mask: bool,
+    ) -> usize {
         match request {
             tools::ToolRequest::TextDraft { layer, kind } => {
                 if let Err(e) = editor.active_mut().unwrap().apply_text_draft(layer, *kind) {
@@ -1634,9 +1663,90 @@ impl ToolPointer {
                 layer,
                 original,
                 draft,
-            } => Self::perform_text_confirm(editor, layer, original, draft),
+            } => Self::perform_text_confirm_for(editor, type_mask, layer, original, draft),
             _ => 0,
         }
+    }
+
+    /// W7-F: the confirm a text session ends with — the ordinary one, or,
+    /// for the two Type Mask tools, [`Self::perform_type_mask_confirm`].
+    fn perform_text_confirm_for(
+        editor: &mut Editor,
+        type_mask: bool,
+        layer: layer_model::LayerId,
+        original: Box<layer_model::LayerKind>,
+        draft: Box<layer_model::LayerKind>,
+    ) -> usize {
+        if type_mask {
+            Self::perform_type_mask_confirm(editor, layer, *draft)
+        } else {
+            Self::perform_text_confirm(editor, layer, original, draft)
+        }
+    }
+
+    /// W7-F: a Type Mask confirm. The session typed into a temporary text
+    /// layer (so the run was visible while it was edited); here its glyph
+    /// coverage — the layer composited alone, through the same text
+    /// rendering every text layer takes, vertical layout included — becomes
+    /// the document's selection, and the temporary layer goes: when the
+    /// click's `CreateLayer` is still the newest history step it is UNDONE
+    /// (so the session leaves exactly one entry, the `SetSelection`, and one
+    /// Ctrl+Z restores the old selection), otherwise it is deleted through
+    /// history. Reports the history depth the confirm moved.
+    fn perform_type_mask_confirm(
+        editor: &mut Editor,
+        layer: layer_model::LayerId,
+        draft: layer_model::LayerKind,
+    ) -> usize {
+        let before = editor.active().map(|d| d.history_depth()).unwrap_or(0);
+        let Some(doc) = editor.active_mut() else {
+            return 0;
+        };
+        if doc.document.layers.get(layer).is_none() {
+            return 0;
+        }
+        // The document already shows the draft; landing it again makes the
+        // coverage read below independent of the draft route's timing.
+        if let Err(e) = doc.apply_text_draft(layer, draft) {
+            editor.set_status(e.to_string());
+            return 0;
+        }
+        let rect = doc.canvas_rect();
+        let coverage: Result<Vec<u8>, String> = doc
+            .layer_pixels(layer)
+            .map(|rgba| rgba.iter().skip(3).step_by(4).copied().collect())
+            .map_err(|e| e.to_string());
+        let created_on_top = matches!(
+            doc.history.peek_undo(),
+            Some(Command::DeleteLayer { layer_id }) if *layer_id == layer
+        );
+        if created_on_top {
+            if let Err(e) = doc.undo() {
+                editor.set_status(e.to_string());
+            }
+        } else {
+            editor.apply_command(Command::DeleteLayer { layer_id: layer });
+        }
+        let depth = |editor: &Editor| editor.active().map(|d| d.history_depth()).unwrap_or(0);
+        let coverage = match coverage {
+            Ok(c) => c,
+            Err(e) => {
+                editor.set_status(e);
+                return depth(editor).saturating_sub(before);
+            }
+        };
+        if coverage.iter().all(|a| *a == 0) {
+            editor.set_status("the type mask has no glyphs to select");
+            return depth(editor).saturating_sub(before);
+        }
+        let origin = glam::IVec2::new(rect.x as i32, rect.y as i32);
+        match editor_core::SelectionMask::new(origin, rect.width, rect.height, coverage) {
+            Ok(mask) => editor.apply_command(Command::SetSelection {
+                selection: editor_core::Selection::Mask(mask),
+            }),
+            Err(e) => editor.set_status(e.to_string()),
+        }
+        depth(editor).saturating_sub(before)
     }
 
     /// The confirm reconciliation: restore (history-free), then commit (one
@@ -1710,6 +1820,8 @@ impl ToolPointer {
             return out;
         }
         out.had_pending = true;
+        // W7-F: a Type Mask session's confirm becomes a selection.
+        let type_mask = self.live_tool().is_some_and(tools::text::is_type_mask);
         let (result, commands, requests) = self.off_pointer(editor, |tool, ctx| tool.commit(ctx));
         // W5-C: a committed Free Transform hands the palette back to the
         // tool Ctrl+T was pressed from (Photopea); a refused one stays put.
@@ -1744,7 +1856,8 @@ impl ToolPointer {
                     original,
                     draft,
                 } => {
-                    out.steps += Self::perform_text_confirm(editor, layer, original, draft);
+                    out.steps +=
+                        Self::perform_text_confirm_for(editor, type_mask, layer, original, draft);
                 }
                 ToolRequest::TransformLayers { layers, delta } => {
                     // Card 035/036: one shared performer — the conjugated
@@ -2264,7 +2377,8 @@ impl ToolPointer {
                     doc.history_state(row)
                 })
                 .flatten();
-            let mut access = DocumentTiles::new(&doc.document.pixels, &mut doc.tiles);
+            let mut access = DocumentTiles::new(&doc.document.pixels, &mut doc.tiles)
+                .at_document_depth(doc.document.meta.bit_depth);
             let mut ctx = ToolContext::new(&mut access, canvas);
             ctx.shape_paths = shape_paths;
             ctx.history_source = history_source;
@@ -2483,6 +2597,8 @@ impl ToolPointer {
             out.picked = Some(rgba);
         }
 
+        // W7-F: a Type Mask session's confirm becomes a selection.
+        let type_mask = self.live_tool().is_some_and(tools::text::is_type_mask);
         if !requests.is_empty() {
             // Crop and slice publish only from `Tool::commit`, which is
             // [`ToolPointer::commit`]'s path, not this one — a request that
@@ -2517,7 +2633,9 @@ impl ToolPointer {
                         original,
                         draft,
                     } => {
-                        out.steps += Self::perform_text_confirm(editor, layer, original, draft);
+                        out.steps += Self::perform_text_confirm_for(
+                            editor, type_mask, layer, original, draft,
+                        );
                     }
                     ToolRequest::TransformLayers { layers, delta } => {
                         // Card 038: the Move tool commits its set move at

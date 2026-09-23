@@ -34,6 +34,10 @@ pub enum FillContents {
     Pattern(String),
     /// 50% grey, the neutral Photoshop offers.
     Gray50,
+    /// Content-Aware: the selection is synthesised from the rest of the
+    /// layer by PatchMatch (`filters::content_aware_fill`), the way
+    /// Photoshop's and Photopea's Fill ▸ Content-Aware work.
+    ContentAware,
 }
 
 /// The kinds of [`FillContents`], for the combo box's stable labels.
@@ -44,16 +48,18 @@ pub enum FillContentsKind {
     Color,
     Pattern,
     Gray50,
+    ContentAware,
 }
 
 impl FillContentsKind {
     /// Every kind, in menu order.
-    pub const ALL: [FillContentsKind; 5] = [
+    pub const ALL: [FillContentsKind; 6] = [
         Self::Foreground,
         Self::Background,
         Self::Color,
         Self::Pattern,
         Self::Gray50,
+        Self::ContentAware,
     ];
 
     /// The label the combo shows.
@@ -64,6 +70,7 @@ impl FillContentsKind {
             Self::Color => "Colour",
             Self::Pattern => "Pattern",
             Self::Gray50 => crate::strings::tr("ui.fill_stroke.50.grey"),
+            Self::ContentAware => crate::strings::tr("ui.fill_stroke.content.aware"),
         }
     }
 }
@@ -77,6 +84,7 @@ impl FillContents {
             Self::Color(_) => FillContentsKind::Color,
             Self::Pattern(_) => FillContentsKind::Pattern,
             Self::Gray50 => FillContentsKind::Gray50,
+            Self::ContentAware => FillContentsKind::ContentAware,
         }
     }
 }
@@ -216,6 +224,7 @@ impl FillDialog {
             FillContentsKind::Foreground => FillContents::Foreground,
             FillContentsKind::Background => FillContents::Background,
             FillContentsKind::Gray50 => FillContents::Gray50,
+            FillContentsKind::ContentAware => FillContents::ContentAware,
         };
         spec
     }
@@ -390,6 +399,7 @@ impl FillDialog {
                     FillContentsKind::Color => FillContents::Color(self.color),
                     FillContentsKind::Pattern => FillContents::Pattern(self.pattern.clone()),
                     FillContentsKind::Gray50 => FillContents::Gray50,
+                    FillContentsKind::ContentAware => FillContents::ContentAware,
                 };
             }
         });
@@ -550,5 +560,63 @@ impl StrokeDialog {
             self.blocked_reason().as_deref(),
             &[],
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dialogs::chrome::test_support::Harness;
+
+    /// W7-I: Fill ▸ Contents offers Content-Aware, and picking it in the real
+    /// combo (a headless frame: open the list, click the row) is what the
+    /// dialog confirms with.
+    #[test]
+    fn the_contents_combo_offers_content_aware_and_confirms_it() {
+        let harness = Harness::new();
+        let mut dialog = FillDialog::new(FillSpec::default(), Vec::new());
+        let text_rect = |h: &Harness, dialog: &mut FillDialog, text: &str| {
+            let mut found = None;
+            for _ in 0..Harness::STABLE_FRAMES {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Harness::SCREEN)),
+                    ..Default::default()
+                };
+                let output = h.ctx.run(input, |ctx| {
+                    let _ = dialog.show(ctx, None);
+                });
+                found = output
+                    .shapes
+                    .iter()
+                    .find_map(|clipped| match &clipped.shape {
+                        egui::Shape::Text(t) if t.galley.text() == text => {
+                            Some(egui::Rect::from_min_size(t.pos, t.galley.size()))
+                        }
+                        _ => None,
+                    });
+            }
+            found
+        };
+        let combo = text_rect(&harness, &mut dialog, FillContentsKind::Foreground.label())
+            .expect("the contents combo shows Foreground");
+        harness.frame(Harness::click_events(combo.center()), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        let row = text_rect(
+            &harness,
+            &mut dialog,
+            FillContentsKind::ContentAware.label(),
+        )
+        .expect("the open contents list has a Content-Aware row");
+        harness.frame(Harness::click_events(row.center()), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        assert_eq!(dialog.spec().contents, FillContents::ContentAware);
+        match dialog.confirm() {
+            Some(DialogAction::Fill(spec)) => {
+                assert_eq!(spec.contents, FillContents::ContentAware)
+            }
+            other => panic!("confirm produced {other:?}"),
+        }
     }
 }

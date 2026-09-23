@@ -96,6 +96,10 @@ use crate::codec::{
     ExportFormat,
 };
 
+// W7-D: the CMYK JPEG/TIFF and palette PNG writers a document's colour mode
+// asks for (`ExportPreset::ink`).
+pub mod ink;
+
 /// Largest destination image the resampler will produce, in pixels.
 ///
 /// A scale factor is a user-supplied number; multiplying an 8K canvas by an
@@ -924,6 +928,46 @@ impl BitDepth {
     }
 }
 
+/// W7-D: the sample layout a file is written in, which follows the
+/// document's colour mode (Image > Mode).
+///
+/// The working buffer is always RGB. A CMYK document asks for its JPEG and
+/// TIFF files to be written as CMYK (separated with `color::cmyk`'s documented
+/// ink model — no ICC press profile — the same model the mode conversion and
+/// the soft proof use); an Indexed document asks for its PNG to be written
+/// as PNG-8 with the palette (GIF always writes a palette, and an indexed
+/// document's at most 256 colours come through it exactly). A container that
+/// cannot carry the layout — PNG/WebP/GIF/BMP for CMYK — is written as RGB,
+/// which is what [`ExportInk::carried_by`] reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ExportInk {
+    #[default]
+    Rgb,
+    Cmyk,
+    Indexed,
+}
+
+impl ExportInk {
+    /// Whether `format` is written in this layout (rather than as RGB).
+    pub fn carried_by(self, format: ExportFormat) -> bool {
+        match self {
+            ExportInk::Rgb => true,
+            ExportInk::Cmyk => matches!(format, ExportFormat::Jpeg(_) | ExportFormat::Tiff),
+            ExportInk::Indexed => matches!(format, ExportFormat::Png | ExportFormat::Gif),
+        }
+    }
+
+    /// The layout a document colour mode byte (`DocumentMeta::color_mode`:
+    /// 3 = CMYK, 4 = Indexed) asks for.
+    pub fn for_color_mode(mode: u8) -> Self {
+        match mode {
+            3 => ExportInk::Cmyk,
+            4 => ExportInk::Indexed,
+            _ => ExportInk::Rgb,
+        }
+    }
+}
+
 /// One named export configuration.
 ///
 /// A preset is the whole recipe: what container, how compressed, how big, how
@@ -948,6 +992,9 @@ pub struct ExportPreset {
     /// Whether the working buffer is converted into `color_space` or written
     /// through untouched. See [`ColorHandling`].
     pub color_handling: ColorHandling,
+    /// W7-D: the sample layout the document's colour mode asks for. See
+    /// [`ExportInk`].
+    pub ink: ExportInk,
 }
 
 impl Default for ExportPreset {
@@ -962,6 +1009,7 @@ impl Default for ExportPreset {
             background: [255, 255, 255],
             color_space: ColorSpace::Srgb,
             color_handling: ColorHandling::Convert,
+            ink: ExportInk::Rgb,
         }
     }
 }
@@ -1023,6 +1071,32 @@ impl ExportPreset {
         self
     }
 
+    /// W7-D: write in the layout a document colour mode asks for.
+    pub fn with_ink(mut self, ink: ExportInk) -> Self {
+        self.ink = ink;
+        self
+    }
+
+    /// W7-D: the preset an Export As batch runs for a document in colour
+    /// mode `mode` (`DocumentMeta::color_mode`): the [`ExportInk`] that mode
+    /// asks for, and — because a CMYK JPEG/TIFF or a palette PNG is written
+    /// at 8 bits per channel — 8 bits whenever the ink is actually written.
+    pub fn for_color_mode(self, mode: u8) -> Self {
+        let mut preset = self.with_ink(ExportInk::for_color_mode(mode));
+        if preset.writes_ink() {
+            preset.bit_depth = BitDepth::Eight;
+        }
+        preset
+    }
+
+    /// Whether this preset writes non-RGB samples (a CMYK JPEG/TIFF or a
+    /// palette PNG) through [`ink`]. GIF is palettised by its own encoder.
+    fn writes_ink(&self) -> bool {
+        self.ink != ExportInk::Rgb
+            && self.ink.carried_by(self.format)
+            && self.format != ExportFormat::Gif
+    }
+
     /// Reject a preset whose parameters cannot produce a file.
     pub fn validate(&self) -> Result<(), ExportError> {
         let reject = |reason: String| reject(self, reason);
@@ -1037,6 +1111,13 @@ impl ExportPreset {
             return Err(reject(format!(
                 "scale {} exceeds the {MAX_SCALE}x limit",
                 self.scale
+            )));
+        }
+        if self.bit_depth == BitDepth::Sixteen && self.writes_ink() {
+            return Err(reject(format!(
+                "a {:?} .{} is written at 8 bits per channel",
+                self.ink,
+                self.format.extension()
             )));
         }
         if self.bit_depth == BitDepth::Sixteen && !self.format.supports_16_bit() {
@@ -1385,19 +1466,90 @@ fn prepare(
     })
 }
 
+/// W7-D: the bytes of a CMYK JPEG/TIFF or a palette PNG, for a preset that
+/// [`ExportPreset::writes_ink`]. `None` for every other preset.
+fn encode_ink(p: &Prepared, preset: &ExportPreset) -> Result<Option<Vec<u8>>, ExportError> {
+    if !preset.writes_ink() {
+        return Ok(None);
+    }
+    let Quantized::Eight(rgba) = &p.pixels else {
+        return Err(reject(preset, "non-RGB files are 8-bit".to_string()));
+    };
+    encode_ink_rgba8(p.width, p.height, rgba, preset)
+}
+
+/// [`encode_ink`] over a straight, display-encoded RGBA8 buffer.
+fn encode_ink_rgba8(
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    preset: &ExportPreset,
+) -> Result<Option<Vec<u8>>, ExportError> {
+    if !preset.writes_ink() {
+        return Ok(None);
+    }
+    let bytes = match (preset.ink, preset.format) {
+        (ExportInk::Cmyk, ExportFormat::Jpeg(quality)) => {
+            if width > u32::from(u16::MAX) || height > u32::from(u16::MAX) {
+                return Err(reject(
+                    preset,
+                    format!("a JPEG is at most {} pixels on a side", u16::MAX),
+                ));
+            }
+            let cmyk = ink::separate_rgba8(rgba, preset.background);
+            ink::encode_cmyk_jpeg(width, height, &cmyk, quality)
+        }
+        (ExportInk::Cmyk, ExportFormat::Tiff) => {
+            let cmyk = ink::separate_rgba8(rgba, preset.background);
+            ink::encode_cmyk_tiff(width, height, &cmyk)
+        }
+        (ExportInk::Indexed, ExportFormat::Png) => {
+            ink::encode_indexed_png(width, height, rgba).ok_or_else(|| {
+                reject(
+                    preset,
+                    "the image has more than 256 colours, so it cannot be a palette PNG; convert it with Image > Mode > Indexed Color first".to_string(),
+                )
+            })?
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(bytes))
+}
+
+/// W7-D: File > Export's single-file road for a CMYK or Indexed document —
+/// the bytes of `format` written in the layout `ink` asks for (a CMYK
+/// JPEG/TIFF separated with `color::cmyk`'s documented ink model over a white
+/// background, or a palette PNG), from the document's straight RGBA8
+/// composite. `Ok(None)` when `format` cannot carry `ink` (or `ink` is RGB),
+/// so the caller writes its ordinary RGB file; GIF is always palettised by
+/// its own encoder, so it is `None` here too.
+pub fn encode_rgba8_in_ink(
+    format: ExportFormat,
+    ink: ExportInk,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> Result<Option<Vec<u8>>, ExportError> {
+    let preset = ExportPreset::new("export", format).with_ink(ink);
+    encode_ink_rgba8(width, height, rgba, &preset)
+}
+
 fn encode_scaled(
     scaled: &LinearImage,
     preset: &ExportPreset,
     metadata: &ExportMetadata,
 ) -> Result<ExportedFile, ExportError> {
     let p = prepare(scaled, preset, metadata)?;
-    let bytes = encode_with(
-        preset.format,
-        p.width,
-        p.height,
-        p.pixels.as_pixels(),
-        &p.options,
-    )?;
+    let bytes = match encode_ink(&p, preset)? {
+        Some(bytes) => bytes,
+        None => encode_with(
+            preset.format,
+            p.width,
+            p.height,
+            p.pixels.as_pixels(),
+            &p.options,
+        )?,
+    };
     Ok(ExportedFile {
         name: preset.file_name(),
         format: preset.format,
@@ -1416,6 +1568,17 @@ fn write_scaled(
     let p = prepare(scaled, preset, metadata)?;
     // The name is sanitised, so this join cannot leave `dir`.
     let path = dir.join(preset.file_name());
+    if let Some(bytes) = encode_ink(&p, preset)? {
+        // Written beside the target and renamed over it, like the codec's
+        // own atomic write: a failure never leaves half a file at `path`.
+        let temp = dir.join(format!(".{}.partial", preset.file_name()));
+        std::fs::write(&temp, &bytes).map_err(CodecError::Io)?;
+        std::fs::rename(&temp, &path).map_err(|e| {
+            let _ = std::fs::remove_file(&temp);
+            CodecError::Io(e)
+        })?;
+        return Ok(path);
+    }
     encode_to_path(
         &path,
         preset.format,

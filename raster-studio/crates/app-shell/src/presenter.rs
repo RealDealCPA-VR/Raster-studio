@@ -434,6 +434,55 @@ pub struct CanvasPresenter {
     /// `true` when the mask view changed since the last upload (same shape as
     /// [`CanvasPresenter::mask_dirty`]).
     mask_view_dirty: bool,
+    /// W7-D: View > Proof Colors / Gamut Warning, applied on the way to the
+    /// texture like the channel mask — never to the document or an export.
+    proof: ProofView,
+    /// `true` when [`CanvasPresenter::proof`] changed since the last upload.
+    proof_dirty: bool,
+}
+
+/// W7-D: the soft-proof display transform (View > Proof Colors and View >
+/// Gamut Warning).
+///
+/// Proof Colors shows every pixel as its round trip through
+/// `color::cmyk`'s documented ink model (RGB -> CMYK -> RGB; no ICC press
+/// profile), so the canvas shows what a CMYK conversion or a CMYK export would
+/// print. Gamut Warning paints `warning` (a theme token colour the shell
+/// resolves) over every pixel that round trip moves by more than
+/// `color::cmyk::GAMUT_THRESHOLD`. With both on, the warning is judged on the
+/// original colour and painted over the proofed one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ProofView {
+    pub proof_colors: bool,
+    pub gamut_warning: bool,
+    pub warning: [u8; 3],
+}
+
+impl ProofView {
+    /// `true` when neither flag is on, so the upload path skips the pass.
+    pub fn is_identity(&self) -> bool {
+        !self.proof_colors && !self.gamut_warning
+    }
+
+    /// Apply the transform to a straight RGBA8 buffer, in place.
+    pub fn apply(&self, rgba8: &mut [u8]) {
+        if self.is_identity() {
+            return;
+        }
+        let lut = color::cmyk::ProofLut::shared();
+        for px in rgba8.as_chunks_mut::<4>().0 {
+            let rgb = [px[0], px[1], px[2]];
+            let proofed = lut.proof(rgb);
+            let out_of_gamut = self.gamut_warning
+                && px[3] > 0
+                && color::cmyk::max_channel_delta(rgb, proofed) > color::cmyk::GAMUT_THRESHOLD;
+            if out_of_gamut {
+                px[..3].copy_from_slice(&self.warning);
+            } else if self.proof_colors {
+                px[..3].copy_from_slice(&proofed);
+            }
+        }
+    }
 }
 
 impl CanvasPresenter {
@@ -508,6 +557,37 @@ impl CanvasPresenter {
         self.overlay_tint = tint;
         self.mask_view_dirty = true;
         true
+    }
+
+    /// W7-D: View > Proof Colors / Gamut Warning. Like
+    /// [`Self::set_channel_mask`]: read every frame, and a change dirties the
+    /// whole texture because it alters every pixel without moving a tile.
+    /// Returns `true` when the view actually moved.
+    pub fn set_proof(&mut self, proof: ProofView) -> bool {
+        if self.proof == proof {
+            return false;
+        }
+        self.proof = proof;
+        self.proof_dirty = true;
+        true
+    }
+
+    /// The soft-proof view currently applied.
+    pub fn proof(&self) -> ProofView {
+        self.proof
+    }
+
+    /// The per-frame read of every VIEW setting the chrome owns: the
+    /// Channels panel's component eyes, the Layers panel's mask view and
+    /// View > Proof Colors / Gamut Warning. The shell calls this once per
+    /// frame before [`Self::sync`], so a test that calls it drives the exact
+    /// road a user's menu tick takes to the texture. Returns `true` when any
+    /// of them moved (the next sync re-uploads the whole canvas).
+    pub fn read_view_settings(&mut self, chrome: &crate::chrome::Chrome) -> bool {
+        let channels = self.set_channel_mask(chrome.channel_mask());
+        let mask_view = self.set_mask_view(chrome.mask_view(), chrome.mask_overlay_tint());
+        let proof = self.set_proof(chrome.proof_view());
+        channels | mask_view | proof
     }
 
     /// Card 059: apply the mask view to one canvas-space `rect` of RGBA8.
@@ -623,7 +703,10 @@ impl CanvasPresenter {
         // 8256x5504 camera JPEG.
         let fit = PresentFit::choose(width, height, gpu.max_texture_dimension_2d());
         let mut dirty = doc.take_dirty();
-        if std::mem::take(&mut self.mask_dirty) || std::mem::take(&mut self.mask_view_dirty) {
+        if std::mem::take(&mut self.mask_dirty)
+            | std::mem::take(&mut self.mask_view_dirty)
+            | std::mem::take(&mut self.proof_dirty)
+        {
             // A channel toggle or a mask-view change alters every pixel and
             // dirties no tile.
             dirty.mark_all();
@@ -752,12 +835,15 @@ impl CanvasPresenter {
     ///
     /// One function so no upload path can forget: the whole-canvas rebuild, the
     /// whole-canvas re-upload and the per-tile upload all go through it.
-    fn composite_masked(
+    pub(crate) fn composite_masked(
         &self,
         doc: &mut OpenDocument,
         rect: PixelRect,
     ) -> Result<Vec<u8>, DocumentError> {
         let mut rgba = doc.composite(rect)?;
+        // W7-D: the soft proof reads the composite's own colours, so it runs
+        // before the channel mask zeroes any of them.
+        self.proof.apply(&mut rgba);
         self.mask.apply(&mut rgba);
         // Card 059: the mask view is the last mile, after the channel mask —
         // it presents the active layer's mask over the finished composite.
@@ -931,6 +1017,75 @@ mod tests {
             color_space: color::ColorSpace::Srgb,
             icc_profile: None,
         }
+    }
+
+    /// W7-D: a document half saturated green, half mid grey.
+    fn green_and_grey() -> OpenDocument {
+        let (w, h) = (8u32, 4u32);
+        let mut rgba8 = Vec::new();
+        for _y in 0..h {
+            for x in 0..w {
+                rgba8.extend_from_slice(if x < 4 {
+                    &[0, 255, 0, 255]
+                } else {
+                    &[128, 128, 128, 255]
+                });
+            }
+        }
+        let image = crate::import::DecodedImage {
+            width: w,
+            height: h,
+            rgba8,
+            color_space: color::ColorSpace::Srgb,
+            icc_profile: None,
+        };
+        crate::doc::OpenDocument::from_import(
+            crate::doc::DocumentId(1),
+            crate::import::document_from_image(&image, "gamut.png", 100).unwrap(),
+        )
+    }
+
+    #[test]
+    fn gamut_warning_marks_saturated_green_but_not_grey_on_the_way_to_the_texture() {
+        let mut doc = green_and_grey();
+        let whole = PixelRect::new(0, 0, 8, 4);
+        let mut presenter = CanvasPresenter::new();
+        let before = presenter.composite_masked(&mut doc, whole).unwrap();
+        assert_eq!(&before[0..4], &[0, 255, 0, 255]);
+        let warning = [255, 0, 255];
+        assert!(presenter.set_proof(ProofView {
+            gamut_warning: true,
+            warning,
+            ..ProofView::default()
+        }));
+        assert!(presenter.proof_dirty, "a view change re-uploads the canvas");
+        let shown = presenter.composite_masked(&mut doc, whole).unwrap();
+        assert_eq!(&shown[0..4], &[255, 0, 255, 255], "green is out of gamut");
+        assert_eq!(&shown[16..20], &[128, 128, 128, 255], "grey prints");
+        // The document itself never moves.
+        assert_eq!(doc.composite(whole).unwrap(), before);
+    }
+
+    #[test]
+    fn proof_colors_shows_the_cmyk_round_trip() {
+        let mut doc = green_and_grey();
+        let whole = PixelRect::new(0, 0, 8, 4);
+        let mut presenter = CanvasPresenter::new();
+        presenter.set_proof(ProofView {
+            proof_colors: true,
+            ..ProofView::default()
+        });
+        let shown = presenter.composite_masked(&mut doc, whole).unwrap();
+        let expected = color::cmyk::ProofLut::shared().proof([0, 255, 0]);
+        assert_ne!(expected, [0, 255, 0]);
+        assert_eq!(&shown[0..3], &expected, "green shows as it would print");
+        assert_eq!(&shown[16..19], &[128, 128, 128], "grey is unchanged");
+        // Off again is the composite.
+        assert!(presenter.set_proof(ProofView::default()));
+        assert_eq!(
+            presenter.composite_masked(&mut doc, whole).unwrap(),
+            doc.composite(whole).unwrap()
+        );
     }
 
     /// A 64x64 document with the camera at 100%, centred — the same fixture

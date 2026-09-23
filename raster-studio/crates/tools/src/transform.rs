@@ -1205,7 +1205,8 @@ impl TransformTool {
         let rect = union_unclipped(state.source, dest).ok_or(ToolError::Degenerate)?;
         let delta = match ctx.paint_target {
             PaintTarget::Layer => {
-                let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
+                // W7-C: a 16-bit layer is resampled at 16 bits.
+                let mut patch = ColorPatch::load_native(ctx.tiles, key, rect)?;
                 let src = patch.buffer().clone();
                 let out = resample(&src, patch.rect(), &state, self.mode)?;
                 patch.replace(out)?;
@@ -1438,7 +1439,8 @@ pub fn float_selection(
         .dest_bounds_unclipped(layer_mode)
         .ok_or(ToolError::Degenerate)?;
     let rect = union_unclipped(layer_state.source, dest).ok_or(ToolError::Degenerate)?;
-    let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
+    // W7-C: a 16-bit layer floats and lands at 16 bits.
+    let mut patch = ColorPatch::load_native(ctx.tiles, key, rect)?;
     let prect = patch.rect();
     let src = patch.buffer().clone();
     let (w, h) = (src.width(), src.height());

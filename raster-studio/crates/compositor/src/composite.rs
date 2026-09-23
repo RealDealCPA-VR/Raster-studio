@@ -355,6 +355,9 @@ pub(crate) struct Ctx<'a, S: TileSource + ?Sized> {
     /// computed — the counters the once-per-composite gate is tested by.
     pub(crate) adjustment_hashes: std::sync::atomic::AtomicUsize,
     pub(crate) adjustment_prepares: std::sync::atomic::AtomicUsize,
+    /// W7-B: pattern tiles decoded for this call, keyed by content, shared by
+    /// every tile and rayon worker of it.
+    patterns: crate::effects::PatternCache,
 }
 
 /// W5-F: what one composite call remembers about one adjustment layer.
@@ -428,6 +431,7 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             adjustments: std::sync::Mutex::new(std::collections::HashMap::new()),
             adjustment_hashes: std::sync::atomic::AtomicUsize::new(0),
             adjustment_prepares: std::sync::atomic::AtomicUsize::new(0),
+            patterns: crate::effects::PatternCache::default(),
         })
     }
 
@@ -640,6 +644,11 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             dissolve_seed: self.opts.dissolve_seed,
             layer_bounds: self.document_bounds(layer),
             doc_bounds: PixelRect::new(0, 0, self.width, self.height),
+            patterns: &self.patterns,
+            layer_origin: {
+                let t = self.level_transform(layer).translation;
+                [t.x, t.y]
+            },
         };
         crate::effects::render(src, &layer.effects, layer.effective_fill_opacity(), &ctx)
     }
@@ -910,9 +919,14 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
         let mut c = Canvas::transparent(rect)?;
         match &layer.kind {
             LayerKind::Group(g) => self.composite_ids(&g.children, rect, &mut c)?,
-            LayerKind::Raster(_) | LayerKind::Generator(_) | LayerKind::SmartObject(_) => {
-                self.fill_layer(layer.id, &mut c)
-            }
+            LayerKind::Raster(_) | LayerKind::Generator(_) => self.fill_layer(layer.id, &mut c),
+            // W7-E: a smart object with an active filter stack is its source
+            // run through the stack over its whole extent (see `smart`);
+            // otherwise its stored tiles are drawn as they are.
+            LayerKind::SmartObject(so) => match self.smart_filtered(layer, &so.filters) {
+                Some(filtered) => c.blit_from(&filtered),
+                None => self.fill_layer(layer.id, &mut c),
+            },
             LayerKind::Text(t) => self.fill_text(t, &mut c),
             LayerKind::Shape(s) => self.fill_shape(s, &mut c),
             LayerKind::Adjustment(_) => {}
@@ -1431,6 +1445,12 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
                     };
                     self.hash_ids(&g.children, child_rect, h);
                 }
+                // W7-E: every pixel of a filtered smart object can depend on
+                // every tile of its source (a blur reads across tile edges),
+                // so its whole tile map keys each tile it touches.
+                LayerKind::SmartObject(so) if crate::smart::renders_filtered(&so.filters) => {
+                    self.hash_whole_map(PixelKey::Layer(id), h);
+                }
                 LayerKind::Raster(_) | LayerKind::Generator(_) | LayerKind::SmartObject(_) => {
                     self.hash_tiles(PixelKey::Layer(id), content_rect, h);
                 }
@@ -1470,6 +1490,70 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
                 self.hash_tiles(PixelKey::Mask(mask.id), mrect, h);
             }
         }
+    }
+
+    /// Every tile stored under `key`, at every level, into `h`.
+    fn hash_whole_map<H: Hasher>(&self, key: PixelKey, h: &mut H) {
+        match self.doc.pixels.tiles(key) {
+            Some(m) => {
+                m.len().hash(h);
+                for (coord, hash) in m.iter() {
+                    coord.x.hash(h);
+                    coord.y.hash(h);
+                    coord.level.hash(h);
+                    hash.0.hash(h);
+                }
+            }
+            None => 0usize.hash(h),
+        }
+    }
+
+    /// W7-E: a smart object's filtered render — its source over its whole
+    /// extent, run through `stack` — or `None` when it draws its bare source:
+    /// no active filter, no runner installed, nothing stored, or an extent too
+    /// large to hold (which then renders unfiltered rather than failing the
+    /// frame). Cached by everything it is made from; see [`crate::smart`].
+    ///
+    /// The extent is the stored tiles' bounds, cut to the canvas when the
+    /// layer is untransformed — so a canvas-sized object (what Convert for
+    /// Smart Filters makes) filters with its edges clamped at the canvas edge,
+    /// not blurred toward the transparent remainder of the edge tiles.
+    fn smart_filtered(
+        &self,
+        layer: &Layer,
+        stack: &[layer_model::SmartFilter],
+    ) -> Option<std::sync::Arc<Canvas>> {
+        let runner = crate::smart::runner()?;
+        if !layer_model::stack_is_active(stack) {
+            return None;
+        }
+        let mut extent = self.tile_map_bounds(PixelKey::Layer(layer.id));
+        if is_identity(&self.level_transform(layer)) {
+            extent = intersect_rects(extent, PixelRect::new(0, 0, self.width, self.height));
+        }
+        if extent.is_empty() || Canvas::area(extent).is_err() {
+            return None;
+        }
+        let mut h = crate::smart::key_hasher();
+        layer.id.0.as_bytes().hash(&mut h);
+        self.level.hash(&mut h);
+        (extent.x, extent.y, extent.width, extent.height).hash(&mut h);
+        self.space.name().hash(&mut h);
+        self.hash_whole_map(PixelKey::Layer(layer.id), &mut h);
+        crate::smart::hash_stack(stack, &mut h);
+        let key = h.finish();
+        Some(crate::smart::cached_or(key, || {
+            match Canvas::transparent(extent) {
+                Ok(mut src) => {
+                    self.fill_layer(layer.id, &mut src);
+                    crate::smart::apply_stack(&src, stack, runner)
+                }
+                // `Canvas::area` accepted the extent above; an allocation
+                // refused anyway leaves the object empty for this frame.
+                Err(_) => Canvas::from_pixels(PixelRect::new(0, 0, 0, 0), Vec::new())
+                    .expect("an empty canvas is always valid"),
+            }
+        }))
     }
 
     fn hash_tiles(&self, key: PixelKey, rect: PixelRect, h: &mut DefaultHasher) {
@@ -2023,6 +2107,12 @@ fn hash_layer_props(layer: &Layer, adjustment: Option<u64>, h: &mut DefaultHashe
             5u8.hash(h);
             s.asset.0.as_bytes().hash(h);
             s.linked.hash(h);
+            // Nothing is written for an object with no active filter, so it
+            // keys exactly as it did before smart filters existed — and
+            // switching its last filter off serves the unfiltered tiles again.
+            if layer_model::stack_is_active(&s.filters) {
+                crate::smart::hash_stack(&s.filters, h);
+            }
         }
         LayerKind::Generator(g) => {
             6u8.hash(h);
@@ -2061,6 +2151,12 @@ fn hash_fill_style(f: &layer_model::FillStyle, h: &mut DefaultHasher) {
         F::Pattern(p) => {
             2u8.hash(h);
             p.asset.map(|a| a.0).hash(h);
+            // W7-B: the pixels themselves, by content, so a changed pattern
+            // keys a different tile.
+            p.tile
+                .as_ref()
+                .map(|t| (t.content_hash(), t.width(), t.height()))
+                .hash(h);
             hash_f32(p.scale, h);
             hash_f32(p.offset_px[0], h);
             hash_f32(p.offset_px[1], h);
@@ -2449,6 +2545,45 @@ fn hash_adjustment(kind: &layer_model::AdjustmentKind, h: &mut DefaultHasher) {
             for v in table.iter().flatten() {
                 hash_f32(*v, h);
             }
+        }
+        // W7-G: HDR Toning and Match Color.
+        A::HdrToning {
+            radius,
+            strength,
+            gamma,
+            exposure,
+            detail,
+            vibrance,
+            saturation,
+        } => {
+            26u8.hash(h);
+            for v in [
+                radius, strength, gamma, exposure, detail, vibrance, saturation,
+            ] {
+                hash_f32(*v, h);
+            }
+        }
+        A::MatchColor {
+            source_mean,
+            source_std,
+            target_mean,
+            target_std,
+            luminance,
+            color_intensity,
+            fade,
+            neutralize,
+        } => {
+            27u8.hash(h);
+            for v in source_mean
+                .iter()
+                .chain(source_std)
+                .chain(target_mean)
+                .chain(target_std)
+                .chain([luminance, color_intensity, fade])
+            {
+                hash_f32(*v, h);
+            }
+            neutralize.hash(h);
         }
     }
 }

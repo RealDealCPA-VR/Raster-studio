@@ -20,10 +20,12 @@
 //!
 //! The preview here is deliberately a labelled *approximate* schematic. The
 //! real rendering is the compositor's (`compositor::effects::render`, called
-//! from its layer composite), and the canvas shows that result. Nine of the
-//! ten effects render there; Pattern Overlay, like a glow or stroke filled
-//! with a pattern, draws nothing, because the compositor has no asset store
-//! (see its "Honest gaps"). Drawing the effects again inside a dialog would
+//! from its layer composite), and the canvas shows that result. All ten
+//! effects render there. W7-B: the Pattern Overlay page picks one of the
+//! patterns Edit > Define Pattern made (handed in with
+//! [`LayerStyleDialog::with_patterns`]), shows it as a swatch, and puts the
+//! pattern's own pixels into the effect, so the compositor, the saved file
+//! and undo all carry them. Drawing the effects again inside a dialog would
 //! be a second implementation that silently disagrees with the first. What is
 //! **not** approximate is the geometry: [`shadow_offset`] is the shared
 //! angle-and-distance arithmetic every one of these effects needs, and it is
@@ -37,8 +39,8 @@ use editor_core::{Command, LayerPatch};
 use egui::{vec2, Context, Rect, Sense};
 use layer_model::{
     BevelEffect, BlendMode, ColorOverlayEffect, FillStyle, GlowEffect, GradientOverlayEffect,
-    LayerEffects, LayerId, PatternOverlayEffect, Rgba, SatinEffect, ShadowEffect, StrokeEffect,
-    StrokePosition,
+    LayerEffects, LayerId, PatternOverlayEffect, PatternTile, Rgba, SatinEffect, ShadowEffect,
+    StrokeEffect, StrokePosition,
 };
 
 use super::action::DialogAction;
@@ -246,6 +248,9 @@ pub struct LayerStyleDialog {
     /// needs no target beside it — unlike the colour picker, which five
     /// different effects share.
     gradient_edit: Option<GradientEditorDialog>,
+    /// W7-B: the defined patterns the Pattern Overlay page offers, in the
+    /// preset store's order.
+    patterns: Vec<PatternTile>,
 }
 
 impl LayerStyleDialog {
@@ -268,6 +273,35 @@ impl LayerStyleDialog {
             global_light_angle,
             color_edit: ColorEdit::new(),
             gradient_edit: None,
+            patterns: Vec::new(),
+        }
+    }
+
+    /// W7-B: offer these defined patterns on the Pattern Overlay page.
+    pub fn with_patterns(mut self, patterns: Vec<PatternTile>) -> Self {
+        self.patterns = patterns;
+        self
+    }
+
+    /// W7-B: the patterns the Pattern Overlay page offers.
+    pub fn patterns(&self) -> &[PatternTile] {
+        &self.patterns
+    }
+
+    /// W7-B: put the `index`-th offered pattern into the Pattern Overlay.
+    ///
+    /// Returns `false`, changing nothing, when the overlay is off or there is
+    /// no such pattern, the same contract [`Self::set_effect_color`] has.
+    pub fn set_overlay_pattern(&mut self, index: usize) -> bool {
+        match (
+            self.effects.pattern_overlay.as_mut(),
+            self.patterns.get(index),
+        ) {
+            (Some(overlay), Some(tile)) => {
+                overlay.pattern.tile = Some(tile.clone());
+                true
+            }
+            _ => false,
         }
     }
 
@@ -796,18 +830,9 @@ impl LayerStyleDialog {
                 }
             }
             EffectKind::PatternOverlay => {
+                let patterns = &self.patterns;
                 if let Some(overlay) = self.effects.pattern_overlay.as_mut() {
-                    design::slider_row(ui, "Opacity", &mut overlay.opacity, 0.0..=1.0);
-                    design::slider_row(ui, "Scale", &mut overlay.pattern.scale, 0.1..=10.0);
-                    design::slider_row(ui, "Angle", &mut overlay.pattern.angle_deg, 0.0..=360.0);
-                    checkbox_row(
-                        ui,
-                        crate::strings::tr("ui.layer_style.link.with.layer"),
-                        &mut overlay.pattern.link_with_layer,
-                    );
-                    if overlay.pattern.asset.is_none() {
-                        caption(ui, crate::strings::tr("ui.layer_style.no.pattern"));
-                    }
+                    pattern_overlay_params(ui, overlay, patterns);
                 }
             }
             EffectKind::Stroke => {
@@ -967,6 +992,15 @@ impl LayerStyleDialog {
                 .rect_filled(shape, rounding(shape_radius), base);
 
             if on {
+                // W7-B: the chosen pattern tiled over the silhouette.
+                if let Some(tile) = self
+                    .effects
+                    .pattern_overlay
+                    .as_ref()
+                    .and_then(|o| o.pattern.tile.as_ref())
+                {
+                    paint_pattern_cells(ui, shape, tile);
+                }
                 if let Some(stroke) = &self.effects.stroke {
                     if let FillStyle::Solid(color) = stroke.fill {
                         ui.painter().rect_stroke(
@@ -1084,6 +1118,120 @@ fn satin_params(ui: &mut egui::Ui, satin: &mut SatinEffect, swatch_id: egui::Id)
         clicked = swatch(ui, swatch_id, satin.color, sizes::swatch()).clicked();
     });
     clicked
+}
+
+/// W7-B: the stable id of the Pattern Overlay page's pattern swatch.
+pub fn pattern_swatch_id() -> egui::Id {
+    egui::Id::new("layer-style-pattern-swatch")
+}
+
+/// W7-B: the Pattern Overlay page: mode, opacity, the pattern and its
+/// placement.
+fn pattern_overlay_params(
+    ui: &mut egui::Ui,
+    overlay: &mut PatternOverlayEffect,
+    patterns: &[PatternTile],
+) {
+    design::inspector_field(ui, "Mode", |ui| {
+        combo(
+            ui,
+            "ls-pattern-mode",
+            &mut overlay.blend_mode,
+            &BlendMode::ALL,
+            |m| m.label().to_string(),
+            |_| None,
+        );
+    });
+    design::slider_row(ui, "Opacity", &mut overlay.opacity, 0.0..=1.0);
+    // The chosen pattern is found among the offered ones by its pixels; a
+    // pattern that is not offered (a file from another machine) still shows,
+    // by name, as the current choice.
+    let current = overlay.pattern.tile.as_ref();
+    let mut pick = current
+        .and_then(|t| {
+            patterns
+                .iter()
+                .position(|p| p.content_hash() == t.content_hash())
+        })
+        .unwrap_or(usize::MAX);
+    let current_name = current.map_or_else(|| "None".to_string(), |t| t.name().to_string());
+    let options: Vec<usize> = (0..patterns.len()).collect();
+    design::inspector_field(ui, "Pattern", |ui| {
+        if patterns.is_empty() {
+            caption(
+                ui,
+                crate::strings::tr("ui.fill_stroke.no.patterns.are.defined.yet"),
+            );
+        } else if combo(
+            ui,
+            "ls-pattern-choice",
+            &mut pick,
+            &options,
+            |i| {
+                patterns
+                    .get(i)
+                    .map_or_else(|| current_name.clone(), |p| p.name().to_string())
+            },
+            |_| None,
+        ) {
+            if let Some(tile) = patterns.get(pick) {
+                overlay.pattern.tile = Some(tile.clone());
+            }
+        }
+    });
+    if let Some(tile) = overlay.pattern.tile.as_ref() {
+        design::inspector_field(ui, "Preview", |ui| {
+            let side = sizes::swatch().y * 3.0;
+            let (_, rect) = ui.allocate_space(vec2(side, side));
+            let _ = ui.interact(rect, pattern_swatch_id(), Sense::hover());
+            if ui.is_rect_visible(rect) {
+                paint_pattern_cells(ui, rect, tile);
+            }
+        });
+    }
+    design::slider_row(ui, "Scale", &mut overlay.pattern.scale, 0.1..=10.0);
+    design::slider_row(ui, "Angle", &mut overlay.pattern.angle_deg, 0.0..=360.0);
+    design::inspector_field(ui, "Offset", |ui| {
+        for axis in 0..2 {
+            let mut v = f64::from(overlay.pattern.offset_px[axis]);
+            if numeric(ui, &mut v, -10_000.0..=10_000.0, 0, "px").changed() {
+                overlay.pattern.offset_px[axis] = v as f32;
+            }
+        }
+    });
+    checkbox_row(
+        ui,
+        crate::strings::tr("ui.layer_style.link.with.layer"),
+        &mut overlay.pattern.link_with_layer,
+    );
+    if overlay.pattern.tile.is_none() {
+        caption(ui, crate::strings::tr("ui.layer_style.no.pattern"));
+    }
+}
+
+/// W7-B: a pattern drawn into `rect` as a grid of flat cells: about two
+/// repeats of the tile across, each cell the tile's pixel at that spot. A
+/// preview, not the composite: the canvas is where the real result shows.
+fn paint_pattern_cells(ui: &egui::Ui, rect: Rect, tile: &PatternTile) {
+    const CELLS: u32 = 12;
+    let step_x = tile.width().div_ceil(CELLS / 2).max(1);
+    let step_y = tile.height().div_ceil(CELLS / 2).max(1);
+    let (cw, ch) = (rect.width() / CELLS as f32, rect.height() / CELLS as f32);
+    let mut mesh = egui::Mesh::default();
+    for cy in 0..CELLS {
+        for cx in 0..CELLS {
+            let px = tile.pixel(i64::from(cx * step_x), i64::from(cy * step_y));
+            let color = super::controls::color_of([
+                f32::from(px[0]) / 255.0,
+                f32::from(px[1]) / 255.0,
+                f32::from(px[2]) / 255.0,
+                f32::from(px[3]) / 255.0,
+            ]);
+            let min = rect.min + vec2(cx as f32 * cw, cy as f32 * ch);
+            mesh.add_colored_rect(Rect::from_min_size(min, vec2(cw, ch)), color);
+        }
+    }
+    ui.painter().add(egui::Shape::mesh(mesh));
 }
 
 /// A glow's colour, when its fill is a solid one.
@@ -1838,6 +1986,159 @@ mod tests {
             EffectKind::Satin,
             "the effect it left is remembered"
         );
+    }
+
+    // ---- W7-B: the Pattern Overlay page picks a defined pattern ----------
+
+    fn tile(name: &str, rgba: [u8; 4], other: [u8; 4]) -> PatternTile {
+        PatternTile::new(name, 2, 1, [rgba, other].concat()).unwrap()
+    }
+
+    fn with_two_patterns() -> LayerStyleDialog {
+        let mut dialog = dialog().with_patterns(vec![
+            tile("Checker", [200, 30, 40, 255], [20, 180, 60, 255]),
+            tile("Stripes", [10, 20, 230, 255], [240, 220, 10, 255]),
+        ]);
+        dialog.set_enabled(EffectKind::PatternOverlay, true);
+        dialog.select(EffectKind::PatternOverlay);
+        dialog
+    }
+
+    /// Every mesh vertex egui painted in one quiet frame: where, and in what
+    /// colour.
+    fn painted_vertices(
+        h: &Harness,
+        draw: impl FnOnce(&egui::Context),
+    ) -> Vec<(egui::Pos2, egui::Color32)> {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, Harness::SCREEN)),
+            ..Default::default()
+        };
+        let mut draw = Some(draw);
+        let output = h.ctx.run(input, |ctx| {
+            if let Some(draw) = draw.take() {
+                draw(ctx);
+            }
+        });
+        let mut out = Vec::new();
+        for clipped in &output.shapes {
+            if let egui::Shape::Mesh(mesh) = &clipped.shape {
+                out.extend(mesh.vertices.iter().map(|v| (v.pos, v.color)));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn choosing_a_pattern_puts_its_pixels_into_the_one_command() {
+        let mut dialog = with_two_patterns();
+        assert!(dialog.set_overlay_pattern(1));
+        assert!(!dialog.set_overlay_pattern(7), "no such pattern");
+        match dialog.confirm() {
+            Some(DialogAction::Command(command)) => match *command {
+                Command::SetLayerProperties { patch, .. } => {
+                    let effects = patch.effects.unwrap();
+                    let chosen = effects.pattern_overlay.unwrap().pattern.tile.unwrap();
+                    assert_eq!(chosen.name(), "Stripes");
+                    assert_eq!(chosen.rgba8(), dialog.patterns()[1].rgba8());
+                }
+                other => panic!("expected SetLayerProperties, got {other:?}"),
+            },
+            other => panic!("expected a command, got {other:?}"),
+        }
+        // An overlay that is off takes no pattern.
+        let mut off = dialog.clone();
+        off.set_enabled(EffectKind::PatternOverlay, false);
+        assert!(!off.set_overlay_pattern(0));
+    }
+
+    #[test]
+    fn picking_a_pattern_from_the_drawn_combo_lands_in_the_overlay() {
+        // The real route: the page draws a combo reading "None", a click
+        // opens it, and a click on a name chooses that pattern.
+        let h = Harness::new();
+        let mut dialog = with_two_patterns();
+        let mut closed = None;
+        for _ in 0..Harness::STABLE_FRAMES + 2 {
+            closed = painted_text_rect(&h, "None", |ctx| {
+                dialog.show(ctx, None);
+            });
+        }
+        let at = closed.expect("the pattern combo was drawn").center();
+        h.frame(Harness::click_events(at), |ctx| {
+            dialog.show(ctx, None);
+        });
+        let mut item = None;
+        for _ in 0..3 {
+            item = painted_text_rect(&h, "Stripes", |ctx| {
+                dialog.show(ctx, None);
+            });
+        }
+        let at = item
+            .expect("the open combo lists the defined patterns")
+            .center();
+        h.frame(Harness::click_events(at), |ctx| {
+            dialog.show(ctx, None);
+        });
+        let chosen = dialog
+            .effects()
+            .pattern_overlay
+            .as_ref()
+            .and_then(|o| o.pattern.tile.as_ref())
+            .expect("the click chose a pattern");
+        assert_eq!(chosen.name(), "Stripes");
+    }
+
+    #[test]
+    fn the_chosen_pattern_is_previewed_in_its_own_colours() {
+        let h = Harness::new();
+        let mut dialog = with_two_patterns();
+        // Before a pattern is chosen there is no swatch to draw.
+        h.frame(Vec::new(), |ctx| {
+            dialog.show(ctx, None);
+        });
+        assert!(!h.was_drawn(pattern_swatch_id()));
+        assert!(dialog.set_overlay_pattern(0));
+        // Enough frames for the modal's fade-in to finish: until it does,
+        // every colour it paints is scaled by the fade.
+        let mut vertices = Vec::new();
+        for _ in 0..40 {
+            vertices = painted_vertices(&h, |ctx| {
+                dialog.show(ctx, None);
+            });
+        }
+        let swatch = h
+            .ctx
+            .read_response(pattern_swatch_id())
+            .expect("the swatch is drawn")
+            .rect;
+        // Only what was painted inside the swatch's own rectangle counts: the
+        // schematic preview beside it paints the pattern too.
+        let colors: Vec<egui::Color32> = vertices
+            .iter()
+            .filter(|(pos, _)| swatch.contains(*pos))
+            .map(|(_, c)| *c)
+            .collect();
+        for want in [
+            super::super::controls::color_of([200.0 / 255.0, 30.0 / 255.0, 40.0 / 255.0, 1.0]),
+            super::super::controls::color_of([20.0 / 255.0, 180.0 / 255.0, 60.0 / 255.0, 1.0]),
+        ] {
+            assert!(
+                colors.contains(&want),
+                "the preview paints the pattern's {want:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn with_no_defined_patterns_the_page_says_so_and_still_draws() {
+        let mut dialog = dialog();
+        dialog.set_enabled(EffectKind::PatternOverlay, true);
+        dialog.select(EffectKind::PatternOverlay);
+        frame_both_themes(|ctx| {
+            assert!(dialog.show(ctx, None).is_open());
+        });
+        assert!(!dialog.set_overlay_pattern(0));
     }
 
     /// Run one quiet frame and return the rectangle of the first text shape
