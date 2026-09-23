@@ -92,6 +92,168 @@ pub fn canvas_camera_of(camera: &render::Camera) -> CanvasCamera {
     }
 }
 
+/// The canvas area a document camera draws into: the rectangle between the
+/// docks, strips and tool column, in **surface pixels** measured from the
+/// window's top-left corner.
+///
+/// It is the one fact every space conversion in the shell shares with the
+/// renderer: `render::Camera::viewport_origin` / `viewport_size` hold it,
+/// [`render::Canvas::render_in`] draws into exactly it, and
+/// [`CanvasArea::viewport`] turns it into the [`ui::canvas::Viewport`] the
+/// pointer route and every overlay map through. The shell learns it from the
+/// chrome's previous frame (`Chrome::canvas_area_px`) and hands it to each
+/// document with `Chrome::place_canvas` ([`CanvasPlacement`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CanvasArea {
+    /// Top-left of the area, in surface pixels.
+    pub origin: glam::Vec2,
+    /// Size of the area, in surface pixels.
+    pub size: glam::Vec2,
+}
+
+impl CanvasArea {
+    /// The area a camera currently draws into.
+    pub fn of_camera(camera: &render::Camera) -> Self {
+        Self {
+            origin: camera.viewport_origin,
+            size: camera.viewport_size,
+        }
+    }
+
+    /// The whole surface: the fallback before any chrome has been laid out.
+    pub fn whole(surface_px: glam::Vec2) -> Self {
+        Self {
+            origin: glam::Vec2::ZERO,
+            size: surface_px,
+        }
+    }
+
+    /// This area cut back to a `surface_px` surface, or `None` when nothing of
+    /// it is left: an area measured in a bigger window (the frame before a
+    /// resize) must not reach past the new surface's edge.
+    pub fn within(&self, surface_px: glam::Vec2) -> Option<Self> {
+        let origin = self.origin.clamp(glam::Vec2::ZERO, surface_px);
+        let far = (self.origin + self.size).min(surface_px);
+        let size = far - origin;
+        (size.x >= 1.0 && size.y >= 1.0).then_some(Self { origin, size })
+    }
+
+    /// The middle of the area, in surface pixels: where the camera centre is
+    /// drawn.
+    pub fn center(&self) -> glam::Vec2 {
+        self.origin + self.size * 0.5
+    }
+
+    /// The [`Viewport`] this area is, at `ppp` physical pixels per point.
+    ///
+    /// The surface handed to the viewport ends at the area's far corner and
+    /// the area's top-left becomes the left/top insets, so
+    /// [`Viewport::center_pt`] is the area's centre and nothing downstream has
+    /// to know where the docks are. With `ppp == 1.0` (the pointer route and
+    /// the shell's overlays) points *are* surface pixels; the chrome's
+    /// painters pass their display scale and get points.
+    pub fn viewport(&self, ppp: f32) -> Viewport {
+        let ppp = if ppp.is_finite() && ppp > 0.0 {
+            ppp
+        } else {
+            1.0
+        };
+        let origin = self.origin / ppp;
+        let far = (self.origin + self.size) / ppp;
+        Viewport::new(
+            far,
+            ui::canvas::PanelInsets::new(origin.x, 0.0, origin.y, 0.0),
+            ppp,
+        )
+    }
+}
+
+impl From<glam::Vec2> for CanvasArea {
+    fn from(size: glam::Vec2) -> Self {
+        Self::whole(size)
+    }
+}
+
+impl From<&render::Camera> for CanvasArea {
+    fn from(camera: &render::Camera) -> Self {
+        Self::of_camera(camera)
+    }
+}
+
+/// Hands documents the canvas area they are drawn in, and keeps a fresh
+/// document's opening fit honest while the chrome's layout settles.
+///
+/// * The camera's `viewport_origin` / `viewport_size` become the area, through
+///   [`crate::doc::OpenDocument::set_viewport`], so the first-frame fit (and
+///   every later View > Fit / Fill / 100%) is against the canvas area and not
+///   the window.
+/// * The opening fit is **provisional** until a measured area arrives that is
+///   the same as the one it was fitted to. Before the chrome has laid out a
+///   frame the shell only knows the surface (`measured == false`), and egui's
+///   first frames lay the docks out wider or narrower than they settle at; a
+///   fit made against either is redone against the next area, until the area
+///   holds still. A fit the user has already moved (zoomed, panned) is never
+///   redone.
+/// * Once settled, moving the area — a window resize, Tab hiding the panels, a
+///   screen mode — never re-fits and never moves `center`: the document point
+///   in the middle of the canvas area stays in the middle of it.
+#[derive(Debug, Default)]
+pub struct CanvasPlacement {
+    provisional: std::collections::HashMap<crate::doc::DocumentId, ProvisionalFit>,
+}
+
+/// What a provisional opening fit was made against, and what it produced.
+#[derive(Debug, Clone, Copy)]
+struct ProvisionalFit {
+    area: CanvasArea,
+    zoom: f32,
+    center: glam::Vec2,
+}
+
+impl CanvasPlacement {
+    /// Place `doc` in `area`; see the type's docs for `measured`.
+    pub fn place(&mut self, doc: &mut crate::doc::OpenDocument, area: CanvasArea, measured: bool) {
+        if !(area.size.x >= 1.0 && area.size.y >= 1.0)
+            || !area.size.is_finite()
+            || !area.origin.is_finite()
+        {
+            return;
+        }
+        let was_pending = doc.awaiting_fit();
+        doc.camera.viewport_origin = area.origin;
+        doc.set_viewport(area.size);
+        let id = doc.id();
+        let remember = |doc: &crate::doc::OpenDocument| ProvisionalFit {
+            area,
+            zoom: doc.camera.zoom,
+            center: doc.camera.center,
+        };
+        if was_pending {
+            // `set_viewport` just made the opening fit.
+            self.provisional.insert(id, remember(doc));
+            return;
+        }
+        let Some(fit) = self.provisional.get(&id).copied() else {
+            return;
+        };
+        if doc.camera.zoom != fit.zoom || doc.camera.center != fit.center {
+            // The user moved the view: the fit is theirs now.
+            self.provisional.remove(&id);
+        } else if fit.area == area {
+            if measured {
+                // The layout held still: the fit is final.
+                self.provisional.remove(&id);
+            }
+        } else {
+            // The same fit `set_viewport` performs on a first placement:
+            // opening never enlarges.
+            doc.camera.fit();
+            doc.camera.zoom = doc.camera.zoom.min(1.0);
+            self.provisional.insert(id, remember(doc));
+        }
+    }
+}
+
 /// The document point under a screen position (through the canvas camera).
 pub fn screen_to_document(
     camera: &CanvasCamera,
@@ -525,5 +687,152 @@ mod tests {
         // Unlinked: the mask reads document space unchanged.
         let unchanged = document_to_mask(&doc, id, 0, &unlinked, doc_pt).unwrap();
         assert!((unchanged - doc_pt).length() < 1e-6, "{unchanged:?}");
+    }
+
+    fn open_doc(width: u32, height: u32) -> crate::doc::OpenDocument {
+        let image = crate::import::DecodedImage {
+            width,
+            height,
+            rgba8: vec![128; (width as usize) * (height as usize) * 4],
+            color_space: color::ColorSpace::Srgb,
+            icc_profile: None,
+        };
+        let imported = crate::import::document_from_image(&image, "t.png", 100).unwrap();
+        crate::doc::OpenDocument::from_import(crate::doc::DocumentId(7), imported)
+    }
+
+    /// W5-A: a camera whose canvas area starts inside the window maps a screen
+    /// point exactly as the renderer does, through the viewport the pointer
+    /// and every overlay use — and the area's centre is the camera centre.
+    #[test]
+    fn the_canvas_area_viewport_agrees_with_the_render_camera() {
+        let mut cam = render::Camera::new(Vec2::new(320.0, 180.0), Vec2::new(760.0, 780.0));
+        cam.viewport_origin = Vec2::new(44.0, 70.0);
+        cam.zoom = 1.25;
+        cam.center = Vec2::new(150.0, 100.0);
+        let vp = crate::tool_input::canvas_viewport(&cam);
+        assert_eq!(vp.center_pt(), Vec2::new(44.0 + 380.0, 70.0 + 390.0));
+        let mirror = canvas_camera_of(&cam);
+        for angle in [0.0, 0.7] {
+            cam.set_rotation(angle);
+            let mirror = CanvasCamera {
+                rotation: cam.rotation,
+                ..mirror
+            };
+            for screen in [
+                Vec2::new(44.0, 70.0),
+                Vec2::new(424.0, 460.0),
+                Vec2::new(700.0, 101.0),
+            ] {
+                let via_ui = screen_to_document(&mirror, &vp, screen);
+                let via_render = cam.screen_to_image(screen);
+                assert!(
+                    (via_ui - via_render).length() < 1e-2,
+                    "{screen:?}: {via_ui:?} vs {via_render:?}"
+                );
+            }
+        }
+        cam.set_rotation(0.0);
+        assert!((cam.screen_to_image(Vec2::new(424.0, 460.0)) - cam.center).length() < 1e-4);
+        // The chrome's point-space viewport is the same area at a display
+        // scale: its centre in points times the scale is the centre in pixels.
+        let area = CanvasArea::of_camera(&cam);
+        let pts = area.viewport(2.0);
+        assert!((pts.center_pt() * 2.0 - area.center()).length() < 1e-4);
+    }
+
+    /// W5-A: the first placement with a measured area fits the document to
+    /// that area; moving the area afterwards (a resize, Tab) neither re-fits
+    /// nor moves the centre.
+    #[test]
+    fn a_measured_area_fits_once_and_a_moved_area_keeps_the_centre() {
+        let mut doc = open_doc(3628, 2041);
+        let mut placement = CanvasPlacement::default();
+        let area = CanvasArea {
+            origin: Vec2::new(44.0, 70.0),
+            size: Vec2::new(760.0, 790.0),
+        };
+        placement.place(&mut doc, area, true);
+        assert!(!doc.awaiting_fit());
+        assert!((doc.camera.zoom - 760.0 / 3628.0).abs() < 1e-6);
+        assert_eq!(doc.camera.viewport_origin, area.origin);
+        doc.camera.zoom = 0.5;
+        doc.camera.center = Vec2::new(1000.0, 700.0);
+        let wider = CanvasArea::whole(Vec2::new(1440.0, 900.0));
+        placement.place(&mut doc, wider, true);
+        assert_eq!(doc.camera.zoom, 0.5);
+        assert_eq!(doc.camera.center, Vec2::new(1000.0, 700.0));
+        assert!((doc.camera.screen_to_image(wider.center()) - doc.camera.center).length() < 1e-3);
+    }
+
+    /// W5-A: before the chrome has laid out a frame only the surface is
+    /// known. The document is fitted to it provisionally, and fitted once more
+    /// — to the canvas area — the first time a measured area arrives; never
+    /// again after that.
+    #[test]
+    fn a_fit_made_against_the_surface_is_redone_once_against_the_canvas_area() {
+        let mut doc = open_doc(3628, 2041);
+        let mut placement = CanvasPlacement::default();
+        placement.place(&mut doc, CanvasArea::whole(Vec2::new(1440.0, 900.0)), false);
+        assert!((doc.camera.zoom - 1440.0 / 3628.0).abs() < 1e-6);
+        let area = CanvasArea {
+            origin: Vec2::new(44.0, 70.0),
+            size: Vec2::new(760.0, 790.0),
+        };
+        placement.place(&mut doc, area, true);
+        assert!(
+            (doc.camera.zoom - 760.0 / 3628.0).abs() < 1e-6,
+            "the provisional fit was not redone against the canvas area: {}",
+            doc.camera.zoom
+        );
+        doc.camera.zoom = 0.9;
+        placement.place(&mut doc, area, true);
+        assert_eq!(
+            doc.camera.zoom, 0.9,
+            "a second measured placement re-fitted"
+        );
+    }
+
+    /// W5-A: egui's first frames lay the docks out at a different width than
+    /// they settle at. The opening fit follows the area until it holds still
+    /// for one placement, and then never again: a later move (Tab, a resize)
+    /// keeps the zoom.
+    #[test]
+    fn the_opening_fit_follows_the_layout_until_it_settles() {
+        let mut doc = open_doc(3628, 2041);
+        let mut placement = CanvasPlacement::default();
+        let early = CanvasArea {
+            origin: Vec2::new(44.0, 76.0),
+            size: Vec2::new(856.0, 800.0),
+        };
+        let settled = CanvasArea {
+            origin: Vec2::new(44.0, 76.0),
+            size: Vec2::new(769.0, 800.0),
+        };
+        placement.place(&mut doc, early, true);
+        assert!((doc.camera.zoom - 856.0 / 3628.0).abs() < 1e-6);
+        placement.place(&mut doc, settled, true);
+        assert!(
+            (doc.camera.zoom - 769.0 / 3628.0).abs() < 1e-6,
+            "the fit stayed at the unsettled layout's {}",
+            doc.camera.zoom
+        );
+        placement.place(&mut doc, settled, true);
+        let zoom = doc.camera.zoom;
+        placement.place(&mut doc, CanvasArea::whole(Vec2::new(1440.0, 900.0)), true);
+        assert_eq!(doc.camera.zoom, zoom, "a settled fit was redone");
+    }
+
+    /// An area measured in a bigger window is cut back to the surface.
+    #[test]
+    fn an_area_is_cut_back_to_the_surface() {
+        let area = CanvasArea {
+            origin: Vec2::new(40.0, 60.0),
+            size: Vec2::new(1000.0, 800.0),
+        };
+        let cut = area.within(Vec2::new(800.0, 600.0)).unwrap();
+        assert_eq!(cut.origin, Vec2::new(40.0, 60.0));
+        assert_eq!(cut.size, Vec2::new(760.0, 540.0));
+        assert!(area.within(Vec2::new(30.0, 30.0)).is_none());
     }
 }

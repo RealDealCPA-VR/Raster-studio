@@ -27,6 +27,28 @@ pub const IMAGE_EXTENSIONS: &[&str] = &[
 ];
 /// Extension of a Raster Studio project package (a directory).
 pub const PROJECT_EXTENSION: &str = "rstudio";
+/// W5-D: File ▸ Open's filters, in the order the picker lists them. A
+/// package is a folder, which a file picker cannot return — but the user can
+/// step into it and pick its `manifest.json`, and the editor maps any file
+/// inside a `*.rstudio` folder to the package
+/// ([`crate::editor::Editor::project_package_for`]). So the first (default)
+/// filter shows projects AND images — everything File ▸ Open can open —
+/// followed by a projects-only filter, images, and everything.
+pub fn open_file_filters() -> Vec<(&'static str, Vec<&'static str>)> {
+    let project = vec![PROJECT_EXTENSION, "json"];
+    let mut everything = project.clone();
+    everything.extend_from_slice(IMAGE_EXTENSIONS);
+    everything.push(PSD_EXTENSION);
+    let mut images = IMAGE_EXTENSIONS.to_vec();
+    images.push(PSD_EXTENSION);
+    vec![
+        ("Raster Studio projects and images", everything),
+        ("Raster Studio project", project),
+        ("Images", images),
+        ("All files", vec!["*"]),
+    ]
+}
+
 /// Extension of a layered Photoshop document, which the export path writes
 /// through the `psd` crate (`OpenDocument::export_to` picks the writer by
 /// this extension).
@@ -201,15 +223,14 @@ pub struct NativeDialogs;
 
 impl FileDialogs for NativeDialogs {
     fn pick_open_file(&mut self) -> Option<PathBuf> {
-        // No project filter here: a `.rstudio` package is a directory, so a
-        // file picker can never return one and the filter only advertised a
-        // capability this dialog does not have. Projects come through
-        // `pick_open_project`.
-        rfd::FileDialog::new()
-            .add_filter("Images", IMAGE_EXTENSIONS)
-            .add_filter("All files", &["*"])
-            .set_title("Open")
-            .pick_file()
+        // W5-D: a `.rstudio` package is a directory, so the picker cannot
+        // return it — but it can return the manifest inside it, which the
+        // editor maps back to the package. See `open_file_filters`.
+        let mut dialog = rfd::FileDialog::new();
+        for (name, extensions) in open_file_filters() {
+            dialog = dialog.add_filter(name, &extensions);
+        }
+        dialog.set_title("Open").pick_file()
     }
 
     fn pick_open_project(&mut self) -> Option<PathBuf> {

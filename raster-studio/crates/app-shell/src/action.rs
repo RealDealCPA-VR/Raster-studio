@@ -139,6 +139,11 @@ pub enum Action {
     /// modes and the menu bar in the last, and the shell sets the window
     /// borderless full screen for the two.
     CycleScreenMode,
+    /// Photoshop/Photopea Alt+Backspace: fill the selection (or the layer)
+    /// with the foreground colour, no dialog.
+    FillForeground,
+    /// Ctrl+Backspace: the same with the background colour.
+    FillBackground,
     // ---- Tools / painting ----
     SelectTool(ToolKey),
     /// Hold to borrow the hand tool; released by [`crate::Editor::release_temporary_hand`].
@@ -181,6 +186,8 @@ const FIXED: &[Action] = &[
     Action::ZoomActualPixels,
     Action::TogglePanels,
     Action::CycleScreenMode,
+    Action::FillForeground,
+    Action::FillBackground,
     Action::TemporaryHand,
     Action::DecreaseBrushSize,
     Action::IncreaseBrushSize,
@@ -232,6 +239,8 @@ impl Action {
             Action::ZoomActualPixels => "zoom-actual-pixels".into(),
             Action::TogglePanels => "toggle-panels".into(),
             Action::CycleScreenMode => "cycle-screen-mode".into(),
+            Action::FillForeground => "fill-foreground".into(),
+            Action::FillBackground => "fill-background".into(),
             Action::SelectTool(k) => format!("select-tool-{}", k.char()),
             Action::TemporaryHand => "temporary-hand".into(),
             Action::DecreaseBrushSize => "decrease-brush-size".into(),
@@ -285,6 +294,7 @@ impl Action {
             | Action::ZoomActualPixels
             | Action::TogglePanels
             | Action::CycleScreenMode => Category::View,
+            Action::FillForeground | Action::FillBackground => Category::Layer,
             Action::SelectTool(_)
             | Action::TemporaryHand
             | Action::DecreaseBrushSize
@@ -324,6 +334,8 @@ impl Action {
             Action::ZoomActualPixels => "Actual Pixels".into(),
             Action::TogglePanels => "Hide / Show Panels".into(),
             Action::CycleScreenMode => "Screen Mode".into(),
+            Action::FillForeground => "Fill with Foreground Color".into(),
+            Action::FillBackground => "Fill with Background Color".into(),
             Action::SelectTool(k) => match tools::registry::by_shortcut(k.char()).first() {
                 Some(id) => match tools::registry::info(*id) {
                     Some(info) => info.name.to_string(),

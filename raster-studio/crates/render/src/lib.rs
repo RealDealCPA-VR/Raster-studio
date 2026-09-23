@@ -36,9 +36,11 @@ pub mod overlay;
 #[cfg(test)]
 mod rotation_tests;
 pub mod texture;
+#[cfg(test)]
+mod viewport_tests;
 
 pub use camera::{Camera, MAX_ZOOM, MIN_ZOOM};
-pub use canvas::{backdrop_clear_color, srgb_to_linear, Canvas, DEFAULT_BACKDROP_SRGB};
+pub use canvas::{backdrop_clear_color, clamp_area, srgb_to_linear, Canvas, DEFAULT_BACKDROP_SRGB};
 pub use composite::{CompositeParams, CompositePass};
 pub use context::GpuContext;
 pub use offscreen::{read_texture_rgba8, OffscreenTarget, Readback};

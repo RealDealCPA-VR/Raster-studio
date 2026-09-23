@@ -317,6 +317,11 @@ struct PendingSave {
     /// package at once would race the swap, and dropping the user's save
     /// behind the timer's is not an answer either.
     follow_up: Option<PathBuf>,
+    /// W5-D: a Save / Save As renames the document after its target before
+    /// the snapshot is taken; this is `(title it had, title it was given)`,
+    /// so a save that fails puts the old name back — a refused save renames
+    /// nothing, as [`OpenDocument::save_to`] promises for the direct route.
+    renamed: Option<(String, String)>,
 }
 
 /// W2-G: the side file a document's commands are journaled to while a save of
@@ -649,6 +654,11 @@ pub struct Editor {
     /// Unique per run of the process. Part of every scratch autosave's name.
     session_tag: String,
     revision: u64,
+    /// W5-F: bumped by every [`Editor::touch`] but NOT by
+    /// [`Editor::touch_settings`] — the counter the Navigator/Histogram
+    /// preview (and the History thumbnail it captures) keys on, so a
+    /// colour-slider drag recomposites nothing.
+    content_revision: u64,
     /// The layer and pointer gesture whose kind edit is currently the top of
     /// the active document's history, when one is.
     ///
@@ -796,7 +806,48 @@ impl Editor {
         let recent = RecentFiles::load(&paths.recent_file());
         let mut editor = Editor::with_state(paths, prefs, recent, dialogs);
         editor.spawner = crate::jobs::spawn_thread;
+        editor.sweep_orphaned_scratch_holds();
         editor
+    }
+
+    /// W5-B: delete the scratch journal holds (`hold-<tag>-<id>.journal`, see
+    /// [`Editor::start_save`]) that runs which are no longer alive left
+    /// behind. A hold in the scratch directory belongs to a document with no
+    /// package, so there is no journal it could ever be absorbed into; a
+    /// crashed run's are pure litter that accumulated for ever. A hold whose
+    /// run is still going (another instance: the pid in its tag is alive) is
+    /// left alone, as is anything whose name does not parse. Returns how many
+    /// were removed.
+    pub fn sweep_orphaned_scratch_holds(&self) -> usize {
+        let scratch = self.prefs.scratch_dir(&self.paths);
+        let Ok(entries) = std::fs::read_dir(&scratch) else {
+            return 0;
+        };
+        let own = format!("hold-{}-", self.session_tag);
+        let mut removed = 0;
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if !name.ends_with(".journal") || name.starts_with(&own) {
+                continue;
+            }
+            let Some(pid) = name
+                .strip_prefix("hold-")
+                .and_then(|rest| rest.split('-').next())
+                .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+            else {
+                continue;
+            };
+            if pid == std::process::id() || crate::session::process_is_running(pid) {
+                continue;
+            }
+            if entry.file_type().is_ok_and(|t| t.is_file())
+                && std::fs::remove_file(entry.path()).is_ok()
+            {
+                removed += 1;
+            }
+        }
+        removed
     }
 
     /// The editor the desktop binary runs: real dialogs, real config directory.
@@ -870,6 +921,7 @@ impl Editor {
             autosaves: BTreeMap::new(),
             session_tag: mint_session_tag(),
             revision: 0,
+            content_revision: 0,
             kind_gesture: None,
             clipboard: None,
             purge_armed: None,
@@ -892,6 +944,24 @@ impl Editor {
     }
 
     fn touch(&mut self) {
+        self.revision += 1;
+        self.content_revision += 1;
+    }
+
+    /// W5-F: a counter that moves with every change EXCEPT the tool settings
+    /// that never reach a pixel of any document — the colour wells, the
+    /// brush, the gradient ramp, the active pattern, the clipboard.
+    /// Conservative by construction: every [`Editor::touch`]
+    /// bumps it, and only the setters that call
+    /// [`Editor::touch_settings`] instead leave it alone.
+    pub fn content_revision(&self) -> u64 {
+        self.content_revision
+    }
+
+    /// W5-F: [`Editor::touch`] for a change that cannot alter what any open
+    /// document composites to — [`Editor::revision`] moves, the
+    /// [`Editor::content_revision`] does not.
+    fn touch_settings(&mut self) {
         self.revision += 1;
     }
 
@@ -3134,6 +3204,12 @@ impl Editor {
         &self.recent
     }
 
+    /// W5-D: a `--shot` capture run keeps its fixtures out of the user's
+    /// recent-files list.
+    pub fn freeze_recent_files(&mut self) {
+        self.recent.freeze();
+    }
+
     pub fn documents(&self) -> &[OpenDocument] {
         &self.docs
     }
@@ -3546,7 +3622,7 @@ impl Editor {
     /// Replace the active tool's brush — the options bar and `[` / `]`.
     pub fn set_brush(&mut self, brush: BrushSettings) {
         self.brush = brush;
-        self.touch();
+        self.touch_settings();
     }
 
     /// The colour wells. Card 058: per-DOCUMENT while a document is active
@@ -3585,14 +3661,14 @@ impl Editor {
             }
             None => self.foreground = rgba,
         }
-        self.touch();
+        self.touch_settings();
     }
 
     /// Replace the ramp the gradient tools paint with — the read-back of the
     /// options bar's and the gradient dialog's edits.
     pub fn set_gradient_ramp(&mut self, gradient: layer_model::Gradient) {
         self.gradient_ramp = gradient;
-        self.touch();
+        self.touch_settings();
     }
 
     /// The ramp the gradient tools paint with.
@@ -3618,7 +3694,7 @@ impl Editor {
             return Err(format!("No pattern named “{name}” is defined"));
         }
         self.active_pattern = Some(name.to_string());
-        self.touch();
+        self.touch_settings();
         Ok(())
     }
 
@@ -3645,7 +3721,7 @@ impl Editor {
             }
             None => self.background = rgba,
         }
-        self.touch();
+        self.touch_settings();
     }
 
     pub fn panels_visible(&self) -> bool {
@@ -3685,7 +3761,7 @@ impl Editor {
 
     pub fn set_clipboard(&mut self, clipboard: Clipboard) {
         self.clipboard = Some(clipboard);
-        self.touch();
+        self.touch_settings();
     }
 
     /// Edit > Purge: drop what `target` names.
@@ -3773,6 +3849,9 @@ impl Editor {
 
     pub fn set_status(&mut self, message: impl Into<String>) {
         self.status = Some(message.into());
+        // Stays a full touch: several tool routes mutate the active document
+        // directly and then report through here, so this bump is what tells
+        // the content-keyed consumers that pixels moved.
         self.touch();
     }
 
@@ -3848,8 +3927,41 @@ impl Editor {
         named || (path.is_dir() && path.join(project_format::MANIFEST_FILE).is_file())
     }
 
+    /// W5-D: the `.rstudio` package `path` names or lives in, if any: the
+    /// package itself (by extension, or a folder holding a manifest), or the
+    /// nearest enclosing `*.rstudio` folder of a file picked inside one — a
+    /// file picker cannot return a folder, so `manifest.json` is what the
+    /// user can actually choose — or the folder a picked manifest sits in.
+    pub fn project_package_for(path: &Path) -> Option<PathBuf> {
+        if Self::is_project_path(path) {
+            return Some(path.to_path_buf());
+        }
+        if let Some(package) = path.ancestors().skip(1).find(|dir| {
+            dir.is_dir()
+                && dir
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXTENSION))
+        }) {
+            return Some(package.to_path_buf());
+        }
+        let is_manifest = path
+            .file_name()
+            .is_some_and(|n| n == project_format::MANIFEST_FILE);
+        match path.parent() {
+            Some(parent) if is_manifest && Self::is_project_path(parent) => {
+                Some(parent.to_path_buf())
+            }
+            _ => None,
+        }
+    }
+
     /// Open a file (image or project) into a new tab.
+    ///
+    /// W5-D: a file inside a `.rstudio` package (its `manifest.json`, say)
+    /// opens the package, never tries to decode the file as an image.
     pub fn open_path(&mut self, path: &Path) -> Result<DocumentId, DocumentError> {
+        let package = Self::project_package_for(path);
+        let path = package.as_deref().unwrap_or(path);
         let depth = self.prefs.history_depth;
         let id = self.mint_id();
         let doc = if Self::is_project_path(path) {
@@ -4081,6 +4193,15 @@ impl Editor {
             }
         };
         self.docs[index].begin_journal_hold(side);
+        // W5-D: Save / Save As names the document after the file it goes to
+        // BEFORE the snapshot is taken, so the package carries that name and
+        // the landed save still matches the live document.
+        let renamed = if matches!(kind, crate::jobs::SaveKind::Save) {
+            let previous = self.docs[index].adopt_title_from(&target);
+            Some((previous, self.docs[index].title().to_string()))
+        } else {
+            None
+        };
         let doc = &self.docs[index];
         let progress = project_format::SaveProgress::new();
         let job = crate::jobs::SaveJob {
@@ -4108,6 +4229,7 @@ impl Editor {
             rx,
             shown: Some(shown),
             follow_up: None,
+            renamed,
         });
         self.touch();
     }
@@ -4172,7 +4294,7 @@ impl Editor {
         for mut pending in jobs {
             match pending.rx.try_recv() {
                 Ok(outcome) => {
-                    self.finish_save(outcome, report);
+                    self.finish_save(outcome, pending.renamed.take(), report);
                     self.start_follow_up(pending.id, pending.follow_up.take());
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -4197,17 +4319,22 @@ impl Editor {
                     self.save_jobs.push(pending);
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    // The worker died without reporting — a panic in the
-                    // writer. The previous package is intact (nothing is
-                    // swapped in until the whole package is built), so the
-                    // only loss is this attempt, and it is said.
+                    // The worker died without reporting. Only reachable in
+                    // a build that unwinds (dev and test): the release
+                    // profile is `panic = "abort"`, where a panic in the
+                    // writer ends the whole process and what survives it is
+                    // crash recovery (the package journal and the hold next
+                    // to it), not this branch. Here the previous package is
+                    // intact (nothing is swapped in until the whole package
+                    // is built), so the only loss is this attempt, and it is
+                    // said.
                     let outcome = crate::jobs::SaveOutcome {
                         id: pending.id,
                         kind: pending.kind,
                         target: pending.target,
                         result: Err("the save worker stopped without reporting".to_string()),
                     };
-                    self.finish_save(outcome, report);
+                    self.finish_save(outcome, pending.renamed.take(), report);
                     self.start_follow_up(pending.id, pending.follow_up.take());
                 }
             }
@@ -4226,6 +4353,7 @@ impl Editor {
         let mut pending = self.save_jobs.remove(at);
         let kind = pending.kind;
         let follow_up = pending.follow_up.take();
+        let renamed = pending.renamed.take();
         let outcome = pending.rx.recv().unwrap_or(crate::jobs::SaveOutcome {
             id: pending.id,
             kind: pending.kind,
@@ -4233,7 +4361,7 @@ impl Editor {
             result: Err("the save worker stopped without reporting".to_string()),
         });
         let mut report = AutosaveReport::default();
-        self.finish_save(outcome, &mut report);
+        self.finish_save(outcome, renamed, &mut report);
         self.start_follow_up(id, follow_up);
         match (kind, report.failed.into_iter().next()) {
             (crate::jobs::SaveKind::Save, Some((_, reason))) => Err(reason),
@@ -4254,8 +4382,22 @@ impl Editor {
                     &side,
                     &package.join(project_format::JOURNAL_FILE),
                 ) {
+                    // W5-B: left where it is, the side file is deleted by the
+                    // next save's hold (`begin_journal_hold`) — the held
+                    // commands gone for good. Renamed aside, they are kept
+                    // and never absorbed twice.
+                    // A side file already gone was absorbed: the error is
+                    // about an earlier absorb's leftover, set aside.
+                    if !side.exists() {
+                        tracing::warn!("journal hold of {}: {e}", package.display());
+                        return;
+                    }
+                    let kept = match project_format::CommandJournal::set_aside(&side) {
+                        Ok(aside) => format!("; they are kept in {}", aside.display()),
+                        Err(e2) => format!("; they could not be set aside either: {e2}"),
+                    };
                     tracing::warn!(
-                        "cannot move the commands journaled during the save into {}: {e}",
+                        "cannot move the commands journaled during the save into {}: {e}{kept}",
                         package.display()
                     );
                 }
@@ -4276,7 +4418,19 @@ impl Editor {
     /// journal is read. Once per open, before [`session::recoverable`] or
     /// [`OpenDocument::open_project`], and only for a real package (nothing
     /// to absorb into otherwise).
+    ///
+    /// W5-B: a crash between the two renames of a save leaves no manifest at
+    /// `project` (the package is under its backup name). That is finished
+    /// first ([`project_format::recover_interrupted_save`]) — returning early
+    /// on the missing manifest, as this did, skipped the hold of exactly the
+    /// open that most needs it.
     fn absorb_journal_hold(project: &Path) {
+        if let Err(e) = project_format::recover_interrupted_save(project) {
+            tracing::warn!(
+                "cannot complete the interrupted save of {}: {e}",
+                project.display()
+            );
+        }
         if !project.join(project_format::MANIFEST_FILE).is_file() {
             return;
         }
@@ -4294,7 +4448,12 @@ impl Editor {
 
     /// What a landed save does to the live state — on this thread, the only
     /// one that may touch it.
-    fn finish_save(&mut self, outcome: crate::jobs::SaveOutcome, report: &mut AutosaveReport) {
+    fn finish_save(
+        &mut self,
+        outcome: crate::jobs::SaveOutcome,
+        renamed: Option<(String, String)>,
+        report: &mut AutosaveReport,
+    ) {
         let crate::jobs::SaveOutcome {
             id,
             kind,
@@ -4376,6 +4535,16 @@ impl Editor {
                     .find(|d| d.id() == id)
                     .and_then(|d| d.project_path().map(Path::to_path_buf));
                 Self::settle_journal_hold(held, package.as_deref());
+                // W5-D: the rename a Save / Save As made at its start is
+                // undone — unless the title has changed again since (the
+                // user renamed it meanwhile), which stays.
+                if let Some((previous, adopted)) = renamed {
+                    if let Some(doc) = self.docs.iter_mut().find(|d| d.id() == id) {
+                        if doc.document.meta.title == adopted {
+                            doc.document.meta.title = previous;
+                        }
+                    }
+                }
                 let what = match kind {
                     crate::jobs::SaveKind::Save => "Save",
                     crate::jobs::SaveKind::Autosave { .. } => "Autosave",
@@ -4659,7 +4828,10 @@ impl Editor {
                 Some(_) => Ok(()),
             },
 
-            Action::DeleteLayer | Action::ToggleLayerVisibility => match doc {
+            Action::DeleteLayer
+            | Action::ToggleLayerVisibility
+            | Action::FillForeground
+            | Action::FillBackground => match doc {
                 None => Err(no_doc()),
                 Some(d) if d.document.active_layer().is_none() => Err(ActionError::unavailable(
                     action,
@@ -4780,6 +4952,21 @@ impl Editor {
                 self.touch();
                 Ok(Effect::Panels)
             }
+            Action::FillForeground | Action::FillBackground => {
+                let contents = if action == Action::FillForeground {
+                    ui::dialogs::FillContents::Foreground
+                } else {
+                    ui::dialogs::FillContents::Background
+                };
+                let spec = ui::dialogs::FillSpec {
+                    contents,
+                    ..Default::default()
+                };
+                let message = crate::menu_bridge::fill_selection_with(self, &spec)
+                    .map_err(|e| ActionError::failed(action, e))?;
+                self.set_status(message);
+                Ok(Effect::DocumentEdited)
+            }
             Action::CycleScreenMode => {
                 self.screen_mode = self.screen_mode.next();
                 self.touch();
@@ -4887,6 +5074,14 @@ impl Editor {
         let Some(path) = self.dialogs.pick_open_file() else {
             return Err(ActionError::Cancelled(Action::Open));
         };
+        // W5-D: a pick inside a `.rstudio` package (its manifest) opens the
+        // project — the import worker only decodes images, so the package
+        // opens here, as File > Open Project does.
+        if let Some(package) = Self::project_package_for(&path) {
+            self.open_path(&package)
+                .map_err(|e| ActionError::failed(Action::Open, e))?;
+            return Ok(Effect::DocumentSet);
+        }
         // Card 087: the read and decode run off the interaction thread; the
         // document appears (or the failure is reported) when the shell polls
         // the finished job. The picker itself stays on this thread — native
@@ -5106,6 +5301,11 @@ impl Editor {
                 if let Some(notes) = outcome.psd_notes {
                     if let Some(doc) = self.docs.iter_mut().find(|d| d.id() == outcome.id) {
                         doc.set_psd_notes(notes);
+                        // W5-D: Save as PSD names the tab after the file,
+                        // as the project Save As does.
+                        if outcome.route == ExportRoute::File {
+                            doc.adopt_title_from(&outcome.dir);
+                        }
                     }
                 }
                 self.status = Some(match outcome.route {
@@ -5404,7 +5604,9 @@ impl Editor {
 
     fn act_zoom(&mut self, factor: f32) -> Result<Effect, ActionError> {
         let doc = self.active_mut().expect("`can` required a document");
-        let anchor = doc.camera.viewport_size * 0.5;
+        // The middle of the canvas area, which sits past the tool column,
+        // the bars and the rulers: the point the image is centred on.
+        let anchor = doc.camera.viewport_center();
         doc.camera.zoom_at(anchor, factor);
         self.touch();
         Ok(Effect::View)

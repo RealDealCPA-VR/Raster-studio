@@ -606,6 +606,10 @@ impl Shell {
         };
         shell.ruler_unit_seen = shell.chrome.workspace().canvas.unit;
         shell.sync_ruler_unit();
+        // W5-D: a capture run's fixtures stay out of File > Open Recent.
+        if shell.shot.is_some() {
+            shell.editor.freeze_recent_files();
+        }
         shell
     }
 
@@ -867,16 +871,20 @@ impl Shell {
         self.spread_viewport(Vec2::new(size.width as f32, size.height as f32));
     }
 
-    /// Hand every open document the size of the area it is drawn in.
+    /// Hand every open document the canvas area it is drawn in, on a
+    /// `surface` of this many physical pixels.
     ///
-    /// Through [`OpenDocument::set_viewport`] rather than by assigning
+    /// Through [`Chrome::place_canvas`] (and so
+    /// [`OpenDocument::set_viewport`]) rather than by assigning
     /// `camera.viewport_size`, because a document that has never been drawn
     /// still owes the user a fit and this is the moment its size is known. A
     /// background tab opened while another was active gets fitted here too,
-    /// rather than the first time it happens to be redrawn.
-    fn spread_viewport(&mut self, viewport: Vec2) {
+    /// rather than the first time it happens to be redrawn. The area is the
+    /// last laid-out frame's canvas area cut back to the new surface, or the
+    /// surface itself before any frame was laid out.
+    fn spread_viewport(&mut self, surface: Vec2) {
         for doc in self.editor.documents_mut() {
-            doc.set_viewport(viewport);
+            self.chrome.place_canvas(doc, surface);
         }
     }
 
@@ -996,13 +1004,20 @@ impl Shell {
         // ---- document -> compositor -> GPU texture ----
         let mut camera = Camera::new(Vec2::ONE, Vec2::ONE);
         let mut have_document = false;
+        let surface_px = Vec2::new(
+            state.surface_config.width as f32,
+            state.surface_config.height as f32,
+        );
+        // The canvas area this frame renders into: the one the last laid-out
+        // frame left between the panels. Compared after the chrome runs, so a
+        // frame that moved the panels is followed by one drawn into the new
+        // area.
+        let area_used = self.chrome.canvas_area_px();
         if let Some(doc) = self.editor.active_mut() {
             // The first frame is where a freshly opened document learns how big
-            // the window is, and therefore where it is fitted to it.
-            doc.set_viewport(Vec2::new(
-                state.surface_config.width as f32,
-                state.surface_config.height as f32,
-            ));
+            // its canvas area is, and therefore where it is fitted to it —
+            // between the docks, not across the window.
+            self.chrome.place_canvas(doc, surface_px);
             camera = doc.camera.clone();
             have_document = true;
             // The Channels panel's component toggles are a view setting, so
@@ -1081,7 +1096,7 @@ impl Shell {
                         && (segment.b - segment.a).length() > 0.5
                 }),
             ) {
-                let viewport = crate::tool_input::canvas_viewport(doc.camera.viewport_size);
+                let viewport = crate::tool_input::canvas_viewport(&doc.camera);
                 let camera = crate::tool_input::canvas_camera_of(&doc.camera);
                 let a = crate::interaction_geometry::document_to_screen(&camera, &viewport, bar.a);
                 let b = crate::interaction_geometry::document_to_screen(&camera, &viewport, bar.b);
@@ -1096,7 +1111,7 @@ impl Shell {
                 .active()
                 .map(|doc| {
                     (
-                        crate::tool_input::canvas_viewport(doc.camera.viewport_size),
+                        crate::tool_input::canvas_viewport(&doc.camera),
                         crate::tool_input::canvas_camera_of(&doc.camera),
                     )
                 })
@@ -1146,7 +1161,7 @@ impl Shell {
             if let (true, tools::SessionGeometry::Transform { state, .. }) =
                 (geometry_doc == doc.id(), &geometry)
             {
-                let viewport = crate::tool_input::canvas_viewport(doc.camera.viewport_size);
+                let viewport = crate::tool_input::canvas_viewport(&doc.camera);
                 let camera = crate::tool_input::canvas_camera_of(&doc.camera);
                 let pivot = crate::interaction_geometry::document_to_screen(
                     &camera,
@@ -1194,6 +1209,12 @@ impl Shell {
             });
             (full, captured)
         };
+        // The panels moved (Tab, a screen mode, a dock resized, the first
+        // layout): this frame was rendered into the old canvas area, so draw
+        // one more into the new one rather than wait for the next input.
+        if have_document && self.chrome.canvas_area_px() != area_used {
+            state.window.request_redraw();
+        }
         state
             .egui_state
             .handle_platform_output(&state.window, full_output.platform_output);
@@ -1214,7 +1235,13 @@ impl Shell {
                     label: Some("frame"),
                 });
         if have_document {
-            state.canvas.render(&mut encoder, &view);
+            // Into the canvas area only: the document is never drawn under a
+            // dock (the pass still clears the whole surface to the backdrop).
+            state.canvas.render_in(
+                &mut encoder,
+                &view,
+                (state.surface_config.width, state.surface_config.height),
+            );
             // Over the image, under the chrome — a panel must cover the ants,
             // not the other way round.
             state.overlay.render(&mut encoder, &view);
@@ -1380,12 +1407,25 @@ impl Shell {
                 self.editor.set_status(e.to_string());
             }
         }
+        // W5-C: Edit > Transform > Scale/Rotate/... and Transform Selection
+        // arrive as a tool pick carrying the options-bar choice. The choice
+        // lands on the options bar, and a Free Transform pick parks a
+        // session request like Ctrl+T does, so the handles are up before any
+        // click and a commit hands the palette back to the tool it came from.
+        if let Some((tool, key, index)) = output.tool_choice {
+            self.chrome.set_tool_choice(tool, &key, index);
+            if tool == tools::ToolId::FreeTransform {
+                crate::tool_input::request_free_transform(self.editor.tool());
+            }
+        }
         if let Some(tool) = output.select_tool {
-            // Card 025: switching tools ends a live text session through its
-            // cancel route first, so the draft never strands on the layer.
+            // Card 025 / W5-D: switching tools ends a live text session
+            // through its CONFIRM route, so the draft never strands on the
+            // layer — clicking another tool is how a Photopea user finishes
+            // typing, and cancelling here deleted the text they just typed.
             if self.pointer.is_text_editing() {
                 self.pointer
-                    .text_edit(&mut self.editor, tools::TextEdit::Cancel);
+                    .text_edit(&mut self.editor, tools::TextEdit::Confirm);
             }
             self.editor.set_tool(tool);
         }
@@ -1408,6 +1448,11 @@ impl Shell {
                 tracing::warn!("{}: {reason}", action.label());
             }
         }
+        // W5-C: a Ctrl+T (or Transform-menu) session and a ticked Show
+        // Transform Controls box begin here, in the frame that asked for
+        // them, and publish their handles at once: the keyboard route never
+        // produces a pointer sample, so waiting for one left the canvas bare.
+        self.begin_pending_tool_session();
         // The Properties panel's adjustment sliders and the Text panel's
         // fields. Their own path rather than `commands` because a drag emits
         // one per frame and `apply_kind_edit` folds the run into a single undo
@@ -1689,12 +1734,11 @@ impl Shell {
     ///
     /// Reports whether it was consumed. The rules are the narrow ones: only
     /// while [`ToolPointer::is_text_editing`], only when egui does not hold the
-    /// keyboard, and never with Ctrl or Alt held — so Ctrl+S still saves while
-    /// the user is typing. Ctrl+Enter confirms the run (the draft commits as
-    /// one history entry), plain Enter inserts a line break (card 031), and
-    /// Escape cancels it (an entered layer returns to its original payload
-    /// with no history entry; a layer the click created is deleted) — through
-    /// the text-session routes, the only way out of a text session (card 025).
+    /// keyboard, and never with Ctrl or Alt held (except AltGr, Ctrl+Alt with
+    /// a character, which types) — so Ctrl+S still saves while the user is
+    /// typing. Ctrl+Enter and Escape both confirm the run (the draft commits
+    /// as one history entry, W5-D), plain Enter inserts a line break (card
+    /// 031) — through the text-session routes (card 025).
     fn route_text_key(&mut self, owner: KeyboardOwner, logical: &winit::keyboard::Key) -> bool {
         use winit::keyboard::Key as WKey;
         if owner.egui_text_focus || owner.recording_shortcut || !self.pointer.is_text_editing() {
@@ -1703,7 +1747,25 @@ impl Shell {
         // Card 028: while a session is live, Ctrl+A belongs to the text
         // (select-all); every other Ctrl/Alt/Super chord still reaches the
         // keymap — Ctrl+S keeps saving mid-typing.
-        if self.modifiers.control_key() || self.modifiers.super_key() {
+        // W5-D: Ctrl+Alt together is how Windows reports AltGr, the key that
+        // types `@`, `€` and `{` on non-US layouts — a character arriving
+        // with both held is text, not a chord. Round 2: but Ctrl+Alt is also
+        // a real chord family (Ctrl+Alt+Z Undo, Ctrl+Alt+J Duplicate Layer,
+        // Ctrl+Alt+Shift+S Export), whose logical key is the plain letter.
+        // AltGr never yields an ASCII letter or digit, so those stay chords,
+        // and so does any Ctrl+Alt chord the keymap actually binds.
+        let altgr_character = self.modifiers.control_key()
+            && self.modifiers.alt_key()
+            && !self.modifiers.super_key()
+            && match logical {
+                WKey::Character(s) => {
+                    !s.chars().any(|c| c.is_ascii_alphanumeric())
+                        && chord_from_key(logical, self.modifiers)
+                            .is_none_or(|chord| self.editor.keymap().resolve_any(&chord).is_none())
+                }
+                _ => false,
+            };
+        if !altgr_character && (self.modifiers.control_key() || self.modifiers.super_key()) {
             if let winit::keyboard::Key::Character(c) = logical {
                 // Card 028: Ctrl+C/X/V/A belong to the text while a session
                 // is live; every other chord still reaches the keymap —
@@ -1729,6 +1791,7 @@ impl Shell {
         let enter_confirm_chord =
             self.modifiers.control_key() && matches!(logical, WKey::Named(NamedKey::Enter));
         if !enter_confirm_chord
+            && !altgr_character
             && (self.modifiers.control_key()
                 || self.modifiers.alt_key()
                 || self.modifiers.super_key())
@@ -1765,8 +1828,8 @@ impl Shell {
             WKey::Named(NamedKey::Delete) => tools::TextEdit::DeleteForward,
             // Card 031: Enter inserts a line break (paragraph text, card
             // 023); Ctrl+Enter confirms the session as one history entry for
-            // the whole run; Escape cancels it (restore-or-delete, no entry
-            // for an entered layer). None falls through to the keymap while a
+            // the whole run; Escape confirms too (W5-D). None falls through
+            // to the keymap while a
             // run is open — a composing IME is consumed earlier (card 029),
             // so Enter during composition belongs to the platform.
             WKey::Named(NamedKey::Enter) => {
@@ -1776,7 +1839,9 @@ impl Shell {
                     tools::TextEdit::Insert("\n")
                 }
             }
-            WKey::Named(NamedKey::Escape) => tools::TextEdit::Cancel,
+            // W5-D: Escape commits the run, as Photopea does — the typed
+            // text is kept, never thrown away by a reflexive Escape.
+            WKey::Named(NamedKey::Escape) => tools::TextEdit::Confirm,
             // Card 027: movement keys, with Shift extending the selection.
             WKey::Named(NamedKey::ArrowLeft) => tools::TextEdit::CaretStep {
                 back: true,
@@ -2163,6 +2228,43 @@ impl Shell {
         };
     }
 
+    /// Card 010: what the options bar holds for the effective tool, as the
+    /// tool's own setting values. The conversion happens here, at the
+    /// boundary — the UI crate's value types never reach a tool.
+    fn tool_settings(&self) -> Vec<(String, tools::ToolSetting)> {
+        self.chrome
+            .tool_options(self.editor.effective_tool())
+            .into_iter()
+            .map(|(key, value)| {
+                let setting = match value {
+                    ui::OptionValue::Float(v) => tools::ToolSetting::Float(v),
+                    ui::OptionValue::Int(v) => tools::ToolSetting::Int(v),
+                    ui::OptionValue::Bool(v) => tools::ToolSetting::Bool(v),
+                    ui::OptionValue::Choice(v) => tools::ToolSetting::Choice(v),
+                    ui::OptionValue::Color(v) => tools::ToolSetting::Color(v),
+                };
+                (key, setting)
+            })
+            .collect()
+    }
+
+    /// W5-C: begin whatever session must be on screen without a pointer
+    /// sample (a parked Ctrl+T, a ticked Show Transform Controls) and, when
+    /// one began or changed, publish its geometry through the production
+    /// publisher and ask for a frame to draw it.
+    fn begin_pending_tool_session(&mut self) {
+        let (_, settings) = crate::tool_input::SnapPolicy::split_settings(&self.tool_settings());
+        if self
+            .pointer
+            .begin_pending_session(&mut self.editor, &settings)
+        {
+            let geometry = self.pointer.live_geometry();
+            self.chrome
+                .publish_tool_geometry(geometry, self.editor.active().map(|doc| doc.id()));
+            self.repaint_at = Some(Instant::now());
+        }
+    }
+
     fn on_pointer(&mut self, phase: PointerPhase, button: PointerButton, over_panel: bool) {
         // A modal dialog owns the whole pointer while it is open: a press that
         // means "dismiss this modal" must never claim a canvas gesture. The
@@ -2187,21 +2289,7 @@ impl Shell {
         // Card 010: what the options bar holds is what the tool is. The
         // conversion happens here, at the boundary — the UI crate's value
         // types never reach a tool.
-        let settings: Vec<(String, tools::ToolSetting)> = self
-            .chrome
-            .tool_options(self.editor.effective_tool())
-            .into_iter()
-            .map(|(key, value)| {
-                let setting = match value {
-                    ui::OptionValue::Float(v) => tools::ToolSetting::Float(v),
-                    ui::OptionValue::Int(v) => tools::ToolSetting::Int(v),
-                    ui::OptionValue::Bool(v) => tools::ToolSetting::Bool(v),
-                    ui::OptionValue::Choice(v) => tools::ToolSetting::Choice(v),
-                    ui::OptionValue::Color(v) => tools::ToolSetting::Color(v),
-                };
-                (key, setting)
-            })
-            .collect();
+        let settings = self.tool_settings();
         let outcome = self
             .pointer
             .handle(&mut self.editor, input, over_panel, &settings);
@@ -2555,6 +2643,14 @@ impl ApplicationHandler<crate::shell::AppEvent> for Shell {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "shell_w5d_tests.rs"]
+mod w5d_tests;
+
+#[cfg(test)]
+#[path = "shell_w5c_tests.rs"]
+mod w5c_tests;
 
 #[cfg(test)]
 mod tests {
@@ -4870,8 +4966,8 @@ mod tests {
         assert_eq!(doc.project_path(), Some(target.as_path()));
         assert_eq!(
             shell.editor.window_title(),
-            "large.png — Raster Studio",
-            "the title lost its bullet"
+            "large — Raster Studio",
+            "the title lost its bullet and follows the saved file (W5-D)"
         );
         assert!(shell.editor.recent().entries().contains(&target));
         assert!(
@@ -5340,7 +5436,8 @@ mod tests {
         assert!(shell.pump_jobs());
         assert_eq!(
             shell.editor.status(),
-            Some("Saving large.png… 1/16 tiles"),
+            // W5-D: the document is named after the file it is saved to.
+            Some("Saving progress… 1/16 tiles"),
             "progress refreshes its own line"
         );
 

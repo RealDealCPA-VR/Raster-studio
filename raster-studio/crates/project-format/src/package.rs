@@ -497,6 +497,17 @@ fn grow_source_journal(from: &Path) -> Result<(), ProjectError> {
     Ok(())
 }
 
+/// Complete a save of `path` that a crash interrupted between its two renames:
+/// the previous package is put back from its backup name. `true` when one was.
+///
+/// [`open_project`] does this first thing, but a caller that looks at the
+/// package *before* opening it (an application absorbing a journal side file
+/// into it, say) has to see the package that the open will see, not a missing
+/// manifest.
+pub fn recover_interrupted_save(path: &Path) -> Result<bool, ProjectError> {
+    atomic::recover(path)
+}
+
 /// Load a project package, verifying it and running document migrations.
 pub fn load_project(path: &Path) -> Result<Document, ProjectError> {
     Ok(open_project(path)?.document)

@@ -2282,3 +2282,278 @@ fn every_palette_tool_has_a_real_route_test_or_an_owner() {
     assert_eq!(accounted.len(), ToolId::ALL.len());
     assert!(here.len() >= 26 + 12);
 }
+
+// ------------------------------------------- W5-C: selection transforms --
+//
+// Free Transform and Move with a pixel selection move ONLY the selected
+// pixels (Photopea's floating selection), Ctrl+T puts its gizmo up before
+// any canvas click, and a committed Ctrl+T hands the palette back to the
+// tool it was pressed from. Every step here is the shell's own: the marquee
+// through the pointer route, Ctrl+T as the menu pick the keymap chord
+// resolves to (`menu_bridge::pick` -> `record` -> `ChromeOutput::menu` ->
+// `menu_bridge::perform`), the gizmo drag through `ToolPointer::handle`, and
+// Enter as `ToolPointer::commit`.
+
+/// Marquee `(x0, y0)..(x1, y1)` through the Rectangular Marquee's real route.
+fn marquee(pointer: &mut ToolPointer, ed: &mut Editor, x0: f32, y0: f32, x1: f32, y1: f32) {
+    select_tool(ed, ToolId::RectMarquee);
+    let outcomes = drag(pointer, ed, &[v(x0, y0), v(x1, y1)]);
+    all_reached(ToolId::RectMarquee, &outcomes);
+    assert_eq!(
+        selection(ed).bounds(),
+        Some((
+            IVec2::new(x0 as i32, y0 as i32),
+            IVec2::new(x1 as i32, y1 as i32)
+        )),
+        "the marquee selected the dragged box"
+    );
+}
+
+/// Ctrl+T: the chord's menu action, taken through the pick/record/perform
+/// steps `shell.rs` performs for a menu pick.
+fn ctrl_t(ed: &mut Editor) {
+    let action = ui::MenuAction::FreeTransform;
+    let pick = menu_bridge::pick(&ui::Intent::Action(action), ed)
+        .expect("Free Transform resolves to a pick");
+    let mut out = ChromeOutput::default();
+    menu_bridge::record(pick, &mut out);
+    assert_eq!(out.menu, vec![action], "Ctrl+T is performed as a menu pick");
+    for action in out.menu {
+        menu_bridge::perform(action, ed).expect("Free Transform performs");
+    }
+    assert_eq!(ed.tool(), ToolId::FreeTransform);
+}
+
+/// The live transform session's source box and quad, if one is published.
+fn transform_geometry(pointer: &mut ToolPointer) -> Option<tools::transform::TransformState> {
+    match pointer.live_geometry()?.1 {
+        tools::SessionGeometry::Transform { state, .. } => Some(state),
+        _ => None,
+    }
+}
+
+fn in_box(x: u32, y: u32, x0: u32, y0: u32, x1: u32, y1: u32) -> bool {
+    (x0..x1).contains(&x) && (y0..y1).contains(&y)
+}
+
+/// The no-pointer-sample half (Ctrl+T from the keyboard, a Transform menu
+/// item, Show Transform Controls) is proven on the shell itself, which
+/// begins the session in the frame that performed the pick:
+/// `app-shell`'s `shell::w5c_tests`. This is the pointer half: the first
+/// sample the pointer sees, a bare hover with no button, begins it.
+#[test]
+fn ctrl_t_frames_the_selection_or_the_ink_on_the_first_hover() {
+    let (_dir, mut ed) = open(&checker4);
+    let mut pointer = ToolPointer::new();
+    marquee(&mut pointer, &mut ed, 20.0, 20.0, 40.0, 40.0);
+    // A fresh pointer: nothing it has seen could have begun a session.
+    let mut pointer = ToolPointer::new();
+    ctrl_t(&mut ed);
+    let doc = ed.active().unwrap();
+    let hover = app::shell_screen_pt(doc, 90.0, 90.0);
+    pointer.handle(
+        &mut ed,
+        ui::canvas::PointerInput::at(ui::canvas::PointerPhase::Move, hover),
+        false,
+        &[],
+    );
+    let state =
+        transform_geometry(&mut pointer).expect("Ctrl+T published its gizmo on a hover, no click");
+    assert_eq!(
+        state.source,
+        raster::PixelRect::new(20, 20, 20, 20),
+        "the gizmo frames the selection"
+    );
+    // Without a selection the gizmo frames the layer's ink, still with no
+    // click.
+    app::set_selection(&mut ed, Selection::None);
+    select_tool(&mut ed, ToolId::Brush);
+    let mut pointer = ToolPointer::new();
+    ctrl_t(&mut ed);
+    // A hover (no button) is enough for the real route.
+    let doc = ed.active().unwrap();
+    let hover = app::shell_screen_pt(doc, 5.0, 5.0);
+    pointer.handle(
+        &mut ed,
+        ui::canvas::PointerInput::at(ui::canvas::PointerPhase::Move, hover),
+        false,
+        &[],
+    );
+    let state = transform_geometry(&mut pointer).expect("a hover shows the Ctrl+T gizmo");
+    assert_eq!(state.source, raster::PixelRect::new(0, 0, W, H));
+}
+
+#[test]
+fn free_transform_with_a_selection_scales_only_the_selected_pixels() {
+    let (_dir, mut ed) = open(&checker4);
+    let mut pointer = ToolPointer::new();
+    marquee(&mut pointer, &mut ed, 20.0, 20.0, 40.0, 40.0);
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+    ctrl_t(&mut ed);
+    // Scale 2x: the bottom-right corner handle from (40, 40) to (60, 60),
+    // anchored on the opposite corner.
+    let outcomes = drag(
+        &mut pointer,
+        &mut ed,
+        &[v(40.0, 40.0), v(50.0, 50.0), v(60.0, 60.0)],
+    );
+    all_reached(ToolId::FreeTransform, &outcomes);
+    let state = transform_geometry(&mut pointer).expect("the session is live");
+    assert_eq!(state.corners[2], v(60.0, 60.0), "the corner was dragged");
+    // Enter.
+    let out = pointer.commit(&mut ed);
+    assert_eq!(out.failed, None, "{out:?}");
+    assert_eq!(depth(&ed), d0 + 1, "one undoable step");
+    let after = composite(&mut ed);
+    // Every pixel outside the scaled patch's destination is untouched: the
+    // rest of the layer did not move.
+    let stray: Vec<(u32, u32)> = changed(&before, &after)
+        .into_iter()
+        .filter(|&(x, y)| !in_box(x, y, 20, 20, 60, 60))
+        .collect();
+    assert!(
+        stray.is_empty(),
+        "{} pixel(s) outside the destination changed, e.g. {:?}",
+        stray.len(),
+        &stray[..stray.len().min(5)]
+    );
+    // The scaled patch is there: each 8 px cell of the destination carries
+    // the 4 px source cell it came from.
+    for j in 0..5u32 {
+        for i in 0..5u32 {
+            let (dx, dy) = (24 + 8 * i, 24 + 8 * j);
+            let (sx, sy) = (22 + 4 * i, 22 + 4 * j);
+            assert!(
+                near(px(&after, dx, dy), checker4(sx, sy), 2),
+                "({dx}, {dy}) = {:?}, want the source cell at ({sx}, {sy}) = {:?}",
+                px(&after, dx, dy),
+                checker4(sx, sy)
+            );
+        }
+    }
+    // The selection travelled with the pixels.
+    assert!(cov(&ed, 21, 21) > 0.5 && cov(&ed, 58, 58) > 0.5);
+    assert_eq!(cov(&ed, 62, 62), 0.0);
+    assert_eq!(cov(&ed, 18, 18), 0.0);
+    // One Undo puts pixels and selection back.
+    undo(&mut ed);
+    assert_eq!(composite(&mut ed), before, "undo restored the pixels");
+    assert_eq!(
+        selection(&ed).bounds(),
+        Some((IVec2::new(20, 20), IVec2::new(40, 40)))
+    );
+}
+
+#[test]
+fn committing_a_ctrl_t_transform_returns_to_the_previous_tool() {
+    let (_dir, mut ed) = open(&checker4);
+    let mut pointer = ToolPointer::new();
+    marquee(&mut pointer, &mut ed, 20.0, 20.0, 40.0, 40.0);
+    assert_eq!(ed.tool(), ToolId::RectMarquee);
+    ctrl_t(&mut ed);
+    let outcomes = drag(&mut pointer, &mut ed, &[v(40.0, 40.0), v(60.0, 60.0)]);
+    all_reached(ToolId::FreeTransform, &outcomes);
+    let out = pointer.commit(&mut ed);
+    assert_eq!(out.failed, None, "{out:?}");
+    assert_eq!(
+        ed.tool(),
+        ToolId::RectMarquee,
+        "Enter hands the palette back to the tool Ctrl+T was pressed from"
+    );
+}
+
+#[test]
+fn escaping_a_ctrl_t_transform_returns_to_the_previous_tool_and_forgets_it() {
+    let (_dir, mut ed) = open(&checker4);
+    let mut pointer = ToolPointer::new();
+    marquee(&mut pointer, &mut ed, 20.0, 20.0, 40.0, 40.0);
+    ctrl_t(&mut ed);
+    let outcomes = drag(&mut pointer, &mut ed, &[v(40.0, 40.0), v(60.0, 60.0)]);
+    all_reached(ToolId::FreeTransform, &outcomes);
+    let d0 = depth(&ed);
+    // Escape: the route `Shell::abandon_gesture` takes.
+    assert!(pointer.cancel(&mut ed), "there was a session to abandon");
+    assert_eq!(depth(&ed), d0, "nothing committed");
+    assert_eq!(
+        ed.tool(),
+        ToolId::RectMarquee,
+        "Escape hands the palette back to the tool Ctrl+T was pressed from"
+    );
+    // Free Transform picked from the palette straight after, a session
+    // dragged and committed: the abandoned Ctrl+T's hand-back is gone, so the
+    // palette stays on Free Transform.
+    select_tool(&mut ed, ToolId::FreeTransform);
+    let outcomes = drag(&mut pointer, &mut ed, &[v(40.0, 40.0), v(60.0, 60.0)]);
+    all_reached(ToolId::FreeTransform, &outcomes);
+    let out = pointer.commit(&mut ed);
+    assert_eq!(out.failed, None, "{out:?}");
+    assert_eq!(ed.tool(), ToolId::FreeTransform, "no stale hand-back");
+}
+
+#[test]
+fn move_with_a_selection_moves_only_the_selected_pixels() {
+    let (_dir, mut ed) = open(&checker4);
+    let mut pointer = ToolPointer::new();
+    marquee(&mut pointer, &mut ed, 20.0, 20.0, 40.0, 40.0);
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+    select_tool(&mut ed, ToolId::Move);
+    let outcomes = drag(
+        &mut pointer,
+        &mut ed,
+        &[v(30.0, 30.0), v(50.0, 30.0), v(70.0, 30.0)],
+    );
+    all_reached(ToolId::Move, &outcomes);
+    assert_eq!(depth(&ed), d0 + 1, "one undoable step");
+    let after = composite(&mut ed);
+    for y in 0..H {
+        for x in 0..W {
+            let got = px(&after, x, y);
+            if in_box(x, y, 60, 20, 80, 40) {
+                assert_eq!(got, px(&before, x - 40, y), "moved pixel at ({x}, {y})");
+            } else if in_box(x, y, 20, 20, 40, 40) {
+                assert_eq!(got[3], 0, "the vacated pixel ({x}, {y}) is empty");
+            } else {
+                assert_eq!(
+                    got,
+                    px(&before, x, y),
+                    "({x}, {y}) outside the selection moved"
+                );
+            }
+        }
+    }
+    // The marching ants moved with the pixels.
+    assert_eq!(cov(&ed, 61, 21), 1.0);
+    assert_eq!(cov(&ed, 21, 21), 0.0);
+    undo(&mut ed);
+    assert_eq!(composite(&mut ed), before, "undo restored the pixels");
+}
+
+#[test]
+fn show_transform_controls_draws_its_box_before_any_click() {
+    let (_dir, mut ed) = open(&checker4);
+    select_tool(&mut ed, ToolId::Move);
+    let mut pointer = ToolPointer::new();
+    let settings = vec![("show_transform".to_string(), tools::ToolSetting::Bool(true))];
+    // The options-bar seed a hover carries, the checkbox just ticked.
+    let doc = ed.active().unwrap();
+    let hover = app::shell_screen_pt(doc, 5.0, 5.0);
+    pointer.handle(
+        &mut ed,
+        ui::canvas::PointerInput::at(ui::canvas::PointerPhase::Move, hover),
+        true,
+        &settings,
+    );
+    let state = transform_geometry(&mut pointer)
+        .expect("the ticked option framed the layer before any click");
+    assert_eq!(state.source, raster::PixelRect::new(0, 0, W, H));
+    // Unticked: the box goes.
+    pointer.handle(
+        &mut ed,
+        ui::canvas::PointerInput::at(ui::canvas::PointerPhase::Move, hover),
+        true,
+        &[],
+    );
+    assert!(transform_geometry(&mut pointer).is_none());
+}

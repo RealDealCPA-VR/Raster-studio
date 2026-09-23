@@ -474,7 +474,18 @@ fn menu_table() -> BTreeMap<Chord, MenuAction> {
         // `ui::menu::action_for_shortcut`.
         out.entry(chord).or_insert(action);
     }
+    // Second spellings of a menu item's chord. A painted chord keeps its item.
+    for (chord, action) in menu_aliases() {
+        out.entry(chord).or_insert(action);
+    }
     out
+}
+
+/// W5-E: the default chords that reach a menu item without being the one
+/// painted beside it. The menu paints one chord per row (Delete beside
+/// Edit > Clear); Photoshop's Backspace clears the selection too.
+pub fn menu_aliases() -> Vec<(Chord, MenuAction)> {
+    vec![(Chord::plain(Key::Backspace), MenuAction::ClearPixels)]
 }
 
 /// The menu item that means the same thing as an application [`Action`].
@@ -513,6 +524,8 @@ pub fn menu_twin(action: Action) -> Option<MenuAction> {
         | Action::OpenProject
         | Action::TogglePanels
         | Action::CycleScreenMode
+        | Action::FillForeground
+        | Action::FillBackground
         | Action::SelectTool(_)
         | Action::TemporaryHand
         | Action::DecreaseBrushSize
@@ -687,6 +700,16 @@ impl Keymap {
 
         // File
         add(Chord::ctrl(Key::character('n')), NewDocument);
+        add(
+            Chord {
+                ctrl_or_cmd: false,
+                alt: true,
+                shift: false,
+                key: Key::Backspace,
+            },
+            FillForeground,
+        );
+        add(Chord::ctrl(Key::Backspace), FillBackground);
         add(Chord::ctrl(Key::character('o')), Open);
         // A package is a directory, so it needs a picker — and therefore a
         // chord — of its own.
@@ -1383,6 +1406,95 @@ mod tests {
             vec![Action::Save, Action::Export],
             "a repeated identical binding is not a conflict"
         );
+    }
+
+    /// W5-E: Photoshop's core chords reach their menu items through the
+    /// real keymap, and none of them collides with anything either table
+    /// already claims.
+    #[test]
+    fn the_photoshop_adjustment_and_clear_chords_resolve_to_their_actions() {
+        use ui::menu::AdjustmentId as A;
+        let map = Keymap::default();
+        let ctrl = |c| Chord::ctrl(Key::character(c));
+        for (chord, action) in [
+            (ctrl('l'), MenuAction::ApplyAdjustment(A::Levels)),
+            (ctrl('m'), MenuAction::ApplyAdjustment(A::Curves)),
+            (ctrl('u'), MenuAction::ApplyAdjustment(A::HueSaturation)),
+            (ctrl('b'), MenuAction::ApplyAdjustment(A::ColorBalance)),
+            (ctrl('i'), MenuAction::ApplyAdjustment(A::Invert)),
+            (Chord::plain(Key::Delete), MenuAction::ClearPixels),
+            (Chord::plain(Key::Backspace), MenuAction::ClearPixels),
+        ] {
+            assert_eq!(
+                map.resolve_any(&chord),
+                Some(Resolved::Menu(action)),
+                "{chord} does not reach {action:?}"
+            );
+        }
+        // An alias never takes a chord the menu paints beside another item,
+        // nor one the application's own table claims.
+        let painted: BTreeMap<Chord, MenuAction> = menu_bindings().into_iter().collect();
+        for (chord, action) in menu_aliases() {
+            assert!(
+                painted.get(&chord).is_none_or(|a| *a == action),
+                "{chord} is painted beside {:?}",
+                painted[&chord]
+            );
+            assert!(map.resolve(&chord).is_none(), "{chord} is an app chord");
+        }
+    }
+
+    /// W5-E round 3: Ctrl+I inverts at once, as in Photoshop and Photopea.
+    /// The chord's menu action goes down the chrome's one intent road (the
+    /// `route` that `Shell::perform_menu_chord`'s posted intent is harvested
+    /// through), opens no dialog, and the perform the shell then runs turns
+    /// every pixel of the layer into its inverse.
+    #[test]
+    fn ctrl_i_inverts_the_layer_at_once_without_a_dialog() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = crate::editor::Editor::with_state(
+            crate::prefs::AppPaths::rooted(dir.path().join("config")),
+            crate::prefs::Preferences::default(),
+            crate::recent::RecentFiles::new(),
+            Box::new(crate::dialogs::ScriptedDialogs::new()),
+        );
+        let (w, h) = (8u32, 4u32);
+        let rgba: Vec<u8> = (0..w * h)
+            .flat_map(|i| [(i * 7) as u8, 40, 200, 255])
+            .collect();
+        let png = dir.path().join("probe.png");
+        std::fs::write(
+            &png,
+            raster::encode(raster::ExportFormat::Png, w, h, &rgba).unwrap(),
+        )
+        .unwrap();
+        ed.open_path(&png).unwrap();
+
+        let Some(Resolved::Menu(action)) =
+            Keymap::default().resolve_any(&Chord::ctrl(Key::character('i')))
+        else {
+            panic!("Ctrl+I reaches no menu item");
+        };
+        let mut chrome = crate::chrome::Chrome::new();
+        let mut out = crate::chrome::ChromeOutput::default();
+        chrome.menu_click(ui::Intent::Action(action), &ed, &mut out);
+        assert!(!chrome.dialog_open(), "Ctrl+I opened a dialog");
+        assert_eq!(out.menu, vec![action], "{out:?}");
+
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let before = crate::menu_bridge::pixels::read_layer(ed.active().unwrap(), layer);
+        for a in out.menu {
+            crate::menu_bridge::perform(a, &mut ed).unwrap();
+        }
+        let after = crate::menu_bridge::pixels::read_layer(ed.active().unwrap(), layer);
+        assert_eq!(after.len(), before.len());
+        for (b, a) in before.chunks(4).zip(after.chunks(4)) {
+            assert_eq!(
+                [a[0], a[1], a[2], a[3]],
+                [255 - b[0], 255 - b[1], 255 - b[2], b[3]],
+                "Ctrl+I did not invert {b:?}"
+            );
+        }
     }
 
     /// W2-X: Photopea's `F` cycles the screen mode. W2-C pinned the chord

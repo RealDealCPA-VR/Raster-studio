@@ -8,6 +8,7 @@
 //! for a mask.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use raster::{Tile, TileHash};
 
@@ -35,9 +36,17 @@ impl<T: TileSource + ?Sized> TileSource for &T {
 /// A [`TileSource`] backed by an in-memory map. Keys are always
 /// `TileHash::of(bytes)`, so a value can never be filed under a hash that does
 /// not describe it.
+///
+/// Each tile is held as an immutable `Arc<[u8]>`: a tile is content-addressed,
+/// so its bytes never change once filed, and a **clone of the source shares
+/// them** instead of copying them. That is what makes the snapshot a save hands
+/// its worker ([`Clone`] on the UI thread, once per save and autosave) cost a
+/// map of pointers rather than a copy of every pixel the document has ever
+/// held — which, for a large document, was a stall of the interaction thread
+/// every autosave interval.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MemoryTileSource {
-    tiles: HashMap<TileHash, Vec<u8>>,
+    tiles: HashMap<TileHash, Arc<[u8]>>,
 }
 
 impl MemoryTileSource {
@@ -48,14 +57,18 @@ impl MemoryTileSource {
     /// Store `bytes` under their own content hash and return it.
     pub fn insert_bytes(&mut self, bytes: Vec<u8>) -> TileHash {
         let hash = TileHash::of(&bytes);
-        self.tiles.insert(hash, bytes);
+        // Already filed: the bytes are the same by construction, and keeping
+        // the existing allocation keeps it shared with every clone.
+        self.tiles.entry(hash).or_insert_with(|| Arc::from(bytes));
         hash
     }
 
     /// Store a tile's pixel bytes under [`Tile::hash`].
     pub fn insert_tile(&mut self, tile: &Tile) -> TileHash {
         let hash = tile.hash();
-        self.tiles.insert(hash, tile.data().to_vec());
+        self.tiles
+            .entry(hash)
+            .or_insert_with(|| Arc::from(tile.data()));
         hash
     }
 
@@ -74,7 +87,7 @@ impl MemoryTileSource {
 
 impl TileSource for MemoryTileSource {
     fn tile(&self, hash: TileHash) -> Option<&[u8]> {
-        self.tiles.get(&hash).map(Vec::as_slice)
+        self.tiles.get(&hash).map(|b| &**b)
     }
 }
 
@@ -101,6 +114,24 @@ mod tests {
         let h = s.insert_tile(&tile);
         assert_eq!(h, tile.hash());
         assert_eq!(s.tile(h).unwrap(), tile.data());
+    }
+
+    #[test]
+    fn a_clone_shares_the_tile_bytes_rather_than_copying_them() {
+        // W5-B: a save snapshots the document's source with `clone()` on the
+        // UI thread; with owned `Vec`s that copied every pixel held.
+        let mut s = MemoryTileSource::new();
+        let h = s.insert_tile(&Tile::transparent(PixelFormat::Rgba16));
+        let snapshot = s.clone();
+        assert_eq!(snapshot, s);
+        assert!(
+            std::ptr::eq(s.tile(h).unwrap(), snapshot.tile(h).unwrap()),
+            "the clone points at the same bytes"
+        );
+        // And the source stays independent: a new tile in one is not in the
+        // other.
+        let h2 = s.insert_bytes(vec![3u8; 8]);
+        assert!(s.contains(h2) && !snapshot.contains(h2));
     }
 
     #[test]

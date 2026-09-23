@@ -636,13 +636,14 @@ fn every_layers_footer_button_emits_its_command() {
         "adjustment meant {intents:?}"
     );
 
-    // Mask attaches one to the active layer.
+    // Mask attaches one to the active layer through Layer > Layer Mask's
+    // creation route (W5-D: the app then aims painting at the new mask);
+    // with no selection it reveals all.
     let intents = h.click(ui::view::ids::layer_mask());
     assert!(
         intents.iter().any(|i| matches!(
             i,
-            Intent::Document(editor_core::Command::SetLayerProperties { patch, .. })
-                if matches!(&patch.mask, editor_core::Patch::Set(_))
+            Intent::Action(ui::menu::MenuAction::Mask(ui::menu::MaskOp::RevealAll))
         )),
         "mask meant {intents:?}"
     );

@@ -11,8 +11,11 @@
 //! point under the middle of the window:
 //!
 //! ```text
-//!   image = center + R(-rotation) · F · (screen - viewport/2) / zoom
+//!   image = center + R(-rotation) · F · (screen - viewport_centre) / zoom
 //! ```
+//!
+//! where `viewport_centre = viewport_origin + viewport_size / 2`: the middle of
+//! the canvas area the host gave the camera, in surface pixels.
 //!
 //! # Mirror convention
 //!
@@ -59,8 +62,18 @@ pub struct Camera {
     pub flip_y: bool,
     /// Size of the image being viewed, in pixels.
     pub image_size: Vec2,
-    /// Size of the viewport (surface), in pixels.
+    /// Size of the viewport, in pixels: the canvas area the image is drawn
+    /// into, which is not the whole surface once a host paints panels around
+    /// it. Fit, fill and centring all divide by this.
     pub viewport_size: Vec2,
+    /// Top-left of the viewport within the surface, in pixels. Screen
+    /// coordinates ([`Camera::screen_to_image`], [`Camera::zoom_at`]) are
+    /// measured from the surface's corner, so the image centres on
+    /// `viewport_origin + viewport_size / 2` — the middle of the canvas area,
+    /// not of the window. Zero (the default) is a viewport that starts at the
+    /// surface's corner; [`crate::Canvas::render_in`] draws into exactly this
+    /// rectangle.
+    pub viewport_origin: Vec2,
 }
 
 impl Camera {
@@ -73,7 +86,13 @@ impl Camera {
             flip_y: false,
             image_size,
             viewport_size,
+            viewport_origin: Vec2::ZERO,
         }
+    }
+
+    /// The middle of the viewport, in surface pixels: where `center` is drawn.
+    pub fn viewport_center(&self) -> Vec2 {
+        self.viewport_origin + self.viewport_size * 0.5
     }
 
     /// Pan by a delta given in *screen* pixels.
@@ -165,7 +184,7 @@ impl Camera {
     /// Convert a screen-space point to image-space pixels, through the pan,
     /// the zoom, the view rotation and the view mirror.
     pub fn screen_to_image(&self, screen: Vec2) -> Vec2 {
-        let from_center = screen - self.viewport_size * 0.5;
+        let from_center = screen - self.viewport_center();
         self.center + self.screen_vector_to_image(from_center)
     }
 
@@ -198,7 +217,10 @@ impl Camera {
     /// no trick at all.
     pub fn checker_frame(&self) -> [f32; 4] {
         let (s, c) = self.rotation.sin_cos();
-        let centre = self.viewport_size * 0.5;
+        // In framebuffer pixels, like the fragment position the shader turns:
+        // the canvas pass draws into the viewport rectangle, but
+        // `@builtin(position)` is still measured from the surface's corner.
+        let centre = self.viewport_center();
         match (self.flip_x, self.flip_y) {
             (false, false) => [c, s, centre.x, centre.y],
             // F = -I: the frame is turned half a turn further.
@@ -764,5 +786,31 @@ mod tests {
         // The grabbed image point is under the moved pointer.
         let now = c.screen_to_image(Vec2::new(400.0, 200.0));
         assert!((now - grabbed).length() < 1e-3, "{now:?} vs {grabbed:?}");
+    }
+
+    /// W5-A: a viewport that starts inside the surface (the canvas area
+    /// between a host's panels) centres the image on the area's centre, and
+    /// fits to the area's size, not the surface's.
+    #[test]
+    fn an_offset_viewport_centres_and_fits_in_its_own_rectangle() {
+        let mut c = Camera::new(Vec2::new(320.0, 180.0), Vec2::new(760.0, 780.0));
+        c.viewport_origin = Vec2::new(44.0, 70.0);
+        c.fit();
+        assert!((c.zoom - 760.0 / 320.0).abs() < 1e-6);
+        let mid = c.screen_to_image(Vec2::new(44.0 + 380.0, 70.0 + 390.0));
+        assert!((mid - Vec2::new(160.0, 90.0)).length() < 1e-3, "{mid:?}");
+        // The area's top-left corner is the image point half an area left and
+        // up of the centre.
+        let corner = c.screen_to_image(c.viewport_origin);
+        let want = Vec2::new(160.0, 90.0) - Vec2::new(380.0, 390.0) / c.zoom;
+        assert!((corner - want).length() < 1e-3, "{corner:?} vs {want:?}");
+        // The checker turns about the same centre the image does.
+        let [_, _, kx, ky] = c.checker_frame();
+        assert_eq!((kx, ky), (424.0, 460.0));
+        // Zooming about a pointer keeps the pointer's image point under it.
+        let at = Vec2::new(600.0, 300.0);
+        let before = c.screen_to_image(at);
+        c.zoom_at(at, 1.7);
+        assert!((c.screen_to_image(at) - before).length() < 1e-3);
     }
 }

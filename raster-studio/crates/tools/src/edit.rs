@@ -123,6 +123,23 @@ impl Default for MoveTool {
 }
 
 impl MoveTool {
+    /// W5-C: seed Show Transform Controls' box from the context alone, so
+    /// ticking the option frames the active layer's ink straight away rather
+    /// than after the next canvas click. No session, no commands.
+    pub fn seed_display(&mut self, ctx: &ToolContext<'_>) {
+        if !self.show_transform {
+            self.display_bounds = None;
+            self.display_layer = None;
+            return;
+        }
+        self.display_layer = ctx.active_layer;
+        // The TIGHT ink first: the stored extent is tile-aligned, so a 128 px
+        // image would be framed as 256 px.
+        self.display_bounds = ctx
+            .active_layer_ink_bounds
+            .or(ctx.active_layer_content_bounds);
+    }
+
     /// The topmost layer in `ctx.layer_stack` with a sufficiently opaque pixel
     /// at `p`.
     pub fn layer_under(&self, ctx: &ToolContext<'_>, p: Vec2) -> Option<LayerId> {
@@ -277,7 +294,8 @@ impl Tool for MoveTool {
         // rather than a box around the wrong ink).
         if self.show_transform {
             self.display_bounds = if self.layer == ctx.active_layer {
-                ctx.active_layer_content_bounds
+                ctx.active_layer_ink_bounds
+                    .or(ctx.active_layer_content_bounds)
             } else {
                 None
             };
@@ -346,6 +364,41 @@ impl Tool for MoveTool {
         // transform would put a do-nothing entry in the undo stack.
         if d.length() < 1e-4 {
             return Ok(());
+        }
+        // W5-C: with a pixel selection the Move tool moves the SELECTED
+        // PIXELS of the active layer (Photopea), not the whole layer: they
+        // are lifted, laid down at the whole-pixel offset over what was left
+        // behind, and the marching ants travel with them, as ONE undoable
+        // step. A parametric layer (text, shape) keeps the layer move.
+        if let Some((min, max)) = ctx.selection.bounds() {
+            if ctx.paint_target == crate::tool::PaintTarget::Layer
+                && !ctx.active_layer_parametric
+                && Some(layer) == ctx.active_layer
+            {
+                let step = d.round();
+                if step == Vec2::ZERO {
+                    return Ok(());
+                }
+                let rect = PixelRect::new(
+                    min.x as i64,
+                    min.y as i64,
+                    (max.x - min.x).max(0) as u32,
+                    (max.y - min.y).max(0) as u32,
+                );
+                let mut state = crate::transform::TransformState::new(rect);
+                for corner in state.corners.iter_mut() {
+                    *corner += step;
+                }
+                state.pivot += step;
+                let command = crate::transform::float_selection(
+                    ctx,
+                    &state,
+                    crate::transform::TransformMode::Scale,
+                    "Move Selection",
+                )?;
+                ctx.emit(command);
+                return Ok(());
+            }
         }
         // Card 038: with a multi-layer selection the WHOLE set moves — one
         // transaction (the shell conjugates per participant). The active

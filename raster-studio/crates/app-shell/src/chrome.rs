@@ -479,6 +479,50 @@ const LIVE_ELLIPSE_STEPS: usize = 64;
 /// W4-A: how many chords a live pen curve segment is flattened into.
 const LIVE_CURVE_STEPS: usize = 16;
 
+/// W5-F: one hash of everything in `doc` that can change a composited pixel
+/// — canvas size and colour space, the layer tree's order, each layer's
+/// pixel-affecting properties ([`compositor::composite::layer_signature`])
+/// and every layer and mask tile hash. Taken every frame by the Layers
+/// thumbnails and the Colour Samplers to decide whether to do any work; it
+/// reads no pixel and serialises nothing, and unlike
+/// [`Editor::content_revision`] it also sees the routes that write the
+/// document without going through the editor (a live text draft).
+fn document_signature(doc: &crate::doc::OpenDocument) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let d = &doc.document;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    d.width().hash(&mut h);
+    d.height().hash(&mut h);
+    d.meta.bit_depth.hash(&mut h);
+    d.meta.color_mode.hash(&mut h);
+    std::mem::discriminant(&d.meta.color_space).hash(&mut h);
+    if let color::ColorSpace::IccProfile { asset_hash, .. } = &d.meta.color_space {
+        asset_hash.hash(&mut h);
+    }
+    d.layers.root().hash(&mut h);
+    let tiles = |map: Option<&editor_core::TileMap>,
+                 h: &mut std::collections::hash_map::DefaultHasher| {
+        match map {
+            None => 0usize.hash(h),
+            Some(map) => {
+                map.len().hash(h);
+                for (coord, hash) in map.iter() {
+                    (coord.x, coord.y, coord.level, hash.0).hash(h);
+                }
+            }
+        }
+    };
+    for id in d.layers.iter_depth_first() {
+        id.hash(&mut h);
+        if let Some(layer) = d.layers.get(id) {
+            compositor::composite::layer_signature(layer).hash(&mut h);
+        }
+        tiles(d.layer_tiles(id), &mut h);
+        tiles(d.mask_tiles(id), &mut h);
+    }
+    h.finish()
+}
+
 /// W4-G: the composited colour of one document pixel, straight-alpha sRGB in
 /// `0..=1` — what the Info panel's Colour Sampler rows show. `None` off the
 /// image or when the composite fails.
@@ -607,6 +651,9 @@ pub struct Chrome {
     /// The two rectangles the last drawn frame settled on. `None` until a frame
     /// has been drawn, which is the only honest answer before one has.
     frame_geometry: Option<FrameGeometry>,
+    /// Which documents were fitted before a canvas area was measured — see
+    /// [`Chrome::place_canvas`].
+    canvas_placement: crate::interaction_geometry::CanvasPlacement,
     /// The modal dialog host: at most one [`ui::dialogs`] surface open, drawn
     /// after the docks. See [`crate::dialog_host`].
     dialogs: crate::dialog_host::DialogHost,
@@ -618,7 +665,29 @@ pub struct Chrome {
     /// W2-X: the editor revision the Navigator/Histogram composite preview
     /// was built at. `None` until one is built, and again once the last
     /// document closes. See [`Chrome::refresh_composite_preview`].
-    preview_revision: Option<u64>,
+    /// W5-F: keyed on [`Editor::content_revision`] and the document, so a
+    /// colour-well or brush change (which moves only [`Editor::revision`])
+    /// does not recomposite the canvas.
+    preview_revision: Option<(u64, crate::doc::DocumentId)>,
+    /// W5-F: how many composite previews were built — the counter the
+    /// colour-slider gate is tested by.
+    preview_builds: usize,
+    /// W5-F: the (document signature, document, sampler points) the Colour
+    /// Sampler rows were composited at. See
+    /// [`Chrome::refresh_sampler_colours`] and [`document_signature`].
+    samplers_read_at: Option<(u64, crate::doc::DocumentId, Vec<glam::Vec2>)>,
+    /// W5-F: how many 1x1 sampler composites ran — the counter its gate is
+    /// tested by.
+    sampler_composites: usize,
+    /// W5-F: the (document signature, document) the Layers thumbnails were
+    /// last checked against with nothing left owed. The per-layer
+    /// fingerprint pass is skipped while it holds. See
+    /// [`Chrome::refresh_layer_thumbs`] and [`document_signature`].
+    /// The two texture counts are part of the key, so a texture dropped by
+    /// anything else is re-uploaded on the next frame.
+    thumbs_checked_at: Option<(u64, crate::doc::DocumentId, usize, usize)>,
+    /// W5-F: how many per-layer fingerprint passes ran.
+    thumb_passes: usize,
     /// W2-X: the revision and pointer position the Info panel's colour
     /// sample was read at, so the 1x1 composite runs when either moves and
     /// not per frame. See [`Chrome::refresh_info_sample`].
@@ -655,25 +724,37 @@ pub fn view_flag_refusal(flag: ui::ViewFlag) -> Option<&'static str> {
     ui::view_flag_unavailable(flag)
 }
 
-/// Where this frame's window is, and where the part of it the user can see the
-/// image in is. **They are not the same rectangle**, and confusing them is what
-/// made Fill Screen smaller than Fit on Screen.
+/// Where this frame's window is, and where the canvas area inside it is.
+/// **They are not the same rectangle**: the docks, the options bar, the tab
+/// strip, the status bar and the tool column take the edges of the window,
+/// and the document is fitted, centred and drawn in what they leave.
 ///
 /// Both are in logical points, as egui reports them; `ppp` converts either to
 /// the physical pixels [`render::Camera`] measures in.
 #[derive(Debug, Clone, Copy)]
 struct FrameGeometry {
-    /// The whole window — `Context::screen_rect`. This is the rectangle the
-    /// shell renders the image across: [`crate::shell::Shell::redraw`] gives
-    /// `OpenDocument::camera` the entire surface as its `viewport_size` and
-    /// composites with no scissor, and the panels are painted on top of the
-    /// result. [`crate::tool_input::canvas_viewport`] says the same thing on
-    /// the way in, for pointer coordinates.
+    /// The whole window — `Context::screen_rect`. Screen coordinates (the
+    /// pointer, the overlays) are measured from its corner.
     surface: egui::Rect,
-    /// What the docks, the strips and the tool rail left — the part of the
-    /// image the user can actually see, and the rectangle Zoom to Selection
-    /// has to land inside.
+    /// What the docks, the strips and the tool rail left — the canvas area.
+    /// It is the document camera's viewport: [`Chrome::canvas_area_px`] hands
+    /// it (in physical pixels) to the shell, which gives every document's
+    /// `render::Camera` this rectangle as its `viewport_origin` /
+    /// `viewport_size` ([`crate::chrome::Chrome::place_canvas`]),
+    /// renders the composite into it and nowhere else
+    /// ([`render::Canvas::render_in`]), and maps the pointer and every overlay
+    /// through it ([`crate::tool_input::canvas_viewport`]). Fit, Fill, 100%
+    /// and Zoom to Selection all frame against it — the `ui` canvas host is
+    /// synced to it by [`Chrome::sync_canvas_host`]. The rectangle is known
+    /// only once the chrome has laid out, so the shell uses the previous
+    /// frame's.
     content: egui::Rect,
+    /// `content` less the ruler gutters while View > Rulers is on (the rulers
+    /// are painted over its top and left edges by `crate::canvas_extras`), so
+    /// no part of the document is fitted or centred under a ruler. This is the
+    /// rectangle [`Chrome::canvas_area_px`] reports; equal to `content` with
+    /// the rulers off.
+    canvas: egui::Rect,
     /// Physical pixels per logical point, for this frame.
     ppp: f32,
     /// The canvas appearance this frame is drawn with. Only the ruler gutter
@@ -883,6 +964,20 @@ impl Chrome {
             self.thumbs.clear();
             self.thumbs_document = Some(open.id());
         }
+        // W5-F: the per-layer fingerprint pass serialises every layer (and a
+        // group's whole subtree) — skip it outright while nothing that can
+        // change a thumbnail has moved since a pass that left nothing owed.
+        let signature = document_signature(open);
+        let checked = (
+            signature,
+            open.id(),
+            self.workspace.layer_thumbs.len(),
+            self.workspace.mask_thumbs.len(),
+        );
+        if self.thumbs_checked_at == Some(checked) {
+            return;
+        }
+        self.thumb_passes += 1;
         let ids = open.document.layers.iter_depth_first();
         let live: std::collections::HashSet<LayerId> = ids.iter().copied().collect();
         self.workspace
@@ -946,6 +1041,14 @@ impl Chrome {
                 }
             }
         }
+        self.thumbs_checked_at = (!owed).then(|| {
+            (
+                signature,
+                open.id(),
+                self.workspace.layer_thumbs.len(),
+                self.workspace.mask_thumbs.len(),
+            )
+        });
         if owed {
             // Thumbnails still to recomposite: the next frame takes the next
             // batch, without waiting for the user to move the pointer.
@@ -1000,20 +1103,30 @@ impl Chrome {
     /// [`Editor::revision`] moves — never per frame — and read from the
     /// canvas in bands (see [`composite_preview`]) so the peak buffer is one
     /// band rather than the whole canvas.
+    ///
+    /// W5-F: keyed on [`Editor::content_revision`] (and the document), not
+    /// [`Editor::revision`]: the colour wells, the brush and the status line
+    /// move the latter on every frame of a slider drag without changing a
+    /// pixel, and each of those frames used to read the whole canvas.
     fn refresh_composite_preview(&mut self, ctx: &egui::Context, editor: &mut Editor) {
-        let revision = editor.revision();
+        let content = editor.content_revision();
         let Some(open) = editor.active_mut() else {
             self.workspace.clear_composite_preview();
             self.preview_revision = None;
             ui::panels::history::HistoryThumbs::clear(ctx);
             return;
         };
-        if self.preview_revision == Some(revision) && self.workspace.navigator_texture.is_some() {
+        let key = (content, open.id());
+        if self.preview_revision == Some(key) && self.workspace.navigator_texture.is_some() {
             return;
         }
+        self.preview_builds += 1;
+        // The Histogram's generation: unique per build, so a switch between
+        // two documents at the same content revision still recounts.
+        let revision = self.preview_builds as u64;
         let Some((w, h, small)) = composite_preview(open, PREVIEW_EDGE) else {
             self.workspace.clear_composite_preview();
-            self.preview_revision = Some(revision);
+            self.preview_revision = Some(key);
             return;
         };
         // W4-I: the same picture becomes the History panel's thumbnail of
@@ -1028,7 +1141,7 @@ impl Chrome {
         );
         self.workspace
             .set_composite_preview(ctx, revision, w as usize, h as usize, &small);
-        self.preview_revision = Some(revision);
+        self.preview_revision = Some(key);
     }
 
     /// W2-X: the colour under the pointer for the Info panel, read through
@@ -1065,8 +1178,7 @@ impl Chrome {
     fn pointer_document_point(&self, editor: &Editor, pos: egui::Pos2) -> Option<(f32, f32)> {
         let frame = self.frame_geometry?;
         let doc = editor.active()?;
-        let surface = frame.surface.size() * frame.ppp;
-        let viewport = crate::tool_input::canvas_viewport(glam::Vec2::new(surface.x, surface.y));
+        let viewport = crate::tool_input::canvas_viewport(&doc.camera);
         let mirror = crate::tool_input::canvas_camera_of(&doc.camera);
         let pt = mirror.doc_of_screen_pt(
             &viewport,
@@ -1385,6 +1497,15 @@ impl Chrome {
         // never their own last click.
         w.palette.quick_mask = editor.quick_mask();
         w.palette.screen_mode = editor.screen_mode();
+        // W5-D round 2: the Layer|Mask toggle, the thumbnail target border
+        // and the Properties subject draw the editor's validated edit target
+        // — whichever route moved it (Layers mask button, Layer > Layer Mask,
+        // a thumbnail click, undo removing the mask) — never a stale focus.
+        w.property_focus = if editor.edit_target_is_mask() {
+            ui::panels::properties::PropertyFocus::Mask
+        } else {
+            ui::panels::properties::PropertyFocus::Layer
+        };
         w.status.tool = Some(tool);
         // The brush is [`Editor`]'s. Push it into the options bar every frame
         // so `[` and `]` move the slider the user is looking at — without this
@@ -1429,28 +1550,6 @@ impl Chrome {
         }
     }
 
-    /// Remember this frame's two rectangles: the window, and what the docks
-    /// left of it.
-    ///
-    /// [`Workspace::viewport`](ui::Workspace::viewport) is the leftover — the
-    /// visible canvas area, which is what the Navigator draws its proxy from.
-    ///
-    /// The `ui` canvas host, though, is given the **whole window**, because
-    /// that is the rectangle the shell renders from: `OpenDocument::camera`'s
-    /// `viewport_size` is the entire surface and the composite is drawn across
-    /// all of it, with the panels painted over the top. Every zoom command this
-    /// chrome routes to that host divides by its viewport, so the host and
-    /// `render::Camera` have to be looking at the same rectangle or the zoom
-    /// they compute is for a window that does not exist.
-    ///
-    /// That mismatch was not a rounding error. Given the host the content
-    /// rectangle instead, a 400x300 document in a 1400x900 window came out at
-    /// Fit 3.0 and Fill 2.4565 — Fill *smaller* than Fit — and the image, sized
-    /// for a 732x752 rectangle but centred on the window, left a strip of bare
-    /// backdrop along the bottom of the canvas area.
-    ///
-    /// The one command that genuinely belongs to the smaller rectangle is Zoom
-    /// to Selection, and it asks for it by name: see [`Chrome::frame_selection`].
     /// Publish the live tool session's geometry into the canvas sessions the
     /// overlays are drawn from (card 012).
     ///
@@ -1564,14 +1663,28 @@ impl Chrome {
     /// document's, so they outlive a tool switch), each with the colour of a
     /// 1x1 composite at it — an edit under a point shows in its row on the
     /// next frame. No document, no rows.
+    ///
+    /// W5-F: each readout is a 1x1 composite, which the compositor quantises
+    /// to a whole tile — so the rows are re-read only when the document's
+    /// content ([`document_signature`]), the document or a point moved,
+    /// never on an idle frame or a colour-well drag.
     fn refresh_sampler_colours(&mut self, editor: &Editor) {
         let Some(doc) = editor.active() else {
             self.workspace.info.samplers.clear();
+            self.samplers_read_at = None;
             return;
         };
         if doc.samplers().is_empty() && self.workspace.info.samplers.is_empty() {
+            self.samplers_read_at = None;
             return;
         }
+        let key = (document_signature(doc), doc.id(), doc.samplers().to_vec());
+        if self.samplers_read_at.as_ref() == Some(&key)
+            && self.workspace.info.samplers.len() == key.2.len()
+        {
+            return;
+        }
+        self.sampler_composites += doc.samplers().len();
         self.workspace.info.samplers = doc
             .samplers()
             .iter()
@@ -1580,6 +1693,7 @@ impl Chrome {
                 color: document_colour_at(doc, p.x.floor() as i64, p.y.floor() as i64),
             })
             .collect();
+        self.samplers_read_at = Some(key);
     }
 
     /// XB: publish (or clear, with `None`) the live tool's pointer readout —
@@ -1606,7 +1720,7 @@ impl Chrome {
             return;
         };
         let camera = crate::tool_input::canvas_camera_of(&doc.camera);
-        let viewport = crate::tool_input::canvas_viewport(doc.camera.viewport_size);
+        let viewport = crate::tool_input::canvas_viewport(&doc.camera);
         let pointer =
             crate::interaction_geometry::document_to_screen(&camera, &viewport, readout.anchor);
         if !pointer.is_finite() {
@@ -1686,7 +1800,7 @@ impl Chrome {
             return;
         };
         let camera = crate::tool_input::canvas_camera_of(&doc.camera);
-        let viewport = crate::tool_input::canvas_viewport(doc.camera.viewport_size);
+        let viewport = crate::tool_input::canvas_viewport(&doc.camera);
         let style = CanvasStyle::from_context(ctx);
         let layout = HandleLayout::default();
         // The extras' layer, painted after them: the handles sit over the
@@ -1982,17 +2096,66 @@ impl Chrome {
         if w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 {
             self.workspace.viewport = (w, h);
         }
+        let style = ui::canvas::CanvasStyle::from_context(ctx);
+        let canvas = if self.workspace.view_flags.get(ui::ViewFlag::Rulers) {
+            let t = style.ruler_thickness_pt;
+            let t = if t.is_finite() { t.max(0.0) } else { 0.0 };
+            egui::Rect::from_min_max(content.min + egui::vec2(t, t), content.max)
+        } else {
+            content
+        };
         let geometry = FrameGeometry {
             surface: ctx.screen_rect(),
             content,
+            canvas,
             ppp: ctx.pixels_per_point(),
-            style: ui::canvas::CanvasStyle::from_context(ctx),
+            style,
         };
         // The host is never drawn by this shell and therefore never learned any
         // of this on its own: left alone it frames documents against its default
-        // 1280x720 viewport, whatever window it is really in.
-        self.sync_canvas_host(geometry.surface, &geometry);
+        // 1280x720 viewport, whatever window it is really in. It is given the
+        // canvas area, the same rectangle the document camera draws into.
+        self.sync_canvas_host(geometry.canvas, &geometry);
         self.frame_geometry = Some(geometry);
+    }
+
+    /// Give `doc`'s camera the canvas area to draw into, on a `surface_px`
+    /// surface: the last laid-out frame's area ([`Chrome::canvas_area_px`],
+    /// cut back to the surface), or the whole surface before any frame has
+    /// been laid out. The shell calls this every frame for the active document
+    /// and for every document on a resize; see
+    /// [`crate::interaction_geometry::CanvasPlacement`] for the fit rules.
+    pub fn place_canvas(&mut self, doc: &mut crate::doc::OpenDocument, surface_px: glam::Vec2) {
+        let measured = self.canvas_area_px().and_then(|a| a.within(surface_px));
+        let (area, measured) = match measured {
+            Some(area) => (area, true),
+            None => (
+                crate::interaction_geometry::CanvasArea::whole(surface_px),
+                false,
+            ),
+        };
+        self.canvas_placement.place(doc, area, measured);
+    }
+
+    /// The canvas area the last laid-out frame left between the panels, in
+    /// physical surface pixels — the document camera's viewport. `None` until a
+    /// frame has been drawn (the shell then falls back to the whole surface
+    /// and keeps a new document's fit pending), or when the panels left no
+    /// area at all.
+    pub fn canvas_area_px(&self) -> Option<crate::interaction_geometry::CanvasArea> {
+        let frame = self.frame_geometry?;
+        let origin = (frame.canvas.min - frame.surface.min) * frame.ppp;
+        let size = frame.canvas.size() * frame.ppp;
+        (origin.x.is_finite()
+            && origin.y.is_finite()
+            && size.x.is_finite()
+            && size.y.is_finite()
+            && size.x >= 1.0
+            && size.y >= 1.0)
+            .then(|| crate::interaction_geometry::CanvasArea {
+                origin: glam::Vec2::new(origin.x, origin.y),
+                size: glam::Vec2::new(size.x, size.y),
+            })
     }
 
     /// Point the `ui` canvas host at `rect`, measured in the window `geometry`
@@ -2015,52 +2178,18 @@ impl Chrome {
 
     /// View ▸ Zoom to Selection, framed where the user can see it.
     ///
-    /// Every other camera command this chrome routes is about the whole
-    /// picture, so the window is the right rectangle for all of them. This one
-    /// is about *showing the user something*, and the shell paints its docks
-    /// over the window: measured against the surface, a selection is centred on
-    /// the window and its leading edges end up behind the tool rail and the
-    /// options bar. With every dock open in a 1400x900 window that hid ~27
-    /// points of a 40x40 selection's left edge and ~29 of its top;
-    /// `zoom_to_selection_frames_the_selection_where_the_docks_are_not`
-    /// measures the same thing from the camera the shell renders with.
-    ///
-    /// So the zoom is measured against the content rectangle, and the centre is
-    /// then translated back into the surface-centred camera the shell renders
-    /// from. [`render::Camera::screen_to_image`] puts `center` at the middle of
-    /// the *surface*, so to land a document point `p` at the middle of the
-    /// content rectangle the camera has to be centred at
-    /// `p - (content_centre - surface_centre) / zoom`.
+    /// The `ui` canvas host is synced to the canvas area every frame
+    /// ([`Chrome::record_viewport`]) and the document camera the shell renders
+    /// from is centred in that same area, so the host's framing lands the
+    /// selection between the docks with no correction. The camera that the
+    /// host moved is read back into `view_center` by `Workspace::absorb`, and
+    /// `harvest` reports that to the shell; a refusal (nothing selected)
+    /// moves nothing.
     fn frame_selection(&mut self) {
         let intent = ui::Intent::Action(ui::menu::MenuAction::Zoom(
             ui::menu::ZoomCommand::ToSelection,
         ));
-        let Some(geometry) = self.frame_geometry else {
-            // Nothing has been drawn yet, so there is no content rectangle to
-            // frame against. Perform it plainly rather than drop it.
-            self.workspace.absorb(&intent);
-            return;
-        };
-        self.sync_canvas_host(geometry.content, &geometry);
-        let moved = self.workspace.absorb(&intent);
-        self.sync_canvas_host(geometry.surface, &geometry);
-        // Nothing selected: the camera did not move, and shifting it by the
-        // panel offset would pan the image for a command that refused.
-        if !moved {
-            return;
-        }
-        let zoom = self.workspace.canvas.view.camera.zoom;
-        if !(zoom.is_finite() && zoom > 0.0) {
-            return;
-        }
-        let offset = ((geometry.content.center() - geometry.surface.min) * geometry.ppp
-            - geometry.surface.size() * (geometry.ppp * 0.5))
-            / zoom;
-        self.workspace.canvas.view.camera.center -= glam::Vec2::new(offset.x, offset.y);
-        // `Workspace::absorb_action` read the camera back into `view_center`
-        // before this correction, and `harvest` reports *that* to the shell.
-        let center = self.workspace.canvas.view.camera.center;
-        self.workspace.view_center = (center.x, center.y);
+        self.workspace.absorb(&intent);
     }
 
     /// `Ctrl+2`…`Ctrl+9`: isolate the channel the Channels panel prints that
@@ -3691,9 +3820,18 @@ mod tests {
     fn extras_frame_of(on: &[ui::ViewFlag], zoom: f32, rgba: &[u8]) -> ExtrasFrame {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("a.png");
+        // A square document whose side follows the pixels handed in (8x8 for
+        // the default fixture; the grid tests pass a larger one, because the
+        // grid is drawn over the document only).
+        let side = ((rgba.len() / 4) as f64).sqrt() as u32;
+        assert_eq!(
+            (side * side * 4) as usize,
+            rgba.len(),
+            "square RGBA fixture"
+        );
         std::fs::write(
             &p,
-            raster::encode(raster::ExportFormat::Png, 8, 8, rgba).unwrap(),
+            raster::encode(raster::ExportFormat::Png, side, side, rgba).unwrap(),
         )
         .unwrap();
         let mut editor = editor(&dir.path().join("config"));
@@ -3702,7 +3840,7 @@ mod tests {
             let doc = editor.active_mut().unwrap();
             doc.set_viewport(glam::Vec2::new(1400.0, 900.0));
             doc.camera.zoom = zoom;
-            doc.camera.center = glam::Vec2::new(4.0, 4.0);
+            doc.camera.center = glam::Vec2::splat(side as f32 / 2.0);
         }
         let mut chrome = Chrome::new();
         for flag in EXTRAS {
@@ -3822,11 +3960,12 @@ mod tests {
     }
 
     /// W3-A: View ▸ Grid at 100% paints the document grid — at the default
-    /// 64 px spacing a 1400x900 view crosses well over a dozen major lines —
-    /// and unticked paints none.
+    /// 64 px spacing a 640x640 document crosses well over a dozen major
+    /// lines — and unticked paints none. The grid covers the document only
+    /// (Photopea), so the fixture is a document, not the 8x8 swatch.
     #[test]
     fn view_grid_paints_grid_lines_at_100_percent() {
-        let on = extras_frame(&[ui::ViewFlag::Grid], 1.0);
+        let on = extras_frame_of(&[ui::ViewFlag::Grid], 1.0, &vec![9u8; 640 * 640 * 4]);
         let major = segments_in(&on.shapes, on.style.grid_major, on.content);
         assert!(major.len() >= 12, "only {} major grid lines", major.len());
         let off = extras_frame(&[], 1.0);
@@ -4105,7 +4244,11 @@ mod tests {
     /// scrim in paint order, and the scrim before the dialog's text.
     #[test]
     fn view_extras_paint_under_an_open_dialog_and_its_scrim() {
-        let mut frame = extras_frame(&[ui::ViewFlag::Grid, ui::ViewFlag::LayerEdges], 1.0);
+        let mut frame = extras_frame_of(
+            &[ui::ViewFlag::Grid, ui::ViewFlag::LayerEdges],
+            1.0,
+            &vec![9u8; 640 * 640 * 4],
+        );
         let ctx = egui::Context::default();
         install_theme(&ctx, design::Theme::Dark);
         frame.chrome.open_new_document_dialog();
@@ -7122,9 +7265,19 @@ mod tests {
         assert_eq!(chrome.workspace().histogram.generation(), None);
         assert_eq!(chrome.workspace().info.sampled, None);
 
-        // One frame, with the pointer over the middle of the window — where
-        // the freshly opened image is centred.
-        let centre = egui::pos2(700.0, 450.0);
+        // A layout frame, then the document placed in the canvas area it left,
+        // as `Shell::redraw` does; then a frame with the pointer over the
+        // middle of the canvas area — where the freshly opened image is
+        // centred.
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            chrome.ui(ctx, &mut ed);
+        });
+        chrome.place_canvas(ed.active_mut().unwrap(), glam::Vec2::new(1400.0, 900.0));
+        let centre = chrome
+            .frame_geometry
+            .expect("a frame was drawn")
+            .canvas
+            .center();
         let full = ctx.run(raw_input(vec![egui::Event::PointerMoved(centre)]), |ctx| {
             chrome.ui(ctx, &mut ed);
         });
@@ -7858,21 +8011,23 @@ mod tests {
             "the canvas host still thinks the window is {:?}",
             viewport.surface_pt()
         );
-        // ...and its viewport is the *whole* window, because that is the
-        // rectangle `render::Camera` centres the image on and spans with it.
-        // Handing the host the smaller content rectangle instead is what made
-        // Fill Screen come out smaller than Fit on Screen.
+        // ...and its viewport is the canvas area the docks left, because that
+        // is the rectangle `render::Camera` centres the image on and draws
+        // into (`Chrome::place_canvas`). The host and the camera dividing by
+        // different rectangles is what once made Fill Screen come out smaller
+        // than Fit on Screen.
+        let geometry = chrome.frame_geometry.expect("a frame was drawn");
         assert_eq!(
             viewport.size_pt(),
-            glam::Vec2::new(1400.0, 900.0),
+            glam::Vec2::new(geometry.canvas.width(), geometry.canvas.height()),
             "the canvas host is framing against a rectangle the shell does not \
-             render from: insets {:?}",
+             render into: insets {:?}",
             viewport.insets()
         );
-        // The chrome's own strips are still measured — they are what the
-        // Navigator draws and what Zoom to Selection frames against — they are
-        // just not the same rectangle.
-        let geometry = chrome.frame_geometry.expect("a frame was drawn");
+        assert_eq!(
+            viewport.center_pt(),
+            glam::Vec2::new(geometry.canvas.center().x, geometry.canvas.center().y),
+        );
         assert!(
             geometry.content.height() < 900.0 && geometry.content.width() < 1400.0,
             "the menu, status strips and docks reserved nothing: {:?}",
@@ -7886,12 +8041,13 @@ mod tests {
     }
 
     /// The document camera the shell renders from, as `Shell::redraw` builds
-    /// it: the whole surface, in physical pixels.
-    fn render_camera(editor: &Editor, geometry: FrameGeometry) -> render::Camera {
+    /// it: the canvas area the chrome's last frame left, in physical pixels.
+    fn render_camera(editor: &Editor, chrome: &Chrome) -> render::Camera {
         let open = editor.active().expect("a document is open");
         let mut camera = open.camera.clone();
-        camera.viewport_size =
-            glam::Vec2::new(geometry.surface.width(), geometry.surface.height()) * geometry.ppp;
+        let area = chrome.canvas_area_px().expect("a frame was drawn");
+        camera.viewport_origin = area.origin;
+        camera.viewport_size = area.size;
         camera
     }
 
@@ -7930,9 +8086,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ed = wide_document(dir.path());
 
-        let (fill, chrome) = view_item(&mut ed, M::Zoom(Z::FillScreen));
+        let (fill, mut chrome) = view_item(&mut ed, M::Zoom(Z::FillScreen));
         let fill_zoom = fill.set_zoom.expect("Fill Screen reports a zoom");
-        // The Fit this application actually performs, on this same editor.
+        // The Fit this application actually performs, on this same editor,
+        // with the document placed in the canvas area as `Shell::redraw`
+        // places it.
+        chrome.place_canvas(ed.active_mut().unwrap(), glam::Vec2::new(1400.0, 900.0));
         ed.dispatch(crate::Action::ZoomFit).unwrap();
         let fit_zoom = ed.active().unwrap().camera.zoom;
         assert!(
@@ -7943,24 +8102,28 @@ mod tests {
         // ...and it fills: at that zoom the image covers every point of the
         // canvas area the user can see, with nothing of the backdrop left.
         let geometry = chrome.frame_geometry.expect("a frame was drawn");
-        let mut camera = render_camera(&ed, geometry);
+        let mut camera = render_camera(&ed, &chrome);
         camera.zoom = fill_zoom;
         let (cx, cy) = fill.set_view_center.expect("Fill Screen reports a centre");
         camera.center = glam::Vec2::new(cx, cy);
         let ppp = geometry.ppp;
         let top_left = camera.screen_to_image(glam::Vec2::new(
-            (geometry.content.min.x - geometry.surface.min.x) * ppp,
-            (geometry.content.min.y - geometry.surface.min.y) * ppp,
+            (geometry.canvas.min.x - geometry.surface.min.x) * ppp,
+            (geometry.canvas.min.y - geometry.surface.min.y) * ppp,
         ));
         let bottom_right = camera.screen_to_image(glam::Vec2::new(
-            (geometry.content.max.x - geometry.surface.min.x) * ppp,
-            (geometry.content.max.y - geometry.surface.min.y) * ppp,
+            (geometry.canvas.max.x - geometry.surface.min.x) * ppp,
+            (geometry.canvas.max.y - geometry.surface.min.y) * ppp,
         ));
+        // Within the host's framing margin: `ui::CanvasCamera` frames Fill with
+        // the same `FIT_MARGIN` as Fit, which leaves a hairline (1% of a side)
+        // of backdrop; the defect this pins was a whole strip of it.
+        let tol = glam::Vec2::new(400.0, 300.0) * ui::canvas::CanvasCamera::FIT_MARGIN;
         assert!(
-            top_left.x >= 0.0
-                && top_left.y >= 0.0
-                && bottom_right.x <= 400.0
-                && bottom_right.y <= 300.0,
+            top_left.x >= -tol.x
+                && top_left.y >= -tol.y
+                && bottom_right.x <= 400.0 + tol.x
+                && bottom_right.y <= 300.0 + tol.y,
             "Fill Screen left backdrop showing: the canvas area spans document \
              {top_left:?}..{bottom_right:?}, outside the 400x300 image"
         );
@@ -7968,11 +8131,11 @@ mod tests {
 
     #[test]
     fn zoom_to_selection_frames_the_selection_where_the_docks_are_not() {
-        // The camera the shell renders from is centred on the *window*, and the
-        // docks are painted over it. Framing the selection against the window
-        // therefore hides its leading edges behind the tool rail and the
-        // options bar — measured at ~27 points on the left and ~29 on the top
-        // for this very selection.
+        // The camera the shell renders from is centred in the canvas area the
+        // docks leave. Framing the selection against the window instead hid
+        // its leading edges behind the tool rail and the options bar —
+        // measured at ~27 points on the left and ~29 on the top for this very
+        // selection.
         use ui::menu::MenuAction as M;
         use ui::menu::ZoomCommand as Z;
         let dir = tempfile::tempdir().unwrap();
@@ -7980,7 +8143,7 @@ mod tests {
 
         let (out, chrome) = view_item(&mut ed, M::Zoom(Z::ToSelection));
         let geometry = chrome.frame_geometry.expect("a frame was drawn");
-        let mut camera = render_camera(&ed, geometry);
+        let mut camera = render_camera(&ed, &chrome);
         camera.zoom = out.set_zoom.expect("Zoom to Selection reports a zoom");
         let (cx, cy) = out
             .set_view_center
@@ -7990,12 +8153,12 @@ mod tests {
         // What the *visible* canvas rectangle shows, in document pixels.
         let ppp = geometry.ppp;
         let top_left = camera.screen_to_image(glam::Vec2::new(
-            (geometry.content.min.x - geometry.surface.min.x) * ppp,
-            (geometry.content.min.y - geometry.surface.min.y) * ppp,
+            (geometry.canvas.min.x - geometry.surface.min.x) * ppp,
+            (geometry.canvas.min.y - geometry.surface.min.y) * ppp,
         ));
         let bottom_right = camera.screen_to_image(glam::Vec2::new(
-            (geometry.content.max.x - geometry.surface.min.x) * ppp,
-            (geometry.content.max.y - geometry.surface.min.y) * ppp,
+            (geometry.canvas.max.x - geometry.surface.min.x) * ppp,
+            (geometry.canvas.max.y - geometry.surface.min.y) * ppp,
         ));
         assert!(
             top_left.x <= 100.0
@@ -8058,6 +8221,258 @@ mod tests {
             "Zoom to Selection panned to ({cx}, {cy}) with nothing selected; \
              the camera was at {before:?}"
         );
+    }
+
+    /// A `w`x`h` PNG opened in a fresh editor, and a 1440x900 window's worth
+    /// of frames driven exactly as `Shell::redraw` drives them: place the
+    /// active document in the chrome's last canvas area (the whole surface
+    /// before the first layout), then lay the chrome out. The default docks
+    /// are open.
+    fn opened_in_a_1440_window(dir: &std::path::Path, w: u32, h: u32) -> (Editor, Chrome) {
+        let path = dir.join("scene.png");
+        std::fs::write(
+            &path,
+            raster::encode(
+                raster::ExportFormat::Png,
+                w,
+                h,
+                &vec![200u8; (w * h * 4) as usize],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut ed = editor(&dir.join("config"));
+        ed.open_path(&path).unwrap();
+        let mut chrome = Chrome::new();
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let surface = glam::Vec2::new(1440.0, 900.0);
+        for _ in 0..3 {
+            chrome.place_canvas(ed.active_mut().unwrap(), surface);
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    chrome.ui(ctx, &mut ed);
+                },
+            );
+        }
+        chrome.place_canvas(ed.active_mut().unwrap(), surface);
+        (ed, chrome)
+    }
+
+    /// W5-A: a 320x180 image opened in a 1440x900 window is centred in the
+    /// canvas area the docks leave — within a pixel of its centre — and not
+    /// on the window's centre, where its right part went under the docks.
+    /// Measured through the camera the shell renders with, the viewport every
+    /// overlay maps through, and a real marquee gesture through the pointer
+    /// route.
+    #[test]
+    fn an_opened_image_is_centred_in_the_canvas_area_not_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, chrome) = opened_in_a_1440_window(dir.path(), 320, 180);
+        let area = chrome.canvas_area_px().expect("a frame was laid out");
+        // The default docks really take the right of the window: the canvas
+        // area's centre is well left of the window's.
+        assert!(
+            area.center().x < 720.0 - 100.0,
+            "the default docks left the canvas area {area:?}"
+        );
+        // View > Rulers is on by default, and the rulers are painted over the
+        // top and left of what the docks left: the canvas area starts past
+        // them, so no image pixel is fitted or centred under a ruler.
+        let frame = chrome.frame_geometry.expect("a frame was laid out");
+        assert!(chrome.workspace().view_flags.get(ui::ViewFlag::Rulers));
+        let t = frame.style.ruler_thickness_pt;
+        assert!(t > 0.0);
+        assert_eq!(
+            area.origin,
+            glam::Vec2::new(frame.content.min.x + t, frame.content.min.y + t) * frame.ppp,
+            "the canvas area does not start past the ruler gutters"
+        );
+        let doc = ed.active().unwrap();
+        assert_eq!(doc.camera.zoom, 1.0, "a small image opens at 100%");
+        assert_eq!(doc.camera.viewport_origin, area.origin);
+        assert_eq!(doc.camera.viewport_size, area.size);
+
+        // Where the renderer draws the image's corners and centre.
+        let camera = crate::tool_input::canvas_camera_of(&doc.camera);
+        let viewport = crate::tool_input::canvas_viewport(&doc.camera);
+        let to_screen =
+            |p: glam::Vec2| crate::interaction_geometry::document_to_screen(&camera, &viewport, p);
+        let (tl, br) = (
+            to_screen(glam::Vec2::ZERO),
+            to_screen(glam::Vec2::new(320.0, 180.0)),
+        );
+        let centre = (tl + br) * 0.5;
+        assert!(
+            (centre - area.center()).length() <= 1.0,
+            "the image is centred on {centre:?}, not the canvas area's {:?}",
+            area.center()
+        );
+        assert!(
+            (centre - glam::Vec2::new(720.0, 450.0)).length() > 50.0,
+            "the image is still centred on the window"
+        );
+        // Nothing of it under a dock: it lies inside the canvas area.
+        let far = area.origin + area.size;
+        assert!(
+            tl.x >= area.origin.x && tl.y >= area.origin.y && br.x <= far.x && br.y <= far.y,
+            "the image {tl:?}..{br:?} leaves the canvas area {area:?}"
+        );
+        // The renderer's own mapping agrees: the area's centre is the image's.
+        let under = doc.camera.screen_to_image(area.center());
+        assert!(
+            (under - glam::Vec2::new(160.0, 90.0)).length() <= 1.0,
+            "{under:?}"
+        );
+
+        // A pointer press at the canvas area's centre lands on the image's
+        // centre: a marquee dragged from there starts at (160, 90).
+        ed.set_tool(tools::ToolId::RectMarquee);
+        let mut pointer = crate::tool_input::ToolPointer::new();
+        let start = area.center();
+        for (phase, at) in [
+            (ui::canvas::PointerPhase::Down, start),
+            (
+                ui::canvas::PointerPhase::Move,
+                start + glam::Vec2::new(10.0, 10.0),
+            ),
+            (
+                ui::canvas::PointerPhase::Up,
+                start + glam::Vec2::new(20.0, 20.0),
+            ),
+        ] {
+            pointer.handle(&mut ed, ui::canvas::PointerInput::at(phase, at), false, &[]);
+        }
+        let (min, max) = ed
+            .active()
+            .unwrap()
+            .document
+            .selection
+            .bounds()
+            .expect("the marquee selected");
+        assert_eq!(
+            (min.x, min.y, max.x, max.y),
+            (160, 90, 180, 110),
+            "a press at the canvas area's centre did not land on the image's centre"
+        );
+    }
+
+    /// W5-A: View > Fit on Screen fits the image inside the canvas area — a
+    /// 3628x2041 scene, which fitted against the window ran under the docks.
+    /// And Tab (panels hidden, so the area grows) keeps the image centre in the
+    /// middle of the new area without re-fitting.
+    #[test]
+    fn fit_on_screen_fits_the_canvas_area_and_a_panel_toggle_keeps_the_centre() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, mut chrome) = opened_in_a_1440_window(dir.path(), 3628, 2041);
+        let area = chrome.canvas_area_px().expect("a frame was laid out");
+        ed.dispatch(crate::Action::ZoomFit).unwrap();
+        let doc = ed.active().unwrap();
+        let want = (area.size.x / 3628.0).min(area.size.y / 2041.0);
+        assert!(
+            (doc.camera.zoom - want).abs() < 1e-5,
+            "Fit on Screen zoomed to {}, the canvas area fits {want}",
+            doc.camera.zoom
+        );
+        let camera = crate::tool_input::canvas_camera_of(&doc.camera);
+        let viewport = crate::tool_input::canvas_viewport(&doc.camera);
+        let tl =
+            crate::interaction_geometry::document_to_screen(&camera, &viewport, glam::Vec2::ZERO);
+        let br = crate::interaction_geometry::document_to_screen(
+            &camera,
+            &viewport,
+            glam::Vec2::new(3628.0, 2041.0),
+        );
+        let far = area.origin + area.size;
+        assert!(
+            tl.x >= area.origin.x - 0.5
+                && tl.y >= area.origin.y - 0.5
+                && br.x <= far.x + 0.5
+                && br.y <= far.y + 0.5,
+            "the fitted image {tl:?}..{br:?} leaves the canvas area {area:?}"
+        );
+
+        // The area moves (as Tab hiding the docks moves it): no re-fit, and the
+        // document point that was in the middle of the area is in the middle
+        // of the new one.
+        let (zoom, center) = (doc.camera.zoom, doc.camera.center);
+        let wider = crate::interaction_geometry::CanvasArea {
+            origin: glam::Vec2::ZERO,
+            size: glam::Vec2::new(1440.0, 900.0),
+        };
+        chrome
+            .canvas_placement
+            .place(ed.active_mut().unwrap(), wider, true);
+        let doc = ed.active().unwrap();
+        assert_eq!(doc.camera.zoom, zoom, "a panel toggle re-fitted");
+        let middle = doc.camera.screen_to_image(wider.center());
+        assert!(
+            (middle - center).length() < 1e-3,
+            "{middle:?} vs {center:?}"
+        );
+    }
+
+    /// W5-A: View > Zoom In / Zoom Out (and Ctrl+= / Ctrl+-, the same
+    /// actions) zoom about the middle of the canvas area, where the image is
+    /// centred. The canvas area starts past the tool column, the bars and the
+    /// rulers, so anchoring at half its size (a point up and left of its
+    /// middle) walked the image off centre on every step.
+    #[test]
+    fn view_zoom_in_and_out_keep_the_image_centred_in_the_canvas_area() {
+        use ui::menu::MenuAction as M;
+        use ui::menu::ZoomCommand as Z;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, chrome) = opened_in_a_1440_window(dir.path(), 320, 180);
+        let area = chrome.canvas_area_px().expect("a frame was laid out");
+        assert!(
+            area.origin.x > 1.0 && area.origin.y > 1.0,
+            "the canvas area {area:?} does not start past the chrome"
+        );
+        let image_centre = |ed: &Editor| {
+            let doc = ed.active().unwrap();
+            let camera = crate::tool_input::canvas_camera_of(&doc.camera);
+            let viewport = crate::tool_input::canvas_viewport(&doc.camera);
+            let tl = crate::interaction_geometry::document_to_screen(
+                &camera,
+                &viewport,
+                glam::Vec2::ZERO,
+            );
+            let br = crate::interaction_geometry::document_to_screen(
+                &camera,
+                &viewport,
+                glam::Vec2::new(320.0, 180.0),
+            );
+            (tl + br) * 0.5
+        };
+        assert!((image_centre(&ed) - area.center()).length() <= 1.0);
+        for (step, zoom) in [Z::In, Z::In, Z::In, Z::Out, Z::Out, Z::Out, Z::Out]
+            .into_iter()
+            .enumerate()
+        {
+            // The menu route: the pick the menu bar makes, then the dispatch.
+            let intent = ui::Intent::Action(M::Zoom(zoom));
+            let Some(crate::menu_bridge::Pick::Action(action)) =
+                crate::menu_bridge::pick(&intent, &ed)
+            else {
+                panic!("View > Zoom {zoom:?} is not an application action");
+            };
+            let before = ed.active().unwrap().camera.zoom;
+            ed.dispatch(action).unwrap();
+            assert_ne!(ed.active().unwrap().camera.zoom, before, "step {step}");
+            let centre = image_centre(&ed);
+            assert!(
+                (centre - area.center()).length() <= 1.0,
+                "after step {step} ({zoom:?}) the image is centred on {centre:?}, not the canvas area's {:?}",
+                area.center()
+            );
+        }
     }
 
     /// Run one frame, then absorb `action` as the menu bar would have.
@@ -9261,5 +9676,108 @@ mod tests {
                 "layer {id} of the first document is still uploaded"
             );
         }
+    }
+
+    /// W5-F: thirty frames of a colour-well drag — the shell hands each
+    /// frame's `ChromeOutput::set_foreground` to `Editor::set_foreground`,
+    /// and a brush-size drag lands in `set_brush` — build ZERO composite
+    /// previews (each one reads the whole canvas), capture no History
+    /// thumbnail and run no Layers fingerprint pass; one real edit
+    /// afterwards builds exactly one.
+    #[test]
+    fn a_colour_slider_drag_recomposites_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, ids) = editor_with_layers(dir.path(), 2);
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        for _ in 0..4 {
+            thumb_frame(&ctx, &mut chrome, &mut ed);
+        }
+        let builds = chrome.preview_builds;
+        let passes = chrome.thumb_passes;
+        assert!(builds >= 1, "fixture: the preview was never built");
+        let revision = ed.revision();
+        for i in 0..30 {
+            let v = i as f32 / 30.0;
+            ed.set_foreground([v, 1.0 - v, 0.5, 1.0]);
+            let mut brush = *ed.brush();
+            brush.size = 10.0 + i as f32;
+            ed.set_brush(brush);
+            thumb_frame(&ctx, &mut chrome, &mut ed);
+        }
+        assert!(
+            ed.revision() > revision,
+            "the drag moved the editor revision"
+        );
+        assert_eq!(
+            chrome.preview_builds, builds,
+            "a colour drag recomposited the canvas preview"
+        );
+        assert_eq!(
+            chrome.thumb_passes, passes,
+            "a colour drag re-fingerprinted the layers"
+        );
+
+        paint_grey_through_editor(&mut ed, ids[1], 77);
+        thumb_frame(&ctx, &mut chrome, &mut ed);
+        thumb_frame(&ctx, &mut chrome, &mut ed);
+        assert_eq!(chrome.preview_builds, builds + 1, "one edit, one preview");
+        assert_eq!(
+            chrome.thumb_passes,
+            passes + 1,
+            "one edit, one fingerprint pass"
+        );
+    }
+
+    /// W5-F: the Colour Sampler rows composite (one 1x1, tile-quantised
+    /// composite per point) only when the document's pixels, the document or
+    /// a point moved: idle frames and a colour drag composite zero; a paint
+    /// under the points — even one written straight into the document,
+    /// bypassing the editor — re-reads them on the next frame.
+    #[test]
+    fn colour_samplers_composite_nothing_while_nothing_moved() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, ids) = editor_with_layers(dir.path(), 2);
+        ed.active_mut().unwrap().samplers = vec![
+            glam::Vec2::new(10.5, 10.5),
+            glam::Vec2::new(200.5, 20.5),
+            glam::Vec2::new(40.5, 150.5),
+            glam::Vec2::new(290.5, 190.5),
+        ];
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        thumb_frame(&ctx, &mut chrome, &mut ed);
+        assert_eq!(
+            chrome.sampler_composites, 4,
+            "the first frame reads each point"
+        );
+        assert_eq!(chrome.workspace.info.samplers.len(), 4);
+        for i in 0..30 {
+            ed.set_foreground([i as f32 / 30.0, 0.0, 0.0, 1.0]);
+            thumb_frame(&ctx, &mut chrome, &mut ed);
+        }
+        assert_eq!(
+            chrome.sampler_composites, 4,
+            "idle frames composited samplers"
+        );
+
+        let before = chrome.workspace.info.samplers[0].color;
+        paint_grey(ed.active_mut().unwrap(), ids[1], 250);
+        thumb_frame(&ctx, &mut chrome, &mut ed);
+        assert_eq!(
+            chrome.sampler_composites, 8,
+            "an edit re-reads every point once"
+        );
+        assert_ne!(
+            chrome.workspace.info.samplers[0].color, before,
+            "the row under the painted tile did not change"
+        );
+
+        // A moved point is a re-read too.
+        ed.active_mut().unwrap().samplers[3] = glam::Vec2::new(5.5, 5.5);
+        thumb_frame(&ctx, &mut chrome, &mut ed);
+        assert_eq!(chrome.sampler_composites, 12);
     }
 }

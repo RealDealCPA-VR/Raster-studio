@@ -7,6 +7,7 @@
 //! never set a value the schema would refuse, and a tool whose schema lacks a
 //! field simply ignores that part of the preset.
 
+use design::{contrast_ratio_over, Srgba, TextSize};
 use tools::{BrushSettings, ToolId};
 
 use crate::tool_options::{OptionValue, ToolOptions};
@@ -169,6 +170,65 @@ impl BrushesState {
     }
 }
 
+/// How much of the brush colour a soft tip's rim shows in its preview, from
+/// the design tokens: the least coverage at which `ink` over `tile` clears
+/// the WCAG floor for a non-text graphic (3:1, the tokens'
+/// [`TextSize::Large`] floor). The fall-off of a soft brush is the whole
+/// point of the preset, so its edge has to read against the tile, not fade
+/// into it — and a theme whose ink cannot clear the floor at all gets a solid
+/// rim rather than a faint one.
+pub fn soft_tip_rim_coverage(ink: Srgba, tile: Srgba) -> f32 {
+    let floor = TextSize::Large.min_contrast_aa();
+    let clears = |a: f32| {
+        let byte = (a * f32::from(ink.a)).round().clamp(0.0, 255.0) as u8;
+        contrast_ratio_over(ink.with_alpha(byte), tile) >= floor
+    };
+    if !clears(1.0) {
+        return 1.0;
+    }
+    // Contrast climbs monotonically with coverage: bisect for the least.
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    for _ in 0..16 {
+        let mid = 0.5 * (lo + hi);
+        if clears(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    hi
+}
+
+/// The alpha each of `rings` nested tip rings is painted at, rim first, so
+/// that the rings *stacked* over one another cover the tile from `rim` (see
+/// [`soft_tip_rim_coverage`]) at the rim up to fully solid at the core, in
+/// even steps.
+///
+/// Painting every ring at `1 / rings` (what the preview did) stacks to only
+/// an eighth at the rim and two thirds at the centre: the soft presets were
+/// nearly invisible.
+pub fn tip_ring_alphas(rings: usize, rim: f32) -> Vec<f32> {
+    if rings <= 1 {
+        return vec![1.0; rings];
+    }
+    let rim = rim.clamp(0.0, 1.0);
+    let coverage = |k: usize| rim + (1.0 - rim) * k as f32 / (rings - 1) as f32;
+    (0..rings)
+        .map(|k| {
+            if k == 0 {
+                return coverage(0);
+            }
+            let below = coverage(k - 1);
+            ((coverage(k) - below) / (1.0 - below).max(f32::EPSILON)).clamp(0.0, 1.0)
+        })
+        .collect()
+}
+
+/// The coverage `alphas` stack to, painted one over another.
+pub fn stacked_coverage(alphas: &[f32]) -> f32 {
+    alphas.iter().fold(0.0, |c, a| c + (1.0 - c) * a)
+}
+
 /// The presets a new install starts with — one per shape of stroke, rather than
 /// a hundred textures nobody has authored yet.
 fn default_presets() -> Vec<BrushPreset> {
@@ -214,6 +274,48 @@ fn default_presets() -> Vec<BrushPreset> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_soft_tips_rings_stack_from_a_legible_rim_to_a_solid_core() {
+        let rim = 0.3;
+        let alphas = tip_ring_alphas(8, rim);
+        assert_eq!(alphas.len(), 8);
+        assert!(alphas[0] >= rim - 1e-6, "{alphas:?}");
+        for k in 1..=8 {
+            let expected = rim + (1.0 - rim) * (k - 1) as f32 / 7.0;
+            assert!(
+                (stacked_coverage(&alphas[..k]) - expected).abs() < 1e-4,
+                "ring {k}: {alphas:?}"
+            );
+        }
+        assert!((stacked_coverage(&alphas) - 1.0).abs() < 1e-4);
+        assert_eq!(tip_ring_alphas(1, rim), vec![1.0]);
+    }
+
+    /// The rim coverage comes from the theme's own colours: the least that
+    /// clears the 3:1 non-text floor, in both themes, and solid when the ink
+    /// cannot clear it at all.
+    #[test]
+    fn the_soft_rim_coverage_is_the_least_that_clears_the_token_floor() {
+        for theme in [design::Theme::Dark, design::Theme::Light] {
+            let t = theme.tokens();
+            let ink = t.palette.text(design::TextRole::Primary);
+            let tile = t.palette.color(design::ColorRole::SurfacePanel);
+            let rim = soft_tip_rim_coverage(ink, tile);
+            let at = |a: f32| contrast_ratio_over(ink.with_alpha((a * 255.0).round() as u8), tile);
+            assert!(at(rim) >= 3.0, "{theme:?}: rim {rim} reads {}", at(rim));
+            assert!(
+                at(rim - 0.02) < 3.0,
+                "{theme:?}: rim {rim} is not the least"
+            );
+            assert!(
+                rim > 1.0 / 8.0,
+                "{theme:?}: rim {rim} is the old faint eighth"
+            );
+        }
+        let grey = Srgba::hex(0x808080);
+        assert_eq!(soft_tip_rim_coverage(grey, grey), 1.0);
+    }
 
     #[test]
     fn the_default_presets_are_named_and_distinct() {

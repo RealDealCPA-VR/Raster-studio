@@ -29,7 +29,7 @@
 //! before anything is read or written and refused with
 //! [`editor_core::CommandError::NotInvertible`].
 
-use editor_core::Command;
+use editor_core::{Command, Selection};
 use filters::{EdgeMode, FilterBuffer};
 use glam::{IVec2, Vec2};
 use layer_model::LayerId;
@@ -886,6 +886,10 @@ pub struct TransformTool {
     parent: Option<glam::Affine2>,
     grabbed: Option<Handle>,
     last: Vec2,
+    /// W5-C: the session began over a pixel selection, so the commit floats
+    /// the selected pixels (Photopea) instead of moving the whole layer, and
+    /// the whole-layer preview lens stays off.
+    floating: bool,
 }
 
 impl Default for TransformTool {
@@ -899,6 +903,7 @@ impl Default for TransformTool {
             layer: None,
             grabbed: None,
             last: Vec2::ZERO,
+            floating: false,
         }
     }
 }
@@ -918,6 +923,88 @@ impl TransformTool {
             return Err(ToolError::Degenerate);
         }
         self.state = Some(TransformState::new(source));
+        Ok(())
+    }
+
+    /// W5-C: start a session from the context alone, before any pointer
+    /// contact: over the explicit pixel selection, else the active layer's
+    /// ink. What a canvas press does when no session is live, and what
+    /// Edit > Free Transform (Ctrl+T) does straight away so the handles are
+    /// on screen before the first click.
+    pub fn begin_from_context(&mut self, ctx: &ToolContext<'_>) -> Result<(), ToolError> {
+        // No session yet: start one over the explicit pixel selection,
+        // else the ACTIVE LAYER'S CONTENT (card 034: a small logo's box
+        // surrounds the logo; a text layer's box surrounds the text) —
+        // the whole canvas only when the layer has no ink to surround.
+        self.layer = ctx.active_layer;
+        self.parent = ctx.active_layer_parent_transform;
+        // Card 036: the selected set, normalized — a participant whose
+        // ancestor is also selected is dropped (its transform moves with
+        // the ancestor; moving both would double it). Locked participants
+        // refuse the whole session up front: all-or-nothing, documented —
+        // a partial commit of a mixed selection is exactly the surprise
+        // this refusal exists to prevent.
+        let mut targets: Vec<LayerId> = Vec::new();
+        for candidate in ctx.selected_layers.clone() {
+            let mut ancestor = ctx.parent_of(candidate);
+            let mut shadowed = false;
+            while let Some(a) = ancestor {
+                if ctx.selected_layers.contains(&a) {
+                    shadowed = true;
+                    break;
+                }
+                ancestor = ctx.parent_of(a);
+            }
+            if shadowed || targets.contains(&candidate) {
+                continue;
+            }
+            targets.push(candidate);
+        }
+        for locked in targets.iter().map(|t| ctx.layer_lock(*t)) {
+            if locked == Some(true) {
+                return Err(ToolError::LayerLocked);
+            }
+        }
+        // The session's representative: the active layer when it
+        // survived normalization, else the set's first participant. The
+        // gizmo (and the single-layer commit path) aims here, so the
+        // recorded parent chain must be THIS layer's — not the context's
+        // active layer's.
+        let representative = if targets.contains(&ctx.active_layer.unwrap_or_default()) {
+            ctx.active_layer
+        } else {
+            targets.first().copied()
+        };
+        self.layer = representative.or(self.layer);
+        // Empty selection (a restored project, say): keep card 035's
+        // context fallback instead of clobbering it with None.
+        self.parent = representative
+            .and_then(|l| ctx.parent_transform_of(l))
+            .or(self.parent);
+        self.targets = targets.clone();
+        let src = match ctx.selection.bounds() {
+            Some((min, max)) => PixelRect::new(
+                min.x as i64,
+                min.y as i64,
+                (max.x - min.x).max(0) as u32,
+                (max.y - min.y).max(0) as u32,
+            ),
+            // The stored extent is tile-aligned (a 64px image in one
+            // 256px tile reads as 256px) — clipping to the canvas keeps
+            // the handles on the picture.
+            None => {
+                let inked = ctx.active_layer_content_bounds.unwrap_or(ctx.canvas);
+                let x0 = inked.x.max(ctx.canvas.x);
+                let y0 = inked.y.max(ctx.canvas.y);
+                let x1 = (inked.x + inked.width as i64).min(ctx.canvas.x + ctx.canvas.width as i64);
+                let y1 =
+                    (inked.y + inked.height as i64).min(ctx.canvas.y + ctx.canvas.height as i64);
+                PixelRect::new(x0, y0, (x1 - x0).max(0) as u32, (y1 - y0).max(0) as u32)
+            }
+        };
+        self.begin(src)?;
+        // W5-C: a session over a selection floats its pixels at commit.
+        self.floating = !self.selection_only && ctx.selection.bounds().is_some();
         Ok(())
     }
 
@@ -983,6 +1070,25 @@ impl TransformTool {
             self.state = None;
             self.grabbed = None;
             return Err(ToolError::not_invertible());
+        }
+
+        // W5-C: a pixel selection floats. The selected pixels are lifted,
+        // carried through the session and laid back over the rest of the
+        // layer, the selection travelling with them: ONE transaction. A
+        // parametric layer keeps its whole-layer transform (floating part of
+        // a text layer would rasterize it), and a mask target keeps the
+        // coverage path below.
+        if ctx.paint_target == PaintTarget::Layer
+            && !ctx.active_layer_parametric
+            && ctx.selection.bounds().is_some()
+            && !selection_covers_all_ink(ctx)
+        {
+            let command = float_selection(ctx, &state, self.mode, "Free Transform");
+            self.state = None;
+            self.grabbed = None;
+            self.floating = false;
+            ctx.emit(command?);
+            return Ok(());
         }
 
         // Card 035: whole-layer move/scale/rotate/flip/skew commits as a
@@ -1148,6 +1254,239 @@ fn union_unclipped(a: PixelRect, b: PixelRect) -> Option<PixelRect> {
     }
     Some(PixelRect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
 }
+
+/// W5-C: `true` when `m` is (numerically) the identity map.
+fn is_identity_affine(m: &glam::Affine2) -> bool {
+    m.abs_diff_eq(glam::Affine2::IDENTITY, 1e-5)
+}
+
+/// W5-C: the session state carried from document space into the layer's own
+/// pixel space through `to_layer` (document -> layer pixels, the shell's
+/// `sample_to_layer`). The document map `H` (source corners -> corners) is
+/// conjugated to `M * H * M^-1` and re-anchored on the axis-aligned box that
+/// covers the mapped source, so the resampler reads the layer's real tiles.
+/// Warp is exact only while `M` keeps axes (translate/scale); a rotated layer
+/// refuses the warp float rather than bending the wrong pixels.
+fn state_in_layer_space(
+    state: &TransformState,
+    mode: TransformMode,
+    to_layer: glam::Affine2,
+) -> Result<(TransformState, TransformMode), ToolError> {
+    if is_identity_affine(&to_layer) {
+        return Ok((state.clone(), mode));
+    }
+    let map = |p: Vec2| to_layer.transform_point2(p);
+    let src = state.source_corners().map(map);
+    let lo = src
+        .iter()
+        .fold(Vec2::splat(f32::INFINITY), |a, b| a.min(*b));
+    let hi = src
+        .iter()
+        .fold(Vec2::splat(f32::NEG_INFINITY), |a, b| a.max(*b));
+    if !lo.is_finite() || !hi.is_finite() {
+        return Err(ToolError::not_invertible());
+    }
+    let x0 = lo.x.floor() as i64;
+    let y0 = lo.y.floor() as i64;
+    let x1 = (hi.x.ceil() as i64).max(x0 + 1);
+    let y1 = (hi.y.ceil() as i64).max(y0 + 1);
+    let source = PixelRect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32);
+    let mut out = TransformState::new(source);
+    out.pivot = map(state.pivot);
+    match state.mesh.filter(|_| mode == TransformMode::Warp) {
+        Some(mesh) => {
+            let m = to_layer.matrix2;
+            if m.x_axis.y.abs() > 1e-5 || m.y_axis.x.abs() > 1e-5 {
+                return Err(ToolError::not_invertible());
+            }
+            let mut points = mesh.points;
+            for row in points.iter_mut() {
+                for p in row.iter_mut() {
+                    *p = map(*p);
+                }
+            }
+            out.mesh = Some(WarpMesh { points });
+            out.corners = [points[0][0], points[0][3], points[3][3], points[3][0]];
+            Ok((out, TransformMode::Warp))
+        }
+        None => {
+            let h = Homography::from_quads(state.source_corners(), state.corners)
+                .ok_or_else(ToolError::not_invertible)?;
+            let back = to_layer.inverse();
+            let mut corners = out.corners;
+            for c in corners.iter_mut() {
+                let doc = back.transform_point2(*c);
+                let moved = h.apply(doc).ok_or_else(ToolError::not_invertible)?;
+                *c = map(moved);
+            }
+            out.corners = corners;
+            // Every non-warp mode resamples through the same homography
+            // branch; Distort names "four free corners", which the
+            // conjugated quad is.
+            Ok((out, TransformMode::Distort))
+        }
+    }
+}
+
+/// W5-C: the selection carried through the same session: an affine
+/// resample of the mask for Scale/Rotate/Skew (the Transform Selection
+/// path), and the coverage plane pushed through the pixel resampler for the
+/// projective modes and Warp, so the marching ants land exactly where the
+/// floated pixels did.
+fn transformed_selection(
+    selection: &Selection,
+    canvas: PixelRect,
+    state: &TransformState,
+    mode: TransformMode,
+) -> Result<Selection, ToolError> {
+    let canvas_rect = selection::rect::Rect::from_xywh(
+        canvas.x as i32,
+        canvas.y as i32,
+        canvas.width,
+        canvas.height,
+    );
+    if matches!(
+        mode,
+        TransformMode::Scale | TransformMode::Rotate | TransformMode::Skew
+    ) {
+        let xf = quad_affine(state.source_corners(), state.corners)
+            .ok_or_else(ToolError::not_invertible)?;
+        return Ok(transform_selection(
+            selection,
+            canvas_rect,
+            xf,
+            selection::transform::ResampleFilter::Bilinear,
+        )?);
+    }
+    let dest = state
+        .dest_bounds_unclipped(mode)
+        .ok_or(ToolError::Degenerate)?;
+    let rect = union_unclipped(state.source, dest).ok_or(ToolError::Degenerate)?;
+    // The same allocation cap every patch obeys.
+    crate::patch::TileBox::covering(rect)?;
+    let mut plane = FilterBuffer::transparent(rect.width, rect.height)?;
+    for y in state.source.y..state.source.bottom() {
+        for x in state.source.x..state.source.right() {
+            let c = selection.coverage_at(IVec2::new(x as i32, y as i32));
+            if c > 0.0 {
+                plane.set((x - rect.x) as u32, (y - rect.y) as u32, [c; 4]);
+            }
+        }
+    }
+    let moved = resample(&plane, rect, state, mode)?;
+    let coverage: Vec<u8> = moved
+        .pixels()
+        .iter()
+        .map(|p| (p[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8)
+        .collect();
+    let mask = editor_core::SelectionMask::new(
+        IVec2::new(rect.x as i32, rect.y as i32),
+        rect.width,
+        rect.height,
+        coverage,
+    )?;
+    Ok(Selection::Mask(mask))
+}
+
+/// A hard-edged rectangular selection that contains every inked pixel of the
+/// active layer selects the whole layer: floating it would resample pixels
+/// for a result the lossless whole-layer transform gives exactly (card 035),
+/// so the commit keeps the layer transform. A partial or soft selection floats.
+fn selection_covers_all_ink(ctx: &ToolContext<'_>) -> bool {
+    let Selection::Rect { min, max } = ctx.selection else {
+        return false;
+    };
+    let Some(ink) = ctx.active_layer_ink_bounds else {
+        return false;
+    };
+    let (ink_max_x, ink_max_y) = (ink.x + i64::from(ink.width), ink.y + i64::from(ink.height));
+    i64::from(min.x) <= ink.x
+        && i64::from(min.y) <= ink.y
+        && i64::from(max.x) >= ink_max_x
+        && i64::from(max.y) >= ink_max_y
+}
+
+/// W5-C: Photopea's floating selection. The selected pixels of the active
+/// layer are LIFTED (weighted by the selection's coverage), carried through
+/// `state` with the patch resampler, and laid back OVER what the lift left
+/// behind: every pixel the selection did not cover stays byte-identical.
+/// The selection travels with them. Both land as ONE undoable transaction
+/// (`label` names it in History). Used by the free transform's commit and by
+/// the Move tool's drag when a selection is active.
+pub fn float_selection(
+    ctx: &mut ToolContext<'_>,
+    state: &TransformState,
+    mode: TransformMode,
+    label: &str,
+) -> Result<Command, ToolError> {
+    let selection = ctx.selection.clone();
+    if selection.bounds().is_none() {
+        return Err(ToolError::Degenerate);
+    }
+    ctx.require_layer_target()?;
+    if let Some(layer) = ctx.active_layer {
+        if ctx.layer_lock(layer) == Some(true) {
+            return Err(ToolError::LayerLocked);
+        }
+    }
+    let target = ctx.pixel_target()?;
+    let key = ctx.pixel_key()?;
+    let to_layer = ctx.sample_to_layer.unwrap_or(glam::Affine2::IDENTITY);
+    let from_layer = to_layer.inverse();
+    let (layer_state, layer_mode) = state_in_layer_space(state, mode, to_layer)?;
+    let dest = layer_state
+        .dest_bounds_unclipped(layer_mode)
+        .ok_or(ToolError::Degenerate)?;
+    let rect = union_unclipped(layer_state.source, dest).ok_or(ToolError::Degenerate)?;
+    let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
+    let prect = patch.rect();
+    let src = patch.buffer().clone();
+    let (w, h) = (src.width(), src.height());
+    // Split the plane: `lifted` carries the selected share of every pixel,
+    // `rest` what the lift leaves behind. Premultiplied, so one scale per
+    // pixel splits colour and alpha together.
+    let mut lifted = FilterBuffer::transparent(w, h)?;
+    let mut rest = src.clone();
+    let mut any = false;
+    let src_box = layer_state.source;
+    for y in src_box.y.max(prect.y)..src_box.bottom().min(prect.bottom()) {
+        for x in src_box.x.max(prect.x)..src_box.right().min(prect.right()) {
+            let doc = from_layer.transform_point2(Vec2::new(x as f32 + 0.5, y as f32 + 0.5));
+            let c = selection.coverage_at(IVec2::new(doc.x.floor() as i32, doc.y.floor() as i32));
+            if c <= 0.0 {
+                continue;
+            }
+            let (lx, ly) = ((x - prect.x) as u32, (y - prect.y) as u32);
+            let p = src.get(lx, ly);
+            lifted.set(lx, ly, p.map(|v| v * c));
+            rest.set(lx, ly, p.map(|v| v * (1.0 - c)));
+            any = true;
+        }
+    }
+    let mut commands = Vec::new();
+    if any {
+        let moved = resample(&lifted, prect, &layer_state, layer_mode)?;
+        let mut out = rest;
+        for (o, m) in out.pixels_mut().iter_mut().zip(moved.pixels()) {
+            let keep = 1.0 - m[3].clamp(0.0, 1.0);
+            for c in 0..4 {
+                o[c] = m[c] + o[c] * keep;
+            }
+        }
+        patch.replace(out)?;
+        let delta = patch.commit(ctx.tiles, key)?;
+        if !delta.is_empty() {
+            commands.push(Command::PaintTiles { target, delta });
+        }
+    }
+    let next = transformed_selection(&selection, ctx.canvas, state, mode)?;
+    commands.push(Command::SetSelection { selection: next });
+    Ok(Command::Transaction {
+        label: label.to_string(),
+        commands,
+    })
+}
+
 impl Tool for TransformTool {
     fn id(&self) -> ToolId {
         ToolId::FreeTransform
@@ -1174,78 +1513,7 @@ impl Tool for TransformTool {
         event: PointerEvent,
     ) -> Result<(), ToolError> {
         if self.state.is_none() {
-            // No session yet: start one over the explicit pixel selection,
-            // else the ACTIVE LAYER'S CONTENT (card 034: a small logo's box
-            // surrounds the logo; a text layer's box surrounds the text) —
-            // the whole canvas only when the layer has no ink to surround.
-            self.layer = ctx.active_layer;
-            self.parent = ctx.active_layer_parent_transform;
-            // Card 036: the selected set, normalized — a participant whose
-            // ancestor is also selected is dropped (its transform moves with
-            // the ancestor; moving both would double it). Locked participants
-            // refuse the whole session up front: all-or-nothing, documented —
-            // a partial commit of a mixed selection is exactly the surprise
-            // this refusal exists to prevent.
-            let mut targets: Vec<LayerId> = Vec::new();
-            for candidate in ctx.selected_layers.clone() {
-                let mut ancestor = ctx.parent_of(candidate);
-                let mut shadowed = false;
-                while let Some(a) = ancestor {
-                    if ctx.selected_layers.contains(&a) {
-                        shadowed = true;
-                        break;
-                    }
-                    ancestor = ctx.parent_of(a);
-                }
-                if shadowed || targets.contains(&candidate) {
-                    continue;
-                }
-                targets.push(candidate);
-            }
-            for locked in targets.iter().map(|t| ctx.layer_lock(*t)) {
-                if locked == Some(true) {
-                    return Err(ToolError::LayerLocked);
-                }
-            }
-            // The session's representative: the active layer when it
-            // survived normalization, else the set's first participant. The
-            // gizmo (and the single-layer commit path) aims here, so the
-            // recorded parent chain must be THIS layer's — not the context's
-            // active layer's.
-            let representative = if targets.contains(&ctx.active_layer.unwrap_or_default()) {
-                ctx.active_layer
-            } else {
-                targets.first().copied()
-            };
-            self.layer = representative.or(self.layer);
-            // Empty selection (a restored project, say): keep card 035's
-            // context fallback instead of clobbering it with None.
-            self.parent = representative
-                .and_then(|l| ctx.parent_transform_of(l))
-                .or(self.parent);
-            self.targets = targets.clone();
-            let src = match ctx.selection.bounds() {
-                Some((min, max)) => PixelRect::new(
-                    min.x as i64,
-                    min.y as i64,
-                    (max.x - min.x).max(0) as u32,
-                    (max.y - min.y).max(0) as u32,
-                ),
-                // The stored extent is tile-aligned (a 64px image in one
-                // 256px tile reads as 256px) — clipping to the canvas keeps
-                // the handles on the picture.
-                None => {
-                    let inked = ctx.active_layer_content_bounds.unwrap_or(ctx.canvas);
-                    let x0 = inked.x.max(ctx.canvas.x);
-                    let y0 = inked.y.max(ctx.canvas.y);
-                    let x1 =
-                        (inked.x + inked.width as i64).min(ctx.canvas.x + ctx.canvas.width as i64);
-                    let y1 = (inked.y + inked.height as i64)
-                        .min(ctx.canvas.y + ctx.canvas.height as i64);
-                    PixelRect::new(x0, y0, (x1 - x0).max(0) as u32, (y1 - y0).max(0) as u32)
-                }
-            };
-            self.begin(src)?;
+            self.begin_from_context(ctx)?;
         }
         let mode = self.mode;
         self.grabbed = self
@@ -1290,6 +1558,7 @@ impl Tool for TransformTool {
         self.layer = None;
         self.parent = None;
         self.targets = Vec::new();
+        self.floating = false;
     }
 
     fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
@@ -1312,7 +1581,9 @@ impl Tool for TransformTool {
             state: state.clone(),
             mode: self.mode,
             active: self.grabbed,
-            layer: self.layer,
+            // W5-C: a floating selection moves only its pixels; naming the
+            // layer would lens the WHOLE layer as the preview.
+            layer: if self.floating { None } else { self.layer },
         })
     }
 }

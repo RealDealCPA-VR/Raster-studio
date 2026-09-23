@@ -4,7 +4,14 @@
 //! *canonical* path where the file still exists, so opening `./photo.png` and
 //! then `/home/me/photo.png` leaves one entry rather than two that look
 //! different and mean the same file. The entry stored is the path the caller
-//! gave, because that is the one the user recognises in a menu.
+//! gave, because that is the one the user recognises in a menu — made
+//! absolute first when it was relative to the working directory (W5-D): a
+//! `photo.png` from a command line means nothing to the next launch, which
+//! starts somewhere else, and would sit beside the absolute entry for the
+//! same file whenever that file has since moved or gone.
+//!
+//! A `--shot` capture run [`RecentFiles::freeze`]s the list: fixtures it opens
+//! must not land in the user's File ▸ Open Recent.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -21,10 +28,40 @@ fn identity(path: &Path) -> PathBuf {
 }
 
 /// Most-recently-opened files, newest first.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RecentFiles {
     entries: Vec<PathBuf>,
+    /// W5-D: set for a `--shot` run — [`RecentFiles::record`] and
+    /// [`RecentFiles::save`] then do nothing. Never persisted.
+    frozen: bool,
+}
+
+/// The on-disk shape: a bare JSON array of paths, as it always was.
+impl Serialize for RecentFiles {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.entries.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for RecentFiles {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(RecentFiles {
+            entries: Vec::<PathBuf>::deserialize(deserializer)?,
+            frozen: false,
+        })
+    }
+}
+
+/// W5-D: the form an entry is stored in — absolute when the caller's path was
+/// relative to the working directory, as given otherwise. `std::path::absolute`
+/// rather than `canonicalize`: it needs no file on disk and on Windows does not
+/// add the verbatim-path prefix Windows canonical paths carry, which a menu
+/// would then show.
+fn stored_form(path: PathBuf) -> PathBuf {
+    if path.has_root() {
+        return path;
+    }
+    std::path::absolute(&path).unwrap_or(path)
 }
 
 impl RecentFiles {
@@ -48,7 +85,10 @@ impl RecentFiles {
     /// Put `path` at the front, removing any earlier mention of the same file
     /// and dropping whatever falls past [`MAX_RECENT_FILES`].
     pub fn record(&mut self, path: impl Into<PathBuf>) {
-        let path = path.into();
+        if self.frozen {
+            return;
+        }
+        let path = stored_form(path.into());
         let id = identity(&path);
         self.entries.retain(|e| identity(e) != id);
         self.entries.insert(0, path);
@@ -63,6 +103,17 @@ impl RecentFiles {
 
     pub fn clear(&mut self) {
         self.entries.clear();
+    }
+
+    /// W5-D: stop recording and saving — what a `--shot` capture run asks
+    /// for, so the fixtures it opens never reach the user's recent list.
+    pub fn freeze(&mut self) {
+        self.frozen = true;
+    }
+
+    /// Whether [`RecentFiles::freeze`] has been called.
+    pub fn is_frozen(&self) -> bool {
+        self.frozen
     }
 
     /// Read the list, treating anything unreadable as an empty one.
@@ -91,6 +142,9 @@ impl RecentFiles {
     }
 
     pub fn save(&self, path: &Path) -> io::Result<()> {
+        if self.frozen {
+            return Ok(());
+        }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -103,6 +157,44 @@ impl RecentFiles {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W5-D: a path relative to the working directory is stored absolute, so
+    /// the next launch (started somewhere else) can still open it, and the
+    /// same file recorded both ways is one entry even when it does not exist.
+    #[test]
+    fn a_relative_path_is_recorded_absolute_and_deduplicates() {
+        let mut r = RecentFiles::new();
+        r.record("w5d-not-on-disk/photo.png");
+        let absolute = std::env::current_dir()
+            .unwrap()
+            .join("w5d-not-on-disk")
+            .join("photo.png");
+        assert_eq!(r.entries(), std::slice::from_ref(&absolute));
+        r.record(absolute.clone());
+        assert_eq!(r.entries(), [absolute], "one entry, not two");
+    }
+
+    #[test]
+    fn a_frozen_list_records_and_saves_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("recent.json");
+        let mut r = RecentFiles::new();
+        r.freeze();
+        r.record("/a/one.png");
+        assert!(r.is_empty());
+        r.save(&file).unwrap();
+        assert!(!file.exists(), "a frozen list never writes");
+    }
+
+    #[test]
+    fn the_file_is_still_a_bare_json_array() {
+        let mut r = RecentFiles::new();
+        r.record("/a/one.png");
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.starts_with('['), "{json}");
+        let back: RecentFiles = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, r);
+    }
 
     #[test]
     fn recording_the_same_file_twice_leaves_one_entry_at_the_front() {

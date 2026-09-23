@@ -206,6 +206,50 @@ pub struct HistoryThumbs {
     /// compacted off the bottom of the stack (or may have been, when the
     /// shift could not be told).
     compacted: bool,
+    /// W5-F: the fingerprints of the journal's commands, memoised across
+    /// captures by the identity of each command's heap payload (see
+    /// [`payload_identity`]) and pruned to the journal at every capture, so
+    /// a capture fingerprints only the commands it has not seen before.
+    memo: std::collections::HashMap<PayloadId, u64>,
+}
+
+/// W5-F: which command a fingerprint was taken of, told without reading its
+/// contents: the variant, the address of its heap payload (a mask's coverage,
+/// a stroke's tile list, a transaction's members, a boxed layer) and that
+/// payload's length.
+///
+/// A command is never edited in place once it is in the history — undo and
+/// redo move it between the stacks, which moves the `Vec`/`Box` header but
+/// never the buffer it points at — so while the command is alive no other
+/// payload can share the address. The memo is pruned to the journal at every
+/// capture that has nothing to redo (see [`Leads::into_kept`]). A stale entry
+/// is read only if a command is freed (a new edit clearing the redo stack, or
+/// compaction) and a later command of the same variant, with a payload of the
+/// same length, is allocated at the freed address before a capture with an
+/// empty redo stack prunes the entry: an undo, a new edit, an undo and
+/// another new edit before one capture. Even then only the picture shown for
+/// that row is affected.
+type PayloadId = (u8, usize, usize);
+
+fn payload_identity(command: &Command) -> Option<PayloadId> {
+    let (tag, at, len) = match command {
+        Command::SetSelection {
+            selection: editor_core::Selection::Mask(mask),
+        } => (1, mask.coverage().as_ptr() as usize, mask.coverage().len()),
+        Command::Transaction { commands, .. } => (2, commands.as_ptr() as usize, commands.len()),
+        Command::CreateLayer { layer } => (3, std::ptr::from_ref(&**layer) as usize, 1),
+        Command::SetLayerKind { kind, .. } => (4, std::ptr::from_ref(&**kind) as usize, 1),
+        Command::PaintTiles { delta, .. }
+        | Command::FillRegion { delta, .. }
+        | Command::ClearRegion { delta, .. } => (5, delta.edits().as_ptr() as usize, delta.len()),
+        Command::ResampleImage { changes, .. } => (6, changes.as_ptr() as usize, changes.len()),
+        // Everything else is a handful of ids and numbers: its bounded
+        // fingerprint is a few dozen bytes of `Debug`, cheaper than a memo.
+        _ => return None,
+    };
+    // An empty buffer's pointer is a dangling placeholder shared by every
+    // empty buffer — no identity at all.
+    (len > 0).then_some((tag, at, len))
 }
 
 /// One stored picture.
@@ -217,41 +261,173 @@ struct Thumb {
     tex: egui::TextureHandle,
 }
 
-/// A stable fingerprint of one command: its full `Debug` form, hashed as it
-/// is written (tile edits carry content hashes, so two different strokes do
-/// not collide), with no string built.
-fn fingerprint(command: &Command) -> u64 {
-    use std::hash::Hasher as _;
-    struct Sink(std::collections::hash_map::DefaultHasher);
-    impl std::fmt::Write for Sink {
-        fn write_str(&mut self, s: &str) -> std::fmt::Result {
-            self.0.write(s.as_bytes());
-            Ok(())
-        }
-    }
-    let mut sink = Sink(std::collections::hash_map::DefaultHasher::new());
-    let _ = std::fmt::write(&mut sink, format_args!("{command:?}"));
-    sink.0.finish()
+/// W5-F: the most bytes one command's fingerprint feeds its hasher.
+///
+/// The fingerprint used to be the command's whole `Debug` form, and a
+/// `SetSelection` carrying a lasso or feathered mask formats every byte of
+/// its coverage — megabytes, for each of up to [`History::limit`] rows, on
+/// the UI thread whenever the preview was rebuilt. A fingerprint only has to
+/// tell neighbouring states apart, so what it reads is bounded: the command
+/// label and shape, tile hashes as `Debug` writes them (a stroke's first
+/// tiles already differ from any other stroke's), a mask's size, bounds and
+/// an evenly spaced sample of its coverage. Past the budget formatting stops.
+const FINGERPRINT_BUDGET: usize = 16 * 1024;
+
+/// How many coverage samples a mask selection contributes.
+const MASK_SAMPLES: usize = 1024;
+
+thread_local! {
+    /// Bytes fed to fingerprint hashers on this thread — the counter the
+    /// bounded-cost gate is tested by.
+    static FINGERPRINT_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Commands fingerprinted on this thread — the counter the memo is
+    /// tested by.
+    static FINGERPRINTED_ROWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// The journal's fingerprints, computed only for the rows a check asks for.
+/// A hasher that stops accepting `Debug` output once its budget is spent
+/// (returning `fmt::Error`, which ends the formatting there and then).
+struct Sink {
+    hasher: std::collections::hash_map::DefaultHasher,
+    budget: usize,
+}
+
+impl Sink {
+    fn feed(&mut self, bytes: &[u8]) -> bool {
+        use std::hash::Hasher as _;
+        let take = bytes.len().min(self.budget);
+        self.hasher.write(&bytes[..take]);
+        self.budget -= take;
+        FINGERPRINT_BYTES.with(|c| c.set(c.get() + take));
+        take == bytes.len()
+    }
+}
+
+impl std::fmt::Write for Sink {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        if self.feed(s.as_bytes()) {
+            Ok(())
+        } else {
+            Err(std::fmt::Error)
+        }
+    }
+}
+
+/// A stable fingerprint of one command, at a bounded cost (see
+/// [`FINGERPRINT_BUDGET`]).
+fn fingerprint(command: &Command) -> u64 {
+    use std::hash::Hasher as _;
+    FINGERPRINTED_ROWS.with(|c| c.set(c.get() + 1));
+    let mut sink = Sink {
+        hasher: std::collections::hash_map::DefaultHasher::new(),
+        budget: FINGERPRINT_BUDGET,
+    };
+    feed_command(command, &mut sink);
+    sink.hasher.finish()
+}
+
+fn feed_command(command: &Command, sink: &mut Sink) {
+    match command {
+        Command::Transaction { label, commands } => {
+            sink.feed(b"Transaction");
+            sink.feed(label.as_bytes());
+            sink.feed(&commands.len().to_le_bytes());
+            for member in commands {
+                if sink.budget == 0 {
+                    break;
+                }
+                feed_command(member, sink);
+            }
+        }
+        Command::SetSelection {
+            selection: editor_core::Selection::Mask(mask),
+        } => {
+            sink.feed(b"SetSelection/Mask");
+            let origin = mask.origin();
+            for v in [origin.x, origin.y] {
+                sink.feed(&v.to_le_bytes());
+            }
+            sink.feed(&mask.width().to_le_bytes());
+            sink.feed(&mask.height().to_le_bytes());
+            match mask.bounds() {
+                Some((min, max)) => {
+                    for v in [min.x, min.y, max.x, max.y] {
+                        sink.feed(&v.to_le_bytes());
+                    }
+                }
+                None => {
+                    sink.feed(b"empty");
+                }
+            }
+            let coverage = mask.coverage();
+            let stride = coverage.len().div_ceil(MASK_SAMPLES).max(1);
+            let sample: Vec<u8> = coverage.iter().step_by(stride).copied().collect();
+            sink.feed(&sample);
+        }
+        other => {
+            let _ = std::fmt::write(sink, format_args!("{other:?}"));
+        }
+    }
+}
+
+/// The journal's fingerprints, computed only for the rows a check asks for
+/// and only for commands the previous captures have not already
+/// fingerprinted (`kept`, carried across captures by [`HistoryThumbs`]).
 struct Leads<'a> {
     journal: Vec<&'a Command>,
     memo: Vec<Option<u64>>,
+    kept: std::collections::HashMap<PayloadId, u64>,
 }
 
 impl<'a> Leads<'a> {
-    fn new(history: &'a History) -> Self {
+    fn new(history: &'a History, kept: std::collections::HashMap<PayloadId, u64>) -> Self {
         let journal: Vec<&Command> = history.journal().collect();
         let memo = vec![None; journal.len()];
-        Self { journal, memo }
+        Self {
+            journal,
+            memo,
+            kept,
+        }
     }
 
     /// The fingerprint of the command that led into row `row` (`row >= 1`).
     fn of_row(&mut self, row: usize) -> Option<u64> {
         let at = row.checked_sub(1)?;
-        let command = self.journal.get(at)?;
-        Some(*self.memo[at].get_or_insert_with(|| fingerprint(command)))
+        let command = *self.journal.get(at)?;
+        if let Some(fp) = self.memo[at] {
+            return Some(fp);
+        }
+        let identity = payload_identity(command);
+        let fp = match identity.and_then(|id| self.kept.get(&id).copied()) {
+            Some(fp) => fp,
+            None => {
+                let fp = fingerprint(command);
+                if let Some(id) = identity {
+                    self.kept.insert(id, fp);
+                }
+                fp
+            }
+        };
+        self.memo[at] = Some(fp);
+        Some(fp)
+    }
+
+    /// The memo to carry to the next capture. With nothing to redo, only
+    /// the commands still in the journal can come back, so everything else
+    /// is dropped and the memo never outgrows the history. With a redo
+    /// stack the undone commands are kept too (they come back on a redo and
+    /// the stack cannot be read past its top); they are dropped at the first
+    /// capture after a new edit clears it.
+    fn into_kept(mut self, redo_depth: usize) -> std::collections::HashMap<PayloadId, u64> {
+        if redo_depth == 0 {
+            let live: std::collections::HashSet<PayloadId> = self
+                .journal
+                .iter()
+                .filter_map(|c| payload_identity(c))
+                .collect();
+            self.kept.retain(|id, _| live.contains(id));
+        }
+        self.kept
     }
 }
 
@@ -310,10 +486,11 @@ impl HistoryThumbs {
                 ..Self::default()
             };
         }
-        let mut leads = Leads::new(history);
+        let mut leads = Leads::new(history, std::mem::take(&mut thumbs.memo));
         thumbs.realign(&mut leads, index, history.limit());
         thumbs.rows.retain(|t| t.index <= last);
         let lead = leads.of_row(index);
+        thumbs.memo = leads.into_kept(history.redo_depth());
         match thumbs.rows.iter_mut().find(|t| t.index == index) {
             Some(t) => {
                 t.tex.set(image, egui::TextureOptions::LINEAR);
@@ -574,6 +751,94 @@ mod tests {
         assert!(HistoryThumbs::texture(&ctx, 1).is_none());
         assert!(HistoryThumbs::texture(&ctx, 2).is_some());
         assert_eq!(HistoryThumbs::opened_row(&ctx), None);
+    }
+
+    /// W5-F: a history of large mask selections is re-fingerprinted at a
+    /// bounded cost per capture — not by formatting every coverage byte of
+    /// every stored row — and distinct masks still tell their rows apart.
+    #[test]
+    fn a_history_of_large_mask_selections_fingerprints_at_a_bounded_cost() {
+        let side = 1024u32;
+        let mask = |x0: i32| {
+            let mut coverage = vec![0u8; (side * side) as usize];
+            for y in 0..side as usize {
+                for x in (x0 as usize)..(x0 as usize + 200) {
+                    coverage[y * side as usize + x] = 255;
+                }
+            }
+            Command::SetSelection {
+                selection: editor_core::Selection::Mask(
+                    editor_core::SelectionMask::new(glam::IVec2::ZERO, side, side, coverage)
+                        .unwrap(),
+                ),
+            }
+        };
+        let ctx = egui::Context::default();
+        let mut doc = Document::new(side, side, "Test");
+        let mut history = History::new();
+        let px = [8usize, 8];
+        let image = vec![7u8; 8 * 8 * 4];
+        HistoryThumbs::capture(&ctx, 1, &history, px, &image);
+        let rows = 6;
+        for i in 0..rows {
+            history.apply(&mut doc, mask(i * 100)).unwrap();
+            HistoryThumbs::capture(&ctx, 1, &history, px, &image);
+        }
+        let rows_before = FINGERPRINTED_ROWS.with(|c| c.get());
+        let before = FINGERPRINT_BYTES.with(|c| c.get());
+        HistoryThumbs::capture(&ctx, 1, &history, px, &image);
+        let spent = FINGERPRINT_BYTES.with(|c| c.get()) - before;
+        let refingerprinted = FINGERPRINTED_ROWS.with(|c| c.get()) - rows_before;
+        assert_eq!(
+            (refingerprinted, spent),
+            (0, 0),
+            "a capture of a stable {rows}-row history re-fingerprinted rows (rows, bytes)"
+        );
+        // Every stored row survived the capture: the fingerprints still match.
+        for row in 0..=rows as usize {
+            assert!(HistoryThumbs::texture(&ctx, row).is_some(), "row {row}");
+        }
+
+        // An undo, a redo and a new edit each fingerprint at most the one
+        // command that is new to the memo, never the rows below it.
+        let rows_at = || FINGERPRINTED_ROWS.with(|c| c.get());
+        let n = rows_at();
+        history.undo(&mut doc).unwrap();
+        HistoryThumbs::capture(&ctx, 1, &history, px, &image);
+        history.redo(&mut doc).unwrap();
+        HistoryThumbs::capture(&ctx, 1, &history, px, &image);
+        assert_eq!(rows_at() - n, 0, "an undo and a redo re-fingerprinted rows");
+        let n = rows_at();
+        history.apply(&mut doc, mask(700)).unwrap();
+        HistoryThumbs::capture(&ctx, 1, &history, px, &image);
+        assert_eq!(
+            rows_at() - n,
+            1,
+            "a new edit fingerprinted more than itself"
+        );
+        for row in 0..=rows as usize + 1 {
+            assert!(HistoryThumbs::texture(&ctx, row).is_some(), "row {row}");
+        }
+        // An undo and a different edit in its place: the rewritten row is
+        // fingerprinted afresh (a new payload), so its old picture is not
+        // kept under it and the rows below keep theirs.
+        history.undo(&mut doc).unwrap();
+        history.apply(&mut doc, mask(750)).unwrap();
+        HistoryThumbs::capture(&ctx, 1, &history, px, &image);
+        for row in 0..=rows as usize + 1 {
+            assert!(HistoryThumbs::texture(&ctx, row).is_some(), "row {row}");
+        }
+
+        let coverage_bytes = (side * side) as usize;
+        let before = FINGERPRINT_BYTES.with(|c| c.get());
+        let _ = fingerprint(&mask(0));
+        let spent = FINGERPRINT_BYTES.with(|c| c.get()) - before;
+        assert!(
+            spent <= FINGERPRINT_BUDGET && spent < coverage_bytes,
+            "one mask's fingerprint read {spent} bytes"
+        );
+        assert_ne!(fingerprint(&mask(0)), fingerprint(&mask(100)));
+        assert_eq!(fingerprint(&mask(300)), fingerprint(&mask(300)));
     }
 
     fn document_with(edits: usize) -> (Document, History) {

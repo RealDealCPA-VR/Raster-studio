@@ -127,14 +127,84 @@ fn world_transform(document: &Document, id: layer_model::LayerId) -> Affine2 {
     t
 }
 
+/// W5-F: where one stored tile's pixel centres land against the new canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TileFate {
+    /// Every centre is inside: the tile is kept untouched.
+    Kept,
+    /// Every centre is outside: the tile is cleared whole.
+    Cleared,
+    /// The canvas edge crosses the tile: only this case tests each pixel.
+    Crossing,
+}
+
+/// How far (in new-canvas pixels) a tile's corner centres must clear the
+/// canvas edge before the whole tile is classified without per-pixel tests.
+/// An affine map sends the tile's grid of centres into the parallelogram its
+/// four corner centres span, so a margin this size absorbs the rounding of
+/// `transform_point2` and keeps the classification identical to testing
+/// every pixel.
+const FATE_MARGIN: f32 = 1.0 / 64.0;
+
+/// Classify the tile whose top-left pixel is `(ox, oy)` by its four corner
+/// pixel centres under `to_new`. The canvas `[0, w) x [0, h)` is convex, so
+/// four corners inside mean every centre is; four corners past the same edge
+/// mean none is. Anything else — including a corner within [`FATE_MARGIN`]
+/// of an edge — is [`TileFate::Crossing`].
+fn tile_fate(to_new: Affine2, ox: i64, oy: i64, ts: usize, w: f32, h: f32) -> TileFate {
+    let last = (ts - 1) as f32 + 0.5;
+    let corners = [(0.5, 0.5), (last, 0.5), (0.5, last), (last, last)]
+        .map(|(dx, dy)| to_new.transform_point2(Vec2::new(ox as f32 + dx, oy as f32 + dy)));
+    if !corners.iter().all(|p| p.is_finite()) {
+        return TileFate::Crossing;
+    }
+    let m = FATE_MARGIN;
+    if corners
+        .iter()
+        .all(|p| p.x >= m && p.y >= m && p.x < w - m && p.y < h - m)
+    {
+        return TileFate::Kept;
+    }
+    let outside = [
+        corners.iter().all(|p| p.x < -m),
+        corners.iter().all(|p| p.y < -m),
+        corners.iter().all(|p| p.x >= w + m),
+        corners.iter().all(|p| p.y >= h + m),
+    ];
+    if outside.iter().any(|b| *b) {
+        TileFate::Cleared
+    } else {
+        TileFate::Crossing
+    }
+}
+
+thread_local! {
+    /// W5-F: tiles [`delete_outside`] tested pixel by pixel on this thread —
+    /// the counter its classification gate is tested by.
+    static PIXEL_TESTED_TILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The destructive half (Delete Cropped Pixels): clear every raster layer's
 /// pixels whose centre lands outside the new canvas.
 ///
 /// Tile maps are in layer space, so the edits are independent of the
 /// transforms [`geometry_commands`] adds in the same transaction.
+///
+/// W5-F: each tile is first classified by its corners ([`tile_fate`]): a
+/// tile wholly inside is left alone and one wholly outside is cleared
+/// without reading its bytes, so only the tiles the canvas edge crosses are
+/// tested pixel by pixel.
 pub(crate) fn delete_outside(
     doc: &mut OpenDocument,
     plan: &CropPlan,
+) -> Result<Vec<Command>, String> {
+    delete_outside_with(doc, plan, true)
+}
+
+fn delete_outside_with(
+    doc: &mut OpenDocument,
+    plan: &CropPlan,
+    classify: bool,
 ) -> Result<Vec<Command>, String> {
     let ts = TILE_SIZE as usize;
     let (w, h) = (plan.size.x as f32, plan.size.y as f32);
@@ -156,37 +226,47 @@ pub(crate) fn delete_outside(
             if coord.level != 0 {
                 continue;
             }
-            let rewritten = {
-                let Some(bytes) = compositor::TileSource::tile(&doc.tiles, hash) else {
-                    continue;
-                };
-                if bytes.is_empty() || bytes.len() % (ts * ts) != 0 {
-                    continue;
-                }
-                let bpp = bytes.len() / (ts * ts);
-                let (ox, oy) = coord.pixel_origin();
-                let mut out: Option<Vec<u8>> = None;
-                let mut kept = 0usize;
-                for ty in 0..ts {
-                    for tx in 0..ts {
-                        let p = to_new.transform_point2(Vec2::new(
-                            ox as f32 + tx as f32 + 0.5,
-                            oy as f32 + ty as f32 + 0.5,
-                        ));
-                        if p.x >= 0.0 && p.y >= 0.0 && p.x < w && p.y < h {
-                            kept += 1;
-                            continue;
-                        }
-                        let i = (ty * ts + tx) * bpp;
-                        if bytes[i..i + bpp].iter().any(|b| *b != 0) {
-                            out.get_or_insert_with(|| bytes.to_vec())[i..i + bpp].fill(0);
+            let (ox, oy) = coord.pixel_origin();
+            let fate = if classify {
+                tile_fate(to_new, ox, oy, ts, w, h)
+            } else {
+                TileFate::Crossing
+            };
+            let rewritten = match fate {
+                TileFate::Kept => None,
+                TileFate::Cleared => Some(None),
+                TileFate::Crossing => {
+                    PIXEL_TESTED_TILES.with(|c| c.set(c.get() + 1));
+                    let Some(bytes) = compositor::TileSource::tile(&doc.tiles, hash) else {
+                        continue;
+                    };
+                    if bytes.is_empty() || bytes.len() % (ts * ts) != 0 {
+                        continue;
+                    }
+                    let bpp = bytes.len() / (ts * ts);
+                    let mut out: Option<Vec<u8>> = None;
+                    let mut kept = 0usize;
+                    for ty in 0..ts {
+                        for tx in 0..ts {
+                            let p = to_new.transform_point2(Vec2::new(
+                                ox as f32 + tx as f32 + 0.5,
+                                oy as f32 + ty as f32 + 0.5,
+                            ));
+                            if p.x >= 0.0 && p.y >= 0.0 && p.x < w && p.y < h {
+                                kept += 1;
+                                continue;
+                            }
+                            let i = (ty * ts + tx) * bpp;
+                            if bytes[i..i + bpp].iter().any(|b| *b != 0) {
+                                out.get_or_insert_with(|| bytes.to_vec())[i..i + bpp].fill(0);
+                            }
                         }
                     }
-                }
-                if kept == 0 {
-                    Some(None)
-                } else {
-                    out.map(Some)
+                    if kept == 0 {
+                        Some(None)
+                    } else {
+                        out.map(Some)
+                    }
                 }
             };
             match rewritten {
@@ -668,5 +748,94 @@ mod tests {
                 assert_eq!(buf, before, "Reveal All restores the whole image");
             }
         }
+    }
+
+    /// An editor holding one `side` x `side` opaque document with a
+    /// diagonal pattern, so every tile holds different, non-zero bytes.
+    fn big_editor(dir: &std::path::Path, side: u32) -> Editor {
+        let mut rgba = Vec::with_capacity((side * side * 4) as usize);
+        for y in 0..side {
+            for x in 0..side {
+                rgba.extend_from_slice(&[(x % 251) as u8, (y % 241) as u8, 90, 255]);
+            }
+        }
+        let png = dir.join("big.png");
+        std::fs::write(
+            &png,
+            raster::encode(raster::ExportFormat::Png, side, side, &rgba).unwrap(),
+        )
+        .unwrap();
+        let mut editor = Editor::with_state(
+            AppPaths::rooted(dir.join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        editor.open_path(&png).unwrap();
+        editor
+    }
+
+    /// W5-F: Delete Cropped Pixels tests pixel by pixel only the tiles the
+    /// new canvas edge crosses. A 1280x1280 canvas is 5x5 tiles; keeping
+    /// 300..1000 on both axes leaves one tile wholly inside, 16 wholly
+    /// outside, and 8 crossed by the edge — and the classified result is
+    /// the same set of edits the all-pixel path makes, straight or rotated.
+    #[test]
+    fn delete_cropped_pixels_tests_only_the_tiles_the_edge_crosses() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = big_editor(dir.path(), 1280);
+        let doc = editor.active_mut().unwrap();
+        let tiles_of = |doc: &OpenDocument| {
+            doc.document
+                .layers
+                .iter_depth_first()
+                .into_iter()
+                .filter_map(|id| doc.document.pixels.tiles(PixelKey::Layer(id)))
+                .map(|m| m.len())
+                .sum::<usize>()
+        };
+        assert_eq!(tiles_of(doc), 25, "fixture: one layer of 5x5 tiles");
+        let straight = CropPlan {
+            size: UVec2::new(700, 700),
+            to_new: Affine2::from_translation(-Vec2::new(300.0, 300.0)),
+        };
+        let before = PIXEL_TESTED_TILES.with(|c| c.get());
+        let fast = delete_outside(doc, &straight).unwrap();
+        let tested = PIXEL_TESTED_TILES.with(|c| c.get()) - before;
+        assert_eq!(tested, 8, "tiles tested pixel by pixel");
+        let edits = |commands: &[Command]| -> Vec<String> {
+            commands.iter().map(|c| format!("{c:?}")).collect()
+        };
+        let slow = delete_outside_with(doc, &straight, false).unwrap();
+        assert_eq!(
+            edits(&fast),
+            edits(&slow),
+            "classification changed the result"
+        );
+        // 16 cleared + 8 rewritten; the inside tile is untouched.
+        let Command::PaintTiles { delta, .. } = &fast[0] else {
+            panic!("not a paint: {fast:?}");
+        };
+        assert_eq!(delta.edits().len(), 24, "{delta:?}");
+
+        // A straightened crop: the classification still agrees pixel for
+        // pixel with testing everything.
+        let rotated = plan(&CropRequest {
+            rect: PixelRect::new(200, 180, 800, 760),
+            straighten: 0.3,
+            delete_cropped: true,
+            output_size: None,
+        })
+        .unwrap();
+        let before = PIXEL_TESTED_TILES.with(|c| c.get());
+        let fast = delete_outside(doc, &rotated).unwrap();
+        let tested = PIXEL_TESTED_TILES.with(|c| c.get()) - before;
+        let slow = delete_outside_with(doc, &rotated, false).unwrap();
+        assert_eq!(
+            edits(&fast),
+            edits(&slow),
+            "rotated: classification changed the result"
+        );
+        assert!(tested < 25, "rotated: every tile was tested ({tested})");
     }
 }

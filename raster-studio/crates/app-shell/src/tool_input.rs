@@ -24,16 +24,17 @@
 //!
 //! # Where the canvas is
 //!
-//! The canvas is the **whole window**. [`crate::shell::Shell::redraw`] renders
-//! [`render::Canvas`] over the entire surface and hands every document's camera
-//! the surface size ([`crate::doc::OpenDocument::set_viewport`]), so the image
-//! is centred on the window and the panels are an egui overlay drawn on top of
-//! it. The viewport this module routes against is therefore built from
-//! `camera.viewport_size` — the *same* number [`render::Camera::screen_to_image`]
-//! divides by — which is what makes a click land on the pixel under the cursor
-//! rather than a panel's width away from it. Panels are excluded by the
-//! `over_panel` flag the shell reads from egui, not by shrinking the rectangle;
-//! shrinking it would move every document coordinate.
+//! The canvas is the **canvas area**: the rectangle the docks, the strips and
+//! the tool column leave. [`crate::shell::Shell::redraw`] hands every
+//! document's camera that rectangle as `viewport_origin` / `viewport_size`
+//! ([`crate::chrome::Chrome::place_canvas`]) and renders
+//! [`render::Canvas`] into it alone, so the image is fitted and centred between
+//! the panels. The viewport this module routes against is built from the same
+//! camera ([`canvas_viewport`]) — the *same* origin and size
+//! [`render::Camera::screen_to_image`] measures from — which is what makes a
+//! click land on the pixel under the cursor rather than a panel's width away
+//! from it. Pointer positions stay window coordinates; a press that starts on
+//! a panel is excluded by the `over_panel` flag the shell reads from egui.
 //!
 //! # Who owns a gesture
 //!
@@ -156,8 +157,7 @@ use tools::{
     registry, CropRequest, PaintTarget, Slice, TileAccess, Tool, ToolContext, ToolId, ToolRequest,
 };
 use ui::canvas::{
-    CanvasCamera, Dispatch, InputRouter, PanelInsets, PointerInput, PointerPhase, Rejected, Route,
-    Viewport,
+    CanvasCamera, Dispatch, InputRouter, PointerInput, PointerPhase, Rejected, Route, Viewport,
 };
 
 use crate::doc::DocumentId;
@@ -643,8 +643,17 @@ fn push_rect_edges(out: &mut Vec<TextOverlaySegment>, r: text_engine::Rect, kind
     }
 }
 
-pub fn canvas_viewport(surface_px: Vec2) -> Viewport {
-    Viewport::new(surface_px, PanelInsets::NONE, 1.0)
+/// The viewport a pointer (or an overlay) is mapped through: the canvas area
+/// a document camera draws into, in surface pixels.
+///
+/// Pass the document's camera (`canvas_viewport(&doc.camera)`): the canvas
+/// area is `camera.viewport_origin` .. `+ camera.viewport_size`, the rectangle
+/// between the docks, and its top-left becomes the viewport's left/top insets
+/// so a click, the ants and the handles all measure from the same corner the
+/// renderer centres the image in. A bare size is a canvas area that starts at
+/// the surface's corner (what a test without a chrome has).
+pub fn canvas_viewport(area: impl Into<crate::interaction_geometry::CanvasArea>) -> Viewport {
+    area.into().viewport(1.0)
 }
 
 /// The router's camera, mirrored from the document's: pan, zoom, view
@@ -911,6 +920,29 @@ pub struct ToolPointer {
     /// W3-A: View ▸ Snap and View ▸ Smart Guides, as last copied across by the
     /// shell. See [`SnapPolicy`].
     snap: SnapPolicy,
+    /// W5-C: the tool Edit > Free Transform (Ctrl+T) was invoked from; a
+    /// committed transform hands the palette back to it (Photopea).
+    restore_tool: Option<ToolId>,
+    /// W5-C: the (document, layer) Show Transform Controls last framed, so a
+    /// hover re-seeds the Move tool's box only when something changed.
+    move_display_seeded: Option<(DocumentId, Option<layer_model::LayerId>)>,
+}
+
+thread_local! {
+    /// W5-C: a Free Transform the menu asked for, carrying the tool it was
+    /// invoked from. `menu_bridge::perform` holds only the editor, so the
+    /// request is parked here and the pointer takes it up at its next call
+    /// ([`ToolPointer::begin_pending_session`]).
+    static PENDING_TRANSFORM: std::cell::Cell<Option<ToolId>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// W5-C: park a Free Transform request (Edit > Free Transform, Ctrl+T) for
+/// the pointer to begin at once over the selection or the layer's ink, so
+/// the handles are published before any canvas click. `previous` is the tool
+/// the commit returns to.
+pub fn request_free_transform(previous: ToolId) {
+    PENDING_TRANSFORM.with(|slot| slot.set(Some(previous)));
 }
 
 impl ToolPointer {
@@ -1070,6 +1102,17 @@ impl ToolPointer {
     /// nothing, which is why the context it is given is never drained.
     pub fn cancel(&mut self, editor: &mut Editor) -> bool {
         let had = self.router.is_gesture_active() || self.is_tool_active();
+        // W5-C: Escape ends a Ctrl+T session the way Enter does, handing the
+        // palette back to the tool it was invoked from; a parked request
+        // that never began goes with it, and nothing stale is left for a
+        // later palette-picked Free Transform to jump back to.
+        let restore = self.restore_tool.take();
+        let parked = PENDING_TRANSFORM.with(|slot| slot.take());
+        if let Some(previous) = restore.or(parked) {
+            if editor.tool() == ToolId::FreeTransform && previous != ToolId::FreeTransform {
+                editor.set_tool(previous);
+            }
+        }
         self.router.cancel();
         self.aimed_at = None;
         // W4-B: an abandoned stroke takes its live preview with it — the
@@ -1668,6 +1711,13 @@ impl ToolPointer {
         }
         out.had_pending = true;
         let (result, commands, requests) = self.off_pointer(editor, |tool, ctx| tool.commit(ctx));
+        // W5-C: a committed Free Transform hands the palette back to the
+        // tool Ctrl+T was pressed from (Photopea); a refused one stays put.
+        let restore = if result.is_ok() && self.live_tool() == Some(ToolId::FreeTransform) {
+            self.restore_tool.take()
+        } else {
+            None
+        };
 
         if let Err(e) = result {
             out.failed = Some(e.to_string());
@@ -1751,6 +1801,11 @@ impl ToolPointer {
 
         let after = editor.active().map(|d| d.history_depth()).unwrap_or(0);
         out.steps = after.saturating_sub(before);
+        if let Some(previous) = restore {
+            if editor.tool() == ToolId::FreeTransform {
+                editor.set_tool(previous);
+            }
+        }
         out
     }
 
@@ -1785,6 +1840,141 @@ impl ToolPointer {
         had
     }
 
+    /// W5-C: start the sessions that must be on screen before the first
+    /// canvas click. A parked Free Transform request (Ctrl+T) begins its
+    /// session over the selection bounds or the active layer's ink right
+    /// here, and the Move tool's Show Transform Controls box is seeded from
+    /// the active layer. `settings` is the options bar's seed for the
+    /// effective tool (the transform's mode choice rides it). Reports
+    /// whether the published geometry may have changed.
+    pub fn begin_pending_session(
+        &mut self,
+        editor: &mut Editor,
+        settings: &[(String, tools::ToolSetting)],
+    ) -> bool {
+        if self.router.is_gesture_active() {
+            return false;
+        }
+        let mut changed = false;
+        if let Some(previous) = PENDING_TRANSFORM.with(|slot| slot.take()) {
+            changed |= self.begin_transform(editor, previous, settings);
+        }
+        if editor.tool() != ToolId::FreeTransform {
+            // Left Free Transform by any other door: no stale hand-back.
+            self.restore_tool = None;
+        }
+        if editor.effective_tool() == ToolId::Move {
+            changed |= self.seed_move_display(editor, settings);
+        } else {
+            self.move_display_seeded = None;
+        }
+        changed
+    }
+
+    /// W5-C: the Free Transform half of [`Self::begin_pending_session`].
+    fn begin_transform(
+        &mut self,
+        editor: &mut Editor,
+        previous: ToolId,
+        settings: &[(String, tools::ToolSetting)],
+    ) -> bool {
+        if editor.effective_tool() != ToolId::FreeTransform {
+            return false;
+        }
+        let Some(doc_id) = editor.active().map(|doc| doc.id()) else {
+            return false;
+        };
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|(id, tool)| *id == ToolId::FreeTransform && tool.is_active())
+        {
+            // A session is already live: Ctrl+T again keeps it.
+            return false;
+        }
+        let mut fresh = tools::transform::TransformTool::default();
+        for (key, setting) in settings {
+            if crate::chrome::BRUSH_KEYS.contains(&key.as_str()) {
+                continue;
+            }
+            let _ = fresh.set_setting(key, *setting);
+        }
+        // `off_pointer` runs against the live tool slot; the fresh session
+        // is begun through the same context a press builds, then installed.
+        self.current = Some((ToolId::FreeTransform, registry::make(ToolId::FreeTransform)));
+        let (result, _, _) = self.off_pointer(editor, |_, ctx| fresh.begin_from_context(ctx));
+        match result {
+            Ok(()) => {
+                self.current = Some((ToolId::FreeTransform, Box::new(fresh)));
+                self.session_doc = Some(doc_id);
+                self.restore_tool = (previous != ToolId::FreeTransform).then_some(previous);
+                true
+            }
+            Err(e) => {
+                editor.set_status(e.to_string());
+                false
+            }
+        }
+    }
+
+    /// W5-C: the Show Transform Controls half of
+    /// [`Self::begin_pending_session`].
+    fn seed_move_display(
+        &mut self,
+        editor: &mut Editor,
+        settings: &[(String, tools::ToolSetting)],
+    ) -> bool {
+        let wants = settings
+            .iter()
+            .any(|(k, v)| k == "show_transform" && matches!(v, tools::ToolSetting::Bool(true)));
+        let key = editor
+            .active()
+            .map(|doc| (doc.id(), doc.document.active_layer()));
+        if !wants {
+            let shown = self
+                .current
+                .as_ref()
+                .is_some_and(|(id, tool)| *id == ToolId::Move && tool.live_geometry().is_some());
+            self.move_display_seeded = None;
+            if shown {
+                if let Some((_, tool)) = self.current.as_mut() {
+                    let _ = tool.set_setting("show_transform", tools::ToolSetting::Bool(false));
+                }
+            }
+            return shown;
+        }
+        let Some(key) = key else {
+            return false;
+        };
+        let live_move = self
+            .current
+            .as_ref()
+            .is_some_and(|(id, _)| *id == ToolId::Move);
+        if live_move && self.move_display_seeded == Some(key) {
+            return false;
+        }
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|(_, tool)| tool.is_active())
+        {
+            return false;
+        }
+        let mut fresh = tools::edit::MoveTool::default();
+        for (k, setting) in settings {
+            let _ = fresh.set_setting(k, *setting);
+        }
+        self.current = Some((ToolId::Move, registry::make(ToolId::Move)));
+        let _ = self.off_pointer(editor, |_, ctx| {
+            fresh.seed_display(ctx);
+            Ok(())
+        });
+        self.current = Some((ToolId::Move, Box::new(fresh)));
+        self.session_doc = Some(key.0);
+        self.move_display_seeded = Some(key);
+        true
+    }
+
     /// Route one pointer sample.
     ///
     /// `over_panel` is the shell's answer to "is the chrome under the cursor" —
@@ -1805,6 +1995,9 @@ impl ToolPointer {
         let (snap, settings) = SnapPolicy::split_settings(settings);
         let settings = settings.as_slice();
         self.snap = snap;
+        // W5-C: a Ctrl+T session and a ticked Show Transform Controls box
+        // begin on the first sample the pointer sees, a hover included.
+        self.begin_pending_session(editor, settings);
         if over_panel && !self.router.is_gesture_active() {
             out.refused = Some(Refusal::OverPanel);
             return out;
@@ -1850,7 +2043,7 @@ impl ToolPointer {
 
         let (dispatch, viewport) = {
             let doc = editor.active_mut().expect("checked immediately above");
-            let viewport = canvas_viewport(doc.camera.viewport_size);
+            let viewport = canvas_viewport(&doc.camera);
             let mut camera = canvas_camera_of(&doc.camera);
             let rotation_before = camera.rotation;
             let dispatch = self.router.handle(input, &mut camera, &viewport, effective);
@@ -4646,7 +4839,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let editor = editor(dir.path());
         let camera = editor.active().unwrap().camera.clone();
-        let viewport = canvas_viewport(camera.viewport_size);
+        let viewport = canvas_viewport(&camera);
         let mirror = canvas_camera_of(&camera);
         for at in [
             Vec2::new(0.0, 0.0),
@@ -6856,7 +7049,7 @@ mod tests {
                 doc.camera.flip_x = flip_x;
                 doc.camera.flip_y = flip_y;
             }
-            let viewport = canvas_viewport(editor.active().unwrap().camera.viewport_size);
+            let viewport = canvas_viewport(&editor.active().unwrap().camera);
             let c = viewport.center_pt();
             // Off-axis points (30 and 120 degrees): neither is invariant under
             // a mirror about either screen axis, so a dropped flip anywhere in

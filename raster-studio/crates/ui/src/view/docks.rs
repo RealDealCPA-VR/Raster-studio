@@ -487,6 +487,11 @@ fn body_of(
 ) {
     match panel {
         PanelId::Layers => layers_body(w, ui, doc, fill_bottom),
+        // W5-E: no document, no history — not an 'Open' row and a snapshot
+        // button over nothing.
+        PanelId::History if !has_document(doc) => {
+            empty_state(ui, crate::strings::tr("ui.docks.history.no.document"));
+        }
         PanelId::History => history_body(w, ui, history),
         PanelId::Adjustments => adjustments_body(w, ui),
         PanelId::Properties => properties_body(w, ui, doc, history),
@@ -502,6 +507,12 @@ fn body_of(
         PanelId::Paths => paths_body(w, ui, doc),
         PanelId::Actions => actions_body(w, ui),
     }
+}
+
+/// Whether `doc` is a real document rather than the 0x0 placeholder the
+/// chrome is drawn against when nothing is open.
+fn has_document(doc: &Document) -> bool {
+    doc.width() > 0 && doc.height() > 0
 }
 
 // ---------------------------------------------------------------------------
@@ -1452,6 +1463,14 @@ fn layer_search_field(w: &mut Workspace, ui: &mut Ui, width: f32) {
         &current,
         width,
     );
+    // W5-E: an empty, unfocused field says what it is for.
+    if edit.text.is_empty() && !edit.response.has_focus() {
+        field_placeholder(
+            ui,
+            &edit.response,
+            crate::strings::tr("ui.docks.layers.search.placeholder"),
+        );
+    }
     // Live: the rows narrow with every keystroke, not only on Enter.
     let next = edit.committed.unwrap_or(edit.text);
     if next != current {
@@ -1459,6 +1478,52 @@ fn layer_search_field(w: &mut Workspace, ui: &mut Ui, width: f32) {
     }
     edit.response
         .on_hover_text(crate::strings::tr("ui.docks.layers.search"));
+}
+
+/// The hint an empty, unfocused text field shows, in the tertiary text colour
+/// so it never reads as a value, at exactly the place typed text starts.
+///
+/// `field` is the response a `TextEdit` returned, whose `rect` egui sets to
+/// the field's *text* area (its outer rect less its margin), so the hint is
+/// laid out where the `TextEdit` lays its own galley.
+fn field_placeholder(ui: &Ui, field: &egui::Response, placeholder: &str) {
+    let t = current_tokens(ui);
+    let inner = field.rect;
+    ui.painter().with_clip_rect(inner).text(
+        inner.left_center(),
+        egui::Align2::LEFT_CENTER,
+        placeholder,
+        egui::FontSelection::default().resolve(ui.style()),
+        color32(t.palette.text(TextRole::Tertiary)),
+    );
+}
+
+/// W5-E: `value` as it fits in a text area `max_width` wide, cut with an
+/// ellipsis when it does not — the string a field is handed while it is not
+/// being edited, so the field lays out and clips one galley of its own and
+/// nothing is painted over it.
+fn elided_value(ui: &Ui, value: &str, max_width: f32) -> String {
+    let font = egui::FontSelection::default().resolve(ui.style());
+    let colour = ui.visuals().widgets.inactive.text_color();
+    let full = ui
+        .painter()
+        .layout_no_wrap(value.to_string(), font.clone(), colour);
+    if full.size().x <= max_width {
+        return value.to_string();
+    }
+    let mut job = egui::text::LayoutJob::simple_singleline(value.to_string(), font, colour);
+    job.wrap = egui::text::TextWrapping {
+        max_width,
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('\u{2026}'),
+    };
+    let galley = ui.fonts(|f| f.layout_job(job));
+    galley
+        .rows
+        .iter()
+        .flat_map(|r| r.glyphs.iter().map(|g| g.chr))
+        .collect()
 }
 
 /// Photopea's footer row, in Photopea's order: link, fx, mask, adjustment,
@@ -1536,9 +1601,16 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
             Some(super::ids::layer_mask()),
         );
         if has_layer && !has_mask && mask.clicked() {
-            if let Some(id) = active {
-                w.emit(Intent::Document(LayersModel::add_mask(id)));
-            }
+            // W5-D: the button is Layer > Layer Mask's creation route, so the
+            // app attaches mask + coverage atomically AND aims painting at the
+            // new mask. With a selection live it masks to that selection
+            // (Photopea's behaviour); otherwise it reveals everything.
+            let op = if doc.selection.bounds().is_some() {
+                crate::menu::MaskOp::RevealSelection
+            } else {
+                crate::menu::MaskOp::RevealAll
+            };
+            w.emit(Intent::Action(crate::menu::MenuAction::Mask(op)));
         }
 
         // Adjustment: the grid lives in its own panel.
@@ -1860,7 +1932,14 @@ fn properties_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &His
 
     match subject {
         PropertiesSubject::Nothing => {
-            empty_state(ui, crate::strings::tr("ui.docks.select.a.layer.to.see.its"));
+            empty_state(
+                ui,
+                crate::strings::tr(if has_document(doc) {
+                    "ui.docks.select.a.layer.to.see.its"
+                } else {
+                    "ui.docks.properties.no.document"
+                }),
+            );
         }
         PropertiesSubject::Layer(id) => {
             layer_properties(w, ui, doc, id);
@@ -1889,11 +1968,25 @@ fn properties_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &His
         }
     }
 
+    // W5-E: with nothing open there is no layer and no mask to choose.
+    if !has_document(doc) {
+        return;
+    }
     ui.add_space(Space::Small.pt());
     hairline(ui);
-    ui.horizontal(|ui| {
+    // W5-D: the Mask half of the toggle only means something when the active
+    // layer has a mask — without one the shell's target silently resolves to
+    // content, so the control is disabled and says why instead.
+    let layer_has_mask = doc
+        .active_layer()
+        .and_then(|id| doc.layers.get(id))
+        .is_some_and(|l| l.mask.is_some());
+    let toggle = ui.horizontal(|ui| {
+        if !layer_has_mask {
+            ui.disable();
+        }
         let mut focus = w.property_focus;
-        let mut index = usize::from(focus == PropertyFocus::Mask);
+        let mut index = usize::from(layer_has_mask && focus == PropertyFocus::Mask);
         if design::segmented_control(ui, "raster-property-focus", &mut index, &["Layer", "Mask"]) {
             focus = if index == 0 {
                 PropertyFocus::Layer
@@ -1910,6 +2003,11 @@ fn properties_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &His
             });
         }
     });
+    if !layer_has_mask {
+        toggle
+            .response
+            .on_hover_text(crate::strings::tr("ui.docks.this.layer.has.no.mask"));
+    }
 }
 
 fn layer_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) {
@@ -1918,7 +2016,37 @@ fn layer_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId)
     };
     let mut renamed: Option<String> = None;
     design::inspector_field(ui, "Name", |ui| {
-        renamed = super::text_field(ui, super::ids::layer_name(id), &layer.name).committed;
+        // W5-E: a long name ends in an ellipsis inside the field itself: the
+        // field is handed the elided name while nobody is editing it, and the
+        // whole name the moment it takes focus, so an edit never starts from
+        // the cut copy.
+        let field = super::ids::layer_name(id);
+        // `text_field`'s stash for an edit in progress (view/mod.rs).
+        let stash = field.with("in-progress");
+        let in_edit =
+            ui.memory(|m| m.has_focus(field) || m.data.get_temp::<String>(stash).is_some());
+        // The width of the field's text area, as the `TextEdit` reported it
+        // last frame (its response rect is the text area); before the first
+        // frame, the field less a button's padding on each side, which is
+        // never wider than the real text area.
+        let text_width = field.with("text-width");
+        let max_width = ui
+            .memory(|m| m.data.get_temp::<f32>(text_width))
+            .unwrap_or_else(|| {
+                current_tokens(ui).metrics.inspector_label_width
+                    - ui.spacing().button_padding.x * 2.0
+            });
+        let shown = if in_edit {
+            layer.name.clone()
+        } else {
+            elided_value(ui, &layer.name, max_width)
+        };
+        let edit = super::text_field(ui, field, &shown);
+        ui.memory_mut(|m| m.data.insert_temp(text_width, edit.response.rect.width()));
+        if edit.response.gained_focus() && shown != layer.name {
+            ui.memory_mut(|m| m.data.insert_temp(stash, layer.name.clone()));
+        }
+        renamed = edit.committed;
     });
     if let Some(name) = renamed {
         if name.trim() != layer.name {
@@ -2541,10 +2669,15 @@ fn color_body(w: &mut Workspace, ui: &mut Ui) {
     match w.color.notation {
         ColorNotation::Hsb => {
             let mut hsv = w.color.hsv();
+            // W5-E: S and B read in percent, 0-100, like Alpha below and
+            // like Photopea — not the 0-1 fraction the model stores.
+            let mut percent = [hsv[1] * 100.0, hsv[2] * 100.0];
             let mut changed = false;
             changed |= design::slider_row(ui, "H", &mut hsv[0], 0.0..=360.0).changed();
-            changed |= design::slider_row(ui, "S", &mut hsv[1], 0.0..=1.0).changed();
-            changed |= design::slider_row(ui, "B", &mut hsv[2], 0.0..=1.0).changed();
+            changed |= design::slider_row(ui, "S", &mut percent[0], 0.0..=100.0).changed();
+            changed |= design::slider_row(ui, "B", &mut percent[1], 0.0..=100.0).changed();
+            hsv[1] = percent[0] / 100.0;
+            hsv[2] = percent[1] / 100.0;
             if changed && w.color.set_hsv(hsv) {
                 emit_color(w);
             }
@@ -2822,11 +2955,20 @@ pub(crate) fn paint_brush_tip(ui: &Ui, rect: egui::Rect, settings: &tools::Brush
         TIP_RINGS
     };
     let painter = ui.painter_at(rect);
-    for k in 0..rings {
+    // W5-E: each ring's alpha is chosen so the *stacked* coverage ramps from
+    // a legible rim to a solid core (`panels::brushes::tip_ring_alphas`); an
+    // even 1/8 per ring left the soft presets a faint smudge.
+    // The rim's coverage is the least that clears the tokens' 3:1 floor for
+    // the ink over the panel the tile sits on.
+    let rim = crate::panels::brushes::soft_tip_rim_coverage(
+        t.palette.text(TextRole::Primary),
+        t.palette.color(ColorRole::SurfacePanel),
+    );
+    let alphas = crate::panels::brushes::tip_ring_alphas(rings, rim);
+    for (k, alpha) in alphas.into_iter().enumerate() {
         // Ring k spans from the rim (k = 0) in to the hardness radius.
         let f = k as f32 / rings as f32;
         let r = radius * (1.0 - f * (1.0 - hardness));
-        let alpha = if rings == 1 { 1.0 } else { 1.0 / rings as f32 };
         painter.add(egui::Shape::convex_polygon(
             ellipse(r),
             colour.gamma_multiply(alpha),
@@ -2966,6 +3108,126 @@ fn brushes_body(w: &mut Workspace, ui: &mut Ui, fill_bottom: Option<f32>) {
 // Character and Paragraph
 // ---------------------------------------------------------------------------
 
+/// W5-F: what the Character panel reads from the installed-font library,
+/// kept in the context's frame data between frames.
+///
+/// Each of those reads takes the compositor's global text-engine lock and
+/// walks the whole font database — the family list sorts every name — and the
+/// panel used to make them on every frame it was drawn. They change only when
+/// a font is installed, so they are read on demand instead: the family list
+/// when a Family edit begins (a user who just installed a font sees it the
+/// next time they open the list), and a family's faces and substitute when
+/// the shown family changes or that list is refreshed.
+#[derive(Clone, Default)]
+struct FontListCache {
+    families: Option<std::sync::Arc<Vec<String>>>,
+    /// The family the entry below describes, its faces, and the substitute
+    /// shaping would use for it.
+    family: Option<FamilyFonts>,
+    /// Whether the Family field was being edited on the last frame.
+    editing: bool,
+}
+
+#[derive(Clone)]
+struct FamilyFonts {
+    name: String,
+    faces: std::sync::Arc<Vec<text_engine::FaceRecord>>,
+    substitute: Option<String>,
+}
+
+/// W5-F: where the Character panel reads the installed-font library from.
+///
+/// Always the compositor's library in the app; a test puts its own source in
+/// the context's data (under [`font_source_id`]) to count the reads the panel
+/// makes and to control what they return, so a call site that bypasses the
+/// cache and reads the compositor directly shows up as a read the source
+/// never saw.
+#[derive(Clone)]
+pub(crate) struct FontSource {
+    families: std::sync::Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    faces: std::sync::Arc<FacesRead>,
+    substitute: std::sync::Arc<SubstituteRead>,
+}
+
+/// A [`FontSource`]'s read of one family's installed faces.
+type FacesRead = dyn Fn(&str) -> Vec<text_engine::FaceRecord> + Send + Sync;
+/// A [`FontSource`]'s read of the substitute shaping uses for a family.
+type SubstituteRead = dyn Fn(&str) -> Option<String> + Send + Sync;
+
+impl Default for FontSource {
+    fn default() -> Self {
+        Self {
+            families: std::sync::Arc::new(compositor::font_families),
+            faces: std::sync::Arc::new(compositor::font_family_faces),
+            substitute: std::sync::Arc::new(text_panel::substitution),
+        }
+    }
+}
+
+fn font_source_id() -> egui::Id {
+    egui::Id::new("raster-character-font-source")
+}
+
+fn font_source(ctx: &egui::Context) -> FontSource {
+    ctx.data(|d| d.get_temp::<FontSource>(font_source_id()))
+        .unwrap_or_default()
+}
+
+fn font_list_cache_id() -> egui::Id {
+    egui::Id::new("raster-character-font-lists")
+}
+
+fn font_list_cache(ctx: &egui::Context) -> FontListCache {
+    ctx.data(|d| d.get_temp::<FontListCache>(font_list_cache_id()))
+        .unwrap_or_default()
+}
+
+/// The installed families, read once per Family edit session (`editing`
+/// turning on refreshes them, and with them the per-family entry).
+fn cached_font_families(ctx: &egui::Context, editing: bool) -> std::sync::Arc<Vec<String>> {
+    let mut cache = font_list_cache(ctx);
+    let started = editing && !cache.editing;
+    cache.editing = editing;
+    if started || cache.families.is_none() {
+        let read = font_source(ctx).families;
+        cache.families = Some(std::sync::Arc::new(read()));
+        if started {
+            cache.family = None;
+        }
+    }
+    let families = cache.families.clone().unwrap_or_default();
+    ctx.data_mut(|d| d.insert_temp(font_list_cache_id(), cache));
+    families
+}
+
+/// Note whether the Family field is being edited this frame, without
+/// reading anything — the next edit start is what refreshes the lists.
+fn note_family_editing(ctx: &egui::Context, editing: bool) {
+    let mut cache = font_list_cache(ctx);
+    if cache.editing != editing {
+        cache.editing = editing;
+        ctx.data_mut(|d| d.insert_temp(font_list_cache_id(), cache));
+    }
+}
+
+/// `family`'s installed faces and its substitute, read when the family
+/// changes (or after a refresh), not per frame.
+fn cached_family_fonts(ctx: &egui::Context, family: &str) -> FamilyFonts {
+    let mut cache = font_list_cache(ctx);
+    if let Some(hit) = cache.family.as_ref().filter(|f| f.name == family) {
+        return hit.clone();
+    }
+    let source = font_source(ctx);
+    let fonts = FamilyFonts {
+        name: family.to_string(),
+        faces: std::sync::Arc::new((source.faces)(family)),
+        substitute: (source.substitute)(family),
+    };
+    cache.family = Some(fonts.clone());
+    ctx.data_mut(|d| d.insert_temp(font_list_cache_id(), cache));
+    fonts
+}
+
 fn character_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     let Some((layer, mut run)) = text_panel::active_text(doc, doc.active_layer()) else {
         empty_state(ui, text_panel::no_text_layer_reason());
@@ -2984,8 +3246,11 @@ fn character_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
         if let Some(committed) = edit.committed {
             picked_family = Some(committed);
         }
+        if !edit.editing {
+            note_family_editing(ui.ctx(), false);
+        }
         if edit.editing {
-            let families = compositor::font_families();
+            let families = cached_font_families(ui.ctx(), true);
             let candidates = text_panel::family_candidates(&edit.text, &families);
             let picked = &mut picked_family;
             egui::popup_below_widget(
@@ -3036,7 +3301,9 @@ fn character_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     // Card 022: an uninstalled family is reported with the substitute the
     // shaper will use — the same rule `attrs_for` applies, so the report and
     // the render agree. The requested name stays in the document.
-    if let Some(substitute) = text_panel::substitution(&run.style.family) {
+    // W5-F: read through the per-family cache, not per frame.
+    let family_fonts = cached_family_fonts(ui.ctx(), &run.style.family);
+    if let Some(substitute) = family_fonts.substitute.clone() {
         ui.label(hint(
             ui,
             format!(
@@ -3046,7 +3313,7 @@ fn character_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             ),
         ));
     }
-    let faces = compositor::font_family_faces(&run.style.family);
+    let faces: &[text_engine::FaceRecord] = &family_fonts.faces;
     design::inspector_field(ui, "Face", |ui| {
         if faces.is_empty() {
             // Nothing to list — the control cannot act, so instead of a combo
@@ -3066,7 +3333,7 @@ fn character_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             egui::ComboBox::from_id_salt(super::ids::character_face(layer))
                 .selected_text(body(ui, selected))
                 .show_ui(ui, |combo_ui| {
-                    for face in &faces {
+                    for face in faces {
                         let label = text_panel::face_label(face.weight, face.slant, face.stretch);
                         if combo_ui
                             .selectable_label(
@@ -4999,5 +5266,474 @@ mod tests {
             tops.len() < n,
             "the presets were laid out as a list, not a grid"
         );
+    }
+
+    /// W5-E: the Color panel's S and B read in percent, as Alpha does — a
+    /// fully saturated, full-brightness red reads 100 and 100, not 1 and 1.
+    #[test]
+    fn hsb_saturation_and_brightness_read_in_percent() {
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut w = Workspace::new();
+        w.color
+            .set_well(ColorWell::Foreground, [1.0, 0.0, 0.0, 1.0]);
+        w.color.notation = ColorNotation::Hsb;
+        let mut body = |w: &mut Workspace, ui: &mut Ui| color_body(w, ui);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let out = frame_of(&ctx, &mut w, screen(), &mut body);
+        let value_in = |label: &str| -> String {
+            let field = ctx
+                .read_response(egui::Id::new(("raster-numeric-field", label)))
+                .unwrap_or_else(|| panic!("no {label} field"))
+                .rect;
+            out.shapes
+                .iter()
+                .find_map(|c| match &c.shape {
+                    egui::Shape::Text(t) if field.contains(t.pos + t.galley.size() * 0.5) => {
+                        Some(t.galley.text().to_string())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("the {label} field shows no value"))
+        };
+        assert_eq!(value_in("S"), "100");
+        assert_eq!(value_in("B"), "100");
+        assert_eq!(value_in("Alpha"), "100");
+    }
+
+    /// W5-E: with no document open the History panel lists nothing — no
+    /// "Open" row, no snapshot button — and Properties offers no Layer|Mask
+    /// choice over a layer that does not exist.
+    #[test]
+    fn with_no_document_history_has_no_rows_and_properties_no_toggle() {
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let none = Document::new(0, 0, "");
+        let history = History::default();
+        let mut w = Workspace::new();
+        let mut body = |w: &mut Workspace, ui: &mut Ui| {
+            body_of(w, ui, &none, &history, PanelId::History, None)
+        };
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let out = frame_of(&ctx, &mut w, screen(), &mut body);
+        assert!(
+            ctx.read_response(super::super::ids::history_row(0))
+                .is_none(),
+            "an empty-document History drew a row"
+        );
+        assert!(ctx
+            .read_response(super::super::ids::history_new_snapshot())
+            .is_none());
+        let texts = painted_texts(&out);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == crate::strings::tr("ui.docks.history.no.document")),
+            "{texts:?}"
+        );
+
+        let mut body = |w: &mut Workspace, ui: &mut Ui| {
+            body_of(w, ui, &none, &history, PanelId::Properties, None)
+        };
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let out = frame_of(&ctx, &mut w, screen(), &mut body);
+        let texts = painted_texts(&out);
+        assert!(
+            !texts.iter().any(|t| t == "Layer" || t == "Mask"),
+            "the Layer|Mask toggle is drawn with no document: {texts:?}"
+        );
+
+        // With a document both are back.
+        let doc = Document::new(8, 8, "open");
+        let mut body =
+            |w: &mut Workspace, ui: &mut Ui| body_of(w, ui, &doc, &history, PanelId::History, None);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        assert!(ctx
+            .read_response(super::super::ids::history_row(0))
+            .is_some());
+    }
+
+    /// W5-E: the Layers search field says what it is for while it is empty.
+    #[test]
+    fn the_empty_layers_search_field_shows_its_placeholder_inside_it() {
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut w = Workspace::new();
+        let mut body = |w: &mut Workspace, ui: &mut Ui| {
+            let width = ui.available_width();
+            layer_search_field(w, ui, width);
+        };
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let out = frame_of(&ctx, &mut w, screen(), &mut body);
+        let field = ctx
+            .read_response(crate::panels::layers::ids::search_field())
+            .expect("the search field is drawn")
+            .rect;
+        let placeholder = crate::strings::tr("ui.docks.layers.search.placeholder");
+        let drawn = out.shapes.iter().any(|c| match &c.shape {
+            egui::Shape::Text(t) => {
+                t.galley.text() == placeholder && field.contains(t.pos + t.galley.size() * 0.5)
+            }
+            _ => false,
+        });
+        assert!(
+            drawn,
+            "no placeholder inside {field:?}: {:?}",
+            painted_texts(&out)
+        );
+        let hint_x = out
+            .shapes
+            .iter()
+            .find_map(|c| match &c.shape {
+                egui::Shape::Text(t) if t.galley.text() == placeholder => Some(t.pos.x),
+                _ => None,
+            })
+            .expect("the placeholder is drawn");
+        // Typed text replaces it, starting where the hint started.
+        w.layers.search = "abc".into();
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let out = frame_of(&ctx, &mut w, screen(), &mut body);
+        assert!(!painted_texts(&out).iter().any(|t| t == placeholder));
+        let typed_x = out
+            .shapes
+            .iter()
+            .find_map(|c| match &c.shape {
+                egui::Shape::Text(t) if t.galley.text() == "abc" => Some(t.pos.x),
+                _ => None,
+            })
+            .expect("the typed text is drawn");
+        assert!(
+            (hint_x - typed_x).abs() <= 0.5,
+            "the hint starts at x={hint_x} but typed text at x={typed_x}"
+        );
+    }
+
+    /// W5-E: a layer name too long for the Properties Name field ends in an
+    /// ellipsis inside the field instead of being cut mid-letter.
+    #[test]
+    fn a_long_layer_name_is_elided_inside_the_properties_name_field() {
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut doc = Document::new(8, 8, "long");
+        let name = "A layer name far too long to fit the Properties panel name field";
+        let id = doc
+            .layers
+            .push_root(layer_model::Layer::raster(name))
+            .unwrap();
+        doc.set_active_layer(Some(id)).unwrap();
+        let history = History::default();
+        let mut w = Workspace::new();
+        let mut body = |w: &mut Workspace, ui: &mut Ui| properties_body(w, ui, &doc, &history);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let out = frame_of(&ctx, &mut w, screen(), &mut body);
+        let field = ctx
+            .read_response(super::super::ids::layer_name(id))
+            .expect("the Name field is drawn")
+            .rect;
+        // Every piece of text drawn inside the field: there must be exactly
+        // one — the field's own galley — and no full-length copy under it.
+        let inside: Vec<(String, egui::Rect, egui::Rect)> = out
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) => {
+                    let rect = t.galley.rect.translate(t.pos.to_vec2());
+                    let visible = rect.intersect(c.clip_rect);
+                    (visible.is_positive() && visible.intersects(field))
+                        .then(|| (drawn_glyphs(&t.galley), rect, c.clip_rect))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            inside.len(),
+            1,
+            "the Name field shows more than one text: {inside:?}"
+        );
+        let (shown, rect, clip) = &inside[0];
+        let kept = shown
+            .strip_suffix('\u{2026}')
+            .unwrap_or_else(|| panic!("the name {shown:?} is not elided"));
+        assert!(
+            !kept.is_empty() && name.starts_with(kept),
+            "the elided text {shown:?} is not the start of the name"
+        );
+        assert!(
+            field.contains_rect(*rect),
+            "the elided name {rect:?} runs past the field {field:?}"
+        );
+        assert!(
+            clip.contains_rect(*rect),
+            "the elided name {rect:?} is cut by its clip {clip:?}"
+        );
+
+        // While the field is being edited it holds the whole name.
+        ctx.memory_mut(|m| m.request_focus(super::super::ids::layer_name(id)));
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let out = frame_of(&ctx, &mut w, screen(), &mut body);
+        let drawn: Vec<String> = out
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) => Some(drawn_glyphs(&t.galley)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            drawn.iter().any(|t| t == name),
+            "the focused field does not hold the whole name: {drawn:?}"
+        );
+    }
+
+    /// The characters a galley actually lays out — an elided galley keeps
+    /// its whole source in `text()`, so only the glyphs say what is drawn.
+    fn drawn_glyphs(galley: &egui::Galley) -> String {
+        galley
+            .rows
+            .iter()
+            .flat_map(|r| r.glyphs.iter().map(|g| g.chr))
+            .collect()
+    }
+
+    /// W5-E: clicking the elided Name field edits the *whole* name — the
+    /// ellipsis is display only and never reaches the document.
+    #[test]
+    fn editing_an_elided_name_starts_from_the_whole_name() {
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut doc = Document::new(8, 8, "long");
+        let name = "A layer name far too long to fit the Properties panel name field";
+        let id = doc
+            .layers
+            .push_root(layer_model::Layer::raster(name))
+            .unwrap();
+        doc.set_active_layer(Some(id)).unwrap();
+        let snapshot = doc.clone();
+        let history = History::default();
+        let mut w = Workspace::new();
+        let mut body = |w: &mut Workspace, ui: &mut Ui| properties_body(w, ui, &snapshot, &history);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let _ = w.drain_intents();
+        // A real click on the field, then a keystroke and Enter.
+        click_id(&ctx, &mut w, super::super::ids::layer_name(id), &mut body);
+        let mut input = screen();
+        input.events = vec![egui::Event::Text("X".into())];
+        let _ = frame_of(&ctx, &mut w, input, &mut body);
+        let mut input = screen();
+        input.events = vec![egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }];
+        let _ = frame_of(&ctx, &mut w, input, &mut body);
+        let command = w
+            .drain_intents()
+            .into_iter()
+            .find_map(|i| match i {
+                Intent::Document(c) => Some(c),
+                _ => None,
+            })
+            .expect("the edit renamed the layer");
+        command.apply(&mut doc).unwrap();
+        let renamed = doc.layers.get(id).unwrap().name.clone();
+        assert!(
+            !renamed.contains('\u{2026}') && renamed.replacen('X', "", 1) == name,
+            "the edit started from the cut copy: {renamed:?}"
+        );
+    }
+
+    /// W5-E: a soft preset's preview has a rim you can see. The outermost
+    /// ring used to be painted at an eighth of the text colour's alpha.
+    #[test]
+    fn a_soft_brush_preview_rim_is_legible() {
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let soft = tools::BrushSettings {
+            size: 24.0,
+            hardness: 0.0,
+            ..tools::BrushSettings::default()
+        };
+        let mut w = Workspace::new();
+        let mut body = |_: &mut Workspace, ui: &mut Ui| {
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(64.0), Sense::hover());
+            paint_brush_tip(ui, rect, &soft);
+        };
+        let out = frame_of(&ctx, &mut w, screen(), &mut body);
+        let rim = out
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Path(p) if p.closed => {
+                    let r = p.visual_bounding_rect();
+                    Some((r.width() * r.height(), p.fill))
+                }
+                _ => None,
+            })
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+            .expect("the tip painted no ring")
+            .1;
+        // The rim, composited over the panel the tile sits on the way egui
+        // blends it (premultiplied, in gamma space), clears the tokens' 3:1
+        // floor for a non-text graphic.
+        let panel = design::Theme::Dark
+            .tokens()
+            .palette
+            .color(ColorRole::SurfacePanel);
+        let keep = 1.0 - f32::from(rim.a()) / 255.0;
+        let over = |fg: u8, bg: u8| (f32::from(fg) + keep * f32::from(bg)).round().min(255.0) as u8;
+        let seen = design::Srgba::rgb(
+            over(rim.r(), panel.r),
+            over(rim.g(), panel.g),
+            over(rim.b(), panel.b),
+        );
+        let contrast = design::contrast_ratio(seen, panel);
+        assert!(
+            contrast >= design::TextSize::Large.min_contrast_aa() - 0.05,
+            "the soft rim (alpha {}) reads {contrast:.2}:1 on the panel",
+            rim.a()
+        );
+    }
+
+    /// W5-F: the Character panel reads the installed-font library on demand,
+    /// not per frame. The reads are counted by a font source the test puts in
+    /// the context — outside the panel's cache — so a call site that bypasses
+    /// the cache and reads the compositor directly is a read the source never
+    /// sees (the family list) or draws the compositor's faces instead of the
+    /// source's (the Face row).
+    ///
+    /// Thirty idle frames read the shown family's faces and substitute once
+    /// and the family list never; thirty frames of a Family edit read the
+    /// family list once; a second edit reads it again; a new family is one
+    /// more faces read.
+    #[test]
+    fn the_character_panel_reads_the_font_library_on_demand_not_per_frame() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        // A family the compositor has faces for, so the source saying "no
+        // faces" is visible on screen: the Face row states the reason instead
+        // of drawing the compositor's faces in a combo.
+        let real = compositor::font_families()
+            .into_iter()
+            .find(|f| !compositor::font_family_faces(f).is_empty())
+            .unwrap_or_else(|| {
+                let hack = egui::FontDefinitions::default()
+                    .font_data
+                    .get("Hack")
+                    .expect("egui ships Hack")
+                    .font
+                    .to_vec();
+                assert!(compositor::load_font(hack) > 0);
+                "Hack".to_string()
+            });
+        assert!(!compositor::font_family_faces(&real).is_empty());
+
+        let mut doc = Document::new(64, 64, "type");
+        let id = doc
+            .layers
+            .push_root(layer_model::Layer::with_kind(
+                "T",
+                layer_model::LayerKind::Text(layer_model::TextLayer::default()),
+            ))
+            .unwrap();
+        if let layer_model::LayerKind::Text(t) = &mut doc.layers.get_mut(id).unwrap().kind {
+            t.font_family = real.clone();
+        }
+        doc.set_active_layer(Some(id)).unwrap();
+        let mut w = Workspace::new();
+        let ctx = egui::Context::default();
+
+        let family_reads = Arc::new(AtomicUsize::new(0));
+        let face_reads = Arc::new(AtomicUsize::new(0));
+        let source = FontSource {
+            families: {
+                let n = Arc::clone(&family_reads);
+                Arc::new(move || {
+                    n.fetch_add(1, Ordering::SeqCst);
+                    vec!["Source Only Family".to_string()]
+                })
+            },
+            faces: {
+                let n = Arc::clone(&face_reads);
+                Arc::new(move |_| {
+                    n.fetch_add(1, Ordering::SeqCst);
+                    Vec::new()
+                })
+            },
+            substitute: Arc::new(|_| None),
+        };
+        ctx.data_mut(|d| d.insert_temp(font_source_id(), source));
+
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 900.0));
+        let frame = |w: &mut Workspace, doc: &Document| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        character_body(w, ui, doc);
+                    });
+                },
+            )
+        };
+        let no_faces = crate::strings::tr("ui.docks.character.face.none");
+        let editing_key = super::super::ids::character_family(id).with("in-progress");
+        let reads = || {
+            (
+                family_reads.load(Ordering::SeqCst),
+                face_reads.load(Ordering::SeqCst),
+            )
+        };
+
+        // Idle: the shown family's faces once, the family list never, and the
+        // Face row is drawn from the source's (empty) answer.
+        for _ in 0..30 {
+            let out = frame(&mut w, &doc);
+            assert!(
+                painted_texts(&out).iter().any(|t| *t == no_faces),
+                "the Face row was not drawn from the font source"
+            );
+        }
+        assert_eq!(reads(), (0, 1), "30 idle frames: (family, faces) reads");
+
+        // A Family edit: the family list is read when it starts, not per frame.
+        let edit = |on: bool| {
+            ctx.data_mut(|d| {
+                if on {
+                    d.insert_temp(editing_key, real.clone());
+                } else {
+                    d.remove::<String>(editing_key);
+                }
+            });
+        };
+        edit(true);
+        for _ in 0..30 {
+            let _ = frame(&mut w, &doc);
+        }
+        assert_eq!(reads(), (1, 2), "30 frames of a Family edit");
+        edit(false);
+        for _ in 0..5 {
+            let _ = frame(&mut w, &doc);
+        }
+        edit(true);
+        for _ in 0..30 {
+            let _ = frame(&mut w, &doc);
+        }
+        assert_eq!(reads(), (2, 3), "a second Family edit re-reads the list");
+        edit(false);
+
+        // A different family is one more faces read, then served.
+        if let layer_model::LayerKind::Text(t) = &mut doc.layers.get_mut(id).unwrap().kind {
+            t.font_family = "No Such Family On Any Machine".into();
+        }
+        for _ in 0..30 {
+            let _ = frame(&mut w, &doc);
+        }
+        assert_eq!(reads(), (2, 4), "a new family is read once, then served");
     }
 }

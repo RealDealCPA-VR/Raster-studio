@@ -70,18 +70,16 @@ use crate::menu::AdjustmentId;
 use crate::panels::properties::adjustment_id_of;
 use crate::strings::tr;
 
+/// The Curves graph editor. Declared here rather than in `dialogs/mod.rs`
+/// because this dialog is its one host.
+#[path = "curve_widget.rs"]
+pub mod curve_widget;
+
+use curve_widget::{ChannelHistograms, CurveEditor};
+
 /// Largest side of the proxy the live preview adjusts. The same bound the
 /// filter dialogs use, so the two previews cost the same.
 pub const MAX_PREVIEW_SIDE: u32 = super::filter_dialog::MAX_PREVIEW_SIDE;
-
-/// The fixed input positions the Curves editor exposes a slider for.
-///
-/// A full curve editor is a canvas; a dialog gets the five points Photoshop's
-/// own curve presets are written at, each with its output value editable. Five
-/// knots on `y = x` are still recognised as the identity by
-/// [`adjustments::Curve`], so an untouched Curves dialog is refused like any
-/// other untouched adjustment.
-pub const CURVE_INPUTS: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
 
 /// Which colour the nested picker edits.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -182,6 +180,11 @@ pub struct AdjustmentDialog {
     color_edit: ColorEdit<ColorTarget>,
     /// Color Balance: which tone range the three sliders edit.
     balance_tone: usize,
+    /// Curves: the graph's channel and held point.
+    curve: CurveEditor,
+    /// Curves: the luma, red, green and blue histograms of `source`, drawn
+    /// behind the graph. Only Curves pays for them.
+    curve_histograms: Option<Box<ChannelHistograms>>,
     /// Channel Mixer: which output channel the row edits.
     mixer_output: usize,
     /// Selective Color: which colour range the four sliders edit.
@@ -236,6 +239,15 @@ impl AdjustmentDialog {
         });
         let stats = (id == AdjustmentId::Equalize)
             .then(|| ImageStats::from_premultiplied_rgba(source.pixels(), &space));
+        let curve_histograms = (id == AdjustmentId::Curves).then(|| {
+            let s = ImageStats::from_premultiplied_rgba(source.pixels(), &space);
+            Box::new([
+                *s.luma.bins(),
+                *s.channels[0].bins(),
+                *s.channels[1].bins(),
+                *s.channels[2].bins(),
+            ])
+        });
         let mut kind = editable_kind(id, id.identity_kind());
         // Replace Color opens sampling the middle of the layer, the way
         // Photopea's opens on the colour under its eyedropper.
@@ -257,6 +269,8 @@ impl AdjustmentDialog {
             cached_for: None,
             color_edit: ColorEdit::new(),
             balance_tone: 1,
+            curve: CurveEditor::default(),
+            curve_histograms,
             mixer_output: 0,
             selective_range: 0,
             proxy_scale,
@@ -395,6 +409,16 @@ impl AdjustmentDialog {
     /// The luma histogram of the preview source, when this dialog shows one.
     pub fn histogram(&self) -> Option<&[u32; HISTOGRAM_BINS]> {
         self.histogram.as_ref()
+    }
+
+    /// Curves: the graph editor's state (which channel is shown).
+    pub fn curve_editor(&self) -> &CurveEditor {
+        &self.curve
+    }
+
+    /// Curves: the per-channel histograms drawn behind the graph.
+    pub fn curve_histograms(&self) -> Option<&ChannelHistograms> {
+        self.curve_histograms.as_deref()
     }
 
     /// Run the adjustment over the proxy and return the result.
@@ -784,11 +808,18 @@ impl AdjustmentDialog {
                 changed |=
                     design::slider_row(ui, tr("ui.adjustment.gamma"), gamma, 0.1..=10.0).changed();
             }
-            K::Curves { points } => {
-                for (index, point) in points.iter_mut().enumerate() {
-                    let label = curve_point_label(index);
-                    changed |= design::slider_row(ui, label, &mut point[1], 0.0..=1.0).changed();
-                }
+            K::CurvesFull {
+                composite,
+                red,
+                green,
+                blue,
+            } => {
+                changed |= curve_widget::show(
+                    ui,
+                    &mut self.curve,
+                    [composite, red, green, blue],
+                    self.curve_histograms.as_deref(),
+                );
             }
             K::Exposure { stops } => {
                 changed |=
@@ -1045,7 +1076,7 @@ impl AdjustmentDialog {
             // `identity_kind`. Drawn as their narrow form's rows would be
             // misleading, so they say what they are.
             K::LevelsFull { .. }
-            | K::CurvesFull { .. }
+            | K::Curves { .. }
             | K::ExposureFull { .. }
             | K::HueSaturationFull { .. }
             | K::Auto { .. }
@@ -1266,34 +1297,36 @@ fn selective_range_label(index: usize) -> String {
     tr(KEYS[index.min(8)]).to_string()
 }
 
-fn curve_point_label(index: usize) -> &'static str {
-    tr(match index {
-        0 => "ui.adjustment.curve.0",
-        1 => "ui.adjustment.curve.1",
-        2 => "ui.adjustment.curve.2",
-        3 => "ui.adjustment.curve.3",
-        _ => "ui.adjustment.curve.4",
-    })
-}
-
 /// The shape of `kind` this dialog edits.
 ///
-/// Curves is the one whose stored form is open-ended — any number of points
-/// anywhere — while the editor here is five sliders at [`CURVE_INPUTS`]. A
-/// curve handed in is resampled at those inputs, so what the sliders show is
-/// what the curve does there; the identity comes back as five knots on
-/// `y = x`, which [`adjustments::Curve`] still recognises as the identity.
+/// Curves is edited on the graph in its wide stored spelling,
+/// [`AdjustmentKind::CurvesFull`], whatever it was handed: a composite-only
+/// curve becomes the composite with three identity channel curves, and every
+/// list is normalized through [`adjustments::Curve`] (sorted, merged, in
+/// range), so the points the graph shows are the knots the renderer uses.
 fn editable_kind(id: AdjustmentId, kind: AdjustmentKind) -> AdjustmentKind {
+    let clean = |points: &[[f32; 2]]| curve_widget::normalized(points);
     match (id, kind) {
-        (AdjustmentId::Curves, AdjustmentKind::Curves { points }) => {
-            let curve = Curve::new(&points).unwrap_or_else(|_| Curve::identity());
-            AdjustmentKind::Curves {
-                points: CURVE_INPUTS
-                    .iter()
-                    .map(|x| [*x, curve.eval(*x).clamp(0.0, 1.0)])
-                    .collect(),
-            }
-        }
+        (AdjustmentId::Curves, AdjustmentKind::Curves { points }) => AdjustmentKind::CurvesFull {
+            composite: clean(&points),
+            red: Curve::identity().points(),
+            green: Curve::identity().points(),
+            blue: Curve::identity().points(),
+        },
+        (
+            AdjustmentId::Curves,
+            AdjustmentKind::CurvesFull {
+                composite,
+                red,
+                green,
+                blue,
+            },
+        ) => AdjustmentKind::CurvesFull {
+            composite: clean(&composite),
+            red: clean(&red),
+            green: clean(&green),
+            blue: clean(&blue),
+        },
         (_, kind) => kind,
     }
 }
@@ -1489,14 +1522,164 @@ mod tests {
     }
 
     #[test]
-    fn a_curve_is_resampled_at_the_five_inputs_and_the_identity_stays_one() {
+    fn curves_opens_on_the_wide_spelling_at_the_identity() {
         let dialog = AdjustmentDialog::with_placeholder(AdjustmentId::Curves);
-        let AdjustmentKind::Curves { points } = dialog.kind() else {
-            panic!("not curves");
+        let AdjustmentKind::CurvesFull {
+            composite,
+            red,
+            green,
+            blue,
+        } = dialog.kind()
+        else {
+            panic!("the Curves dialog edits {:?}", dialog.kind());
         };
-        assert_eq!(points.len(), CURVE_INPUTS.len());
-        assert!(points.iter().all(|p| p[0] == p[1]), "{points:?}");
+        for points in [composite, red, green, blue] {
+            assert!(points.iter().all(|p| p[0] == p[1]), "{points:?}");
+        }
         assert!(dialog.invocation().is_identity());
+        assert!(dialog.curve_histograms().is_some());
+        // A composite-only curve handed in keeps its shape.
+        let mut dialog = dialog;
+        assert!(dialog.set_kind(AdjustmentKind::Curves {
+            points: vec![[0.0, 0.0], [0.5, 0.7], [1.0, 1.0]],
+        }));
+        assert!(matches!(
+            dialog.kind(),
+            AdjustmentKind::CurvesFull { composite, .. } if composite[1] == [0.5, 0.7]
+        ));
+    }
+
+    /// The graph's screen position of graph point `p`.
+    fn graph_pos(graph: Rect, p: [f32; 2]) -> egui::Pos2 {
+        pos2(
+            graph.left() + graph.width() * p[0],
+            graph.bottom() - graph.height() * p[1],
+        )
+    }
+
+    fn composite_of(dialog: &AdjustmentDialog) -> Vec<[f32; 2]> {
+        match dialog.kind() {
+            AdjustmentKind::CurvesFull { composite, .. } => composite.clone(),
+            other => panic!("not CurvesFull: {other:?}"),
+        }
+    }
+
+    /// W5-E: the drawn graph is the editor. A click on it adds a point that
+    /// lands in `CurvesFull`, the live preview changes with it, a drag moves
+    /// the point, and dragging it off the graph removes it again.
+    #[test]
+    fn clicking_and_dragging_on_the_drawn_curve_graph_edits_curves_full_and_the_preview() {
+        use curve_widget::curve_graph_id;
+        let harness = Harness::new();
+        let mut dialog = AdjustmentDialog::with_placeholder(AdjustmentId::Curves);
+        let graph = harness.settle(curve_graph_id(), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        assert!(graph.width() > 0.0 && (graph.width() - graph.height()).abs() < 0.5);
+        let untouched = dialog.preview_buffer().to_rgba8();
+
+        // Click: a point is added where the pointer is.
+        harness.frame(Harness::click_events(graph_pos(graph, [0.5, 0.8])), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        let points = composite_of(&dialog);
+        assert_eq!(points.len(), 3, "{points:?}");
+        assert!((points[1][0] - 0.5).abs() < 0.02 && (points[1][1] - 0.8).abs() < 0.02);
+        assert!(!dialog.invocation().is_identity());
+        assert_ne!(dialog.preview_buffer().to_rgba8(), untouched);
+        assert!(dialog.confirm().is_some());
+
+        // Drag it lower: press on it, move, release.
+        harness.frame(Harness::press_events(graph_pos(graph, [0.5, 0.8])), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        harness.frame(
+            vec![egui::Event::PointerMoved(graph_pos(graph, [0.5, 0.3]))],
+            |ctx| {
+                let _ = dialog.show(ctx, None);
+            },
+        );
+        let points = composite_of(&dialog);
+        assert_eq!(points.len(), 3, "the drag added a point: {points:?}");
+        assert!((points[1][1] - 0.3).abs() < 0.02, "{points:?}");
+        // Off the graph: the point goes.
+        harness.frame(
+            vec![egui::Event::PointerMoved(
+                graph.right_bottom() + egui::vec2(graph.width(), graph.height()),
+            )],
+            |ctx| {
+                let _ = dialog.show(ctx, None);
+            },
+        );
+        harness.frame(
+            vec![egui::Event::PointerButton {
+                pos: graph.right_bottom() + egui::vec2(graph.width(), graph.height()),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+            |ctx| {
+                let _ = dialog.show(ctx, None);
+            },
+        );
+        assert_eq!(composite_of(&dialog).len(), 2, "{:?}", dialog.kind());
+        assert!(dialog.invocation().is_identity());
+    }
+
+    /// The channel dropdown chooses which of the four curves the graph edits.
+    #[test]
+    fn the_curve_channel_dropdown_edits_the_red_curve() {
+        use curve_widget::curve_graph_id;
+        let harness = Harness::new();
+        let mut dialog = AdjustmentDialog::with_placeholder(AdjustmentId::Curves);
+        let text_rect = |h: &Harness, dialog: &mut AdjustmentDialog, text: &str| {
+            let mut found = None;
+            for _ in 0..Harness::STABLE_FRAMES {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Harness::SCREEN)),
+                    ..Default::default()
+                };
+                let output = h.ctx.run(input, |ctx| {
+                    let _ = dialog.show(ctx, None);
+                });
+                found = output
+                    .shapes
+                    .iter()
+                    .find_map(|clipped| match &clipped.shape {
+                        egui::Shape::Text(t) if t.galley.text() == text => {
+                            Some(egui::Rect::from_min_size(t.pos, t.galley.size()))
+                        }
+                        _ => None,
+                    });
+            }
+            found
+        };
+        let rgb = tr("ui.adjustment.curve.rgb").to_string();
+        let red = tr("ui.adjustment.red").to_string();
+        let combo = text_rect(&harness, &mut dialog, &rgb).expect("the channel combo shows RGB");
+        harness.frame(Harness::click_events(combo.center()), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        let row = text_rect(&harness, &mut dialog, &red).expect("the open list has a Red row");
+        harness.frame(Harness::click_events(row.center()), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        assert_eq!(dialog.curve_editor().channel(), 1);
+        let graph = harness.settle(curve_graph_id(), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        harness.frame(Harness::click_events(graph_pos(graph, [0.5, 0.9])), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        let AdjustmentKind::CurvesFull { composite, red, .. } = dialog.kind() else {
+            panic!("not CurvesFull");
+        };
+        assert_eq!(composite.len(), 2, "the composite moved: {composite:?}");
+        assert_eq!(
+            red.len(),
+            3,
+            "the red curve did not take the point: {red:?}"
+        );
     }
 
     #[test]

@@ -1443,13 +1443,18 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::RotateCanvas(CR::FlipVertical) => {
             remap_all_layers(editor, "Flip Canvas Vertical", |x, y, _, h| (x, h - 1 - y))
         }
-        // Free Transform and its five modes route to the gizmo tool: the
-        // session begins on the next canvas press, the options bar's mode
-        // choice (fed to the tool at every press) names the shape of the
-        // drag, Enter commits one undoable step, Escape cancels. The mode
-        // itself is set by the workspace option, which the Transform items
-        // also arrive as a pick for (see resolve).
+        // Free Transform and its five modes route to the gizmo tool. W5-C:
+        // the session no longer waits for a canvas press: the request is
+        // parked with the tool it was invoked from, and the pointer begins
+        // it over the selection bounds (or the layer's ink) at its next call
+        // (`ToolPointer::begin_pending_session`), so the handles are up
+        // before any click. The options bar's mode choice names the shape of
+        // the drag, Enter commits one undoable step and hands the palette
+        // back to the previous tool, Escape cancels. The mode itself is set
+        // by the workspace option, which the Transform items also arrive as
+        // a pick for (see resolve).
         MenuAction::FreeTransform => {
+            crate::tool_input::request_free_transform(editor.tool());
             editor.set_tool(tools::ToolId::FreeTransform);
             Ok("Free Transform: drag a handle, Enter to commit, Escape to cancel".to_string())
         }
@@ -1458,6 +1463,11 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         | MenuAction::Transform(T::Skew)
         | MenuAction::Transform(T::Distort)
         | MenuAction::Transform(T::Perspective) => {
+            // The menu bar never reaches here: `resolve` turns these items
+            // into `Pick::ToolChoice`, which `Shell::apply_chrome` performs
+            // (mode, tool and the session request). This arm serves a caller
+            // that performs the action directly.
+            crate::tool_input::request_free_transform(editor.tool());
             editor.set_tool(tools::ToolId::FreeTransform);
             Ok("Transform: drag a handle, Enter to commit, Escape to cancel".to_string())
         }
@@ -3476,6 +3486,17 @@ fn create_mask(editor: &mut Editor, op: ui::menu::MaskOp) -> Result<String, Stri
         }
     };
     editor.apply_command(command);
+    // W5-D: a new mask is the paint target, as in Photopea — otherwise the
+    // first brush stroke after "add mask" lands on the image pixels.
+    let attached = editor.active().is_some_and(|doc| {
+        doc.document
+            .active_layer()
+            .and_then(|id| doc.document.layers.get(id))
+            .is_some_and(|l| l.mask.is_some())
+    });
+    if attached {
+        editor.set_edit_target_kind(crate::edit_target::EditTargetKind::Mask);
+    }
     Ok(format!("{label} mask attached"))
 }
 

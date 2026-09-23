@@ -242,6 +242,60 @@ pub fn composite_rect<S: TileSource + ?Sized>(
     Ctx::new(doc, source, level, opts)?.composite_root(rect)
 }
 
+/// W5-F: the composite sampled on a grid — pixel `(i, j)` of the result is the
+/// document's composite at the single pixel `(xs[i], ys[j])`, and the result's
+/// rect is `(0, 0, xs.len(), ys.len())`.
+///
+/// Each sample is one 1x1 [`composite_rect`] through one shared context, so
+/// the cost is the number of samples (times the reach of any effect or mask
+/// feather under them), never the area the grid spans. This is how a small
+/// preview of a huge layer — a Layers-panel thumbnail — is bounded: the
+/// tiled path quantises every request to whole tiles and would composite the
+/// entire layer to fill 64 pixels.
+pub fn composite_grid<S: TileSource + ?Sized>(
+    doc: &Document,
+    source: &S,
+    xs: &[i64],
+    ys: &[i64],
+    level: u8,
+    opts: CompositeOptions,
+) -> Result<Canvas, CompositeError> {
+    let ctx = Ctx::new(doc, source, level, opts)?;
+    let too_large = || CompositeError::RegionTooLarge {
+        pixels: (xs.len() as u64).saturating_mul(ys.len() as u64),
+        max: crate::MAX_CANVAS_PIXELS,
+    };
+    let width = u32::try_from(xs.len()).map_err(|_| too_large())?;
+    let height = u32::try_from(ys.len()).map_err(|_| too_large())?;
+    let mut out = Canvas::transparent(PixelRect::new(0, 0, width, height))?;
+    let points: Vec<(usize, usize)> = (0..ys.len())
+        .flat_map(|j| (0..xs.len()).map(move |i| (i, j)))
+        .collect();
+    let samples = points
+        .par_iter()
+        .map(|&(i, j)| {
+            ctx.composite_root(PixelRect::new(xs[i], ys[j], 1, 1))
+                .map(|c| c.pixels()[0])
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for (&(i, j), px) in points.iter().zip(samples) {
+        out.set(i as i64, j as i64, px);
+    }
+    Ok(out)
+}
+
+/// W5-F: every property of `layer` that can change a pixel, as one hash —
+/// exactly what a composited tile's cache key reads for the layer, its
+/// tiles excepted. Cheap (no serialisation): numbers, the text fingerprint, a
+/// shape's path. A caller that wants to know "did anything that draws move?"
+/// every frame hashes this per layer plus the tile maps, instead of
+/// fingerprinting each layer's whole serialised form.
+pub fn layer_signature(layer: &Layer) -> u64 {
+    let mut h = DefaultHasher::new();
+    hash_layer_props(layer, None, &mut h);
+    h.finish()
+}
+
 /// Composite one layer and its descendants over `rect`, as if nothing else were
 /// in the document.
 ///
@@ -289,6 +343,30 @@ pub(crate) struct Ctx<'a, S: TileSource + ?Sized> {
     decode: Option<[f32; 256]>,
     /// One layer's preview stand-in, if this frame carries one (card 013).
     over: Option<LayerOverride>,
+    /// W5-F: each adjustment layer's prepared form and parameter fingerprint,
+    /// resolved at most once per composite call and shared by every tile
+    /// (and every rayon worker) of it. A Color Lookup carries a whole 3D
+    /// table: hashing it into every tile's cache key, and cloning and
+    /// validating it into a fresh prepared form for every tile, was the
+    /// per-tile cost this removes. The document is immutable for the life
+    /// of a `Ctx`, so a layer id names one parameter set throughout.
+    adjustments: std::sync::Mutex<std::collections::HashMap<LayerId, AdjustmentMemo>>,
+    /// W5-F: how many adjustment fingerprints / prepared forms this context
+    /// computed — the counters the once-per-composite gate is tested by.
+    pub(crate) adjustment_hashes: std::sync::atomic::AtomicUsize,
+    pub(crate) adjustment_prepares: std::sync::atomic::AtomicUsize,
+}
+
+/// W5-F: what one composite call remembers about one adjustment layer.
+///
+/// Each slot is a shared once-cell: the map's lock is held only to find the
+/// cell, and the work runs inside the cell's own initialisation, so rayon
+/// workers racing on the same layer wait for one computation instead of
+/// each doing it.
+#[derive(Default)]
+struct AdjustmentMemo {
+    fingerprint: std::sync::Arc<std::sync::OnceLock<u64>>,
+    prepared: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<PreparedAdjustment>>>,
 }
 
 impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
@@ -347,6 +425,49 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             space,
             decode,
             over,
+            adjustments: std::sync::Mutex::new(std::collections::HashMap::new()),
+            adjustment_hashes: std::sync::atomic::AtomicUsize::new(0),
+            adjustment_prepares: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    /// W5-F: the memo, recovered rather than propagated when a worker
+    /// panicked while holding it — the entries are pure functions of the
+    /// document, so a half-written one is merely recomputed.
+    fn adjustment_memo(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<LayerId, AdjustmentMemo>> {
+        self.adjustments
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// W5-F: `layer`'s adjustment, prepared once per composite call.
+    fn prepared_adjustment(
+        &self,
+        layer: LayerId,
+        kind: &layer_model::AdjustmentKind,
+    ) -> std::sync::Arc<PreparedAdjustment> {
+        let cell =
+            std::sync::Arc::clone(&self.adjustment_memo().entry(layer).or_default().prepared);
+        std::sync::Arc::clone(cell.get_or_init(|| {
+            self.adjustment_prepares
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            std::sync::Arc::new(PreparedAdjustment::new(kind))
+        }))
+    }
+
+    /// W5-F: `layer`'s adjustment parameters as one hash, computed once per
+    /// composite call and folded into each tile key in its place.
+    fn adjustment_fingerprint(&self, layer: LayerId, kind: &layer_model::AdjustmentKind) -> u64 {
+        let cell =
+            std::sync::Arc::clone(&self.adjustment_memo().entry(layer).or_default().fingerprint);
+        *cell.get_or_init(|| {
+            self.adjustment_hashes
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut h = DefaultHasher::new();
+            hash_adjustment(kind, &mut h);
+            h.finish()
         })
     }
 
@@ -440,7 +561,7 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
         }
         match &layer.kind {
             LayerKind::Adjustment(adj) => {
-                let prepared = PreparedAdjustment::new(&adj.kind);
+                let prepared = self.prepared_adjustment(layer.id, &adj.kind);
                 if !prepared.is_identity() {
                     let cov = self.adjustment_coverage(layer, rect)?;
                     self.apply_adjustment(&prepared, layer, backdrop, cov.as_deref());
@@ -1277,7 +1398,11 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
                 0xFFu8.hash(h);
                 continue;
             };
-            hash_layer_props(layer, h);
+            let adjustment = match &layer.kind {
+                LayerKind::Adjustment(a) => Some(self.adjustment_fingerprint(layer.id, &a.kind)),
+                _ => None,
+            };
+            hash_layer_props(layer, adjustment, h);
             let t = self.level_transform(layer);
             let identity = is_identity(&t);
             // A styled layer traces its own pixels over a grown rect, so that
@@ -1804,7 +1929,12 @@ fn hash_f32(v: f32, h: &mut DefaultHasher) {
 ///
 /// Deliberately excludes `name` and `locked`: neither reaches the compositing
 /// maths, and including them would evict cached tiles on a rename.
-fn hash_layer_props(layer: &Layer, h: &mut DefaultHasher) {
+///
+/// W5-F: an adjustment layer's parameters arrive already folded into
+/// `adjustment` (see [`Ctx::adjustment_fingerprint`]), so a Color Lookup's
+/// table is hashed once per composite rather than once per tile; `None`
+/// hashes them here.
+fn hash_layer_props(layer: &Layer, adjustment: Option<u64>, h: &mut DefaultHasher) {
     layer.id.0.as_bytes().hash(h);
     layer.visible.hash(h);
     hash_f32(layer.opacity, h);
@@ -1850,7 +1980,14 @@ fn hash_layer_props(layer: &Layer, h: &mut DefaultHasher) {
         }
         LayerKind::Adjustment(a) => {
             2u8.hash(h);
-            hash_adjustment(&a.kind, h);
+            match adjustment {
+                Some(fp) => fp.hash(h),
+                None => {
+                    let mut own = DefaultHasher::new();
+                    hash_adjustment(&a.kind, &mut own);
+                    own.finish().hash(h);
+                }
+            }
         }
         LayerKind::Text(t) => {
             3u8.hash(h);
@@ -2583,5 +2720,74 @@ mod tests {
         // Far outside is transparent, and a non-finite coordinate too.
         assert_eq!(bilinear(&c, 1e30, 0.0), [0.0; 4]);
         assert_eq!(bilinear(&c, f32::NAN, 0.0), [0.0; 4]);
+    }
+
+    /// W5-F: a Color Lookup layer's table is hashed into the tile keys and
+    /// prepared for the pixel loop ONCE per composite call, however many
+    /// tiles that call keys and draws — and the key still follows the table.
+    #[test]
+    fn a_color_lookup_is_hashed_and_prepared_once_per_composite_not_per_tile() {
+        use crate::testkit::TestDoc;
+        use layer_model::AdjustmentKind;
+        use std::sync::atomic::Ordering;
+
+        let mut t = TestDoc::new(512, 512);
+        let base = t.push_raster("base");
+        t.fill(base, [200, 100, 50, 255]);
+        let size = 17u32;
+        let step = |v: u32| 1.0 - v as f32 / (size - 1) as f32;
+        let mut table = Vec::new();
+        for b in 0..size {
+            for g in 0..size {
+                for r in 0..size {
+                    table.push([step(r), step(g), step(b)]);
+                }
+            }
+        }
+        let lut = t.push_adjustment(
+            "lut",
+            AdjustmentKind::ColorLookup {
+                name: "invert".into(),
+                size,
+                table,
+            },
+        );
+
+        let keys = {
+            let ctx = Ctx::new(&t.doc, &t.src, 0, CompositeOptions::default()).unwrap();
+            let coords = ctx.tiles_covering(PixelRect::new(0, 0, 512, 512));
+            assert_eq!(coords.len(), 4, "fixture: four tiles");
+            let keys: Vec<u64> = coords.iter().map(|c| ctx.tile_input_key(*c)).collect();
+            let drawn: Vec<Canvas> = coords
+                .par_iter()
+                .map(|c| ctx.composite_root(tile_rect(*c)).unwrap())
+                .collect();
+            // The lookup really applied: 200 inverted is dark.
+            let px = drawn[0].pixels()[0];
+            assert!(px[0] < 0.5, "the lookup did not apply: {px:?}");
+            assert_eq!(
+                ctx.adjustment_hashes.load(Ordering::Relaxed),
+                1,
+                "the table was hashed per tile"
+            );
+            assert_eq!(
+                ctx.adjustment_prepares.load(Ordering::Relaxed),
+                1,
+                "the table was prepared per tile"
+            );
+            keys
+        };
+
+        // One changed table entry changes every tile's key.
+        if let LayerKind::Adjustment(a) = &mut t.doc.layers.get_mut(lut).unwrap().kind {
+            if let AdjustmentKind::ColorLookup { table, .. } = &mut a.kind {
+                table[100][1] = 0.123;
+            }
+        }
+        let ctx = Ctx::new(&t.doc, &t.src, 0, CompositeOptions::default()).unwrap();
+        let coords = ctx.tiles_covering(PixelRect::new(0, 0, 512, 512));
+        for (c, before) in coords.iter().zip(keys) {
+            assert_ne!(ctx.tile_input_key(*c), before, "{c:?} kept a stale key");
+        }
     }
 }

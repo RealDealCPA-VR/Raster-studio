@@ -476,6 +476,46 @@ pub const MIN_LUT_SIZE: usize = 2;
 /// the cap keeps a stored document from carrying an unbounded table.
 pub const MAX_LUT_SIZE: usize = 65;
 
+/// Largest `.cube` file [`read_cube_file`] reads: 16 MiB.
+///
+/// A 65-point cube — the largest [`Lut3d`] takes — is 274,625 lines of three
+/// numbers, a few MiB even with generous precision, so this refuses nothing a
+/// real LUT needs and bounds what the Load button reads on the interaction
+/// thread.
+pub const MAX_CUBE_FILE_BYTES: u64 = 16 << 20;
+
+/// Read the text of the `.cube` file at `path` for [`Lut3d::parse_cube`],
+/// refusing — from its metadata, before a byte is read — a file larger than
+/// [`MAX_CUBE_FILE_BYTES`]. The read is bounded to the cap as well, so a file
+/// that grows after the check is refused rather than read whole.
+///
+/// # Errors
+///
+/// [`AdjustmentError::InvalidLut`] for a file too large, unreadable, or not
+/// UTF-8 text.
+pub fn read_cube_file(path: &std::path::Path) -> Result<String, AdjustmentError> {
+    use std::io::Read as _;
+    let bad = |reason: String| AdjustmentError::InvalidLut { reason };
+    let too_large = |size: u64| {
+        bad(format!(
+            "the file is {size} bytes; a .cube is read up to {MAX_CUBE_FILE_BYTES}"
+        ))
+    };
+    let meta = std::fs::metadata(path).map_err(|e| bad(e.to_string()))?;
+    if meta.len() > MAX_CUBE_FILE_BYTES {
+        return Err(too_large(meta.len()));
+    }
+    let file = std::fs::File::open(path).map_err(|e| bad(e.to_string()))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_CUBE_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| bad(e.to_string()))?;
+    if bytes.len() as u64 > MAX_CUBE_FILE_BYTES {
+        return Err(too_large(bytes.len() as u64));
+    }
+    String::from_utf8(bytes).map_err(|_| bad("the file is not text".to_string()))
+}
+
 /// A 3D colour lookup table on **gamma-encoded** values, sampled trilinearly.
 ///
 /// The table is `size³` output colours in `.cube` order — red varies fastest,
@@ -587,6 +627,12 @@ impl Lut3d {
                         .ok_or_else(|| {
                             bad(format!("line {}: LUT_3D_SIZE needs a number", index + 1))
                         })?;
+                    if !(MIN_LUT_SIZE..=MAX_LUT_SIZE).contains(&n) {
+                        return Err(bad(format!(
+                            "line {}: the cube edge must be {MIN_LUT_SIZE}..={MAX_LUT_SIZE}, got {n}",
+                            index + 1
+                        )));
+                    }
                     size = Some(n);
                 }
                 "LUT_1D_SIZE" => {
@@ -628,6 +674,17 @@ impl Lut3d {
                             "line {}: expected three numbers, got {}",
                             index + 1,
                             values.len()
+                        )));
+                    }
+                    // Collect no more than the table can hold: the declared
+                    // cube, or the largest one there is while none is
+                    // declared yet. Past that the file is refused here,
+                    // rather than read into memory whole and refused after.
+                    let edge = size.unwrap_or(MAX_LUT_SIZE);
+                    if table.len() >= edge * edge * edge {
+                        return Err(bad(format!(
+                            "line {}: more entries than a {edge}-point cube holds",
+                            index + 1
                         )));
                     }
                     table.push([values[0], values[1], values[2]]);
@@ -1011,6 +1068,74 @@ mod tests {
                 "{text:?} was accepted"
             );
         }
+    }
+
+    #[test]
+    fn a_cube_stops_collecting_at_the_size_it_declares() {
+        // W5-B: entries past `LUT_3D_SIZE³` (or past 65³ while no size is
+        // declared) used to be collected into memory and refused only at
+        // the end.
+        let mut text = String::from("LUT_3D_SIZE 2\n");
+        for _ in 0..9 {
+            text.push_str("0 0 0\n");
+        }
+        match Lut3d::parse_cube("x", &text) {
+            Err(AdjustmentError::InvalidLut { reason }) => {
+                assert!(reason.contains("line 10: more entries"), "{reason}")
+            }
+            other => panic!("accepted: {other:?}"),
+        }
+        let mut text = String::new();
+        for _ in 0..=MAX_LUT_SIZE.pow(3) {
+            text.push_str("0 0 0\n");
+        }
+        match Lut3d::parse_cube("x", &text) {
+            Err(AdjustmentError::InvalidLut { reason }) => {
+                assert!(reason.contains("more entries than a 65-point"), "{reason}")
+            }
+            other => panic!("accepted: {other:?}"),
+        }
+        // An edge out of range is refused where it is declared.
+        match Lut3d::parse_cube("x", "LUT_3D_SIZE 100000\n0 0 0\n") {
+            Err(AdjustmentError::InvalidLut { reason }) => {
+                assert!(reason.starts_with("line 1:"), "{reason}")
+            }
+            other => panic!("accepted: {other:?}"),
+        }
+        // And exactly the declared size still parses.
+        assert!(Lut3d::parse_cube("x", &cube_text(&Lut3d::identity(2))).is_ok());
+    }
+
+    #[test]
+    fn a_cube_file_over_the_cap_is_refused_before_it_is_read() {
+        // No tempfile dev-dependency here: a directory of our own under the
+        // system temp, removed at the end.
+        let dir = std::env::temp_dir().join(format!(
+            "raster-cube-cap-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("huge.cube");
+        // Sparse: the metadata says the size; no byte of it has to exist.
+        // Twice the cap, so the refusal names the size only the metadata
+        // knows — the bounded read would stop at the cap and name that.
+        let size = MAX_CUBE_FILE_BYTES * 2;
+        let f = std::fs::File::create(&path).unwrap();
+        f.set_len(size).unwrap();
+        drop(f);
+        match read_cube_file(&path) {
+            Err(AdjustmentError::InvalidLut { reason }) => assert!(
+                reason.contains(&format!("the file is {size} bytes")),
+                "not refused from the metadata: {reason}"
+            ),
+            other => panic!("read a file over the cap: {:?}", other.map(|t| t.len())),
+        }
+        let ok = dir.join("ok.cube");
+        std::fs::write(&ok, cube_text(&Lut3d::identity(2))).unwrap();
+        let text = read_cube_file(&ok).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(Lut3d::parse_cube("ok", &text).unwrap().is_identity());
     }
 
     #[test]

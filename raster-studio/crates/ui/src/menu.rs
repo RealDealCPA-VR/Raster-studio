@@ -121,10 +121,13 @@ impl AdjustmentId {
     }
 
     /// Whether Image ▸ Adjustments opens a dialog for this adjustment.
-    /// Desaturate and Equalize ask nothing, in Photopea as here: the click
-    /// applies them.
+    /// Desaturate, Equalize and Invert ask nothing, in Photoshop and Photopea
+    /// as here: the click (or Ctrl+I, W5-E) applies them.
     pub const fn has_dialog(self) -> bool {
-        !matches!(self, AdjustmentId::Desaturate | AdjustmentId::Equalize)
+        !matches!(
+            self,
+            AdjustmentId::Desaturate | AdjustmentId::Equalize | AdjustmentId::Invert
+        )
     }
 
     pub const fn label(self) -> &'static str {
@@ -2213,6 +2216,12 @@ impl MenuAction {
             MenuAction::KeyboardShortcuts => Shortcut::ctrl_alt_shift('k'),
             MenuAction::Preferences => Shortcut::ctrl('k'),
 
+            // W5-E: Photoshop's (and Photopea's) core adjustment chords.
+            MenuAction::ApplyAdjustment(AdjustmentId::Levels) => Shortcut::ctrl('l'),
+            MenuAction::ApplyAdjustment(AdjustmentId::Curves) => Shortcut::ctrl('m'),
+            MenuAction::ApplyAdjustment(AdjustmentId::HueSaturation) => Shortcut::ctrl('u'),
+            MenuAction::ApplyAdjustment(AdjustmentId::ColorBalance) => Shortcut::ctrl('b'),
+            MenuAction::ApplyAdjustment(AdjustmentId::Invert) => Shortcut::ctrl('i'),
             MenuAction::ApplyAdjustment(AdjustmentId::Desaturate) => Shortcut::ctrl_shift('u'),
             MenuAction::AutoTone => Shortcut::ctrl_shift('l'),
             MenuAction::AutoContrast => Shortcut::ctrl_alt_shift('l'),
@@ -4512,7 +4521,7 @@ mod tests {
     }
 
     #[test]
-    fn desaturate_wears_shift_ctrl_u_and_only_two_adjustments_skip_the_dialog() {
+    fn desaturate_wears_shift_ctrl_u_and_only_three_adjustments_skip_the_dialog() {
         assert_eq!(
             MenuAction::ApplyAdjustment(AdjustmentId::Desaturate).shortcut(),
             Some(Shortcut::ctrl_shift('u'))
@@ -4522,9 +4531,14 @@ mod tests {
             .copied()
             .filter(|id| !id.has_dialog())
             .collect();
+        // W5-E: Invert asks nothing either, so Ctrl+I inverts at once.
         assert_eq!(
             no_dialog,
-            vec![AdjustmentId::Desaturate, AdjustmentId::Equalize]
+            vec![
+                AdjustmentId::Invert,
+                AdjustmentId::Desaturate,
+                AdjustmentId::Equalize
+            ]
         );
     }
 

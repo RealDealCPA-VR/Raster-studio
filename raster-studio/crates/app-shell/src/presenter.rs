@@ -880,7 +880,7 @@ pub fn selection_ants(
     time_secs: f64,
     style: &ui::canvas::AntsStyle,
 ) -> ui::canvas::AntsGeometry {
-    let viewport = crate::tool_input::canvas_viewport(doc.camera.viewport_size);
+    let viewport = crate::tool_input::canvas_viewport(&doc.camera);
     let camera = crate::interaction_geometry::canvas_camera_of(&doc.camera);
     let phase = ui::canvas::ants_phase(time_secs, style);
     let loops = outline.of(&doc.document);

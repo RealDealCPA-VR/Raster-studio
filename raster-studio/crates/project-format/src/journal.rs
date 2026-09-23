@@ -83,8 +83,8 @@
 //! platform-specific open, which is future work; what is closed here is the
 //! case that needs no race at all — a link that is simply *already there*.
 
-use std::io::Write;
-use std::path::Path;
+use std::io::{Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 
 use editor_core::{Command, Document};
 use serde::{Deserialize, Serialize};
@@ -265,7 +265,7 @@ impl CommandJournal {
     }
 
     /// Move every command held in the side file `side` to the end of the
-    /// journal `into`, then delete `side`.
+    /// journal `into`, exactly once, even across a crash.
     ///
     /// The other half of the ordering rule in the module header. An
     /// application that saves a *snapshot* on a worker keeps applying
@@ -283,43 +283,144 @@ impl CommandJournal {
     /// file exists loses nothing either — the file survives next to the
     /// package, and the caller absorbs it before it reads the journal back.
     ///
+    /// # Exactly once
+    ///
+    /// Appending and then deleting the side file (what this did) replays the
+    /// held edits **twice** after a crash between the two steps: the records
+    /// are in the journal *and* the side file is still there to be absorbed
+    /// again. So the side file is first **renamed** to a staged name that
+    /// records the journal's length before the append
+    /// (`<side>.absorbing-<len>`), then the records are appended, then the
+    /// staged file is deleted. Every intermediate state a crash can leave is
+    /// finished by the next call — which every open makes before it reads
+    /// the journal — by comparing the journal past that length with the
+    /// staged records: nothing there, append; a torn prefix of them, cut it
+    /// and append; all of them, only delete the staged file. A journal that
+    /// holds something *else* there is not guessed at: the staged file is set
+    /// aside ([`CommandJournal::set_aside`]), so its records are kept but
+    /// never replayed twice. That leftover does not hold up the side file of
+    /// *this* call — it is still absorbed — but the call then returns an
+    /// error naming what was set aside, so the caller hears about it.
+    ///
     /// Only command records are carried: the side file is the application's,
     /// and a marker in it would say something about a snapshot this journal
     /// never saw. The records land as **one** write and one fsync. An absent
-    /// side file absorbs as zero records. Returns how many were moved.
+    /// side file absorbs as zero records. Returns how many were moved by this
+    /// call.
     pub fn absorb(side: &Path, into: &Path) -> Result<usize, ProjectError> {
-        let recovery = match crate::safepath::read_capped(side, &label(side), MAX_JOURNAL_BYTES) {
-            Ok(bytes) => Self::parse(&bytes),
+        let (finished, set_aside) = Self::finish_interrupted_absorbs(side, into)?;
+        let moved = Self::absorb_side(side, into)? + finished;
+        match set_aside.first() {
+            None => Ok(moved),
+            Some(aside) => Err(ProjectError::Io(std::io::Error::other(format!(
+                "the journal changed under an unfinished absorb; its commands were kept in {} \
+                 and not replayed ({moved} held commands were absorbed)",
+                label(aside)
+            )))),
+        }
+    }
+
+    /// Absorb the side file itself: rename, append, delete (see
+    /// [`CommandJournal::absorb`]).
+    fn absorb_side(side: &Path, into: &Path) -> Result<usize, ProjectError> {
+        let bytes = match crate::safepath::read_capped(side, &label(side), MAX_JOURNAL_BYTES) {
+            Ok(bytes) => bytes,
             Err(ProjectError::MissingFile { .. }) => return Ok(0),
             Err(e) => return Err(e),
         };
-        let commands = recovery.commands();
-        if !commands.is_empty() {
-            reject_unsafe_target(into)?;
-            let mut buffer = Vec::new();
-            for cmd in commands {
-                let record = Record::Command(Box::new(cmd.clone()));
-                buffer.extend_from_slice(&serde_json::to_vec(&record)?);
-                buffer.push(b'\n');
+        let (buffer, count) = command_buffer(&bytes)?;
+        if count == 0 {
+            remove_if_present(side)?;
+            return Ok(0);
+        }
+        reject_unsafe_target(into)?;
+        let at = journal_len(into)?;
+        let staged = staged_path(side, at);
+        std::fs::rename(side, &staged)?;
+        // The rename has to be on disk before the records are: a rename lost
+        // to a crash after the append would bring the side file back.
+        crate::atomic::sync_dir(crate::atomic::parent_dir(side))?;
+        if let Err(e) = write_at(into, at, &buffer) {
+            // Put things back as they were, so a later absorb starts clean;
+            // if even that fails, the staged file is finished by the next one.
+            if truncate_to(into, at).is_ok() {
+                let _ = std::fs::rename(&staged, side);
             }
-            let mut f = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(into)?;
-            f.write_all(&buffer)?;
-            f.flush()?;
-            f.sync_all()?;
+            return Err(e);
         }
-        // Only once the records are durable in the journal: a crash before
-        // this line leaves the side file to be absorbed again, and a second
-        // absorb of the same records would be a duplicate-apply — so the
-        // caller absorbs exactly once per open, before reading the journal.
-        match std::fs::remove_file(side) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
+        #[cfg(test)]
+        if tests::CRASH_AFTER_APPEND.with(|c| c.replace(false)) {
+            // A crash here: the records are in the journal, the staged file
+            // is not yet deleted.
+            return Err(ProjectError::Io(std::io::Error::other("simulated crash")));
         }
-        Ok(commands.len())
+        // Durable in the journal; the staged copy is now only a duplicate.
+        // Should the delete fail, the next absorb finds the records already
+        // in place and deletes it then.
+        let _ = std::fs::remove_file(&staged);
+        Ok(count)
+    }
+
+    /// Finish every absorb of `side` a crash (or a failed write) left staged.
+    /// Returns how many records were moved, and every staged file set aside
+    /// because the journal no longer matched it.
+    fn finish_interrupted_absorbs(
+        side: &Path,
+        into: &Path,
+    ) -> Result<(usize, Vec<PathBuf>), ProjectError> {
+        let mut moved = 0;
+        let mut set_aside = Vec::new();
+        for (at, staged) in staged_absorbs(side)? {
+            let bytes = crate::safepath::read_capped(&staged, &label(&staged), MAX_JOURNAL_BYTES)?;
+            let (buffer, count) = command_buffer(&bytes)?;
+            reject_unsafe_target(into)?;
+            let len = journal_len(into)?;
+            let done = if len < at {
+                None
+            } else if len == at {
+                Some(false)
+            } else {
+                let journal = crate::safepath::read_capped(into, &label(into), MAX_JOURNAL_BYTES)?;
+                let tail = journal.get(at as usize..).unwrap_or_default();
+                if tail.starts_with(&buffer) {
+                    Some(true)
+                } else if buffer.starts_with(tail) {
+                    // A torn append: part of the records, and nothing after.
+                    Some(false)
+                } else {
+                    None
+                }
+            };
+            match done {
+                Some(true) => {}
+                Some(false) => {
+                    if count > 0 {
+                        write_at(into, at, &buffer)?;
+                        moved += count;
+                    }
+                }
+                None => {
+                    // Not guessed at, and not in the way of the side file
+                    // behind it: kept, never replayed.
+                    set_aside.push(Self::set_aside(&staged)?);
+                    continue;
+                }
+            }
+            remove_if_present(&staged)?;
+        }
+        Ok((moved, set_aside))
+    }
+
+    /// Rename `side` to a unique `<side>.unabsorbed-…` sibling that no absorb
+    /// ever reads, and return the new path.
+    ///
+    /// For held commands that could not be moved into a journal: the next
+    /// hold would otherwise delete them, and absorbing them later could
+    /// replay them twice. Set aside, they are kept for a person to look at.
+    pub fn set_aside(side: &Path) -> Result<PathBuf, ProjectError> {
+        let aside = crate::atomic::unique_sibling(side, UNABSORBED_PREFIX);
+        std::fs::rename(side, &aside)?;
+        Ok(aside)
     }
 
     /// Read a journal, keeping the valid prefix and stopping at the first
@@ -408,6 +509,107 @@ impl CommandJournal {
     }
 }
 
+/// Infix of a side file an absorb has claimed: `<side>.absorbing-<len>`, where
+/// `<len>` is the journal's length before the records were appended.
+const STAGED_INFIX: &str = ".absorbing-";
+
+/// Prefix of a side file set aside rather than absorbed
+/// ([`CommandJournal::set_aside`]).
+pub const UNABSORBED_PREFIX: &str = "unabsorbed";
+
+/// The command records of a side file, as the one buffer they are appended in,
+/// and how many there are.
+fn command_buffer(side_bytes: &[u8]) -> Result<(Vec<u8>, usize), ProjectError> {
+    let recovery = CommandJournal::parse(side_bytes);
+    let commands = recovery.commands();
+    let mut buffer = Vec::new();
+    for cmd in commands {
+        let record = Record::Command(Box::new(cmd.clone()));
+        buffer.extend_from_slice(&serde_json::to_vec(&record)?);
+        buffer.push(b'\n');
+    }
+    Ok((buffer, commands.len()))
+}
+
+fn staged_path(side: &Path, at: u64) -> PathBuf {
+    let mut name = side
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(format!("{STAGED_INFIX}{at}"));
+    side.with_file_name(name)
+}
+
+/// Every staged absorb of `side`, oldest journal offset first.
+fn staged_absorbs(side: &Path) -> Result<Vec<(u64, PathBuf)>, ProjectError> {
+    let Some(stem) = side.file_name().and_then(|n| n.to_str()) else {
+        return Ok(Vec::new());
+    };
+    let prefix = format!("{stem}{STAGED_INFIX}");
+    let entries = match std::fs::read_dir(crate::atomic::parent_dir(side)) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+    let mut out = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(at) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix(&prefix))
+            .and_then(|n| n.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        out.push((at, entry.path()));
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Length of the journal at `path`; an absent journal is empty.
+fn journal_len(path: &Path) -> Result<u64, ProjectError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) => Ok(m.len()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Cut the journal back to `at` bytes and write `buffer` there, durably. The
+/// cut is a no-op unless an earlier write was torn.
+fn write_at(into: &Path, at: u64, buffer: &[u8]) -> Result<(), ProjectError> {
+    reject_unsafe_target(into)?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(into)?;
+    f.set_len(at)?;
+    f.seek(SeekFrom::Start(at))?;
+    f.write_all(buffer)?;
+    f.flush()?;
+    f.sync_all()?;
+    Ok(())
+}
+
+fn truncate_to(into: &Path, at: u64) -> Result<(), ProjectError> {
+    reject_unsafe_target(into)?;
+    let f = std::fs::OpenOptions::new().write(true).open(into)?;
+    f.set_len(at)?;
+    f.sync_all()?;
+    Ok(())
+}
+
+fn remove_if_present(path: &Path) -> Result<(), ProjectError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Name a journal path by its filename, for an error message that does not
 /// leak the whole absolute path of the user's machine.
 fn label(path: &Path) -> String {
@@ -435,6 +637,14 @@ mod tests {
     use super::*;
     use editor_core::{Command, Document};
     use layer_model::Layer;
+
+    thread_local! {
+        /// Set, the next [`CommandJournal::absorb`] of this thread stops
+        /// right after its append — a crash before the staged file is
+        /// deleted — and returns an error.
+        pub(super) static CRASH_AFTER_APPEND: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
+    }
 
     fn create(name: &str) -> (Command, layer_model::LayerId) {
         let layer = Layer::raster(name);
@@ -500,6 +710,201 @@ mod tests {
 
         // Nothing to absorb is not an error, and changes nothing.
         let before = std::fs::read(&journal).unwrap();
+        assert_eq!(CommandJournal::absorb(&side, &journal).unwrap(), 0);
+        assert_eq!(std::fs::read(&journal).unwrap(), before);
+    }
+
+    /// Where a crash can leave an absorb: every intermediate state of the
+    /// rename → append → delete sequence, built by hand.
+    #[derive(Debug, Clone, Copy)]
+    enum CrashAt {
+        /// Before the absorb began: only the side file.
+        BeforeRename,
+        /// Side file renamed to its staged name, nothing appended.
+        AfterRename,
+        /// Staged, and the append torn half way.
+        TornAppend,
+        /// Staged, and every record appended; the staged file not deleted.
+        AfterAppend,
+        /// The absorb finished.
+        Finished,
+    }
+
+    /// W5-B: a journal and a side file as a save leaves them, the side file
+    /// then advanced to `at`; returns (journal, side, the snapshot digest,
+    /// the ids of the two held layers).
+    fn crashed_absorb(
+        dir: &Path,
+        at: CrashAt,
+    ) -> (
+        std::path::PathBuf,
+        std::path::PathBuf,
+        DocumentDigest,
+        [layer_model::LayerId; 2],
+        Document,
+    ) {
+        let journal = dir.join("commands.journal");
+        let side = dir.join("p.rstudio.journal-hold");
+        let mut doc = Document::new(64, 64, "t");
+        let (old, _) = create("old");
+        old.apply(&mut doc).unwrap();
+        CommandJournal::append(&journal, &old).unwrap();
+        let snapshot = DocumentDigest::of(&rmp_serde::to_vec_named(&doc).unwrap());
+        CommandJournal::mark_saved(&journal, snapshot).unwrap();
+        let (a, a_id) = create("held-1");
+        let (b, b_id) = create("held-2");
+        CommandJournal::append(&side, &a).unwrap();
+        CommandJournal::append(&side, &b).unwrap();
+
+        let len = std::fs::metadata(&journal).unwrap().len();
+        let (buffer, count) = command_buffer(&std::fs::read(&side).unwrap()).unwrap();
+        assert_eq!(count, 2);
+        let staged = staged_path(&side, len);
+        let append = |bytes: &[u8]| {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&journal)
+                .unwrap();
+            f.write_all(bytes).unwrap();
+        };
+        match at {
+            CrashAt::BeforeRename => {}
+            CrashAt::AfterRename => std::fs::rename(&side, &staged).unwrap(),
+            CrashAt::TornAppend => {
+                std::fs::rename(&side, &staged).unwrap();
+                append(&buffer[..buffer.len() / 2]);
+            }
+            CrashAt::AfterAppend => {
+                std::fs::rename(&side, &staged).unwrap();
+                append(&buffer);
+            }
+            CrashAt::Finished => {
+                std::fs::remove_file(&side).unwrap();
+                append(&buffer);
+            }
+        }
+        (journal, side, snapshot, [a_id, b_id], doc)
+    }
+
+    /// W5-B: the absorb used to append and then delete the side file, so a
+    /// crash between the two replayed the held edits twice. Whatever step a
+    /// crash stops it at, the absorb the next open makes leaves exactly one
+    /// copy of them after the marker — and a second open adds nothing.
+    #[test]
+    fn a_crash_at_any_step_of_an_absorb_leaves_exactly_one_copy_of_the_held_commands() {
+        for at in [
+            CrashAt::BeforeRename,
+            CrashAt::AfterRename,
+            CrashAt::TornAppend,
+            CrashAt::AfterAppend,
+            CrashAt::Finished,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (journal, side, snapshot, ids, doc) = crashed_absorb(dir.path(), at);
+
+            // The next open.
+            CommandJournal::absorb(&side, &journal).unwrap();
+            let recovery = CommandJournal::read(&journal).unwrap();
+            assert!(!recovery.truncated(), "{at:?}: no torn record is left");
+            assert_eq!(
+                recovery.since_last_save().len(),
+                2,
+                "{at:?}: exactly one copy of the two held commands"
+            );
+            let mut recovered = doc.clone();
+            assert_eq!(recovery.replay_onto(&mut recovered, snapshot).unwrap(), 2);
+            for id in ids {
+                assert!(recovered.layers.get(id).is_some(), "{at:?}");
+            }
+            let left: Vec<_> = std::fs::read_dir(dir.path())
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|n| n != "commands.journal")
+                .collect();
+            assert!(left.is_empty(), "{at:?}: nothing left to absorb: {left:?}");
+
+            // And the open after that.
+            let before = std::fs::read(&journal).unwrap();
+            assert_eq!(CommandJournal::absorb(&side, &journal).unwrap(), 0);
+            assert_eq!(std::fs::read(&journal).unwrap(), before, "{at:?}");
+        }
+    }
+
+    /// W5-B: `absorb` itself — not a hand-built state — stages the side file
+    /// before it appends. Stopped by a crash right after the append, what is
+    /// on disk is the staged file, not the side file; the next open finds
+    /// the records already there and leaves exactly one copy. The old
+    /// append-then-delete left the side file, and the next open appended it
+    /// a second time.
+    #[test]
+    fn an_absorb_stopped_after_its_append_left_the_side_file_staged() {
+        let dir = tempfile::tempdir().unwrap();
+        let (journal, side, snapshot, ids, doc) = crashed_absorb(dir.path(), CrashAt::BeforeRename);
+        let len = std::fs::metadata(&journal).unwrap().len();
+
+        CRASH_AFTER_APPEND.with(|c| c.set(true));
+        let err = CommandJournal::absorb(&side, &journal).unwrap_err();
+        assert!(err.to_string().contains("simulated crash"), "{err}");
+        assert!(
+            !side.exists(),
+            "the side file was not staged before the append"
+        );
+        assert!(staged_path(&side, len).exists(), "no staged file was left");
+        assert_eq!(
+            CommandJournal::read(&journal)
+                .unwrap()
+                .since_last_save()
+                .len(),
+            2,
+            "the append ran"
+        );
+
+        // The next open.
+        assert_eq!(CommandJournal::absorb(&side, &journal).unwrap(), 0);
+        let recovery = CommandJournal::read(&journal).unwrap();
+        assert_eq!(recovery.since_last_save().len(), 2, "exactly one copy");
+        let mut recovered = doc.clone();
+        assert_eq!(recovery.replay_onto(&mut recovered, snapshot).unwrap(), 2);
+        for id in ids {
+            assert!(recovered.layers.get(id).is_some());
+        }
+        assert!(staged_absorbs(&side).unwrap().is_empty());
+    }
+
+    /// W5-B: a staged absorb whose journal now holds something else past its
+    /// offset is not guessed at — the records are kept aside and never
+    /// replayed, and the caller hears about it. It does not hold up the side
+    /// file behind it: that one's commands still reach the journal.
+    #[test]
+    fn a_staged_absorb_the_journal_no_longer_matches_is_set_aside_not_replayed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (journal, side, _, _, _) = crashed_absorb(dir.path(), CrashAt::AfterRename);
+        let (other, _) = create("unrelated");
+        CommandJournal::append(&journal, &other).unwrap();
+        let before = std::fs::read(&journal).unwrap();
+        // This save's hold, written after the leftover.
+        let (fresh, _) = create("this-save");
+        CommandJournal::append(&side, &fresh).unwrap();
+        let (fresh_only, _) = command_buffer(&std::fs::read(&side).unwrap()).unwrap();
+
+        let err = CommandJournal::absorb(&side, &journal).unwrap_err();
+        assert!(err.to_string().contains("not replayed"), "{err}");
+        assert!(!side.exists(), "this save's hold was not absorbed");
+        let after = std::fs::read(&journal).unwrap();
+        assert!(after.starts_with(&before), "the journal was rewritten");
+        assert_eq!(
+            &after[before.len()..],
+            &fresh_only[..],
+            "not exactly this save's command after the journal"
+        );
+        let before = after;
+        let kept: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(UNABSORBED_PREFIX))
+            .collect();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        // Set aside is final: a later absorb neither reads nor replays it.
         assert_eq!(CommandJournal::absorb(&side, &journal).unwrap(), 0);
         assert_eq!(std::fs::read(&journal).unwrap(), before);
     }

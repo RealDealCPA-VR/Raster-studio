@@ -154,8 +154,14 @@ pub fn grid(
     canvas: DocRect,
     style: &CanvasStyle,
 ) -> bool {
-    let visible = camera.visible_doc_rect(viewport);
+    // W5-E: the grid is the document's, so it is clipped to the document
+    // rather than ruled across the whole pasteboard.
+    let visible = camera.visible_doc_rect(viewport).intersect(&canvas);
     let stroke_line = |axis: Axis, value: f32, stroke: egui::Stroke| {
+        let (lo, hi) = axis.range_of(visible);
+        if visible.is_empty() || value < lo || value > hi {
+            return;
+        }
         let (a, b) = grid::line_endpoints(visible, axis, value);
         painter.line_segment(
             [
@@ -290,18 +296,56 @@ pub fn rulers(
                         stroke,
                     );
                     if let Some(label) = &tick.label {
-                        painter.text(
-                            egui::pos2(left.min.x, y + style.label_gap_pt),
-                            egui::Align2::LEFT_TOP,
-                            label,
-                            font.clone(),
-                            style.ruler_text,
-                        );
+                        painter.add(vertical_ruler_label(painter, left, y, label, &font, style));
                     }
                 }
             }
         }
     }
+}
+
+/// W5-E: a left-ruler label, turned a quarter to read bottom-to-top the way
+/// the ruler runs, laid out below its tick and centred across the gutter.
+///
+/// Drawn level it spilled out of the gutter over the image — a four-digit
+/// number is wider than the ruler is thick. Turned, its *height* is what
+/// crosses the gutter, and the type scale's caption line fits inside it.
+pub fn vertical_ruler_label(
+    painter: &egui::Painter,
+    gutter: egui::Rect,
+    tick_y: f32,
+    label: &str,
+    font: &egui::FontId,
+    style: &CanvasStyle,
+) -> egui::Shape {
+    let galley = painter.layout_no_wrap(label.to_string(), font.clone(), style.ruler_text);
+    let size = galley.size();
+    // Turned by -90 degrees about `pos`: the text runs up from `pos` and its
+    // height extends to the right of it.
+    let x = gutter.min.x + ((gutter.width() - size.y) * 0.5).max(0.0);
+    let y = tick_y + style.label_gap_pt + size.x;
+    egui::Shape::Text(
+        egui::epaint::TextShape::new(egui::pos2(x, y), galley, style.ruler_text)
+            .with_angle(-std::f32::consts::FRAC_PI_2),
+    )
+}
+
+/// The screen rectangle a text shape covers, its rotation included.
+pub fn text_shape_bounds(text: &egui::epaint::TextShape) -> egui::Rect {
+    let size = text.galley.size();
+    let (sin, cos) = text.angle.sin_cos();
+    let turn = |v: egui::Vec2| egui::vec2(v.x * cos - v.y * sin, v.x * sin + v.y * cos);
+    let corners = [
+        egui::Vec2::ZERO,
+        egui::vec2(size.x, 0.0),
+        egui::vec2(0.0, size.y),
+        size,
+    ];
+    let mut rect = egui::Rect::NOTHING;
+    for c in corners {
+        rect.extend_with(text.pos + turn(c));
+    }
+    rect
 }
 
 /// The pointer's position marked on each ruler — W3-A: a hairline across the
@@ -1119,6 +1163,108 @@ mod tests {
         let _ = ctx.tessellate(out.shapes, out.pixels_per_point);
         assert!(dense, "a one-pixel grid at 1/64 zoom is not drawable");
         assert!(!sparse, "the same grid at 8x reads fine");
+    }
+
+    /// W5-E: the left ruler's numbers stay inside its gutter. Drawn level,
+    /// a four-digit label was wider than the ruler and spilled over the image.
+    #[test]
+    fn vertical_ruler_labels_lie_within_the_gutter_width() {
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, Theme::Dark);
+        let style = CanvasStyle::new(Theme::Dark, 1.0);
+        let v = viewport();
+        // Far out, so the labels run to four digits.
+        let cam = CanvasCamera {
+            center: Vec2::new(5000.0, 4000.0),
+            zoom: 0.1,
+            ..CanvasCamera::default()
+        };
+        let outer = v.content_rect();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                rulers(
+                    &ui.painter().clone(),
+                    &cam,
+                    &v,
+                    outer,
+                    &RulerSpec::default(),
+                    &style,
+                );
+            });
+        });
+        let [top, left] = rulers::gutters(outer, style.ruler_thickness_pt);
+        let mut vertical = Vec::new();
+        for clipped in &output.shapes {
+            if let egui::Shape::Text(text) = &clipped.shape {
+                let bounds = text_shape_bounds(text);
+                if bounds.center().y > top.max.y {
+                    vertical.push((text.galley.text().to_string(), bounds));
+                }
+            }
+        }
+        assert!(
+            vertical.iter().any(|(label, _)| label.len() >= 4),
+            "no four-digit label on the left ruler: {vertical:?}"
+        );
+        for (label, bounds) in &vertical {
+            assert!(
+                bounds.min.x >= left.min.x - 0.5 && bounds.max.x <= left.max.x + 0.5,
+                "{label:?} at {bounds:?} leaves the gutter {left:?}"
+            );
+        }
+    }
+
+    /// W5-E: the grid is ruled over the document only, never the pasteboard
+    /// around it.
+    #[test]
+    fn grid_segments_lie_within_the_document_rect() {
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, Theme::Dark);
+        let style = CanvasStyle::new(Theme::Dark, 1.0);
+        let v = viewport();
+        let doc_size = Vec2::new(300.0, 200.0);
+        let cam = CanvasCamera {
+            center: Vec2::new(150.0, 100.0),
+            zoom: 1.0,
+            ..CanvasCamera::default()
+        };
+        let settings = GridSettings {
+            visible: true,
+            spacing_doc: 50.0,
+            subdivisions: 2,
+            pixel_grid: false,
+        };
+        let doc_pt = document_bounds_pt(&cam, &v, doc_size).expect("the document is on screen");
+        let doc_rect = egui::Rect::from_min_max(to_pos2(doc_pt.min), to_pos2(doc_pt.max));
+        assert!(
+            v.content_rect().width() > doc_rect.width() + 100.0,
+            "the test needs pasteboard around the document"
+        );
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                grid(
+                    &ui.painter().clone(),
+                    &cam,
+                    &v,
+                    &settings,
+                    DocRect::of_canvas(doc_size),
+                    &style,
+                );
+            });
+        });
+        let mut segments = 0;
+        for clipped in &output.shapes {
+            if let egui::Shape::LineSegment { points, .. } = &clipped.shape {
+                segments += 1;
+                for p in points {
+                    assert!(
+                        doc_rect.expand(0.5).contains(*p),
+                        "a grid line reaches {p:?}, outside the document {doc_rect:?}"
+                    );
+                }
+            }
+        }
+        assert!(segments > 4, "the grid drew {segments} lines");
     }
 
     #[test]

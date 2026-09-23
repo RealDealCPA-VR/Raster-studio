@@ -39,6 +39,27 @@ use ui::dialogs::{
 };
 use ui::menu::AdjustmentId;
 
+/// W5-B: the `.cube` file Color Lookup's "Load" button asks for. A test sets
+/// [`PICKED_CUBE_FOR_TEST`] to stand in for the person at the file dialog, so
+/// the dialog's real Load route can be driven headless.
+fn pick_cube_file() -> Option<std::path::PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = PICKED_CUBE_FOR_TEST.with(|p| p.borrow_mut().take()) {
+        return Some(path);
+    }
+    rfd::FileDialog::new()
+        .add_filter("3D LUT", &["cube", "CUBE"])
+        .set_title("Load Color Lookup")
+        .pick_file()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The file [`pick_cube_file`] answers once, in place of the dialog.
+    pub(crate) static PICKED_CUBE_FOR_TEST: RefCell<Option<std::path::PathBuf>> =
+        const { RefCell::new(None) };
+}
+
 thread_local! {
     /// The parameters the Adjustments dialog confirmed, waiting for the
     /// [`ui::menu::MenuAction::ApplyAdjustment`] pick that rides
@@ -944,16 +965,14 @@ impl DialogHost {
                 // file; the dialog parses it and shows why when it cannot.
                 DialogOutcome::Open => {
                     if dialog.take_lut_file_request() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("3D LUT", &["cube", "CUBE"])
-                            .set_title("Load Color Lookup")
-                            .pick_file()
-                        {
+                        if let Some(path) = pick_cube_file() {
                             let name = path
                                 .file_stem()
                                 .map(|s| s.to_string_lossy().into_owned())
                                 .unwrap_or_default();
-                            match std::fs::read_to_string(&path) {
+                            // W5-B: size-checked from the metadata before a
+                            // byte is read — this is the interaction thread.
+                            match adjustments::extended::read_cube_file(&path) {
                                 Ok(text) => {
                                     let _ = dialog.load_cube_text(&name, &text);
                                 }
@@ -1180,7 +1199,12 @@ impl ScreenSampler for CanvasSampler<'_> {
         }
         let surface_px = glam::Vec2::new(self.surface_px.x, self.surface_px.y);
         let px_glam = glam::Vec2::new(px.x, px.y);
-        let viewport = crate::tool_input::canvas_viewport(surface_px);
+        // Off the window is off the canvas.
+        if px_glam.cmplt(glam::Vec2::ZERO).any() || px_glam.cmpgt(surface_px).any() {
+            return None;
+        }
+        // The canvas area the document camera draws into, not the window.
+        let viewport = crate::tool_input::canvas_viewport(&self.doc.camera);
         let mirror = crate::tool_input::canvas_camera_of(&self.doc.camera);
         let doc_pt = mirror.doc_of_screen_pt(&viewport, px_glam);
         let (w, h) = (

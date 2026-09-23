@@ -99,8 +99,7 @@ use glam::Vec2;
 use ui::canvas::geom::{from_pos2, to_pos2};
 use ui::canvas::{
     brush_cursor, cursor_for_tool_id, paint, rulers, Axis, CanvasCursor, CanvasStyle,
-    CursorOverride, DocRect, GuideDrag, GuideGesture, GuideGrab, Guides, PanelInsets, RulerSpec,
-    SnapHit, Viewport,
+    CursorOverride, DocRect, GuideDrag, GuideGesture, GuideGrab, Guides, RulerSpec, SnapHit,
 };
 use ui::ViewFlag;
 
@@ -227,14 +226,14 @@ impl CanvasExtras {
         }
         // The camera the surface was rendered with — rotation included, as
         // the ants and the transform handles read it — measured against the
-        // whole window, because that is the rectangle the shell composites
-        // across (`Chrome::sync_canvas_host` says why). In egui points, so
-        // the painter and the pointer agree on a scaled display.
+        // canvas area it draws into (`viewport_origin` / `viewport_size`, the
+        // rectangle between the docks; see `Chrome::canvas_area_px`). In egui
+        // points, so the painter and the pointer agree on a scaled display.
         //
-        // `render::Camera::viewport_size` is in physical pixels and its zoom is
-        // physical pixels per document pixel; `ui::canvas::Viewport` takes the
-        // surface in points and converts through the scale, so the surface is
-        // divided by it here and the zoom is left as it is.
+        // The camera's area is in physical pixels and its zoom is physical
+        // pixels per document pixel; `ui::canvas::Viewport` takes points and
+        // converts through the scale, so `CanvasArea::viewport` divides the
+        // area by it and the zoom is left as it is.
         let camera = crate::interaction_geometry::canvas_camera_of(&doc.camera);
         let ppp = ctx.pixels_per_point();
         let ppp = if ppp.is_finite() && ppp > 0.0 {
@@ -242,7 +241,8 @@ impl CanvasExtras {
         } else {
             1.0
         };
-        let viewport = Viewport::new(doc.camera.viewport_size / ppp, PanelInsets::NONE, ppp);
+        let viewport =
+            crate::interaction_geometry::CanvasArea::of_camera(&doc.camera).viewport(ppp);
         if viewport.is_degenerate() {
             self.last = report;
             return report;
@@ -517,7 +517,7 @@ impl CanvasExtras {
             1.0
         };
         let camera = tool_input::canvas_camera_of(&doc.camera);
-        let viewport = tool_input::canvas_viewport(doc.camera.viewport_size);
+        let viewport = tool_input::canvas_viewport(&doc.camera);
         let to_doc = |p: egui::Pos2| {
             crate::interaction_geometry::screen_to_document(&camera, &viewport, from_pos2(p) * ppp)
         };

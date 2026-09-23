@@ -1442,6 +1442,72 @@ impl OpenDocument {
             CompositeOptions::default(),
         )?
         .and_then(|b| intersect_rects(b, canvas));
+        // W5-F: past a few megapixels the banded composite costs the layer's
+        // whole area on the UI thread — and a stroke inside a group rebuilds
+        // the group's thumbnail too. There the thumbnail is composited on a
+        // sampled grid instead (THUMB_SUPERSAMPLE² points per thumbnail
+        // pixel, spread over its footprint), whose cost is bounded by the
+        // thumbnail's size, not the layer's.
+        if let Some(bounds) = bounds.filter(|b| {
+            u64::from(b.width) * u64::from(b.height) > SAMPLED_THUMB_PIXELS
+                && tw * th > 0
+                && (tw < w || th < h)
+        }) {
+            let s = THUMB_SUPERSAMPLE;
+            // The thumbnail columns/rows whose footprint meets the bounds.
+            let span = |lo: i64, len: i64, n: u32, full: u32| {
+                let first = ThumbAccumulator::index_of(lo, n, full);
+                let last = ThumbAccumulator::index_of(lo + len - 1, n, full);
+                first..=last
+            };
+            let cols = span(bounds.x, i64::from(bounds.width), tw, w);
+            let rows = span(bounds.y, i64::from(bounds.height), th, h);
+            let points = |range: std::ops::RangeInclusive<u32>, n: u32, full: u32| {
+                range
+                    .flat_map(|o| {
+                        let (lo, hi) = ThumbAccumulator::footprint(o, n, full);
+                        (0..s).map(move |k| {
+                            let at = lo + (f64::from(k) + 0.5) * (hi - lo) / f64::from(s);
+                            (at.floor() as i64).clamp(0, i64::from(full) - 1)
+                        })
+                    })
+                    .collect::<Vec<i64>>()
+            };
+            let xs = points(cols.clone(), tw, w);
+            let ys = points(rows.clone(), th, h);
+            THUMB_COMPOSITES.with(|c| c.set(c.get() + 1));
+            THUMB_PIXELS.with(|c| c.set(c.get() + (xs.len() * ys.len()) as u64));
+            let grid = compositor::composite::composite_grid(
+                &staged,
+                &self.tiles,
+                &xs,
+                &ys,
+                0,
+                CompositeOptions::default(),
+            )?;
+            let rgba8 = grid.to_rgba8(&self.document.meta.color_space);
+            let gw = xs.len();
+            let mut out = vec![0u8; (tw as usize) * (th as usize) * 4];
+            let n = f64::from(s * s);
+            for (j, oy) in rows.enumerate() {
+                for (i, ox) in cols.clone().enumerate() {
+                    let mut sum = [0.0f64; 4];
+                    for sy in 0..s as usize {
+                        for sx in 0..s as usize {
+                            let g = ((j * s as usize + sy) * gw + i * s as usize + sx) * 4;
+                            for (c, acc) in sum.iter_mut().enumerate() {
+                                *acc += f64::from(rgba8[g + c]);
+                            }
+                        }
+                    }
+                    let o = ((oy * tw + ox) as usize) * 4;
+                    for (c, acc) in sum.iter().enumerate() {
+                        out[o + c] = (acc / n).round().clamp(0.0, 255.0) as u8;
+                    }
+                }
+            }
+            return Ok((tw, th, out));
+        }
         if let Some(bounds) = bounds {
             let band = i64::from(TILE_SIZE);
             let mut y = bounds.y;
@@ -1450,6 +1516,7 @@ impl OpenDocument {
                 let rows = band.min(y_end - y);
                 let region = PixelRect::new(bounds.x, y, bounds.width, rows as u32);
                 THUMB_COMPOSITES.with(|c| c.set(c.get() + 1));
+                THUMB_PIXELS.with(|c| c.set(c.get() + u64::from(bounds.width) * rows as u64));
                 let canvas = compositor::composite_region(
                     &staged,
                     &self.tiles,
@@ -1904,12 +1971,22 @@ impl OpenDocument {
 
     /// Save to `path`, which becomes this document's location.
     pub fn save_to(&mut self, path: &Path, app_version: &str) -> Result<(), DocumentError> {
-        let report = project_format::save_project_with(
+        // W5-D: the tab and window title follow Save As. Set before the write
+        // so the package carries the name it is saved under; put back if the
+        // write fails, so a refused save renames nothing.
+        let previous_title = self.adopt_title_from(path);
+        let report = match project_format::save_project_with(
             path,
             &self.document,
             &SourceTiles(&self.tiles),
             &SaveOptions::new(app_version),
-        )?;
+        ) {
+            Ok(report) => report,
+            Err(e) => {
+                self.document.meta.title = previous_title;
+                return Err(e.into());
+            }
+        };
         self.project_path = Some(path.to_path_buf());
         self.document.set_path(Some(path.to_path_buf()));
         self.document.mark_saved();
@@ -1970,6 +2047,9 @@ impl OpenDocument {
         let rgba8 = self.composite(self.canvas_rect())?;
         let (bytes, notes) = crate::import::psd_from_document(&self.document, &self.tiles, &rgba8)?;
         write_atomically(path, &bytes).map_err(crate::import::ImportError::from)?;
+        // W5-D: Save as PSD names the tab after the file it wrote, as the
+        // project Save As does.
+        self.adopt_title_from(path);
         self.psd_notes = notes.clone();
         Ok(notes)
     }
@@ -2505,11 +2585,29 @@ impl OpenDocument {
     /// stays dirty: the package holds the snapshot, not those edits, and a
     /// clean flag would tell the user work is on disk that is not.
     pub fn adopt_saved(&mut self, path: &Path, unchanged: bool) {
+        // W5-D: the tab and window title follow the file the user saved to.
+        self.adopt_title_from(path);
         self.project_path = Some(path.to_path_buf());
         self.document.set_path(Some(path.to_path_buf()));
         if unchanged {
             self.document.mark_saved();
         }
+    }
+
+    /// W5-D: name the document after the file stem of `path` (`poster` for
+    /// `poster.rstudio` or `poster.psd`) — what the tab and the window title
+    /// show. Returns the title it replaced. A path with no stem keeps the
+    /// current title.
+    pub(crate) fn adopt_title_from(&mut self, path: &Path) -> String {
+        let previous = self.document.meta.title.clone();
+        if let Some(stem) = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .filter(|s| !s.trim().is_empty())
+        {
+            self.document.meta.title = stem;
+        }
+        previous
     }
 
     /// W2-G: wrap a `.psd` the job thread has already parsed
@@ -2537,16 +2635,25 @@ impl OpenDocument {
     /// records survive the swap, and a crash while the hold is open leaves
     /// the file next to the package for the next open to absorb.
     ///
-    /// A stale side file at `side` (an earlier hold this process never
-    /// finished — the caller absorbs those at open) is replaced, not appended
-    /// to. One hold at a time: a second call while one is open is a no-op.
+    /// A stale side file at `side` (an earlier hold whose absorb failed — the
+    /// caller absorbs a crashed run's at open) is not appended to, and W5-B:
+    /// not deleted either — those are held commands no journal has yet, so
+    /// it is renamed aside ([`project_format::CommandJournal::set_aside`])
+    /// where it is kept and never absorbed twice. One hold at a time: a
+    /// second call while one is open is a no-op.
     pub fn begin_journal_hold(&mut self, side: PathBuf) {
         if self.journal_hold.is_some() {
             return;
         }
-        if let Err(e) = std::fs::remove_file(&side) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!("cannot clear the journal hold {}: {e}", side.display());
+        if std::fs::symlink_metadata(&side).is_ok() {
+            match project_format::CommandJournal::set_aside(&side) {
+                Ok(aside) => {
+                    tracing::warn!("an unabsorbed journal hold was kept as {}", aside.display())
+                }
+                Err(e) => {
+                    tracing::warn!("cannot set aside the journal hold {}: {e}", side.display());
+                    let _ = std::fs::remove_file(&side);
+                }
             }
         }
         self.journal_hold = Some(side);
@@ -2588,6 +2695,24 @@ thread_local! {
 /// The calling thread's thumbnail compositor-call count so far.
 pub fn thumbnail_composites() -> u64 {
     THUMB_COMPOSITES.with(|c| c.get())
+}
+
+/// W5-F: a layer thumbnail whose bounds exceed this many pixels is
+/// composited on a sampled grid rather than in full-resolution bands.
+const SAMPLED_THUMB_PIXELS: u64 = 4 * 1024 * 1024;
+
+/// W5-F: samples per thumbnail pixel along each axis on the sampled path.
+const THUMB_SUPERSAMPLE: u32 = 3;
+
+thread_local! {
+    /// W5-F: how many canvas pixels [`OpenDocument::layer_thumbnail`] asked
+    /// the compositor for on this thread — band areas, or grid samples.
+    static THUMB_PIXELS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// W5-F: the calling thread's thumbnail composited-pixel count so far.
+pub fn thumbnail_pixels() -> u64 {
+    THUMB_PIXELS.with(|c| c.get())
 }
 
 /// `a ∩ b`, or `None` when they do not overlap.
@@ -3765,7 +3890,8 @@ mod tests {
         let project = dir.path().join("p.rstudio");
         d.save_to(&project, "test").unwrap();
         assert!(!d.is_dirty(), "a save clears it");
-        assert_eq!(d.tab_label(), "test.png");
+        // W5-D: the tab follows Save As to the file's name.
+        assert_eq!(d.tab_label(), "p");
         assert_eq!(d.project_path(), Some(project.as_path()));
 
         // ...and the next edit dirties it again.
@@ -4354,6 +4480,61 @@ mod tests {
         );
         // A different edge is a different thumbnail.
         assert!(!cache.layer_is_current(&d, b, 32));
+    }
+
+    /// W5-F: the thumbnail of a huge layer — and of the group holding it,
+    /// which a stroke on the layer also rebuilds — composites a bounded
+    /// number of pixels (a sampled grid), not the layer's whole area, and
+    /// still shows the layer's content: left half red, right half blue.
+    #[test]
+    fn a_huge_layer_s_thumbnail_composites_a_bounded_sample_grid() {
+        let side = 4096u32;
+        let mut d = OpenDocument::blank(DocumentId(7003), side, side, "huge", 32).unwrap();
+        let layer = d.document.active_layer().unwrap();
+        let solid = |rgba: [u8; 4]| {
+            let mut bytes = Vec::with_capacity((TILE_SIZE * TILE_SIZE * 4) as usize);
+            for _ in 0..TILE_SIZE * TILE_SIZE {
+                bytes.extend_from_slice(&rgba);
+            }
+            bytes
+        };
+        let red = d.tiles.insert_bytes(solid([255, 0, 0, 255]));
+        let blue = d.tiles.insert_bytes(solid([0, 0, 255, 255]));
+        let n = (side / TILE_SIZE) as i32;
+        let mut edits = Vec::new();
+        for ty in 0..n {
+            for tx in 0..n {
+                let hash = if tx < n / 2 { red } else { blue };
+                edits.push(TileEdit::set(raster::TileCoord::new(tx, ty, 0), hash));
+            }
+        }
+        d.apply(Command::paint_tiles(PixelTarget::Layer(layer), edits).unwrap())
+            .unwrap();
+        let group = d
+            .document
+            .layers
+            .push_root(layer_model::Layer::group("G"))
+            .unwrap();
+        d.document.layers.move_layer(layer, Some(group), 0).unwrap();
+
+        let edge = 64u32;
+        let bound = u64::from(edge * edge * THUMB_SUPERSAMPLE * THUMB_SUPERSAMPLE);
+        for id in [layer, group] {
+            let before = thumbnail_pixels();
+            let (tw, th, rgba) = d.layer_thumbnail(id, edge).unwrap();
+            let spent = thumbnail_pixels() - before;
+            assert!(
+                spent <= bound,
+                "{id:?}: one thumbnail composited {spent} pixels (bound {bound})"
+            );
+            assert_eq!((tw, th), (edge, edge));
+            let px = |x: u32, y: u32| {
+                let i = ((y * tw + x) * 4) as usize;
+                [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]
+            };
+            assert_eq!(px(5, 30), [255, 0, 0, 255], "{id:?}: left is red");
+            assert_eq!(px(58, 30), [0, 0, 255, 255], "{id:?}: right is blue");
+        }
     }
 
     #[test]

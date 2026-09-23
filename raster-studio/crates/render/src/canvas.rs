@@ -84,6 +84,27 @@ pub struct Canvas {
     bind_group: Option<wgpu::BindGroup>,
     format: wgpu::TextureFormat,
     backdrop: [u8; 3],
+    /// The camera's viewport as of the last [`Canvas::update_camera`]:
+    /// `[origin.x, origin.y, size.x, size.y]` in surface pixels. What
+    /// [`Canvas::render_in`] confines the quad to.
+    area: [f32; 4],
+}
+
+/// The pixel rectangle `[x, y, w, h]` of `area` (`[x, y, w, h]`, floats) that
+/// lies inside a `target_w` x `target_h` target, or `None` when nothing of it
+/// does. Rounded outward to whole pixels, then clamped, so a viewport can
+/// never be handed to wgpu outside its attachment (which is a validation
+/// error, and an uncaptured one is a panic).
+pub fn clamp_area(area: [f32; 4], target_w: u32, target_h: u32) -> Option<[u32; 4]> {
+    let [x, y, w, h] = area;
+    if !(x.is_finite() && y.is_finite() && w.is_finite() && h.is_finite()) {
+        return None;
+    }
+    let x0 = x.round().clamp(0.0, target_w as f32) as u32;
+    let y0 = y.round().clamp(0.0, target_h as f32) as u32;
+    let x1 = (x + w).round().clamp(0.0, target_w as f32) as u32;
+    let y1 = (y + h).round().clamp(0.0, target_h as f32) as u32;
+    (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0])
 }
 
 impl Canvas {
@@ -233,6 +254,7 @@ impl Canvas {
             bind_group: None,
             format: output_format,
             backdrop: DEFAULT_BACKDROP_SRGB,
+            area: [0.0; 4],
         })
     }
 
@@ -292,7 +314,16 @@ impl Canvas {
     /// checkerboard ([`Camera::checker_frame`]), so the checker turns (and
     /// mirrors, when the camera's `flip_x` / `flip_y` is set) with the
     /// document instead of staying nailed to the window.
-    pub fn update_camera(&self, gpu: &GpuContext, camera: &Camera) {
+    ///
+    /// Also records the camera's viewport rectangle (`viewport_origin`,
+    /// `viewport_size`) for [`Canvas::render_in`].
+    pub fn update_camera(&mut self, gpu: &GpuContext, camera: &Camera) {
+        self.area = [
+            camera.viewport_origin.x,
+            camera.viewport_origin.y,
+            camera.viewport_size.x,
+            camera.viewport_size.y,
+        ];
         let (m0, mut m1) = camera.clip_to_uv();
         m1[2] = if self.format.is_srgb() { 0.0 } else { 1.0 };
         let u = CameraUniform {
@@ -346,6 +377,61 @@ impl Canvas {
         let Some(bind_group) = &self.bind_group else {
             return; // cleared, but there is no source texture to draw yet
         };
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, bind_group, &[]);
+        pass.draw(0..6, 0..1);
+    }
+
+    /// Record a render pass that clears all of `target` to the backdrop and
+    /// draws the quad into the camera's viewport rectangle only.
+    ///
+    /// The host's canvas area: a window whose panels take the edges gets its
+    /// document fitted, centred and drawn *between* them, and not one document
+    /// pixel is written under a panel. `target_size` is `target`'s size in
+    /// pixels; the rectangle is clamped to it ([`clamp_area`]), so a viewport
+    /// left over from a larger window can never reach wgpu out of bounds. With
+    /// nothing of the rectangle inside the target, only the clear happens.
+    pub fn render_in(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        target_size: (u32, u32),
+    ) {
+        let clear = backdrop_clear_color(self.backdrop, self.format);
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("canvas-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(clear),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        let Some(bind_group) = &self.bind_group else {
+            return;
+        };
+        let Some([x, y, w, h]) = clamp_area(self.area, target_size.0, target_size.1) else {
+            return;
+        };
+        // The viewport is the camera's own (possibly fractional) rectangle, so
+        // clip space spans exactly what `clip_to_uv` assumed; only a rectangle
+        // that overhangs the target is cut back to it. The scissor is the same
+        // rectangle in whole pixels, so nothing lands outside it.
+        let [ax, ay, aw, ah] = self.area;
+        let (tw, th) = (target_size.0 as f32, target_size.1 as f32);
+        let (vx, vy) = (ax.clamp(0.0, tw), ay.clamp(0.0, th));
+        let (vw, vh) = ((ax + aw).min(tw) - vx, (ay + ah).min(th) - vy);
+        if vw > 0.0 && vh > 0.0 {
+            pass.set_viewport(vx, vy, vw, vh, 0.0, 1.0);
+        } else {
+            pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
+        }
+        pass.set_scissor_rect(x, y, w, h);
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, bind_group, &[]);
         pass.draw(0..6, 0..1);

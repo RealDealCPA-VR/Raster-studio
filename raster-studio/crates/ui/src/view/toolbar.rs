@@ -862,33 +862,29 @@ pub(crate) fn color_wells(w: &mut Workspace, ui: &mut Ui) {
     let t = current_tokens(ui);
     let side = t.metrics.toolbar_button;
     ui.horizontal(|ui| {
-        if swatch(ui, w.color.foreground(), side, Sense::click())
-            .on_hover_text(crate::strings::tr("ui.toolbar.foreground.picker"))
-            .clicked()
-        {
-            w.color.editing = crate::panels::color::ColorWell::Foreground;
-        }
-        if swatch(ui, w.color.foreground(), side, Sense::click())
-            .on_hover_text(crate::strings::tr("ui.toolbar.foreground.picker"))
-            .double_clicked()
-        {
-            w.emit(Intent::OpenColorPicker(
-                crate::panels::color::ColorWell::Foreground,
-            ));
-        }
-        if swatch(ui, w.color.background(), side, Sense::click())
-            .on_hover_text(crate::strings::tr("ui.toolbar.background.picker"))
-            .clicked()
-        {
-            w.color.editing = crate::panels::color::ColorWell::Background;
-        }
-        if swatch(ui, w.color.background(), side, Sense::click())
-            .on_hover_text(crate::strings::tr("ui.toolbar.background.picker"))
-            .double_clicked()
-        {
-            w.emit(Intent::OpenColorPicker(
-                crate::panels::color::ColorWell::Background,
-            ));
+        // W5-E: one swatch per well, read for both gestures. Drawing a second
+        // swatch for the double-click painted every well twice, side by side.
+        use crate::panels::color::ColorWell;
+        for (well, rgba, tip) in [
+            (
+                ColorWell::Foreground,
+                w.color.foreground(),
+                "ui.toolbar.foreground.picker",
+            ),
+            (
+                ColorWell::Background,
+                w.color.background(),
+                "ui.toolbar.background.picker",
+            ),
+        ] {
+            let response =
+                swatch(ui, rgba, side, Sense::click()).on_hover_text(crate::strings::tr(tip));
+            if response.clicked() {
+                w.color.editing = well;
+            }
+            if response.double_clicked() {
+                w.emit(Intent::OpenColorPicker(well));
+            }
         }
         if super::icon_toggle(
             ui,
@@ -952,6 +948,67 @@ mod tests {
             Some(surface),
             Some(anchor)
         ));
+    }
+
+    /// W5-E: each colour well is one swatch. The palette foot and the Color
+    /// panel used to draw a second swatch per well for the double-click, so
+    /// four squares were painted where there are two wells.
+    #[test]
+    fn each_colour_well_is_one_swatch_that_answers_a_click_and_a_double_click() {
+        use crate::panels::color::ColorWell;
+        let mut w = Workspace::new();
+        let fg = [1.0, 0.0, 0.0, 1.0];
+        let bg = [0.0, 0.0, 1.0, 1.0];
+        w.color.set_well(ColorWell::Foreground, fg);
+        w.color.set_well(ColorWell::Background, bg);
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0));
+        let run = |w: &mut Workspace, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            };
+            ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| color_wells(w, ui));
+            })
+        };
+        let _ = run(&mut w, Vec::new());
+        let out = run(&mut w, Vec::new());
+        let rects_of = |rgba: [f32; 4]| -> Vec<egui::Rect> {
+            out.shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    egui::Shape::Rect(r) if r.fill == rgba_to_color32(rgba) => Some(r.rect),
+                    _ => None,
+                })
+                .collect()
+        };
+        let fg_rects = rects_of(fg);
+        let bg_rects = rects_of(bg);
+        assert_eq!(fg_rects.len(), 1, "foreground swatches: {fg_rects:?}");
+        assert_eq!(bg_rects.len(), 1, "background swatches: {bg_rects:?}");
+
+        // The one background swatch takes the click and the double-click.
+        let at = bg_rects[0].center();
+        let click = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        let _ = w.drain_intents();
+        let _ = run(&mut w, vec![egui::Event::PointerMoved(at), click(true)]);
+        let _ = run(&mut w, vec![click(false)]);
+        assert_eq!(w.color.editing, ColorWell::Background);
+        let _ = run(&mut w, vec![click(true)]);
+        let _ = run(&mut w, vec![click(false)]);
+        let intents = w.drain_intents();
+        assert!(
+            intents.contains(&Intent::OpenColorPicker(ColorWell::Background)),
+            "the double-click opened no picker: {intents:?}"
+        );
     }
 
     #[test]

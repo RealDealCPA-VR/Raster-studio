@@ -99,23 +99,27 @@ pub const TILE_EXT: &str = "tile";
 /// hash of the *inflated* bytes.
 pub const COMPRESSED_TILE_EXT: &str = "tilez";
 
-/// Largest a single tile blob may be: one `TILE_SIZE²` RGBA8 tile.
+/// Largest a single tile blob may be: one `TILE_SIZE²` [`raster::PixelFormat::Rgba16`]
+/// tile, eight bytes a pixel.
 ///
-/// A mask tile is a quarter of this, and nothing this format writes today is
-/// larger, so a blob that claims more is refused before it is read — and refused
-/// before it is *written*, which matters the day one is: a
-/// [`raster::PixelFormat::Rgba16`] tile is twice this and an
-/// [`raster::PixelFormat::RgbaF32`] tile four times, so whoever brings those
-/// through [`TileBytes`] raises this one number and both sides move with it,
-/// rather than shipping saves that never reopen.
-pub const MAX_TILE_BYTES: u64 = (raster::TILE_SIZE as u64) * (raster::TILE_SIZE as u64) * 4;
+/// Image > Mode > 16 Bits and a 16-bit New Document put tiles of exactly this
+/// size in the store (`raster::depth::widen_rgba8_tile`), and the cap used to
+/// be the RGBA8 size, half of it: every save of a 16-bit document was refused
+/// with [`ProjectError::PackageFileTooLarge`] and the only copy of the work
+/// was the one in memory. An RGBA8 tile is half this and a mask tile an
+/// eighth. A [`raster::PixelFormat::RgbaF32`] tile is twice this; whoever
+/// brings those through [`TileBytes`] raises this one number and both sides
+/// (write and read) move with it.
+pub const MAX_TILE_BYTES: u64 = raster::Tile::byte_len(raster::PixelFormat::Rgba16) as u64;
 
 /// Most distinct tiles one package may reference.
 pub const MAX_PACKAGE_TILES: u64 = 1 << 20;
 
 /// Most tile bytes one package may load into memory.
 ///
-/// Not implied by the other two: their product is 256 GiB.
+/// Not implied by the other two: their product is 512 GiB. It stays a whole
+/// number of the largest tile ([`MAX_TILE_BYTES`] divides it), so a package
+/// of full 16-bit tiles fills it exactly rather than stopping one short.
 pub const MAX_TILE_DATA_BYTES: u64 = 8 << 30;
 
 /// Every bound the tile path applies — **in both directions**.
@@ -992,11 +996,35 @@ mod tests {
     }
 
     #[test]
+    fn a_16_bit_tile_saves_and_reopens_byte_for_byte() {
+        // W5-B (P0): Image > Mode > 16 Bits puts `Rgba16` tiles — twice the
+        // RGBA8 size — in the store, and the cap was the RGBA8 size: every
+        // save of a 16-bit document failed with `PackageFileTooLarge`.
+        let dir = tempfile::tempdir().unwrap();
+        let wide = raster::widen_rgba8_tile(&solid_tile([10, 20, 30, 255])).unwrap();
+        assert_eq!(
+            wide.len(),
+            raster::Tile::byte_len(raster::PixelFormat::Rgba16)
+        );
+        let hash = TileHash::of(&wide);
+        let doc = doc_with_tile(hash);
+        let mut source = compositor::MemoryTileSource::new();
+        source.insert_bytes(wide.clone());
+        write(dir.path(), &doc, &source).expect("a 16-bit tile saves");
+
+        let mut store = AssetStore::new();
+        assert_eq!(read_tiles(dir.path(), &doc, &mut store).unwrap(), 1);
+        assert_eq!(&*store.get(BlobHash(hash.0)).unwrap(), wide.as_slice());
+        // The data budget is a whole number of the largest tile.
+        assert_eq!(MAX_TILE_DATA_BYTES % MAX_TILE_BYTES, 0);
+    }
+
+    #[test]
     fn a_blob_the_reader_would_refuse_to_open_is_refused_by_the_save() {
         // `read_tiles` refuses a blob over `MAX_TILE_BYTES` before it opens it
         // and `write_tiles` used to write one anyway, which is a package that
         // saves and then fails every open — the assets defect, in the module
-        // that stated the rule. Reachable the day a `Rgba16` tile (twice this
+        // that stated the rule. Reachable the day a `RgbaF32` tile (twice this
         // size) reaches `TileBytes`.
         let dir = tempfile::tempdir().unwrap();
         let bytes = vec![9u8; MAX_TILE_BYTES as usize + 1];
@@ -1017,7 +1045,7 @@ mod tests {
         );
 
         // And exactly at the cap it still round-trips.
-        let ok = solid_tile([1, 2, 3, 255]);
+        let ok = raster::widen_rgba8_tile(&solid_tile([1, 2, 3, 255])).unwrap();
         assert_eq!(ok.len() as u64, MAX_TILE_BYTES);
         let doc = doc_with_tile(TileHash::of(&ok));
         let mut source = compositor::MemoryTileSource::new();
@@ -1033,7 +1061,7 @@ mod tests {
         // aggregate is a load-side bound, so the save has to stop at the same
         // total or the package is refused only once it is the user's only copy.
         // Not implied by the other two bounds — a million tiles at
-        // `MAX_TILE_BYTES` is 256 GiB against an 8 GiB budget.
+        // `MAX_TILE_BYTES` is 512 GiB against an 8 GiB budget.
         let dir = tempfile::tempdir().unwrap();
         let bytes = solid_tile([4, 4, 4, 255]);
         let hash = TileHash::of(&bytes);

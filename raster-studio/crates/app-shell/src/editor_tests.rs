@@ -644,7 +644,9 @@ fn expected_effect(action: Action) -> Effect {
         | Action::NewLayer
         | Action::DeleteLayer
         | Action::DuplicateLayer
-        | Action::ToggleLayerVisibility => Effect::DocumentEdited,
+        | Action::ToggleLayerVisibility
+        | Action::FillForeground
+        | Action::FillBackground => Effect::DocumentEdited,
         Action::ZoomIn | Action::ZoomOut | Action::ZoomFit | Action::ZoomActualPixels => {
             Effect::View
         }
@@ -1066,7 +1068,8 @@ fn the_window_title_follows_the_document_and_its_dirty_state() {
         .unwrap()
         .save_to(&dir.path().join("h.rstudio"), "test")
         .unwrap();
-    assert_eq!(ed.window_title(), "holiday.png — Raster Studio");
+    // W5-D: the title follows Save As to the saved file's name.
+    assert_eq!(ed.window_title(), "h — Raster Studio");
     assert!(!ed.has_unsaved_work());
 }
 
@@ -4134,4 +4137,58 @@ fn cancelling_pending_imports_drops_their_completions() {
         "{:?}",
         ed.status()
     );
+}
+
+/// W5-E follow-up: Photoshop/Photopea's Alt+Backspace fills with the
+/// foreground colour and Ctrl+Backspace with the background colour, no dialog,
+/// each one undoable step; both chords resolve through the default keymap.
+#[test]
+fn alt_and_ctrl_backspace_fill_with_the_foreground_and_background_colours() {
+    use crate::keymap::{Chord, Key, Keymap};
+    let keymap = Keymap::default();
+    let alt_backspace = Chord {
+        ctrl_or_cmd: false,
+        alt: true,
+        shift: false,
+        key: Key::Backspace,
+    };
+    assert_eq!(keymap.resolve(&alt_backspace), Some(Action::FillForeground));
+    assert_eq!(
+        keymap.resolve(&Chord::ctrl(Key::Backspace)),
+        Some(Action::FillBackground)
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_png(dir.path(), "a.png", 16, 16, 5);
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&a).unwrap();
+    let pixel = |ed: &mut Editor| {
+        let doc = ed.active_mut().unwrap();
+        let rect = doc.canvas_rect();
+        let rgba = doc.composite(rect).unwrap();
+        [rgba[0], rgba[1], rgba[2], rgba[3]]
+    };
+    let before = pixel(&mut ed);
+    let depth = ed.active().unwrap().history_depth();
+
+    ed.set_foreground([1.0, 0.0, 0.0, 1.0]);
+    ed.dispatch(Action::FillForeground).unwrap();
+    assert_eq!(
+        pixel(&mut ed),
+        [255, 0, 0, 255],
+        "filled with the foreground"
+    );
+    assert_eq!(ed.active().unwrap().history_depth(), depth + 1, "one step");
+
+    ed.set_background([0.0, 0.0, 1.0, 1.0]);
+    ed.dispatch(Action::FillBackground).unwrap();
+    assert_eq!(
+        pixel(&mut ed),
+        [0, 0, 255, 255],
+        "filled with the background"
+    );
+
+    ed.dispatch(Action::Undo).unwrap();
+    ed.dispatch(Action::Undo).unwrap();
+    assert_eq!(pixel(&mut ed), before, "two undos restore the pixels");
 }
