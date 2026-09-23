@@ -648,7 +648,7 @@ fn expected_effect(action: Action) -> Effect {
         Action::ZoomIn | Action::ZoomOut | Action::ZoomFit | Action::ZoomActualPixels => {
             Effect::View
         }
-        Action::TogglePanels => Effect::Panels,
+        Action::TogglePanels | Action::CycleScreenMode => Effect::Panels,
         Action::SelectTool(_)
         | Action::TemporaryHand
         | Action::DecreaseBrushSize

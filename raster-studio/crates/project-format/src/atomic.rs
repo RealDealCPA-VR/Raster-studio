@@ -128,6 +128,43 @@ pub(crate) fn write_and_sync(path: &Path, bytes: &[u8]) -> Result<(), ProjectErr
     Ok(())
 }
 
+/// Write `bytes` to `path` and flush — **without** an fsync.
+///
+/// For the tile pass, where a package may hold thousands of blobs: an fsync per
+/// blob serialises the whole save on the disk's flush latency (measured as the
+/// dominant cost of a save — see [`crate::tiles`]). The files written this way
+/// are made durable together by one [`sync_files`] call at the end of the pass,
+/// before the manifest is written and before the swap, so the crash-safety
+/// argument in this module's header is unchanged: nothing is renamed into place
+/// until every byte behind it has been flushed.
+pub(crate) fn write_unsynced(path: &Path, bytes: &[u8]) -> Result<(), ProjectError> {
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(bytes)?;
+    f.flush()?;
+    Ok(())
+}
+
+/// fsync every file in `paths`, as one batch, returning how many were synced.
+///
+/// One batch rather than one call per write: the OS has had the whole pass to
+/// write the data back, so most of these flushes find nothing left to wait for.
+/// It is still one `fsync` *call* per file — `std` has no portable "flush this
+/// directory's files" and Windows has no unprivileged volume flush — which is
+/// why [`crate::tiles::write_tiles`] first avoids writing files at all (reusing
+/// the previous package's blobs) and only then batches what remains.
+///
+/// Opened for writing rather than reading because `FlushFileBuffers` on
+/// Windows refuses a read-only handle.
+pub(crate) fn sync_files(paths: &[PathBuf]) -> Result<usize, ProjectError> {
+    for path in paths {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)?
+            .sync_all()?;
+    }
+    Ok(paths.len())
+}
+
 /// fsync a directory so a rename or creation inside it is durable.
 ///
 /// See the module's platform note: a no-op off Unix.

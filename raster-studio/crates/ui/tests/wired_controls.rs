@@ -806,6 +806,8 @@ fn the_layer_row_context_menu_offers_the_layer_operations() {
     assert_eq!(
         labels,
         vec![
+            // The ellipsis is earned: the application opens the Duplicate
+            // Layer dialog (the copy's name) for this row.
             "Duplicate Layer…",
             "Delete Layer",
             "Blending Options…",
@@ -981,46 +983,9 @@ fn the_tool_column_footer_reset_restores_the_defaults() {
     );
 }
 
-#[test]
-fn reordering_a_panel_within_its_side_through_the_header_control() {
-    let mut h = Harness::new();
-    let before = h.workspace.dock.panels_on(DockSide::Right);
-    assert!(before.len() >= 2);
-    // The reorder control belongs to the ACTIVE tab of the bottom group
-    // (History); groups travel whole, so one click moves History+Color one
-    // slot up the rail's stack.
-    let last = *before.last().unwrap();
-    let panel = if h.workspace.dock.is_active(last) {
-        last
-    } else {
-        *before
-            .iter()
-            .rev()
-            .find(|p| h.workspace.dock.is_active(**p))
-            .unwrap()
-    };
-
-    h.click(ids::panel_menu(panel));
-    let intents = h.click(ids::panel_reorder(panel, true));
-    // The intent carries the group's new stack index — absolute, idempotent.
-    assert!(
-        intents.contains(&Intent::ReorderPanel { panel, to: 1 }),
-        "reordering emitted {intents:?}"
-    );
-    let after = h.workspace.dock.panels_on(DockSide::Right);
-    assert_ne!(after, before);
-    assert_eq!(after.len(), before.len());
-    assert_eq!(after[2], panel);
-    assert_eq!(
-        after[3],
-        if panel == PanelId::History {
-            PanelId::Color
-        } else {
-            PanelId::History
-        }
-    );
-}
-
+// The header reorder chevron is proved in `tests/w2d_dock_reorder.rs`, in
+// terms of the groups the dock reports rather than a named bottom group, so
+// it holds for whatever the default layout is.
 #[test]
 fn the_move_control_for_the_side_a_panel_is_already_on_does_nothing() {
     let mut h = Harness::new();

@@ -30,6 +30,21 @@ pub fn effect_gradient(kind: EffectKind) -> Id {
     Id::new((ROOT, "effect-gradient", kind))
 }
 
+/// The Layer Style dialog's Blending Options page: the blend-mode combo.
+pub fn blending_mode() -> Id {
+    Id::new((ROOT, "blending-mode"))
+}
+
+/// The Layer Style dialog's Blending Options page: the opacity field.
+pub fn blending_opacity() -> Id {
+    Id::new((ROOT, "blending-opacity"))
+}
+
+/// The Layer Style dialog's Blending Options page: the fill-opacity field.
+pub fn blending_fill() -> Id {
+    Id::new((ROOT, "blending-fill"))
+}
+
 /// The Fill dialog's contents combo.
 pub fn fill_contents() -> Id {
     Id::new((ROOT, "fill-contents"))
@@ -119,6 +134,26 @@ pub fn adjustment_histogram() -> Id {
     Id::new((ROOT, "adjustment-histogram"))
 }
 
+/// The Trim dialog's basis combo (transparent / top-left / bottom-right).
+pub fn trim_basis() -> Id {
+    Id::new((ROOT, "trim-basis"))
+}
+
+/// The New Guide dialog's orientation combo.
+pub fn new_guide_orientation() -> Id {
+    Id::new((ROOT, "new-guide-orientation"))
+}
+
+/// The Rename Layer dialog's name field.
+pub fn rename_layer_name() -> Id {
+    Id::new((ROOT, "rename-layer-name"))
+}
+
+/// The Duplicate Layer dialog's name field.
+pub fn duplicate_layer_name() -> Id {
+    Id::new((ROOT, "duplicate-layer-name"))
+}
+
 /// One chip in the colour picker's recent list.
 pub fn recent_color(index: usize) -> Id {
     Id::new((ROOT, "recent-color", index))
@@ -150,6 +185,13 @@ mod tests {
             adjustment_color(ColorTarget::GradientStop(1)),
             adjustment_preview(),
             adjustment_histogram(),
+            trim_basis(),
+            new_guide_orientation(),
+            rename_layer_name(),
+            duplicate_layer_name(),
+            blending_mode(),
+            blending_opacity(),
+            blending_fill(),
             gradient_stop_color(StopRef {
                 kind: StopKind::Color,
                 index: 0,

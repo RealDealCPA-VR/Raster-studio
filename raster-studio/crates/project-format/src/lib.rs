@@ -123,7 +123,11 @@
 //!   it. An application that journals a command *before* applying it, or that
 //!   saves one document while another thread mutates a copy, loses that record
 //!   instead. That ordering is a contract this crate states and cannot enforce.
-//!   See [`journal`].
+//!   What it *can* offer such an application is [`CommandJournal::absorb`]:
+//!   journal the commands accepted during the save to a side file next to the
+//!   package, and absorb it into the package journal once the save has landed
+//!   (or failed, or at the next open after a crash), where they land after
+//!   the marker they belong behind. See [`journal`].
 //! * **A symlink check is not a no-follow open.** The journal writers check
 //!   `symlink_metadata` immediately before opening, which stops a link that is
 //!   already in the package, but `std` offers no portable `O_NOFOLLOW`, so a
@@ -154,7 +158,9 @@ pub use package::{
     SaveReport, AI_DIR, DOCUMENT_FILE, JOURNAL_FILE, MANIFEST_FILE, UNKNOWN_APP_VERSION,
 };
 pub use preview::{Preview, PREVIEWS_DIR, PREVIEW_FILE};
-pub use tiles::{NoTiles, TileBytes, TileReport, TILES_DIR};
+pub use tiles::{
+    NoTiles, SaveProgress, TileBytes, TileReport, COMPRESSED_TILE_EXT, TILES_DIR, TILE_EXT,
+};
 
 #[cfg(test)]
 mod tests;

@@ -33,11 +33,29 @@ use super::{
 };
 
 /// Draw every rail.
+///
+/// The wide right column is shown before the narrow one on purpose: egui
+/// hands each `SidePanel::right` the space the previous one left, so the
+/// column drawn second lands *inside* the first — which is where Photopea's
+/// narrow column sits, between the canvas and the wide column.
 pub fn docks(w: &mut Workspace, ctx: &egui::Context, doc: &Document, history: &History) {
-    for side in [DockSide::Left, DockSide::Right] {
+    for side in [DockSide::Left, DockSide::Right, DockSide::RightNarrow] {
         rail(w, ctx, doc, history, side);
     }
     bottom_rail(w, ctx, doc, history);
+}
+
+/// The egui panel id of one column, open or folded.
+fn column_panel_id(side: DockSide, folded: bool) -> &'static str {
+    match (side, folded) {
+        (DockSide::Left, false) => "raster-dock-left",
+        (DockSide::Left, true) => "raster-dock-left-rail",
+        (DockSide::RightNarrow, false) => "raster-dock-right-narrow",
+        (DockSide::RightNarrow, true) => "raster-dock-right-narrow-rail",
+        (DockSide::Right, false) => "raster-dock-right",
+        (DockSide::Right, true) => "raster-dock-right-rail",
+        (DockSide::Bottom, _) => "raster-dock-bottom",
+    }
 }
 
 fn rail(w: &mut Workspace, ctx: &egui::Context, doc: &Document, history: &History, side: DockSide) {
@@ -48,11 +66,10 @@ fn rail(w: &mut Workspace, ctx: &egui::Context, doc: &Document, history: &Histor
     if w.dock.side_is_collapsed(side) {
         return icon_rail(w, ctx, side);
     }
-    let id = match side {
-        DockSide::Left => "raster-dock-left",
-        DockSide::Right => "raster-dock-right",
-        DockSide::Bottom => return,
-    };
+    if side == DockSide::Bottom {
+        return;
+    }
+    let id = column_panel_id(side, false);
     let builder = match side {
         DockSide::Left => egui::SidePanel::left(id),
         _ => egui::SidePanel::right(id),
@@ -63,15 +80,83 @@ fn rail(w: &mut Workspace, ctx: &egui::Context, doc: &Document, history: &Histor
         .width_range(MIN_DOCK_WIDTH..=MAX_DOCK_WIDTH)
         .frame(egui::Frame::none().fill(color32(t.palette.color(ColorRole::SurfacePanel))))
         .show(ctx, |ui| {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    for (_, members) in w.dock.groups_on(side) {
-                        panel_group(w, ui, doc, history, &members);
-                    }
-                });
+            let whole = ui.max_rect();
+            super::mark(ui, whole, crate::dock::ids::column(side));
+            column(w, ui, doc, history, side);
         });
     commit_measure(w, ctx, side, response.response.rect.width());
+}
+
+/// The last-frame height of the group at stack index `index` on `side`, as
+/// the column remembers it between frames.
+fn group_height_key(side: DockSide, index: usize) -> egui::Id {
+    egui::Id::new("raster-dock-group-height")
+        .with(side)
+        .with(index)
+}
+
+/// One column's stack of tab groups.
+///
+/// # Fixed groups keep their height; one group takes the rest
+///
+/// Photopea stacks its panels so that the column has no dead space: every
+/// group is as tall as its content except the Layers group, which is given
+/// whatever is left and scrolls its rows inside. Before this the whole column
+/// was one scroll area of natural-height groups, so a 900pt window ended in
+/// ~140pt of bare panel colour under History while the Layers rows scrolled
+/// out of sight above it.
+///
+/// egui lays out top to bottom in one pass, so the height the *following*
+/// groups will take is not known when the flexible one is drawn. It is read
+/// from the previous frame instead ([`group_height_key`]): the first frame
+/// gives the flexible group everything, the second frame corrects it, and a
+/// window resize is one frame behind — which is why the geometry tests settle
+/// three frames before reading.
+fn column(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &History, side: DockSide) {
+    let groups = w.dock.groups_on(side);
+    let flex = w.dock.flex_group(side);
+    let viewport_h = ui.available_height();
+    let spacing = ui.spacing().item_spacing.y;
+    let t = current_tokens(ui);
+    // A flexible group can never be squeezed below its header and a few
+    // rows; past that the column scrolls instead.
+    let floor = crate::dock::DockState::header_height() + t.metrics.list_row_height * 3.0;
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for (index, (_, members)) in groups.iter().enumerate() {
+                // Every other group's last-frame height, or `None` on a frame
+                // where one is not known yet: then this group takes its
+                // natural height too, so the first frame never overflows the
+                // column and grows a scroll bar the second frame removes.
+                let others: Option<f32> = (0..groups.len())
+                    .filter(|i| *i != index)
+                    .map(|i| {
+                        ui.ctx()
+                            .memory(|m| m.data.get_temp::<f32>(group_height_key(side, i)))
+                    })
+                    .sum();
+                let fill_bottom = match (flex == Some(index), others) {
+                    (true, Some(others)) => {
+                        let gaps = spacing * groups.len().saturating_sub(1) as f32;
+                        let mine = (viewport_h - others - gaps).max(floor);
+                        Some(ui.cursor().top() + mine)
+                    }
+                    _ => None,
+                };
+                let scope = ui.scope(|ui| {
+                    panel_group(w, ui, doc, history, members, fill_bottom);
+                });
+                let rect = scope.response.rect;
+                for panel in members {
+                    super::mark(ui, rect, crate::dock::ids::group_of(*panel));
+                }
+                ui.ctx().memory_mut(|m| {
+                    m.data
+                        .insert_temp(group_height_key(side, index), rect.height())
+                });
+            }
+        });
 }
 
 /// Take a rail's measured extent, and commit it only if it is a drag.
@@ -96,10 +181,7 @@ fn commit_measure(w: &mut Workspace, ctx: &egui::Context, side: DockSide, measur
 /// unfolding restores exactly the arrangement that was folded.
 fn icon_rail(w: &mut Workspace, ctx: &egui::Context, side: DockSide) {
     let t = design::current_theme(ctx).tokens();
-    let id = match side {
-        DockSide::Left => "raster-dock-left-rail",
-        _ => "raster-dock-right-rail",
-    };
+    let id = column_panel_id(side, true);
     let builder = match side {
         DockSide::Left => egui::SidePanel::left(id),
         _ => egui::SidePanel::right(id),
@@ -158,11 +240,13 @@ fn bottom_rail(w: &mut Workspace, ctx: &egui::Context, doc: &Document, history: 
         .default_height(w.dock.bottom_height())
         .frame(egui::Frame::none().fill(color32(t.palette.color(ColorRole::SurfacePanel))))
         .show(ctx, |ui| {
+            let whole = ui.max_rect();
+            super::mark(ui, whole, crate::dock::ids::column(DockSide::Bottom));
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     for (_, members) in w.dock.groups_on(DockSide::Bottom) {
-                        panel_group(w, ui, doc, history, &members);
+                        panel_group(w, ui, doc, history, &members, None);
                     }
                 });
         });
@@ -170,12 +254,18 @@ fn bottom_rail(w: &mut Workspace, ctx: &egui::Context, doc: &Document, history: 
 }
 
 /// One tabbed group: a strip of tabs, then the active panel's body.
+///
+/// `fill_bottom` is the absolute y this group must reach when it is the
+/// column's flexible one (see [`column`]): the body is stretched to it, and a
+/// body that lists rows — Layers — scrolls them inside the space instead of
+/// growing past it.
 fn panel_group(
     w: &mut Workspace,
     ui: &mut Ui,
     doc: &Document,
     history: &History,
     members: &[PanelId],
+    fill_bottom: Option<f32>,
 ) {
     let active = members
         .iter()
@@ -189,10 +279,26 @@ fn panel_group(
     if w.panel_menu == Some(active) {
         move_controls(w, ui, active);
     }
+    let t = current_tokens(ui);
+    // The rule under the group and the gap before it come off the fill, so
+    // the group's *outer* edge — rule included — lands on `fill_bottom`.
+    let frame_bottom = fill_bottom.map(|b| b - t.borders.hairline - ui.spacing().item_spacing.y);
+    let body_bottom = frame_bottom.map(|b| b - t.metrics.panel_padding);
     panel_frame(ui).show(ui, |ui| {
         ui.push_id(active.key(), |ui| {
-            body_of(w, ui, doc, history, active);
+            body_of(w, ui, doc, history, active, body_bottom);
         });
+        if let Some(bottom) = body_bottom {
+            // Stretch the body to the fill even when its content is shorter:
+            // the panel colour reaches the column's edge with nothing under it.
+            let min = ui.min_rect();
+            if bottom > min.bottom() {
+                ui.expand_to_include_rect(egui::Rect::from_min_max(
+                    min.min,
+                    egui::pos2(min.right(), bottom),
+                ));
+            }
+        }
     });
     hairline(ui);
 }
@@ -359,28 +465,40 @@ fn move_controls(w: &mut Workspace, ui: &mut Ui, panel: PanelId) {
     }
 }
 
-const fn side_label(side: DockSide) -> &'static str {
-    match side {
-        DockSide::Left => "Left",
-        DockSide::Right => "Right",
-        DockSide::Bottom => "Bottom",
-    }
+fn side_label(side: DockSide) -> &'static str {
+    crate::strings::tr(match side {
+        DockSide::Left => "ui.docks.side.left",
+        DockSide::RightNarrow => "ui.docks.side.narrow",
+        DockSide::Right => "ui.docks.side.right",
+        DockSide::Bottom => "ui.docks.side.bottom",
+    })
 }
 
-fn body_of(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &History, panel: PanelId) {
+/// Dispatch to one panel's body. `fill_bottom` is the absolute y the body may
+/// stretch to when its group is the column's flexible one, or `None` to take
+/// its natural height.
+fn body_of(
+    w: &mut Workspace,
+    ui: &mut Ui,
+    doc: &Document,
+    history: &History,
+    panel: PanelId,
+    fill_bottom: Option<f32>,
+) {
     match panel {
-        PanelId::Layers => layers_body(w, ui, doc),
+        PanelId::Layers => layers_body(w, ui, doc, fill_bottom),
         PanelId::History => history_body(w, ui, history),
         PanelId::Adjustments => adjustments_body(w, ui),
         PanelId::Properties => properties_body(w, ui, doc),
         PanelId::Color => color_body(w, ui),
         PanelId::Swatches => swatches_body(w, ui),
-        PanelId::Brushes => brushes_body(w, ui),
+        PanelId::Brushes => brushes_body(w, ui, fill_bottom),
         PanelId::Character => character_body(w, ui, doc),
         PanelId::Paragraph => paragraph_body(w, ui, doc),
         PanelId::Navigator => navigator_body(w, ui, doc),
         PanelId::Info => info_body(w, ui, doc),
-        PanelId::Channels => channels_body(w, ui, doc),
+        PanelId::Histogram => histogram_body(w, ui, doc),
+        PanelId::Channels => channels_body(w, ui, doc, history),
         PanelId::Paths => paths_body(w, ui, doc),
         PanelId::Actions => actions_body(w, ui),
     }
@@ -390,7 +508,7 @@ fn body_of(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &History, pa
 // Layers
 // ---------------------------------------------------------------------------
 
-fn layers_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
+fn layers_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, fill_bottom: Option<f32>) {
     let model = LayersModel::build(doc, &w.layers);
     let active = doc.active_layer();
 
@@ -401,9 +519,21 @@ fn layers_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     ui.add_space(Space::XSmall.pt());
     hairline(ui);
 
-    if model.is_empty() {
-        empty_state(ui, crate::strings::tr("ui.docks.no.layers.yet"));
-    } else {
+    // When the group is the column's flexible one, the rows get exactly the
+    // height between the blend block and the footer and scroll inside it —
+    // the footer stays pinned to the column's edge, Photopea's way.
+    let t = current_tokens(ui);
+    let footer_reserve = panel_icon_side(t).max(t.metrics.control_height)
+        + Space::XSmall.pt()
+        + t.borders.hairline
+        + ui.spacing().item_spacing.y * 3.0;
+    let rows_height = fill_bottom.map(|b| (b - ui.cursor().top() - footer_reserve).max(0.0));
+
+    let rows_ui = |w: &mut Workspace, ui: &mut Ui| {
+        if model.is_empty() {
+            empty_state(ui, crate::strings::tr("ui.docks.no.layers.yet"));
+            return;
+        }
         let rows = model.rows().to_vec();
         // The drop is decided by the drag *as a whole*, not by any one row's
         // response. egui reports `drag_stopped` only on the row the drag began
@@ -441,6 +571,18 @@ fn layers_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
                 }
             }
         }
+    };
+
+    match rows_height {
+        Some(height) => {
+            egui::ScrollArea::vertical()
+                .id_salt("raster-layer-rows")
+                .auto_shrink([false, false])
+                .max_height(height)
+                .min_scrolled_height(height)
+                .show(ui, |ui| rows_ui(w, ui));
+        }
+        None => rows_ui(w, ui),
     }
 
     ui.add_space(Space::XSmall.pt());
@@ -2067,7 +2209,15 @@ fn swatches_body(w: &mut Workspace, ui: &mut Ui) {
 // Brushes
 // ---------------------------------------------------------------------------
 
-fn brushes_body(w: &mut Workspace, ui: &mut Ui) {
+/// The Brushes panel: the preset list, then Edit / Save.
+///
+/// `fill_bottom` is set when this group is its column's flexible one — in
+/// Essentials the Brushes group is the narrow column's last, so it is — and
+/// then the list gets exactly the height between the top of the body and the
+/// two footer buttons and scrolls inside it, the way the Layers rows do. Left
+/// to its natural height the list pushed the group past the column's bottom
+/// at 900pt, and the footer with it.
+fn brushes_body(w: &mut Workspace, ui: &mut Ui, fill_bottom: Option<f32>) {
     let tool = w.palette.active();
     w.brushes.sync(&w.options, tool);
     let active = w.brushes.active();
@@ -2081,36 +2231,58 @@ fn brushes_body(w: &mut Workspace, ui: &mut Ui) {
 
     let mut apply: Option<usize> = None;
     let mut remove: Option<usize> = None;
-    for (i, name, size) in &presets {
-        let response = row_layout(ui, |ui| {
-            ui.add_space(Space::XSmall.pt());
-            ui.label(body(ui, name.clone()));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(hint(ui, format!("{size:.0} px")));
-            });
-        })
-        .response
-        .interact(Sense::click());
-        if ui.is_rect_visible(response.rect) && (Some(*i) == active || response.hovered()) {
-            let t = current_tokens(ui);
-            let radius = Radius::Medium.resolve(&t.radii, response.rect.height());
-            let fill = if Some(*i) == active {
-                ColorRole::SelectionFill
-            } else {
-                ColorRole::ControlFillHovered
-            };
-            ui.painter().rect_filled(
-                response.rect,
-                rounding(radius),
-                color32(t.palette.color(fill)),
-            );
+    let list_ui = |ui: &mut Ui, apply: &mut Option<usize>, remove: &mut Option<usize>| {
+        for (i, name, size) in &presets {
+            let response = row_layout(ui, |ui| {
+                ui.add_space(Space::XSmall.pt());
+                ui.label(body(ui, name.clone()));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(hint(ui, format!("{size:.0} px")));
+                });
+            })
+            .response
+            .interact(Sense::click());
+            if ui.is_rect_visible(response.rect) && (Some(*i) == active || response.hovered()) {
+                let t = current_tokens(ui);
+                let radius = Radius::Medium.resolve(&t.radii, response.rect.height());
+                let fill = if Some(*i) == active {
+                    ColorRole::SelectionFill
+                } else {
+                    ColorRole::ControlFillHovered
+                };
+                ui.painter().rect_filled(
+                    response.rect,
+                    rounding(radius),
+                    color32(t.palette.color(fill)),
+                );
+            }
+            if response.clicked() {
+                *apply = Some(*i);
+            }
+            if response.secondary_clicked() {
+                *remove = Some(*i);
+            }
         }
-        if response.clicked() {
-            apply = Some(*i);
+    };
+
+    // The footer is two stacked buttons under a rule; the list gets what is
+    // left above them when the group is stretched to the column's edge.
+    let t = current_tokens(ui);
+    let footer_reserve = t.metrics.control_height * 2.0
+        + Space::XSmall.pt()
+        + t.borders.hairline
+        + ui.spacing().item_spacing.y * 4.0;
+    let list_height = fill_bottom.map(|b| (b - ui.cursor().top() - footer_reserve).max(0.0));
+    match list_height {
+        Some(height) => {
+            egui::ScrollArea::vertical()
+                .id_salt("raster-brush-presets")
+                .auto_shrink([false, false])
+                .max_height(height)
+                .min_scrolled_height(height)
+                .show(ui, |ui| list_ui(ui, &mut apply, &mut remove));
         }
-        if response.secondary_clicked() {
-            remove = Some(*i);
-        }
+        None => list_ui(ui, &mut apply, &mut remove),
     }
 
     if let Some(i) = apply {
@@ -2477,6 +2649,16 @@ fn navigator_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     let response = ui.interact(rect, super::ids::navigator_proxy(), Sense::click_and_drag());
     if ui.is_rect_visible(rect) {
         super::checkerboard(ui.painter(), rect, Space::Small.pt());
+        // The composite the application uploaded, when there is one; the
+        // checkerboard alone is what a headless draw (no application) sees.
+        if let Some(tex) = w.navigator_texture.as_ref() {
+            ui.painter().image(
+                tex.id(),
+                rect,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+                crate::dialogs::controls::UNTINTED,
+            );
+        }
         let radius = Radius::Small.resolve(&t.radii, rect.height());
         ui.painter().rect_stroke(
             rect,
@@ -2532,6 +2714,30 @@ fn navigator_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
                 w.status.zoom,
             )));
         }
+        // Photopea's slider between the two steppers, logarithmic so the
+        // ladder's small rungs get as much travel as its large ones. It is
+        // bound to the same `SetZoom` intent the steppers post, so the
+        // application moves the one camera for all three.
+        let mut zoom = crate::panels::navigator::clamp_zoom(w.status.zoom);
+        let slider_w = (ui.available_width()
+            - t.metrics.numeric_field_width
+            - panel_icon_side(t)
+            - t.metrics.control_height * 2.0)
+            .max(t.metrics.min_hit_target);
+        let slider = ui.add_sized(
+            Vec2::new(slider_w, t.metrics.control_height),
+            egui::Slider::new(
+                &mut zoom,
+                crate::panels::navigator::MIN_ZOOM..=crate::panels::navigator::MAX_ZOOM,
+            )
+            .logarithmic(true)
+            .show_value(false),
+        );
+        super::mark(ui, slider.rect, crate::dock::ids::navigator_zoom());
+        let slider = slider.on_hover_text(crate::strings::tr("ui.docks.zoom.slider"));
+        if slider.changed() && zoom != w.status.zoom {
+            w.emit(Intent::SetZoom(zoom));
+        }
         ui.label(body(ui, format_zoom(w.status.zoom)));
         if icon_action(
             ui,
@@ -2561,8 +2767,138 @@ fn navigator_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
 fn info_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     for readout in w.info.readouts(doc) {
         design::inspector_field(ui, readout.label, |ui| {
-            ui.label(body(ui, readout.value.clone()));
+            let label = ui.label(body(ui, readout.value.clone()));
+            // Named so a test can read the value the row shows — the RGB and
+            // Hex rows were "—" for the life of a session before
+            // `Workspace::set_info_sample` existed, and nothing measured it.
+            super::mark(ui, label.rect, crate::dock::ids::info_value(readout.label));
         });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Histogram
+// ---------------------------------------------------------------------------
+
+/// The Histogram panel: the RGB or luminosity distribution of the composite
+/// the application last handed to [`Workspace::set_composite_preview`].
+///
+/// The plot is one filled bar per bin over a sunken well, marked under
+/// `dock::ids::histogram_plot` so a headless frame can count the bars it
+/// painted. The channel curves are drawn in the theme's data roles
+/// ([`crate::panels::histogram::channel_role`]: red counts red, in the red
+/// the appearance can show over the well); the luminosity curve is
+/// `ColorRole::Luminance`.
+fn histogram_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
+    use crate::panels::histogram::{HistogramMode, BINS};
+    let t = current_tokens(ui);
+    let mut index = HistogramMode::ALL
+        .iter()
+        .position(|m| *m == w.histogram.mode)
+        .unwrap_or(0);
+    let labels = [
+        crate::strings::tr("ui.docks.histogram.rgb"),
+        crate::strings::tr("ui.docks.histogram.luminosity"),
+    ];
+    if design::segmented_control(ui, "raster-histogram-mode", &mut index, &labels) {
+        w.histogram.mode = HistogramMode::ALL[index];
+    }
+    ui.add_space(Space::XSmall.pt());
+
+    let width = ui.available_width();
+    let height = t.metrics.control_height * 4.0;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+    super::mark(ui, rect, crate::dock::ids::histogram_plot());
+    if ui.is_rect_visible(rect) {
+        let radius = Radius::Small.resolve(&t.radii, rect.height());
+        ui.painter().rect_filled(
+            rect,
+            rounding(radius),
+            color32(t.palette.color(ColorRole::SurfaceSunken)),
+        );
+        ui.painter().rect_stroke(
+            rect,
+            rounding(radius),
+            egui::Stroke::new(
+                t.borders.hairline,
+                color32(t.palette.color(ColorRole::ControlStroke)),
+            ),
+        );
+        if let Some(bins) = w.histogram.bins() {
+            let mode = w.histogram.mode;
+            let peak = bins.peak(mode).max(1) as f32;
+            let plot = rect.shrink(t.borders.hairline);
+            let bar_w = plot.width() / BINS as f32;
+            // The curve colours are the theme's data roles (see
+            // `panels::histogram::channel_role`: red counts red, in the red
+            // this appearance can show over the well) — translucent so
+            // three channels that agree stack towards white where the image
+            // is neutral, Photoshop's "Colors" reading.
+            use crate::panels::histogram::curve_tint;
+            let channels: Vec<(&[u32; BINS], egui::Color32)> = match mode {
+                HistogramMode::Rgb => vec![
+                    (&bins.red, color32(curve_tint(&t.palette, 0))),
+                    (&bins.green, color32(curve_tint(&t.palette, 1))),
+                    (&bins.blue, color32(curve_tint(&t.palette, 2))),
+                ],
+                HistogramMode::Luminosity => vec![(
+                    &bins.luminosity,
+                    color32(t.palette.color(ColorRole::Luminance)),
+                )],
+            };
+            for (counts, colour) in channels {
+                for (bin, count) in counts.iter().enumerate() {
+                    if *count == 0 {
+                        continue;
+                    }
+                    let h = (*count as f32 / peak) * plot.height();
+                    let x = plot.left() + bin as f32 * bar_w;
+                    let bar = egui::Rect::from_min_max(
+                        egui::pos2(x, plot.bottom() - h),
+                        egui::pos2(x + bar_w, plot.bottom()),
+                    );
+                    ui.painter().rect_filled(bar, egui::Rounding::ZERO, colour);
+                }
+            }
+        }
+    }
+
+    match w.histogram.bins() {
+        None => {
+            ui.add_space(Space::XSmall.pt());
+            // With a document open the composite is on its way — the
+            // application hands it over after its next composite — so the
+            // panel says it is waiting, not that there is nothing to see.
+            // The chrome is drawn against a 0×0 placeholder when nothing is
+            // open (see the application's dock host), which is the one case
+            // the other string is for.
+            let has_document = doc.width() > 0 && doc.height() > 0;
+            empty_state(
+                ui,
+                crate::strings::tr(if has_document {
+                    "ui.docks.histogram.waiting"
+                } else {
+                    "ui.docks.histogram.no.composite"
+                }),
+            );
+        }
+        Some(bins) if bins.samples == 0 => {
+            ui.add_space(Space::XSmall.pt());
+            empty_state(ui, crate::strings::tr("ui.docks.histogram.empty"));
+        }
+        Some(bins) => {
+            ui.add_space(Space::XSmall.pt());
+            design::inspector_field(ui, crate::strings::tr("ui.docks.histogram.mean"), |ui| {
+                let mean = bins.mean_luminosity().unwrap_or(0.0);
+                ui.label(body(ui, format!("{mean:.1}")));
+            });
+            design::inspector_field(ui, crate::strings::tr("ui.docks.histogram.pixels"), |ui| {
+                // The count is of the bounded sample, scaled back to the
+                // document so the number means the image, not the thumbnail.
+                let total = u64::from(doc.width()) * u64::from(doc.height());
+                ui.label(body(ui, total.to_string()));
+            });
+        }
     }
 }
 
@@ -2570,7 +2906,10 @@ fn info_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
 // Channels and Paths
 // ---------------------------------------------------------------------------
 
-fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
+/// The Channels footer's actions, in Photopea's order.
+const CHANNEL_ACTIONS: [&str; 4] = ["load", "save", "new", "delete"];
+
+fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &History) {
     let rows = w.channels.rows(doc);
     let mode = doc.meta.color_space.clone();
     let mut toggle: Option<(ChannelKind, bool)> = None;
@@ -2588,6 +2927,8 @@ fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             {
                 toggle = Some((row.kind, !row.visible));
             }
+            channel_thumbnail(w, ui, row.kind);
+            ui.add_space(Space::XSmall.pt());
             ui.label(body(ui, row.name.clone()));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // The chord comes from the row itself, and `keys::channel_for_
@@ -2646,6 +2987,166 @@ fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             w.channels.selected = kind;
             w.emit(Intent::SelectChannel(kind));
         }
+    }
+
+    ui.add_space(Space::XSmall.pt());
+    hairline(ui);
+    channel_footer(w, ui, doc, history);
+}
+
+/// The 4:3 well beside a channel row.
+///
+/// A component row is the composite preview *tinted to its primary* — egui
+/// multiplies the texture by the tint, so a red tint leaves exactly the red
+/// channel's contribution, which is what Photoshop's colour-channel
+/// thumbnails show. The composite row is the preview untinted; a mask row is
+/// the mask's own coverage thumbnail. With no texture (a headless draw, or a
+/// mask the application has not thumbnailed yet) the well shows the
+/// checkerboard and a glyph, never a blank.
+fn channel_thumbnail(w: &mut Workspace, ui: &mut Ui, kind: ChannelKind) {
+    let t = current_tokens(ui);
+    let height = t.metrics.list_row_height - Space::XSmall.pt();
+    let size = Vec2::new(height * 4.0 / 3.0, height);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    response.on_hover_text(crate::strings::tr("ui.docks.channels.thumbnail"));
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let radius = Radius::Small.resolve(&t.radii, size.y);
+    super::checkerboard(ui.painter(), rect, Space::XSmall.pt());
+    let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0));
+    let painted = match kind {
+        ChannelKind::Composite => w.navigator_texture.as_ref().map(|tex| {
+            ui.painter()
+                .image(tex.id(), rect, uv, crate::dialogs::controls::UNTINTED);
+        }),
+        ChannelKind::Component(i) => w.navigator_texture.as_ref().map(|tex| {
+            // The channel's own colour role (the first component is red in
+            // every RGB-primaried space this build supports) — the same red
+            // the Histogram's curve is drawn in, read from the same slot.
+            let tint = t.palette.color(crate::panels::histogram::channel_role(i));
+            ui.painter().image(tex.id(), rect, uv, color32(tint));
+        }),
+        ChannelKind::Mask { layer, .. } => w.mask_thumbs.get(&layer).map(|tex| {
+            ui.painter()
+                .image(tex.id(), rect, uv, crate::dialogs::controls::UNTINTED);
+        }),
+    };
+    if painted.is_none() {
+        let side = rect.height() * 0.7;
+        let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(side));
+        let key = match kind {
+            ChannelKind::Mask { .. } => "mask",
+            _ => "layer-raster",
+        };
+        super::paint_icon(ui, icon_rect, key, TextRole::Tertiary);
+    }
+    ui.painter().rect_stroke(
+        rect,
+        rounding(radius),
+        egui::Stroke::new(
+            t.borders.hairline,
+            color32(t.palette.color(ColorRole::ControlStroke)),
+        ),
+    );
+}
+
+/// Photopea's Channels footer: load the channel as a selection, save the
+/// selection as a channel, new channel, delete channel.
+///
+/// Every action is either routed or *greyed with its reason* — never a live
+/// button that does nothing, and never a button that does something other
+/// than its label. Save goes through the Select menu's own `SaveSelection`,
+/// resolved against the same context the menu bar uses so the gate and the
+/// reason are the menu's. Load is greyed on every row, and its reason names
+/// what is missing: no `Intent` or `editor_core::Command` builds a selection
+/// from a channel's coverage in this build (`Command::SetSelection` exists,
+/// but the workspace cannot read a mask's tiles to fill one), and the Select
+/// menu's `LoadSelection` restores the last *saved* selection, which is a
+/// different thing — routing the button there fired the wrong command under
+/// the right label, which `tests/panel_chrome_geometry.rs` now pins against.
+/// New and Delete have no store to act on — channels live on layers here —
+/// and say so.
+fn channel_footer(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &History) {
+    let context = w.menu_context(doc, history);
+    let selected = w.channels.selected;
+    let is_mask = matches!(selected, ChannelKind::Mask { .. });
+
+    // Load: greyed, with the reason that fits the row. A component has no
+    // selection to load; a mask *is* a selection's shape, but no command
+    // loads a mask as the selection yet, so the button names the missing
+    // command rather than firing `LoadSelection` (a saved selection).
+    let load: Result<Intent, &'static str> = Err(crate::strings::tr(if is_mask {
+        "ui.docks.channels.no.mask.route"
+    } else {
+        "ui.docks.channels.not.a.mask"
+    }));
+    let save = match crate::menu::MenuAction::SaveSelection.resolve(&context) {
+        crate::menu::Resolution::Enabled(intent) => Ok(intent),
+        crate::menu::Resolution::Disabled(_) => Err(crate::strings::tr(if context.has_document {
+            "ui.docks.channels.no.selection"
+        } else {
+            "ui.docks.channels.no.document"
+        })),
+    };
+    let no_store: Result<Intent, &'static str> =
+        Err(crate::strings::tr("ui.docks.channels.no.alpha.store"));
+
+    let actions: [(
+        &'static str,
+        &'static str,
+        &'static str,
+        Result<Intent, &'static str>,
+    ); 4] = [
+        (
+            CHANNEL_ACTIONS[0],
+            "target",
+            crate::strings::tr("ui.docks.channels.load.selection"),
+            load,
+        ),
+        (
+            CHANNEL_ACTIONS[1],
+            "mask",
+            crate::strings::tr("ui.docks.channels.save.selection"),
+            save,
+        ),
+        (
+            CHANNEL_ACTIONS[2],
+            "plus",
+            crate::strings::tr("ui.docks.channels.new"),
+            no_store.clone(),
+        ),
+        (
+            CHANNEL_ACTIONS[3],
+            "trash",
+            crate::strings::tr("ui.docks.channels.delete"),
+            no_store,
+        ),
+    ];
+    let mut fire: Option<Intent> = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = Space::Hair.pt();
+        for (name, icon, tip, route) in actions {
+            let (state, tooltip): (ActionState, String) = match &route {
+                Ok(_) => (ActionState::Idle, tip.to_string()),
+                Err(reason) => (ActionState::Disabled, format!("{tip} — {reason}")),
+            };
+            let response = icon_action_id(
+                ui,
+                icon,
+                &tooltip,
+                state,
+                Some(crate::dock::ids::channel_action(name)),
+            );
+            if let Ok(intent) = route {
+                if response.clicked() {
+                    fire = Some(intent);
+                }
+            }
+        }
+    });
+    if let Some(intent) = fire {
+        w.emit(intent);
     }
 }
 

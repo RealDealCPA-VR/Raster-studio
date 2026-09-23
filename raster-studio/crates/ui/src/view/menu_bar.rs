@@ -34,12 +34,13 @@ pub fn menu_bar(w: &mut Workspace, ctx: &egui::Context, context: &MenuContext) {
         });
 }
 
-/// The menu bar's own surface: the panel colour with a hairline beneath it, so
-/// the bar reads as part of the chrome rather than as a box on top of it.
+/// The menu bar's own surface: the header band — the colour every chrome band
+/// (menu, options, tabs, status) shares, one step darker than a panel body —
+/// so the bar reads as part of the chrome rather than as a box on top of it.
 fn bar_frame(ctx: &egui::Context) -> egui::Frame {
     let t = design::current_theme(ctx).tokens();
     egui::Frame::none()
-        .fill(color32(t.palette.color(ColorRole::SurfacePanel)))
+        .fill(color32(t.palette.color(ColorRole::SurfaceHeader)))
         .inner_margin(egui::Margin::symmetric(Space::Small.pt(), Space::Hair.pt()))
         .stroke(egui::Stroke::NONE)
 }

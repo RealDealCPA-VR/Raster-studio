@@ -43,6 +43,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{LazyLock, Mutex};
 
 use editor_core::{Document, PixelKey};
+use glam::{Affine2, Vec2};
 use layer_model::{LayerId, LayerKind};
 use raster::{PixelRect, TileCoord, TileHash, TILE_SIZE};
 
@@ -106,6 +107,104 @@ pub fn styled_bounds<S: TileSource + ?Sized>(
         None => b,
     };
     Ok(non_empty(Some(grown)))
+}
+
+/// Where level-0 stored tiles of `layer` land on the document — the
+/// rectangles a presenter has to redraw when exactly those tiles were
+/// rewritten (a brush stroke, or the undo of one).
+///
+/// `mask == false` names the layer's own tiles, mapped through the layer's
+/// transform; `mask == true` names its mask's tiles, mapped through the same
+/// pose the compositor samples the mask with (layer transform composed with
+/// the mask's own). Each rectangle is then grown by the layer's effects'
+/// reach, because repainting a pixel moves the drop shadow it casts. On an
+/// untransformed, unstyled layer the answer is the tile rectangle itself.
+///
+/// `Ok(None)` when the answer is not a set of rectangles — the layer or its
+/// mask is missing, a coordinate is not level 0, or the pose carries a tile
+/// past the coordinate ceiling — and a caller treats that as "redraw
+/// everything". Never a guess.
+pub fn edited_tiles_on_document<S: TileSource + ?Sized>(
+    doc: &Document,
+    source: &S,
+    layer: LayerId,
+    mask: bool,
+    coords: &[TileCoord],
+    opts: CompositeOptions,
+) -> Result<Option<Vec<PixelRect>>, CompositeError> {
+    let ctx = Ctx::new(doc, source, 0, opts)?;
+    let Some(layer_ref) = doc.layers.get(layer) else {
+        return Ok(None);
+    };
+    let mut pose = finite_or_identity(layer_ref.transform);
+    if mask {
+        let Some(m) = layer_ref.mask.as_ref() else {
+            return Ok(None);
+        };
+        pose *= finite_or_identity(*m.transform);
+    }
+    let identity = pose.abs_diff_eq(Affine2::IDENTITY, 1e-6);
+    let reach = ctx.style_reach(layer_ref);
+    let mut out = Vec::with_capacity(coords.len());
+    for c in coords {
+        if c.level != 0 {
+            return Ok(None);
+        }
+        let (ox, oy) = c.pixel_origin();
+        let local = PixelRect::new(ox, oy, TILE_SIZE, TILE_SIZE);
+        let mapped = if identity {
+            local
+        } else {
+            match mapped_rect(&pose, local) {
+                Some(r) => r,
+                None => return Ok(None),
+            }
+        };
+        out.push(match reach {
+            Some(margin) => ctx.style_rect(mapped, margin),
+            None => mapped,
+        });
+    }
+    Ok(Some(out))
+}
+
+/// A transform with a non-finite component is the identity, exactly as the
+/// compositor's own `level_transform` treats it, so a corrupt matrix bounds
+/// like "no transform" instead of poisoning the answer.
+fn finite_or_identity(t: Affine2) -> Affine2 {
+    if t.to_cols_array().iter().all(|v| v.is_finite()) {
+        t
+    } else {
+        Affine2::IDENTITY
+    }
+}
+
+/// The bounding box of `rect`'s image under `t`, widened by the two-pixel
+/// bilinear margin the compositor's own `image_rect` uses: a destination
+/// pixel can be reached by taps from up to a pixel outside the mapped shape.
+/// `None` when the image does not fit the coordinate ceiling.
+fn mapped_rect(t: &Affine2, rect: PixelRect) -> Option<PixelRect> {
+    let (mut lo, mut hi) = (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY));
+    for (cx, cy) in [
+        (rect.x, rect.y),
+        (rect.right(), rect.y),
+        (rect.x, rect.bottom()),
+        (rect.right(), rect.bottom()),
+    ] {
+        let p = t.transform_point2(Vec2::new(cx as f32, cy as f32));
+        if !p.x.is_finite() || !p.y.is_finite() {
+            return None;
+        }
+        lo = lo.min(p);
+        hi = hi.max(p);
+    }
+    let x0 = (lo.x.floor() as i64).saturating_sub(2);
+    let y0 = (lo.y.floor() as i64).saturating_sub(2);
+    let x1 = (hi.x.ceil() as i64).saturating_add(2);
+    let y1 = (hi.y.ceil() as i64).saturating_add(2);
+    let width = u32::try_from(x1.checked_sub(x0)?).ok()?;
+    let height = u32::try_from(y1.checked_sub(y0)?).ok()?;
+    Some(PixelRect::new(x0, y0, width, height))
 }
 
 /// `None` for a missing answer or an empty rect — the public contract.
@@ -266,7 +365,6 @@ fn union(a: PixelRect, b: PixelRect) -> PixelRect {
 mod tests {
     use super::*;
     use crate::testkit::TestDoc;
-    use glam::{Affine2, Vec2};
 
     #[test]
     fn an_empty_layer_bounds_to_nothing_without_nan_or_allocation() {
@@ -436,6 +534,106 @@ mod tests {
         assert_eq!(
             content_bounds(&t.doc, &t.src, ghost, 0, CompositeOptions::default()).unwrap(),
             None
+        );
+    }
+
+    /// The rectangles an edit's tiles dirty on the canvas: the tile itself on
+    /// a plain layer, moved with the layer's transform, grown by its style,
+    /// and never a guess where the pose is not a rectangle.
+    #[test]
+    fn edited_tiles_land_where_the_layer_puts_them_grown_by_its_style() {
+        let mut t = TestDoc::linear(1024, 512);
+        let id = t.push_raster("Ink");
+        t.paint_tile(id, TileCoord::new(0, 0, 0), [255, 0, 0, 255]);
+        let opts = CompositeOptions::default();
+        let tile = TileCoord::new(1, 0, 0);
+        let tile_rect = PixelRect::new(256, 0, 256, 256);
+
+        // Untransformed, unstyled: exactly the tile.
+        let plain = edited_tiles_on_document(&t.doc, &t.src, id, false, &[tile], opts)
+            .unwrap()
+            .expect("a rectangle answer");
+        assert_eq!(plain, vec![tile_rect]);
+
+        // Moved right by 300: the tile rectangle moves with it (plus the
+        // compositor's two-pixel bilinear margin), so an undo of a dab on a
+        // moved layer redraws where the dab is *seen*, not where it is stored.
+        t.doc.layers.get_mut(id).unwrap().transform =
+            Affine2::from_translation(Vec2::new(300.0, 0.0));
+        let moved = edited_tiles_on_document(&t.doc, &t.src, id, false, &[tile], opts)
+            .unwrap()
+            .expect("a rectangle answer");
+        assert_eq!(moved.len(), 1);
+        let m = moved[0];
+        assert!(
+            m.x <= 556 && m.right() >= 812,
+            "{m:?} does not cover the moved tile"
+        );
+        assert!(
+            m.x >= 554 && m.right() <= 814,
+            "{m:?} is wider than the margin allows"
+        );
+        assert!(m.y <= 0 && m.bottom() >= 256);
+
+        // A drop shadow grows every rectangle by the effect's reach.
+        t.doc.layers.get_mut(id).unwrap().transform = Affine2::IDENTITY;
+        t.doc.layers.get_mut(id).unwrap().effects = layer_model::LayerEffects {
+            drop_shadow: Some(layer_model::ShadowEffect::default()),
+            ..Default::default()
+        };
+        let reach =
+            crate::effects::reach(&t.doc.layers.get(id).unwrap().effects, 0).expect("reach");
+        assert!(reach > 0);
+        let styled = edited_tiles_on_document(&t.doc, &t.src, id, false, &[tile], opts)
+            .unwrap()
+            .expect("a rectangle answer");
+        assert_eq!(styled.len(), 1);
+        let s = styled[0];
+        assert!(s.x < tile_rect.x && s.right() > tile_rect.right(), "{s:?}");
+        assert!(
+            s.x >= tile_rect.x - reach && s.right() <= tile_rect.right() + reach,
+            "{s:?}"
+        );
+
+        // Mask tiles map through the mask's pose as well as the layer's.
+        t.doc.layers.get_mut(id).unwrap().effects = layer_model::LayerEffects::default();
+        assert!(
+            edited_tiles_on_document(&t.doc, &t.src, id, true, &[tile], opts)
+                .unwrap()
+                .is_none(),
+            "no mask, no rectangle"
+        );
+        let _mask = t.attach_mask(id);
+        {
+            let l = t.doc.layers.get_mut(id).unwrap();
+            *l.mask.as_mut().unwrap().transform = Affine2::from_translation(Vec2::new(0.0, 256.0));
+        }
+        let masked = edited_tiles_on_document(&t.doc, &t.src, id, true, &[tile], opts)
+            .unwrap()
+            .expect("a rectangle answer");
+        assert_eq!(masked.len(), 1);
+        assert!(
+            masked[0].y <= 256 && masked[0].bottom() >= 512,
+            "{:?}",
+            masked[0]
+        );
+        assert!(masked[0].y >= 254, "{:?}", masked[0]);
+
+        // Not a rectangle answer: a mip tile, and a layer that is gone.
+        assert!(edited_tiles_on_document(
+            &t.doc,
+            &t.src,
+            id,
+            false,
+            &[TileCoord::new(0, 0, 1)],
+            opts
+        )
+        .unwrap()
+        .is_none());
+        assert!(
+            edited_tiles_on_document(&t.doc, &t.src, LayerId::new(), false, &[tile], opts)
+                .unwrap()
+                .is_none()
         );
     }
 }

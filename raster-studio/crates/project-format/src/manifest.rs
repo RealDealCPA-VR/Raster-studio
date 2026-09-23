@@ -18,7 +18,12 @@ use crate::hexid;
 /// * `2` — pixels are persisted (`tiles/`), assets are persisted (`assets/`), a
 ///   composite preview is written (`previews/`), and the manifest carries
 ///   [`Manifest::contents`] plus [`Manifest::integrity`].
-pub const MANIFEST_VERSION: u32 = 2;
+/// * `3` — a tile blob may be stored deflate-compressed under
+///   `tiles/xx/<hash>.tilez` (the hash still names the *pixels*). A v2 reader
+///   would report such a blob as missing, so the version moves to make the
+///   refusal a sentence about versions; a v2 package (raw `.tile` blobs only)
+///   is read unchanged — see [`crate::tiles`].
+pub const MANIFEST_VERSION: u32 = 3;
 
 /// Oldest package layout this build reads.
 ///

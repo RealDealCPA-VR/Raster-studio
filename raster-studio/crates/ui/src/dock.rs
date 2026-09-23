@@ -42,6 +42,8 @@ pub enum PanelId {
     Paths,
     /// The Actions recorder: record, stop and replay command sequences.
     Actions,
+    /// The RGB / luminosity histogram of the active composite (W2-D).
+    Histogram,
 }
 
 impl PanelId {
@@ -61,6 +63,10 @@ impl PanelId {
         PanelId::Channels,
         PanelId::Paths,
         PanelId::Actions,
+        // Last on purpose: a saved dock stores one placement per member of
+        // this list *by position*, so a panel added anywhere but the end
+        // would make every older file mean something else.
+        PanelId::Histogram,
     ];
 
     /// Panel title, as shown on its header and in the Window menu.
@@ -80,6 +86,7 @@ impl PanelId {
             PanelId::Channels => "Channels",
             PanelId::Paths => "Paths",
             PanelId::Actions => "Actions",
+            PanelId::Histogram => "Histogram",
         }
     }
 
@@ -100,26 +107,79 @@ impl PanelId {
             PanelId::Channels => "channels",
             PanelId::Paths => "paths",
             PanelId::Actions => "actions",
+            PanelId::Histogram => "histogram",
         }
     }
 }
 
 /// Which edge of the window a panel is docked to.
+///
+/// Photopea's right-hand side is *two* columns: a narrow one against the
+/// canvas (Navigator / Info / Histogram, Colour / Swatches, Brushes /
+/// Character / Paragraph) and a wide one at the window edge (Layers, History,
+/// Properties). [`DockSide::RightNarrow`] is the inner column; [`DockSide::
+/// Right`] stays the wide outer one, so every saved layout that names `Right`
+/// still means what it meant.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum DockSide {
     Left,
+    /// The narrow right column, drawn between the canvas and [`DockSide::Right`].
+    RightNarrow,
+    /// The wide right column, at the window's edge.
     Right,
     /// Below the canvas, above the status bar.
     Bottom,
 }
 
 impl DockSide {
-    pub const ALL: &'static [DockSide] = &[DockSide::Left, DockSide::Right, DockSide::Bottom];
+    /// Every side, in the order the move controls offer them: left to right
+    /// across the window, then the bottom.
+    pub const ALL: &'static [DockSide] = &[
+        DockSide::Left,
+        DockSide::RightNarrow,
+        DockSide::Right,
+        DockSide::Bottom,
+    ];
+
+    /// The vertical sides — the ones that fold to an icon rail.
+    pub const COLUMNS: &'static [DockSide] =
+        &[DockSide::Left, DockSide::RightNarrow, DockSide::Right];
+
+    /// The index of a side in [`DockSide::ALL`].
+    pub fn slot(self) -> usize {
+        DockSide::ALL.iter().position(|s| *s == self).unwrap_or(0)
+    }
+
+    /// The default width of a fresh column of this side.
+    pub const fn default_width(self) -> f32 {
+        match self {
+            DockSide::Left => 260.0,
+            DockSide::RightNarrow => NARROW_DOCK_WIDTH,
+            DockSide::Right => 300.0,
+            DockSide::Bottom => 160.0,
+        }
+    }
+}
+
+/// A side written by a build this one does not know (a future column, say)
+/// lands on the wide right column rather than refusing the whole file.
+fn side_or_default<'de, D: serde::Deserializer<'de>>(d: D) -> Result<DockSide, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Known(DockSide),
+        Unknown(serde::de::IgnoredAny),
+    }
+    Ok(match Raw::deserialize(d)? {
+        Raw::Known(side) => side,
+        Raw::Unknown(_) => DockSide::Right,
+    })
 }
 
 /// Where one panel sits and how it is showing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct PanelPlacement {
+    #[serde(deserialize_with = "side_or_default")]
     pub side: DockSide,
     /// Position within its side, smaller first. Ties break on [`PanelId::ALL`]
     /// order, so the arrangement is total even after a sloppy drag.
@@ -171,30 +231,55 @@ impl LayoutId {
     }
 
     /// The panels this layout opens, per side, with their tabbed group.
-    /// Groups follow Photopea's pairings where the panels exist: channels with
-    /// layers, adjustments with properties, info with navigator.
+    /// Groups follow Photopea's pairings: Layers with Channels and Paths,
+    /// Adjustments with Properties, Navigator with Info and Histogram, Colour
+    /// with Swatches, Brushes with Character and Paragraph.
+    ///
+    /// # The wide column's order is Photopea's
+    ///
+    /// The wide column stacks `[Properties|Adjustments] [History]
+    /// [Layers|Channels|Paths]`, top to bottom — exactly Photopea's placement,
+    /// with Layers as the bottom group. The Layers group is the one
+    /// [`DockState::flex_group`] stretches to the column's edge, and putting
+    /// it last means the stretched group is also the last one: its bottom is
+    /// the column's bottom, and nothing sits under it to be pushed off the
+    /// window when the Layers rows want more room. The narrow column stacks
+    /// `[Navigator|Info|Histogram] [Color|Swatches]
+    /// [Brushes|Character|Paragraph]` and, holding no Layers, stretches its
+    /// last group by the same rule. `tests/panel_chrome_geometry.rs` measures
+    /// both columns at 900 and 1080 points.
     fn panels(self) -> &'static [(PanelId, DockSide, u8)] {
         match self {
             // Photopea has no left dock: every panel lives on the right of
-            // the canvas, tabbed in Photopea's pairings.
+            // the canvas, in two columns, tabbed in Photopea's pairings.
             LayoutId::Essentials => &[
+                (PanelId::Navigator, DockSide::RightNarrow, 0),
+                (PanelId::Info, DockSide::RightNarrow, 0),
+                (PanelId::Histogram, DockSide::RightNarrow, 0),
+                (PanelId::Color, DockSide::RightNarrow, 1),
+                (PanelId::Swatches, DockSide::RightNarrow, 1),
+                (PanelId::Brushes, DockSide::RightNarrow, 2),
+                (PanelId::Character, DockSide::RightNarrow, 2),
+                (PanelId::Paragraph, DockSide::RightNarrow, 2),
                 (PanelId::Properties, DockSide::Right, 0),
                 (PanelId::Adjustments, DockSide::Right, 0),
-                (PanelId::Layers, DockSide::Right, 1),
-                (PanelId::History, DockSide::Right, 2),
-                (PanelId::Color, DockSide::Right, 2),
+                (PanelId::History, DockSide::Right, 1),
+                (PanelId::Layers, DockSide::Right, 2),
+                (PanelId::Channels, DockSide::Right, 2),
+                (PanelId::Paths, DockSide::Right, 2),
             ],
             LayoutId::Painting => &[
-                (PanelId::Color, DockSide::Left, 0),
-                (PanelId::Swatches, DockSide::Left, 0),
-                (PanelId::Brushes, DockSide::Left, 1),
-                (PanelId::Layers, DockSide::Right, 0),
-                (PanelId::Properties, DockSide::Right, 1),
+                (PanelId::Color, DockSide::RightNarrow, 0),
+                (PanelId::Swatches, DockSide::RightNarrow, 0),
+                (PanelId::Brushes, DockSide::RightNarrow, 1),
+                (PanelId::Properties, DockSide::Right, 0),
+                (PanelId::Layers, DockSide::Right, 1),
             ],
             LayoutId::Photography => &[
-                (PanelId::Navigator, DockSide::Left, 0),
-                (PanelId::Info, DockSide::Left, 0),
-                (PanelId::History, DockSide::Left, 1),
+                (PanelId::Navigator, DockSide::RightNarrow, 0),
+                (PanelId::Info, DockSide::RightNarrow, 0),
+                (PanelId::Histogram, DockSide::RightNarrow, 0),
+                (PanelId::History, DockSide::RightNarrow, 1),
                 (PanelId::Properties, DockSide::Right, 0),
                 (PanelId::Adjustments, DockSide::Right, 0),
                 (PanelId::Layers, DockSide::Right, 1),
@@ -210,6 +295,11 @@ impl LayoutId {
 /// rather than merely being small.
 pub const MIN_DOCK_WIDTH: f32 = 220.0;
 
+/// The default width of the narrow right column: Photopea's inner column is
+/// about this wide — enough for a Navigator thumbnail and a three-tab strip,
+/// not enough for a Layers row.
+pub const NARROW_DOCK_WIDTH: f32 = 240.0;
+
 /// The width of a collapsed side dock: one column of panel icons. Photopea's
 /// icon rail is a single hit target wide, and nothing wider would be a rail.
 pub const RAIL_WIDTH_PT: f32 = 40.0;
@@ -223,24 +313,55 @@ pub const MAX_DOCK_HEIGHT: f32 = 400.0;
 /// The full arrangement of the dock.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct DockState {
-    /// One entry per [`PanelId::ALL`] member, in that order.
+    /// One entry per [`PanelId::ALL`] member, in that order. A saved file
+    /// from a build with fewer panels is padded with closed placements on
+    /// load — see [`DockState::normalize`].
     placements: Vec<PanelPlacement>,
     left_width: f32,
     right_width: f32,
     bottom_height: f32,
+    /// The narrow right column's width. Absent from files written before the
+    /// column existed, which is what the default is for.
+    #[serde(default = "default_narrow_width")]
+    right_narrow_width: f32,
     /// Photopea's collapse-to-icons: a whole side dock folded to a rail of
-    /// panel icons at [`DockState::RAIL_WIDTH_PT`]. Indexed by [`side_slot`].
-    #[serde(default)]
-    collapsed: [bool; 2],
+    /// panel icons at [`RAIL_WIDTH_PT`]. Indexed by [`DockSide::COLUMNS`]
+    /// position; a two-entry array from an older file is `[left, right]`
+    /// and is widened on load by [`collapsed_compat`].
+    #[serde(default, deserialize_with = "collapsed_compat")]
+    collapsed: [bool; 3],
     /// The layout this state was last set from, or `None` once the user has
     /// moved something and it no longer matches any preset.
     layout: Option<LayoutId>,
+}
+
+const fn default_narrow_width() -> f32 {
+    NARROW_DOCK_WIDTH
+}
+
+/// Read the collapse flags from a file of any vintage: two entries were
+/// `[left, right]` before the narrow column existed; three are
+/// `[left, narrow, right]`.
+fn collapsed_compat<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[bool; 3], D::Error> {
+    let raw: Vec<bool> = Vec::deserialize(d)?;
+    Ok(match raw.as_slice() {
+        [left, right] => [*left, false, *right],
+        [left, narrow, right, ..] => [*left, *narrow, *right],
+        [left] => [*left, false, false],
+        [] => [false; 3],
+    })
 }
 
 impl Default for DockState {
     fn default() -> Self {
         Self::from_layout(LayoutId::Essentials)
     }
+}
+
+/// The index of a vertical side in [`DockState::collapsed`], or `None` for
+/// the bottom dock, which has no rail to become.
+fn collapse_slot(side: DockSide) -> Option<usize> {
+    DockSide::COLUMNS.iter().position(|s| *s == side)
 }
 
 impl DockState {
@@ -258,17 +379,18 @@ impl DockState {
                     active: false,
                 })
                 .collect(),
-            left_width: 260.0,
-            right_width: 300.0,
-            bottom_height: 160.0,
-            collapsed: [false; 2],
+            left_width: DockSide::Left.default_width(),
+            right_width: DockSide::Right.default_width(),
+            bottom_height: DockSide::Bottom.default_width(),
+            right_narrow_width: DockSide::RightNarrow.default_width(),
+            collapsed: [false; 3],
             layout: Some(layout),
         };
         // `order` is per (side, group): tabs within a group count separately
         // from the groups stacked above and below.
-        let mut next = [[0u8; 4]; 3];
+        let mut next = [[0u8; 4]; DockSide::ALL.len()];
         for (panel, side, group) in layout.panels() {
-            let slot = DockSide::ALL.iter().position(|s| s == side).unwrap_or(0);
+            let slot = side.slot();
             let index = Self::index_of(*panel);
             let first_in_group = next[slot][*group as usize] == 0;
             state.placements[index] = PanelPlacement {
@@ -305,13 +427,19 @@ impl DockState {
 
     /// Replace the whole arrangement with a preset.
     pub fn apply_layout(&mut self, layout: LayoutId) {
-        let widths = (self.left_width, self.right_width, self.bottom_height);
+        let widths = (
+            self.left_width,
+            self.right_width,
+            self.bottom_height,
+            self.right_narrow_width,
+        );
         *self = Self::from_layout(layout);
         // Sizes are the user's, not the layout's: switching workspaces should
         // not undo a dock the user has widened.
         self.left_width = widths.0;
         self.right_width = widths.1;
         self.bottom_height = widths.2;
+        self.right_narrow_width = widths.3;
     }
 
     pub fn placement(&self, panel: PanelId) -> PanelPlacement {
@@ -322,24 +450,19 @@ impl DockState {
         self.placement(panel).open
     }
 
-    /// Whether a whole side dock is folded to its icon rail. Only the two
-    /// vertical sides collapse; the bottom dock has no rail to become.
+    /// Whether a whole side dock is folded to its icon rail. Only the three
+    /// vertical columns ([`DockSide::COLUMNS`]: left, narrow right, wide
+    /// right) collapse; the bottom dock has no rail to become.
     pub fn side_is_collapsed(&self, side: DockSide) -> bool {
-        match side {
-            DockSide::Left => self.collapsed[0],
-            DockSide::Right => self.collapsed[1],
-            DockSide::Bottom => false,
-        }
+        collapse_slot(side).is_some_and(|slot| self.collapsed[slot])
     }
 
     /// Fold a side to its icon rail, or unfold it back to the panels. The
     /// panels' own placements are untouched — unfolding restores exactly what
     /// was folded, which is the round trip.
     pub fn set_side_collapsed(&mut self, side: DockSide, collapsed: bool) {
-        match side {
-            DockSide::Left => self.collapsed[0] = collapsed,
-            DockSide::Right => self.collapsed[1] = collapsed,
-            DockSide::Bottom => {}
+        if let Some(slot) = collapse_slot(side) {
+            self.collapsed[slot] = collapsed;
         }
     }
 
@@ -517,10 +640,37 @@ impl DockState {
         true
     }
 
+    /// The group of `side` that takes the column's leftover height.
+    ///
+    /// Photopea gives the Layers group whatever the fixed groups leave and
+    /// lets its rows scroll inside; a column without Layers stretches its
+    /// last group instead, so no column ends in a strip of dead panel colour.
+    /// The answer is the group's *stack index* in [`DockState::groups_on`],
+    /// or `None` for an empty side.
+    pub fn flex_group(&self, side: DockSide) -> Option<usize> {
+        let groups = self.groups_on(side);
+        groups
+            .iter()
+            .position(|(_, members)| members.contains(&PanelId::Layers))
+            .or_else(|| groups.len().checked_sub(1))
+    }
+
     /// Repair placements after a load: every (side, group) with open panels
     /// has exactly one active member (first open member in tab order wins);
-    /// closed or absent panels are never active.
+    /// closed or absent panels are never active. A file from a build with
+    /// fewer panels is padded so every [`PanelId::ALL`] member has a slot.
     pub fn normalize(&mut self) {
+        while self.placements.len() < PanelId::ALL.len() {
+            self.placements.push(PanelPlacement {
+                side: DockSide::Right,
+                order: u8::MAX,
+                open: false,
+                collapsed: false,
+                group: 0,
+                active: false,
+            });
+        }
+        self.placements.truncate(PanelId::ALL.len());
         for side in DockSide::ALL {
             let groups: Vec<u8> = {
                 let mut seen: Vec<u8> = Vec::new();
@@ -560,6 +710,11 @@ impl DockState {
 
     pub fn right_width(&self) -> f32 {
         self.right_width
+    }
+
+    /// The narrow right column's width.
+    pub fn right_narrow_width(&self) -> f32 {
+        self.right_narrow_width
     }
 
     pub fn bottom_height(&self) -> f32 {
@@ -609,6 +764,7 @@ impl DockState {
         }
         match side {
             DockSide::Left => self.left_width = clamped,
+            DockSide::RightNarrow => self.right_narrow_width = clamped,
             DockSide::Right => self.right_width = clamped,
             DockSide::Bottom => self.bottom_height = clamped,
         }
@@ -703,6 +859,7 @@ impl DockState {
     pub fn side_extent(&self, side: DockSide) -> f32 {
         match side {
             DockSide::Left => self.left_width,
+            DockSide::RightNarrow => self.right_narrow_width,
             DockSide::Right => self.right_width,
             DockSide::Bottom => self.bottom_height,
         }
@@ -717,6 +874,48 @@ impl DockState {
     /// Height of a collapsed panel: its header alone.
     pub fn header_height() -> f32 {
         Space::XXLarge.pt()
+    }
+}
+
+/// Stable widget ids for the dock's *geometry* — the drawn column and the
+/// drawn tab groups — so a headless test can read their rectangles back with
+/// `egui::Context::read_response` rather than trusting the layout code.
+///
+/// They live beside the state rather than in `view::ids` because the state
+/// module is where a column and a group are *defined*; the drawing side marks
+/// what it painted under these names.
+pub mod ids {
+    use super::{DockSide, PanelId};
+
+    /// The rectangle one dock column (or the bottom rail) was drawn in.
+    pub fn column(side: DockSide) -> egui::Id {
+        egui::Id::new("raster-dock-column").with(side)
+    }
+
+    /// The rectangle of the tab group `panel` belongs to — header, body and
+    /// trailing rule together — marked under every member's id.
+    pub fn group_of(panel: PanelId) -> egui::Id {
+        egui::Id::new("raster-dock-group").with(panel)
+    }
+
+    /// The Histogram panel's plot area.
+    pub fn histogram_plot() -> egui::Id {
+        egui::Id::new("raster-histogram-plot")
+    }
+
+    /// The Navigator's zoom slider.
+    pub fn navigator_zoom() -> egui::Id {
+        egui::Id::new("raster-navigator-zoom")
+    }
+
+    /// The Channels footer's actions, by name.
+    pub fn channel_action(name: &'static str) -> egui::Id {
+        egui::Id::new("raster-channel-action").with(name)
+    }
+
+    /// One Info panel readout's value, by its row label.
+    pub fn info_value(label: &'static str) -> egui::Id {
+        egui::Id::new("raster-info-value").with(label)
     }
 }
 
@@ -752,18 +951,23 @@ mod tests {
         assert_eq!(d.layout(), Some(LayoutId::Essentials));
         assert!(d.is_open(PanelId::Layers));
         assert_eq!(d.placement(PanelId::Layers).side, DockSide::Right);
-        assert!(!d.is_open(PanelId::Paths));
+        assert!(!d.is_open(PanelId::Actions));
     }
 
     #[test]
     fn switching_to_painting_opens_brushes_and_closes_history() {
         let mut d = DockState::default();
         assert!(d.is_open(PanelId::History));
-        assert!(!d.is_open(PanelId::Brushes));
+        assert!(d.is_open(PanelId::Navigator));
         d.apply_layout(LayoutId::Painting);
         assert!(d.is_open(PanelId::Brushes));
         assert!(!d.is_open(PanelId::History));
+        assert!(!d.is_open(PanelId::Navigator));
         assert_eq!(d.layout(), Some(LayoutId::Painting));
+        // Photopea has no left dock: Painting keeps its colour panels on the
+        // narrow right column.
+        assert!(d.side_is_empty(DockSide::Left));
+        assert_eq!(d.placement(PanelId::Brushes).side, DockSide::RightNarrow);
     }
 
     #[test]
@@ -845,9 +1049,10 @@ mod tests {
             vec![
                 PanelId::Properties,
                 PanelId::Adjustments,
-                PanelId::Layers,
                 PanelId::History,
-                PanelId::Color
+                PanelId::Layers,
+                PanelId::Channels,
+                PanelId::Paths
             ]
         );
         assert!(
@@ -926,42 +1131,46 @@ mod tests {
             vec![
                 PanelId::Properties,
                 PanelId::Adjustments,
-                PanelId::Layers,
                 PanelId::History,
-                PanelId::Color
+                PanelId::Layers,
+                PanelId::Channels,
+                PanelId::Paths
             ]
         );
-        assert_eq!(d.reorder(PanelId::Layers, true), Some(0));
+        // One step up: the whole [Layers|Channels|Paths] group passes History.
+        assert_eq!(d.reorder(PanelId::Layers, true), Some(1));
         assert_eq!(
             d.panels_on(DockSide::Right),
             vec![
-                PanelId::Layers,
                 PanelId::Properties,
                 PanelId::Adjustments,
-                PanelId::History,
-                PanelId::Color
+                PanelId::Layers,
+                PanelId::Channels,
+                PanelId::Paths,
+                PanelId::History
             ]
         );
         assert_eq!(d.layout(), None);
         // The raised group's tab stays the shown one.
         assert!(d.is_active(PanelId::Layers));
+        assert_eq!(d.reorder(PanelId::Layers, true), Some(0));
+        let top = vec![
+            PanelId::Layers,
+            PanelId::Channels,
+            PanelId::Paths,
+            PanelId::Properties,
+            PanelId::Adjustments,
+            PanelId::History,
+        ];
+        assert_eq!(d.panels_on(DockSide::Right), top);
 
         // The top group cannot go up and the bottom group cannot go down.
         assert_eq!(d.reorder(PanelId::Layers, true), None);
-        assert_eq!(d.reorder(PanelId::Color, false), None);
+        assert_eq!(d.reorder(PanelId::History, false), None);
         // A closed panel has no place in the order at all.
-        assert_eq!(d.reorder(PanelId::Paths, true), None);
+        assert_eq!(d.reorder(PanelId::Actions, true), None);
         // ...and the refusals left the arrangement alone.
-        assert_eq!(
-            d.panels_on(DockSide::Right),
-            vec![
-                PanelId::Layers,
-                PanelId::Properties,
-                PanelId::Adjustments,
-                PanelId::History,
-                PanelId::Color
-            ]
-        );
+        assert_eq!(d.panels_on(DockSide::Right), top);
     }
 
     #[test]
@@ -978,7 +1187,7 @@ mod tests {
         // The whole reason the intent carries a destination rather than a
         // direction: absorbing it twice must not move the panel twice.
         let mut d = DockState::default();
-        let at = 2;
+        let at = 3;
         assert_eq!(d.panels_on(DockSide::Right)[at], PanelId::Layers);
         assert!(d.reorder_to(PanelId::Layers, 0));
         let once = d.panels_on(DockSide::Right);
@@ -1020,9 +1229,9 @@ mod tests {
         assert_eq!(d.panels_on(DockSide::Bottom), vec![PanelId::Layers]);
         assert!(!d.dock(PanelId::Layers, DockSide::Bottom));
         // A closed panel docks (and opens) even onto the side it is filed under.
-        assert!(!d.is_open(PanelId::Paths));
-        assert!(d.dock(PanelId::Paths, DockSide::Right));
-        assert!(d.is_open(PanelId::Paths));
+        assert!(!d.is_open(PanelId::Actions));
+        assert!(d.dock(PanelId::Actions, DockSide::Right));
+        assert!(d.is_open(PanelId::Actions));
     }
 
     #[test]
@@ -1052,9 +1261,10 @@ mod tests {
             vec![
                 PanelId::Properties,
                 PanelId::Adjustments,
-                PanelId::Layers,
                 PanelId::History,
-                PanelId::Color
+                PanelId::Layers,
+                PanelId::Channels,
+                PanelId::Paths
             ]
         );
         assert_eq!(d.layout(), None);
@@ -1063,7 +1273,8 @@ mod tests {
     #[test]
     fn dragging_a_panel_into_a_group_joins_it() {
         let mut d = DockState::default();
-        // Layers lives in its own group; drag it into Properties/Adjustments.
+        // Layers leads the bottom group; drag it into Properties/Adjustments
+        // and Channels/Paths stay behind as the group it left.
         assert!(d.move_panel(PanelId::Layers, DockSide::Right, 0));
         assert_eq!(
             d.groups_on(DockSide::Right),
@@ -1072,7 +1283,8 @@ mod tests {
                     0,
                     vec![PanelId::Properties, PanelId::Adjustments, PanelId::Layers]
                 ),
-                (2, vec![PanelId::History, PanelId::Color])
+                (1, vec![PanelId::History]),
+                (2, vec![PanelId::Channels, PanelId::Paths])
             ]
         );
         // The dragged panel is the tab the group shows.
@@ -1085,13 +1297,17 @@ mod tests {
     #[test]
     fn closing_the_last_tab_removes_the_group() {
         let mut d = DockState::from_layout(LayoutId::Essentials);
-        // Right dock: Properties/Adjustments in group 0, Layers alone in 1,
-        // History/Color in 2.
+        // Right dock: Properties/Adjustments in group 0, History alone in 1,
+        // Layers/Channels/Paths in 2.
         assert_eq!(d.groups_on(DockSide::Right).len(), 3);
-        d.set_open(PanelId::Layers, false);
+        d.set_open(PanelId::History, false);
         let groups = d.groups_on(DockSide::Right);
         assert_eq!(groups.len(), 2, "the empty group is gone");
         assert_eq!(groups[0].1, vec![PanelId::Properties, PanelId::Adjustments]);
+        assert_eq!(
+            groups[1].1,
+            vec![PanelId::Layers, PanelId::Channels, PanelId::Paths]
+        );
         // Groups derive from placements, so renumbering is not needed to keep
         // the stack total: the surviving group is the drawn one.
         assert!(d.active_panel(DockSide::Right, 0).is_some());
@@ -1133,7 +1349,7 @@ mod tests {
     #[test]
     fn closing_an_already_closed_panel_does_not_dirty_the_layout() {
         let mut d = DockState::default();
-        d.set_open(PanelId::Paths, false);
+        d.set_open(PanelId::Actions, false);
         assert_eq!(d.layout(), Some(LayoutId::Essentials));
     }
 
@@ -1145,6 +1361,150 @@ mod tests {
         let json = serde_json::to_string(&d).expect("serialize");
         let back: DockState = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, d);
+    }
+
+    #[test]
+    fn essentials_opens_two_right_columns_with_photopeas_pairings() {
+        // W2-D: the narrow column against the canvas holds the reporting and
+        // colour panels; the wide column at the edge stacks, top to bottom,
+        // [Properties|Adjustments] [History] [Layers|Channels|Paths] — Layers
+        // as the flexing bottom group, Photopea's placement.
+        let d = DockState::default();
+        assert!(!d.side_is_empty(DockSide::RightNarrow));
+        assert!(!d.side_is_empty(DockSide::Right));
+        assert!(d.side_is_empty(DockSide::Left));
+        assert_eq!(
+            d.groups_on(DockSide::RightNarrow),
+            vec![
+                (
+                    0,
+                    vec![PanelId::Navigator, PanelId::Info, PanelId::Histogram]
+                ),
+                (1, vec![PanelId::Color, PanelId::Swatches]),
+                (
+                    2,
+                    vec![PanelId::Brushes, PanelId::Character, PanelId::Paragraph]
+                ),
+            ]
+        );
+        assert_eq!(
+            d.groups_on(DockSide::Right),
+            vec![
+                (0, vec![PanelId::Properties, PanelId::Adjustments]),
+                (1, vec![PanelId::History]),
+                (2, vec![PanelId::Layers, PanelId::Channels, PanelId::Paths]),
+            ]
+        );
+        assert!(d.is_open(PanelId::Histogram));
+        assert_eq!(d.right_narrow_width(), NARROW_DOCK_WIDTH);
+    }
+
+    #[test]
+    fn one_step_up_from_the_bottom_of_essentials_moves_the_layers_group_over_history() {
+        // The shape the header chevron tests outside this crate drive: the
+        // bottom group of the wide column is [Layers|Channels|Paths] and one
+        // step up puts the whole group between Properties/Adjustments and
+        // History — three tabs travel together, History alone slides down.
+        let mut d = DockState::default();
+        let before = d.panels_on(DockSide::Right);
+        let bottom = *before.last().unwrap();
+        assert_eq!(bottom, PanelId::Paths);
+        let active = *before
+            .iter()
+            .rev()
+            .find(|p| d.is_active(**p))
+            .expect("the bottom group shows a tab");
+        assert_eq!(active, PanelId::Layers, "the group's first tab leads");
+        let groups = d.groups_on(DockSide::Right);
+        let from = groups.len() - 1;
+        assert_eq!(d.reorder(active, true), Some(from as u8 - 1));
+        let after = d.panels_on(DockSide::Right);
+        let mut expected = before.clone();
+        let members: Vec<PanelId> = groups[from].1.clone();
+        let above: Vec<PanelId> = groups[from - 1].1.clone();
+        // The moved group now starts where the group above it started.
+        let at = before.iter().position(|p| *p == above[0]).unwrap();
+        expected.truncate(at);
+        expected.extend(members.iter().copied());
+        expected.extend(above.iter().copied());
+        assert_eq!(after, expected);
+        assert_eq!(after.len(), before.len());
+    }
+
+    #[test]
+    fn the_layers_group_takes_the_leftover_height_and_the_last_group_otherwise() {
+        let mut d = DockState::default();
+        // Right: [Properties|Adjustments] [History] [Layers|Channels|Paths],
+        // Photopea's order — Layers is stack index 2, the last group, so the
+        // stretched group is the one on the column's edge.
+        assert_eq!(d.flex_group(DockSide::Right), Some(2));
+        assert_eq!(d.groups_on(DockSide::Right).len(), 3);
+        // No Layers on the narrow column: its last group stretches.
+        assert_eq!(d.flex_group(DockSide::RightNarrow), Some(2));
+        assert_eq!(d.flex_group(DockSide::Left), None);
+        // Layers follows the user: moved to the top, the top group flexes.
+        assert!(d.reorder_to(PanelId::Layers, 0));
+        assert_eq!(d.flex_group(DockSide::Right), Some(0));
+    }
+
+    #[test]
+    fn the_narrow_column_folds_to_a_rail_and_keeps_its_own_width() {
+        let mut d = DockState::default();
+        d.set_side_collapsed(DockSide::RightNarrow, true);
+        assert!(d.side_is_collapsed(DockSide::RightNarrow));
+        assert!(!d.side_is_collapsed(DockSide::Right));
+        assert!(!d.side_is_collapsed(DockSide::Left));
+        d.set_side_width(DockSide::RightNarrow, 300.0);
+        assert_eq!(d.right_narrow_width(), 300.0);
+        assert_eq!(d.right_width(), DockSide::Right.default_width());
+        d.apply_layout(LayoutId::Painting);
+        assert_eq!(d.right_narrow_width(), 300.0, "widths survive a layout");
+    }
+
+    #[test]
+    fn a_dock_saved_before_the_narrow_column_still_loads() {
+        // The exact shape a pre-W2-D session wrote: two collapse flags, no
+        // narrow width, fourteen placements (no Histogram), and three sides.
+        let old = DockState {
+            placements: DockState::from_layout(LayoutId::Essentials)
+                .placements
+                .into_iter()
+                .take(14)
+                .collect(),
+            left_width: 260.0,
+            right_width: 333.0,
+            bottom_height: 160.0,
+            right_narrow_width: 0.0,
+            collapsed: [false, false, true],
+            layout: None,
+        };
+        let mut json = serde_json::to_value(&old).expect("serialize");
+        let obj = json.as_object_mut().unwrap();
+        obj.remove("right_narrow_width");
+        obj.insert("collapsed".into(), serde_json::json!([false, true]));
+        let text = serde_json::to_string(&json).unwrap();
+
+        let mut back: DockState = serde_json::from_str(&text).expect("an old dock loads");
+        back.normalize();
+        assert_eq!(back.right_width(), 333.0);
+        assert_eq!(back.right_narrow_width(), NARROW_DOCK_WIDTH);
+        assert!(
+            back.side_is_collapsed(DockSide::Right),
+            "[left, right] maps to the wide column"
+        );
+        assert!(!back.side_is_collapsed(DockSide::RightNarrow));
+        assert_eq!(back.placements.len(), PanelId::ALL.len());
+        assert!(!back.is_open(PanelId::Histogram));
+        assert!(back.is_open(PanelId::Layers));
+    }
+
+    #[test]
+    fn a_side_from_a_future_build_lands_on_the_wide_column() {
+        let d = DockState::default();
+        let mut json = serde_json::to_value(&d).expect("serialize");
+        json["placements"][0]["side"] = serde_json::json!("Hovering");
+        let back: DockState = serde_json::from_value(json).expect("unknown side tolerated");
+        assert_eq!(back.placement(PanelId::ALL[0]).side, DockSide::Right);
     }
 
     #[test]

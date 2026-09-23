@@ -2,12 +2,27 @@
 //!
 //! # Slots, not tools
 //!
-//! The palette does not show forty-four buttons. It shows one button per
-//! *cycle group* — the tools that share a shortcut letter, which is exactly the
-//! set `tools::registry` already calls a group — with the rest reachable from a
+//! The palette does not show fifty buttons. It shows one button per *slot* —
+//! the tools that declare the same `ToolInfo::slot` id, which is Photopea's
+//! grouping (Blur/Sharpen/Smudge share a slot with no letter between them;
+//! Rotate View sits under Hand on its own `R`) — with the rest reachable from a
 //! fly-out. [`PaletteModel::build`] derives the whole thing from
-//! `tools::registry::all()`, so a new tool joins the palette by existing, and
-//! `every_tool_is_reachable_from_exactly_one_slot` fails if one ever is not.
+//! `tools::registry::all()`, so a new tool joins the palette by declaring a
+//! slot, and `every_tool_is_reachable_from_exactly_one_slot` fails if one that
+//! declares a slot ever is not. A tool with no slot (Free Transform) is a menu
+//! item and a chord, not a button.
+//!
+//! # The footer
+//!
+//! Under the colour wells sit Photopea's `Q` and `F`: the quick-mask toggle,
+//! whose engaged state is [`PaletteState::quick_mask`], and the screen-mode
+//! cycle, whose state is [`PaletteState::screen_mode`]. Both are *mirrors*:
+//! the application owns the mode (the editor's quick mask and screen mode),
+//! writes them into the palette before every frame, and the footer only
+//! draws them. A click on `Q` raises the Select menu's action; a click on `F`
+//! raises a cycle request the chrome turns into its screen-mode action
+//! ([`PaletteState::take_screen_mode_cycle`]). Neither flips its own flag, so
+//! a refused toggle never leaves a control lit over an unchanged screen.
 //!
 //! # The slot remembers
 //!
@@ -23,8 +38,12 @@ use tools::{registry, ToolGroup, ToolId, ToolInfo};
 /// One button of the palette, plus its fly-out variants.
 #[derive(Clone, PartialEq, Debug)]
 pub struct PaletteSlot {
+    /// The registry's slot id (`ToolInfo::slot`), shared by every tool here.
+    pub id: &'static str,
     pub group: ToolGroup,
-    /// The key that cycles this slot, when its tools declare one.
+    /// The key of the slot's first tool, when it declares one. A slot's tools
+    /// may answer to different letters (Hand `H`, Rotate View `R`) or to none
+    /// (the blur brushes); this is the key the button's tooltip shows.
     pub shortcut: Option<char>,
     /// The tools in the slot, in registry order. Never empty.
     pub tools: Vec<ToolId>,
@@ -57,20 +76,21 @@ impl Default for PaletteModel {
 impl PaletteModel {
     /// Group the registry into slots, preserving registry order.
     ///
-    /// Tools sharing a shortcut land in one slot; a tool with no shortcut gets
-    /// a slot of its own, because there is no key to cycle it with and hiding
-    /// it behind another tool would make it unreachable.
+    /// Tools declaring the same `ToolInfo::slot` land in one slot, whatever
+    /// their shortcuts; a tool declaring no slot is left out, because it is
+    /// reached from a menu and a chord instead (Free Transform, `Ctrl+T`).
+    /// Grouping by slot rather than by letter is what lets the four keyless
+    /// blur brushes share one button instead of taking four.
     pub fn build() -> Self {
         let mut slots: Vec<PaletteSlot> = Vec::new();
         for info in registry::all() {
-            let existing = info.shortcut.and_then(|key| {
-                slots
-                    .iter_mut()
-                    .find(|s| s.shortcut == Some(key) && s.group == info.group)
-            });
-            match existing {
+            let Some(id) = info.slot else {
+                continue;
+            };
+            match slots.iter_mut().find(|s| s.id == id) {
                 Some(slot) => slot.tools.push(info.id),
                 None => slots.push(PaletteSlot {
+                    id,
                     group: info.group,
                     shortcut: info.shortcut,
                     tools: vec![info.id],
@@ -78,6 +98,11 @@ impl PaletteModel {
             }
         }
         Self { slots }
+    }
+
+    /// The slot ids, top to bottom — the column as a reader would list it.
+    pub fn slot_ids(&self) -> Vec<&'static str> {
+        self.slots.iter().map(|s| s.id).collect()
     }
 
     pub fn slots(&self) -> &[PaletteSlot] {
@@ -102,6 +127,86 @@ impl PaletteModel {
     }
 }
 
+/// Photopea's `F` cycle: how much chrome surrounds the canvas.
+///
+/// Photopea's three screen modes, meant for the chrome to *read* through the
+/// three predicates below alongside the editor's own `Tab` panels flag. It is
+/// a view setting like the ruler unit, so it is not an intent and never
+/// reaches a document.
+///
+/// The application owns the value (the editor's `screen_mode`, cycled by its
+/// `CycleScreenMode` action on plain `F` and on the footer's control) and
+/// mirrors it into [`PaletteState::screen_mode`] before each frame; the chrome
+/// gates the options bar, tool column and docks on [`ScreenMode::panels_visible`]
+/// and the menu bar on [`ScreenMode::menu_visible`], and the shell sets the
+/// window borderless full screen from [`ScreenMode::fullscreen`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ScreenMode {
+    /// Everything: menu, options bar, tools, docks, status.
+    #[default]
+    Standard,
+    /// The canvas fills the window under the menu bar; the panels are gone.
+    FullScreenWithMenu,
+    /// The canvas alone, in a borderless window.
+    FullScreen,
+}
+
+impl ScreenMode {
+    /// Every mode, in `F` order.
+    pub const ALL: &'static [ScreenMode] = &[
+        ScreenMode::Standard,
+        ScreenMode::FullScreenWithMenu,
+        ScreenMode::FullScreen,
+    ];
+
+    /// The mode one press of `F` leads to; wraps back to Standard.
+    pub const fn next(self) -> ScreenMode {
+        match self {
+            ScreenMode::Standard => ScreenMode::FullScreenWithMenu,
+            ScreenMode::FullScreenWithMenu => ScreenMode::FullScreen,
+            ScreenMode::FullScreen => ScreenMode::Standard,
+        }
+    }
+
+    /// Whether the tool rail, the options bar and the docks are drawn.
+    pub const fn panels_visible(self) -> bool {
+        matches!(self, ScreenMode::Standard)
+    }
+
+    /// Whether the menu bar is drawn.
+    pub const fn menu_visible(self) -> bool {
+        !matches!(self, ScreenMode::FullScreen)
+    }
+
+    /// Whether the window should be borderless full screen.
+    pub const fn fullscreen(self) -> bool {
+        !matches!(self, ScreenMode::Standard)
+    }
+
+    /// The name the footer's tooltip and a menu would show. Bare English
+    /// here, like `MenuAction::label`, because the string is this type's, not
+    /// the view's.
+    pub const fn label(self) -> &'static str {
+        match self {
+            ScreenMode::Standard => "Standard Screen Mode",
+            ScreenMode::FullScreenWithMenu => "Full Screen Mode With Menu Bar",
+            ScreenMode::FullScreen => "Full Screen Mode",
+        }
+    }
+}
+
+/// The footer's quick-mask (`Q`) control, under a stable id so a headless
+/// test can find and click it. Lives here rather than in `view::ids` because
+/// the footer is the palette's, and so is its state.
+pub fn quick_mask_control() -> egui::Id {
+    egui::Id::new("raster-palette-quick-mask")
+}
+
+/// The footer's screen-mode (`F`) control.
+pub fn screen_mode_control() -> egui::Id {
+    egui::Id::new("raster-palette-screen-mode")
+}
+
 /// What the palette remembers between frames.
 #[derive(Clone, PartialEq, Debug)]
 pub struct PaletteState {
@@ -113,6 +218,24 @@ pub struct PaletteState {
     /// A press-and-hold in flight: the slot pressed and the egui time it went
     /// down. Holding past [`HOLD_SECONDS`] opens the fly-out without a click.
     pub hold: Option<(usize, f64)>,
+    /// Whether quick-mask mode is engaged, as the footer's `Q` control shows
+    /// it. The control never sets this itself: a click only emits the menu
+    /// action, and the engaged look follows this flag, which is the editor's
+    /// to mirror in — the same door [`PaletteState::activate`] is for the
+    /// active tool — so a refused toggle (no document) can never leave the
+    /// control lit. The chrome's `sync_workspace` writes it from
+    /// `Editor::quick_mask()` every frame, whichever route toggled it (the
+    /// footer, the `Q` chord, the Select menu).
+    pub quick_mask: bool,
+    /// The footer's `F` cycle, mirrored from the editor's screen mode by the
+    /// chrome every frame; the control lights the two full-screen modes
+    /// ([`ScreenMode::fullscreen`]) and never cycles this itself.
+    pub screen_mode: ScreenMode,
+    /// A click on the footer's `F` since the chrome last asked. The control
+    /// cannot raise an `Intent` for the mode (there is no menu item for it),
+    /// so this is its outbox: the chrome takes it and performs the
+    /// application's own screen-mode action.
+    screen_mode_requested: bool,
 }
 
 impl Default for PaletteState {
@@ -122,6 +245,9 @@ impl Default for PaletteState {
             last_used: HashMap::new(),
             open_flyout: None,
             hold: None,
+            quick_mask: false,
+            screen_mode: ScreenMode::Standard,
+            screen_mode_requested: false,
         }
     }
 }
@@ -132,6 +258,18 @@ pub const HOLD_SECONDS: f64 = 0.3;
 impl PaletteState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The footer's `F` was clicked: ask the application to cycle the screen
+    /// mode. The mode itself is left alone — it is the editor's, and comes
+    /// back through [`PaletteState::screen_mode`] once performed.
+    pub fn request_screen_mode_cycle(&mut self) {
+        self.screen_mode_requested = true;
+    }
+
+    /// Whether `F` was clicked since the last call; clears the request.
+    pub fn take_screen_mode_cycle(&mut self) -> bool {
+        std::mem::take(&mut self.screen_mode_requested)
     }
 
     pub fn active(&self) -> ToolId {
@@ -290,15 +428,144 @@ mod tests {
     #[test]
     fn every_tool_is_reachable_from_exactly_one_slot() {
         let m = PaletteModel::build();
-        let mut seen: Vec<ToolId> = m.slots().iter().flat_map(|s| s.tools.clone()).collect();
+        let seen: Vec<ToolId> = m.slots().iter().flat_map(|s| s.tools.clone()).collect();
         let unique: HashSet<ToolId> = seen.iter().copied().collect();
         assert_eq!(unique.len(), seen.len(), "a tool is in two slots");
-        seen.sort_by_key(|t| ToolId::ALL.iter().position(|x| x == t));
+        // Every tool that declares a slot, and only those, in registry order
+        // (slots are contiguous runs of the registry, so flattening them
+        // gives the registry back): a tool with no slot is a menu item, and
+        // putting it on the column anyway would be the palette overruling the
+        // registry.
+        let expected: Vec<ToolId> = registry::all()
+            .iter()
+            .filter(|i| i.slot.is_some())
+            .map(|i| i.id)
+            .collect();
+        assert_eq!(seen, expected, "the palette and the registry disagree");
         assert_eq!(
-            seen,
-            ToolId::ALL.to_vec(),
-            "a tool is missing from the palette"
+            m.slot_of(ToolId::FreeTransform),
+            None,
+            "Free Transform is Ctrl+T and the Edit menu, not a button"
         );
+    }
+
+    /// Photopea's column, top to bottom. The registry is the source of the
+    /// order; this pins that the palette reproduces it slot for slot.
+    #[test]
+    fn the_column_is_photopeas_nineteen_slots_in_photopeas_order() {
+        let m = PaletteModel::build();
+        assert_eq!(
+            m.slot_ids(),
+            vec![
+                "move",
+                "marquee",
+                "lasso",
+                "wand",
+                "crop",
+                "eyedropper",
+                "heal",
+                "brush",
+                "clone",
+                "eraser",
+                "gradient",
+                "blur",
+                "tone",
+                "pen",
+                "type",
+                "path",
+                "shape",
+                "hand",
+                "zoom",
+            ]
+        );
+        let primaries: Vec<ToolId> = m.slots().iter().map(|s| s.primary()).collect();
+        assert_eq!(
+            primaries,
+            vec![
+                ToolId::Move,
+                ToolId::RectMarquee,
+                ToolId::Lasso,
+                ToolId::MagicWand,
+                ToolId::Crop,
+                ToolId::Eyedropper,
+                ToolId::SpotHealing,
+                ToolId::Brush,
+                ToolId::CloneStamp,
+                ToolId::Eraser,
+                ToolId::Gradient,
+                ToolId::Blur,
+                ToolId::Dodge,
+                ToolId::Pen,
+                ToolId::Type,
+                ToolId::PathSelect,
+                ToolId::Rectangle,
+                ToolId::Hand,
+                ToolId::Zoom,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_slot_may_hold_tools_with_different_keys_or_none() {
+        let m = PaletteModel::build();
+        // Blur, Sharpen, Smudge and Refine Boundary have no letter and used to
+        // take four buttons; Photopea gives them one.
+        let blur = m.slot_of(ToolId::Blur).expect("in the palette");
+        assert_eq!(m.slot_of(ToolId::Sharpen), Some(blur));
+        assert_eq!(m.slot_of(ToolId::Smudge), Some(blur));
+        assert_eq!(m.slot_of(ToolId::RefineBoundary), Some(blur));
+        assert_eq!(m.slots()[blur].shortcut, None);
+        assert!(m.slots()[blur].has_variants());
+        // Rotate View sits under Hand and keeps its own `R`.
+        let hand = m.slot_of(ToolId::Hand).expect("in the palette");
+        assert_eq!(m.slot_of(ToolId::RotateView), Some(hand));
+        assert_eq!(m.slots()[hand].shortcut, Some('h'));
+        assert_eq!(registry::cycle('r', None), Some(ToolId::RotateView));
+    }
+
+    #[test]
+    fn the_screen_mode_cycles_standard_menu_full_and_back() {
+        let mut mode = ScreenMode::default();
+        assert_eq!(mode, ScreenMode::Standard);
+        assert!(mode.panels_visible() && mode.menu_visible() && !mode.fullscreen());
+        mode = mode.next();
+        assert_eq!(mode, ScreenMode::FullScreenWithMenu);
+        assert!(!mode.panels_visible() && mode.menu_visible() && mode.fullscreen());
+        mode = mode.next();
+        assert_eq!(mode, ScreenMode::FullScreen);
+        assert!(!mode.panels_visible() && !mode.menu_visible() && mode.fullscreen());
+        assert_eq!(mode.next(), ScreenMode::Standard);
+        // `ALL` is the cycle, and every mode has a name.
+        for pair in ScreenMode::ALL.windows(2) {
+            assert_eq!(pair[0].next(), pair[1]);
+        }
+        for mode in ScreenMode::ALL {
+            assert!(!mode.label().is_empty());
+        }
+    }
+
+    #[test]
+    fn the_footer_state_starts_in_standard_mode_with_quick_mask_off() {
+        let state = PaletteState::new();
+        assert!(!state.quick_mask);
+        assert_eq!(state.screen_mode, ScreenMode::Standard);
+        assert_ne!(quick_mask_control(), screen_mode_control());
+    }
+
+    /// W2-X: the footer's `F` asks; it never cycles. The request is an
+    /// outbox the chrome drains once, and the mode stays the mirrored one.
+    #[test]
+    fn a_screen_mode_request_is_taken_once_and_leaves_the_mode_alone() {
+        let mut state = PaletteState::new();
+        assert!(!state.take_screen_mode_cycle());
+        state.request_screen_mode_cycle();
+        assert_eq!(state.screen_mode, ScreenMode::Standard);
+        assert!(state.take_screen_mode_cycle());
+        assert!(
+            !state.take_screen_mode_cycle(),
+            "the request was not cleared"
+        );
+        assert_eq!(state.screen_mode, ScreenMode::Standard);
     }
 
     #[test]
@@ -318,20 +585,6 @@ mod tests {
         assert!(m.slots()[slot].has_variants());
         assert_eq!(m.slots()[slot].shortcut, Some('m'));
         assert_eq!(m.slots()[slot].primary(), ToolId::RectMarquee);
-    }
-
-    #[test]
-    fn a_tool_with_no_shortcut_gets_a_slot_to_itself() {
-        let m = PaletteModel::build();
-        for info in registry::all().iter().filter(|i| i.shortcut.is_none()) {
-            let slot = m.slot_of(info.id).expect("in the palette");
-            assert_eq!(
-                m.slots()[slot].tools,
-                vec![info.id],
-                "{:?} was hidden behind another tool with no key to reach it",
-                info.id
-            );
-        }
     }
 
     #[test]

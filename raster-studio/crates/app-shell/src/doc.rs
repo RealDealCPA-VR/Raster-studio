@@ -16,6 +16,7 @@
 use std::path::{Path, PathBuf};
 
 use compositor::{CompositeOptions, MemoryTileSource, TileCompositor, TileSource};
+use editor_core::command::DirtyReach;
 use editor_core::{Command, CommandError, Document, History};
 use layer_model::{LayerId, LayerKind};
 use project_format::{
@@ -151,7 +152,7 @@ pub fn exports_as_psd(path: &Path) -> bool {
 
 /// `true` when two paths name the same file — canonically when both resolve,
 /// case-insensitively otherwise (this build's primary host is Windows).
-fn same_path(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(x), Ok(y)) => x == y,
         _ => a
@@ -167,7 +168,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
 /// through must not have eaten the previous version. The temporary file is a
 /// sibling so the rename stays on one filesystem, and it is removed when the
 /// rename does not happen.
-fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
     let name = path
         .file_name()
@@ -239,6 +240,10 @@ pub struct OpenDocument {
     /// and the history dock has to draw the whole timeline, or a step vanishes
     /// from the panel the moment it is undone and cannot be clicked back.
     undone_labels: Vec<String>,
+    /// W2-G: while a save of this document's *snapshot* runs on a worker,
+    /// commands accepted here are journaled to this side file instead of the
+    /// package journal — see [`OpenDocument::begin_journal_hold`].
+    journal_hold: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for OpenDocument {
@@ -369,6 +374,7 @@ impl OpenDocument {
             psd_notes: crate::import::PsdNotes::default(),
             undone_labels: Vec::new(),
             fit_pending: true,
+            journal_hold: None,
         }
     }
 
@@ -477,6 +483,7 @@ impl OpenDocument {
             psd_notes: crate::import::PsdNotes::default(),
             undone_labels: Vec::new(),
             fit_pending: true,
+            journal_hold: None,
         })
     }
 
@@ -594,6 +601,7 @@ impl OpenDocument {
             psd_notes: crate::import::PsdNotes::default(),
             undone_labels: Vec::new(),
             fit_pending: true,
+            journal_hold: None,
         }
     }
 
@@ -670,8 +678,22 @@ impl OpenDocument {
         // Only after the command was accepted: `project-format` requires the
         // journal to record commands that are already in the document, or a
         // recovery would replay one the snapshot never had.
-        if let Some(project) = &self.project_path {
-            if let Err(e) = CommandJournal::append(&project.join(JOURNAL_FILE), &command) {
+        //
+        // W2-G: while a save of this document's snapshot is in flight, the
+        // record goes to the hold's side file, never to the package journal:
+        // the worker copies that journal's prefix at a moment this thread
+        // cannot see and the swap then deletes the old one, so a record put
+        // there now would either be filed ahead of the new save marker (and
+        // never replayed) or deleted with the old package. The side file is
+        // absorbed after the marker once the save has landed — see
+        // [`OpenDocument::begin_journal_hold`].
+        let journal = match (&self.journal_hold, &self.project_path) {
+            (Some(side), _) => Some(side.clone()),
+            (None, Some(project)) => Some(project.join(JOURNAL_FILE)),
+            (None, None) => None,
+        };
+        if let Some(journal) = journal {
+            if let Err(e) = CommandJournal::append(&journal, &command) {
                 // A journal that cannot be written costs crash recovery, not
                 // the edit — the edit is already in the document.
                 tracing::warn!("cannot journal the command: {e}");
@@ -681,29 +703,187 @@ impl OpenDocument {
     }
 
     /// Undo one step. Reports whether anything was undone.
+    ///
+    /// Invalidates only what the step reaches: the inverse `History` is about
+    /// to apply names its layers and tiles ([`Command::dirty_reach`]), and
+    /// their on-canvas extent is read **before and after** the inverse runs,
+    /// so a moved layer's old spot is redrawn as well as its new one. A step
+    /// whose reach is not a rectangle (a re-order, a canvas resize) still
+    /// marks the whole canvas — see `crate::dirty`.
     pub fn undo(&mut self) -> Result<bool, CommandError> {
         // Read the label *before* the step moves off the done stack.
         let label = self.history.undo_label().map(str::to_string);
+        let reach = self.history.peek_undo().map(Command::dirty_reach);
+        let before = reach.as_ref().map(|r| self.reach_tiles(r));
         let undone = self.history.undo(&mut self.document)?;
         if undone {
             self.undone_labels
                 .push(label.unwrap_or_else(|| "Step".to_string()));
-            // `History` applies the inverse internally and does not hand it
-            // back, so the reach of the change is not knowable here. Marking
-            // the whole canvas is the honest answer; see `crate::dirty`.
-            self.dirty.mark_all();
+            self.mark_step(reach, before);
         }
         Ok(undone)
     }
 
-    /// Redo one step. Reports whether anything was redone.
+    /// Redo one step. Reports whether anything was redone. Invalidates on the
+    /// same terms as [`OpenDocument::undo`].
     pub fn redo(&mut self) -> Result<bool, CommandError> {
+        let reach = self.history.peek_redo().map(Command::dirty_reach);
+        let before = reach.as_ref().map(|r| self.reach_tiles(r));
         let redone = self.history.redo(&mut self.document)?;
         if redone {
             self.undone_labels.pop();
-            self.dirty.mark_all();
+            self.mark_step(reach, before);
         }
         Ok(redone)
+    }
+
+    /// Record an undo/redo step's invalidation: the tiles its reach covered
+    /// before the step (`before`) plus the ones it covers now.
+    fn mark_step(&mut self, reach: Option<DirtyReach>, before: Option<DirtyTiles>) {
+        match (reach, before) {
+            (Some(reach), Some(before)) => {
+                self.dirty.merge(&before);
+                if !self.dirty.is_all() {
+                    let after = self.reach_tiles(&reach);
+                    self.dirty.merge(&after);
+                }
+            }
+            // The step applied but nothing was peeked first — not reachable
+            // through `History`'s API, but the whole canvas is the honest
+            // answer if it ever is.
+            _ => self.dirty.mark_all(),
+        }
+    }
+
+    /// The presenter tiles `reach` invalidates, read against the document
+    /// **as it is now**. Called once before a step and once after, because a
+    /// layer's extent is different on the two sides of a move, a delete or a
+    /// text edit.
+    ///
+    /// Every answer here is a superset of the pixels that change, never a
+    /// guess: the moment a layer's extent cannot be stated as rectangles in
+    /// document space — an adjustment (it reaches everything beneath it), a
+    /// group (its children's own effects are not in its bounds), a layer under
+    /// a transformed or styled ancestor (its bounds are in the parent's
+    /// space), or a compositor query that fails — the answer is the whole
+    /// canvas.
+    fn reach_tiles(&self, reach: &DirtyReach) -> DirtyTiles {
+        if reach.is_everything() {
+            return DirtyTiles::all();
+        }
+        let mut out = DirtyTiles::none();
+        for layer in reach.layers() {
+            if !self.mark_layer_extent(&mut out, layer) {
+                return DirtyTiles::all();
+            }
+        }
+        for (layer, mask, coords) in reach.tile_groups() {
+            if !self.extent_is_rectangular(layer) {
+                return DirtyTiles::all();
+            }
+            let coords: Vec<raster::TileCoord> = coords.iter().copied().collect();
+            match compositor::bounds::edited_tiles_on_document(
+                &self.document,
+                &self.tiles,
+                layer,
+                mask,
+                &coords,
+                CompositeOptions::default(),
+            ) {
+                Ok(Some(rects)) => {
+                    for r in rects {
+                        self.mark_rect_tiles(&mut out, r);
+                    }
+                }
+                Ok(None) | Err(_) => return DirtyTiles::all(),
+            }
+        }
+        out
+    }
+
+    /// Mark the styled extent of `layer` — and of every member of its
+    /// clipping group, since a clipped layer shows through its base's shape
+    /// and the base's shape decides what the clipped layers show. `false`
+    /// when the extent is not rectangular and the caller must mark all.
+    fn mark_layer_extent(&self, out: &mut DirtyTiles, layer: LayerId) -> bool {
+        if !self.document.layers.contains(layer) {
+            // Not there on this side of the step (created by it, or deleted
+            // by it): nothing to mark on this side.
+            return true;
+        }
+        let members: Vec<LayerId> = match self.document.layers.clipping_group(layer) {
+            Some(group) => std::iter::once(group.base)
+                .chain(group.clipped.iter().copied())
+                .collect(),
+            None => vec![layer],
+        };
+        for id in members {
+            if !self.extent_is_rectangular(id) {
+                return false;
+            }
+            match compositor::bounds::styled_bounds(
+                &self.document,
+                &self.tiles,
+                id,
+                0,
+                CompositeOptions::default(),
+            ) {
+                Ok(Some(rect)) => self.mark_rect_tiles(out, rect),
+                Ok(None) => {}
+                Err(_) => return false,
+            }
+        }
+        true
+    }
+
+    /// Whether `layer`'s pixels on the canvas are confined to rectangles
+    /// `compositor::bounds` can state in document space.
+    fn extent_is_rectangular(&self, layer: LayerId) -> bool {
+        let Some(l) = self.document.layers.get(layer) else {
+            return true;
+        };
+        match l.kind {
+            // An adjustment rewrites every pixel beneath it; a group's bounds
+            // do not include its children's own effects.
+            LayerKind::Adjustment(_) | LayerKind::Group(_) => return false,
+            LayerKind::Raster(_)
+            | LayerKind::Generator(_)
+            | LayerKind::SmartObject(_)
+            | LayerKind::Text(_)
+            | LayerKind::Shape(_) => {}
+        }
+        // `styled_bounds` maps through the layer's own transform only, so the
+        // answer is in the parent's space. It is document space exactly when
+        // no ancestor moves or styles its children.
+        let mut cursor = self.document.layers.parent_of(layer);
+        while let Some(pid) = cursor {
+            let Some(parent) = self.document.layers.get(pid) else {
+                return false;
+            };
+            let moved = !parent.transform.abs_diff_eq(glam::Affine2::IDENTITY, 1e-6);
+            if moved || parent.effects.affects_composite() {
+                return false;
+            }
+            cursor = self.document.layers.parent_of(pid);
+        }
+        true
+    }
+
+    /// Mark every level-0 tile `rect` touches, clamped to the canvas.
+    fn mark_rect_tiles(&self, out: &mut DirtyTiles, rect: PixelRect) {
+        let x0 = rect.x.max(0);
+        let y0 = rect.y.max(0);
+        let x1 = rect.right().min(i64::from(self.document.width()));
+        let y1 = rect.bottom().min(i64::from(self.document.height()));
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let t = i64::from(TILE_SIZE);
+        for ty in y0.div_euclid(t)..=(y1 - 1).div_euclid(t) {
+            for tx in x0.div_euclid(t)..=(x1 - 1).div_euclid(t) {
+                out.insert(raster::TileCoord::new(tx as i32, ty as i32, 0));
+            }
+        }
     }
 
     /// How many commands are applied right now — the point on the timeline the
@@ -872,7 +1052,7 @@ impl OpenDocument {
         layer: LayerId,
         kind: LayerKind,
     ) -> Result<(), DocumentError> {
-        let Some(l) = self.document.layers.get_mut(layer) else {
+        let Some(l) = self.document.layers.get(layer) else {
             return Err(DocumentError::Command(CommandError::InvalidPayload {
                 reason: "the layer is gone".to_string(),
             }));
@@ -900,8 +1080,18 @@ impl OpenDocument {
                 reason: e.to_string(),
             })
         })?;
+        // A keystroke redraws the text's own extent, not the canvas: the
+        // styled ink box before the edit (the glyphs being replaced) and
+        // after it (the glyphs now shown), on the same terms as an undo.
+        let reach = DirtyReach::layer(layer);
+        let before = self.reach_tiles(&reach);
+        let Some(l) = self.document.layers.get_mut(layer) else {
+            return Err(DocumentError::Command(CommandError::InvalidPayload {
+                reason: "the layer is gone".to_string(),
+            }));
+        };
         l.kind = kind;
-        self.dirty.mark_all();
+        self.mark_step(Some(reach), Some(before));
         Ok(())
     }
 
@@ -1981,6 +2171,80 @@ impl OpenDocument {
         rmp_serde::to_vec_named(&self.document)
             .ok()
             .map(|b| DocumentDigest::of(&b))
+    }
+
+    /// W2-G: a save of this document's *snapshot* has landed at `path` on the
+    /// job thread; make `path` this document's location.
+    ///
+    /// `unchanged` says the live document still matches the snapshot that was
+    /// written, so it is now clean. When it was edited while the save ran it
+    /// stays dirty: the package holds the snapshot, not those edits, and a
+    /// clean flag would tell the user work is on disk that is not.
+    pub fn adopt_saved(&mut self, path: &Path, unchanged: bool) {
+        self.project_path = Some(path.to_path_buf());
+        self.document.set_path(Some(path.to_path_buf()));
+        if unchanged {
+            self.document.mark_saved();
+        }
+    }
+
+    /// W2-G: wrap a `.psd` the job thread has already parsed
+    /// ([`crate::import::document_from_psd`]) — the same document
+    /// [`OpenDocument::open_psd_bytes`] builds, without the parse on this
+    /// thread.
+    pub fn open_psd_import(id: DocumentId, path: &Path, import: crate::import::PsdImport) -> Self {
+        let mut open = OpenDocument::from_import(id, import.imported);
+        open.source_path = Some(path.to_path_buf());
+        open.psd_notes = import.notes;
+        open
+    }
+
+    /// W2-G: a save of this document's snapshot has just been handed to a
+    /// worker; until [`OpenDocument::end_journal_hold`], journal every
+    /// accepted command to `side` rather than to the package journal.
+    ///
+    /// Why a side file and not the journal: the worker copies the package
+    /// journal's valid prefix at a moment this thread cannot see, then swaps
+    /// the new package in and deletes the old one. A record appended before
+    /// that read lands ahead of the new save marker and is treated as work the
+    /// snapshot already holds; one appended after it is deleted with the old
+    /// package. Recovery would replay neither, and the first command that no
+    /// longer applied would stop the replay for good. In the side file the
+    /// records survive the swap, and a crash while the hold is open leaves
+    /// the file next to the package for the next open to absorb.
+    ///
+    /// A stale side file at `side` (an earlier hold this process never
+    /// finished — the caller absorbs those at open) is replaced, not appended
+    /// to. One hold at a time: a second call while one is open is a no-op.
+    pub fn begin_journal_hold(&mut self, side: PathBuf) {
+        if self.journal_hold.is_some() {
+            return;
+        }
+        if let Err(e) = std::fs::remove_file(&side) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!("cannot clear the journal hold {}: {e}", side.display());
+            }
+        }
+        self.journal_hold = Some(side);
+    }
+
+    /// W2-G: the save has landed (or failed); commands go back to the package
+    /// journal. Returns the side file the hold wrote to — the caller absorbs
+    /// it into the journal the document now has
+    /// ([`project_format::CommandJournal::absorb`]).
+    pub fn end_journal_hold(&mut self) -> Option<PathBuf> {
+        self.journal_hold.take()
+    }
+
+    /// W2-G: the side file the open hold journals to, if a hold is open.
+    pub fn journal_hold(&self) -> Option<&Path> {
+        self.journal_hold.as_deref()
+    }
+
+    /// W2-G: what an export to `.psd` that ran on a worker could not carry;
+    /// replaces the report left by the last exchange.
+    pub fn set_psd_notes(&mut self, notes: crate::import::PsdNotes) {
+        self.psd_notes = notes;
     }
 }
 
@@ -3873,5 +4137,204 @@ mod tests {
             acc.add_region(&band, PixelRect::new(0, i64::from(y0), w, rows));
         }
         assert_eq!(acc.finish(), reference);
+    }
+
+    // ------------------------------------------------- partial invalidation ---
+
+    /// The level-0 tiles `rect` touches on a `w` x `h` canvas — the test's own
+    /// arithmetic, so it can say what the document *should* have marked.
+    fn tiles_under(rect: PixelRect, w: u32, h: u32) -> std::collections::BTreeSet<TileCoord> {
+        let mut out = std::collections::BTreeSet::new();
+        let t = i64::from(TILE_SIZE);
+        let x0 = rect.x.max(0);
+        let y0 = rect.y.max(0);
+        let x1 = rect.right().min(i64::from(w));
+        let y1 = rect.bottom().min(i64::from(h));
+        if x1 <= x0 || y1 <= y0 {
+            return out;
+        }
+        for ty in y0.div_euclid(t)..=(y1 - 1).div_euclid(t) {
+            for tx in x0.div_euclid(t)..=(x1 - 1).div_euclid(t) {
+                out.insert(TileCoord::new(tx as i32, ty as i32, 0));
+            }
+        }
+        out
+    }
+
+    fn styled(d: &OpenDocument, id: LayerId) -> Option<PixelRect> {
+        compositor::bounds::styled_bounds(&d.document, &d.tiles, id, 0, CompositeOptions::default())
+            .unwrap()
+    }
+
+    /// The finding's second half: every keystroke of a live text draft marked
+    /// the whole canvas. A keystroke reaches the text's styled ink box before
+    /// and after the edit, and nothing else — on a 4K canvas that is a
+    /// handful of tiles out of 256.
+    #[test]
+    fn a_text_keystroke_invalidates_only_the_tiles_under_the_text() {
+        let mut d = OpenDocument::blank(DocumentId(4), 4096, 4096, "type", 32).unwrap();
+        let original = layer_model::TextLayer {
+            text: "Headline".to_string(),
+            font_family: "DejaVu Sans".to_string(),
+            size_px: 48.0,
+            ..layer_model::TextLayer::default()
+        };
+        let layer = Layer::with_kind("Type", LayerKind::Text(original.clone()));
+        let id = layer.id;
+        d.apply(Command::create_layer(layer)).unwrap();
+        let _ = d.take_dirty();
+
+        let before = styled(&d, id).expect("the text has an ink box");
+        d.apply_text_draft(
+            id,
+            LayerKind::Text(layer_model::TextLayer {
+                text: "Headline, and then a good deal more of it".to_string(),
+                ..original.clone()
+            }),
+        )
+        .unwrap();
+        let after = styled(&d, id).expect("the longer text has an ink box");
+        assert!(after.right() > before.right(), "the draft grew the ink box");
+
+        let dirty = d.take_dirty();
+        assert!(
+            !dirty.is_all(),
+            "a keystroke re-uploaded the whole 4096x4096 canvas"
+        );
+        let marked: std::collections::BTreeSet<TileCoord> = dirty.tiles().collect();
+        let mut expected = tiles_under(before, 4096, 4096);
+        expected.extend(tiles_under(after, 4096, 4096));
+        assert!(!expected.is_empty());
+        assert_eq!(
+            marked, expected,
+            "exactly the tiles under the old and the new ink box"
+        );
+        assert!(marked.len() < 16 * 16);
+
+        // And a keystroke that *shrinks* the text still clears the glyphs it
+        // removed: the old box is in the set as well as the new one.
+        let wide = after;
+        d.apply_text_draft(id, LayerKind::Text(original)).unwrap();
+        let narrow = styled(&d, id).unwrap();
+        let marked: std::collections::BTreeSet<TileCoord> = d.take_dirty().tiles().collect();
+        let mut expected = tiles_under(wide, 4096, 4096);
+        expected.extend(tiles_under(narrow, 4096, 4096));
+        assert_eq!(marked, expected);
+    }
+
+    /// Undoing a move has two spots to redraw: where the layer is now (it
+    /// leaves) and where it was (it returns). Marking only one of them is a
+    /// ghost on the canvas.
+    #[test]
+    fn undoing_a_moved_layer_redraws_where_it_left_and_where_it_returns() {
+        let mut d = doc_of(TILE_SIZE * 4, TILE_SIZE * 3); // 12 tiles
+        let ink = Layer::raster("Ink");
+        let id = ink.id;
+        d.apply(Command::create_layer(ink)).unwrap();
+        let mut tile = Tile::transparent(raster::PixelFormat::Rgba8);
+        tile.data_mut().fill(250);
+        let hash = d.tiles.insert_tile(&tile);
+        d.apply(Command::PaintTiles {
+            target: PixelTarget::Layer(id),
+            delta: TileDelta::single(TileEdit::set(TileCoord::new(0, 0, 0), hash)),
+        })
+        .unwrap();
+        d.apply(Command::TransformLayer {
+            layer_id: id,
+            matrix: [1.0, 0.0, 0.0, 1.0, 300.0, 0.0],
+        })
+        .unwrap();
+        let _ = d.take_dirty();
+
+        assert!(d.undo().unwrap());
+        let dirty = d.take_dirty();
+        assert!(
+            !dirty.is_all(),
+            "an undo of a move re-uploaded the whole canvas"
+        );
+        // The spot it returns to, and the tiles it left: the moved tile is
+        // x 300..556, grown by the compositor's two-pixel bilinear margin to
+        // 298..558 x -2..258, which reaches into row 1. Rows 2 and column 3
+        // are untouched: 5 of 12 tiles.
+        assert_eq!(
+            dirty.tiles().collect::<Vec<_>>(),
+            vec![
+                TileCoord::new(0, 0, 0),
+                TileCoord::new(1, 0, 0),
+                TileCoord::new(1, 1, 0),
+                TileCoord::new(2, 0, 0),
+                TileCoord::new(2, 1, 0),
+            ],
+        );
+
+        assert!(d.redo().unwrap());
+        let dirty = d.take_dirty();
+        assert!(!dirty.is_all());
+        assert_eq!(dirty.tiles().count(), 5, "and the same five on redo");
+    }
+
+    /// The fallbacks that keep partial invalidation honest: an adjustment
+    /// reaches everything beneath it, and a layer under a transformed group
+    /// has bounds in the group's space, not the document's.
+    #[test]
+    fn an_adjustment_or_a_transformed_ancestor_still_invalidates_everything() {
+        let mut d = doc_of(TILE_SIZE * 2, TILE_SIZE * 2);
+        let adj = Layer::with_kind(
+            "Invert",
+            LayerKind::Adjustment(layer_model::AdjustmentLayer {
+                kind: layer_model::AdjustmentKind::Invert,
+            }),
+        );
+        let adj_id = adj.id;
+        d.apply(Command::create_layer(adj)).unwrap();
+        let _ = d.take_dirty();
+        assert!(d.undo().unwrap());
+        assert!(d.take_dirty().is_all(), "undoing an adjustment's creation");
+        assert!(d.redo().unwrap());
+        assert!(d.take_dirty().is_all());
+        d.apply(Command::SetLayerProperties {
+            layer_id: adj_id,
+            patch: editor_core::LayerPatch {
+                opacity: Some(0.5),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        let _ = d.take_dirty();
+        assert!(d.undo().unwrap());
+        assert!(d.take_dirty().is_all(), "undoing an adjustment's opacity");
+
+        // A raster child of a moved group.
+        let group = Layer::with_kind("G", LayerKind::Group(layer_model::GroupLayer::default()));
+        let group_id = group.id;
+        d.apply(Command::create_layer(group)).unwrap();
+        d.apply(Command::TransformLayer {
+            layer_id: group_id,
+            matrix: [1.0, 0.0, 0.0, 1.0, 100.0, 0.0],
+        })
+        .unwrap();
+        let child = Layer::raster("Child");
+        let child_id = child.id;
+        d.apply(Command::create_layer(child)).unwrap();
+        d.apply(Command::MoveLayer {
+            layer_id: child_id,
+            parent: Some(group_id),
+            index: 0,
+        })
+        .unwrap();
+        let mut tile = Tile::transparent(raster::PixelFormat::Rgba8);
+        tile.data_mut().fill(9);
+        let hash = d.tiles.insert_tile(&tile);
+        d.apply(Command::PaintTiles {
+            target: PixelTarget::Layer(child_id),
+            delta: TileDelta::single(TileEdit::set(TileCoord::new(0, 0, 0), hash)),
+        })
+        .unwrap();
+        let _ = d.take_dirty();
+        assert!(d.undo().unwrap());
+        assert!(
+            d.take_dirty().is_all(),
+            "a stroke under a moved group has no document-space rectangle here"
+        );
     }
 }

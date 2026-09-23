@@ -384,3 +384,541 @@ fn the_history_snapshot_control_is_a_footer_action_under_the_last_row() {
         "the snapshot control ({snapshot:?}) is as wide as a row ({last_row:?})"
     );
 }
+
+// ---------------------------------------------------------------------------
+// W2-D: two right columns, the flexible Layers group, Histogram, Info sample
+// ---------------------------------------------------------------------------
+
+use ui::dock::{ids as dock_ids, DockSide};
+
+/// Every string one frame painted.
+fn painted_text(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+    shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn essentials_draws_a_narrow_right_column_inside_the_wide_one() {
+    let mut h = Harness::with_document(one_layer_document());
+    h.settle();
+    let narrow = h.rect(dock_ids::column(DockSide::RightNarrow));
+    let wide = h.rect(dock_ids::column(DockSide::Right));
+    assert!(narrow.width() > 0.0 && wide.width() > 0.0);
+    assert!(
+        narrow.right() <= wide.left() + 1.0,
+        "the narrow column ({narrow:?}) is not left of the wide one ({wide:?})"
+    );
+    assert!(
+        narrow.width() < wide.width(),
+        "the inner column ({}) is not the narrow one ({})",
+        narrow.width(),
+        wide.width()
+    );
+    // Both columns reach the same edges: they are two columns of one dock,
+    // not a panel floating beside another.
+    assert!((narrow.top() - wide.top()).abs() < 1.0);
+    assert!((narrow.bottom() - wide.bottom()).abs() < 1.0);
+    // The wide column keeps Layers; the narrow one holds the reporting and
+    // colour panels, and its three-tab strip fits inside it.
+    assert!(wide.contains_rect(h.rect(ids::panel_tab(PanelId::Layers))));
+    for panel in [PanelId::Navigator, PanelId::Info, PanelId::Histogram] {
+        let tab = h.rect(ids::panel_tab(panel));
+        assert!(
+            narrow.contains_rect(tab),
+            "{panel:?}'s tab ({tab:?}) is outside the narrow column ({narrow:?})"
+        );
+    }
+    let overflow = h.rect(ids::panel_menu(PanelId::Navigator));
+    let last_tab = h.rect(ids::panel_tab(PanelId::Histogram));
+    assert!(
+        last_tab.right() <= overflow.left(),
+        "the tab strip ({last_tab:?}) runs into the header buttons ({overflow:?})"
+    );
+    // Photopea's pairings: Colour is tabbed with Swatches in the narrow
+    // column; Channels and Paths are tabbed with Layers in the wide one.
+    for panel in [PanelId::Color, PanelId::Swatches] {
+        let tab = h.rect(ids::panel_tab(panel));
+        assert!(
+            narrow.contains_rect(tab),
+            "{panel:?}'s tab ({tab:?}) is outside the narrow column ({narrow:?})"
+        );
+    }
+    for panel in [PanelId::Channels, PanelId::Paths] {
+        let tab = h.rect(ids::panel_tab(panel));
+        assert!(
+            wide.contains_rect(tab),
+            "{panel:?}'s tab ({tab:?}) is outside the wide column ({wide:?})"
+        );
+    }
+    // The wide column stacks Properties over History over Layers.
+    let properties = h.rect(dock_ids::group_of(PanelId::Properties));
+    let history = h.rect(dock_ids::group_of(PanelId::History));
+    let layers = h.rect(dock_ids::group_of(PanelId::Layers));
+    assert!(
+        properties.bottom() <= history.top() + 1.0 && history.bottom() <= layers.top() + 1.0,
+        "the wide column is not Properties / History / Layers: {properties:?} {history:?} {layers:?}"
+    );
+}
+
+#[test]
+fn the_layers_group_takes_the_leftover_height_and_no_column_ends_in_dead_space() {
+    // Photopea: the fixed groups keep their natural height and the Layers
+    // group — the bottom of the wide column — gets whatever the window
+    // leaves. So the Layers group's bottom edge *is* the column's bottom edge
+    // at either window height, and 180pt more window is 180pt more Layers.
+    let mut layers_heights = Vec::new();
+    let mut fixed_heights = Vec::new();
+    for height in [900.0_f32, 1080.0] {
+        let mut h = Harness::with_document(one_layer_document());
+        h.screen = egui::vec2(1400.0, height);
+        h.settle();
+        let t = h.tokens();
+        let wide = h.rect(dock_ids::column(DockSide::Right));
+        let layers = h.rect(dock_ids::group_of(PanelId::Layers));
+        let history = h.rect(dock_ids::group_of(PanelId::History));
+        let properties = h.rect(dock_ids::group_of(PanelId::Properties));
+        assert!(
+            (layers.bottom() - wide.bottom()).abs() <= 1.5,
+            "at {height}pt the Layers group ends at {} but the column at {}: {} pt of dead space",
+            layers.bottom(),
+            wide.bottom(),
+            wide.bottom() - layers.bottom()
+        );
+        // Stacked in order — Properties, History, Layers — each inside the
+        // column, nothing overlapping.
+        assert!(
+            properties.bottom() <= history.top() + 1.0,
+            "{properties:?} vs {history:?}"
+        );
+        assert!(
+            history.bottom() <= layers.top() + 1.0,
+            "{history:?} vs {layers:?}"
+        );
+        assert!(
+            wide.contains_rect(layers.shrink(0.5)),
+            "{layers:?} left {wide:?}"
+        );
+        // The footer is pinned to the group's bottom edge, not scrolled away:
+        // inside the group, and within a control of its edge.
+        let footer = h.rect(ids::new_layer());
+        assert!(
+            layers.contains_rect(footer),
+            "footer {footer:?} left {layers:?}"
+        );
+        assert!(
+            layers.bottom() - footer.bottom() <= t.metrics.control_height * 2.0,
+            "the footer ({footer:?}) is not pinned to the Layers group's edge ({layers:?})"
+        );
+        layers_heights.push(layers.height());
+        fixed_heights.push((properties.height(), history.height()));
+
+        // The narrow column has no Layers, so its last group — Brushes —
+        // stretches instead, and its list scrolls inside the stretch; the
+        // group's bottom is the column's bottom (the fit itself is
+        // `every_narrow_group_fits_inside_its_column_at_900_and_1080`).
+        let narrow = h.rect(dock_ids::column(DockSide::RightNarrow));
+        let last = h.rect(dock_ids::group_of(PanelId::Brushes));
+        assert!(
+            (narrow.bottom() - last.bottom()).abs() <= 1.5,
+            "at {height}pt the narrow column ends at {} but its last group at {}: {} pt of dead space",
+            narrow.bottom(),
+            last.bottom(),
+            narrow.bottom() - last.bottom()
+        );
+    }
+    // 180pt more window is 180pt more Layers group; the fixed groups did not
+    // move by a point.
+    let grew = layers_heights[1] - layers_heights[0];
+    assert!(
+        (grew - 180.0).abs() <= 2.0,
+        "the Layers group grew {grew}pt for a 180pt taller window: {layers_heights:?}"
+    );
+    assert_eq!(
+        fixed_heights[0], fixed_heights[1],
+        "a fixed group changed height"
+    );
+}
+
+/// W2-X (d): the narrow column at 900pt used to end with the Brushes group
+/// cut off — its preset list took its natural height under two fixed groups
+/// and ran past the window, footer and all. The same rule as the wide column
+/// applies now: the fixed groups keep their height, the last group takes the
+/// rest and scrolls its list inside it. So every group of the narrow column
+/// lies inside the column at both window heights, stacked in order with no
+/// overlap, and the last one ends on the column's edge.
+#[test]
+fn every_narrow_group_fits_inside_its_column_at_900_and_1080() {
+    let mut brushes_heights = Vec::new();
+    for height in [900.0_f32, 1080.0] {
+        let mut h = Harness::with_document(one_layer_document());
+        h.screen = egui::vec2(1400.0, height);
+        h.settle();
+        let column = h.rect(dock_ids::column(DockSide::RightNarrow));
+        let groups = h.workspace.dock.groups_on(DockSide::RightNarrow);
+        assert_eq!(groups.len(), 3, "Essentials' narrow column: {groups:?}");
+        let leads: Vec<PanelId> = groups.iter().map(|(_, m)| m[0]).collect();
+        assert_eq!(
+            leads,
+            vec![PanelId::Navigator, PanelId::Color, PanelId::Brushes]
+        );
+        let rects: Vec<egui::Rect> = leads
+            .iter()
+            .map(|p| h.rect(dock_ids::group_of(*p)))
+            .collect();
+        for (panel, rect) in leads.iter().zip(&rects) {
+            assert!(
+                column.contains_rect(rect.shrink(0.5)),
+                "at {height}pt the {panel:?} group ({rect:?}) is not inside the narrow column ({column:?})"
+            );
+            // The group's tab strip is inside its group, so a group that
+            // scrolled its header away would fail here too.
+            let tab = h.rect(ids::panel_tab(*panel));
+            assert!(
+                rect.contains_rect(tab.shrink(0.5)),
+                "at {height}pt {panel:?}'s tab ({tab:?}) left its group ({rect:?})"
+            );
+        }
+        for pair in rects.windows(2) {
+            assert!(
+                pair[0].bottom() <= pair[1].top() + 1.0,
+                "at {height}pt the narrow groups overlap: {:?} over {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        let last = rects[2];
+        assert!(
+            (last.bottom() - column.bottom()).abs() <= 1.5,
+            "at {height}pt the Brushes group ends at {} but the column at {}",
+            last.bottom(),
+            column.bottom()
+        );
+        brushes_heights.push(last.height());
+    }
+    // 180pt more window is 180pt more Brushes group: the stretch is the
+    // list's, not the fixed groups'.
+    let grew = brushes_heights[1] - brushes_heights[0];
+    assert!(
+        (grew - 180.0).abs() <= 2.0,
+        "the Brushes group grew {grew}pt for a 180pt taller window: {brushes_heights:?}"
+    );
+}
+
+/// The rectangles painted strictly inside `plot` that are not the well
+/// itself: the histogram's bars.
+fn bars_inside(shapes: &[egui::epaint::ClippedShape], plot: egui::Rect) -> usize {
+    shapes
+        .iter()
+        .filter(|clipped| match &clipped.shape {
+            egui::Shape::Rect(r) => {
+                r.fill.a() > 0
+                    && plot.expand(0.5).contains_rect(r.rect)
+                    && r.rect.width() < plot.width() * 0.5
+                    && r.rect.height() > 0.0
+            }
+            _ => false,
+        })
+        .count()
+}
+
+#[test]
+fn the_histogram_draws_bars_for_the_composite_it_was_given() {
+    let mut h = Harness::with_document(one_layer_document());
+    h.only(PanelId::Histogram);
+    let shapes = h.settle();
+    let plot = h.rect(dock_ids::histogram_plot());
+    assert_eq!(
+        bars_inside(&shapes, plot),
+        0,
+        "with no composite there is nothing to count, so nothing is drawn"
+    );
+
+    // A 4x4 composite: half mid-grey, half saturated red.
+    let mut rgba: Vec<u8> = Vec::new();
+    for i in 0..16 {
+        rgba.extend_from_slice(if i % 2 == 0 {
+            &[128, 128, 128, 255]
+        } else {
+            &[255, 0, 0, 255]
+        });
+    }
+    h.workspace.set_composite_preview(&h.ctx, 1, 4, 4, &rgba);
+    let shapes = h.settle();
+    let plot = h.rect(dock_ids::histogram_plot());
+    let bars = bars_inside(&shapes, plot);
+    assert!(
+        bars >= 1,
+        "the histogram drew {bars} bars for a real composite"
+    );
+    // Every bar stands on the plot's floor.
+    for clipped in &shapes {
+        if let egui::Shape::Rect(r) = &clipped.shape {
+            if r.rect.width() < plot.width() * 0.5 && plot.expand(0.5).contains_rect(r.rect) {
+                assert!(
+                    (r.rect.bottom() - plot.bottom()).abs() <= 1.5,
+                    "{:?}",
+                    r.rect
+                );
+            }
+        }
+    }
+    // The same generation is not recounted; a new one is.
+    assert_eq!(h.workspace.histogram.generation(), Some(1));
+    h.workspace.set_composite_preview(&h.ctx, 2, 4, 4, &rgba);
+    assert_eq!(h.workspace.histogram.generation(), Some(2));
+}
+
+/// W2-X (b): the curves are painted from the design tokens' data roles —
+/// `ChannelRed` / `ChannelGreen` / `ChannelBlue` at the curve alpha — not
+/// from literal primaries. The grey-and-red composite above fills bins in
+/// all three channels, so all three tints, and nothing else, land on the
+/// plot's floor.
+#[test]
+fn the_histogram_curves_are_painted_in_the_token_channel_colours() {
+    use ui::panels::histogram::{channel_role, curve_alpha_byte};
+    let mut h = Harness::with_document(one_layer_document());
+    h.only(PanelId::Histogram);
+    let mut rgba: Vec<u8> = Vec::new();
+    for i in 0..16 {
+        rgba.extend_from_slice(if i % 2 == 0 {
+            &[128, 128, 128, 255]
+        } else {
+            &[255, 0, 0, 255]
+        });
+    }
+    h.workspace.set_composite_preview(&h.ctx, 1, 4, 4, &rgba);
+    let shapes = h.settle();
+    let plot = h.rect(dock_ids::histogram_plot());
+    let t = h.tokens();
+    let expected: std::collections::BTreeSet<[u8; 4]> = (0..3)
+        .map(|i| {
+            design::color32(
+                t.palette
+                    .color(channel_role(i))
+                    .with_alpha(curve_alpha_byte()),
+            )
+            .to_array()
+        })
+        .collect();
+    assert_eq!(expected.len(), 3, "three distinct channel tints");
+    let painted: std::collections::BTreeSet<[u8; 4]> = shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(r)
+                if r.fill.a() > 0
+                    && plot.expand(0.5).contains_rect(r.rect)
+                    && r.rect.width() < plot.width() * 0.5
+                    && r.rect.height() > 0.0 =>
+            {
+                Some(r.fill.to_array())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        painted, expected,
+        "the bars are not painted in exactly the three token channel tints"
+    );
+    // A control on the pin itself: the literal primaries the panel used to
+    // paint are not what the tokens say, in either theme.
+    let literal_red = egui::Color32::from_rgba_unmultiplied(255, 0, 0, curve_alpha_byte());
+    assert!(
+        !painted.contains(&literal_red.to_array()),
+        "the red curve is still the literal primary"
+    );
+}
+
+/// W2-X (c): with a document open and no composite counted yet the panel
+/// says it is waiting — the application hands the composite over after its
+/// next frame — and only the no-document placeholder (the 0×0 document the
+/// application draws the chrome against) says to open one.
+#[test]
+fn the_histogram_says_it_is_waiting_while_a_document_has_no_composite_yet() {
+    let waiting = ui::strings::tr("ui.docks.histogram.waiting");
+    let none = ui::strings::tr("ui.docks.histogram.no.composite");
+    assert!(!waiting.is_empty() && !none.is_empty() && waiting != none);
+
+    let mut h = Harness::with_document(one_layer_document());
+    h.only(PanelId::Histogram);
+    let text = painted_text(&h.settle());
+    assert!(
+        text.iter().any(|s| s == waiting),
+        "a document is open but the panel does not say it is waiting: {text:?}"
+    );
+    assert!(
+        !text.iter().any(|s| s == none),
+        "a document is open but the panel says to open one: {text:?}"
+    );
+
+    let mut h = Harness::with_document(Document::new(0, 0, ""));
+    h.only(PanelId::Histogram);
+    let text = painted_text(&h.settle());
+    assert!(
+        text.iter().any(|s| s == none),
+        "nothing is open but the panel does not say so: {text:?}"
+    );
+    assert!(!text.iter().any(|s| s == waiting), "{text:?}");
+}
+
+/// W2-X (b): the Channels panel's per-component thumbnails are tinted from
+/// the same token roles the Histogram's curves use — the composite texture
+/// is drawn once per component in `ChannelRed`, `ChannelGreen`, `ChannelBlue`.
+#[test]
+fn the_channel_thumbnails_are_tinted_in_the_token_channel_colours() {
+    use ui::panels::histogram::channel_role;
+    let mut h = Harness::with_document(one_layer_document());
+    h.only(PanelId::Channels);
+    let rgba: Vec<u8> = std::iter::repeat_n([200u8, 100, 50, 255], 16)
+        .flatten()
+        .collect();
+    h.workspace.set_composite_preview(&h.ctx, 1, 4, 4, &rgba);
+    let shapes = h.settle();
+    let t = h.tokens();
+    // egui 0.29 draws an image as a textured mesh whose vertex colour is the
+    // tint; the untextured default id is the font atlas, not a thumbnail.
+    let tints: Vec<egui::Color32> = shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
+                mesh.vertices.first().map(|v| v.color)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !tints.is_empty(),
+        "no thumbnail was drawn from the composite"
+    );
+    for i in 0..3 {
+        let want = design::color32(t.palette.color(channel_role(i)));
+        assert!(
+            tints.contains(&want),
+            "component {i}'s thumbnail is not tinted {want:?}: {tints:?}"
+        );
+    }
+    let literal_red = egui::Color32::from_rgba_unmultiplied(255, 0, 0, 255);
+    assert!(
+        !tints.contains(&literal_red),
+        "a thumbnail is still tinted the literal primary"
+    );
+}
+
+#[test]
+fn the_info_rows_show_the_sample_the_application_set() {
+    let mut h = Harness::with_document(one_layer_document());
+    h.only(PanelId::Info);
+    let shapes = h.settle();
+    let before = painted_text(&shapes);
+    assert!(
+        !before.iter().any(|t| t == "255, 128, 0"),
+        "the sample is on screen before it was set: {before:?}"
+    );
+    assert!(h.ctx.read_response(dock_ids::info_value("RGB")).is_some());
+
+    h.workspace.set_info_sample(Some([1.0, 0.5, 0.0, 1.0]));
+    let shapes = h.settle();
+    let after = painted_text(&shapes);
+    assert!(
+        after.iter().any(|t| t == "255, 128, 0"),
+        "the RGB row did not show the sample: {after:?}"
+    );
+    assert!(
+        after.iter().any(|t| t == "#FF8000"),
+        "the Hex row did not show the sample: {after:?}"
+    );
+    // The rows sit inside the panel: RGB above Hex, both under Pointer.
+    let pointer = h.rect(dock_ids::info_value("Pointer"));
+    let rgb = h.rect(dock_ids::info_value("RGB"));
+    let hex = h.rect(dock_ids::info_value("Hex"));
+    assert!(pointer.bottom() <= rgb.top() && rgb.bottom() <= hex.top());
+
+    // Off the image, the rows go back to the dash rather than a stale colour.
+    h.workspace.set_info_sample(None);
+    let shapes = h.settle();
+    assert!(!painted_text(&shapes).iter().any(|t| t == "#FF8000"));
+}
+
+#[test]
+fn the_channels_footer_is_routed_or_greyed_never_silent() {
+    let mut h = Harness::with_document(one_layer_document());
+    h.only(PanelId::Channels);
+    let shapes = h.settle();
+    let t = h.tokens();
+    let disabled = design::color32(t.palette.text(design::TextRole::Disabled));
+    // No selection, no saved selection, no alpha store: all four are drawn,
+    // and drawn *disabled* — a grey button with a reason, not a live no-op.
+    for name in ["load", "save", "new", "delete"] {
+        let rect = h.rect(dock_ids::channel_action(name));
+        let inks = colours_inside(&shapes, rect);
+        assert!(
+            inks.contains(&disabled),
+            "the {name} action is not painted disabled although nothing can act: {inks:?}"
+        );
+        let response = h
+            .ctx
+            .read_response(dock_ids::channel_action(name))
+            .expect("drawn");
+        assert!(
+            !response.sense.click,
+            "the {name} action senses clicks while it can do nothing"
+        );
+    }
+    // The footer sits under the rows, inside the panel.
+    let eye = h.rect(ids::channel_eye(1));
+    let load = h.rect(dock_ids::channel_action("load"));
+    assert!(load.top() >= eye.bottom(), "{load:?} vs {eye:?}");
+}
+
+/// Round 3: the Load action used to fire the Select menu's `LoadSelection`
+/// whenever a mask row was selected and a selection had been saved — a button
+/// labelled "Load channel as selection" that restored the last *saved*
+/// selection instead. No intent loads a mask as the selection in this build,
+/// so the button must be greyed with that reason even in the exact state that
+/// used to make it live: a mask channel selected, saved selections present.
+#[test]
+fn the_channels_load_action_stays_greyed_when_a_saved_selection_would_have_made_it_live() {
+    use layer_model::{LayerMask, MaskId};
+    use ui::panels::channels::ChannelKind;
+
+    let mut doc = one_layer_document();
+    let layer = doc.layers.iter_depth_first()[0];
+    let mask = MaskId::new();
+    doc.layers.get_mut(layer).unwrap().mask = Some(LayerMask::new(mask));
+    let mut h = Harness::with_document(doc);
+    h.only(PanelId::Channels);
+    h.workspace.channels.selected = ChannelKind::Mask { layer, mask };
+    h.workspace.saved_selections = 2;
+    // Control: in this state the menu's own Load Selection IS enabled, so a
+    // routed button would have come out live.
+    let context = h.workspace.menu_context(&h.doc, &h.history);
+    assert!(matches!(
+        ui::menu::MenuAction::LoadSelection.resolve(&context),
+        ui::menu::Resolution::Enabled(_)
+    ));
+
+    let shapes = h.settle();
+    let t = h.tokens();
+    let disabled = design::color32(t.palette.text(design::TextRole::Disabled));
+    let rect = h.rect(dock_ids::channel_action("load"));
+    let inks = colours_inside(&shapes, rect);
+    assert!(
+        inks.contains(&disabled),
+        "Load is painted live although nothing loads a mask as a selection: {inks:?}"
+    );
+    let response = h
+        .ctx
+        .read_response(dock_ids::channel_action("load"))
+        .expect("drawn");
+    assert!(
+        !response.sense.click,
+        "Load senses clicks: it would fire LoadSelection, not load the channel"
+    );
+    // The reason is the mask-route one, not the no-saved-selection one.
+    let reason = ui::strings::tr("ui.docks.channels.no.mask.route");
+    assert!(!reason.is_empty(), "the reason key is not registered");
+}

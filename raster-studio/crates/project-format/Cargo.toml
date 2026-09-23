@@ -21,6 +21,9 @@ blake3.workspace = true
 raster.workspace = true
 # The content-addressed blob store pixels and assets are loaded back into.
 asset-store.workspace = true
+# Tile blobs are stored deflate-compressed (`tiles/xx/<hash>.tilez`); the same
+# codec `raster` and `psd` already pull in, so no new crate enters the lockfile.
+flate2.workspace = true
 # The authoritative CPU compositor, used for exactly one thing here: rendering
 # the composite preview thumbnail written into `previews/`. A preview produced
 # any other way would be a second compositor and would drift.

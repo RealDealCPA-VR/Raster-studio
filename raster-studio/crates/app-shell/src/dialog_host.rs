@@ -56,6 +56,57 @@ thread_local! {
     /// starting parameters, which is what a keyboard chord with no dialog
     /// asked for.
     static CONFIRMED_ADJUSTMENT: RefCell<Option<AdjustmentInvocation>> = const { RefCell::new(None) };
+    /// The options the Trim dialog confirmed, waiting for the
+    /// [`ui::menu::MenuAction::Trim`] pick that rides out of the same frame
+    /// — the same shape as the parked adjustment, for the same reason.
+    static CONFIRMED_TRIM: RefCell<Option<ui::dialogs::TrimSpec>> = const { RefCell::new(None) };
+    /// The parameters the Refine Edge dialog confirmed, waiting for the
+    /// [`ui::menu::MenuAction::RefineEdge`] pick.
+    static CONFIRMED_REFINE_EDGE: RefCell<Option<ui::dialogs::refine_mask::RefineMaskSpec>> =
+        const { RefCell::new(None) };
+    /// The name the Duplicate Layer dialog confirmed, waiting for the
+    /// [`ui::menu::MenuAction::DuplicateLayer`] pick that rides out of the
+    /// same frame.
+    static CONFIRMED_DUPLICATE_NAME: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Where the licence lives, as the About window says it.
+pub const LICENCE_POINTER: &str =
+    "Proprietary. The licence terms are in LICENSES/ beside the source.";
+/// Where the third-party notices live, relative to the source tree.
+pub const THIRD_PARTY_NOTICES: &str = "LICENSES/THIRD_PARTY_NOTICES.md";
+
+fn stage_confirmed_trim(spec: ui::dialogs::TrimSpec) {
+    CONFIRMED_TRIM.with(|slot| *slot.borrow_mut() = Some(spec));
+}
+
+/// The options a Trim dialog confirmed, if one did since the last take.
+/// Consumed on read, so a confirmation is applied exactly once; `perform`
+/// with nothing parked trims at the dialog's defaults, which is what a chord
+/// with no dialog asked for.
+pub(crate) fn take_confirmed_trim() -> Option<ui::dialogs::TrimSpec> {
+    CONFIRMED_TRIM.with(|slot| slot.borrow_mut().take())
+}
+
+fn stage_confirmed_duplicate_name(name: String) {
+    CONFIRMED_DUPLICATE_NAME.with(|slot| *slot.borrow_mut() = Some(name));
+}
+
+/// The name a Duplicate Layer dialog confirmed, if one did since the last
+/// take. Consumed on read; `perform` with nothing parked names the copy
+/// "<name> copy", which is what a chord with no dialog asked for.
+pub(crate) fn take_confirmed_duplicate_name() -> Option<String> {
+    CONFIRMED_DUPLICATE_NAME.with(|slot| slot.borrow_mut().take())
+}
+
+fn stage_confirmed_refine_edge(spec: ui::dialogs::refine_mask::RefineMaskSpec) {
+    CONFIRMED_REFINE_EDGE.with(|slot| *slot.borrow_mut() = Some(spec));
+}
+
+/// The parameters a Refine Edge dialog confirmed, if one did since the last
+/// take. Consumed on read.
+pub(crate) fn take_confirmed_refine_edge() -> Option<ui::dialogs::refine_mask::RefineMaskSpec> {
+    CONFIRMED_REFINE_EDGE.with(|slot| slot.borrow_mut().take())
 }
 
 /// Park the parameters an Adjustments dialog confirmed for the `perform` arm
@@ -114,6 +165,23 @@ pub enum ActiveDialog {
     Defringe(Box<ui::dialogs::defringe::DefringeDialog>),
     /// Image ▸ Adjustments ▸ <adjustment>… — one dialog for all fifteen.
     Adjustment(Box<AdjustmentDialog>),
+    /// Image ▸ Trim… — the basis and the sides (W2-F). Confirms to a
+    /// [`ui::dialogs::TrimSpec`] parked for the `Trim` menu arm, the way an
+    /// adjustment's parameters are.
+    Trim(Box<ui::dialogs::TrimDialog>),
+    /// Help ▸ About Raster Studio — a window with one button (W2-F).
+    About(Box<ui::dialogs::AboutDialog>),
+    /// View ▸ New Guide… (W2-F). Confirms to a `SetGuides` command.
+    NewGuide(Box<ui::dialogs::NewGuideDialog>),
+    /// Layer ▸ Rename Layer… (W2-F). Confirms to a `SetLayerProperties`.
+    RenameLayer(Box<ui::dialogs::RenameLayerDialog>),
+    /// Layer ▸ Duplicate Layer… (W2-F): the copy's name. Confirms to a name
+    /// parked for the `DuplicateLayer` menu arm, which makes the copy.
+    DuplicateLayer(Box<ui::dialogs::DuplicateLayerDialog>),
+    /// Select ▸ Refine Edge… (W2-F): the Refine Mask dialog over the
+    /// selection's coverage instead of a layer mask's. Its confirmed spec is
+    /// parked for the `RefineEdge` menu arm, which writes the selection.
+    RefineEdge(Box<ui::dialogs::refine_mask::RefineMaskDialog>),
 }
 
 impl ActiveDialog {
@@ -146,7 +214,31 @@ impl ActiveDialog {
             Self::RefineMask(dialog) => dialog.show(ctx),
             Self::Defringe(dialog) => dialog.show(ctx),
             Self::Adjustment(dialog) => dialog.show(ctx, sampler),
+            Self::NewGuide(dialog) => dialog.show(ctx),
+            Self::RenameLayer(dialog) => dialog.show(ctx),
+            Self::RefineEdge(dialog) => dialog.show(ctx),
+            // Neither confirms to a `DialogAction`: `DialogHost::ui` drives
+            // them before it reaches this generic show (see `is_special` and
+            // the debug assertion there), and the host tests
+            // `trim_confirms_to_a_parked_spec_and_the_trim_pick` and
+            // `about_opens_from_the_menu_and_escape_closes_it` drive both
+            // through `ui` to prove the arm below is never the one that runs.
+            Self::Trim(_) | Self::About(_) | Self::DuplicateLayer(_) => DialogOutcome::Open,
         }
+    }
+
+    /// Whether [`DialogHost::ui`] drives this dialog itself rather than
+    /// through [`ActiveDialog::show`]: the ones whose confirmation is not a
+    /// [`DialogAction`].
+    fn is_special(&self) -> bool {
+        matches!(
+            self,
+            Self::Adjustment(_)
+                | Self::Trim(_)
+                | Self::About(_)
+                | Self::RefineEdge(_)
+                | Self::DuplicateLayer(_)
+        )
     }
 }
 
@@ -327,13 +419,79 @@ impl DialogHost {
             // toggling the effect at its defaults. The dialog lists every
             // effect; the row clicked is just the way in, the same way
             // Photopea's Blending Options… is.
-            ui::menu::MenuAction::LayerStyle(_) => match layer_style_dialog(editor) {
+            ui::menu::MenuAction::LayerStyle(_) => match layer_style_dialog(editor, false) {
                 Some(dialog) => {
                     self.open(dialog);
                     true
                 }
                 None => false,
             },
+            // Blending Options… is Photopea's other way into the same
+            // dialog, opened on its Blending page (mode, opacity, fill). It
+            // used to reveal the Properties panel, then to open the dialog
+            // on the Drop Shadow page.
+            ui::menu::MenuAction::BlendingOptions => match layer_style_dialog(editor, true) {
+                Some(dialog) => {
+                    self.open(dialog);
+                    true
+                }
+                None => false,
+            },
+            // Image ▸ Trim… asks for the basis and the sides (W2-F); the
+            // confirmed options are parked for the `Trim` arm.
+            ui::menu::MenuAction::Trim => {
+                if editor.active().is_none() {
+                    return false;
+                }
+                self.open(ActiveDialog::Trim(Box::<ui::dialogs::TrimDialog>::default()));
+                true
+            }
+            // Help ▸ About: the executable's stamp and the licence pointers.
+            ui::menu::MenuAction::About => {
+                self.open(ActiveDialog::About(Box::new(
+                    ui::dialogs::AboutDialog::new(
+                        crate::version::about_line(),
+                        LICENCE_POINTER,
+                        THIRD_PARTY_NOTICES,
+                    ),
+                )));
+                true
+            }
+            // View ▸ New Guide… over the document's current set.
+            ui::menu::MenuAction::NewGuide => match new_guide_dialog(editor) {
+                Some(dialog) => {
+                    self.open(dialog);
+                    true
+                }
+                None => false,
+            },
+            // Layer ▸ Rename Layer… over the active layer's name.
+            ui::menu::MenuAction::RenameLayer => match rename_layer_dialog(editor) {
+                Some(dialog) => {
+                    self.open(dialog);
+                    true
+                }
+                None => false,
+            },
+            // Layer ▸ Duplicate Layer… asks the copy's name first (W2-F): the
+            // row's ellipsis promised a question, and it used to copy at once.
+            ui::menu::MenuAction::DuplicateLayer => match duplicate_layer_dialog(editor) {
+                Some(dialog) => {
+                    self.open(dialog);
+                    true
+                }
+                None => false,
+            },
+            // Select ▸ Refine Edge… over the selection's coverage.
+            ui::menu::MenuAction::RefineEdge => {
+                match crate::layer_ops::refine_edge_dialog(editor) {
+                    Some(dialog) => {
+                        self.open(ActiveDialog::RefineEdge(Box::new(dialog)));
+                        true
+                    }
+                    None => false,
+                }
+            }
             _ => false,
         }
     }
@@ -481,6 +639,80 @@ impl DialogHost {
         }
     }
 
+    /// The open Trim dialog, for tests that drive its options.
+    #[cfg(test)]
+    pub(crate) fn active_trim_dialog_for_test(&mut self) -> &mut ui::dialogs::TrimDialog {
+        match self.active_for_test() {
+            ActiveDialog::Trim(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the trim dialog"),
+        }
+    }
+
+    /// The open About window, for tests that read what it shows.
+    #[cfg(test)]
+    pub(crate) fn active_about_dialog_for_test(&mut self) -> &mut ui::dialogs::AboutDialog {
+        match self.active_for_test() {
+            ActiveDialog::About(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the about window"),
+        }
+    }
+
+    /// The open New Guide dialog, for tests that drive its fields.
+    #[cfg(test)]
+    pub(crate) fn active_new_guide_dialog_for_test(&mut self) -> &mut ui::dialogs::NewGuideDialog {
+        match self.active_for_test() {
+            ActiveDialog::NewGuide(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the new-guide dialog"),
+        }
+    }
+
+    /// The open Rename Layer dialog, for tests that type a name.
+    #[cfg(test)]
+    pub(crate) fn active_rename_dialog_for_test(&mut self) -> &mut ui::dialogs::RenameLayerDialog {
+        match self.active_for_test() {
+            ActiveDialog::RenameLayer(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the rename dialog"),
+        }
+    }
+
+    /// The open Duplicate Layer dialog, for tests that type a name.
+    #[cfg(test)]
+    pub(crate) fn active_duplicate_dialog_for_test(
+        &mut self,
+    ) -> &mut ui::dialogs::DuplicateLayerDialog {
+        match self.active_for_test() {
+            ActiveDialog::DuplicateLayer(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the duplicate dialog"),
+        }
+    }
+
+    /// The open Refine Edge dialog, for tests that drive its parameters.
+    #[cfg(test)]
+    pub(crate) fn active_refine_edge_dialog_for_test(
+        &mut self,
+    ) -> &mut ui::dialogs::refine_mask::RefineMaskDialog {
+        match self.active_for_test() {
+            ActiveDialog::RefineEdge(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the refine-edge dialog"),
+        }
+    }
+
+    /// Whether the open dialog is the Layer Style dialog — Blending Options…
+    /// and every Layer Style row open it.
+    #[cfg(test)]
+    pub(crate) fn layer_style_is_open_for_test(&self) -> bool {
+        matches!(self.active, Some(ActiveDialog::LayerStyle(_)))
+    }
+
+    /// The open Layer Style dialog, for tests that drive its pages.
+    #[cfg(test)]
+    pub(crate) fn active_layer_style_dialog_for_test(&mut self) -> &mut LayerStyleDialog {
+        match self.active_for_test() {
+            ActiveDialog::LayerStyle(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the layer style dialog"),
+        }
+    }
+
     /// Swap the Export As dialog's placeholder preview for a real composite.
     ///
     /// Opening the dialog happens from a harvest that holds only `&Editor`, so
@@ -542,6 +774,63 @@ impl DialogHost {
             }
             return;
         }
+        // Trim takes the same road as the adjustments: the options are
+        // parked and the `Trim` pick rides `out.menu` to the arm that crops.
+        if let ActiveDialog::Trim(dialog) = active {
+            match dialog.show(ctx) {
+                DialogOutcome::Open => {}
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(spec) => {
+                    stage_confirmed_trim(spec);
+                    out.menu.push(ui::menu::MenuAction::Trim);
+                    self.active = None;
+                }
+            }
+            return;
+        }
+        // Refine Edge reuses the Refine Mask dialog, so its confirmation is
+        // a `DialogAction::RefineMask` — which the shell would bake into a
+        // layer MASK. Intercepted here: the spec is parked and the
+        // `RefineEdge` pick carries it to the arm that writes the selection.
+        if let ActiveDialog::RefineEdge(dialog) = active {
+            match dialog.show(ctx) {
+                DialogOutcome::Open => {}
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(action) => {
+                    if let DialogAction::RefineMask(spec) = action {
+                        stage_confirmed_refine_edge(*spec);
+                        out.menu.push(ui::menu::MenuAction::RefineEdge);
+                    }
+                    self.active = None;
+                }
+            }
+            return;
+        }
+        // Duplicate Layer takes Trim's road: the name is parked and the
+        // `DuplicateLayer` pick rides `out.menu` to the arm that copies.
+        if let ActiveDialog::DuplicateLayer(dialog) = active {
+            match dialog.show(ctx) {
+                DialogOutcome::Open => {}
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(name) => {
+                    stage_confirmed_duplicate_name(name);
+                    out.menu.push(ui::menu::MenuAction::DuplicateLayer);
+                    self.active = None;
+                }
+            }
+            return;
+        }
+        // About asks nothing: dismissed is closed.
+        if let ActiveDialog::About(dialog) = active {
+            if dialog.show(ctx) {
+                self.active = None;
+            }
+            return;
+        }
+        debug_assert!(
+            !active.is_special(),
+            "a special dialog reached the generic show"
+        );
         match active.show(ctx, sampler) {
             DialogOutcome::Open => {}
             DialogOutcome::Cancelled => {
@@ -657,15 +946,54 @@ impl ScreenSampler for CanvasSampler<'_> {
 }
 
 /// A [`LayerStyleDialog`] over the active layer's effects.
-fn layer_style_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
+fn layer_style_dialog(editor: &crate::Editor, blending: bool) -> Option<ActiveDialog> {
     let open = editor.active()?;
     let id = open.document.active_layer()?;
     let layer = open.document.layers.get(id)?;
-    Some(ActiveDialog::LayerStyle(Box::new(LayerStyleDialog::new(
-        id,
-        layer.name.clone(),
-        layer.effects.clone(),
-    ))))
+    let mut dialog = LayerStyleDialog::new(id, layer.name.clone(), layer.effects.clone())
+        .with_blending(layer.blend_mode, layer.opacity, layer.fill_opacity);
+    if blending {
+        dialog.show_blending();
+    }
+    Some(ActiveDialog::LayerStyle(Box::new(dialog)))
+}
+
+/// A [`ui::dialogs::NewGuideDialog`] over the active document's guide set
+/// and canvas size.
+fn new_guide_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
+    let open = editor.active()?;
+    Some(ActiveDialog::NewGuide(Box::new(
+        ui::dialogs::NewGuideDialog::new(
+            open.document.guides.clone(),
+            (open.document.width(), open.document.height()),
+        ),
+    )))
+}
+
+/// A [`ui::dialogs::RenameLayerDialog`] over the active layer's name. `None`
+/// when there is no layer, or when the layer's blanket lock refuses a rename
+/// (the menu gates the same way; this is the second line of defence).
+fn rename_layer_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
+    let open = editor.active()?;
+    let id = open.document.active_layer()?;
+    let layer = open.document.layers.get(id)?;
+    if layer.locked.all {
+        return None;
+    }
+    Some(ActiveDialog::RenameLayer(Box::new(
+        ui::dialogs::RenameLayerDialog::new(id, layer.name.clone()),
+    )))
+}
+
+/// A [`ui::dialogs::DuplicateLayerDialog`] over the active layer, opening at
+/// "<name> copy". `None` when there is no layer to copy.
+fn duplicate_layer_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
+    let open = editor.active()?;
+    let id = open.document.active_layer()?;
+    let layer = open.document.layers.get(id)?;
+    Some(ActiveDialog::DuplicateLayer(Box::new(
+        ui::dialogs::DuplicateLayerDialog::new(id, &layer.name),
+    )))
 }
 
 /// An [`ImageSizeDialog`] over the active document's size.
@@ -1159,5 +1487,262 @@ mod tests {
             "there is no pixel layer to adjust"
         );
         assert!(!host.is_open());
+    }
+
+    // ---- W2-F: the dialogs the audit found missing ----------------------
+
+    #[test]
+    fn trim_confirms_to_a_parked_spec_and_the_trim_pick() {
+        // The Trim dialog's confirmation is not a `DialogAction`: `ui` drives
+        // it before the generic show, parks the options and sends the `Trim`
+        // pick down the menu road, exactly as an adjustment travels.
+        let dir = tempfile::tempdir().unwrap();
+        let ed = two_layers(dir.path());
+        let mut host = DialogHost::default();
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::Trim, &ed));
+        assert!(host.is_open(), "Trim… opened its dialog");
+        let spec = ui::dialogs::TrimSpec {
+            basis: ui::dialogs::TrimBasis::TopLeftColor,
+            left: false,
+            ..Default::default()
+        };
+        host.active_trim_dialog_for_test().set_spec(spec);
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| host.ui(ctx, None, &mut out));
+        assert!(
+            host.is_open() && out.is_empty(),
+            "a settle frame decides nothing"
+        );
+        let _ = ctx.run(raw_input(vec![key(egui::Key::Enter)]), |ctx| {
+            host.ui(ctx, None, &mut out)
+        });
+        assert!(!host.is_open(), "Enter closed the dialog");
+        assert_eq!(out.menu, vec![ui::menu::MenuAction::Trim]);
+        assert!(out.commands.is_empty() && out.dialog.is_none());
+        assert_eq!(take_confirmed_trim(), Some(spec));
+        assert_eq!(take_confirmed_trim(), None, "a confirmation is taken once");
+        // Cancelling parks nothing.
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::Trim, &ed));
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| host.ui(ctx, None, &mut out));
+        let _ = ctx.run(raw_input(vec![key(egui::Key::Escape)]), |ctx| {
+            host.ui(ctx, None, &mut out)
+        });
+        assert!(!host.is_open() && out.is_empty());
+        assert_eq!(take_confirmed_trim(), None);
+        // And without a document there is nothing to trim: no dialog.
+        let empty = editor(&dir.path().join("config2"));
+        assert!(!host.open_for_menu_action(&ui::menu::MenuAction::Trim, &empty));
+    }
+
+    #[test]
+    fn duplicate_layer_confirms_to_a_parked_name_and_the_duplicate_pick() {
+        // Same road as Trim: the name is not a `DialogAction`, so `ui`
+        // drives the dialog itself, parks the name and sends the
+        // `DuplicateLayer` pick down the menu road.
+        let dir = tempfile::tempdir().unwrap();
+        let ed = two_layers(dir.path());
+        let mut host = DialogHost::default();
+        assert_eq!(take_confirmed_duplicate_name(), None);
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::DuplicateLayer, &ed));
+        assert!(host.is_open(), "Duplicate Layer… opened its dialog");
+        assert_eq!(
+            host.active_duplicate_dialog_for_test().name(),
+            "Second copy",
+            "the field opens at Photoshop's suggestion"
+        );
+        host.active_duplicate_dialog_for_test().set_name("Twin");
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| host.ui(ctx, None, &mut out));
+        assert!(
+            host.is_open() && out.is_empty(),
+            "a settle frame decides nothing"
+        );
+        let _ = ctx.run(raw_input(vec![key(egui::Key::Enter)]), |ctx| {
+            host.ui(ctx, None, &mut out)
+        });
+        assert!(!host.is_open(), "Enter closed the dialog");
+        assert_eq!(out.menu, vec![ui::menu::MenuAction::DuplicateLayer]);
+        assert!(out.commands.is_empty() && out.dialog.is_none());
+        assert_eq!(take_confirmed_duplicate_name(), Some("Twin".to_string()));
+        assert_eq!(
+            take_confirmed_duplicate_name(),
+            None,
+            "a confirmation is taken once"
+        );
+        // Cancelling parks nothing.
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::DuplicateLayer, &ed));
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| host.ui(ctx, None, &mut out));
+        let _ = ctx.run(raw_input(vec![key(egui::Key::Escape)]), |ctx| {
+            host.ui(ctx, None, &mut out)
+        });
+        assert!(!host.is_open() && out.is_empty());
+        assert_eq!(take_confirmed_duplicate_name(), None);
+        // And without a document there is nothing to copy: no dialog.
+        let empty = editor(&dir.path().join("config2"));
+        assert!(!host.open_for_menu_action(&ui::menu::MenuAction::DuplicateLayer, &empty));
+    }
+
+    #[test]
+    fn about_opens_from_the_menu_and_escape_closes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let ed = editor(&dir.path().join("config"));
+        let mut host = DialogHost::default();
+        // About needs no document at all.
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::About, &ed));
+        assert!(host.is_open());
+        assert_eq!(
+            host.active_about_dialog_for_test().version_line(),
+            crate::version::about_line()
+        );
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| host.ui(ctx, None, &mut out));
+        assert!(host.is_open(), "the window stays until dismissed");
+        let _ = ctx.run(raw_input(vec![key(egui::Key::Escape)]), |ctx| {
+            host.ui(ctx, None, &mut out)
+        });
+        assert!(!host.is_open(), "Escape closed it");
+        assert!(
+            out.is_empty(),
+            "a window that asks nothing produces nothing"
+        );
+    }
+
+    #[test]
+    fn the_w2f_rows_open_their_dialogs_only_over_what_they_need() {
+        let dir = tempfile::tempdir().unwrap();
+        let ed = two_layers(dir.path());
+        let history = history_len(&ed);
+        let mut host = DialogHost::default();
+        // Rename and New Guide open over a layer / a document.
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::RenameLayer, &ed));
+        assert_eq!(host.active_rename_dialog_for_test().name(), "Second");
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::NewGuide, &ed));
+        assert!(host.is_open());
+        // Blending Options is the Layer Style dialog.
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::BlendingOptions, &ed));
+        assert!(host.layer_style_is_open_for_test());
+        // Refine Edge needs a selection: none here, so it falls through.
+        assert!(!host.open_for_menu_action(&ui::menu::MenuAction::RefineEdge, &ed));
+        host.close();
+        assert_eq!(
+            history,
+            history_len(&ed),
+            "opening dialogs touched the document"
+        );
+        // Without a document none of them opens.
+        let empty = editor(&dir.path().join("config2"));
+        for action in [
+            ui::menu::MenuAction::RenameLayer,
+            ui::menu::MenuAction::NewGuide,
+            ui::menu::MenuAction::BlendingOptions,
+            ui::menu::MenuAction::RefineEdge,
+            ui::menu::MenuAction::Trim,
+        ] {
+            assert!(
+                !host.open_for_menu_action(&action, &empty),
+                "{action:?} opened over nothing"
+            );
+        }
+    }
+
+    // ---- W2-X: Blending Options is a page, and confirms as one step -------
+
+    #[test]
+    fn blending_options_opens_on_the_blending_page_and_confirms_one_undoable_step() {
+        use ui::dialogs::layer_style::StylePage;
+        // The defect this pins: Blending Options… opened the Layer Style
+        // dialog on its Drop Shadow page, and the dialog had no page with
+        // the layer's blend mode, opacity or fill at all.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = two_layers(dir.path());
+        let history = history_len(&ed);
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let opacity = |ed: &Editor| {
+            ed.active()
+                .unwrap()
+                .document
+                .layers
+                .get(layer)
+                .unwrap()
+                .opacity
+        };
+        assert_eq!(opacity(&ed), 1.0);
+
+        let mut host = DialogHost::default();
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::BlendingOptions, &ed));
+        assert_eq!(
+            host.active_layer_style_dialog_for_test().page(),
+            StylePage::Blending,
+            "Blending Options… opens on the Blending page"
+        );
+        // Control: a Layer Style effect row opens on an effect page, so the
+        // page above is the row's doing and not the dialog's default.
+        assert!(host.open_for_menu_action(
+            &ui::menu::MenuAction::LayerStyle(ui::menu::EffectSlot::DropShadow),
+            &ed
+        ));
+        assert!(matches!(
+            host.active_layer_style_dialog_for_test().page(),
+            StylePage::Effect(_)
+        ));
+        // Back on the Blending page, seeded from the layer's own fields.
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::BlendingOptions, &ed));
+        {
+            let dialog = host.active_layer_style_dialog_for_test();
+            assert_eq!(dialog.opacity(), 1.0);
+            assert_eq!(dialog.fill_opacity(), 1.0);
+            assert_eq!(dialog.blend_mode(), layer_model::BlendMode::Normal);
+            dialog.set_opacity(0.4);
+        }
+
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut out = ChromeOutput::default();
+        // A settle frame draws the page: its three controls are on screen.
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| host.ui(ctx, None, &mut out));
+        assert!(host.is_open() && out.is_empty());
+        for id in [
+            ui::dialogs::ids::blending_mode(),
+            ui::dialogs::ids::blending_opacity(),
+            ui::dialogs::ids::blending_fill(),
+        ] {
+            assert!(ctx.read_response(id).is_some(), "{id:?} was not drawn");
+        }
+        // Enter confirms: exactly one command rides out, nothing else.
+        let _ = ctx.run(raw_input(vec![key(egui::Key::Enter)]), |ctx| {
+            host.ui(ctx, None, &mut out)
+        });
+        assert!(!host.is_open(), "Enter did not close the dialog");
+        assert_eq!(out.commands.len(), 1, "one command: {:?}", out.commands);
+        assert!(out.menu.is_empty() && out.dialog.is_none());
+        for command in out.commands {
+            ed.apply_command(command);
+        }
+        assert_eq!(
+            history_len(&ed),
+            history + 1,
+            "the confirmed opacity was not exactly one history entry"
+        );
+        assert_eq!(opacity(&ed), 0.4);
+        let depth = ed.active().unwrap().history_depth();
+        assert!(ed.active_mut().unwrap().undo().unwrap());
+        assert_eq!(
+            opacity(&ed),
+            1.0,
+            "undo did not restore the layer's opacity"
+        );
+        assert_eq!(
+            ed.active().unwrap().history_depth(),
+            depth - 1,
+            "one undo took the whole confirmation back"
+        );
     }
 }

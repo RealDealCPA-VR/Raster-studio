@@ -62,6 +62,7 @@
 //! way, and the registry below carries one instance per id so the confirm and
 //! cancel contract is checked for every adjustment, not for a representative.
 
+pub mod about;
 pub mod action;
 pub mod adjustment_dialog;
 pub mod brush_editor;
@@ -72,6 +73,7 @@ pub mod color_edit;
 pub mod color_picker;
 pub mod controls;
 pub mod defringe;
+pub mod duplicate_layer;
 pub mod export_as;
 pub mod fill_stroke;
 pub mod filter_dialog;
@@ -81,11 +83,15 @@ pub mod ids;
 pub mod image_size;
 pub mod layer_style;
 pub mod new_document;
+pub mod new_guide;
 pub mod preferences;
 pub mod refine_mask;
+pub mod rename_layer;
 pub mod sizes;
+pub mod trim;
 pub mod units;
 
+pub use about::AboutDialog;
 pub use action::DialogAction;
 pub use adjustment_dialog::{AdjustmentDialog, AdjustmentInvocation};
 pub use brush_editor::BrushEditorDialog;
@@ -97,6 +103,7 @@ pub use chrome::{
 };
 pub use color_edit::ColorEdit;
 pub use color_picker::{ColorPickerDialog, ColorValue, Eyedropper, RecentColors, ScreenSampler};
+pub use duplicate_layer::DuplicateLayerDialog;
 pub use export_as::{ExportAsDialog, ExportEntry, ExportJob, PreviewSource};
 pub use fill_stroke::{
     FillContents, FillContentsKind, FillDialog, FillSpec, StrokeDialog, StrokeLocation, StrokeSpec,
@@ -111,10 +118,13 @@ pub use layer_style::{shadow_offset, EffectKind, LayerStyleDialog};
 pub use new_document::{
     BackgroundContents, ColorMode, DocumentPreset, NewDocumentDialog, NewDocumentSpec, PresetGroup,
 };
+pub use new_guide::NewGuideDialog;
 pub use preferences::{
     GeneralPrefs, HistoryPrefs, InterfacePrefs, Keymap, KeymapError, PreferencesDialog,
     PrefsSection, Shortcut, ThemeChoice, UiPreferences,
 };
+pub use rename_layer::RenameLayerDialog;
+pub use trim::{TrimBasis, TrimDialog, TrimSpec};
 pub use units::{format_bytes, ResolutionUnit, Unit};
 
 #[cfg(test)]
@@ -180,6 +190,18 @@ pub(crate) mod tests_support {
                 16,
             )),
             Box::new(StrokeDialog::new(StrokeSpec::default())),
+            // W2-F: New Guide confirms at its defaults; Rename needs a name
+            // that differs from the layer's, because an unchanged name is
+            // refused rather than recorded as an empty undo step.
+            Box::new(NewGuideDialog::new(
+                editor_core::Guides::default(),
+                (64, 64),
+            )),
+            Box::new({
+                let mut dialog = RenameLayerDialog::new(layer_model::LayerId::new(), "Layer 1");
+                dialog.set_name("Renamed");
+                dialog
+            }),
         ];
         for filter in filter_dialog::FILTERS {
             dialogs.push(Box::new(FilterDialog::with_placeholder(filter)));

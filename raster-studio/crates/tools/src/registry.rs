@@ -190,6 +190,13 @@ pub struct ToolInfo {
     pub id: ToolId,
     pub name: &'static str,
     pub group: ToolGroup,
+    /// The palette slot this tool shares: tools with the same id are one
+    /// button with a fly-out, in the order they appear in [`all`], whatever
+    /// their shortcuts say (Blur/Sharpen/Smudge have none and still share a
+    /// slot; Rotate View sits under Hand on `R`). `None` keeps a tool off the
+    /// palette altogether — Free Transform is a menu item and `Ctrl+T`, as in
+    /// Photopea, not a button.
+    pub slot: Option<&'static str>,
     /// Icon key; the UI resolves it against its own icon set.
     pub icon: &'static str,
     pub cursor: Cursor,
@@ -199,10 +206,15 @@ pub struct ToolInfo {
     pub options: &'static [OptionSpec],
 }
 
+// Eight positional arguments, one per `ToolInfo` field, for a const table
+// that is read top to bottom: a builder or a struct literal per entry would
+// be fifty more `ToolInfo {` blocks for no extra safety.
+#[allow(clippy::too_many_arguments)]
 const fn t(
     id: ToolId,
     name: &'static str,
     group: ToolGroup,
+    slot: Option<&'static str>,
     icon: &'static str,
     cursor: Cursor,
     shortcut: Option<char>,
@@ -212,6 +224,7 @@ const fn t(
         id,
         name,
         group,
+        slot,
         icon,
         cursor,
         shortcut,
@@ -241,6 +254,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Move,
         "Move",
         ToolGroup::Select,
+        Some("move"),
         "move",
         Cursor::Move,
         Some('v'),
@@ -254,6 +268,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::RectMarquee,
         "Rectangular Marquee",
         ToolGroup::Select,
+        Some("marquee"),
         "marquee-rect",
         Cursor::Crosshair,
         Some('m'),
@@ -263,6 +278,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::EllipseMarquee,
         "Elliptical Marquee",
         ToolGroup::Select,
+        Some("marquee"),
         "marquee-ellipse",
         Cursor::Crosshair,
         Some('m'),
@@ -272,6 +288,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::SingleRowMarquee,
         "Single Row Marquee",
         ToolGroup::Select,
+        Some("marquee"),
         "marquee-row",
         Cursor::Crosshair,
         Some('m'),
@@ -281,6 +298,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::SingleColumnMarquee,
         "Single Column Marquee",
         ToolGroup::Select,
+        Some("marquee"),
         "marquee-column",
         Cursor::Crosshair,
         Some('m'),
@@ -290,6 +308,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Lasso,
         "Lasso",
         ToolGroup::Select,
+        Some("lasso"),
         "lasso",
         Cursor::Crosshair,
         Some('l'),
@@ -299,6 +318,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::PolygonalLasso,
         "Polygonal Lasso",
         ToolGroup::Select,
+        Some("lasso"),
         "lasso-poly",
         Cursor::Crosshair,
         Some('l'),
@@ -308,6 +328,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::MagneticLasso,
         "Magnetic Lasso",
         ToolGroup::Select,
+        Some("lasso"),
         "lasso-magnetic",
         Cursor::Crosshair,
         Some('l'),
@@ -321,6 +342,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::MagicWand,
         "Magic Wand",
         ToolGroup::Select,
+        Some("wand"),
         "wand",
         Cursor::Crosshair,
         Some('w'),
@@ -330,6 +352,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::QuickSelect,
         "Quick Selection",
         ToolGroup::Select,
+        Some("wand"),
         "quick-select",
         Cursor::BrushRing,
         Some('w'),
@@ -343,6 +366,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Crop,
         "Crop",
         ToolGroup::Crop,
+        Some("crop"),
         "crop",
         Cursor::CropMarks,
         Some('c'),
@@ -356,6 +380,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Slice,
         "Slice",
         ToolGroup::Crop,
+        Some("crop"),
         "slice",
         Cursor::Slice,
         Some('c'),
@@ -365,6 +390,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Eyedropper,
         "Eyedropper",
         ToolGroup::Crop,
+        Some("eyedropper"),
         "eyedropper",
         Cursor::Eyedropper,
         Some('i'),
@@ -377,6 +403,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::SpotHealing,
         "Spot Healing Brush",
         ToolGroup::Retouch,
+        Some("heal"),
         "spot-heal",
         Cursor::BrushRing,
         Some('j'),
@@ -389,6 +416,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::HealingBrush,
         "Healing Brush",
         ToolGroup::Retouch,
+        Some("heal"),
         "heal",
         Cursor::BrushRing,
         Some('j'),
@@ -402,6 +430,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Patch,
         "Patch",
         ToolGroup::Retouch,
+        Some("heal"),
         "patch",
         Cursor::Crosshair,
         Some('j'),
@@ -411,6 +440,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::RedEye,
         "Red Eye",
         ToolGroup::Retouch,
+        Some("heal"),
         "red-eye",
         Cursor::Crosshair,
         Some('j'),
@@ -423,6 +453,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Brush,
         "Brush",
         ToolGroup::Paint,
+        Some("brush"),
         "brush",
         Cursor::BrushRing,
         Some('b'),
@@ -432,6 +463,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Pencil,
         "Pencil",
         ToolGroup::Paint,
+        Some("brush"),
         "pencil",
         Cursor::BrushRing,
         Some('b'),
@@ -445,6 +477,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::ColorReplacement,
         "Colour Replacement",
         ToolGroup::Paint,
+        Some("brush"),
         "color-replace",
         Cursor::BrushRing,
         Some('b'),
@@ -458,6 +491,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::CloneStamp,
         "Clone Stamp",
         ToolGroup::Paint,
+        Some("clone"),
         "clone",
         Cursor::BrushRing,
         Some('s'),
@@ -467,6 +501,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::PatternStamp,
         "Pattern Stamp",
         ToolGroup::Paint,
+        Some("clone"),
         "pattern-stamp",
         Cursor::BrushRing,
         Some('s'),
@@ -480,6 +515,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Eraser,
         "Eraser",
         ToolGroup::Paint,
+        Some("eraser"),
         "eraser",
         Cursor::BrushRing,
         Some('e'),
@@ -489,6 +525,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::BackgroundEraser,
         "Background Eraser",
         ToolGroup::Paint,
+        Some("eraser"),
         "eraser-bg",
         Cursor::BrushRing,
         Some('e'),
@@ -501,6 +538,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::MagicEraser,
         "Magic Eraser",
         ToolGroup::Paint,
+        Some("eraser"),
         "eraser-magic",
         Cursor::Crosshair,
         Some('e'),
@@ -510,6 +548,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Gradient,
         "Gradient",
         ToolGroup::Paint,
+        Some("gradient"),
         "gradient",
         Cursor::Crosshair,
         Some('g'),
@@ -529,6 +568,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::PaintBucket,
         "Paint Bucket",
         ToolGroup::Paint,
+        Some("gradient"),
         "bucket",
         Cursor::Bucket,
         Some('g'),
@@ -538,6 +578,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::PatternFill,
         "Pattern Fill",
         ToolGroup::Paint,
+        Some("gradient"),
         "pattern-fill",
         Cursor::Bucket,
         Some('g'),
@@ -547,6 +588,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Blur,
         "Blur",
         ToolGroup::Retouch,
+        Some("blur"),
         "blur",
         Cursor::BrushRing,
         None,
@@ -560,6 +602,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Sharpen,
         "Sharpen",
         ToolGroup::Retouch,
+        Some("blur"),
         "sharpen",
         Cursor::BrushRing,
         None,
@@ -570,9 +613,23 @@ const TOOLS: &[ToolInfo] = &[
         ],
     ),
     t(
+        ToolId::Smudge,
+        "Smudge",
+        ToolGroup::Retouch,
+        Some("blur"),
+        "smudge",
+        Cursor::BrushRing,
+        None,
+        &[
+            f("size", "Size", 1.0, 5000.0, 40.0),
+            f("strength", "Strength", 0.0, 1.0, 0.5),
+        ],
+    ),
+    t(
         ToolId::RefineBoundary,
         "Refine Boundary",
         ToolGroup::Retouch,
+        Some("blur"),
         "refine-boundary",
         Cursor::BrushRing,
         None,
@@ -583,21 +640,10 @@ const TOOLS: &[ToolInfo] = &[
         ],
     ),
     t(
-        ToolId::Smudge,
-        "Smudge",
-        ToolGroup::Retouch,
-        "smudge",
-        Cursor::BrushRing,
-        None,
-        &[
-            f("size", "Size", 1.0, 5000.0, 40.0),
-            f("strength", "Strength", 0.0, 1.0, 0.5),
-        ],
-    ),
-    t(
         ToolId::Dodge,
         "Dodge",
         ToolGroup::Retouch,
+        Some("tone"),
         "dodge",
         Cursor::BrushRing,
         Some('o'),
@@ -607,6 +653,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Burn,
         "Burn",
         ToolGroup::Retouch,
+        Some("tone"),
         "burn",
         Cursor::BrushRing,
         Some('o'),
@@ -616,6 +663,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Sponge,
         "Sponge",
         ToolGroup::Retouch,
+        Some("tone"),
         "sponge",
         Cursor::BrushRing,
         Some('o'),
@@ -629,6 +677,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Pen,
         "Pen",
         ToolGroup::Draw,
+        Some("pen"),
         "pen",
         Cursor::Crosshair,
         // `P`, the one letter of the brief no tool answered to.
@@ -636,9 +685,36 @@ const TOOLS: &[ToolInfo] = &[
         &[],
     ),
     t(
+        ToolId::Type,
+        "Type",
+        ToolGroup::Draw,
+        Some("type"),
+        "type",
+        Cursor::Crosshair,
+        // `T` is the Type tool's alone. It used to be shared with Free
+        // Transform, so a second press while typing left the text for a
+        // transform box; Free Transform is `Ctrl+T` and the Edit menu now.
+        Some('t'),
+        &[
+            f("size_px", "Size", 4.0, 512.0, 24.0),
+            // The three CSS generic families, which `text_engine` resolves to
+            // installed fonts (W1-B2). The installed family list cannot be
+            // offered here: an [`OptionKind::Choice`] is `&'static` const
+            // data and `text::TypeTool::set_setting` reads this very table
+            // back by index, so a live list needs a dynamic option kind first.
+            c(
+                "font_family",
+                "Font",
+                &["sans-serif", "serif", "monospace"],
+                0,
+            ),
+        ],
+    ),
+    t(
         ToolId::PathSelect,
         "Path Select",
         ToolGroup::Draw,
+        Some("path"),
         "path-select",
         Cursor::Crosshair,
         // `A`, Photopea's path-tool letter; Direct Selection shares it and
@@ -650,34 +726,17 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::DirectSelection,
         "Direct Selection",
         ToolGroup::Draw,
+        Some("path"),
         "anchor-block",
         Cursor::Crosshair,
         Some('a'),
         &[],
     ),
     t(
-        ToolId::Type,
-        "Type",
-        ToolGroup::Draw,
-        "type",
-        Cursor::Crosshair,
-        // Shares `T` with Free Transform, so the letter cycles between them —
-        // the same arrangement every other shared letter here uses.
-        Some('t'),
-        &[
-            f("size_px", "Size", 4.0, 512.0, 24.0),
-            c(
-                "font_family",
-                "Font",
-                &["sans-serif", "serif", "monospace"],
-                0,
-            ),
-        ],
-    ),
-    t(
         ToolId::Rectangle,
         "Rectangle",
         ToolGroup::Draw,
+        Some("shape"),
         "shape-rect",
         Cursor::Crosshair,
         Some('u'),
@@ -687,6 +746,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::RoundedRectangle,
         "Rounded Rectangle",
         ToolGroup::Draw,
+        Some("shape"),
         "shape-rrect",
         Cursor::Crosshair,
         Some('u'),
@@ -699,6 +759,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Ellipse,
         "Ellipse",
         ToolGroup::Draw,
+        Some("shape"),
         "shape-ellipse",
         Cursor::Crosshair,
         Some('u'),
@@ -708,6 +769,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Polygon,
         "Polygon",
         ToolGroup::Draw,
+        Some("shape"),
         "shape-polygon",
         Cursor::Crosshair,
         Some('u'),
@@ -720,6 +782,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Star,
         "Star",
         ToolGroup::Draw,
+        Some("shape"),
         "shape-star",
         Cursor::Crosshair,
         Some('u'),
@@ -733,6 +796,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Line,
         "Line",
         ToolGroup::Draw,
+        Some("shape"),
         "shape-line",
         Cursor::Crosshair,
         Some('u'),
@@ -745,6 +809,7 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::CustomShape,
         "Custom Shape",
         ToolGroup::Draw,
+        Some("shape"),
         "shape-custom",
         Cursor::Crosshair,
         Some('u'),
@@ -754,36 +819,44 @@ const TOOLS: &[ToolInfo] = &[
         ToolId::Hand,
         "Hand",
         ToolGroup::Navigate,
+        Some("hand"),
         "hand",
         Cursor::OpenHand,
         Some('h'),
         &[],
     ),
     t(
-        ToolId::Zoom,
-        "Zoom",
-        ToolGroup::Navigate,
-        "zoom",
-        Cursor::ZoomIn,
-        Some('z'),
-        &[],
-    ),
-    t(
         ToolId::RotateView,
         "Rotate View",
         ToolGroup::Navigate,
+        Some("hand"),
         "rotate-view",
         Cursor::Rotate,
         Some('r'),
         &[],
     ),
     t(
+        ToolId::Zoom,
+        "Zoom",
+        ToolGroup::Navigate,
+        Some("zoom"),
+        "zoom",
+        Cursor::ZoomIn,
+        Some('z'),
+        &[],
+    ),
+    t(
         ToolId::FreeTransform,
         "Free Transform",
         ToolGroup::Transform,
+        // Off the palette and off the letter keys: Photopea reaches Free
+        // Transform from Edit ▸ Free Transform and `Ctrl+T` only, and sharing
+        // `T` with Type meant a second `T` while typing swapped the text for a
+        // transform box.
+        None,
         "transform",
         Cursor::Arrow,
-        Some('t'),
+        None,
         &[c(
             "mode",
             "Mode",
@@ -1016,43 +1089,16 @@ mod tests {
     use crate::tool::{PointerEvent, ToolContext};
     use raster::PixelRect;
 
-    /// W1-B1: the tools whose option wiring belongs to the OTHER doer in
-    /// this wave (W1-B2 owns stroke.rs / brush.rs / shape.rs / pen.rs /
-    /// text.rs / patch.rs / transform.rs). Their refusals are tolerated by
-    /// [`every_declared_option_reaches_its_tool`] until B2 lands, at which
-    /// point this list shrinks to empty and the test covers every tool.
-    /// Every tool NOT listed here must answer every one of its spec'd keys.
-    pub(super) const W1_B2_PENDING: &[ToolId] = &[
-        // StrokeTool (stroke.rs, W1-B2)
-        ToolId::SpotHealing,
-        ToolId::HealingBrush,
-        ToolId::Brush,
-        ToolId::Pencil,
-        ToolId::ColorReplacement,
-        ToolId::CloneStamp,
-        ToolId::PatternStamp,
-        ToolId::Eraser,
-        ToolId::BackgroundEraser,
-        ToolId::Blur,
-        ToolId::Sharpen,
-        ToolId::RefineBoundary,
-        ToolId::Smudge,
-        ToolId::Dodge,
-        ToolId::Burn,
-        ToolId::Sponge,
-        // ShapeTool (shape.rs, W1-B2)
-        ToolId::Rectangle,
-        ToolId::RoundedRectangle,
-        ToolId::Ellipse,
-        ToolId::Polygon,
-        ToolId::Star,
-        ToolId::Line,
-        ToolId::CustomShape,
-        // TypeTool (text.rs, W1-B2)
-        ToolId::Type,
-        // TransformTool (transform.rs, W1-B2)
-        ToolId::FreeTransform,
-    ];
+    /// Tools whose option refusals are tolerated by
+    /// [`every_declared_option_reaches_its_tool`].
+    ///
+    /// **Empty, by design.** It held the W1-B2 tools (stroke, shape, type,
+    /// transform) while their `set_setting` wiring was another doer's; they
+    /// all landed, and W2-C emptied it — so the test now covers every tool
+    /// in [`all`] and every key it declares. `the_option_allow_list_is_empty`
+    /// pins it shut: a tool that wants back in has to change that test,
+    /// which is the review conversation this constant exists to force.
+    pub(super) const W1_B2_PENDING: &[ToolId] = &[];
 
     /// A value of the spec's kind that is NOT its default, inside its range —
     /// so a `set_setting` that quietly drops the value cannot pass by
@@ -1083,7 +1129,7 @@ mod tests {
     /// tool refuses is a control that does nothing while looking like it
     /// does — the defect this test exists to prevent. The brush-shared keys
     /// travel through `set_brush` by design and are skipped; the tools in
-    /// [`W1_B2_PENDING`] are tolerated until their owner lands.
+    /// [`W1_B2_PENDING`] would be tolerated, and that list is empty.
     #[test]
     fn every_declared_option_reaches_its_tool() {
         let mut refused = Vec::new();
@@ -1112,6 +1158,112 @@ mod tests {
             refused.is_empty(),
             "a declared option was refused by its own tool — wire it in set_setting: {refused:#?}"
         );
+    }
+
+    /// W2-C: the allow-list above is shut. With it empty, the test above is
+    /// the whole contract — every tool, every key — and a tool cannot be
+    /// quietly excused by being listed.
+    #[test]
+    fn the_option_allow_list_is_empty() {
+        assert!(
+            W1_B2_PENDING.is_empty(),
+            "a tool is being excused from answering its own options: {W1_B2_PENDING:?}"
+        );
+    }
+
+    /// The palette column Photopea draws, as slot ids, top to bottom. The
+    /// `ui` crate's palette derives its buttons from [`ToolInfo::slot`] in
+    /// registry order, so this list is the order of the buttons.
+    const PHOTOPEA_SLOTS: &[&str] = &[
+        "move",
+        "marquee",
+        "lasso",
+        "wand",
+        "crop",
+        "eyedropper",
+        "heal",
+        "brush",
+        "clone",
+        "eraser",
+        "gradient",
+        "blur",
+        "tone",
+        "pen",
+        "type",
+        "path",
+        "shape",
+        "hand",
+        "zoom",
+    ];
+
+    #[test]
+    fn the_slots_read_in_photopeas_order_and_each_is_one_contiguous_run() {
+        // A slot's tools sit together in `TOOLS`: a palette that groups by
+        // id in registry order would otherwise show a slot twice.
+        let mut runs: Vec<&str> = Vec::new();
+        for t in TOOLS {
+            let Some(slot) = t.slot else { continue };
+            if runs.last() != Some(&slot) {
+                assert!(
+                    !runs.contains(&slot),
+                    "{slot:?} appears in two separate runs; {:?} is out of place",
+                    t.id
+                );
+                runs.push(slot);
+            }
+        }
+        assert_eq!(runs, PHOTOPEA_SLOTS);
+    }
+
+    #[test]
+    fn the_slot_mates_are_the_ones_photopea_groups() {
+        let mates = |slot: &str| -> Vec<ToolId> {
+            TOOLS
+                .iter()
+                .filter(|t| t.slot == Some(slot))
+                .map(|t| t.id)
+                .collect()
+        };
+        assert_eq!(
+            mates("blur"),
+            vec![
+                ToolId::Blur,
+                ToolId::Sharpen,
+                ToolId::Smudge,
+                ToolId::RefineBoundary
+            ],
+            "the keyless retouch brushes share one slot"
+        );
+        assert_eq!(mates("hand"), vec![ToolId::Hand, ToolId::RotateView]);
+        assert_eq!(
+            mates("heal"),
+            vec![
+                ToolId::SpotHealing,
+                ToolId::HealingBrush,
+                ToolId::Patch,
+                ToolId::RedEye
+            ]
+        );
+        assert_eq!(mates("type"), vec![ToolId::Type]);
+        assert_eq!(
+            mates("path"),
+            vec![ToolId::PathSelect, ToolId::DirectSelection]
+        );
+    }
+
+    #[test]
+    fn free_transform_is_the_only_tool_off_the_palette_and_has_no_letter() {
+        let off: Vec<ToolId> = TOOLS
+            .iter()
+            .filter(|t| t.slot.is_none())
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(off, vec![ToolId::FreeTransform]);
+        let ft = info(ToolId::FreeTransform).unwrap();
+        assert_eq!(ft.shortcut, None, "Free Transform is Ctrl+T, not a letter");
+        // And `T` is the Type tool's alone: a second press stays on Type.
+        assert_eq!(by_shortcut('t'), vec![ToolId::Type]);
+        assert_eq!(cycle('t', Some(ToolId::Type)), Some(ToolId::Type));
     }
 
     #[test]

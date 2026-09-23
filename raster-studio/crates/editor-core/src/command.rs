@@ -34,6 +34,8 @@
 //! corrupt document normalizes what it captures (see
 //! [`Command::SetLayerProperties`]).
 
+use std::collections::BTreeSet;
+
 use glam::Affine2;
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +43,7 @@ use layer_model::{
     AssetId, AssetOrigin, BlendMode, ClippingMode, DetachedSubtree, Layer, LayerEffects, LayerId,
     LayerKind, LayerMask, LockState,
 };
-use raster::PixelRect;
+use raster::{PixelRect, TileCoord};
 
 use crate::document::{Document, Guides};
 use crate::pixels::{
@@ -1410,6 +1412,171 @@ fn current_location(doc: &Document, id: LayerId) -> Option<(Option<LayerId>, usi
         }
     }
     None
+}
+
+/// What part of the canvas a command changes, stated in terms this crate can
+/// know without a compositor: the stored tiles it rewrote, the layers whose
+/// whole extent it touched, or "everything".
+///
+/// This is the seam that lets an undo or redo invalidate only the changed
+/// rectangle. `editor-core` sees hashes and layer ids, never a layer's
+/// on-canvas rectangle — that needs the layer's transform, its effects' reach
+/// and its clipping neighbours, which only the compositor knows — so a reach
+/// names *which* layers and tiles changed and the shell maps them to styled
+/// bounds (`compositor::bounds`) **before and after** the command runs, so a
+/// moved layer clears the spot it left as well as the one it arrived at.
+///
+/// `everything` is the honest fallback for a structural command whose reach
+/// is not a rectangle: a re-order changes what every pixel under the moved
+/// layer is composited from, a canvas resize changes which pixels exist.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DirtyReach {
+    everything: bool,
+    /// Distinct, in first-seen order (`LayerId` is not `Ord`).
+    layers: Vec<LayerId>,
+    /// Level-0 tiles rewritten under a pixel owner, in that owner's own
+    /// (pre-transform) space, keyed by the owning layer. `true` marks the
+    /// layer's mask tiles, `false` its own pixels. Keys are distinct.
+    tiles: Vec<((LayerId, bool), BTreeSet<TileCoord>)>,
+}
+
+impl DirtyReach {
+    /// No pixel of the composite changed.
+    pub fn nothing() -> Self {
+        Self::default()
+    }
+
+    /// The whole canvas has to be recomposited.
+    pub fn everything() -> Self {
+        Self {
+            everything: true,
+            ..Self::default()
+        }
+    }
+
+    /// The whole extent of `layer` — before and after the command — changed.
+    pub fn layer(layer: LayerId) -> Self {
+        Self {
+            layers: vec![layer],
+            ..Self::default()
+        }
+    }
+
+    /// Stored tiles of one pixel owner were rewritten. Any tile above level
+    /// 0 is not a rectangle of the level-0 canvas, so it widens the reach to
+    /// everything.
+    pub fn tiles(target: PixelTarget, coords: impl IntoIterator<Item = TileCoord>) -> Self {
+        let (layer, mask) = match target {
+            PixelTarget::Layer(id) => (id, false),
+            PixelTarget::Mask(id) => (id, true),
+        };
+        let mut set = BTreeSet::new();
+        for c in coords {
+            if c.level != 0 {
+                return Self::everything();
+            }
+            set.insert(c);
+        }
+        let mut r = Self::default();
+        if !set.is_empty() {
+            r.tiles.push(((layer, mask), set));
+        }
+        r
+    }
+
+    pub fn is_everything(&self) -> bool {
+        self.everything
+    }
+
+    /// `true` when nothing at all is named.
+    pub fn is_nothing(&self) -> bool {
+        !self.everything && self.layers.is_empty() && self.tiles.is_empty()
+    }
+
+    /// The layers whose whole extent changed. Meaningless once
+    /// [`DirtyReach::is_everything`].
+    pub fn layers(&self) -> impl Iterator<Item = LayerId> + '_ {
+        self.layers.iter().copied()
+    }
+
+    /// The rewritten tiles, grouped by `(owning layer, is_mask)`. Meaningless
+    /// once [`DirtyReach::is_everything`].
+    pub fn tile_groups(&self) -> impl Iterator<Item = (LayerId, bool, &BTreeSet<TileCoord>)> {
+        self.tiles.iter().map(|((l, m), set)| (*l, *m, set))
+    }
+
+    /// Fold `other` in. Everything absorbs the rest and cannot be narrowed
+    /// again by a later, smaller reach.
+    pub fn merge(&mut self, other: DirtyReach) {
+        if other.everything || self.everything {
+            *self = Self::everything();
+            return;
+        }
+        for l in other.layers {
+            if !self.layers.contains(&l) {
+                self.layers.push(l);
+            }
+        }
+        for (key, set) in other.tiles {
+            match self.tiles.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, mine)) => mine.extend(set),
+                None => self.tiles.push((key, set)),
+            }
+        }
+    }
+}
+
+impl Command {
+    /// What this command changes on the canvas — see [`DirtyReach`].
+    ///
+    /// Matched exhaustively with no wildcard, so a new variant has to state
+    /// its reach rather than inherit whichever arm happened to be last. The
+    /// same command applied forward or as an inverse names the same layers
+    /// and tiles, which is what makes the answer usable for undo and redo:
+    /// the shell asks *before* applying and again *after*.
+    pub fn dirty_reach(&self) -> DirtyReach {
+        match self {
+            Command::PaintTiles { target, delta }
+            | Command::FillRegion { target, delta, .. }
+            | Command::ClearRegion { target, delta, .. } => {
+                DirtyReach::tiles(*target, delta.iter().map(|e| e.coord))
+            }
+            // The selection and the guides are overlays, not pixels. The
+            // colour-mode flip and the asset-table rows are bookkeeping that
+            // only ever ride inside a Transaction whose other members carry
+            // the dirtiness.
+            Command::SetSelection { .. }
+            | Command::SetGuides { .. }
+            | Command::SetMetaColorMode { .. }
+            | Command::SetAssetSourceSize { .. }
+            | Command::ReplaceAssetSource { .. } => DirtyReach::nothing(),
+            // One layer's whole extent, before and after. A create has no
+            // "before" and a delete has no "after"; the shell's two-sided
+            // query handles both by finding the layer missing on one side.
+            Command::CreateLayer { layer } => DirtyReach::layer(layer.id),
+            Command::DeleteLayer { layer_id }
+            | Command::SetLayerProperties { layer_id, .. }
+            | Command::TransformLayer { layer_id, .. }
+            | Command::SetLayerKind { layer_id, .. } => DirtyReach::layer(*layer_id),
+            Command::RestoreLayers { subtree } => DirtyReach::layer(subtree.root()),
+            // A re-order changes what every pixel beneath the moved layer is
+            // composited from; a canvas resize or resample changes which
+            // pixels exist at all. No rectangle is the honest answer.
+            Command::MoveLayer { .. }
+            | Command::SetCanvasSize { .. }
+            | Command::ResampleImage { .. } => DirtyReach::everything(),
+            Command::Transaction { commands, .. } => {
+                let mut out = DirtyReach::nothing();
+                for c in commands {
+                    out.merge(c.dirty_reach());
+                    if out.is_everything() {
+                        break;
+                    }
+                }
+                out
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3927,5 +4094,202 @@ mod tests {
         assert_eq!(labels[7], "Fill");
         assert_eq!(labels[8], "Fill Mask");
         assert_eq!(labels[9], "Clear");
+    }
+
+    // ----------------------------------------------------------- reach ---
+
+    fn tile_groups_of(r: &DirtyReach) -> Vec<(LayerId, bool, Vec<TileCoord>)> {
+        r.tile_groups()
+            .map(|(l, m, set)| (l, m, set.iter().copied().collect()))
+            .collect()
+    }
+
+    #[test]
+    fn a_pixel_edit_reaches_exactly_the_tiles_it_rewrote() {
+        let id = LayerId::new();
+        let paint = Command::paint_tiles(
+            PixelTarget::Layer(id),
+            [
+                TileEdit::set(coord(0, 0), hash(1)),
+                TileEdit::set(coord(3, 2), hash(2)),
+            ],
+        )
+        .unwrap();
+        let r = paint.dirty_reach();
+        assert!(!r.is_everything());
+        assert!(!r.is_nothing());
+        assert_eq!(r.layers().count(), 0, "a paint changes no layer's extent");
+        assert_eq!(
+            tile_groups_of(&r),
+            vec![(id, false, vec![coord(0, 0), coord(3, 2)])]
+        );
+
+        // A mask edit is keyed to the mask, so the shell can map it through
+        // the mask's own pose rather than the layer's.
+        let mask =
+            Command::paint_tiles(PixelTarget::Mask(id), [TileEdit::set(coord(1, 1), hash(3))])
+                .unwrap();
+        assert_eq!(
+            tile_groups_of(&mask.dirty_reach()),
+            vec![(id, true, vec![coord(1, 1)])]
+        );
+
+        // A mip-level tile is not a rectangle of the level-0 canvas.
+        let mip = Command::paint_tiles(
+            PixelTarget::Layer(id),
+            [TileEdit::set(TileCoord::new(0, 0, 1), hash(4))],
+        )
+        .unwrap();
+        assert!(mip.dirty_reach().is_everything());
+    }
+
+    #[test]
+    fn layer_scoped_commands_name_their_layer_and_structural_ones_reach_everything() {
+        let (mut doc, id) = doc_with_layer();
+        let restore = Command::DeleteLayer { layer_id: id }
+            .apply(&mut doc)
+            .unwrap();
+        assert!(matches!(restore, Command::RestoreLayers { .. }));
+
+        for cmd in [
+            Command::create_layer(Layer {
+                id,
+                ..Layer::raster("L")
+            }),
+            Command::DeleteLayer { layer_id: id },
+            Command::SetLayerProperties {
+                layer_id: id,
+                patch: LayerPatch {
+                    opacity: Some(0.5),
+                    ..Default::default()
+                },
+            },
+            Command::TransformLayer {
+                layer_id: id,
+                matrix: [1.0, 0.0, 0.0, 1.0, 5.0, 0.0],
+            },
+            Command::SetLayerKind {
+                layer_id: id,
+                kind: Box::new(LayerKind::Raster(layer_model::RasterLayer::default())),
+            },
+            restore,
+        ] {
+            let r = cmd.dirty_reach();
+            assert!(!r.is_everything(), "{cmd:?} is one layer's extent");
+            assert_eq!(r.layers().collect::<Vec<_>>(), vec![id], "{cmd:?}");
+            assert_eq!(r.tile_groups().count(), 0, "{cmd:?}");
+        }
+
+        for cmd in [
+            Command::MoveLayer {
+                layer_id: id,
+                parent: None,
+                index: 0,
+            },
+            Command::SetCanvasSize {
+                size: glam::UVec2::new(10, 10),
+            },
+            Command::ResampleImage {
+                size: glam::UVec2::new(10, 10),
+                changes: Vec::new(),
+            },
+        ] {
+            assert!(cmd.dirty_reach().is_everything(), "{cmd:?}");
+        }
+
+        for cmd in [
+            Command::SetSelection {
+                selection: crate::selection::Selection::None,
+            },
+            Command::SetGuides {
+                guides: Guides::default(),
+            },
+            Command::SetMetaColorMode { from: 0, to: 1 },
+        ] {
+            assert!(cmd.dirty_reach().is_nothing(), "{cmd:?}");
+        }
+    }
+
+    #[test]
+    fn a_transactions_reach_is_the_union_of_its_members_and_everything_wins() {
+        let a = LayerId::new();
+        let b = LayerId::new();
+        let tx = Command::Transaction {
+            label: "two".into(),
+            commands: vec![
+                Command::paint_tiles(PixelTarget::Layer(a), [TileEdit::set(coord(1, 1), hash(1))])
+                    .unwrap(),
+                Command::TransformLayer {
+                    layer_id: b,
+                    matrix: [1.0, 0.0, 0.0, 1.0, 5.0, 0.0],
+                },
+                Command::paint_tiles(PixelTarget::Layer(a), [TileEdit::set(coord(2, 2), hash(2))])
+                    .unwrap(),
+            ],
+        };
+        let r = tx.dirty_reach();
+        assert!(!r.is_everything());
+        assert_eq!(r.layers().collect::<Vec<_>>(), vec![b]);
+        assert_eq!(
+            tile_groups_of(&r),
+            vec![(a, false, vec![coord(1, 1), coord(2, 2)])]
+        );
+
+        let tx = Command::Transaction {
+            label: "reorder + paint".into(),
+            commands: vec![
+                Command::MoveLayer {
+                    layer_id: b,
+                    parent: None,
+                    index: 0,
+                },
+                Command::paint_tiles(PixelTarget::Layer(a), [TileEdit::set(coord(1, 1), hash(1))])
+                    .unwrap(),
+            ],
+        };
+        let r = tx.dirty_reach();
+        assert!(r.is_everything());
+        assert_eq!(r.layers().count(), 0, "everything carries no list");
+        assert_eq!(r.tile_groups().count(), 0);
+
+        // And merging a small reach into everything cannot narrow it.
+        let mut e = DirtyReach::everything();
+        e.merge(DirtyReach::layer(a));
+        assert!(e.is_everything());
+    }
+
+    /// The property undo relies on: the inverse a command hands back names
+    /// the same layers and tiles the forward command did, so the shell can
+    /// ask the inverse where it reaches before and after applying it.
+    #[test]
+    fn an_inverse_reaches_what_its_forward_command_reached() {
+        let (mut doc, id) = doc_with_layer();
+        let paint = Command::paint_tiles(
+            PixelTarget::Layer(id),
+            [
+                TileEdit::set(coord(0, 0), hash(1)),
+                TileEdit::set(coord(1, 0), hash(2)),
+            ],
+        )
+        .unwrap();
+        let inverse = paint.apply(&mut doc).unwrap();
+        assert_eq!(inverse.dirty_reach(), paint.dirty_reach());
+
+        let move_it = Command::TransformLayer {
+            layer_id: id,
+            matrix: [1.0, 0.0, 0.0, 1.0, 300.0, 0.0],
+        };
+        let inverse = move_it.apply(&mut doc).unwrap();
+        assert_eq!(inverse.dirty_reach(), move_it.dirty_reach());
+
+        let create = Command::create_layer(Layer::raster("New"));
+        let created = match &create {
+            Command::CreateLayer { layer } => layer.id,
+            _ => unreachable!(),
+        };
+        let inverse = create.apply(&mut doc).unwrap();
+        assert_eq!(inverse.dirty_reach(), DirtyReach::layer(created));
+        let restore = inverse.apply(&mut doc).unwrap();
+        assert_eq!(restore.dirty_reach(), DirtyReach::layer(created));
     }
 }

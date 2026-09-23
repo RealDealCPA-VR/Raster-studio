@@ -175,6 +175,9 @@ pub struct SaveOptions {
     pub collect_assets: bool,
     /// Assets the document refers to.
     pub assets: Vec<AssetInput>,
+    /// Where the tile pass reports how far it has got, for a status bar on
+    /// another thread. `None` reports nothing.
+    pub progress: Option<std::sync::Arc<crate::tiles::SaveProgress>>,
 }
 
 impl SaveOptions {
@@ -186,7 +189,14 @@ impl SaveOptions {
             preview_max_edge: DEFAULT_PREVIEW_MAX_EDGE,
             collect_assets: false,
             assets: Vec::new(),
+            progress: None,
         }
+    }
+
+    /// Report tile progress into `progress` as the save runs.
+    pub fn reporting_to(mut self, progress: std::sync::Arc<crate::tiles::SaveProgress>) -> Self {
+        self.progress = Some(progress);
+        self
     }
 
     /// Embed every linked asset ("collect assets for a portable project").
@@ -338,7 +348,16 @@ fn build_package(
     contents.insert(DOCUMENT_FILE.to_string(), FileDigest::of(&doc_bytes));
 
     // Pixels. Content-addressed, so not listed in `contents`.
-    let tile_report = tiles::write_tiles(tmp, doc, tiles)?;
+    //
+    // When this save replaces a package, that package's blobs are the first
+    // place to look for every tile: verified and linked rather than re-encoded
+    // (see `tiles`). Only a real package qualifies — one with a manifest and a
+    // `tiles/` that is not a link out of it — anything else is simply not
+    // consulted, and the save proceeds as a first save would.
+    let previous = (dest.join(MANIFEST_FILE).is_file()
+        && safepath::reject_symlink(&dest.join(TILES_DIR), TILES_DIR).is_ok())
+    .then_some(dest);
+    let tile_report = tiles::write_tiles(tmp, doc, tiles, previous, opts.progress.as_deref())?;
 
     // Assets.
     let (asset_report, index) = assets::write_assets(tmp, &opts.assets, opts.collect_assets)?;
@@ -386,9 +405,9 @@ fn build_package(
         caps.manifest,
     )?;
 
-    // Files were fsynced as they were written; the directories holding them
-    // were not, and a file fsync says nothing about the durability of the
-    // directory entry pointing at it.
+    // Files were fsynced as they were written (the tile pass, as one batch at
+    // its end); the directories holding them were not, and a file fsync says
+    // nothing about the durability of the directory entry pointing at it.
     atomic::sync_tree(tmp)?;
 
     Ok(SaveReport {

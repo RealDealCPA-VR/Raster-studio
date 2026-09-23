@@ -246,28 +246,35 @@ fn the_applications_own_composite_recomputes_exactly_one_tile_after_a_small_edit
     );
 }
 
-/// An undo must invalidate what it changed.
+/// An undo must invalidate what it changed — and only what it changed.
 ///
-/// `OpenDocument::undo` cannot know the reach of the inverse it applied, so it
-/// marks the whole canvas dirty. That is the honest answer for the *upload*;
-/// what must not happen is the tile cache handing back the post-edit tile
-/// afterwards, because the cache key is derived from the document rather than
-/// from the dirty set.
+/// `OpenDocument::undo` reads the reach of the step it is about to reverse
+/// ([`Command::dirty_reach`]) and marks the tiles that reach covers, before and
+/// after the inverse runs. For a one-tile paint that is the painted tile, not
+/// the canvas: re-uploading a 4K texture to take back one brush dab is the cost
+/// the dirty set exists to avoid. What must not happen either is the tile
+/// cache handing back the post-edit tile afterwards, because the cache key is
+/// derived from the document rather than from the dirty set.
 #[test]
 fn undoing_an_edit_does_not_leave_the_cache_showing_it() {
     let mut doc = big_document();
     let region = viewport();
     let before = doc.composite(region).unwrap();
+    // The presenter drains the dirty set once it has uploaded a frame. Without
+    // this every set read below would still carry the `DirtyTiles::all()` the
+    // document was born with and could not tell what the edit, the undo or
+    // the redo marked.
+    doc.take_dirty();
 
     small_edit(&mut doc, 7);
     let edited = doc.composite(region).unwrap();
     assert_ne!(edited, before);
 
-    // The presenter drains the dirty set once it has uploaded the edited
-    // frame, so the canvas is clean going into the undo. Without this the
-    // assertion below would still read the `DirtyTiles::all()` the document
-    // was born with and could not tell whether the undo marked anything.
-    doc.take_dirty();
+    // The edited frame is uploaded, so the canvas is clean going into the undo.
+    let edit_dirty = doc.take_dirty();
+    assert!(!edit_dirty.is_all());
+    let edit_tiles: Vec<TileCoord> = edit_dirty.tiles().collect();
+    assert_eq!(edit_tiles, vec![EDITED], "the edit itself named its tile");
 
     assert!(doc.undo().unwrap());
     assert_eq!(
@@ -275,11 +282,111 @@ fn undoing_an_edit_does_not_leave_the_cache_showing_it() {
         before,
         "the cache served a tile the document no longer describes"
     );
-    assert!(doc.take_dirty().is_all(), "an undo redraws the canvas");
+    let undo_dirty = doc.take_dirty();
+    assert!(
+        !undo_dirty.is_all(),
+        "undoing a one-tile paint re-uploaded the whole canvas"
+    );
+    assert!(
+        !undo_dirty.is_empty(),
+        "an undo that marks nothing is a ghost"
+    );
+    // The edit moved nothing, so its pre-edit bounds are the same tile; the
+    // undo's set must contain every tile the edit touched.
+    for tile in &edit_tiles {
+        assert!(
+            undo_dirty.tiles().any(|t| t == *tile),
+            "undo did not mark {tile:?}, which the edit touched; it marked {:?}",
+            undo_dirty.tiles().collect::<Vec<_>>()
+        );
+    }
 
-    // ...and redo brings it back, through the same cache.
+    // ...and redo brings it back, through the same cache, marking the same
+    // tiles.
     assert!(doc.redo().unwrap());
     assert_eq!(doc.composite(region).unwrap(), edited);
+    let redo_dirty = doc.take_dirty();
+    assert!(
+        !redo_dirty.is_all(),
+        "redoing a one-tile paint re-uploaded the whole canvas"
+    );
+    assert_eq!(
+        redo_dirty.tiles().collect::<Vec<_>>(),
+        undo_dirty.tiles().collect::<Vec<_>>(),
+        "redo marks what undo marked"
+    );
+}
+
+/// The other side of the narrowing: a step whose reach is not a rectangle — a
+/// layer re-order changes what every pixel beneath the moved layer is blended
+/// from, a canvas resize changes which pixels exist — still marks the whole
+/// canvas on undo and on redo. Through the document's own command path, on a
+/// canvas small enough that the composite check is cheap.
+#[test]
+fn undoing_a_structural_step_still_redraws_the_whole_canvas() {
+    let mut doc = app::blank(TILE_SIZE * 2, TILE_SIZE * 2, "Structural");
+    let coords = doc.canvas_tiles();
+    let lower = doc.add_layer(Layer::raster("Lower"));
+    doc.paint_layer(lower, &coords, &|_, _, _| [200, 40, 40, 255]);
+    let upper = doc.add_layer(Layer::raster("Upper"));
+    doc.paint_layer(upper, &coords, &|_, _, _| [40, 40, 200, 160]);
+    let region = doc.canvas_rect();
+    let before = doc.composite(region).unwrap();
+    doc.take_dirty();
+
+    // --- a re-order: the top layer goes to the bottom of the stack ---
+    doc.apply(Command::MoveLayer {
+        layer_id: upper,
+        parent: None,
+        index: usize::MAX,
+    })
+    .unwrap();
+    let reordered = doc.composite(region).unwrap();
+    assert!(
+        reordered != before,
+        "the re-order changed nothing, so the undo below would prove nothing"
+    );
+    assert!(doc.take_dirty().is_all(), "a re-order redraws the canvas");
+
+    assert!(doc.undo().unwrap());
+    assert_eq!(doc.composite(region).unwrap(), before);
+    assert!(
+        doc.take_dirty().is_all(),
+        "undoing a re-order redraws the canvas"
+    );
+    assert!(doc.redo().unwrap());
+    assert_eq!(doc.composite(region).unwrap(), reordered);
+    assert!(
+        doc.take_dirty().is_all(),
+        "redoing a re-order redraws the canvas"
+    );
+
+    // --- a canvas resize: which pixels exist changes ---
+    doc.apply(Command::SetCanvasSize {
+        size: glam::UVec2::new(TILE_SIZE * 3, TILE_SIZE),
+    })
+    .unwrap();
+    assert_eq!(
+        (doc.document.width(), doc.document.height()),
+        (TILE_SIZE * 3, TILE_SIZE)
+    );
+    assert!(doc.take_dirty().is_all(), "a resize redraws the canvas");
+
+    assert!(doc.undo().unwrap());
+    assert_eq!(
+        (doc.document.width(), doc.document.height()),
+        (TILE_SIZE * 2, TILE_SIZE * 2)
+    );
+    assert_eq!(doc.composite(region).unwrap(), reordered);
+    assert!(
+        doc.take_dirty().is_all(),
+        "undoing a resize redraws the canvas"
+    );
+    assert!(doc.redo().unwrap());
+    assert!(
+        doc.take_dirty().is_all(),
+        "redoing a resize redraws the canvas"
+    );
 }
 
 /// A guard on the fixture: ten painted, visible layers really do cover the

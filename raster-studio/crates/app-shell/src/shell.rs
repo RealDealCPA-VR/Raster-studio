@@ -377,6 +377,28 @@ const ANTS_FRAME: Duration = Duration::from_millis(33);
 /// hashing the PNGs).
 const SHOT_WARMUP_FRAMES: u32 = 24;
 
+/// W2-G: how often the loop wakes to look at jobs in flight when nothing else
+/// is happening. A frame's worth: a completion is noticed within one frame,
+/// and an idle window with a save running costs sixty polls a second rather
+/// than a spinning core.
+const JOB_POLL: Duration = Duration::from_millis(16);
+
+/// W2-G: the geometry the window opens with.
+///
+/// A `--shot` capture ignores whatever the last session persisted — always
+/// [`WindowGeometry::DEFAULT`], never maximized — so two runs on any machine
+/// produce PNGs of the same size and evidence screenshots are reproducible
+/// (before this, a persisted maximized 2560×1351 and a fresh 1440×900 profile
+/// captured different images of the same build). An ordinary session restores
+/// where it was, clamped into something a window manager can honour.
+pub fn window_geometry_for(persisted: Option<WindowGeometry>, shot: bool) -> WindowGeometry {
+    if shot {
+        WindowGeometry::DEFAULT
+    } else {
+        persisted.unwrap_or(WindowGeometry::DEFAULT).sanitized()
+    }
+}
+
 /// Read the rendered surface back to the CPU and write it as a PNG at the
 /// `--shot` path (S2.3: a literal screenshot of the GUI). Reported, never
 /// fatal: a failed capture logs and returns `false`, and the session carries
@@ -436,6 +458,11 @@ struct WindowState {
     title: String,
     /// The theme last installed on the egui context.
     theme: design::Theme,
+    /// W2-X: the screen mode the window was last put in. The two full-screen
+    /// modes are borderless full screen; Standard restores the framed window.
+    /// Applied only when the editor's mode moves, so a mode the platform
+    /// dropped on its own is not forced back every frame.
+    screen_mode: ui::palette::ScreenMode,
 }
 
 /// The application: an [`Editor`] plus the window it is shown in.
@@ -670,12 +697,7 @@ impl Shell {
     }
 
     fn build_window(&mut self, event_loop: &ActiveEventLoop) -> Result<WindowState, ShellError> {
-        let geometry = self
-            .editor
-            .preferences()
-            .window
-            .unwrap_or(WindowGeometry::DEFAULT)
-            .sanitized();
+        let geometry = window_geometry_for(self.editor.preferences().window, self.shot.is_some());
         let attrs = Window::default_attributes()
             .with_title(self.editor.window_title())
             .with_inner_size(PhysicalSize::new(geometry.width, geometry.height))
@@ -765,7 +787,27 @@ impl Shell {
             egui_renderer,
             egui_depth,
             theme,
+            screen_mode: ui::palette::ScreenMode::Standard,
         })
+    }
+
+    /// W2-G: one frame's worth of job bookkeeping — apply every import, save
+    /// and export that has landed, keep the crash marker current, and say
+    /// whether anything is still running. Called once per loop iteration by
+    /// `about_to_wait`; a test with no window calls it directly to step the
+    /// loop.
+    fn pump_jobs(&mut self) -> bool {
+        if !self.editor.jobs_pending() {
+            return false;
+        }
+        let autosaves_before = self.editor.autosave_paths();
+        self.editor.poll_jobs();
+        // A scratch autosave that has just landed is only recoverable once
+        // the marker names it.
+        if self.editor.autosave_paths() != autosaves_before {
+            self.sync_marker();
+        }
+        self.editor.jobs_pending()
     }
 
     fn resize(&mut self, size: PhysicalSize<u32>) {
@@ -796,7 +838,14 @@ impl Shell {
     }
 
     /// Store the window's geometry so the next session opens where this one was.
+    ///
+    /// Not for a `--shot` run: its window is the fixed capture geometry, not
+    /// where the user left anything, and persisting it would overwrite the
+    /// real session's record (W2-G).
     fn capture_geometry(&mut self) {
+        if self.shot.is_some() {
+            return;
+        }
         let Some(state) = &self.state else { return };
         let size = state.window.inner_size();
         let position = state
@@ -819,8 +868,14 @@ impl Shell {
         self.editor.set_preferences(prefs);
     }
 
-    /// Clean exit: geometry, preferences, recent files, then the crash marker.
+    /// Clean exit: saves in flight, geometry, preferences, recent files, then
+    /// the crash marker.
     fn shut_down(&mut self) {
+        // A save still running on a worker — an autosave the timer started, a
+        // Ctrl+S the user did not wait for — lands before the process goes.
+        // The one place the interaction thread blocks on a save, and the one
+        // where nothing else needs it.
+        self.editor.wait_for_saves();
         self.capture_geometry();
         if let Err(e) = self.editor.persist() {
             tracing::warn!("could not save preferences: {e}");
@@ -847,6 +902,16 @@ impl Shell {
         }
         if (state.egui_ctx.zoom_factor() - scale).abs() > f32::EPSILON {
             state.egui_ctx.set_zoom_factor(scale);
+        }
+        // W2-X: the window follows the editor's screen mode (plain F, the
+        // palette footer). The chrome hides its bands from the same value.
+        let mode = self.editor.screen_mode();
+        if state.screen_mode != mode {
+            state.window.set_fullscreen(
+                mode.fullscreen()
+                    .then_some(winit::window::Fullscreen::Borderless(None)),
+            );
+            state.screen_mode = mode;
         }
     }
 
@@ -1338,27 +1403,11 @@ impl Shell {
                 DialogAction::Export(job) => {
                     // Photopea writes downloads straight away; this is the
                     // desktop equivalent — the folder picker asks once, then
-                    // every enabled entry lands in it.
+                    // every enabled entry lands in it. The composite and the
+                    // encodes run on a worker (W2-G); the status line reports
+                    // the outcome when it lands.
                     if let Some(dir) = self.editor.pick_export_folder() {
-                        match self
-                            .editor
-                            .active_mut()
-                            .expect("the export dialog only opens with a document")
-                            .export_job(&job, &dir)
-                        {
-                            Ok(paths) => {
-                                let last = paths.last().map(|p| p.display().to_string());
-                                self.editor.set_status(format!(
-                                    "Exported {} file(s) to {}",
-                                    paths.len(),
-                                    last.unwrap_or_default()
-                                ));
-                            }
-                            Err(e) => {
-                                tracing::warn!("export failed: {e}");
-                                self.editor.set_status(format!("Export failed: {e}"));
-                            }
-                        }
+                        self.editor.request_export(*job, dir);
                     }
                     // Cancelled at the folder picker: nothing written, nothing
                     // to report.
@@ -2190,15 +2239,16 @@ impl ApplicationHandler<crate::shell::AppEvent> for Shell {
         if self.state.is_none() {
             return;
         }
-        // Card 087: apply finished import jobs. A completion redraws; while
-        // jobs are in flight the loop polls instead of sleeping, or a slow
-        // import on a worker thread would never be noticed.
-        if self.editor.imports_pending() {
-            self.editor.poll_imports();
+        // Card 087 / W2-G: apply finished jobs — imports, saves, exports. A
+        // completion redraws; while jobs are in flight the loop wakes at the
+        // job poll rate instead of sleeping, or a slow worker would never be
+        // noticed — and instead of spinning, which a save that takes seconds
+        // would turn into seconds of a busy core.
+        if self.pump_jobs() {
             if let Some(state) = &self.state {
                 state.window.request_redraw();
             }
-            event_loop.set_control_flow(ControlFlow::Poll);
+            event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + JOB_POLL));
             return;
         }
         // C1: keep redrawing until the shot's warm-up frames have all rendered
@@ -2212,11 +2262,12 @@ impl ApplicationHandler<crate::shell::AppEvent> for Shell {
             return;
         }
         if let Some(report) = self.editor.autosave_tick(Instant::now()) {
-            tracing::info!("autosaved {} document(s)", report.written.len());
+            tracing::info!("autosave started for {} document(s)", report.started.len());
             for (_, reason) in &report.failed {
                 tracing::warn!("autosave failed: {reason}");
             }
             // A scratch autosave is only recoverable once the marker names it.
+            // The marker is re-synced as each job lands too (`pump_jobs`).
             self.sync_marker();
         }
         let Some(state) = &self.state else { return };
@@ -2727,6 +2778,50 @@ mod tests {
         assert_eq!(
             modifiers_of(ModifiersState::empty()),
             tools::Modifiers::NONE
+        );
+    }
+
+    /// W2-X: Photopea's plain `F` walks the three screen modes through the
+    /// same key route Tab takes to the panels flag. The window's borderless
+    /// full screen follows `Editor::screen_mode` in `sync_appearance`, which
+    /// needs a real window; this proves the route up to the value it reads.
+    #[test]
+    fn plain_f_cycles_the_screen_mode_through_the_key_route() {
+        use ui::palette::ScreenMode;
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_two_images(dir.path());
+        let free = KeyboardOwner::default();
+        let f = WKey::Character("f".into());
+
+        assert_eq!(shell.editor().screen_mode(), ScreenMode::Standard);
+        for expected in [
+            ScreenMode::FullScreenWithMenu,
+            ScreenMode::FullScreen,
+            ScreenMode::Standard,
+        ] {
+            press(&mut shell, free, f.clone(), ModifiersState::empty());
+            assert_eq!(shell.editor().screen_mode(), expected);
+        }
+
+        // Like every other chord, F is a letter while a field has the
+        // keyboard, and nothing while a modal owns it.
+        let typing = KeyboardOwner {
+            egui_text_focus: true,
+            recording_shortcut: false,
+        };
+        press(&mut shell, typing, f.clone(), ModifiersState::empty());
+        assert_eq!(
+            shell.editor().screen_mode(),
+            ScreenMode::Standard,
+            "F cycled the screen mode while a text field had the keyboard"
+        );
+        shell.chrome.open_new_document_dialog();
+        assert!(shell.chrome.dialog_open());
+        press(&mut shell, free, f, ModifiersState::empty());
+        assert_eq!(
+            shell.editor().screen_mode(),
+            ScreenMode::Standard,
+            "F cycled the screen mode under a modal"
         );
     }
 
@@ -3816,6 +3911,727 @@ mod tests {
                 .status()
                 .is_some_and(|s| s.starts_with("Exported 1 file")),
             "the status bar did not report the export"
+        );
+    }
+
+    // ------------------------------------------------------------ W2-G
+
+    thread_local! {
+        /// Job bodies a queueing spawner has been handed and not yet run.
+        static QUEUED_JOBS: std::cell::RefCell<Vec<Box<dyn FnOnce() + Send>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// A spawner that holds every job until the test says so — the job is
+    /// "in flight" for exactly as many frames as the test pumps.
+    fn queue_job(_name: String, body: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+        QUEUED_JOBS.with(|q| q.borrow_mut().push(body));
+        Ok(())
+    }
+
+    /// Run every queued job body on a real worker thread, joined: the body
+    /// provably runs off the calling thread, and the test stays deterministic.
+    fn run_queued_jobs_on_a_worker() -> usize {
+        let bodies: Vec<_> = QUEUED_JOBS.with(|q| q.borrow_mut().drain(..).collect());
+        let n = bodies.len();
+        for body in bodies {
+            std::thread::spawn(body)
+                .join()
+                .expect("the job body completes");
+        }
+        n
+    }
+
+    /// A `w`x`h` PNG of noise: every 256x256 tile distinct, so a save has as
+    /// many blobs to write as the canvas has tiles.
+    fn write_noise_png(path: &std::path::Path, w: u32, h: u32) {
+        let mut state = 0x9e37_79b9u32;
+        let mut px = Vec::with_capacity((w * h * 4) as usize);
+        for _ in 0..w * h {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            px.extend_from_slice(&[(state >> 16) as u8, (state >> 8) as u8, state as u8, 255]);
+        }
+        std::fs::write(
+            path,
+            raster::encode(raster::ExportFormat::Png, w, h, &px).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// A shell over a 1024x1024 noise image (16 distinct tiles) whose jobs
+    /// are queued rather than run, with the save picker primed to `target`.
+    fn shell_with_a_large_document_and_queued_jobs(
+        dir: &std::path::Path,
+        target: &std::path::Path,
+    ) -> Shell {
+        let png = dir.join("large.png");
+        write_noise_png(&png, 1024, 1024);
+        let mut editor = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new().saving_to(target.to_path_buf())),
+        );
+        editor.open_path(&png).unwrap();
+        editor.dispatch(Action::NewLayer).unwrap();
+        assert!(editor.active().unwrap().is_dirty());
+        editor.set_spawner(queue_job);
+        Shell::new(editor, Vec::new())
+    }
+
+    /// W2-G: Ctrl+S hands the write to a worker and the shell keeps
+    /// processing frames while it runs. Pinned through the job seam with no
+    /// wall clock: the job is held in flight while frames are pumped, then run
+    /// on a real thread, and the next pump applies the completion — path,
+    /// dirty flag, title, recents, status — on the interaction thread.
+    #[test]
+    fn a_save_runs_on_the_worker_while_the_shell_keeps_processing_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("large.rstudio");
+        let mut shell = shell_with_a_large_document_and_queued_jobs(dir.path(), &target);
+
+        // Ctrl+S through the shell's own action route.
+        shell.perform(Action::Save);
+        assert!(
+            shell.editor.saves_pending(),
+            "the save is a job, not a blocking call"
+        );
+        assert!(
+            shell
+                .editor
+                .status()
+                .is_some_and(|s| s.starts_with("Saving")),
+            "{:?}",
+            shell.editor.status()
+        );
+        assert!(
+            !target.exists(),
+            "nothing has been written: the worker has not run"
+        );
+        assert!(shell.editor.active().unwrap().is_dirty());
+        assert!(shell.editor.window_title().starts_with("• "));
+
+        // A second Ctrl+S while it runs is refused, and the refusal is on the
+        // status line.
+        shell.perform(Action::Save);
+        assert!(
+            shell
+                .editor
+                .status()
+                .is_some_and(|s| s.contains("already being saved")),
+            "{:?}",
+            shell.editor.status()
+        );
+        assert_eq!(
+            QUEUED_JOBS.with(|q| q.borrow().len()),
+            1,
+            "the refused save started no second job"
+        );
+
+        // Frames go by. The loop polls, finds nothing landed, carries on.
+        for _ in 0..3 {
+            assert!(shell.pump_jobs(), "still in flight");
+            shell.apply_chrome(ChromeOutput::default());
+        }
+        assert!(shell.editor.active().unwrap().is_dirty());
+        assert!(!target.exists());
+
+        // The worker runs — on another thread — and the next frame applies
+        // the completion here.
+        assert_eq!(run_queued_jobs_on_a_worker(), 1);
+        assert!(target.join(project_format::MANIFEST_FILE).is_file());
+        assert!(
+            shell.editor.active().unwrap().is_dirty(),
+            "not clean until the completion is applied on this thread"
+        );
+        assert!(!shell.pump_jobs(), "nothing left in flight");
+        let doc = shell.editor.active().unwrap();
+        assert!(!doc.is_dirty(), "the completion cleared the dirty flag");
+        assert_eq!(doc.project_path(), Some(target.as_path()));
+        assert_eq!(
+            shell.editor.window_title(),
+            "large.png — Raster Studio",
+            "the title lost its bullet"
+        );
+        assert!(shell.editor.recent().entries().contains(&target));
+        assert!(
+            shell
+                .editor
+                .status()
+                .is_some_and(|s| s.starts_with("Saved ")),
+            "{:?}",
+            shell.editor.status()
+        );
+        // And the package the worker wrote is the document, pixels included.
+        let loaded = project_format::open_project(&target).unwrap();
+        assert_eq!(loaded.document.layers.len(), 2);
+        assert_eq!(loaded.tiles.len(), 16, "sixteen distinct noise tiles");
+    }
+
+    /// W2-G: an edit made while the worker is writing leaves the document
+    /// dirty when the save lands — the package holds the snapshot, not the
+    /// edit — and the status line says so.
+    #[test]
+    fn an_edit_during_a_save_keeps_the_document_dirty_when_it_lands() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("edited.rstudio");
+        let mut shell = shell_with_a_large_document_and_queued_jobs(dir.path(), &target);
+        shell.perform(Action::Save);
+        shell.editor.dispatch(Action::NewLayer).unwrap();
+        run_queued_jobs_on_a_worker();
+        shell.pump_jobs();
+        let doc = shell.editor.active().unwrap();
+        assert!(doc.is_dirty(), "the third layer is not on disk");
+        assert_eq!(doc.project_path(), Some(target.as_path()));
+        assert!(
+            shell
+                .editor
+                .status()
+                .is_some_and(|s| s.contains("not in it yet")),
+            "{:?}",
+            shell.editor.status()
+        );
+        assert_eq!(
+            project_format::load_project(&target).unwrap().layers.len(),
+            2,
+            "the snapshot had two layers"
+        );
+    }
+
+    /// W2-G: the autosave timer takes the same worker route as Ctrl+S.
+    #[test]
+    fn an_autosave_takes_the_same_worker_route() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell =
+            shell_with_a_large_document_and_queued_jobs(dir.path(), &dir.path().join("x"));
+        let t0 = Instant::now();
+        assert!(
+            shell.editor.autosave_tick(t0).is_none(),
+            "the first tick arms"
+        );
+        let due = shell.editor.next_autosave().unwrap();
+        let report = shell.editor.autosave_tick(due).expect("a dirty document");
+        assert_eq!(report.started.len(), 1, "{report:?}");
+        assert!(
+            report.written.is_empty(),
+            "started, not written: {report:?}"
+        );
+        let (_, path) = &report.started[0];
+        assert!(!path.exists(), "the worker has not run");
+        assert!(shell.editor.saves_pending());
+        assert!(
+            shell.editor.autosave_paths().is_empty(),
+            "not recorded until it has landed"
+        );
+
+        assert!(shell.pump_jobs());
+        assert_eq!(run_queued_jobs_on_a_worker(), 1);
+        assert!(!shell.pump_jobs());
+        assert!(path.join(project_format::MANIFEST_FILE).is_file());
+        assert_eq!(shell.editor.autosave_paths(), vec![path.clone()]);
+        assert!(
+            shell.editor.active().unwrap().is_dirty(),
+            "an autosave into scratch is not the save the user asked for"
+        );
+    }
+
+    /// W2-G: a `.psd` is parsed on the worker; the interaction thread only
+    /// wraps the result when the job lands.
+    #[test]
+    fn a_psd_is_parsed_on_the_worker() {
+        let dir = tempfile::tempdir().unwrap();
+        let psd = dir.path().join("layers.psd");
+        let mut file = psd::PsdFile::new(psd::PsdHeader::rgba8(16, 16));
+        let canvas = psd::Rect::sized(16, 16);
+        let mut layer = psd::PsdLayer::raster("Base", canvas);
+        layer
+            .set_rgba8(&[10u8, 20, 30, 255].repeat(16 * 16))
+            .unwrap();
+        file.layers = vec![layer];
+        std::fs::write(&psd, psd::write(&file).unwrap()).unwrap();
+
+        let mut editor = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new().opening(psd.clone())),
+        );
+        editor.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+        editor.set_spawner(queue_job);
+        let mut shell = Shell::new(editor, Vec::new());
+        shell.perform(Action::Open);
+        assert!(shell.editor.imports_pending());
+        assert!(shell.editor.documents().is_empty(), "nothing parsed here");
+        assert!(shell.pump_jobs());
+        assert_eq!(run_queued_jobs_on_a_worker(), 1);
+        assert!(!shell.pump_jobs());
+        let doc = shell.editor.active().expect("the psd opened");
+        assert_eq!(doc.title(), "layers.psd");
+        assert_eq!(doc.source_path(), Some(psd.as_path()));
+        assert_eq!(doc.document.layers.len(), 1);
+        assert!(!doc.tiles.is_empty(), "the pixels came with the tree");
+    }
+
+    /// W2-G: a save that fails reaches the status line, leaves the document
+    /// dirty, and leaves the previous package exactly as it was.
+    #[test]
+    fn a_failed_save_reaches_the_status_line_and_leaves_the_previous_package_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.rstudio");
+        // A "directory" that is a file: the worker cannot create the package
+        // under it.
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let bad = blocker.join("second.rstudio");
+        let png = dir.path().join("a.png");
+        write_noise_png(&png, 256, 256);
+        let mut editor = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(
+                ScriptedDialogs::new()
+                    .saving_to(first.clone())
+                    .saving_to(bad.clone()),
+            ),
+        );
+        editor.open_path(&png).unwrap();
+        editor.dispatch(Action::NewLayer).unwrap();
+        let mut shell = Shell::new(editor, Vec::new());
+
+        shell.perform(Action::Save);
+        assert!(!shell.editor.active().unwrap().is_dirty());
+        assert!(first.join(project_format::MANIFEST_FILE).is_file());
+
+        shell.editor.dispatch(Action::NewLayer).unwrap();
+        shell.perform(Action::SaveAs);
+        let doc = shell.editor.active().unwrap();
+        assert!(doc.is_dirty(), "a failed save clears nothing");
+        assert_eq!(
+            doc.project_path(),
+            Some(first.as_path()),
+            "and adopts nothing"
+        );
+        assert!(
+            shell
+                .editor
+                .status()
+                .is_some_and(|s| s.starts_with("Save failed:")),
+            "{:?}",
+            shell.editor.status()
+        );
+        let loaded = project_format::open_project(&first).unwrap();
+        assert_eq!(loaded.document.layers.len(), 2, "the first save is intact");
+    }
+
+    /// W2-G round 2: File ▸ Export… (one file) composites and encodes on the
+    /// worker; the shell keeps processing frames, nothing exists at the
+    /// target until the worker has run, and the completion puts the file's
+    /// name on the status line.
+    #[test]
+    fn a_file_export_runs_on_the_worker_while_the_shell_keeps_processing_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("flat.png");
+        let png = dir.path().join("large.png");
+        write_noise_png(&png, 1024, 1024);
+        let mut editor = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new().exporting_to(target.clone())),
+        );
+        editor.open_path(&png).unwrap();
+        editor.set_spawner(queue_job);
+        let mut shell = Shell::new(editor, Vec::new());
+
+        shell.perform(Action::Export);
+        assert!(
+            !target.exists(),
+            "nothing has been written: the export is a job and the worker has not run"
+        );
+        assert!(shell.editor.jobs_pending(), "the export is in flight");
+        assert!(
+            shell
+                .editor
+                .status()
+                .is_some_and(|s| s.starts_with("Exporting ")),
+            "{:?}",
+            shell.editor.status()
+        );
+        for _ in 0..3 {
+            assert!(shell.pump_jobs(), "still in flight");
+            shell.apply_chrome(ChromeOutput::default());
+        }
+        assert!(!target.exists());
+
+        assert_eq!(run_queued_jobs_on_a_worker(), 1);
+        assert!(!shell.pump_jobs(), "nothing left in flight");
+        assert_eq!(
+            shell.editor.status(),
+            Some(format!("Exported {}", target.display()).as_str())
+        );
+        let source = raster::decode_path(&png).unwrap();
+        let exported = raster::decode_path(&target).unwrap();
+        assert_eq!((exported.width, exported.height), (1024, 1024));
+        let off = source
+            .rgba8
+            .iter()
+            .zip(&exported.rgba8)
+            .filter(|(a, b)| a.abs_diff(**b) > 1)
+            .count();
+        assert_eq!(off, 0, "the export carries the document's pixels");
+    }
+
+    /// W2-G round 2: a destination nothing can encode is refused on this
+    /// thread, as the synchronous route refused it — an error dialog, no job.
+    #[test]
+    fn a_file_export_to_an_unknown_format_is_refused_before_any_job_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("a.png");
+        write_noise_png(&png, 256, 256);
+        let mut editor = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new().exporting_to(dir.path().join("a.xyz"))),
+        );
+        editor.open_path(&png).unwrap();
+        editor.set_spawner(queue_job);
+        let mut shell = Shell::new(editor, Vec::new());
+        let err = shell
+            .editor
+            .dispatch(Action::Export)
+            .expect_err("no codec writes .xyz");
+        assert!(matches!(err, ActionError::Failed { .. }), "{err:?}");
+        assert!(err.to_string().contains("xyz"), "{err}");
+        assert!(
+            !shell.editor.jobs_pending(),
+            "no job for a file nothing can write"
+        );
+        assert_eq!(QUEUED_JOBS.with(|q| q.borrow().len()), 0);
+    }
+
+    /// W2-G round 2: a command accepted while the worker writes a save is
+    /// journaled aside, and lands in the new package's journal *after* the
+    /// save marker once the save has landed — so crash recovery replays it.
+    ///
+    /// Before this, the record went into the old package's journal: either
+    /// ahead of the marker (copied as "already in the snapshot") or into the
+    /// directory the swap deleted. Recovery then replayed nothing of what
+    /// followed the save, and stopped at the first later command that no
+    /// longer applied.
+    #[test]
+    fn a_command_applied_during_a_save_is_replayed_by_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("held.rstudio");
+        let mut shell = shell_with_a_large_document_and_queued_jobs(dir.path(), &target);
+
+        // A first save, landed: the package exists and the document is clean.
+        shell.perform(Action::Save);
+        assert_eq!(run_queued_jobs_on_a_worker(), 1);
+        assert!(!shell.pump_jobs());
+        assert!(!shell.editor.active().unwrap().is_dirty());
+        assert_eq!(
+            shell.editor.active().unwrap().project_path(),
+            Some(target.as_path())
+        );
+
+        // One edit before the save (in its snapshot), one during it (not).
+        shell.editor.dispatch(Action::NewLayer).unwrap();
+        shell.perform(Action::Save);
+        assert!(shell.editor.saves_pending());
+        shell.editor.dispatch(Action::NewLayer).unwrap();
+        let hold = crate::editor::journal_hold_path(&target);
+        assert!(
+            hold.is_file(),
+            "the command accepted during the save is held aside, not written into \
+             a journal the swap is about to delete"
+        );
+        assert_eq!(
+            shell.editor.active().unwrap().journal_hold(),
+            Some(hold.as_path())
+        );
+
+        assert_eq!(run_queued_jobs_on_a_worker(), 1);
+        assert!(!shell.pump_jobs());
+        assert!(!hold.exists(), "absorbed into the new package's journal");
+        assert!(shell.editor.active().unwrap().journal_hold().is_none());
+        assert!(
+            shell.editor.active().unwrap().is_dirty(),
+            "the fourth layer is not on disk"
+        );
+
+        // Exactly the one command follows the marker, and it applies onto the
+        // package as recovery would apply it.
+        let rec = crate::session::recoverable(&target)
+            .unwrap()
+            .expect("the edit made during the save is recoverable");
+        assert_eq!(rec.commands.len(), 1, "{rec:?}");
+        let loaded = project_format::open_project(&target).unwrap();
+        assert_eq!(loaded.document.layers.len(), 3, "the snapshot had three");
+        let journal =
+            project_format::CommandJournal::read(&target.join(project_format::JOURNAL_FILE))
+                .unwrap();
+        let mut recovered = loaded.document;
+        assert_eq!(
+            journal
+                .replay_onto(&mut recovered, loaded.document_digest)
+                .unwrap(),
+            1
+        );
+        assert_eq!(recovered.layers.len(), 4);
+
+        // And a command after the save goes to the package journal directly,
+        // after the held one.
+        shell.editor.dispatch(Action::NewLayer).unwrap();
+        assert!(!hold.exists());
+        assert_eq!(
+            crate::session::recoverable(&target)
+                .unwrap()
+                .unwrap()
+                .commands
+                .len(),
+            2
+        );
+    }
+
+    /// W2-G round 2: the process dies after the worker swapped the new
+    /// package in but before this thread applied the completion. The hold
+    /// survives next to the package, and the next run's recovery absorbs it
+    /// before it reads the journal — the command made during the save is
+    /// restored along with the rest.
+    #[test]
+    fn a_crash_between_the_swap_and_the_completion_loses_no_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("crashed.rstudio");
+        let mut shell = shell_with_a_large_document_and_queued_jobs(dir.path(), &target);
+        shell.perform(Action::Save);
+        assert_eq!(run_queued_jobs_on_a_worker(), 1);
+        assert!(!shell.pump_jobs());
+
+        shell.editor.dispatch(Action::NewLayer).unwrap();
+        shell.perform(Action::Save);
+        shell.editor.dispatch(Action::NewLayer).unwrap();
+        // The worker finishes — the new package (three layers) is in place —
+        // and then the process is gone before the next frame.
+        assert_eq!(run_queued_jobs_on_a_worker(), 1);
+        drop(shell);
+        let hold = crate::editor::journal_hold_path(&target);
+        assert!(hold.is_file(), "the hold outlives the process");
+        assert_eq!(
+            project_format::load_project(&target).unwrap().layers.len(),
+            3
+        );
+
+        // The next run.
+        let mut editor = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new().answering_recover(true)),
+        );
+        let report = editor.recover(&crate::session::SessionRecord {
+            pid: 0,
+            open_projects: vec![target.clone()],
+            autosaves: Vec::new(),
+        });
+        assert_eq!(report.restored, vec![(target.clone(), 1)], "{report:?}");
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert!(!hold.exists(), "absorbed exactly once");
+        assert_eq!(editor.active().unwrap().document.layers.len(), 4);
+    }
+
+    /// W2-G round 2: Ctrl+S while the timer's autosave is writing the same
+    /// document is not dropped — it is queued and starts the moment the
+    /// autosave lands, and no second writer touches the package meanwhile.
+    #[test]
+    fn a_save_pressed_during_an_autosave_runs_after_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("queued.rstudio");
+        let mut shell = shell_with_a_large_document_and_queued_jobs(dir.path(), &target);
+        let t0 = Instant::now();
+        assert!(shell.editor.autosave_tick(t0).is_none());
+        let due = shell.editor.next_autosave().unwrap();
+        let report = shell.editor.autosave_tick(due).expect("a dirty document");
+        assert_eq!(report.started.len(), 1);
+        assert_eq!(QUEUED_JOBS.with(|q| q.borrow().len()), 1);
+
+        shell.perform(Action::Save);
+        let status = shell.editor.status().unwrap_or_default().to_string();
+        assert!(
+            !status.contains("already being saved"),
+            "the user's save is not refused behind an autosave: {status:?}"
+        );
+        assert!(status.contains("once the autosave finishes"), "{status:?}");
+        assert_eq!(
+            QUEUED_JOBS.with(|q| q.borrow().len()),
+            1,
+            "no second writer to the package while the autosave runs"
+        );
+
+        // The autosave lands; the same frame starts the queued save.
+        assert_eq!(run_queued_jobs_on_a_worker(), 1);
+        assert!(shell.pump_jobs(), "the queued save is now in flight");
+        assert_eq!(QUEUED_JOBS.with(|q| q.borrow().len()), 1);
+        assert!(shell.editor.active().unwrap().is_dirty());
+        assert!(!target.exists());
+        assert!(
+            shell
+                .editor
+                .status()
+                .is_some_and(|s| s.starts_with("Saving ")),
+            "{:?}",
+            shell.editor.status()
+        );
+
+        assert_eq!(run_queued_jobs_on_a_worker(), 1);
+        assert!(!shell.pump_jobs());
+        let doc = shell.editor.active().unwrap();
+        assert!(!doc.is_dirty(), "the queued save landed");
+        assert_eq!(doc.project_path(), Some(target.as_path()));
+        assert!(target.join(project_format::MANIFEST_FILE).is_file());
+    }
+
+    /// W2-G round 2: a save's progress refreshes the status line only while
+    /// the line still shows that save's own text; a newer message — the
+    /// refusal of a second Ctrl+S, anything else — is not overwritten by the
+    /// tile count moving.
+    #[test]
+    fn a_saves_progress_does_not_overwrite_a_newer_status_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("progress.rstudio");
+        let mut shell = shell_with_a_large_document_and_queued_jobs(dir.path(), &target);
+        shell.perform(Action::Save);
+        let id = shell.editor.active().unwrap().id();
+        let progress = shell.editor.save_progress_of(id).expect("a save in flight");
+        assert!(
+            shell
+                .editor
+                .status()
+                .is_some_and(|s| s.starts_with("Saving ")),
+            "{:?}",
+            shell.editor.status()
+        );
+
+        // The worker counts its tiles while the line shows its own text: the
+        // count is shown.
+        progress.set_total(16);
+        progress.bump();
+        assert!(shell.pump_jobs());
+        assert_eq!(
+            shell.editor.status(),
+            Some("Saving large.png… 1/16 tiles"),
+            "progress refreshes its own line"
+        );
+
+        // Something newer claims the line; further progress leaves it alone.
+        shell.perform(Action::Save);
+        assert!(
+            shell
+                .editor
+                .status()
+                .is_some_and(|s| s.contains("already being saved")),
+            "{:?}",
+            shell.editor.status()
+        );
+        progress.bump();
+        assert!(shell.pump_jobs());
+        assert!(
+            shell
+                .editor
+                .status()
+                .is_some_and(|s| s.contains("already being saved")),
+            "the refusal survived a progress tick: {:?}",
+            shell.editor.status()
+        );
+        shell.editor.set_status("Layer added");
+        progress.bump();
+        assert!(shell.pump_jobs());
+        assert_eq!(shell.editor.status(), Some("Layer added"));
+
+        // The completion is news, and says its piece.
+        assert_eq!(run_queued_jobs_on_a_worker(), 1);
+        assert!(!shell.pump_jobs());
+        assert!(
+            shell
+                .editor
+                .status()
+                .is_some_and(|s| s.starts_with("Saved ")),
+            "{:?}",
+            shell.editor.status()
+        );
+    }
+
+    /// W2-G reachability: the editor the desktop binary runs
+    /// (`Editor::native` → `Editor::new`) starts its jobs on worker threads —
+    /// the inline mode belongs to `with_state` alone.
+    #[test]
+    fn the_desktop_editor_runs_jobs_on_worker_threads() {
+        let dir = tempfile::tempdir().unwrap();
+        let editor = crate::editor::Editor::new(
+            AppPaths::rooted(dir.path().join("config")),
+            Box::new(ScriptedDialogs::new()),
+        );
+        assert!(std::ptr::fn_addr_eq(
+            editor.spawner(),
+            crate::jobs::spawn_thread as crate::jobs::Spawner
+        ));
+        let inline = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("config2")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        assert!(std::ptr::fn_addr_eq(
+            inline.spawner(),
+            crate::jobs::run_inline as crate::jobs::Spawner
+        ));
+    }
+
+    /// W2-G: `--shot` opens the fixed capture geometry whatever the last
+    /// session persisted, and persists nothing on the way out.
+    #[test]
+    fn a_shot_window_ignores_persisted_geometry_and_never_stores_its_own() {
+        let persisted = WindowGeometry {
+            x: -3,
+            y: 12,
+            width: 2560,
+            height: 1351,
+            maximized: true,
+        };
+        assert_eq!(
+            window_geometry_for(Some(persisted), true),
+            WindowGeometry::DEFAULT
+        );
+        let shot = window_geometry_for(None, true);
+        assert_eq!(shot, WindowGeometry::DEFAULT);
+        assert!(!shot.maximized, "a capture window is never maximized");
+        assert_eq!((shot.width, shot.height), (1440, 900));
+        // An ordinary session restores where it was, sanitized.
+        assert_eq!(
+            window_geometry_for(Some(persisted), false),
+            persisted.sanitized()
+        );
+        assert_eq!(window_geometry_for(None, false), WindowGeometry::DEFAULT);
+
+        // And a shot shell's exit leaves the persisted record alone.
+        let dir = tempfile::tempdir().unwrap();
+        let prefs = Preferences {
+            window: Some(persisted),
+            ..Preferences::default()
+        };
+        let editor = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            prefs,
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        let mut shell = Shell::with_shot(editor, Vec::new(), Some(dir.path().join("shot.png")));
+        shell.capture_geometry();
+        assert_eq!(
+            shell.editor.preferences().window,
+            Some(persisted.sanitized()),
+            "a shot run must not overwrite the real session's geometry"
         );
     }
 

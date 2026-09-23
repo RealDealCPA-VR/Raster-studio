@@ -288,7 +288,10 @@ fn no_opaque_rect_is_painted_over_a_visible_tool_slot_at_either_viewport() {
 
     let model = ui::PaletteModel::build();
     let slot_count = model.slots().len();
-    assert!(slot_count >= 20, "the registry has only {slot_count} slots");
+    assert_eq!(
+        slot_count, 19,
+        "Photopea's column is nineteen slots; the registry gave {slot_count}"
+    );
 
     for size in [egui::vec2(1440.0, 900.0), egui::vec2(1280.0, 720.0)] {
         let ctx = egui::Context::default();
@@ -358,8 +361,11 @@ fn no_opaque_rect_is_painted_over_a_visible_tool_slot_at_either_viewport() {
                     }
                 }
             }
-            assert!(
-                visible >= 20,
+            // Nineteen slots plus the three-row footer fit a 720 pt window
+            // whole: none may be scrolled off or tucked under the footer.
+            assert_eq!(
+                visible,
+                slot_count,
                 "{}: only {visible} of {slot_count} tool slots are fully on screen",
                 at(size)
             );
@@ -469,4 +475,417 @@ fn a_tool_slot_glyph_is_at_least_the_minimum_hit_target() {
             ink.height()
         );
     }
+}
+
+/// W2-C: the column is Photopea's — nineteen slots in Photopea's order, Free
+/// Transform off it — and the footer carries Photopea's `Q` and `F` under the
+/// wells, drawn with real ink.
+///
+/// A real route, not a helper: the frame is drawn through
+/// `ui::view::tool_palette`, the controls are found by their ids, and the
+/// clicks go in as egui pointer events. Q must come out as the *same*
+/// `Intent::Action(MenuAction::ToggleQuickMask)` the Select menu raises and
+/// draw engaged *only* from the flag the shell mirrors in — never from its
+/// own click. F is live (W2-X): it has click sense, a click raises a
+/// screen-mode cycle *request* on the palette state — no intent, and the
+/// mirrored mode itself does not move — and it draws engaged only from the
+/// `ScreenMode` the shell mirrors in (both full-screen modes light it,
+/// Standard clears it). Both glyphs sit in the secondary text role at rest.
+#[test]
+fn the_column_is_photopeas_and_q_and_f_sit_under_the_wells() {
+    use ui::palette::{quick_mask_control, screen_mode_control, ScreenMode};
+    use ui::MenuAction;
+
+    let ctx = egui::Context::default();
+    design::apply_theme(&ctx, design::Theme::Dark);
+    let style = design::style_for(design::Theme::Dark);
+    ctx.set_style_of(egui::Theme::Dark, style.clone());
+    ctx.set_style_of(egui::Theme::Light, style);
+    let t = design::Theme::Dark.tokens();
+    let mut w = Workspace::new();
+
+    let frame = |w: &mut Workspace, events: Vec<egui::Event>| {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1440.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let full = ctx.run(input, |ctx| ui::view::tool_palette(w, ctx));
+        (full.shapes, w.drain_intents())
+    };
+    let click = |at: egui::Pos2| {
+        vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            },
+        ]
+    };
+    let accent = design::color32(t.palette.color(design::ColorRole::AccentSubtle));
+    let engaged_fill = |shapes: &[egui::epaint::ClippedShape], rect: egui::Rect| {
+        shapes.iter().any(|c| match &c.shape {
+            egui::Shape::Rect(r) => r.fill == accent && r.rect.contains_rect(rect.shrink(1.0)),
+            _ => false,
+        })
+    };
+
+    // Two warm-up frames: egui settles panel layout on the second.
+    frame(&mut w, Vec::new());
+    let (shapes, intents) = frame(&mut w, Vec::new());
+    assert!(
+        intents.is_empty(),
+        "an untouched palette emitted {intents:?}"
+    );
+
+    // The column.
+    let model = ui::PaletteModel::build();
+    assert_eq!(
+        model.slot_ids(),
+        vec![
+            "move",
+            "marquee",
+            "lasso",
+            "wand",
+            "crop",
+            "eyedropper",
+            "heal",
+            "brush",
+            "clone",
+            "eraser",
+            "gradient",
+            "blur",
+            "tone",
+            "pen",
+            "type",
+            "path",
+            "shape",
+            "hand",
+            "zoom",
+        ]
+    );
+    assert_eq!(model.slot_of(tools::ToolId::FreeTransform), None);
+    let slot_rects: Vec<egui::Rect> = (0..model.slots().len())
+        .map(|i| {
+            ctx.read_response(ui::view::ids::tool_slot(i))
+                .unwrap_or_else(|| panic!("slot {i} was not drawn"))
+                .rect
+        })
+        .collect();
+    for pair in slot_rects.windows(2) {
+        assert!(
+            pair[1].top() >= pair[0].bottom(),
+            "slots are drawn top to bottom in model order: {pair:?}"
+        );
+    }
+    let strip = slot_rects
+        .iter()
+        .fold(egui::Rect::NOTHING, |acc, r| acc.union(*r));
+
+    // The footer: Q under swap, F under reset, both inside the column and
+    // below the wells, and both carrying a glyph rather than the missing-icon
+    // mark.
+    let rect_of = |id: egui::Id, name: &str| {
+        ctx.read_response(id)
+            .unwrap_or_else(|| panic!("{name} was not drawn"))
+            .rect
+    };
+    let swap = rect_of(ui::view::ids::color_swap(), "swap");
+    let reset = rect_of(ui::view::ids::color_reset(), "reset");
+    let quick = rect_of(quick_mask_control(), "quick mask");
+    let screen = rect_of(screen_mode_control(), "screen mode");
+    assert!(
+        quick.top() >= swap.bottom(),
+        "Q is not under swap: {quick:?} vs {swap:?}"
+    );
+    assert!(
+        screen.top() >= reset.bottom(),
+        "F is not under reset: {screen:?} vs {reset:?}"
+    );
+    assert!(
+        quick.top() > strip.bottom(),
+        "Q is not under the slot column"
+    );
+    assert!(
+        (quick.left() - swap.left()).abs() < 0.5,
+        "Q is not aligned with swap"
+    );
+    assert!(
+        (screen.left() - reset.left()).abs() < 0.5,
+        "F is not aligned with reset"
+    );
+    assert!(screen.left() >= quick.right(), "F is not to the right of Q");
+    let column = egui::Rect::from_x_y_ranges(
+        strip.left() - design::Space::Small.pt()..=strip.right() + design::Space::Small.pt(),
+        strip.top()..=f32::INFINITY,
+    );
+    assert!(
+        column.contains_rect(quick),
+        "Q is outside the column: {quick:?}"
+    );
+    assert!(
+        column.contains_rect(screen),
+        "F is outside the column: {screen:?}"
+    );
+
+    let danger = design::color32(t.palette.color(design::ColorRole::Danger));
+    let ink_of = |shapes: &[egui::epaint::ClippedShape], rect: egui::Rect, name: &str| {
+        let mut ink = egui::Rect::NOTHING;
+        for clipped in shapes {
+            let b = clipped.shape.visual_bounding_rect();
+            if !rect.contains(b.center()) {
+                continue;
+            }
+            let solid = |stroke: &egui::epaint::PathStroke| match stroke.color {
+                egui::epaint::ColorMode::Solid(c) => c,
+                egui::epaint::ColorMode::UV(_) => egui::Color32::TRANSPARENT,
+            };
+            match &clipped.shape {
+                egui::Shape::Path(p) => {
+                    assert_ne!(p.fill, danger, "{name} is painted as a missing icon");
+                    assert_ne!(
+                        solid(&p.stroke),
+                        danger,
+                        "{name} is painted as a missing icon"
+                    );
+                    ink = ink.union(b);
+                }
+                egui::Shape::LineSegment { stroke, .. } => {
+                    assert_ne!(solid(stroke), danger, "{name} is painted as a missing icon");
+                    ink = ink.union(b);
+                }
+                egui::Shape::Circle(c) => {
+                    assert_ne!(c.fill, danger, "{name} is painted as a missing icon");
+                    ink = ink.union(b);
+                }
+                _ => {}
+            }
+        }
+        ink
+    };
+    let min = t.metrics.min_hit_target;
+    for (name, rect) in [("quick mask", quick), ("screen mode", screen)] {
+        let ink = ink_of(&shapes, rect, name);
+        assert!(
+            ink.width().max(ink.height()) >= min * 0.5,
+            "{name}'s glyph spans only {}x{} pt",
+            ink.width(),
+            ink.height()
+        );
+    }
+    assert!(
+        !engaged_fill(&shapes, quick),
+        "Q reads as engaged before anyone engaged it"
+    );
+
+    // Q: the Select menu's own action comes out, and nothing else — the
+    // control does not declare itself engaged, because the editor may refuse
+    // the toggle (no document). It still reads plain on the next frame.
+    assert!(!w.palette.quick_mask);
+    let (_, intents) = frame(&mut w, click(quick.center()));
+    assert_eq!(
+        intents,
+        vec![Intent::Action(MenuAction::ToggleQuickMask)],
+        "Q did not raise the quick-mask action"
+    );
+    assert!(
+        !w.palette.quick_mask,
+        "Q declared itself engaged before the editor said so"
+    );
+    let (shapes, intents) = frame(&mut w, Vec::new());
+    assert!(intents.is_empty());
+    assert!(
+        !engaged_fill(&shapes, quick),
+        "Q lit up on a click alone, with nothing mirrored from the editor"
+    );
+    // The engaged look follows the flag the shell mirrors from
+    // `Editor::quick_mask()`: set, it is an opaque accent fill exactly over
+    // the control; cleared, the fill goes.
+    w.palette.quick_mask = true;
+    let (shapes, _) = frame(&mut w, Vec::new());
+    assert!(
+        engaged_fill(&shapes, quick),
+        "the engaged quick-mask control has no accent fill"
+    );
+    w.palette.quick_mask = false;
+    let (shapes, _) = frame(&mut w, Vec::new());
+    assert!(
+        !engaged_fill(&shapes, quick),
+        "Q stays lit after the mirrored flag cleared"
+    );
+    assert!(
+        !engaged_fill(&shapes, screen),
+        "F reads as engaged in Standard mode"
+    );
+
+    // F: live. Its click is a *request* — the chrome performs the
+    // application's screen-mode action against the editor and mirrors the
+    // mode back — so the control raises no intent, leaves the mode where it
+    // was, and reads as engaged only from the mirrored value.
+    let f_response = ctx
+        .read_response(screen_mode_control())
+        .expect("F was drawn");
+    assert!(f_response.sense.click, "F has no click sense");
+    let q_response = ctx
+        .read_response(quick_mask_control())
+        .expect("Q was drawn");
+    assert!(q_response.sense.click, "Q lost its click sense");
+    assert_eq!(w.palette.screen_mode, ScreenMode::Standard);
+    assert!(
+        !w.palette.take_screen_mode_cycle(),
+        "a cycle request exists before any click"
+    );
+    let (shapes, intents) = frame(&mut w, click(screen.center()));
+    assert!(intents.is_empty(), "F raised {intents:?}");
+    assert!(
+        w.palette.take_screen_mode_cycle(),
+        "F's click raised no cycle request"
+    );
+    assert!(
+        !w.palette.take_screen_mode_cycle(),
+        "taking the request did not clear it"
+    );
+    assert_eq!(
+        w.palette.screen_mode,
+        ScreenMode::Standard,
+        "F cycled the screen mode itself instead of asking"
+    );
+    assert!(
+        !engaged_fill(&shapes, screen),
+        "F reads as engaged after a click alone"
+    );
+    // The mirrored full-screen modes light it; Standard clears it.
+    for mode in [ScreenMode::FullScreenWithMenu, ScreenMode::FullScreen] {
+        w.palette.screen_mode = mode;
+        let (shapes, _) = frame(&mut w, Vec::new());
+        assert!(engaged_fill(&shapes, screen), "{mode:?} does not light F");
+    }
+    w.palette.screen_mode = ScreenMode::Standard;
+    let (shapes, _) = frame(&mut w, Vec::new());
+    assert!(
+        !engaged_fill(&shapes, screen),
+        "F stays lit after the mirrored mode cleared"
+    );
+
+    // Both glyphs are painted in the secondary role in their plain state —
+    // F is a live control now, not a disabled one. Read from a frame with the
+    // pointer parked away from both, so no hover state is in the picture.
+    let disabled = design::color32(t.palette.text(design::TextRole::Disabled));
+    let secondary = design::color32(t.palette.text(design::TextRole::Secondary));
+    assert_ne!(
+        disabled, secondary,
+        "the theme cannot tell disabled from plain"
+    );
+    let ink_colors = |shapes: &[egui::epaint::ClippedShape], rect: egui::Rect| {
+        let mut out: Vec<egui::Color32> = Vec::new();
+        let mut push = |c: egui::Color32| {
+            if c.a() > 0 && !out.contains(&c) {
+                out.push(c);
+            }
+        };
+        let solid = |stroke: &egui::epaint::PathStroke| match stroke.color {
+            egui::epaint::ColorMode::Solid(c) => c,
+            egui::epaint::ColorMode::UV(_) => egui::Color32::TRANSPARENT,
+        };
+        for clipped in shapes {
+            if !rect.contains(clipped.shape.visual_bounding_rect().center()) {
+                continue;
+            }
+            match &clipped.shape {
+                egui::Shape::Path(p) => {
+                    push(p.fill);
+                    push(solid(&p.stroke));
+                }
+                egui::Shape::LineSegment { stroke, .. } => push(solid(stroke)),
+                egui::Shape::Circle(c) => {
+                    push(c.fill);
+                    push(c.stroke.color);
+                }
+                _ => {}
+            }
+        }
+        out
+    };
+    let (shapes, _) = frame(
+        &mut w,
+        vec![egui::Event::PointerMoved(egui::pos2(720.0, 450.0))],
+    );
+    let f_ink = ink_colors(&shapes, screen);
+    assert!(!f_ink.is_empty(), "F has no glyph");
+    assert!(
+        f_ink.iter().all(|c| *c == secondary),
+        "F's plain glyph is not in the secondary role: {f_ink:?} vs {secondary:?}"
+    );
+    let q_ink = ink_colors(&shapes, quick);
+    assert!(
+        q_ink.iter().all(|c| *c == secondary),
+        "Q's plain glyph is not in the secondary role: {q_ink:?} vs {secondary:?}"
+    );
+}
+
+/// W2-X: the options bar is part of the header band under the menu bar — the
+/// header shade, not the panel shade the columns use. Read from the real
+/// panel frame `ui::view::tool_options` paints.
+#[test]
+fn the_options_bar_is_painted_in_the_header_shade() {
+    let ctx = egui::Context::default();
+    design::apply_theme(&ctx, design::Theme::Dark);
+    let style = design::style_for(design::Theme::Dark);
+    ctx.set_style_of(egui::Theme::Dark, style.clone());
+    ctx.set_style_of(egui::Theme::Light, style);
+    let t = design::Theme::Dark.tokens();
+    let mut w = Workspace::new();
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1440.0, 900.0),
+        )),
+        ..Default::default()
+    };
+    let mut shapes = Vec::new();
+    for _ in 0..2 {
+        let full = ctx.run(input.clone(), |ctx| ui::view::tool_options(&mut w, ctx));
+        shapes = full.shapes;
+    }
+    let band =
+        egui::containers::panel::PanelState::load(&ctx, egui::Id::new("raster-tool-options"))
+            .expect("the options bar was drawn")
+            .rect;
+    let header = design::color32(t.palette.color(design::ColorRole::SurfaceHeader));
+    let panel = design::color32(t.palette.color(design::ColorRole::SurfacePanel));
+    assert_ne!(
+        header, panel,
+        "the theme cannot tell the header from a panel"
+    );
+    let fills: Vec<egui::Color32> = shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Rect(r)
+                if (r.rect.min - band.min).length() < 1.0
+                    && (r.rect.max - band.max).length() < 1.0 =>
+            {
+                Some(r.fill)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        fills.contains(&header),
+        "the options bar {band:?} is not filled with the header shade: {fills:?}"
+    );
+    assert!(
+        !fills.contains(&panel),
+        "the options bar is still filled with the panel shade: {fills:?}"
+    );
 }

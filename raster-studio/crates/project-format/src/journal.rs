@@ -264,6 +264,64 @@ impl CommandJournal {
         Ok(())
     }
 
+    /// Move every command held in the side file `side` to the end of the
+    /// journal `into`, then delete `side`.
+    ///
+    /// The other half of the ordering rule in the module header. An
+    /// application that saves a *snapshot* on a worker keeps applying
+    /// commands while the save runs, and a record of one of those must not
+    /// reach the package journal before the save's marker: the save copies
+    /// the journal's valid prefix *as of its read*, so a record appended
+    /// before that read is copied ahead of the marker and treated as work the
+    /// snapshot already holds, and one appended after it is deleted with the
+    /// old package by the swap. Either way recovery would not replay it. Such
+    /// an application journals those commands to a **side file** for the
+    /// duration of the save and calls this once the save has landed (or
+    /// failed): the records go after whatever marker the package journal now
+    /// ends with, which is where the commands belong, because every one of
+    /// them was accepted after the snapshot was taken. A crash while the side
+    /// file exists loses nothing either — the file survives next to the
+    /// package, and the caller absorbs it before it reads the journal back.
+    ///
+    /// Only command records are carried: the side file is the application's,
+    /// and a marker in it would say something about a snapshot this journal
+    /// never saw. The records land as **one** write and one fsync. An absent
+    /// side file absorbs as zero records. Returns how many were moved.
+    pub fn absorb(side: &Path, into: &Path) -> Result<usize, ProjectError> {
+        let recovery = match crate::safepath::read_capped(side, &label(side), MAX_JOURNAL_BYTES) {
+            Ok(bytes) => Self::parse(&bytes),
+            Err(ProjectError::MissingFile { .. }) => return Ok(0),
+            Err(e) => return Err(e),
+        };
+        let commands = recovery.commands();
+        if !commands.is_empty() {
+            reject_unsafe_target(into)?;
+            let mut buffer = Vec::new();
+            for cmd in commands {
+                let record = Record::Command(Box::new(cmd.clone()));
+                buffer.extend_from_slice(&serde_json::to_vec(&record)?);
+                buffer.push(b'\n');
+            }
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(into)?;
+            f.write_all(&buffer)?;
+            f.flush()?;
+            f.sync_all()?;
+        }
+        // Only once the records are durable in the journal: a crash before
+        // this line leaves the side file to be absorbed again, and a second
+        // absorb of the same records would be a duplicate-apply — so the
+        // caller absorbs exactly once per open, before reading the journal.
+        match std::fs::remove_file(side) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        Ok(commands.len())
+    }
+
     /// Read a journal, keeping the valid prefix and stopping at the first
     /// record that does not parse.
     ///
@@ -403,6 +461,63 @@ mod tests {
 
         CommandJournal::clear(&jpath).unwrap();
         assert!(CommandJournal::read_all(&jpath).unwrap().is_empty());
+    }
+
+    /// A side file's commands land *after* the marker the journal ends with,
+    /// so recovery replays them; the side file is gone afterwards; an absent
+    /// side file is a no-op.
+    #[test]
+    fn absorbing_a_side_file_puts_its_commands_after_the_last_save_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = dir.path().join("commands.journal");
+        let side = dir.path().join("p.rstudio.journal-hold");
+
+        // A package journal as a save leaves it: an old command, then the
+        // marker for the snapshot that holds it.
+        let mut doc = Document::new(64, 64, "t");
+        let (old, _) = create("old");
+        old.apply(&mut doc).unwrap();
+        CommandJournal::append(&journal, &old).unwrap();
+        let snapshot = DocumentDigest::of(&rmp_serde::to_vec_named(&doc).unwrap());
+        CommandJournal::mark_saved(&journal, snapshot).unwrap();
+
+        // Two commands accepted while that save ran, journaled aside.
+        let (a, a_id) = create("during-1");
+        let (b, b_id) = create("during-2");
+        CommandJournal::append(&side, &a).unwrap();
+        CommandJournal::append(&side, &b).unwrap();
+
+        assert_eq!(CommandJournal::absorb(&side, &journal).unwrap(), 2);
+        assert!(!side.exists(), "the side file is consumed");
+
+        let recovery = CommandJournal::read(&journal).unwrap();
+        assert_eq!(recovery.commands().len(), 3);
+        assert_eq!(recovery.since_last_save().len(), 2, "after the marker");
+        let mut recovered = doc.clone();
+        assert_eq!(recovery.replay_onto(&mut recovered, snapshot).unwrap(), 2);
+        assert!(recovered.layers.get(a_id).is_some());
+        assert!(recovered.layers.get(b_id).is_some());
+
+        // Nothing to absorb is not an error, and changes nothing.
+        let before = std::fs::read(&journal).unwrap();
+        assert_eq!(CommandJournal::absorb(&side, &journal).unwrap(), 0);
+        assert_eq!(std::fs::read(&journal).unwrap(), before);
+    }
+
+    /// A marker in the side file is not carried: it would anchor recovery to
+    /// a snapshot this journal never described.
+    #[test]
+    fn absorbing_carries_commands_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = dir.path().join("commands.journal");
+        let side = dir.path().join("side");
+        let (a, _) = create("A");
+        CommandJournal::append(&side, &a).unwrap();
+        CommandJournal::mark_saved(&side, DocumentDigest::of(b"elsewhere")).unwrap();
+        assert_eq!(CommandJournal::absorb(&side, &journal).unwrap(), 1);
+        let recovery = CommandJournal::read(&journal).unwrap();
+        assert!(recovery.last_save().is_none());
+        assert_eq!(recovery.since_last_save().len(), 1);
     }
 
     #[test]

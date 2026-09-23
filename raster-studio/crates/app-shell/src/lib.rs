@@ -109,6 +109,7 @@ pub mod import;
 pub mod interaction_geometry;
 pub mod jobs;
 pub mod keymap;
+pub mod layer_ops;
 pub mod menu_bridge;
 pub mod placement;
 pub mod prefs;

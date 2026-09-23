@@ -6,6 +6,16 @@
 //! [`Command::SetLayerProperties`], which is what makes an entire style change
 //! a single undo step.
 //!
+//! # The Blending Options page
+//!
+//! Above the effect list sits one more page, the one Layer ▸ Layer Style ▸
+//! Blending Options… opens on: the layer's blend mode, opacity and fill
+//! opacity, which are layer fields rather than effects. They ride the same
+//! [`LayerPatch`] as the effect block, so a changed opacity and a new drop
+//! shadow confirmed together are still one undo step. Photopea's page also
+//! carries knockout and per-channel toggles; this engine has no such layer
+//! fields, so the page does not draw controls it could not honour.
+//!
 //! # About the preview
 //!
 //! The preview here is deliberately labelled *approximate*. There is no layer
@@ -22,8 +32,9 @@ use design::{
 use editor_core::{Command, LayerPatch};
 use egui::{vec2, Context, Rect, Sense};
 use layer_model::{
-    BevelEffect, ColorOverlayEffect, FillStyle, GlowEffect, GradientOverlayEffect, LayerEffects,
-    LayerId, PatternOverlayEffect, Rgba, SatinEffect, ShadowEffect, StrokeEffect, StrokePosition,
+    BevelEffect, BlendMode, ColorOverlayEffect, FillStyle, GlowEffect, GradientOverlayEffect,
+    LayerEffects, LayerId, PatternOverlayEffect, Rgba, SatinEffect, ShadowEffect, StrokeEffect,
+    StrokePosition,
 };
 
 use super::action::DialogAction;
@@ -33,7 +44,7 @@ use super::chrome::{
 };
 use super::color_edit::ColorEdit;
 use super::color_picker::ScreenSampler;
-use super::controls::{checkbox_row, combo, swatch};
+use super::controls::{checkbox_row, combo, numeric, swatch};
 use super::gradient_editor::{gradient_swatch, GradientEditorDialog};
 use super::{ids, sizes};
 
@@ -162,6 +173,36 @@ impl EffectKind {
     }
 }
 
+/// Which page the parameter panel shows: the layer's own blending fields, or
+/// one effect's parameters.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum StylePage {
+    /// Blend mode, opacity and fill opacity — the page Layer ▸ Layer Style ▸
+    /// Blending Options… opens on.
+    Blending,
+    /// One effect's parameter block.
+    Effect(EffectKind),
+}
+
+/// The layer's blending fields as the dialog edits them, in one place so the
+/// "did anything change" comparison is a single equality.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Blending {
+    mode: BlendMode,
+    opacity: f32,
+    fill_opacity: f32,
+}
+
+impl Default for Blending {
+    fn default() -> Self {
+        Self {
+            mode: BlendMode::Normal,
+            opacity: 1.0,
+            fill_opacity: 1.0,
+        }
+    }
+}
+
 /// Where a shadow lands, given the light's angle and the shadow's distance.
 ///
 /// `angle_deg` is the direction the light comes *from*, measured
@@ -183,6 +224,15 @@ pub struct LayerStyleDialog {
     layer_name: String,
     effects: LayerEffects,
     original: LayerEffects,
+    /// The layer's blend mode, opacity and fill as edited, and as they were
+    /// when the dialog opened — only a changed field rides the patch.
+    blending: Blending,
+    original_blending: Blending,
+    /// The page the parameter panel shows.
+    page: StylePage,
+    /// The effect the panel showed last (or shows now, when `page` is an
+    /// effect page). Kept apart from `page` so switching to Blending Options
+    /// and back lands on the effect the user was editing.
     selected: EffectKind,
     global_light_angle: f32,
     /// The nested colour picker, when a swatch has been clicked.
@@ -207,6 +257,9 @@ impl LayerStyleDialog {
             layer_name: layer_name.into(),
             effects: effects.clone(),
             original: effects,
+            blending: Blending::default(),
+            original_blending: Blending::default(),
+            page: StylePage::Effect(EffectKind::DropShadow),
             selected: EffectKind::DropShadow,
             global_light_angle,
             color_edit: ColorEdit::new(),
@@ -214,9 +267,65 @@ impl LayerStyleDialog {
         }
     }
 
+    /// Seed the Blending Options page with the layer's current blend mode,
+    /// opacity and fill opacity. These become the "unchanged" baseline: a
+    /// confirm carries a blending field only when it moved from here.
+    pub fn with_blending(mut self, mode: BlendMode, opacity: f32, fill_opacity: f32) -> Self {
+        let blending = Blending {
+            mode,
+            opacity: clamp_unit(opacity),
+            fill_opacity: clamp_unit(fill_opacity),
+        };
+        self.blending = blending;
+        self.original_blending = blending;
+        self
+    }
+
     /// The layer being styled.
     pub fn layer(&self) -> LayerId {
         self.layer
+    }
+
+    /// The page the parameter panel shows.
+    pub fn page(&self) -> StylePage {
+        self.page
+    }
+
+    /// Show the Blending Options page.
+    pub fn show_blending(&mut self) {
+        self.page = StylePage::Blending;
+    }
+
+    /// The blend mode the Blending Options page holds.
+    pub fn blend_mode(&self) -> BlendMode {
+        self.blending.mode
+    }
+
+    /// Set the layer's blend mode.
+    pub fn set_blend_mode(&mut self, mode: BlendMode) {
+        self.blending.mode = mode;
+    }
+
+    /// The layer opacity the Blending Options page holds, `0..=1`.
+    pub fn opacity(&self) -> f32 {
+        self.blending.opacity
+    }
+
+    /// Set the layer opacity. Clamped to `0..=1`, the range
+    /// [`LayerPatch::validate`] accepts, so the dialog can never confirm a
+    /// value the command would refuse.
+    pub fn set_opacity(&mut self, opacity: f32) {
+        self.blending.opacity = clamp_unit(opacity);
+    }
+
+    /// The fill opacity the Blending Options page holds, `0..=1`.
+    pub fn fill_opacity(&self) -> f32 {
+        self.blending.fill_opacity
+    }
+
+    /// Set the layer's fill opacity. Clamped like [`Self::set_opacity`].
+    pub fn set_fill_opacity(&mut self, fill_opacity: f32) {
+        self.blending.fill_opacity = clamp_unit(fill_opacity);
     }
 
     /// The effect block as edited.
@@ -234,9 +343,11 @@ impl LayerStyleDialog {
         self.selected
     }
 
-    /// Show a different effect's parameters.
+    /// Show a different effect's parameters (leaving the Blending Options
+    /// page, if that is what was showing).
     pub fn select(&mut self, kind: EffectKind) {
         self.selected = kind;
+        self.page = StylePage::Effect(kind);
     }
 
     /// Whether `kind` is switched on.
@@ -284,9 +395,10 @@ impl LayerStyleDialog {
         }
     }
 
-    /// Whether anything has changed since the dialog opened.
+    /// Whether anything has changed since the dialog opened — an effect or
+    /// one of the blending fields.
     pub fn is_modified(&self) -> bool {
-        self.effects != self.original
+        self.effects != self.original || self.blending != self.original_blending
     }
 
     /// Drop every effect.
@@ -537,6 +649,18 @@ impl LayerStyleDialog {
     }
 
     fn effect_list(&mut self, ui: &mut egui::Ui) {
+        // The layer's own blending fields come first, as Photopea lists them:
+        // they are not an effect, so the row has no enable checkbox.
+        if design::list_row(
+            ui,
+            crate::strings::tr("ui.layer_style.blending.options"),
+            self.page == StylePage::Blending,
+        )
+        .clicked()
+        {
+            self.show_blending();
+        }
+        ui.add_space(Space::XSmall.pt());
         design::section_header(ui, "Effects");
         let mut master = self.effects.enabled;
         if checkbox_row(
@@ -555,7 +679,9 @@ impl LayerStyleDialog {
                 if checkbox_row(ui, "", &mut on).changed() {
                     self.set_enabled(kind, on);
                 }
-                if design::list_row(ui, kind.label(), self.selected == kind).clicked() {
+                if design::list_row(ui, kind.label(), self.page == StylePage::Effect(kind))
+                    .clicked()
+                {
                     self.select(kind);
                 }
             });
@@ -575,7 +701,13 @@ impl LayerStyleDialog {
     }
 
     fn parameters(&mut self, ui: &mut egui::Ui) {
-        let kind = self.selected;
+        let kind = match self.page {
+            StylePage::Blending => {
+                self.blending_params(ui);
+                return;
+            }
+            StylePage::Effect(kind) => kind,
+        };
         design::section_header(ui, kind.label());
         if !self.is_enabled(kind) {
             caption(
@@ -720,6 +852,60 @@ impl LayerStyleDialog {
         }
     }
 
+    /// The Blending Options page: blend mode, opacity and fill opacity.
+    ///
+    /// Each control is registered under its stable [`ids`] id so a test can
+    /// see the page was drawn — the mode combo and the two numeric fields
+    /// take an egui-allocated id of their own, which nothing outside this
+    /// frame can look up.
+    fn blending_params(&mut self, ui: &mut egui::Ui) {
+        design::section_header(ui, crate::strings::tr("ui.layer_style.blending.options"));
+        design::inspector_field(
+            ui,
+            crate::strings::tr("ui.layer_style.blending.mode"),
+            |ui| {
+                let mut mode = self.blending.mode;
+                let before = ui.cursor().min;
+                if combo(
+                    ui,
+                    ids::blending_mode(),
+                    &mut mode,
+                    &BlendMode::ALL,
+                    |m| m.label().to_string(),
+                    |_| None,
+                ) {
+                    self.set_blend_mode(mode);
+                }
+                tag(ui, before, ids::blending_mode());
+            },
+        );
+        design::inspector_field(
+            ui,
+            crate::strings::tr("ui.layer_style.blending.opacity"),
+            |ui| {
+                let mut percent = f64::from(self.blending.opacity) * 100.0;
+                let response = numeric(ui, &mut percent, 0.0..=100.0, 0, "%");
+                if response.changed() {
+                    self.set_opacity((percent / 100.0) as f32);
+                }
+                tag(ui, response.rect.min, ids::blending_opacity());
+            },
+        );
+        design::inspector_field(
+            ui,
+            crate::strings::tr("ui.layer_style.blending.fill"),
+            |ui| {
+                let mut percent = f64::from(self.blending.fill_opacity) * 100.0;
+                let response = numeric(ui, &mut percent, 0.0..=100.0, 0, "%");
+                if response.changed() {
+                    self.set_fill_opacity((percent / 100.0) as f32);
+                }
+                tag(ui, response.rect.min, ids::blending_fill());
+            },
+        );
+        caption(ui, crate::strings::tr("ui.layer_style.blending.caption"));
+    }
+
     /// A schematic of the style: the layer silhouette with the effects that
     /// have a screen-space geometry drawn around it.
     fn preview(&mut self, ui: &mut egui::Ui) {
@@ -770,6 +956,9 @@ impl LayerStyleDialog {
             } else {
                 color32(t.palette.color(ColorRole::TextPrimary))
             };
+            // The layer opacity scales the silhouette the way it scales the
+            // layer: a 40% layer previews at 40%.
+            let base = base.gamma_multiply(self.blending.opacity);
             ui.painter()
                 .rect_filled(shape, rounding(shape_radius), base);
 
@@ -921,6 +1110,28 @@ fn set_solid_fill(glow: Option<&mut GlowEffect>, rgba: Rgba) -> bool {
     }
 }
 
+/// Register `id` as a zero-sized marker at `at`, so the control drawn there
+/// can be found from a test through [`egui::Context::read_response`]. A
+/// zero-sized hover-only widget contains no pointer position, so it takes no
+/// click and no hover from the control it marks.
+fn tag(ui: &mut egui::Ui, at: egui::Pos2, id: egui::Id) {
+    let _ = ui.interact(
+        Rect::from_min_size(at, egui::Vec2::ZERO),
+        id,
+        Sense::hover(),
+    );
+}
+
+/// `value` held to the `0..=1` the layer commands accept; a NaN becomes fully
+/// opaque rather than a value [`LayerPatch::validate`] would refuse.
+fn clamp_unit(value: f32) -> f32 {
+    if value.is_nan() {
+        1.0
+    } else {
+        value.clamp(0.0, 1.0)
+    }
+}
+
 fn with_alpha(color: Rgba, opacity: f32) -> egui::Color32 {
     super::controls::color_of([
         color[0],
@@ -939,12 +1150,21 @@ impl Dialog for LayerStyleDialog {
         crate::strings::tr("ui.layer_style.apply.style")
     }
 
+    /// One command for the whole dialog: the effect block always, and each
+    /// blending field only when it moved — so an untouched opacity is not
+    /// re-written (and a style-only change stays a style-only patch).
     fn confirm(&self) -> Option<DialogAction> {
+        let now = self.blending;
+        let was = self.original_blending;
+        let moved = |now: f32, was: f32| (now != was).then_some(now);
         Some(DialogAction::Command(Box::new(
             Command::SetLayerProperties {
                 layer_id: self.layer,
                 patch: LayerPatch {
                     effects: Some(Box::new(self.effects.clone())),
+                    blend_mode: (now.mode != was.mode).then_some(now.mode),
+                    opacity: moved(now.opacity, was.opacity),
+                    fill_opacity: moved(now.fill_opacity, was.fill_opacity),
                     ..LayerPatch::default()
                 },
             },
@@ -1450,5 +1670,197 @@ mod tests {
             stored_color(&dialog, EffectKind::DropShadow).unwrap(),
             before
         );
+    }
+
+    // ---- W2-X: the Blending Options page ---------------------------------
+
+    /// The blending controls, as drawn on the last frame.
+    fn blending_drawn(h: &Harness) -> [bool; 3] {
+        [
+            h.was_drawn(crate::dialogs::ids::blending_mode()),
+            h.was_drawn(crate::dialogs::ids::blending_opacity()),
+            h.was_drawn(crate::dialogs::ids::blending_fill()),
+        ]
+    }
+
+    #[test]
+    fn the_dialog_opens_on_an_effect_page_and_show_blending_moves_it() {
+        let mut dialog = dialog();
+        assert_eq!(dialog.page(), StylePage::Effect(EffectKind::DropShadow));
+        dialog.show_blending();
+        assert_eq!(dialog.page(), StylePage::Blending);
+        // Choosing an effect leaves the page; the effect it lands on is the
+        // one asked for.
+        dialog.select(EffectKind::Stroke);
+        assert_eq!(dialog.page(), StylePage::Effect(EffectKind::Stroke));
+        assert_eq!(dialog.selected(), EffectKind::Stroke);
+    }
+
+    #[test]
+    fn the_blending_page_draws_mode_opacity_and_fill_and_the_effect_pages_do_not() {
+        // The defect this pins: Blending Options… opened this dialog on the
+        // Drop Shadow page, and there was no page with the layer's blend
+        // mode, opacity or fill anywhere in it.
+        let h = Harness::new();
+        let mut on_blending = dialog();
+        on_blending.show_blending();
+        h.frame(Vec::new(), |ctx| {
+            assert!(on_blending.show(ctx, None).is_open());
+        });
+        assert_eq!(
+            blending_drawn(&h),
+            [true, true, true],
+            "[mode, opacity, fill] on the Blending Options page"
+        );
+        // And not on any effect page — a control that is drawn where its
+        // page is not is the same defect the other way round.
+        for kind in EffectKind::ALL {
+            let h = Harness::new();
+            let mut dialog = dialog();
+            dialog.set_enabled(kind, true);
+            dialog.select(kind);
+            h.frame(Vec::new(), |ctx| {
+                dialog.show(ctx, None);
+            });
+            assert_eq!(blending_drawn(&h), [false; 3], "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn the_blending_page_draws_in_both_appearances() {
+        frame_both_themes(|ctx| {
+            let mut dialog = dialog().with_blending(BlendMode::Multiply, 0.4, 0.7);
+            dialog.show_blending();
+            assert!(dialog.show(ctx, None).is_open());
+        });
+    }
+
+    #[test]
+    fn with_blending_seeds_the_page_from_the_layer_and_counts_as_unchanged() {
+        let dialog = dialog().with_blending(BlendMode::Screen, 0.25, 0.5);
+        assert_eq!(dialog.blend_mode(), BlendMode::Screen);
+        assert_eq!(dialog.opacity(), 0.25);
+        assert_eq!(dialog.fill_opacity(), 0.5);
+        assert!(
+            !dialog.is_modified(),
+            "the layer's own values are not a change"
+        );
+        // Nothing moved, so nothing but the effects rides the patch.
+        match dialog.confirm() {
+            Some(DialogAction::Command(command)) => match *command {
+                Command::SetLayerProperties { patch, .. } => {
+                    assert!(patch.effects.is_some());
+                    assert!(patch.blend_mode.is_none());
+                    assert!(patch.opacity.is_none());
+                    assert!(patch.fill_opacity.is_none());
+                }
+                other => panic!("expected SetLayerProperties, got {other:?}"),
+            },
+            other => panic!("expected a command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_moved_blending_field_rides_the_one_command_with_the_effects() {
+        let mut dialog = dialog().with_blending(BlendMode::Normal, 1.0, 1.0);
+        dialog.set_enabled(EffectKind::Stroke, true);
+        dialog.set_opacity(0.4);
+        dialog.set_blend_mode(BlendMode::Multiply);
+        assert!(dialog.is_modified());
+        match dialog.confirm() {
+            Some(DialogAction::Command(command)) => match *command {
+                Command::SetLayerProperties { layer_id, patch } => {
+                    assert_eq!(layer_id, dialog.layer());
+                    // One patch, one undo step: the stroke and the opacity
+                    // and the mode arrive together.
+                    assert!(patch.effects.as_ref().unwrap().stroke.is_some());
+                    assert_eq!(patch.opacity, Some(0.4));
+                    assert_eq!(patch.blend_mode, Some(BlendMode::Multiply));
+                    // Fill was not touched, so it is not re-written.
+                    assert!(patch.fill_opacity.is_none());
+                    assert!(patch.name.is_none());
+                }
+                other => panic!("expected SetLayerProperties, got {other:?}"),
+            },
+            other => panic!("expected a command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn opacity_and_fill_are_held_to_the_range_the_command_accepts() {
+        let mut dialog = dialog();
+        dialog.set_opacity(1.7);
+        assert_eq!(dialog.opacity(), 1.0);
+        dialog.set_opacity(-0.2);
+        assert_eq!(dialog.opacity(), 0.0);
+        dialog.set_fill_opacity(f32::NAN);
+        assert_eq!(dialog.fill_opacity(), 1.0, "a NaN is not sent to validate");
+        dialog.set_fill_opacity(0.3);
+        assert_eq!(dialog.fill_opacity(), 0.3);
+        let seeded = LayerStyleDialog::new(LayerId::new(), "Headline", LayerEffects::default())
+            .with_blending(BlendMode::Normal, 2.0, -1.0);
+        assert_eq!((seeded.opacity(), seeded.fill_opacity()), (1.0, 0.0));
+    }
+
+    #[test]
+    fn clicking_the_blending_row_in_the_list_opens_the_page() {
+        // The row is the way in from inside the dialog: the parameter panel
+        // shows the page after the click, and the effect it left is the one
+        // a later effect click returns to.
+        let h = Harness::new();
+        let mut dialog = dialog();
+        dialog.select(EffectKind::Satin);
+        // Settle, then find the row by the text it draws: the list row is a
+        // design widget with no id of its own, so it is located by painting
+        // the frame and reading the label's rectangle back.
+        let label = crate::strings::tr("ui.layer_style.blending.options");
+        let mut row = None;
+        for _ in 0..Harness::STABLE_FRAMES + 2 {
+            row = painted_text_rect(&h, label, |ctx| {
+                dialog.show(ctx, None);
+            });
+        }
+        let at = row.expect("the Blending Options row was drawn").center();
+        h.frame(Harness::click_events(at), |ctx| {
+            dialog.show(ctx, None);
+        });
+        assert_eq!(
+            dialog.page(),
+            StylePage::Blending,
+            "the click did not open the page"
+        );
+        assert_eq!(
+            dialog.selected(),
+            EffectKind::Satin,
+            "the effect it left is remembered"
+        );
+    }
+
+    /// Run one quiet frame and return the rectangle of the first text shape
+    /// reading exactly `text`, read off what egui painted.
+    fn painted_text_rect(
+        h: &Harness,
+        text: &str,
+        draw: impl FnOnce(&egui::Context),
+    ) -> Option<Rect> {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, Harness::SCREEN)),
+            ..Default::default()
+        };
+        let mut draw = Some(draw);
+        let output = h.ctx.run(input, |ctx| {
+            if let Some(draw) = draw.take() {
+                draw(ctx);
+            }
+        });
+        output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(t) if t.galley.text() == text => {
+                    Some(Rect::from_min_size(t.pos, t.galley.size()))
+                }
+                _ => None,
+            })
     }
 }

@@ -14,10 +14,12 @@ use super::{body, hint, text};
 /// The strip along the bottom of the window.
 pub fn status_bar(w: &mut Workspace, ctx: &egui::Context, doc: &Document) {
     let t = design::current_theme(ctx).tokens();
+    // The header band, like the menu bar above it: the status strip is chrome,
+    // not a panel body.
     egui::TopBottomPanel::bottom("raster-status")
         .frame(
             egui::Frame::none()
-                .fill(color32(t.palette.color(ColorRole::SurfacePanel)))
+                .fill(color32(t.palette.color(ColorRole::SurfaceHeader)))
                 .inner_margin(egui::Margin::symmetric(
                     t.metrics.panel_padding,
                     Space::Hair.pt(),

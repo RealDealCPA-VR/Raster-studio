@@ -117,6 +117,25 @@ impl History {
         self.undone.last().map(|e| e.label.as_str())
     }
 
+    /// The command [`History::undo`] would apply next — the recorded inverse
+    /// of the most recent edit — without applying it.
+    ///
+    /// This is how a caller learns the *reach* of an undo before it happens
+    /// ([`Command::dirty_reach`]): the inverse names the layers and tiles it
+    /// will touch, and their on-canvas extent has to be read before the
+    /// document changes as well as after, or a moved layer's old position is
+    /// never redrawn. `None` when there is nothing to undo.
+    pub fn peek_undo(&self) -> Option<&Command> {
+        self.done.last().map(|e| &e.inverse)
+    }
+
+    /// The command [`History::redo`] would apply next — the forward command
+    /// of the most recently undone edit — without applying it. `None` when
+    /// there is nothing to redo. See [`History::peek_undo`].
+    pub fn peek_redo(&self) -> Option<&Command> {
+        self.undone.last().map(|e| &e.forward)
+    }
+
     /// Forget every recorded edit. The document is left exactly as it is; only
     /// the ability to undo is dropped.
     pub fn clear(&mut self) {
@@ -508,6 +527,51 @@ mod tests {
         doc.mark_saved();
         hist.redo(&mut doc).unwrap();
         assert!(doc.is_dirty());
+    }
+
+    /// The peek is what lets the shell invalidate only what an undo or redo
+    /// will touch: it must name exactly the command the next undo (redo)
+    /// applies, and must not itself move anything.
+    #[test]
+    fn peeking_names_the_command_the_next_undo_or_redo_applies_without_applying_it() {
+        let (mut doc, id) = doc_with_layer();
+        let mut hist = History::new();
+        assert!(hist.peek_undo().is_none() && hist.peek_redo().is_none());
+
+        let paint = Command::paint_tiles(
+            PixelTarget::Layer(id),
+            [TileEdit::set(coord(2, 1), hash(1))],
+        )
+        .unwrap();
+        hist.apply(&mut doc, paint.clone()).unwrap();
+        let before = doc.clone();
+
+        // The inverse of a paint is a paint of the same tiles with the old
+        // hashes: the peek hands back exactly that, and the document is
+        // untouched by the question.
+        let inverse = hist.peek_undo().expect("one step to undo").clone();
+        assert_eq!(doc, before, "peeking applied something");
+        assert!(
+            matches!(&inverse, Command::PaintTiles { target, delta }
+                if *target == PixelTarget::Layer(id)
+                    && delta.iter().map(|e| e.coord).collect::<Vec<_>>() == vec![coord(2, 1)]
+                    && delta.iter().all(|e| e.hash.is_none())),
+            "the peeked inverse is not the recorded one: {inverse:?}"
+        );
+        assert_eq!(inverse.dirty_reach(), paint.dirty_reach());
+        assert!(hist.peek_redo().is_none());
+
+        // After the undo, the redo peek is the forward command, byte for byte.
+        assert!(hist.undo(&mut doc).unwrap());
+        assert!(hist.peek_undo().is_none());
+        let forward = hist.peek_redo().expect("one step to redo");
+        assert_eq!(*forward, paint);
+
+        // And a redo puts the inverse back under the undo peek — the inverse
+        // captured by *that* redo, not the original one.
+        assert!(hist.redo(&mut doc).unwrap());
+        assert_eq!(hist.peek_undo(), Some(&inverse));
+        assert!(hist.peek_redo().is_none());
     }
 
     #[test]

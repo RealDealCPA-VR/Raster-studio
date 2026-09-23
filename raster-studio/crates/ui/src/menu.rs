@@ -24,7 +24,7 @@
 //! the [`MenuAction`] itself: still an enumerable value a test can assert on,
 //! just performed elsewhere.
 
-use editor_core::{Command, Document, History, LayerPatch, Patch};
+use editor_core::{Command, Document, Guides, History, LayerPatch, Patch};
 use layer_model::{
     AdjustmentKind, AdjustmentLayer, ClippingMode, Layer, LayerId, LayerKind, LockState,
 };
@@ -826,6 +826,9 @@ pub enum ZoomCommand {
     /// nothing selected.
     ToSelection,
     PrintSize,
+    /// View ▸ 200%: two document pixels per screen pixel, an absolute zoom
+    /// like [`ZoomCommand::ActualPixels`] rather than a step.
+    Double,
 }
 
 impl ZoomCommand {
@@ -835,6 +838,7 @@ impl ZoomCommand {
         ZoomCommand::FitOnScreen,
         ZoomCommand::FillScreen,
         ZoomCommand::ActualPixels,
+        ZoomCommand::Double,
         ZoomCommand::ToSelection,
         ZoomCommand::PrintSize,
     ];
@@ -846,6 +850,7 @@ impl ZoomCommand {
             ZoomCommand::FitOnScreen => "Fit on Screen",
             ZoomCommand::FillScreen => "Fill Screen",
             ZoomCommand::ActualPixels => "100%",
+            ZoomCommand::Double => "200%",
             ZoomCommand::ToSelection => "Zoom to Selection",
             ZoomCommand::PrintSize => "Print Size",
         }
@@ -860,8 +865,127 @@ impl ZoomCommand {
             ZoomCommand::FillScreen => Shortcut::ctrl_shift('0'),
             ZoomCommand::ActualPixels => Shortcut::ctrl('1'),
             ZoomCommand::ToSelection => Shortcut::ctrl_alt('0'),
-            ZoomCommand::PrintSize => return None,
+            ZoomCommand::PrintSize | ZoomCommand::Double => return None,
         })
+    }
+}
+
+/// Which canvas (or selection) edge Layer ▸ Align moves the layers to.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub enum AlignEdge {
+    Left,
+    HorizontalCenter,
+    Right,
+    Top,
+    VerticalCenter,
+    Bottom,
+}
+
+impl AlignEdge {
+    pub const ALL: &'static [AlignEdge] = &[
+        AlignEdge::Top,
+        AlignEdge::VerticalCenter,
+        AlignEdge::Bottom,
+        AlignEdge::Left,
+        AlignEdge::HorizontalCenter,
+        AlignEdge::Right,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            AlignEdge::Left => "Left Edges",
+            AlignEdge::HorizontalCenter => "Horizontal Centers",
+            AlignEdge::Right => "Right Edges",
+            AlignEdge::Top => "Top Edges",
+            AlignEdge::VerticalCenter => "Vertical Centers",
+            AlignEdge::Bottom => "Bottom Edges",
+        }
+    }
+
+    /// Whether the edge moves layers along x (`true`) or y.
+    pub const fn is_horizontal(self) -> bool {
+        matches!(
+            self,
+            AlignEdge::Left | AlignEdge::HorizontalCenter | AlignEdge::Right
+        )
+    }
+}
+
+/// Which axis Layer ▸ Distribute spaces the selected layers along.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub enum DistributeAxis {
+    Horizontal,
+    Vertical,
+}
+
+impl DistributeAxis {
+    pub const ALL: &'static [DistributeAxis] =
+        &[DistributeAxis::Vertical, DistributeAxis::Horizontal];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            DistributeAxis::Horizontal => "Horizontally",
+            DistributeAxis::Vertical => "Vertically",
+        }
+    }
+}
+
+/// One of the four lock flags on a layer — Layer ▸ Lock ▸ ….
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub enum LayerLock {
+    Pixels,
+    Position,
+    Transparency,
+    All,
+}
+
+impl LayerLock {
+    pub const ALL: &'static [LayerLock] = &[
+        LayerLock::Transparency,
+        LayerLock::Pixels,
+        LayerLock::Position,
+        LayerLock::All,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            LayerLock::Pixels => "Lock Image Pixels",
+            LayerLock::Position => "Lock Position",
+            LayerLock::Transparency => "Lock Transparent Pixels",
+            LayerLock::All => "Lock All",
+        }
+    }
+
+    /// Whether this flag is set in `state`.
+    pub const fn is_set(self, state: LockState) -> bool {
+        match self {
+            LayerLock::Pixels => state.pixels,
+            LayerLock::Position => state.position,
+            LayerLock::Transparency => state.transparency,
+            LayerLock::All => state.all,
+        }
+    }
+
+    /// `state` with this flag flipped.
+    pub const fn toggled(self, state: LockState) -> LockState {
+        match self {
+            LayerLock::Pixels => LockState {
+                pixels: !state.pixels,
+                ..state
+            },
+            LayerLock::Position => LockState {
+                position: !state.position,
+                ..state
+            },
+            LayerLock::Transparency => LockState {
+                transparency: !state.transparency,
+                ..state
+            },
+            LayerLock::All => LockState {
+                all: !state.all,
+                ..state
+            },
+        }
     }
 }
 
@@ -886,6 +1010,9 @@ pub enum MenuAction {
     CloseOthers,
     Save,
     SaveAs,
+    /// File ▸ Save as PSD…: the layered PSD writer behind a `.psd` picker.
+    /// Separate from [`MenuAction::Export`], whose formats are all flat.
+    SaveAsPsd,
     Export(ExportFormat),
     ExportLayers,
     PlaceEmbedded,
@@ -897,6 +1024,10 @@ pub enum MenuAction {
     // ---- Edit ----------------------------------------------------------
     Undo,
     Redo,
+    /// Edit ▸ Step Forward: Photoshop's alias for redo, drawn as its own row.
+    StepForward,
+    /// Edit ▸ Step Backward: Photoshop's alias for undo, drawn as its own row.
+    StepBackward,
     Cut,
     Copy,
     CopyMerged,
@@ -986,6 +1117,20 @@ pub enum MenuAction {
     MergeVisible,
     FlattenImage,
     ToggleLayerVisibility,
+    /// Layer ▸ Align ▸ …: move the selected layers so the named edge meets the
+    /// selection's (when there is one) or the canvas's. One undoable step.
+    AlignLayers(AlignEdge),
+    /// Layer ▸ Distribute ▸ …: space three or more selected layers evenly
+    /// between the outermost two. One undoable step.
+    DistributeLayers(DistributeAxis),
+    /// Layer ▸ Lock ▸ …: flip one lock flag on the active layer. Resolves
+    /// straight to a [`Command::SetLayerProperties`].
+    LockLayer(LayerLock),
+    /// Layer ▸ Rename Layer…: a name dialog over the active layer.
+    RenameLayer,
+    /// Layer ▸ Stamp Visible: composite every visible layer into a new layer
+    /// above the active one. Ctrl+Alt+Shift+E.
+    StampVisible,
 
     // ---- Select --------------------------------------------------------
     SelectAll,
@@ -1010,6 +1155,10 @@ pub enum MenuAction {
     /// scratch mask instead of the layer, and leaving converts that painted
     /// coverage into the document selection. `Q`.
     ToggleQuickMask,
+    /// Select ▸ Refine Edge…: the Refine Mask pipeline run over the selection
+    /// itself (selection → temporary coverage → dialog → selection), so it
+    /// needs no layer mask. Lands as one [`Command::SetSelection`].
+    RefineEdge,
 
     // ---- Filter --------------------------------------------------------
     LastFilter,
@@ -1025,6 +1174,15 @@ pub enum MenuAction {
     ResetViewRotation,
     /// Choose the unit the rulers and the readouts measure in.
     SetRulerUnit(crate::dialogs::units::Unit),
+    /// View ▸ New Guide…: orientation and position, appended to the
+    /// document's guide set as one [`Command::SetGuides`].
+    NewGuide,
+    /// View ▸ Clear Guides: empty the document's guide set. Disabled, with a
+    /// reason, when there are none.
+    ClearGuides,
+    /// View ▸ Lock Guides: flip the document-level guide lock the canvas drag
+    /// code honours (`ui::canvas` refuses to drag a guide while it is on).
+    LockGuides,
 
     // ---- Window --------------------------------------------------------
     ApplyLayout(LayoutId),
@@ -1217,6 +1375,10 @@ pub struct MenuContext {
     pub ruler_unit: crate::dialogs::units::Unit,
     pub dock: DockState,
     pub theme: design::Theme,
+    /// The document's guide set, so View ▸ Clear Guides can say "there are
+    /// none" and Lock Guides can both tick and flip the document-level lock
+    /// without losing the guides themselves.
+    pub guides: Guides,
 }
 
 impl Default for MenuContext {
@@ -1247,6 +1409,7 @@ impl Default for MenuContext {
             ruler_unit: crate::dialogs::units::Unit::Pixels,
             dock: DockState::default(),
             theme: design::Theme::default(),
+            guides: Guides::default(),
         }
     }
 }
@@ -1275,8 +1438,14 @@ impl MenuContext {
             // `Selection::is_empty`.
             has_selection: doc.selection.bounds().is_some(),
             layer_count: doc.layers.len(),
-            selected_layers: usize::from(active.is_some()),
+            // The document's multi-selection set, never smaller than the
+            // active cursor: Distribute needs three, Align moves the set.
+            selected_layers: doc
+                .layer_selection()
+                .len()
+                .max(usize::from(active.is_some())),
             active,
+            guides: doc.guides.clone(),
             // The Image ▸ Mode items read the document's own mode: the current
             // mode's item is disabled as a no-op, and the meta's u8 maps onto
             // the ui enum's discriminants (0 = RGB, 1 = Grayscale).
@@ -1352,22 +1521,6 @@ fn cmd(command: Command) -> Resolution {
     Resolution::Enabled(Intent::Document(command))
 }
 
-/// Put the Properties panel in front of the user, or say it is already there.
-///
-/// The panel *is* the editor for a layer's blending and for an adjustment
-/// layer's parameters, so the two menu items that name those are requests to
-/// reveal it. Absolute (`open: true`), which is what [`crate::Intent`] requires
-/// of anything the workspace absorbs.
-fn reveal_properties(ctx: &MenuContext, already: &'static str) -> Resolution {
-    gate(
-        ctx.dock.is_open(PanelId::Properties).then_some(already),
-        Resolution::Enabled(Intent::SetPanelOpen {
-            panel: PanelId::Properties,
-            open: true,
-        }),
-    )
-}
-
 fn gate(reason: Option<&'static str>, resolution: Resolution) -> Resolution {
     match reason {
         Some(r) => Resolution::Disabled(r),
@@ -1399,7 +1552,7 @@ impl MenuAction {
             MenuAction::CloseOthers,
             MenuAction::CloseAll,
         ]);
-        out.extend([MenuAction::Save, MenuAction::SaveAs]);
+        out.extend([MenuAction::Save, MenuAction::SaveAs, MenuAction::SaveAsPsd]);
         out.extend(ExportFormat::ALL.iter().copied().map(MenuAction::Export));
         out.extend([
             MenuAction::ExportLayers,
@@ -1411,6 +1564,8 @@ impl MenuAction {
             // ---- Edit ----
             MenuAction::Undo,
             MenuAction::Redo,
+            MenuAction::StepForward,
+            MenuAction::StepBackward,
             MenuAction::Cut,
             MenuAction::Copy,
             MenuAction::CopyMerged,
@@ -1509,6 +1664,18 @@ impl MenuAction {
             MenuAction::FlattenImage,
             // Emitted by the Layers panel's eye, and by no menu at all.
             MenuAction::ToggleLayerVisibility,
+        ]);
+        out.extend(AlignEdge::ALL.iter().copied().map(MenuAction::AlignLayers));
+        out.extend(
+            DistributeAxis::ALL
+                .iter()
+                .copied()
+                .map(MenuAction::DistributeLayers),
+        );
+        out.extend(LayerLock::ALL.iter().copied().map(MenuAction::LockLayer));
+        out.extend([
+            MenuAction::RenameLayer,
+            MenuAction::StampVisible,
             // ---- Select ----
             MenuAction::SelectAll,
             MenuAction::Deselect,
@@ -1527,6 +1694,7 @@ impl MenuAction {
             MenuAction::SaveSelection,
             MenuAction::LoadSelection,
             MenuAction::ToggleQuickMask,
+            MenuAction::RefineEdge,
             // ---- Filter ----
             MenuAction::LastFilter,
             MenuAction::FilterGallery,
@@ -1542,6 +1710,11 @@ impl MenuAction {
                 .map(MenuAction::SetRulerUnit),
         );
         out.extend(ViewFlag::ALL.iter().copied().map(MenuAction::ToggleView));
+        out.extend([
+            MenuAction::NewGuide,
+            MenuAction::ClearGuides,
+            MenuAction::LockGuides,
+        ]);
         // ---- Window ----
         out.extend(LayoutId::ALL.iter().copied().map(MenuAction::ApplyLayout));
         out.extend(PanelId::ALL.iter().copied().map(MenuAction::TogglePanel));
@@ -1568,6 +1741,7 @@ impl MenuAction {
             MenuAction::CloseOthers => "Close Others".into(),
             MenuAction::Save => "Save".into(),
             MenuAction::SaveAs => "Save As…".into(),
+            MenuAction::SaveAsPsd => "Save as PSD…".into(),
             MenuAction::Export(f) => format!("{}…", f.extension().to_uppercase()),
             MenuAction::ExportLayers => "Export Layers…".into(),
             MenuAction::PlaceEmbedded => "Place Embedded…".into(),
@@ -1578,6 +1752,8 @@ impl MenuAction {
 
             MenuAction::Undo => "Undo".into(),
             MenuAction::Redo => "Redo".into(),
+            MenuAction::StepForward => "Step Forward".into(),
+            MenuAction::StepBackward => "Step Backward".into(),
             MenuAction::Cut => "Cut".into(),
             MenuAction::Copy => "Copy".into(),
             MenuAction::CopyMerged => "Copy Merged".into(),
@@ -1604,7 +1780,8 @@ impl MenuAction {
             MenuAction::CropToSelection => "Crop".into(),
             MenuAction::Trim => "Trim…".into(),
             MenuAction::RevealAll => "Reveal All".into(),
-            MenuAction::DuplicateDocument => "Duplicate…".into(),
+            // No ellipsis: the duplicate is made at once, nothing is asked.
+            MenuAction::DuplicateDocument => "Duplicate".into(),
 
             MenuAction::NewLayer => "Layer".into(),
             MenuAction::NewGroup => "Group".into(),
@@ -1612,6 +1789,8 @@ impl MenuAction {
             MenuAction::NewAdjustmentLayer(a) => a.label().into(),
             MenuAction::LayerViaCopy => "Layer via Copy".into(),
             MenuAction::LayerViaCut => "Layer via Cut".into(),
+            // W2-F: the ellipsis is earned — the row asks for the copy's name
+            // (Photoshop's dialog, opening at "<name> copy") before it copies.
             MenuAction::DuplicateLayer => "Duplicate Layer…".into(),
             MenuAction::DeleteLayer => "Delete Layer".into(),
             MenuAction::Mask(m) => m.label().into(),
@@ -1633,6 +1812,11 @@ impl MenuAction {
             MenuAction::MergeVisible => "Merge Visible".into(),
             MenuAction::FlattenImage => "Flatten Image".into(),
             MenuAction::ToggleLayerVisibility => "Show / Hide Layer".into(),
+            MenuAction::AlignLayers(edge) => edge.label().into(),
+            MenuAction::DistributeLayers(axis) => axis.label().into(),
+            MenuAction::LockLayer(lock) => lock.label().into(),
+            MenuAction::RenameLayer => "Rename Layer…".into(),
+            MenuAction::StampVisible => "Stamp Visible".into(),
 
             MenuAction::SelectAll => "All".into(),
             MenuAction::Deselect => "Deselect".into(),
@@ -1649,6 +1833,7 @@ impl MenuAction {
             MenuAction::SaveSelection => "Save Selection…".into(),
             MenuAction::LoadSelection => "Load Selection…".into(),
             MenuAction::ToggleQuickMask => "Edit in Quick Mask Mode".into(),
+            MenuAction::RefineEdge => "Refine Edge…".into(),
 
             MenuAction::LastFilter => "Last Filter".into(),
             MenuAction::FilterGallery => "Filter Gallery…".into(),
@@ -1664,6 +1849,9 @@ impl MenuAction {
             MenuAction::ToggleView(f) => f.label().into(),
             MenuAction::ResetViewRotation => "Reset View Rotation".into(),
             MenuAction::SetRulerUnit(unit) => unit.label().into(),
+            MenuAction::NewGuide => "New Guide…".into(),
+            MenuAction::ClearGuides => "Clear Guides".into(),
+            MenuAction::LockGuides => "Lock Guides".into(),
 
             MenuAction::ApplyLayout(l) => l.title().into(),
             MenuAction::TogglePanel(p) => p.title().into(),
@@ -1740,7 +1928,11 @@ impl MenuAction {
             MenuAction::ArrangeLayer(a) => a.shortcut(),
             MenuAction::MergeDown => Shortcut::ctrl('e'),
             MenuAction::MergeVisible => Shortcut::ctrl_shift('e'),
-
+            MenuAction::StampVisible => Shortcut::ctrl_alt_shift('e'),
+            // Step Forward/Backward paint no chord: the application keymap
+            // already binds Ctrl+Shift+Z and Ctrl+Alt+Z to Redo/Undo, whose
+            // menu twins are the Undo/Redo rows, and a chord painted beside
+            // two rows is what `no_two_painted_menu_chords_disagree` refuses.
             MenuAction::SelectAll => Shortcut::ctrl('a'),
             MenuAction::Deselect => Shortcut::ctrl('d'),
             MenuAction::Reselect => Shortcut::ctrl_shift('d'),
@@ -1780,6 +1972,8 @@ impl MenuAction {
             MenuAction::SetColorMode(mode) => ctx.color_mode == mode,
             MenuAction::SetRulerUnit(unit) => ctx.ruler_unit == unit,
             MenuAction::ToggleLayerVisibility => ctx.active.map(|l| l.visible)?,
+            MenuAction::LockLayer(lock) => lock.is_set(ctx.active?.locked),
+            MenuAction::LockGuides => ctx.guides.locked,
             _ => return None,
         })
     }
@@ -1804,6 +1998,7 @@ impl MenuAction {
             | MenuAction::PlaceLinked
             | MenuAction::FileInfo
             | MenuAction::Print
+            | MenuAction::SaveAsPsd
             | MenuAction::DuplicateDocument => gate(ctx.need_document(), act(self)),
             MenuAction::CloseAll => gate(
                 (ctx.open_documents == 0).then_some("No document is open"),
@@ -1816,8 +2011,12 @@ impl MenuAction {
             MenuAction::Export(_) => gate(ctx.need_document(), act(self)),
 
             // ---- Edit ------------------------------------------------------
-            MenuAction::Undo => gate((!ctx.can_undo).then_some("Nothing to undo"), act(self)),
-            MenuAction::Redo => gate((!ctx.can_redo).then_some("Nothing to redo"), act(self)),
+            MenuAction::Undo | MenuAction::StepBackward => {
+                gate((!ctx.can_undo).then_some("Nothing to undo"), act(self))
+            }
+            MenuAction::Redo | MenuAction::StepForward => {
+                gate((!ctx.can_redo).then_some("Nothing to redo"), act(self))
+            }
             MenuAction::Copy | MenuAction::CopyMerged => match ctx.need_pixel_layer() {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
@@ -1970,12 +2169,11 @@ impl MenuAction {
                 }),
                 Err(r) => Resolution::Disabled(r),
             },
+            // Photopea's Blending Options… opens the Layer Style dialog; the
+            // chrome's dialog host opens it for this action, the same way it
+            // does for every `LayerStyle(_)` row.
             MenuAction::BlendingOptions => match ctx.need_layer() {
-                Ok(_) => reveal_properties(
-                    ctx,
-                    "The Properties panel is already open; blending mode and \
-                     opacity are there",
-                ),
+                Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
             },
             MenuAction::LayerStyle(_) => match ctx.need_layer() {
@@ -2047,6 +2245,43 @@ impl MenuAction {
                     .or((ctx.layer_count < 2).then_some("There is only one layer")),
                 act(self),
             ),
+            // Align moves the selected layers, so a position lock on the
+            // active one refuses it the way Free Transform is refused.
+            MenuAction::AlignLayers(_) => match ctx.need_layer() {
+                Ok(l) if l.locked.blocks_transform() => {
+                    Resolution::Disabled("The layer's position is locked")
+                }
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::DistributeLayers(_) => gate(
+                ctx.need_document()
+                    .or((ctx.selected_layers < 3).then_some("Select three or more layers")),
+                act(self),
+            ),
+            // A lock flag is one property patch; `LockState::all` refuses
+            // every other patch, but a patch that touches only `locked` is
+            // the one it allows, which is how a lock is released.
+            MenuAction::LockLayer(lock) => match ctx.need_layer() {
+                Ok(l) => cmd(Command::SetLayerProperties {
+                    layer_id: l.id,
+                    patch: LayerPatch {
+                        locked: Some(lock.toggled(l.locked)),
+                        ..Default::default()
+                    },
+                }),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::RenameLayer => match ctx.need_layer() {
+                Ok(l) if l.locked.all => Resolution::Disabled("The layer is locked"),
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::StampVisible => gate(
+                ctx.need_document()
+                    .or((ctx.layer_count == 0).then_some("The document has no layers")),
+                act(self),
+            ),
 
             // ---- Select ----------------------------------------------------
             MenuAction::SelectAll | MenuAction::ColorRange => gate(ctx.need_document(), act(self)),
@@ -2066,6 +2301,7 @@ impl MenuAction {
                 act(self),
             ),
             MenuAction::ToggleQuickMask => gate(ctx.need_document(), act(self)),
+            MenuAction::RefineEdge => gate(ctx.need_selection(), act(self)),
             MenuAction::SelectAllLayers => gate(
                 ctx.need_document()
                     .or((ctx.layer_count == 0).then_some("The document has no layers")),
@@ -2167,6 +2403,29 @@ impl MenuAction {
                 Resolution::Enabled(Intent::SetViewFlag {
                     flag,
                     on: !ctx.view.get(flag),
+                }),
+            ),
+            MenuAction::NewGuide => gate(ctx.need_document(), act(self)),
+            MenuAction::ClearGuides => gate(
+                ctx.need_document().or(ctx
+                    .guides
+                    .list
+                    .is_empty()
+                    .then_some("There are no guides to clear")),
+                cmd(Command::SetGuides {
+                    guides: Guides {
+                        list: Vec::new(),
+                        ..ctx.guides.clone()
+                    },
+                }),
+            ),
+            MenuAction::LockGuides => gate(
+                ctx.need_document(),
+                cmd(Command::SetGuides {
+                    guides: Guides {
+                        locked: !ctx.guides.locked,
+                        ..ctx.guides.clone()
+                    },
                 }),
             ),
 
@@ -2366,6 +2625,7 @@ fn file_menu(recent_files: usize) -> Menu {
             Entry::Separator,
             item(MenuAction::Save),
             item(MenuAction::SaveAs),
+            item(MenuAction::SaveAsPsd),
             Entry::Separator,
             Entry::submenu(
                 "Export As",
@@ -2393,6 +2653,8 @@ fn edit_menu() -> Menu {
         entries: vec![
             item(MenuAction::Undo),
             item(MenuAction::Redo),
+            item(MenuAction::StepForward),
+            item(MenuAction::StepBackward),
             Entry::Separator,
             item(MenuAction::Cut),
             item(MenuAction::Copy),
@@ -2471,6 +2733,8 @@ fn layer_menu() -> Menu {
             item(MenuAction::EditAdjustmentLayer),
             item(MenuAction::DuplicateLayer),
             item(MenuAction::DeleteLayer),
+            item(MenuAction::RenameLayer),
+            Entry::submenu("Lock", items(LayerLock::ALL, MenuAction::LockLayer)),
             Entry::Separator,
             Entry::submenu("Layer Mask", items(MaskOp::ALL, MenuAction::Mask)),
             item(MenuAction::RefineMask),
@@ -2507,9 +2771,15 @@ fn layer_menu() -> Menu {
             item(MenuAction::GroupLayers),
             item(MenuAction::UngroupLayers),
             Entry::submenu("Arrange", items(Arrange::ALL, MenuAction::ArrangeLayer)),
+            Entry::submenu("Align", items(AlignEdge::ALL, MenuAction::AlignLayers)),
+            Entry::submenu(
+                "Distribute",
+                items(DistributeAxis::ALL, MenuAction::DistributeLayers),
+            ),
             Entry::Separator,
             item(MenuAction::MergeDown),
             item(MenuAction::MergeVisible),
+            item(MenuAction::StampVisible),
             item(MenuAction::FlattenImage),
         ],
     }
@@ -2536,6 +2806,7 @@ fn select_menu() -> Menu {
             Entry::submenu("Modify", items(ModifySelection::ALL, MenuAction::Modify)),
             item(MenuAction::GrowSelection),
             item(MenuAction::SimilarSelection),
+            item(MenuAction::RefineEdge),
             Entry::Separator,
             item(MenuAction::TransformSelection),
             Entry::Separator,
@@ -2581,6 +2852,13 @@ fn view_menu() -> Menu {
     ));
     entries.push(Entry::Separator);
     entries.extend(items(ViewFlag::ALL, MenuAction::ToggleView));
+    // Guides are a document feature (persisted, undoable through
+    // `Command::SetGuides`), so their rows sit beside the Guides overlay
+    // toggle rather than in a document menu.
+    entries.push(Entry::Separator);
+    entries.push(item(MenuAction::NewGuide));
+    entries.push(item(MenuAction::ClearGuides));
+    entries.push(item(MenuAction::LockGuides));
     Menu {
         title: "View",
         entries,
@@ -3404,12 +3682,15 @@ mod tests {
                 open: false,
             })
         );
+        // Actions is the one panel Essentials leaves closed (W2-D opened
+        // Paths, tabbed with Layers), so it is the closed side of the proof.
+        assert!(!ctx.dock.is_open(PanelId::Actions));
         assert_eq!(
-            MenuAction::TogglePanel(PanelId::Paths)
+            MenuAction::TogglePanel(PanelId::Actions)
                 .resolve(&ctx)
                 .intent(),
             Some(&Intent::SetPanelOpen {
-                panel: PanelId::Paths,
+                panel: PanelId::Actions,
                 open: true,
             })
         );
@@ -3707,6 +3988,216 @@ mod tests {
             })
             .collect();
         assert_eq!(listed, PanelId::ALL.iter().copied().collect::<HashSet<_>>());
+    }
+
+    // ---- W2-F: the rows the audit found missing ----------------------------
+
+    #[test]
+    fn the_w2f_rows_are_in_their_menus_with_their_labels() {
+        let by_title = |title: &str| -> Vec<MenuAction> {
+            menu_bar(0)
+                .into_iter()
+                .find(|m| m.title == title)
+                .unwrap_or_else(|| panic!("no {title} menu"))
+                .actions()
+        };
+        let file = by_title("File");
+        assert!(file.contains(&MenuAction::SaveAsPsd));
+        assert_eq!(MenuAction::SaveAsPsd.label(), "Save as PSD…");
+
+        let edit = by_title("Edit");
+        assert!(edit.contains(&MenuAction::StepForward));
+        assert!(edit.contains(&MenuAction::StepBackward));
+
+        let layer = by_title("Layer");
+        for edge in AlignEdge::ALL {
+            assert!(layer.contains(&MenuAction::AlignLayers(*edge)), "{edge:?}");
+        }
+        for axis in DistributeAxis::ALL {
+            assert!(
+                layer.contains(&MenuAction::DistributeLayers(*axis)),
+                "{axis:?}"
+            );
+        }
+        for lock in LayerLock::ALL {
+            assert!(layer.contains(&MenuAction::LockLayer(*lock)), "{lock:?}");
+        }
+        assert!(layer.contains(&MenuAction::RenameLayer));
+        assert!(layer.contains(&MenuAction::StampVisible));
+        assert_eq!(
+            MenuAction::StampVisible.shortcut(),
+            Some(Shortcut::ctrl_alt_shift('e'))
+        );
+        assert_eq!(
+            action_for_shortcut(Shortcut::ctrl_alt_shift('e'), 0),
+            Some(MenuAction::StampVisible)
+        );
+
+        let select = by_title("Select");
+        assert!(select.contains(&MenuAction::RefineEdge));
+
+        let view = by_title("View");
+        assert!(view.contains(&MenuAction::Zoom(ZoomCommand::Double)));
+        assert_eq!(MenuAction::Zoom(ZoomCommand::Double).label(), "200%");
+        assert!(view.contains(&MenuAction::NewGuide));
+        assert!(view.contains(&MenuAction::ClearGuides));
+        assert!(view.contains(&MenuAction::LockGuides));
+
+        // Trim keeps its ellipsis (it opens a dialog now); Image ▸ Duplicate
+        // loses its false one because nothing is asked. Duplicate Layer keeps
+        // its own: the application's dialog host opens `DuplicateLayerDialog`
+        // for it (the copy's name is asked), so the ellipsis is earned.
+        assert_eq!(MenuAction::Trim.label(), "Trim…");
+        assert_eq!(MenuAction::DuplicateDocument.label(), "Duplicate");
+        assert_eq!(MenuAction::DuplicateLayer.label(), "Duplicate Layer…");
+    }
+
+    #[test]
+    fn blending_options_routes_to_the_layer_style_dialog_not_the_panel() {
+        let (doc, _g, inside, _b) = stacked_document();
+        let ctx = ctx_with_layer(&doc, inside);
+        assert_eq!(
+            MenuAction::BlendingOptions.resolve(&ctx).intent(),
+            Some(&Intent::Action(MenuAction::BlendingOptions))
+        );
+        assert_eq!(
+            MenuAction::BlendingOptions
+                .resolve(&MenuContext {
+                    has_document: true,
+                    ..Default::default()
+                })
+                .reason(),
+            Some("Select a layer first")
+        );
+    }
+
+    #[test]
+    fn a_lock_row_resolves_to_the_flipped_flag_and_ticks_when_set() {
+        let (doc, _g, inside, _b) = stacked_document();
+        let ctx = ctx_with_layer(&doc, inside);
+        assert_eq!(
+            MenuAction::LockLayer(LayerLock::Position).checked(&ctx),
+            Some(false)
+        );
+        match MenuAction::LockLayer(LayerLock::Position)
+            .resolve(&ctx)
+            .intent()
+        {
+            Some(Intent::Document(Command::SetLayerProperties { layer_id, patch })) => {
+                assert_eq!(*layer_id, inside);
+                assert_eq!(
+                    patch.locked,
+                    Some(LockState {
+                        position: true,
+                        ..LockState::default()
+                    })
+                );
+            }
+            other => panic!("unexpected resolution: {other:?}"),
+        }
+        let locked = MenuContext {
+            active: Some(ActiveLayer {
+                locked: LockState {
+                    all: true,
+                    ..LockState::default()
+                },
+                ..ctx.active.unwrap()
+            }),
+            ..ctx
+        };
+        assert_eq!(
+            MenuAction::LockLayer(LayerLock::All).checked(&locked),
+            Some(true)
+        );
+        // Releasing the blanket lock is the one patch it allows.
+        match MenuAction::LockLayer(LayerLock::All)
+            .resolve(&locked)
+            .intent()
+        {
+            Some(Intent::Document(Command::SetLayerProperties { patch, .. })) => {
+                assert_eq!(patch.locked, Some(LockState::default()));
+            }
+            other => panic!("unexpected resolution: {other:?}"),
+        }
+        assert_eq!(
+            MenuAction::RenameLayer.resolve(&locked).reason(),
+            Some("The layer is locked")
+        );
+        assert_eq!(
+            MenuAction::AlignLayers(AlignEdge::Left)
+                .resolve(&locked)
+                .reason(),
+            Some("The layer's position is locked")
+        );
+    }
+
+    #[test]
+    fn distribute_needs_three_layers_and_refine_edge_needs_a_selection() {
+        let (doc, _g, inside, _b) = stacked_document();
+        let ctx = ctx_with_layer(&doc, inside);
+        assert_eq!(
+            MenuAction::DistributeLayers(DistributeAxis::Horizontal)
+                .resolve(&ctx)
+                .reason(),
+            Some("Select three or more layers")
+        );
+        assert!(MenuAction::DistributeLayers(DistributeAxis::Horizontal)
+            .resolve(&MenuContext {
+                selected_layers: 3,
+                ..ctx.clone()
+            })
+            .is_enabled());
+        assert_eq!(
+            MenuAction::RefineEdge.resolve(&ctx).reason(),
+            Some("There is no selection")
+        );
+        assert!(MenuAction::RefineEdge
+            .resolve(&MenuContext {
+                has_selection: true,
+                ..ctx
+            })
+            .is_enabled());
+    }
+
+    #[test]
+    fn the_guide_rows_resolve_to_set_guides_commands_over_the_documents_set() {
+        let mut ctx = MenuContext {
+            has_document: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            MenuAction::ClearGuides.resolve(&ctx).reason(),
+            Some("There are no guides to clear")
+        );
+        assert_eq!(MenuAction::LockGuides.checked(&ctx), Some(false));
+        ctx.guides = Guides {
+            list: vec![editor_core::Guide {
+                axis: editor_core::GuideAxis::Vertical,
+                doc: 12.0,
+                locked: false,
+            }],
+            visible: true,
+            locked: false,
+        };
+        match MenuAction::ClearGuides.resolve(&ctx).intent() {
+            Some(Intent::Document(Command::SetGuides { guides })) => {
+                assert!(guides.list.is_empty());
+                assert!(guides.visible, "clearing keeps the visibility flag");
+            }
+            other => panic!("unexpected resolution: {other:?}"),
+        }
+        match MenuAction::LockGuides.resolve(&ctx).intent() {
+            Some(Intent::Document(Command::SetGuides { guides })) => {
+                assert!(guides.locked, "the lock flips on");
+                assert_eq!(guides.list.len(), 1, "locking keeps the guides");
+            }
+            other => panic!("unexpected resolution: {other:?}"),
+        }
+        // The context reads the document's own set.
+        let mut doc = Document::new(16, 16, "G");
+        doc.guides = ctx.guides.clone();
+        let read = MenuContext::from_document(&doc, &History::new());
+        assert_eq!(read.guides, ctx.guides);
     }
 
     #[test]

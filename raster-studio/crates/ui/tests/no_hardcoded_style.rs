@@ -59,7 +59,48 @@ const FORBIDDEN_NUMERIC: &[(&str, &str)] = &[
 /// foreground or background, which is not the design system's to choose.
 const SANCTIONED: &[&str] = &["Color32::from_rgba_unmultiplied("];
 
+/// W2-X: a bare `[r, g, b, a]` of `f32` literals in shipping source is a
+/// colour written in numbers — the Histogram's curves were `[1.0, 0.0, 0.0,
+/// 1.0]` in `panels/histogram.rs`, which the call-site patterns above never
+/// saw because no `Color32::` constructor was named. These are the lines
+/// allowed to keep one, each *genuine user data* rather than a design
+/// decision: the file's name, then text the line must contain.
+const SANCTIONED_ARRAYS: &[(&str, &str, &str)] = &[
+    (
+        "color.rs",
+        "DEFAULT_FOREGROUND",
+        "the user's default foreground swatch (Photoshop's black)",
+    ),
+    (
+        "color.rs",
+        "DEFAULT_BACKGROUND",
+        "the user's default background swatch (Photoshop's white)",
+    ),
+    (
+        "menu.rs",
+        "[1.0, 0.0, 0.0, 0.0]",
+        "the Channel Mixer's identity row: mixer weights, not a colour",
+    ),
+    (
+        "menu.rs",
+        "[0.0, 1.0, 0.0, 0.0]",
+        "the Channel Mixer's identity row: mixer weights, not a colour",
+    ),
+    (
+        "menu.rs",
+        "[0.0, 0.0, 1.0, 0.0]",
+        "the Channel Mixer's identity row: mixer weights, not a colour",
+    ),
+    (
+        "toolbar.rs",
+        "return [0.0, 0.0, 0.0, 1.0];",
+        "the preview of the user's gradient ramp when it has no stops: the ramp's own data",
+    ),
+];
+
 /// Directories owned by other work in this crate. They have their own gates.
+/// `panels` is *not* here: the panel models paint too (a histogram curve, a
+/// channel tint) and are held to the same rule as `view`.
 const NOT_OURS: &[&str] = &["canvas", "dialogs"];
 
 fn crate_src() -> PathBuf {
@@ -182,6 +223,103 @@ fn is_bare_f32(rhs: &str) -> bool {
         && trimmed.contains('.')
 }
 
+/// Every bare four-float array literal on `code`: `[1.0, 0.0, 0.0, 1.0]`
+/// fires; `[rgb[0], rgb[1], rgb[2], 1.0]`, `[0; 4]`, `[f32; 4]` and a
+/// two-element pair do not.
+fn bare_rgba_arrays(code: &str) -> Vec<&str> {
+    let mut found = Vec::new();
+    let mut from = 0usize;
+    while let Some(open) = code[from..].find('[') {
+        let start = from + open;
+        let Some(close) = code[start..].find(']') else {
+            break;
+        };
+        let inner = &code[start + 1..start + close];
+        let parts: Vec<&str> = inner.split(',').collect();
+        if parts.len() == 4 && parts.iter().all(|p| is_bare_f32(p)) {
+            found.push(&code[start..=start + close]);
+        }
+        from = start + 1;
+    }
+    found
+}
+
+/// W2-X: a colour written as four `f32` literals is a colour written
+/// literally, whichever call it is handed to. The design crate has data
+/// roles for the one class of colour that used to be argued as "data, not
+/// design" — `ColorRole::ChannelRed` and its siblings — so the only bare
+/// arrays left are the user's own swatch defaults, listed in
+/// [`SANCTIONED_ARRAYS`] with their reason.
+#[test]
+fn no_colour_is_written_as_a_bare_rgba_array() {
+    let mut files = Vec::new();
+    rust_files(&crate_src(), &mut files);
+
+    let mut violations = Vec::new();
+    for path in &files {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        for (number, line) in shipping_source(path).lines().enumerate() {
+            let code = without_comments(line);
+            let arrays = bare_rgba_arrays(code);
+            if arrays.is_empty() {
+                continue;
+            }
+            let sanctioned = SANCTIONED_ARRAYS
+                .iter()
+                .any(|(file, text, _)| name == *file && code.contains(text));
+            if sanctioned {
+                continue;
+            }
+            violations.push(format!(
+                "{}:{}: {} — name a design::ColorRole (data colours: ChannelRed / \
+                 ChannelGreen / ChannelBlue / Luminance) or list genuine user data in \
+                 SANCTIONED_ARRAYS",
+                path.display(),
+                number + 1,
+                arrays.join(", ")
+            ));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "colours written as bare rgba arrays:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn the_panels_directory_is_in_the_scanned_set() {
+    // The gate's reach is part of its claim: `src/panels` paints (the
+    // Histogram's curves, the Channels tints) and must be scanned like
+    // `src/view`, not skipped as another team's directory.
+    let mut files = Vec::new();
+    rust_files(&crate_src(), &mut files);
+    let has = |suffix: &str| {
+        files
+            .iter()
+            .any(|p| p.to_string_lossy().replace('\\', "/").ends_with(suffix))
+    };
+    assert!(
+        has("src/panels/histogram.rs"),
+        "panels/histogram.rs is not scanned"
+    );
+    assert!(has("src/panels/color.rs"), "panels/color.rs is not scanned");
+    assert!(has("src/view/docks.rs"), "view/docks.rs is not scanned");
+    assert!(!has("src/canvas/mod.rs"), "canvas has its own gate");
+    // Every sanctioned array names a file that exists and a line that is
+    // still there — a stale whitelist entry is a hole nobody is looking at.
+    for (file, text, _) in SANCTIONED_ARRAYS {
+        let path = files
+            .iter()
+            .find(|p| p.file_name().and_then(|n| n.to_str()) == Some(file))
+            .unwrap_or_else(|| panic!("{file} is not in the scanned set"));
+        assert!(
+            shipping_source(path).lines().any(|l| l.contains(text)),
+            "{file} no longer contains `{text}`: drop the stale whitelist entry"
+        );
+    }
+}
+
 /// C9: a bare `f32` `let` binding is a layout extent written in numbers.
 ///
 /// The old `let footer_h = 52.0;` slipped past the call-site scan above —
@@ -262,6 +400,22 @@ fn the_gate_actually_catches_something() {
     assert!(!is_bare_f32(" h - 52.0;"));
     assert!(!is_bare_f32(" x * 2.0;"));
     assert!(!is_bare_f32(" tokens.metrics.footer_height.pt();"));
+
+    // W2-X's regression: the Histogram's literal primary fires the array
+    // gate; a user-data conversion, an `[x; 4]` repeat and a type do not.
+    assert_eq!(
+        bare_rgba_arrays("        0 => [1.0, 0.0, 0.0, 1.0],"),
+        vec!["[1.0, 0.0, 0.0, 1.0]"]
+    );
+    assert_eq!(
+        bare_rgba_arrays("    pub const fn tint() -> [f32; 4] { [0.0, 0.0, 1.0, 0.6] }"),
+        vec!["[0.0, 0.0, 1.0, 0.6]"]
+    );
+    assert!(bare_rgba_arrays("rgba_to_color32([rgb[0], rgb[1], rgb[2], 1.0])").is_empty());
+    assert!(bare_rgba_arrays("let bins = [0; 4];").is_empty());
+    assert!(bare_rgba_arrays("fn f(c: [f32; 4]) -> [f32; 4]").is_empty());
+    assert!(bare_rgba_arrays("let pair = [1.0, 0.0];").is_empty());
+    assert!(bare_rgba_arrays("let ints = [1, 2, 3, 4];").is_empty());
 }
 
 #[test]

@@ -135,6 +135,78 @@ fn semantic_colors_are_legible_as_foreground_on_a_panel() {
     }
 }
 
+/// W2-X: the Histogram's curves and the Channels panel's thumbnail tints
+/// come from [`ColorRole::DATA`] rather than from literal primaries in the
+/// panel, so a theme can pick a red that reads on its own surfaces. That is
+/// only an improvement if every such colour is *visible*: a graphical object
+/// under SC 1.4.11, 3:1 over the panel body (thumbnails) and over the sunken
+/// well (the plot), in both appearances. The four are also held apart from
+/// one another — three curves that share a hue are not three curves.
+#[test]
+fn data_colours_are_legible_over_the_panel_and_the_plot_well_in_both_themes() {
+    let mut failures = Vec::new();
+    for theme in Theme::ALL {
+        let p = theme.palette();
+        for role in ColorRole::DATA {
+            for surface in [SurfaceRole::Panel, SurfaceRole::Sunken] {
+                let ratio = contrast_ratio_over(p.color(*role), p.surface(surface));
+                if ratio < 3.0 {
+                    failures.push(format!(
+                        "{theme:?}: {role:?} on {surface:?} = {ratio:.2}:1, needs 3.0:1"
+                    ));
+                }
+            }
+        }
+        let distinct: BTreeSet<_> = ColorRole::DATA.iter().map(|r| p.color(*r)).collect();
+        assert_eq!(
+            distinct.len(),
+            ColorRole::DATA.len(),
+            "{theme:?}: two data roles share one colour"
+        );
+        // Red, green and blue must *be* red, green and blue: each channel's
+        // own component is its strongest one, or the curve lies about what
+        // it counts.
+        let red = p.color(ColorRole::ChannelRed);
+        assert!(
+            red.r > red.g && red.r > red.b,
+            "{theme:?}: {red:?} is not red"
+        );
+        let green = p.color(ColorRole::ChannelGreen);
+        assert!(
+            green.g > green.r && green.g > green.b,
+            "{theme:?}: {green:?} is not green"
+        );
+        let blue = p.color(ColorRole::ChannelBlue);
+        assert!(
+            blue.b > blue.r && blue.b > blue.g,
+            "{theme:?}: {blue:?} is not blue"
+        );
+        // Luminance is a neutral reading: no hue of its own.
+        let lum = p.color(ColorRole::Luminance);
+        let spread = lum.r.max(lum.g).max(lum.b) - lum.r.min(lum.g).min(lum.b);
+        assert!(spread <= 8, "{theme:?}: Luminance {lum:?} carries a hue");
+    }
+    assert!(
+        failures.is_empty(),
+        "data colours that vanish:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn the_data_colour_gate_actually_catches_a_bad_palette() {
+    // A "red" the colour of the panel body must fail the same check.
+    let mut pairs: Vec<(ColorRole, design::Srgba)> = design::tokens::palette::DARK_ROLES.to_vec();
+    pairs.push((ColorRole::ChannelRed, design::Srgba::hex(0x4A4747)));
+    let bad = Palette::from_pairs(true, &pairs);
+    assert!(bad.missing_roles().is_empty());
+    let ratio = contrast_ratio_over(
+        bad.color(ColorRole::ChannelRed),
+        bad.surface(SurfaceRole::Panel),
+    );
+    assert!(ratio < 3.0, "sabotaged palette still scored {ratio:.2}:1");
+}
+
 #[test]
 fn separators_are_visible_on_the_surfaces_they_divide() {
     // A hairline that resolves to less than 1.2:1 is invisible; a divider that

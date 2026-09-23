@@ -1989,4 +1989,126 @@ mod option_tests {
             Err(ToolError::UnknownOption { .. })
         ));
     }
+
+    /// One Red Eye box over a flash-red layer; the centre pixel of the fix,
+    /// sRGB 8-bit.
+    fn red_eye_result(darken: f32) -> [u8; 4] {
+        let mut tiles = MemoryTiles::new();
+        let layer = LayerId::new();
+        paint(&mut tiles, PixelKey::Layer(layer), |_, _| {
+            [220, 30, 30, 255]
+        });
+        let delta = {
+            let mut ctx =
+                ToolContext::new(&mut tiles, PixelRect::new(0, 0, W, H)).with_layer(layer);
+            let mut tool = RedEyeTool::default();
+            tool.set_setting("darken", ToolSetting::Float(darken))
+                .unwrap();
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(8.0, 8.0))
+                .unwrap();
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(24.0, 24.0))
+                .unwrap();
+            match ctx.drain().pop() {
+                Some(Command::PaintTiles { delta, .. }) => delta,
+                other => panic!("expected the fix as one paint: {other:?}"),
+            }
+        };
+        // The tool emits, the application applies: do the applying here.
+        tiles.apply_delta(PixelKey::Layer(layer), &delta);
+        let px = read_rgba8(&tiles, PixelKey::Layer(layer), PixelRect::new(16, 16, 1, 1)).unwrap();
+        [px[0], px[1], px[2], px[3]]
+    }
+
+    /// W2-C: the options bar's Darken Amount changes the pixels, not just a
+    /// field. Before the option was wired the bar drew a control that did
+    /// nothing; a field test cannot tell the two apart.
+    #[test]
+    fn red_eye_darken_zero_and_one_fix_the_pupil_differently() {
+        let bright = red_eye_result(0.0);
+        let dark = red_eye_result(1.0);
+        assert_ne!(
+            bright, dark,
+            "darken 0 and darken 1 produced the same pupil"
+        );
+        // Both took the red out: the fixed pupil is neutral...
+        for px in [bright, dark] {
+            let (r, g, b) = (i16::from(px[0]), i16::from(px[1]), i16::from(px[2]));
+            assert!(
+                (r - g).abs() <= 2 && (g - b).abs() <= 2,
+                "{px:?} is still tinted"
+            );
+        }
+        // ...and darken 1 is black where darken 0 keeps the pupil's luminance.
+        assert!(dark[0] < 8, "darken 1 left {dark:?}");
+        assert!(bright[0] > 40, "darken 0 left {bright:?}");
+    }
+
+    /// Lasso a diamond over a black blot, drag it onto a hard stripe texture,
+    /// return the healed square, sRGB 8-bit.
+    fn patch_result(softness: f32) -> Vec<u8> {
+        let mut tiles = MemoryTiles::new();
+        let layer = LayerId::new();
+        paint(&mut tiles, PixelKey::Layer(layer), |x, y| {
+            if x >= 32 {
+                // 2 px stripes: texture a 0.5 px sigma keeps and a 1 px sigma
+                // softens, so the two heals cannot come out the same.
+                if (x / 2 + y / 2) % 2 == 0 {
+                    [200, 200, 200, 255]
+                } else {
+                    [60, 60, 60, 255]
+                }
+            } else if (12..20).contains(&x) && (12..20).contains(&y) {
+                [0, 0, 0, 255]
+            } else {
+                [128, 128, 128, 255]
+            }
+        });
+        let delta = {
+            let mut ctx =
+                ToolContext::new(&mut tiles, PixelRect::new(0, 0, W, H)).with_layer(layer);
+            let mut tool = PatchTool::default();
+            tool.set_setting("softness", ToolSetting::Float(softness))
+                .unwrap();
+            // A diamond, so the corners of its bounding box stay uncovered
+            // and the heal has an "outside" to take its shading from.
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(16.0, 6.0))
+                .unwrap();
+            for (x, y) in [(26.0, 16.0), (16.0, 26.0), (6.0, 16.0)] {
+                tool.on_pointer_move(&mut ctx, PointerEvent::at(x, y))
+                    .unwrap();
+            }
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(16.0, 6.0))
+                .unwrap();
+            assert!(tool.region().is_some(), "the lasso closed");
+            // Drag it 32 px right, onto the stripes.
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(16.0, 16.0))
+                .unwrap();
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(48.0, 16.0))
+                .unwrap();
+            match ctx.drain().pop() {
+                Some(Command::PaintTiles { delta, .. }) => delta,
+                other => panic!("expected the heal as one paint: {other:?}"),
+            }
+        };
+        tiles.apply_delta(PixelKey::Layer(layer), &delta);
+        read_rgba8(&tiles, PixelKey::Layer(layer), PixelRect::new(8, 8, 16, 16)).unwrap()
+    }
+
+    /// W2-C: Softness reaches the heal. `0.0` clamps to the 0.5 px floor the
+    /// registry declares; `1.0` blurs the texture split twice as wide.
+    #[test]
+    fn patch_softness_zero_and_one_heal_differently() {
+        let tight = patch_result(0.0);
+        let soft = patch_result(1.0);
+        assert_ne!(tight, soft, "softness 0 and 1 healed identically");
+        // Both healed: the blot's centre is no longer black.
+        for (name, px) in [("tight", &tight), ("soft", &soft)] {
+            let centre = (8 * 16 + 8) * 4;
+            assert!(
+                px[centre] > 20,
+                "{name} left the blot black: {:?}",
+                &px[centre..centre + 4]
+            );
+        }
+    }
 }

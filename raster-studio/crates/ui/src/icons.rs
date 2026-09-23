@@ -1288,6 +1288,33 @@ const MASK: &[Prim] = &[
     Prim::Dot([0.5, 0.5], 0.11),
 ];
 
+/// The palette footer's quick-mask (Q) mark: Photoshop's and Photopea's
+/// square with a ringed pupil in it — the frame is the document, the ring the
+/// rubylith the mode paints. Distinct from [`MASK`] (a wide rectangle with a
+/// dot) so `no_two_chrome_controls_share_a_drawing` holds.
+const QUICK_MASK: &[Prim] = &[
+    Prim::Poly(
+        &[[0.14, 0.14], [0.86, 0.14], [0.86, 0.86], [0.14, 0.86]],
+        true,
+    ),
+    Prim::Circle([0.5, 0.5], 0.24),
+    Prim::Dot([0.5, 0.5], 0.09),
+];
+
+/// The palette footer's screen-mode (F) mark: a monitor on its stand with a
+/// grow arrow across the screen, the way Photopea draws its `F` cycle.
+const SCREEN_MODE: &[Prim] = &[
+    Prim::Poly(
+        &[[0.12, 0.16], [0.88, 0.16], [0.88, 0.66], [0.12, 0.66]],
+        true,
+    ),
+    Prim::Line([0.5, 0.66], [0.5, 0.82]),
+    Prim::Line([0.32, 0.86], [0.68, 0.86]),
+    Prim::Line([0.32, 0.54], [0.68, 0.28]),
+    Prim::Poly(&[[0.52, 0.28], [0.68, 0.28], [0.68, 0.42]], false),
+    Prim::Poly(&[[0.32, 0.40], [0.32, 0.54], [0.48, 0.54]], false),
+];
+
 /// The drawing for a chrome icon key.
 ///
 /// The companion to [`icon_for`], for everything that is not a tool: the panel
@@ -1317,6 +1344,8 @@ pub fn ui_icon(key: &str) -> Icon {
         "link" => LINK,
         "adjustment" => ADJUSTMENT,
         "mask" => MASK,
+        "quick-mask" => QUICK_MASK,
+        "screen-mode" => SCREEN_MODE,
         // layer classes
         "layer-raster" => LAYER_RASTER,
         "layer-group" => LAYER_GROUP,
@@ -1390,6 +1419,8 @@ pub const CHROME_ICON_KEYS: &[&str] = &[
     "link",
     "adjustment",
     "mask",
+    "quick-mask",
+    "screen-mode",
 ];
 
 /// Draw the chrome icon `key` centred in `rect`, in the palette's colour for

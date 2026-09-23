@@ -225,6 +225,14 @@ pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
     };
     context.open_documents = editor.documents().len();
     context.theme = editor.preferences().theme.resolve(design::Theme::Dark);
+    // The multi-selection lives on the DOCUMENT (`Editor::set_layer_selection`
+    // puts it there); the workspace's Layers panel echoes it a frame later.
+    // Layer ▸ Distribute needs the count the document holds, not the echo.
+    if let Some(open) = editor.active() {
+        context.selected_layers = context
+            .selected_layers
+            .max(open.document.layer_selection().len());
+    }
     context
 }
 
@@ -450,6 +458,11 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
         MenuAction::Export(_) => Action::Export,
         MenuAction::Undo => Action::Undo,
         MenuAction::Redo => Action::Redo,
+        // Edit ▸ Step Backward / Step Forward are Photoshop's names for the
+        // same two application actions; the rows exist so the menu paints
+        // them, and they perform exactly what Undo and Redo perform.
+        MenuAction::StepBackward => Action::Undo,
+        MenuAction::StepForward => Action::Redo,
         // The shortcut editor lives inside the preferences window.
         MenuAction::Preferences | MenuAction::KeyboardShortcuts => Action::ShowPreferences,
         MenuAction::DuplicateLayer => Action::DuplicateLayer,
@@ -457,6 +470,9 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
         MenuAction::Zoom(Z::Out) => Action::ZoomOut,
         MenuAction::Zoom(Z::FitOnScreen) => Action::ZoomFit,
         MenuAction::Zoom(Z::ActualPixels) => Action::ZoomActualPixels,
+        // View ▸ 200% is an absolute zoom, the channel the Navigator's own
+        // zoom field already rides.
+        MenuAction::Zoom(Z::Double) => return Some(Pick::Zoom(2.0)),
         // Everything else is either performed against the live document by
         // `perform` or is honestly out of this build's reach; the one table in
         // `unavailable_reason` decides which, and says why when it is the
@@ -661,9 +677,11 @@ pub fn draw(
 ) {
     let menus = menus(editor);
     egui::TopBottomPanel::top("raster-menu-bar")
+        // The header band: the menu bar and the options bar under it share
+        // the header shade, the columns beneath them the panel shade.
         .frame(crate::chrome::panel_frame(
             ctx,
-            design::SurfaceRole::Panel,
+            design::SurfaceRole::Header,
             design::Space::Hair,
         ))
         .show(ctx, |ui| {
@@ -1413,7 +1431,14 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
             Ok("Transform: drag a handle, Enter to commit, Escape to cancel".to_string())
         }
         MenuAction::CropToSelection => editor.crop_to_selection(),
-        MenuAction::Trim => editor.trim_canvas(),
+        // W2-F: the options are the dialog's when one was just confirmed
+        // (parked by `DialogHost::ui`, taken here in the same frame);
+        // otherwise Photopea's defaults — transparent pixels, every side —
+        // which is what a click that opened no dialog asked for.
+        MenuAction::Trim => crate::layer_ops::trim_with(
+            editor,
+            crate::dialog_host::take_confirmed_trim().unwrap_or_default(),
+        ),
         MenuAction::RotateCanvas(CR::Deg90Cw) => editor.rotate_canvas_90(true),
         MenuAction::RotateCanvas(CR::Deg90Ccw) => editor.rotate_canvas_90(false),
         MenuAction::RevealAll => {
@@ -1501,10 +1526,28 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::Reselect => reselect(editor),
         MenuAction::ToggleQuickMask => editor.toggle_quick_mask(),
         MenuAction::SetColorMode(mode) => editor.set_color_mode(mode),
+        // W2-F: Select ▸ Refine Edge… confirmed. The parameters are the
+        // dialog's (parked by `DialogHost::ui`); a click that opened no
+        // dialog — no selection to refine — is answered with the reason.
+        MenuAction::RefineEdge => match crate::dialog_host::take_confirmed_refine_edge() {
+            Some(spec) => crate::layer_ops::refine_edge_with(editor, &spec),
+            None => Err(dialog_refused(action, editor)),
+        },
 
         // ---- Layer ---------------------------------------------------------
         MenuAction::LayerViaCopy => layer_via(editor, false),
         MenuAction::LayerViaCut => layer_via(editor, true),
+        // W2-F: the layer_ops module. Duplicate Layer… arrives here only from
+        // its name dialog (the host opens it for every click with a layer);
+        // the parked name is the one typed, `None` names the copy itself.
+        MenuAction::DuplicateLayer => crate::layer_ops::duplicate_layer(
+            editor,
+            crate::dialog_host::take_confirmed_duplicate_name(),
+        ),
+        MenuAction::AlignLayers(edge) => crate::layer_ops::align(editor, edge),
+        MenuAction::DistributeLayers(axis) => crate::layer_ops::distribute(editor, axis),
+        MenuAction::StampVisible => crate::layer_ops::stamp_visible(editor),
+        MenuAction::SaveAsPsd => crate::layer_ops::save_as_psd(editor),
         MenuAction::GroupLayers => group_layers(editor),
         MenuAction::UngroupLayers => ungroup_layers(editor),
         MenuAction::MergeDown => merge(editor, MergeScope::Down),
@@ -1537,9 +1580,12 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         | MenuAction::CanvasSize
         | MenuAction::RotateCanvas(CR::Arbitrary)
         | MenuAction::LayerStyle(_)
+        | MenuAction::BlendingOptions
         | MenuAction::FilterGallery
         | MenuAction::RefineMask
-        | MenuAction::RemoveColorFringe => Err(dialog_refused(action, editor)),
+        | MenuAction::RemoveColorFringe
+        | MenuAction::RenameLayer
+        | MenuAction::NewGuide => Err(dialog_refused(action, editor)),
         MenuAction::SelectAllLayers => {
             let doc = editor
                 .active_mut()
@@ -1631,7 +1677,19 @@ fn dialog_refused(action: MenuAction, editor: &Editor) -> String {
     };
     let layer = doc.document.active_layer();
     let reason = match action {
-        MenuAction::LayerStyle(_) if layer.is_none() => "Select a layer first",
+        MenuAction::LayerStyle(_) | MenuAction::BlendingOptions if layer.is_none() => {
+            "Select a layer first"
+        }
+        MenuAction::RenameLayer => match layer {
+            None => "Select a layer first",
+            Some(id) => match doc.document.layers.get(id) {
+                Some(l) if l.locked.all => "The layer is locked",
+                _ => "",
+            },
+        },
+        MenuAction::RefineEdge if doc.document.selection.bounds().is_none() => {
+            "There is no selection"
+        }
         MenuAction::RefineMask | MenuAction::RemoveColorFringe => match layer {
             None => "Select a layer first",
             Some(id) => match doc.document.layers.get(id).and_then(|l| l.mask.as_ref()) {
@@ -3353,7 +3411,7 @@ pub(crate) fn read_mask_coverage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dialogs::{RecordingUrls, ScriptedDialogs, UrlLauncher};
+    use crate::dialogs::{CloseChoice, FileDialogs, RecordingUrls, ScriptedDialogs, UrlLauncher};
     use crate::prefs::AppPaths;
     use crate::recent::RecentFiles;
 
@@ -3724,26 +3782,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ed = editor_with_a_document(dir.path());
         let mut ws = Workspace::new();
-        assert!(!ws.dock.is_open(ui::PanelId::Channels), "not open yet");
+        // Actions is the one panel the default (Essentials) layout leaves
+        // closed — W2-D opened Channels and Paths with Layers — so it is the
+        // one whose opening proves something.
+        let panel = ui::PanelId::Actions;
+        assert!(!ws.dock.is_open(panel), "not open yet");
 
         let context = context(&mut ed, &ws);
-        let Ok(Pick::Workspace(intent)) = resolve(
-            MenuAction::TogglePanel(ui::PanelId::Channels),
-            &context,
-            &ed,
-        ) else {
-            panic!("Window ▸ Channels is not wired");
+        let Ok(Pick::Workspace(intent)) = resolve(MenuAction::TogglePanel(panel), &context, &ed)
+        else {
+            panic!("Window ▸ Actions is not wired");
         };
         assert!(ws.absorb(&intent), "absorbing it changed nothing");
-        assert!(ws.dock.is_open(ui::PanelId::Channels));
+        assert!(ws.dock.is_open(panel));
 
         // ...and the menu now shows the checkmark, because the context is read
         // off the same workspace rather than off a fresh default.
         let after = self::context(&mut ed, &ws);
-        assert_eq!(
-            MenuAction::TogglePanel(ui::PanelId::Channels).checked(&after),
-            Some(true)
-        );
+        assert_eq!(MenuAction::TogglePanel(panel).checked(&after), Some(true));
     }
 
     #[test]
@@ -4018,7 +4074,7 @@ mod tests {
         };
         let mut s = format!("{clip:?} ");
         s += &format!(
-            "{} {:?} {:?} sel={:?} tool={:?} {}x{} stored={} saved={}",
+            "{} {:?} {:?} sel={:?} tool={:?} {}x{} stored={} saved={} guides={:?}",
             d.history_depth(),
             d.document.selection,
             d.document.active_layer(),
@@ -4028,12 +4084,16 @@ mod tests {
             d.document.height(),
             d.document.stored_selection.is_some(),
             d.document.saved_selections.len(),
+            d.document.guides,
         );
         for id in d.document.layers.iter_depth_first() {
             let layer = d.document.layers.get(id).expect("a listed layer exists");
+            // W2-F: the name, the lock flags and the transform are in it too,
+            // so Rename, the Lock rows and Align/Distribute (which move a
+            // layer without touching a tile) read as the edits they are.
             s.push_str(&format!(
-                "|{id:?} v{} {:?} {:?}",
-                layer.visible, layer.mask, layer.kind
+                "|{id:?} {:?} v{} {:?} {:?} {:?} {:?}",
+                layer.name, layer.visible, layer.locked, layer.transform, layer.mask, layer.kind
             ));
             if let Some(map) = d.document.layer_tiles(id) {
                 let mut tiles: Vec<_> = map.iter().collect();
@@ -6126,6 +6186,11 @@ mod tests {
                 // answer is the status line, and `reveal_all_on_a_contained_
                 // canvas_reveals_nothing` pins the grow case.
                 || action == MenuAction::RevealAll
+                // W2-F: Save as PSD cancels at the scripted picker (loud);
+                // Align refuses a layer that already meets the edge (loud),
+                // and in this fixture both layers fill the canvas.
+                || action == MenuAction::SaveAsPsd
+                || matches!(action, MenuAction::AlignLayers(_))
             {
                 match perform(action, &mut ed) {
                     Ok(_) | Err(_) => checked += 1,
@@ -6248,6 +6313,15 @@ mod tests {
             MenuAction::SetColorMode(ui::menu::ColorMode::Lab),
             MenuAction::SetColorMode(ui::menu::ColorMode::Cmyk),
             MenuAction::SetColorMode(ui::menu::ColorMode::Indexed),
+            // W2-F: the scripted picker cancels the PSD save; both fixture
+            // layers already fill the canvas, so every Align edge is met.
+            MenuAction::SaveAsPsd,
+            MenuAction::AlignLayers(ui::menu::AlignEdge::Left),
+            MenuAction::AlignLayers(ui::menu::AlignEdge::HorizontalCenter),
+            MenuAction::AlignLayers(ui::menu::AlignEdge::Right),
+            MenuAction::AlignLayers(ui::menu::AlignEdge::Top),
+            MenuAction::AlignLayers(ui::menu::AlignEdge::VerticalCenter),
+            MenuAction::AlignLayers(ui::menu::AlignEdge::Bottom),
         ];
 
         let mut broken = Vec::new();
@@ -6313,6 +6387,14 @@ mod tests {
             MenuAction::FillDialog,
             MenuAction::StrokeDialog,
             MenuAction::NewDocument,
+            // W2-F: the rows the audit found asking nothing, or asking in
+            // the wrong place (Blending Options revealed a panel).
+            MenuAction::Trim,
+            MenuAction::RenameLayer,
+            MenuAction::NewGuide,
+            MenuAction::About,
+            MenuAction::BlendingOptions,
+            MenuAction::DuplicateLayer,
         ];
         asked.extend(
             ui::menu::AdjustmentId::ALL
@@ -6785,5 +6867,829 @@ mod tests {
         let mut out = crate::chrome::ChromeOutput::default();
         crate::menu_bridge::record(pick, &mut out);
         assert_eq!(out.enter_text_layer, Some(id), "the pick carries the layer");
+    }
+
+    // =======================================================================
+    // W2-F: the menu gaps the audit found, driven through the menu bar's own
+    // click handler (`Chrome::menu_click`) and the dialog host.
+    // =======================================================================
+
+    /// A 40x30 PNG that is transparent except for an opaque 12x12 block at
+    /// (10, 8): the margins Image > Trim... has to find.
+    fn margin_png(dir: &std::path::Path) -> std::path::PathBuf {
+        let (w, h) = (40u32, 30u32);
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 8..20 {
+            for x in 10..22 {
+                let i = ((y * w + x) * 4) as usize;
+                rgba[i..i + 4].copy_from_slice(&[200, 30, 30, 255]);
+            }
+        }
+        let path = dir.join("margin.png");
+        std::fs::write(
+            &path,
+            raster::encode(raster::ExportFormat::Png, w, h, &rgba).unwrap(),
+        )
+        .unwrap();
+        path
+    }
+
+    /// The `suggested` path every save/export picker was opened at, shared
+    /// with the test because the editor owns the dialogs box.
+    type Suggestions = std::rc::Rc<std::cell::RefCell<Vec<std::path::PathBuf>>>;
+
+    /// A [`FileDialogs`] that answers like the [`ScriptedDialogs`] it wraps
+    /// and copies every picker's `suggested` path out to a shared list — so
+    /// a test can see *which* picker a menu row opened (the PSD save's
+    /// `.psd` suggestion against the plain export's raster one), not only
+    /// what the scripted answer was.
+    struct SuggestionRecorder {
+        inner: ScriptedDialogs,
+        seen: Suggestions,
+    }
+
+    impl SuggestionRecorder {
+        fn share(&mut self) {
+            self.seen
+                .borrow_mut()
+                .extend(self.inner.suggested.drain(..));
+        }
+    }
+
+    impl FileDialogs for SuggestionRecorder {
+        fn pick_open_file(&mut self) -> Option<std::path::PathBuf> {
+            self.inner.pick_open_file()
+        }
+        fn pick_place_file(&mut self) -> Option<std::path::PathBuf> {
+            self.inner.pick_place_file()
+        }
+        fn pick_replace_file(&mut self) -> Option<std::path::PathBuf> {
+            self.inner.pick_replace_file()
+        }
+        fn pick_open_project(&mut self) -> Option<std::path::PathBuf> {
+            self.inner.pick_open_project()
+        }
+        fn pick_save_path(&mut self, suggested: &std::path::Path) -> Option<std::path::PathBuf> {
+            let answer = self.inner.pick_save_path(suggested);
+            self.share();
+            answer
+        }
+        fn pick_export_path(&mut self, suggested: &std::path::Path) -> Option<std::path::PathBuf> {
+            let answer = self.inner.pick_export_path(suggested);
+            self.share();
+            answer
+        }
+        fn pick_export_folder(&mut self) -> Option<std::path::PathBuf> {
+            self.inner.pick_export_folder()
+        }
+        fn confirm_close(&mut self, document: &str) -> CloseChoice {
+            self.inner.confirm_close(document)
+        }
+        fn confirm_recover(&mut self, document: &str) -> bool {
+            self.inner.confirm_recover(document)
+        }
+        fn report_error(&mut self, title: &str, message: &str) {
+            self.inner.report_error(title, message);
+        }
+        fn report_notice(&mut self, title: &str, message: &str) {
+            self.inner.report_notice(title, message);
+        }
+    }
+
+    /// `with_two_layers`, but the export picker answers `path` once and the
+    /// paths every picker was opened at come back with the editor.
+    fn with_two_layers_exporting_to(
+        dir: &std::path::Path,
+        path: &std::path::Path,
+    ) -> (Editor, Suggestions) {
+        let seen = Suggestions::default();
+        let mut ed = Editor::with_state(
+            AppPaths::rooted(dir.join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(SuggestionRecorder {
+                inner: ScriptedDialogs::new().exporting_to(path),
+                seen: seen.clone(),
+            }),
+        );
+        ed.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+        ed.open_path(&probe_png(dir, 48, 32))
+            .expect("the probe opens");
+        let extra = layer_model::Layer::raster("Second");
+        let id = extra.id;
+        ed.apply_command(Command::create_layer(extra));
+        let rgba = vec![90u8; 48 * 32 * 4];
+        let paint = {
+            let doc = ed.active_mut().unwrap();
+            pixels::write_layer(doc, id, &rgba, "Second").unwrap()
+        };
+        ed.apply_command(paint);
+        ed.set_active_layer(id);
+        (ed, seen)
+    }
+
+    /// Route `action` through the menu bar's click handler exactly as `draw`
+    /// does. The chrome comes back so a dialog it opened can be driven.
+    fn click(ed: &mut Editor, action: MenuAction) -> (crate::chrome::Chrome, ChromeOutput) {
+        let mut chrome = crate::chrome::Chrome::new();
+        let menu_ctx = context(ed, chrome.workspace());
+        let intent = resolve_intent(action, &menu_ctx, ed)
+            .unwrap_or_else(|reason| panic!("{action:?} is disabled: {reason}"));
+        let mut out = ChromeOutput::default();
+        chrome.menu_click(intent, ed, &mut out);
+        (chrome, out)
+    }
+
+    /// Apply what a click (or a confirmed dialog) put in the output, the way
+    /// the shell does: commands through history, menu picks through
+    /// `perform`, application actions through `dispatch`.
+    fn apply_output(ed: &mut Editor, out: ChromeOutput) -> Result<(), String> {
+        for command in out.commands {
+            ed.apply_command(command);
+        }
+        for action in out.menu {
+            perform(action, ed)?;
+        }
+        for action in out.actions {
+            ed.dispatch(action).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Press `pressed` in the chrome's open dialog: a settle frame, then the
+    /// key, through the host's own `ui`. Returns what that frame produced.
+    fn press_in_dialog(chrome: &mut crate::chrome::Chrome, pressed: egui::Key) -> ChromeOutput {
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut out = ChromeOutput::default();
+        let host = chrome.dialogs_for_test();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| host.ui(ctx, None, &mut out));
+        let _ = ctx.run(raw_input(vec![key(pressed)]), |ctx| {
+            host.ui(ctx, None, &mut out)
+        });
+        out
+    }
+
+    /// A raster layer holding one opaque block, painted and made active.
+    fn block_layer(ed: &mut Editor, name: &str, x: u32, y: u32, size: u32) -> LayerId {
+        let (w, h) = canvas_of(ed).unwrap();
+        let layer = layer_model::Layer::raster(name);
+        let id = layer.id;
+        ed.apply_command(Command::create_layer(layer));
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for yy in y..(y + size).min(h) {
+            for xx in x..(x + size).min(w) {
+                let i = ((yy * w + xx) * 4) as usize;
+                rgba[i..i + 4].copy_from_slice(&[255, 0, 0, 255]);
+            }
+        }
+        let paint = {
+            let doc = ed.active_mut().unwrap();
+            pixels::write_layer(doc, id, &rgba, name).unwrap()
+        };
+        ed.apply_command(paint);
+        ed.set_active_layer(id);
+        id
+    }
+
+    fn ink(ed: &Editor, id: LayerId) -> raster::PixelRect {
+        let doc = ed.active().unwrap();
+        crate::tool_input::tight_document_bounds(&doc.document, &doc.tiles, id)
+            .expect("the block layer has ink")
+    }
+
+    fn depth(ed: &Editor) -> usize {
+        ed.active().unwrap().history_depth()
+    }
+
+    #[test]
+    fn save_as_psd_writes_a_layered_file_the_psd_crate_reads_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("stacked.psd");
+        let (mut ed, suggested) = with_two_layers_exporting_to(dir.path(), &target);
+        let (chrome, out) = click(&mut ed, MenuAction::SaveAsPsd);
+        assert!(
+            !chrome.dialog_open(),
+            "Save as PSD is a file picker, not a modal"
+        );
+        assert_eq!(out.menu, vec![MenuAction::SaveAsPsd]);
+        apply_output(&mut ed, out).expect("the export ran");
+        // The row opened a *PSD* picker — the one that leads with the PSD
+        // filter, is titled "Save as PSD" and suggests a `.psd` — not the
+        // plain export picker suggesting a raster. The scripted picker
+        // answers `target` either way, so the suggestion is what tells them
+        // apart; without the arming it would end in `.png`.
+        let extension = |path: &std::path::PathBuf| {
+            path.extension().and_then(|e| e.to_str()).map(str::to_owned)
+        };
+        {
+            let seen = suggested.borrow();
+            assert_eq!(seen.len(), 1, "exactly one picker opened: {seen:?}");
+            assert_eq!(
+                extension(&seen[0]).as_deref(),
+                Some(crate::dialogs::PSD_EXTENSION),
+                "File > Save as PSD opened the PSD picker: {seen:?}"
+            );
+        }
+        let bytes = std::fs::read(&target).expect("the .psd was written");
+        let file = psd::read(&bytes).expect("the psd crate reads it back");
+        assert_eq!(file.layers.len(), 2, "both layers survived the round trip");
+        assert_eq!(file.header.width, 48);
+        assert_eq!(file.header.height, 32);
+        assert!(
+            ed.status().unwrap().contains("PSD"),
+            "the status names the PSD: {:?}",
+            ed.status()
+        );
+        // Control: the plain Export from the same editor opens the plain
+        // picker, whose suggestion is a raster — so the assertion above is
+        // not one every picker satisfies, and one arming affects exactly one
+        // picker. (The scripted answers are spent, so this picker cancels.)
+        let _ = ed.dispatch(Action::Export);
+        {
+            let seen = suggested.borrow();
+            assert_eq!(seen.len(), 2, "the plain export opened a picker: {seen:?}");
+            assert_ne!(
+                extension(&seen[1]).as_deref(),
+                Some(crate::dialogs::PSD_EXTENSION),
+                "the plain Export picker does not suggest a .psd: {seen:?}"
+            );
+            assert_eq!(
+                seen[0].with_extension(""),
+                seen[1].with_extension(""),
+                "the PSD picker suggests the export's own name, in .psd: {seen:?}"
+            );
+        }
+        // And a cancelled picker is a loud refusal, not a silent nothing.
+        let mut cancelled = with_two_layers(dir.path());
+        let reason = perform(MenuAction::SaveAsPsd, &mut cancelled).unwrap_err();
+        assert!(reason.contains("Save as PSD"), "{reason}");
+    }
+
+    #[test]
+    fn stamp_visible_lands_above_the_active_layer_as_one_undoable_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = with_two_layers(dir.path());
+        let before = ed.active().unwrap().document.layers.root().to_vec();
+        assert_eq!(before.len(), 2);
+        let (top, bottom) = (before[0], before[1]);
+        // Stamp above the BOTTOM layer, so "above the active one" is
+        // distinguishable from "at the top".
+        ed.set_active_layer(bottom);
+        let expected = composite(&mut ed);
+        let steps = depth(&ed);
+
+        let (chrome, out) = click(&mut ed, MenuAction::StampVisible);
+        assert!(!chrome.dialog_open());
+        assert_eq!(out.menu, vec![MenuAction::StampVisible]);
+        apply_output(&mut ed, out).expect("the stamp applied");
+
+        let root = ed.active().unwrap().document.layers.root().to_vec();
+        assert_eq!(root.len(), 3, "one new layer");
+        assert_eq!(
+            (root[0], root[2]),
+            (top, bottom),
+            "the stack around it is untouched"
+        );
+        let stamp = root[1];
+        assert_eq!(
+            ed.active().unwrap().document.active_layer(),
+            Some(stamp),
+            "the stamp becomes the active layer"
+        );
+        assert_eq!(
+            pixels::read_layer(ed.active().unwrap(), stamp),
+            expected,
+            "the stamp holds exactly what the canvas showed"
+        );
+        assert_eq!(depth(&ed), steps + 1, "one undo step");
+        ed.dispatch(Action::Undo).unwrap();
+        assert_eq!(
+            ed.active().unwrap().document.layers.root(),
+            &[top, bottom],
+            "undo removes the stamp"
+        );
+    }
+
+    #[test]
+    fn align_moves_the_layer_to_the_canvas_or_the_selection_as_one_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path()); // 48 x 32
+        let id = block_layer(&mut ed, "Block", 10, 10, 4);
+        assert_eq!((ink(&ed, id).x, ink(&ed, id).y), (10, 10));
+        let steps = depth(&ed);
+
+        // To the canvas: no selection.
+        let (_, out) = click(&mut ed, MenuAction::AlignLayers(ui::menu::AlignEdge::Right));
+        assert_eq!(
+            out.menu,
+            vec![MenuAction::AlignLayers(ui::menu::AlignEdge::Right)]
+        );
+        apply_output(&mut ed, out).unwrap();
+        let b = ink(&ed, id);
+        assert_eq!(
+            b.x + b.width as i64,
+            48,
+            "the right edge meets the canvas edge"
+        );
+        assert_eq!(b.y, 10, "a horizontal align leaves y alone");
+        assert_eq!(depth(&ed), steps + 1, "one undo step");
+
+        // Already there: a loud refusal, and no undo step.
+        let reason =
+            perform(MenuAction::AlignLayers(ui::menu::AlignEdge::Right), &mut ed).unwrap_err();
+        assert!(reason.contains("Already aligned"), "{reason}");
+        assert_eq!(depth(&ed), steps + 1);
+
+        ed.dispatch(Action::Undo).unwrap();
+        assert_eq!(ink(&ed, id).x, 10, "undo puts the layer back");
+
+        // To the selection when there is one.
+        select_rect(&mut ed, (20, 4), (30, 20));
+        let (_, out) = click(&mut ed, MenuAction::AlignLayers(ui::menu::AlignEdge::Left));
+        apply_output(&mut ed, out).unwrap();
+        assert_eq!(ink(&ed, id).x, 20, "the left edge meets the selection's");
+        let (_, out) = click(
+            &mut ed,
+            MenuAction::AlignLayers(ui::menu::AlignEdge::Bottom),
+        );
+        apply_output(&mut ed, out).unwrap();
+        let b = ink(&ed, id);
+        assert_eq!(
+            b.y + b.height as i64,
+            20,
+            "the bottom edge meets the selection's"
+        );
+        let (_, out) = click(
+            &mut ed,
+            MenuAction::AlignLayers(ui::menu::AlignEdge::HorizontalCenter),
+        );
+        apply_output(&mut ed, out).unwrap();
+        assert_eq!(ink(&ed, id).x, 23, "centred on the selection's 25");
+    }
+
+    #[test]
+    fn distribute_spaces_three_selected_layers_evenly_as_one_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let a = block_layer(&mut ed, "A", 0, 0, 4);
+        let b = block_layer(&mut ed, "B", 4, 0, 4);
+        let c = block_layer(&mut ed, "C", 40, 0, 4);
+        // Two layers is not enough, and the menu says so.
+        ed.set_layer_selection(vec![a, c], Some(c));
+        let menu_ctx = context(&mut ed, &Workspace::new());
+        assert_eq!(
+            resolve_intent(
+                MenuAction::DistributeLayers(ui::menu::DistributeAxis::Horizontal),
+                &menu_ctx,
+                &ed
+            ),
+            Err("Select three or more layers".to_string())
+        );
+        ed.set_layer_selection(vec![a, b, c], Some(c));
+        let steps = depth(&ed);
+        let (_, out) = click(
+            &mut ed,
+            MenuAction::DistributeLayers(ui::menu::DistributeAxis::Horizontal),
+        );
+        apply_output(&mut ed, out).unwrap();
+        // Centres were 2, 6, 42: the outer two stay, the middle lands on 22.
+        assert_eq!(ink(&ed, a).x, 0);
+        assert_eq!(ink(&ed, b).x, 20);
+        assert_eq!(ink(&ed, c).x, 40);
+        assert_eq!(depth(&ed), steps + 1, "one undo step");
+        ed.dispatch(Action::Undo).unwrap();
+        assert_eq!(ink(&ed, b).x, 4, "undo puts the middle one back");
+    }
+
+    #[test]
+    fn refine_edge_changes_the_selection_coverage_through_its_dialog_as_one_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        // Disabled without a selection, and the reason is the selection's.
+        let menu_ctx = context(&mut ed, &Workspace::new());
+        assert_eq!(
+            resolve_intent(MenuAction::RefineEdge, &menu_ctx, &ed),
+            Err("There is no selection".to_string())
+        );
+        select_rect(&mut ed, (8, 8), (24, 24));
+        let before = format!("{:?}", ed.active().unwrap().document.selection);
+        let steps = depth(&ed);
+
+        let (mut chrome, out) = click(&mut ed, MenuAction::RefineEdge);
+        assert!(chrome.dialog_open(), "Refine Edge opens its dialog");
+        assert!(out.is_empty(), "opening changed nothing");
+        chrome
+            .dialogs_for_test()
+            .active_refine_edge_dialog_for_test()
+            .set_spec_for_test(ui::dialogs::refine_mask::RefineMaskSpec {
+                shift_px: 4,
+                ..Default::default()
+            });
+        let out = press_in_dialog(&mut chrome, egui::Key::Enter);
+        assert!(!chrome.dialog_open(), "Enter closed the dialog");
+        assert_eq!(out.menu, vec![MenuAction::RefineEdge]);
+        assert!(
+            out.commands.is_empty() && out.dialog.is_none(),
+            "the confirmation must not take the layer-mask road: {out:?}"
+        );
+        apply_output(&mut ed, out).expect("the refinement applied");
+
+        let after = &ed.active().unwrap().document.selection;
+        assert!(
+            matches!(after, editor_core::Selection::Mask(_)),
+            "{after:?}"
+        );
+        // The expansion is a disk of radius 4: a pixel 3 outside the left
+        // edge (level with the middle) is inside it, one 6 outside is not.
+        assert_eq!(
+            after.coverage_at(glam::IVec2::new(5, 16)),
+            1.0,
+            "expanding by 4 selects the pixel 3 outside the old edge"
+        );
+        assert_eq!(
+            after.coverage_at(glam::IVec2::new(2, 16)),
+            0.0,
+            "and not the pixel 6 outside"
+        );
+        assert_eq!(depth(&ed), steps + 1, "one undo step");
+        ed.dispatch(Action::Undo).unwrap();
+        assert_eq!(
+            format!("{:?}", ed.active().unwrap().document.selection),
+            before,
+            "undo restores the rectangle"
+        );
+    }
+
+    #[test]
+    fn the_trim_dialogs_options_reach_the_canvas_as_one_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(dir.path());
+        ed.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+        ed.open_path(&margin_png(dir.path())).unwrap();
+        let steps = depth(&ed);
+
+        let (mut chrome, out) = click(&mut ed, MenuAction::Trim);
+        assert!(chrome.dialog_open(), "Trim... opens its options");
+        assert!(out.is_empty());
+        chrome
+            .dialogs_for_test()
+            .active_trim_dialog_for_test()
+            .set_spec(ui::dialogs::TrimSpec {
+                right: false,
+                bottom: false,
+                ..Default::default()
+            });
+        let out = press_in_dialog(&mut chrome, egui::Key::Enter);
+        assert_eq!(out.menu, vec![MenuAction::Trim]);
+        apply_output(&mut ed, out).expect("the trim applied");
+        let doc = &ed.active().unwrap().document;
+        assert_eq!(
+            (doc.width(), doc.height()),
+            (30, 22),
+            "only the top and left margins went"
+        );
+        assert_eq!(depth(&ed), steps + 1, "one undo step");
+        ed.dispatch(Action::Undo).unwrap();
+        let doc = &ed.active().unwrap().document;
+        assert_eq!((doc.width(), doc.height()), (40, 30));
+
+        // Every side, the default: the block alone remains.
+        let (mut chrome, _) = click(&mut ed, MenuAction::Trim);
+        let out = press_in_dialog(&mut chrome, egui::Key::Enter);
+        apply_output(&mut ed, out).unwrap();
+        let doc = &ed.active().unwrap().document;
+        assert_eq!((doc.width(), doc.height()), (12, 12));
+    }
+
+    #[test]
+    fn about_opens_a_real_window_from_the_menu_bar() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = with_two_layers(dir.path());
+        let (mut chrome, out) = click(&mut ed, MenuAction::About);
+        assert!(chrome.dialog_open(), "About opens a window");
+        assert!(out.is_empty(), "opening it produces no edit");
+        let about_line = crate::version::about_line();
+        {
+            let host = chrome.dialogs_for_test();
+            let about = host.active_about_dialog_for_test();
+            assert_eq!(about.version_line(), about_line);
+            assert_eq!(about.notices(), crate::dialog_host::THIRD_PARTY_NOTICES);
+            assert_eq!(about.licence(), crate::dialog_host::LICENCE_POINTER);
+            // The drawn window says the version: read back off the paint list.
+            let ctx = egui::Context::default();
+            crate::chrome::install_theme(&ctx, design::Theme::Dark);
+            let mut drawn = ChromeOutput::default();
+            // Two frames, as the nine-menus test runs: egui lays a window
+            // out on its first frame and paints it on the second.
+            let mut painted = Vec::new();
+            for _ in 0..2 {
+                let output = ctx.run(raw_input(Vec::new()), |ctx| host.ui(ctx, None, &mut drawn));
+                painted = painted_text(&ctx, &output);
+            }
+            assert!(drawn.is_empty(), "drawing the window produced {drawn:?}");
+            assert!(
+                painted.iter().any(|t| t.contains(&about_line)),
+                "the window never drew {about_line:?}; it drew {painted:?}"
+            );
+            assert!(painted.iter().any(|t| t == "About Raster Studio"));
+        }
+        let out = press_in_dialog(&mut chrome, egui::Key::Escape);
+        assert!(!chrome.dialog_open(), "Escape closes it");
+        assert!(out.is_empty());
+        // The notices file the window points at is real.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        assert!(
+            root.join(crate::dialog_host::THIRD_PARTY_NOTICES).is_file(),
+            "the About window points at a file that does not exist"
+        );
+    }
+
+    #[test]
+    fn blending_options_opens_the_layer_style_dialog_not_the_properties_panel() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = with_two_layers(dir.path());
+        let (mut chrome, out) = click(&mut ed, MenuAction::BlendingOptions);
+        assert!(chrome.dialog_open(), "Blending Options opens a dialog");
+        assert!(
+            chrome.dialogs_for_test().layer_style_is_open_for_test(),
+            "and it is the Layer Style dialog"
+        );
+        assert!(
+            out.workspace.is_empty(),
+            "no panel was revealed instead: {:?}",
+            out.workspace
+        );
+    }
+
+    #[test]
+    fn the_guide_rows_ride_history_from_the_menu_bar() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = with_two_layers(dir.path());
+        let menu_ctx = context(&mut ed, &Workspace::new());
+        assert_eq!(
+            resolve_intent(MenuAction::ClearGuides, &menu_ctx, &ed),
+            Err("There are no guides to clear".to_string())
+        );
+        let steps = depth(&ed);
+
+        // New Guide... through its dialog.
+        let (mut chrome, out) = click(&mut ed, MenuAction::NewGuide);
+        assert!(chrome.dialog_open());
+        assert!(out.is_empty());
+        {
+            let dialog = chrome.dialogs_for_test().active_new_guide_dialog_for_test();
+            dialog.set_orientation(ui::dialogs::new_guide::Orientation::Vertical);
+            dialog.set_position(12.0);
+        }
+        let out = press_in_dialog(&mut chrome, egui::Key::Enter);
+        assert!(!chrome.dialog_open());
+        assert_eq!(out.commands.len(), 1, "one SetGuides command: {out:?}");
+        apply_output(&mut ed, out).unwrap();
+        let guides = &ed.active().unwrap().document.guides;
+        assert_eq!(guides.list.len(), 1);
+        assert_eq!(guides.list[0].axis, editor_core::GuideAxis::Vertical);
+        assert_eq!(guides.list[0].doc, 12.0);
+        assert_eq!(depth(&ed), steps + 1);
+
+        // Lock Guides flips the document flag and ticks.
+        assert!(invoke(&mut ed, MenuAction::LockGuides).unwrap());
+        assert!(ed.active().unwrap().document.guides.locked);
+        let menu_ctx = context(&mut ed, &Workspace::new());
+        assert_eq!(MenuAction::LockGuides.checked(&menu_ctx), Some(true));
+        assert_eq!(depth(&ed), steps + 2);
+
+        // Clear Guides empties the list and keeps the lock flag.
+        assert!(invoke(&mut ed, MenuAction::ClearGuides).unwrap());
+        let guides = &ed.active().unwrap().document.guides;
+        assert!(guides.list.is_empty());
+        assert!(guides.locked);
+        assert_eq!(depth(&ed), steps + 3);
+
+        for _ in 0..3 {
+            ed.dispatch(Action::Undo).unwrap();
+        }
+        assert_eq!(
+            ed.active().unwrap().document.guides,
+            editor_core::Guides::default(),
+            "three undos put the guides back to nothing"
+        );
+    }
+
+    #[test]
+    fn rename_layer_renames_the_active_layer_through_its_dialog_as_one_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = with_two_layers(dir.path());
+        let id = ed.active().unwrap().document.active_layer().unwrap();
+        let steps = depth(&ed);
+        let (mut chrome, out) = click(&mut ed, MenuAction::RenameLayer);
+        assert!(chrome.dialog_open(), "Rename Layer... opens its dialog");
+        assert!(out.is_empty());
+        chrome
+            .dialogs_for_test()
+            .active_rename_dialog_for_test()
+            .set_name("Sky");
+        let out = press_in_dialog(&mut chrome, egui::Key::Enter);
+        assert!(!chrome.dialog_open());
+        assert_eq!(out.commands.len(), 1, "{out:?}");
+        apply_output(&mut ed, out).unwrap();
+        let name = |ed: &Editor| {
+            ed.active()
+                .unwrap()
+                .document
+                .layers
+                .get(id)
+                .unwrap()
+                .name
+                .clone()
+        };
+        assert_eq!(name(&ed), "Sky");
+        assert_eq!(depth(&ed), steps + 1, "one undo step");
+        ed.dispatch(Action::Undo).unwrap();
+        assert_eq!(name(&ed), "Second", "undo restores the name");
+    }
+
+    #[test]
+    fn duplicate_layer_asks_for_a_name_and_copies_above_its_source_as_one_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = with_two_layers(dir.path());
+        let before = ed.active().unwrap().document.layers.root().to_vec();
+        assert_eq!(before.len(), 2);
+        let (top, bottom) = (before[0], before[1]);
+        // Copy the BOTTOM layer, so "directly above its source" is
+        // distinguishable from "at the top of the stack".
+        ed.set_active_layer(bottom);
+        let source_name = ed
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .get(bottom)
+            .unwrap()
+            .name
+            .clone();
+        let source_pixels = pixels::read_layer(ed.active().unwrap(), bottom);
+        let steps = depth(&ed);
+
+        let (mut chrome, out) = click(&mut ed, MenuAction::DuplicateLayer);
+        assert!(chrome.dialog_open(), "Duplicate Layer... asks for a name");
+        assert!(out.is_empty(), "opening the dialog copies nothing: {out:?}");
+        {
+            let dialog = chrome.dialogs_for_test().active_duplicate_dialog_for_test();
+            assert_eq!(dialog.name(), format!("{source_name} copy"));
+            dialog.set_name("Twin");
+        }
+        let out = press_in_dialog(&mut chrome, egui::Key::Enter);
+        assert!(!chrome.dialog_open());
+        assert_eq!(out.menu, vec![MenuAction::DuplicateLayer]);
+        assert!(out.commands.is_empty());
+        apply_output(&mut ed, out).expect("the duplicate applied");
+
+        let doc = &ed.active().unwrap().document;
+        let root = doc.layers.root().to_vec();
+        assert_eq!(root.len(), 3, "one new layer");
+        assert_eq!(
+            (root[0], root[2]),
+            (top, bottom),
+            "the copy sits directly above its source, not on top of the stack"
+        );
+        let copy = root[1];
+        assert_eq!(doc.layers.get(copy).unwrap().name, "Twin", "the typed name");
+        assert_eq!(
+            doc.active_layer(),
+            Some(copy),
+            "the copy is the active layer"
+        );
+        assert_eq!(
+            pixels::read_layer(ed.active().unwrap(), copy),
+            source_pixels,
+            "the copy carries its source's pixels"
+        );
+        assert_eq!(depth(&ed), steps + 1, "one undo step");
+        ed.dispatch(Action::Undo).unwrap();
+        assert_eq!(
+            ed.active().unwrap().document.layers.root().to_vec(),
+            before,
+            "undo removes the copy"
+        );
+
+        // Escape copies nothing. (Undo lifted the copy, which was the active
+        // layer, so the source is made active again first.)
+        ed.set_active_layer(bottom);
+        let (mut chrome, _) = click(&mut ed, MenuAction::DuplicateLayer);
+        let out = press_in_dialog(&mut chrome, egui::Key::Escape);
+        assert!(!chrome.dialog_open() && out.is_empty(), "{out:?}");
+        assert_eq!(ed.active().unwrap().document.layers.root().len(), 2);
+    }
+
+    #[test]
+    fn layer_via_copy_and_cut_lift_only_the_selected_pixels() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let source = ed.active().unwrap().document.active_layer().unwrap();
+        let before = pixels::read_layer(ed.active().unwrap(), source);
+        select_rect(&mut ed, (8, 8), (16, 16));
+        assert!(invoke(&mut ed, MenuAction::LayerViaCopy).unwrap());
+        let copy = ed.active().unwrap().document.layers.root()[0];
+        assert_ne!(copy, source);
+        let lifted = pixels::read_layer(ed.active().unwrap(), copy);
+        let w = 48usize;
+        let px =
+            |buf: &[u8], x: usize, y: usize| buf[(y * w + x) * 4..(y * w + x) * 4 + 4].to_vec();
+        assert_eq!(
+            px(&lifted, 10, 10),
+            px(&before, 10, 10),
+            "inside: the source pixel"
+        );
+        assert_eq!(px(&lifted, 2, 2)[3], 0, "outside: nothing");
+        assert_eq!(px(&lifted, 30, 20)[3], 0, "outside: nothing");
+        assert_eq!(
+            pixels::read_layer(ed.active().unwrap(), source),
+            before,
+            "a copy leaves the source alone"
+        );
+        // Cut takes the same pixels and clears them below.
+        ed.set_active_layer(source);
+        assert!(invoke(&mut ed, MenuAction::LayerViaCut).unwrap());
+        let after = pixels::read_layer(ed.active().unwrap(), source);
+        assert_eq!(px(&after, 10, 10)[3], 0, "the hole");
+        assert_eq!(
+            px(&after, 2, 2),
+            px(&before, 2, 2),
+            "outside the hole, untouched"
+        );
+    }
+
+    #[test]
+    fn step_rows_lock_rows_and_zoom_200_route_through_the_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = with_two_layers(dir.path());
+        let menu_ctx = context(&mut ed, &Workspace::new());
+        assert_eq!(
+            resolve(MenuAction::StepBackward, &menu_ctx, &ed),
+            Ok(Pick::Action(Action::Undo))
+        );
+        assert_eq!(
+            resolve(MenuAction::StepForward, &menu_ctx, &ed),
+            Err("Nothing to redo".to_string())
+        );
+        ed.dispatch(Action::Undo).unwrap();
+        let menu_ctx = context(&mut ed, &Workspace::new());
+        assert_eq!(
+            resolve(MenuAction::StepForward, &menu_ctx, &ed),
+            Ok(Pick::Action(Action::Redo))
+        );
+        assert_eq!(
+            resolve(
+                MenuAction::Zoom(ui::menu::ZoomCommand::Double),
+                &menu_ctx,
+                &ed
+            ),
+            Ok(Pick::Zoom(2.0))
+        );
+        ed.dispatch(Action::Redo).unwrap();
+
+        // The lock rows flip one flag each, as one undo step, and tick.
+        let id = ed.active().unwrap().document.active_layer().unwrap();
+        let locked = |ed: &Editor| ed.active().unwrap().document.layers.get(id).unwrap().locked;
+        assert!(!locked(&ed).position);
+        let steps = depth(&ed);
+        assert!(invoke(
+            &mut ed,
+            MenuAction::LockLayer(ui::menu::LayerLock::Position)
+        )
+        .unwrap());
+        assert!(locked(&ed).position);
+        assert_eq!(depth(&ed), steps + 1);
+        let menu_ctx = context(&mut ed, &Workspace::new());
+        assert_eq!(
+            MenuAction::LockLayer(ui::menu::LayerLock::Position).checked(&menu_ctx),
+            Some(true)
+        );
+        assert_eq!(
+            resolve_intent(
+                MenuAction::AlignLayers(ui::menu::AlignEdge::Left),
+                &menu_ctx,
+                &ed
+            ),
+            Err("The layer's position is locked".to_string()),
+            "a position lock refuses Align, as it refuses Free Transform"
+        );
+        assert!(invoke(
+            &mut ed,
+            MenuAction::LockLayer(ui::menu::LayerLock::Position)
+        )
+        .unwrap());
+        assert!(!locked(&ed).position, "the second click releases it");
+        // Lock All, then release it: the one patch the blanket lock allows.
+        assert!(invoke(&mut ed, MenuAction::LockLayer(ui::menu::LayerLock::All)).unwrap());
+        assert!(locked(&ed).all);
+        let menu_ctx = context(&mut ed, &Workspace::new());
+        assert_eq!(
+            resolve_intent(MenuAction::RenameLayer, &menu_ctx, &ed),
+            Err("The layer is locked".to_string())
+        );
+        assert!(invoke(&mut ed, MenuAction::LockLayer(ui::menu::LayerLock::All)).unwrap());
+        assert!(!locked(&ed).all);
     }
 }

@@ -27,6 +27,105 @@ pub const IMAGE_EXTENSIONS: &[&str] = &[
 ];
 /// Extension of a Raster Studio project package (a directory).
 pub const PROJECT_EXTENSION: &str = "rstudio";
+/// Extension of a layered Photoshop document, which the export path writes
+/// through the `psd` crate (`OpenDocument::export_to` picks the writer by
+/// this extension).
+pub const PSD_EXTENSION: &str = "psd";
+
+thread_local! {
+    /// Set by File ▸ Save as PSD… for the *next* export picker on this
+    /// thread, and cleared by that picker. The editor's `Export` action owns
+    /// the only road to the export picker and the `.psd` writer behind it;
+    /// this flag is how the menu row makes that one call a PSD save (PSD
+    /// filter first, a `.psd` suggestion, the right title) without a second
+    /// action. Thread-local, like the parked adjustment parameters in
+    /// `dialog_host`, so parallel tests cannot arm each other's pickers.
+    static PSD_SAVE_ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Arm the next export picker as a PSD save.
+pub fn arm_psd_save() {
+    PSD_SAVE_ARMED.with(|armed| armed.set(true));
+}
+
+/// Whether the next export picker was armed as a PSD save; consumed on read,
+/// so one arming affects exactly one picker.
+pub fn take_psd_save() -> bool {
+    PSD_SAVE_ARMED.with(|armed| armed.replace(false))
+}
+
+/// `suggested` with its extension swapped for `.psd`, for the armed picker.
+pub fn psd_save_suggestion(suggested: &Path) -> PathBuf {
+    suggested.with_extension(PSD_EXTENSION)
+}
+
+/// One export picker as it is about to be shown: its title, its filters in
+/// the order the platform dialog lists them (the first is the one the dialog
+/// opens on), and the file name it suggests.
+///
+/// [`NativeDialogs::pick_export_path`] builds its `rfd` dialog from this and
+/// nothing else, and [`ScriptedDialogs`] records the same value — so a test
+/// that asserts "Save as PSD led with the PSD filter" is reading the request
+/// the real picker is built from, not a claim beside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportPickerRequest {
+    pub title: &'static str,
+    /// `(label, extensions)`, first entry first.
+    pub filters: Vec<(&'static str, &'static [&'static str])>,
+    pub suggested: PathBuf,
+}
+
+impl ExportPickerRequest {
+    /// The request for the next export picker, starting at `suggested`.
+    ///
+    /// Consumes the PSD arming ([`take_psd_save`]): armed, the PSD filter
+    /// leads, the title says "Save as PSD" and the suggestion wears `.psd`;
+    /// unarmed, it is the plain Export picker, which offers PSD too, last,
+    /// because `export_to` writes a layered `.psd` by extension either way.
+    pub fn next(suggested: &Path) -> Self {
+        let psd = take_psd_save();
+        let mut filters: Vec<(&'static str, &'static [&'static str])> = Vec::new();
+        if psd {
+            filters.push(("Photoshop", &[PSD_EXTENSION]));
+        }
+        filters.extend([
+            ("PNG", &["png"] as &[&str]),
+            ("JPEG", &["jpg", "jpeg"]),
+            ("WebP", &["webp"]),
+            ("TIFF", &["tif", "tiff"]),
+            ("GIF", &["gif"]),
+            ("BMP", &["bmp"]),
+        ]);
+        if !psd {
+            filters.push(("Photoshop", &[PSD_EXTENSION]));
+        }
+        Self {
+            title: if psd { "Save as PSD" } else { "Export" },
+            filters,
+            suggested: if psd {
+                psd_save_suggestion(suggested)
+            } else {
+                suggested.to_path_buf()
+            },
+        }
+    }
+
+    /// Whether the picker opens on the PSD filter — what File ▸ Save as
+    /// PSD… differs from File ▸ Export… by.
+    pub fn leads_with_psd(&self) -> bool {
+        self.filters
+            .first()
+            .is_some_and(|(_, extensions)| *extensions == [PSD_EXTENSION])
+    }
+
+    /// The suggested file name's extension, lower-cased.
+    pub fn suggested_extension(&self) -> Option<String> {
+        self.suggested
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+    }
+}
 
 /// Everything the shell needs to ask the platform.
 pub trait FileDialogs {
@@ -151,14 +250,17 @@ impl FileDialogs for NativeDialogs {
     }
 
     fn pick_export_path(&mut self, suggested: &Path) -> Option<PathBuf> {
-        let mut dialog = rfd::FileDialog::new()
-            .add_filter("PNG", &["png"])
-            .add_filter("JPEG", &["jpg", "jpeg"])
-            .add_filter("WebP", &["webp"])
-            .add_filter("TIFF", &["tif", "tiff"])
-            .add_filter("GIF", &["gif"])
-            .add_filter("BMP", &["bmp"])
-            .set_title("Export");
+        // File ▸ Save as PSD… arms the picker for one call: the PSD filter
+        // leads, the title says so, and the suggested name wears `.psd`. The
+        // request is built by `ExportPickerRequest::next`, the same value
+        // the scripted double records, so what a test asserts about the
+        // filters is what this dialog is built from.
+        let request = ExportPickerRequest::next(suggested);
+        let suggested = request.suggested;
+        let mut dialog = rfd::FileDialog::new().set_title(request.title);
+        for (label, extensions) in request.filters {
+            dialog = dialog.add_filter(label, extensions);
+        }
         if let Some(dir) = suggested.parent() {
             if dir.is_dir() {
                 dialog = dialog.set_directory(dir);
@@ -250,6 +352,10 @@ pub struct ScriptedDialogs {
     pub notices: Vec<(String, String)>,
     /// Every `suggested` path a save/export dialog was opened at.
     pub suggested: Vec<PathBuf>,
+    /// Every export picker as it would have been shown — title, filter order
+    /// and suggestion — so a test can see that Save as PSD asked for a PSD
+    /// *first*, not only that it suggested one.
+    pub export_requests: Vec<ExportPickerRequest>,
     /// Answers for the picker behind "Place Embedded…"/"Place Linked…".
     pub place_files: Vec<PathBuf>,
     /// Answers for the picker behind "Replace Contents…" (card 069).
@@ -332,7 +438,13 @@ impl FileDialogs for ScriptedDialogs {
     }
 
     fn pick_export_path(&mut self, suggested: &Path) -> Option<PathBuf> {
-        self.suggested.push(suggested.to_path_buf());
+        // The scripted picker builds the same request the native one does —
+        // consuming the PSD arming, leading with the PSD filter, suggesting
+        // `.psd` — and records it, so a test can see that Save as PSD asked
+        // for a PSD.
+        let request = ExportPickerRequest::next(suggested);
+        self.suggested.push(request.suggested.clone());
+        self.export_requests.push(request);
         (!self.export_paths.is_empty()).then(|| self.export_paths.remove(0))
     }
 
@@ -389,6 +501,67 @@ mod tests {
         let chosen = d.pick_save_path(Path::new("/work/photo.rstudio"));
         assert_eq!(chosen, Some(PathBuf::from("/out/final.rstudio")));
         assert_eq!(d.suggested, [PathBuf::from("/work/photo.rstudio")]);
+    }
+
+    #[test]
+    fn an_armed_export_picker_suggests_a_psd_exactly_once() {
+        let mut d = ScriptedDialogs::new()
+            .exporting_to("/out/a.psd")
+            .exporting_to("/out/b.png");
+        arm_psd_save();
+        assert_eq!(
+            d.pick_export_path(Path::new("/work/photo.png")),
+            Some(PathBuf::from("/out/a.psd"))
+        );
+        // The arming is consumed: the next picker is the plain export one.
+        assert_eq!(
+            d.pick_export_path(Path::new("/work/photo.png")),
+            Some(PathBuf::from("/out/b.png"))
+        );
+        assert_eq!(
+            d.suggested,
+            [
+                PathBuf::from("/work/photo.psd"),
+                PathBuf::from("/work/photo.png")
+            ]
+        );
+        assert!(!take_psd_save(), "nothing is left armed");
+    }
+
+    #[test]
+    fn the_armed_request_leads_with_psd_and_the_plain_one_ends_with_it() {
+        // The request is what the native picker is built from, so its
+        // filter order is the picker's filter order.
+        arm_psd_save();
+        let armed = ExportPickerRequest::next(Path::new("/work/photo.png"));
+        assert!(armed.leads_with_psd(), "{armed:?}");
+        assert_eq!(armed.title, "Save as PSD");
+        assert_eq!(armed.suggested_extension().as_deref(), Some("psd"));
+        assert_eq!(armed.filters[0], ("Photoshop", &[PSD_EXTENSION] as &[&str]));
+        // Unarmed: the plain Export picker, PSD offered last.
+        let plain = ExportPickerRequest::next(Path::new("/work/photo.png"));
+        assert!(!plain.leads_with_psd(), "{plain:?}");
+        assert_eq!(plain.title, "Export");
+        assert_eq!(plain.suggested_extension().as_deref(), Some("png"));
+        assert_eq!(plain.filters[0].0, "PNG");
+        assert_eq!(
+            plain.filters.last().map(|f| f.0),
+            Some("Photoshop"),
+            "the plain picker still offers PSD, last"
+        );
+        // The same formats either way, only the order differs.
+        let mut a: Vec<_> = armed.filters.iter().map(|f| f.0).collect();
+        let mut p: Vec<_> = plain.filters.iter().map(|f| f.0).collect();
+        a.sort_unstable();
+        p.sort_unstable();
+        assert_eq!(a, p);
+        // And the scripted double records exactly the request it answered.
+        arm_psd_save();
+        let mut d = ScriptedDialogs::new().exporting_to("/out/a.psd");
+        let _ = d.pick_export_path(Path::new("/work/photo.png"));
+        assert_eq!(d.export_requests.len(), 1);
+        assert!(d.export_requests[0].leads_with_psd());
+        assert_eq!(d.suggested, [d.export_requests[0].suggested.clone()]);
     }
 
     #[test]

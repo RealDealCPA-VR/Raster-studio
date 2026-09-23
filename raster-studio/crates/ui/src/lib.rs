@@ -152,6 +152,15 @@ pub struct Workspace {
     /// [`Workspace::layer_thumbs`]. The mask well draws this when present and
     /// falls back to the mask glyph (headless draws, layers without a mask).
     pub mask_thumbs: std::collections::HashMap<layer_model::LayerId, egui::TextureHandle>,
+    /// W2-D: a bounded downsample of the active document's *composite*,
+    /// uploaded by the application through [`Workspace::set_composite_preview`].
+    /// The Navigator draws it under its view box and the Channels panel tints
+    /// it per component; without it (a headless draw, no document) both fall
+    /// back to the checkerboard.
+    pub navigator_texture: Option<egui::TextureHandle>,
+    /// W2-D: the Histogram panel's counted bins, fed from the same composite
+    /// preview and cached by its generation.
+    pub histogram: panels::histogram::HistogramState,
 
     /// Pointer samples the canvas routed to the active tool this frame, in
     /// document space, waiting for [`Workspace::drain_canvas_events`].
@@ -165,7 +174,7 @@ pub struct Workspace {
     /// What the layout engine reported for each rail's extent on the previous
     /// frame, indexed by [`DockSide::ALL`]. Only a *change* under the pointer
     /// counts as a resize — see [`dock::is_resize`].
-    rail_measure: [Option<f32>; 3],
+    rail_measure: [Option<f32>; DockSide::ALL.len()],
 }
 
 impl Default for Workspace {
@@ -211,7 +220,7 @@ impl MaskViewMode {
 
 /// Index of a side in [`Workspace::rail_measure`].
 fn rail_slot(side: DockSide) -> usize {
-    DockSide::ALL.iter().position(|s| *s == side).unwrap_or(0)
+    side.slot()
 }
 
 impl Workspace {
@@ -246,12 +255,69 @@ impl Workspace {
             canvas: canvas::CanvasHost::default(),
             layer_thumbs: std::collections::HashMap::new(),
             mask_thumbs: std::collections::HashMap::new(),
+            navigator_texture: None,
+            histogram: panels::histogram::HistogramState::new(),
             canvas_events: Vec::new(),
             grid_suppressed: false,
             view_readback: (1.0, (0.0, 0.0)),
             outbox: Vec::new(),
-            rail_measure: [None; 3],
+            rail_measure: [None; DockSide::ALL.len()],
         }
+    }
+
+    /// Hand the workspace a bounded downsample of the active composite.
+    ///
+    /// The application composites; the workspace only draws. One call feeds
+    /// both consumers — the Navigator thumbnail (uploaded as a texture,
+    /// written in place when one already exists so the panel keeps drawing
+    /// the same texture id) and the Histogram (recounted only when
+    /// `generation` moves, see [`panels::histogram::HistogramState::set_source`]).
+    /// `rgba` is straight-alpha 8-bit, `width × height` pixels.
+    pub fn set_composite_preview(
+        &mut self,
+        ctx: &egui::Context,
+        generation: u64,
+        width: usize,
+        height: usize,
+        rgba: &[u8],
+    ) {
+        if width == 0 || height == 0 || rgba.len() < width * height * 4 {
+            self.clear_composite_preview();
+            return;
+        }
+        if self.histogram.set_source(generation, width, height, rgba) {
+            let image = egui::ColorImage::from_rgba_unmultiplied(
+                [width, height],
+                &rgba[..width * height * 4],
+            );
+            match self.navigator_texture.as_mut() {
+                Some(tex) => tex.set(image, egui::TextureOptions::LINEAR),
+                None => {
+                    self.navigator_texture = Some(ctx.load_texture(
+                        "raster-composite-preview",
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Drop the composite preview: the document closed, or there is none.
+    pub fn clear_composite_preview(&mut self) {
+        self.navigator_texture = None;
+        self.histogram.clear();
+    }
+
+    /// Record the colour under the pointer for the Info panel, or `None` when
+    /// the pointer is off the image.
+    ///
+    /// The UI reads a pixel from nothing — the application owns the composite
+    /// — so this is the one door the RGB and Hex rows are fed through; before
+    /// it existed they read "—" for the life of the session. `rgba` is
+    /// straight-alpha sRGB in `0.0..=1.0`; the Hex row is derived from it.
+    pub fn set_info_sample(&mut self, rgba: Option<[f32; 4]>) {
+        self.info.sampled = rgba;
     }
 
     /// The extent the layout engine reported for one rail last frame.
@@ -698,14 +764,18 @@ mod tests {
     #[test]
     fn absorbing_a_panel_toggle_moves_the_dock() {
         let mut w = Workspace::new();
+        assert!(
+            !w.dock.is_open(PanelId::Actions),
+            "Essentials leaves Actions closed"
+        );
         assert!(w.absorb(&Intent::SetPanelOpen {
-            panel: PanelId::Paths,
+            panel: PanelId::Actions,
             open: true
         }));
-        assert!(w.dock.is_open(PanelId::Paths));
+        assert!(w.dock.is_open(PanelId::Actions));
         // Absorbing it again changes nothing and says so.
         assert!(!w.absorb(&Intent::SetPanelOpen {
-            panel: PanelId::Paths,
+            panel: PanelId::Actions,
             open: true
         }));
     }
@@ -744,11 +814,12 @@ mod tests {
         assert!(w.absorb(&Intent::ReorderPanel { panel: last, to: 0 }));
         assert_ne!(w.dock.panels_on(DockSide::Right), before);
         let group_lead = w.dock.panels_on(DockSide::Right)[0];
-        assert_eq!(
-            w.dock.panels_on(DockSide::Right)[1],
-            last,
-            "the dragged panel rides with its group"
+        let front = w.dock.groups_on(DockSide::Right)[0].1.clone();
+        assert!(
+            front.contains(&last),
+            "the dragged panel rides with its group: {front:?}"
         );
+        assert_eq!(front[0], group_lead);
         // Absorbing the very same intent again leaves it exactly there: the
         // destination is absolute, so a second application is a no-op.
         assert!(!w.absorb(&Intent::ReorderPanel { panel: last, to: 0 }));
@@ -787,8 +858,9 @@ mod tests {
         let doc = Document::new(32, 32, "Probe");
         let group = doc.layers.iter_depth_first().first().copied();
         let intents = vec![
+            // Paths is the one panel no Essentials column opens.
             Intent::SetPanelOpen {
-                panel: PanelId::Navigator,
+                panel: PanelId::Actions,
                 open: true,
             },
             Intent::DockPanel {

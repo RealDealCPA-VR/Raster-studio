@@ -8,6 +8,7 @@ use tools::{OptionKind, OptionSpec, ToolId};
 
 use crate::icons::icon_for;
 use crate::intent::Intent;
+use crate::menu::MenuAction;
 use crate::palette::{group_label, tooltip, PaletteModel};
 use crate::tool_options::{schema_for, wants_gradient_stops, OptionValue, BLEND_MODE_KEY};
 use crate::Workspace;
@@ -16,12 +17,13 @@ use super::{body, hint, overlay_frame, rgba_to_color32, swatch, text};
 
 /// The vertical strip of tools down the left edge.
 ///
-/// Two regions share the panel: the colour footer, pinned to the bottom, and
-/// the slot column above it, which scrolls when the window is shorter than
-/// the registry (twenty-three slots at 28 pt overflow a 720 pt window). The
-/// footer is laid out *first*, as a bottom panel inside the side panel, so the
-/// column is given exactly the height that is left rather than the two
-/// fighting over the flow.
+/// Two regions share the panel: the footer — the colour wells, swap and reset,
+/// then quick mask and screen mode — pinned to the bottom, and the slot column
+/// above it, which scrolls when the window is shorter than the registry
+/// (Photopea's nineteen slots at 28 pt fit a 720 pt window with the footer;
+/// the old twenty-four did not). The footer is laid out *first*, as a bottom
+/// panel inside the side panel, so the column is given exactly the height
+/// that is left rather than the two fighting over the flow.
 ///
 /// History, so nobody re-learns it: for a year the footer was drawn after the
 /// slots and opened with a `rect_filled(ui.max_rect(), ..)` — an opaque panel
@@ -74,10 +76,10 @@ pub fn tool_palette(w: &mut Workspace, ctx: &egui::Context) {
     flyout(w, ctx, &model);
 }
 
-/// The footer's reserved height: the overlapping well pair, a gap, and the
-/// swap/reset row.
+/// The footer's reserved height: the overlapping well pair, a gap, the
+/// swap/reset row, a gap, and the quick-mask/screen-mode row.
 fn footer_height(t: &design::Tokens) -> f32 {
-    well_pair_height(t) + Space::XSmall.pt() + t.metrics.min_hit_target
+    well_pair_height(t) + (Space::XSmall.pt() + t.metrics.min_hit_target) * 2.0
 }
 
 /// The height of the two wells drawn overlapping — the front one is offset
@@ -87,17 +89,26 @@ fn well_pair_height(t: &design::Tokens) -> f32 {
 }
 
 /// Photopea's bottom-of-column controls: the foreground/background swatch
-/// pair, with swap (X) and reset (D) beneath it.
+/// pair, with swap (X) and reset (D) beneath it, and quick mask (Q) and
+/// screen mode (F) beneath those.
 ///
 /// Everything is placed at absolute offsets inside the footer's rect rather
 /// than through egui's layout: the footer must be exactly the column wide and
 /// a known height ([`footer_height`]), and its caller has already reserved
 /// that rect. It paints nothing outside it — see [`tool_palette`] for why that
 /// sentence has to be written down.
-/// Quick-mask (Q) and screen-mode (F) are deferred, not deferred-and-drawn: a
-/// 48 pt column cannot hold four more controls, and the features behind them
-/// (a mask editing mode; the full-screen chrome) do not exist yet — when they
-/// do, this footer is where they land.
+///
+/// Q routes to the Select menu's *Edit in Quick Mask Mode* — the same
+/// [`Intent::Action`] the menu item and the `Q` chord raise — and reads as
+/// engaged from [`crate::palette::PaletteState::quick_mask`], which only the
+/// shell sets, from the editor, every frame.
+///
+/// F raises a cycle request ([`crate::palette::PaletteState::request_screen_mode_cycle`])
+/// the chrome performs as the application's screen-mode action, and lights
+/// the two full-screen modes from [`crate::palette::PaletteState::screen_mode`]
+/// — mirrored from the editor, never cycled here, so the control cannot light
+/// over an unchanged screen. `the_column_is_photopeas_and_q_and_f_sit_under_the_wells`
+/// pins both contracts.
 fn footer(w: &mut Workspace, ui: &mut Ui) {
     let tokens = design::current_theme(ui.ctx()).tokens();
     let area = ui.max_rect();
@@ -142,22 +153,57 @@ fn footer(w: &mut Workspace, ui: &mut Ui) {
     // this footer deliberately avoids. The glyph is inset by a hair only: the
     // control is already hit-target sized, and the old `shrink(3.0)` on top
     // of `paint_ui_icon`'s own inset left a 4 pt glyph.
+    // `engaged` draws the control the way a selected slot is drawn — the
+    // accent fill and ring — so quick mask reads as a mode that is *on*.
+    // `live == false` is a disabled control: hover only (so the tooltip can
+    // say why), no hover fill, the glyph in the disabled role, and `clicked()`
+    // is never true because the response has no click sense.
     let icon_control = |ui: &mut Ui,
                         left: f32,
                         top: f32,
                         id: egui::Id,
                         key: &str,
+                        live: bool,
+                        engaged: bool,
                         tooltip: &str| {
         let rect = egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(hit, hit));
-        let response = ui.interact(rect, id, egui::Sense::click());
-        if response.hovered() {
+        let sense = if live {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        };
+        let response = ui.interact(rect, id, sense);
+        let radius =
+            design::egui_theme::rounding(design::Radius::Small.resolve(&tokens.radii, hit));
+        if live && engaged {
             ui.painter().rect_filled(
                 rect,
-                design::egui_theme::rounding(design::Radius::Small.resolve(&tokens.radii, hit)),
+                radius,
+                color32(tokens.palette.color(ColorRole::AccentSubtle)),
+            );
+            ui.painter().rect_stroke(
+                rect,
+                radius,
+                egui::Stroke::new(
+                    tokens.borders.hairline,
+                    color32(tokens.palette.color(ColorRole::Accent)),
+                ),
+            );
+        } else if live && response.hovered() {
+            ui.painter().rect_filled(
+                rect,
+                radius,
                 color32(tokens.palette.color(ColorRole::ControlFillHovered)),
             );
         }
-        crate::icons::paint_ui_icon_inset(ui, rect, Space::Hair, key, design::TextRole::Secondary);
+        let role = if !live {
+            design::TextRole::Disabled
+        } else if engaged {
+            design::TextRole::Primary
+        } else {
+            design::TextRole::Secondary
+        };
+        crate::icons::paint_ui_icon_inset(ui, rect, Space::Hair, key, role);
         response.on_hover_text(tooltip)
     };
 
@@ -171,6 +217,8 @@ fn footer(w: &mut Workspace, ui: &mut Ui) {
         row2_top,
         super::ids::color_swap(),
         "swap",
+        true,
+        false,
         crate::strings::tr("ui.toolbar.swap.foreground.and.background.x"),
     );
     if swap.clicked() {
@@ -183,6 +231,8 @@ fn footer(w: &mut Workspace, ui: &mut Ui) {
         row2_top,
         super::ids::color_reset(),
         "reset-colors",
+        true,
+        false,
         crate::strings::tr("ui.toolbar.default.colours.d"),
     );
     if reset.clicked() {
@@ -192,6 +242,42 @@ fn footer(w: &mut Workspace, ui: &mut Ui) {
         );
         w.emit(Intent::SetForeground(black));
         w.emit(Intent::SetBackground(white));
+    }
+
+    // Row 3: quick mask (Q) then screen mode (F), the same pair shape.
+    // The tooltips are built from the menu item's own label and the mode's
+    // name, so the footer cannot drift from what Select ▸ says.
+    let row3_top = row2_top + hit + Space::XSmall.pt();
+    let quick = icon_control(
+        ui,
+        row2_left,
+        row3_top,
+        crate::palette::quick_mask_control(),
+        "quick-mask",
+        true,
+        w.palette.quick_mask,
+        &format!("{} (Q)", MenuAction::ToggleQuickMask.label()),
+    );
+    if quick.clicked() {
+        // Emit only. The engaged look is `w.palette.quick_mask`, which the
+        // shell mirrors from the editor; flipping it here would light the
+        // control on a refused toggle (no document open).
+        w.emit(Intent::Action(MenuAction::ToggleQuickMask));
+    }
+    // F: the tooltip names the mode one press leads to; the engaged look is
+    // the mirrored mode's, and the click is a request the chrome performs.
+    let screen = icon_control(
+        ui,
+        row2_left + hit,
+        row3_top,
+        crate::palette::screen_mode_control(),
+        "screen-mode",
+        true,
+        w.palette.screen_mode.fullscreen(),
+        &format!("{} (F)", w.palette.screen_mode.next().label()),
+    );
+    if screen.clicked() {
+        w.palette.request_screen_mode_cycle();
     }
 }
 
@@ -473,7 +559,10 @@ pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
         .exact_height(t.metrics.toolbar_height)
         .frame(
             egui::Frame::none()
-                .fill(color32(t.palette.color(ColorRole::SurfacePanel)))
+                // The header band, with the menu bar above it: one shade for
+                // the two strips across the top, the panel shade for the
+                // columns beneath them.
+                .fill(color32(t.palette.color(ColorRole::SurfaceHeader)))
                 .inner_margin(egui::Margin::symmetric(
                     t.metrics.panel_padding,
                     Space::XSmall.pt(),

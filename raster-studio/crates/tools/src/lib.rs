@@ -141,10 +141,12 @@ pub use layer_model::BlendMode;
 /// The options-bar key the paint blend mode travels under.
 ///
 /// Not a registry key: the registry schema has no slot for a blend mode, so
-/// the UI adds the control by capability (painting and retouching tools) and
-/// forwards it like any other touched option. The `ui.` prefix is history —
-/// the key is now answered by [`StrokeTool::set_setting`] and must be
-/// forwarded, not filtered.
+/// the UI adds the control by capability — to exactly the four source-over
+/// stroke tools [`composites_strokes`] names (Brush, Pencil, Clone Stamp,
+/// Pattern Stamp), which are the only tools whose `set_setting` accepts it —
+/// and forwards it like any other touched option. The `ui.` prefix is
+/// history — the key is now answered by [`StrokeTool::set_setting`] and must
+/// be forwarded, not filtered.
 pub const BLEND_MODE_KEY: &str = "ui.blend_mode";
 
 /// The blend mode a [`ToolSetting::Choice`] index under [`BLEND_MODE_KEY`]

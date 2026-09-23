@@ -53,7 +53,8 @@
 //! Every colour, radius, gap and text size *this module chooses* comes from
 //! `design`. There is no literal `Color32` and no bare pixel gap anywhere below.
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use design::{Space, SurfaceRole, TextRole, TypeRole};
 use editor_core::Command;
@@ -68,12 +69,26 @@ use crate::prefs::Preferences;
 
 /// The Layers panel thumbnail's longest edge, in texels.
 const THUMB_EDGE: u32 = 64;
+/// W2-D/W2-X: long edge of the composite preview the Navigator and the
+/// Histogram share.
+const PREVIEW_EDGE: u32 = 256;
+/// How many canvas rows one band of the composite preview reads at a time —
+/// the peak buffer is one band, not the whole canvas, on a 3628x2041 scene.
+const PREVIEW_BAND_ROWS: u32 = 256;
 
 /// How many layer/mask thumbnails one frame may recomposite. The rest wait
 /// for the next frame (which [`Chrome::refresh_layer_thumbs`] requests), so
 /// a tall stack whose every layer changed — an import, a canvas resize —
 /// spreads its cost over frames instead of freezing one.
 const THUMBS_PER_FRAME: usize = 2;
+
+/// The start screen's recent-file thumbnails' longest edge, in texels: a
+/// texel budget for the decode, not a size on screen (the cell is sized from
+/// tokens and the image is fitted into it).
+const RECENT_THUMB_EDGE: u32 = 256;
+
+/// How many recent files the start screen's grid shows.
+const START_RECENT_MAX: usize = 8;
 
 /// Install `theme` on an egui context so it survives the platform changing its
 /// mind about light and dark.
@@ -496,6 +511,27 @@ pub struct Chrome {
     /// The document `thumbs` and the workspace's thumbnail textures belong
     /// to; a switch of active document drops both.
     thumbs_document: Option<crate::doc::DocumentId>,
+    /// W2-X: the editor revision the Navigator/Histogram composite preview
+    /// was built at. `None` until one is built, and again once the last
+    /// document closes. See [`Chrome::refresh_composite_preview`].
+    preview_revision: Option<u64>,
+    /// W2-X: the revision and pointer position the Info panel's colour
+    /// sample was read at, so the 1x1 composite runs when either moves and
+    /// not per frame. See [`Chrome::refresh_info_sample`].
+    info_sample_at: Option<(u64, egui::Pos2)>,
+    /// What the docks are drawn against while no document is open: a
+    /// document with no layers and an empty history, so every panel shows
+    /// its header over an empty body — Photopea's start state — rather than
+    /// the right half of the window going blank. Built once, on first use.
+    empty_dock: Option<(editor_core::Document, editor_core::History)>,
+    /// The tab strip's overflow list is open.
+    tab_overflow_open: bool,
+    /// The start screen's Templates card has its preset list unfolded.
+    start_templates_open: bool,
+    /// The start screen's recent-file thumbnails, uploaded once per path.
+    /// `None` records a file that could not be read, so it is not retried
+    /// every frame. See [`Chrome::refresh_recent_thumbs`].
+    recent_thumbs: HashMap<PathBuf, Option<egui::TextureHandle>>,
 }
 
 /// Where this frame's window is, and where the part of it the user can see the
@@ -749,6 +785,76 @@ impl Chrome {
         }
     }
 
+    /// W2-X: the bounded downsample of the active composite the Navigator
+    /// draws under its view box and the Histogram counts, rebuilt only when
+    /// [`Editor::revision`] moves — never per frame — and read from the
+    /// canvas in bands (see [`composite_preview`]) so the peak buffer is one
+    /// band rather than the whole canvas.
+    fn refresh_composite_preview(&mut self, ctx: &egui::Context, editor: &mut Editor) {
+        let revision = editor.revision();
+        let Some(open) = editor.active_mut() else {
+            self.workspace.clear_composite_preview();
+            self.preview_revision = None;
+            return;
+        };
+        if self.preview_revision == Some(revision) && self.workspace.navigator_texture.is_some() {
+            return;
+        }
+        let Some((w, h, small)) = composite_preview(open, PREVIEW_EDGE) else {
+            self.workspace.clear_composite_preview();
+            self.preview_revision = Some(revision);
+            return;
+        };
+        self.workspace
+            .set_composite_preview(ctx, revision, w as usize, h as usize, &small);
+        self.preview_revision = Some(revision);
+    }
+
+    /// W2-X: the colour under the pointer for the Info panel, read through
+    /// the same sampler the dialogs' eyedropper uses — a 1x1 composite, run
+    /// only when the pointer or the revision moved. `None` with the pointer
+    /// off the canvas area (over a dock, outside the window), which the rows
+    /// draw as a dash. Called after [`Chrome::record_viewport`], because the
+    /// sampler maps through this frame's geometry.
+    fn refresh_info_sample(&mut self, ctx: &egui::Context, editor: &Editor) {
+        use ui::dialogs::ScreenSampler as _;
+        let pos = match self.frame_geometry {
+            Some(frame) => ctx
+                .pointer_latest_pos()
+                .filter(|p| frame.content.contains(*p)),
+            None => None,
+        };
+        let at = pos.map(|p| (editor.revision(), p));
+        if at == self.info_sample_at {
+            return;
+        }
+        let sampler = pos.and_then(|_| self.screen_sampler(editor));
+        let sample = match (pos, &sampler) {
+            (Some(p), Some(s)) => s.sample([p.x, p.y]),
+            _ => None,
+        };
+        self.workspace.info.pointer = pos.and_then(|p| self.pointer_document_point(editor, p));
+        self.workspace.set_info_sample(sample);
+        self.info_sample_at = at;
+    }
+
+    /// Where the pointer is on the document, in document pixels, for the
+    /// Info panel's Pointer row: the same window-to-document mapping the
+    /// sampler and the tool route use. `None` off the image.
+    fn pointer_document_point(&self, editor: &Editor, pos: egui::Pos2) -> Option<(f32, f32)> {
+        let frame = self.frame_geometry?;
+        let doc = editor.active()?;
+        let surface = frame.surface.size() * frame.ppp;
+        let viewport = crate::tool_input::canvas_viewport(glam::Vec2::new(surface.x, surface.y));
+        let mirror = crate::tool_input::canvas_camera_of(&doc.camera);
+        let pt = mirror.doc_of_screen_pt(
+            &viewport,
+            glam::Vec2::new(pos.x * frame.ppp, pos.y * frame.ppp),
+        );
+        let (w, h) = (doc.document.width() as f32, doc.document.height() as f32);
+        (pt.x >= 0.0 && pt.y >= 0.0 && pt.x < w && pt.y < h).then_some((pt.x, pt.y))
+    }
+
     /// Put `img` in the layer's texture: written in place when the layer
     /// already has one (the panel keeps drawing the same texture id), created
     /// otherwise.
@@ -807,27 +913,56 @@ impl Chrome {
         self.read_gesture(ctx);
         self.sync_workspace(editor);
         self.refresh_layer_thumbs(ctx, editor);
+        self.refresh_composite_preview(ctx, editor);
+        // W2-X: Photopea's F. Both full-screen modes drop the options bar,
+        // the tool column and the docks; the last drops the menu bar too. The
+        // editor's Tab flag still hides the panels on its own in Standard.
+        let mode = editor.screen_mode();
+        let panels = editor.panels_visible() && mode.panels_visible();
 
-        // Order matters, and it is `ui::Workspace::ui`'s: egui gives each panel
-        // what the previously added ones left, so the full-width strips — menu,
-        // tabs, options, status — are claimed before the vertical tool rail and
-        // the docks, and the canvas gets the rectangle in the middle.
-        self.menu_bar(ctx, editor, &mut out);
-        if editor.documents().len() > 1 || editor.panels_visible() {
-            self.tab_strip(ctx, editor, &mut out);
+        // Order matters, and it is egui's: each panel gets what the previously
+        // added ones left. Photopea's chrome, top to bottom: the menu bar and
+        // the options bar span the full width; the tool column and the docks
+        // take the sides; the tab strip sits *inside* what is left, over the
+        // canvas alone — never across the tool column or the docks; the
+        // status strip is the bottom band. The `ui` crate's own surfaces are
+        // driven from the workspace this chrome owns, and every control in
+        // them posts an intent `harvest` translates below.
+        if mode.menu_visible() {
+            self.menu_bar(ctx, editor, &mut out);
         }
-        // The `ui` crate's own surfaces, driven from the workspace this chrome
-        // owns. Every control in them posts an intent, which `harvest`
-        // translates below.
-        if editor.panels_visible() {
+        if panels {
             ui::view::tool_options(&mut self.workspace, ctx);
         }
         self.status_bar(ctx, editor, &mut out);
-        if editor.panels_visible() {
+        if panels {
             ui::view::tool_palette(&mut self.workspace, ctx);
-            if let Some(open) = editor.active() {
-                ui::view::docks(&mut self.workspace, ctx, &open.document, &open.history);
+            match editor.active() {
+                Some(open) => {
+                    ui::view::docks(&mut self.workspace, ctx, &open.document, &open.history);
+                }
+                None => {
+                    // Photopea keeps its panels up with nothing open: the
+                    // headers over an empty body, not an empty right half.
+                    // Drawn against a placeholder with no layers, so the
+                    // Layers panel has no rows — and nothing a control emits
+                    // can reach a document; see `drop_document_intents`.
+                    let (doc, history) = self.empty_dock.get_or_insert_with(|| {
+                        (
+                            editor_core::Document::new(0, 0, ""),
+                            editor_core::History::new(),
+                        )
+                    });
+                    ui::view::docks(&mut self.workspace, ctx, doc, history);
+                    self.drop_document_intents();
+                }
             }
+        }
+        // The tab strip, in the room the docks left: over the canvas only, and
+        // only when there is a document to name. With none, the start screen
+        // is the empty state and there is no dead band above it.
+        if !editor.documents().is_empty() {
+            self.tab_strip(ctx, editor, &mut out);
         }
         self.start_screen(ctx, editor, &mut out);
         // The live tool session's overlays, over the canvas the surface shows
@@ -885,6 +1020,9 @@ impl Chrome {
         // has once every panel has taken its share, and it is what the
         // Navigator's rectangle and Fit on Screen are computed against.
         self.record_viewport(ctx);
+        // The Info panel's colour under the pointer, read through the frame
+        // just recorded — the same route the dialogs' eyedropper takes.
+        self.refresh_info_sample(ctx, editor);
         // The right-click menu floats above everything; its rows post intents
         // the harvest below turns into actions the same frame.
         let menu_ctx = crate::menu_bridge::context(editor, &self.workspace);
@@ -986,6 +1124,11 @@ impl Chrome {
             .collect();
         let tool = editor.effective_tool();
         w.palette.activate(&ui::PaletteModel::build(), tool);
+        // W2-X: the footer's Q and F draw the editor's modes — whichever
+        // route moved them (the footer, the chord, the Select menu) — and
+        // never their own last click.
+        w.palette.quick_mask = editor.quick_mask();
+        w.palette.screen_mode = editor.screen_mode();
         w.status.tool = Some(tool);
         // The brush is [`Editor`]'s. Push it into the options bar every frame
         // so `[` and `]` move the slider the user is looking at — without this
@@ -1330,9 +1473,34 @@ impl Chrome {
         self.route(intent, editor, out);
     }
 
+    /// The empty state's "controls disabled": the docks were just drawn
+    /// against the placeholder document, so anything they emitted *at a
+    /// document* — a layer command, a selection, a history jump, a camera
+    /// move — has nowhere to land and is dropped here. Everything else (a
+    /// panel opened or moved, a tool option, a colour) is the workspace's own
+    /// and is put back for `harvest`, in order.
+    fn drop_document_intents(&mut self) {
+        let kept: Vec<ui::Intent> = self
+            .workspace
+            .drain_intents()
+            .into_iter()
+            .filter(|intent| !is_document_directed(intent))
+            .collect();
+        for intent in kept {
+            self.workspace.emit(intent);
+        }
+    }
+
     fn harvest(&mut self, editor: &Editor, out: &mut ChromeOutput) {
         for intent in self.workspace.drain_intents() {
             self.route(intent, editor, out);
+        }
+        // W2-X: the palette footer's F has no menu item to raise an intent
+        // for, so its click is a request the chrome answers with the
+        // application's own action — performed by the shell against the
+        // editor, and mirrored back next frame by `sync_workspace`.
+        if self.workspace.palette.take_screen_mode_cycle() {
+            out.actions.push(Action::CycleScreenMode);
         }
         // Which drag an edit belongs to is the *window's* knowledge: a slider
         // emits the value it now holds and has no idea whether the button is
@@ -1420,8 +1588,11 @@ impl Chrome {
         egui::Id::new(("raster-tab-close", index))
     }
 
-    /// Widest a document tab may grow before its title truncates.
-    const TAB_MAX_WIDTH_PT: f32 = 160.0;
+    /// Widest a document tab may grow before its title truncates: two
+    /// inspector labels, on the grid.
+    pub fn tab_width(tokens: &design::Tokens) -> f32 {
+        tokens.metrics.inspector_label_width * 2.0
+    }
 
     /// The tab button itself, for drag targeting in tests and a11y.
     pub fn tab_id(index: usize) -> egui::Id {
@@ -1439,35 +1610,110 @@ impl Chrome {
     }
 
     fn tab_strip(&mut self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
+        let tokens = design::current_theme(ctx).tokens();
+        let tab_width = Self::tab_width(tokens);
+        let gap = Space::XSmall.pt();
+        // Added after the tool column and the docks, so egui hands it only the
+        // room they left: the strip runs over the canvas, not the window.
         egui::TopBottomPanel::top("raster-tabs")
-            .frame(panel_frame(ctx, SurfaceRole::Panel, Space::Hair))
+            .frame(panel_frame(ctx, SurfaceRole::Header, Space::Hair))
             .show(ctx, |ui| {
-                // With no document the start screen (drawn over the canvas)
-                // is the empty state; the strip itself stays empty.
-                if editor.documents().is_empty() {
-                    return;
-                }
+                let total = editor.documents().len();
+                // The chevron's room is always reserved, so the count of tabs
+                // that fit cannot flip between frames as the chevron appears.
+                let chevron = tokens.metrics.min_hit_target + gap;
+                let room = (ui.available_width() - chevron).max(0.0);
+                let fits = ((room + gap) / (tab_width + gap)).floor().max(1.0) as usize;
+                let (first, last) = visible_tab_range(total, fits, editor.active_index());
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = Space::XSmall.pt();
-                    for (index, doc) in editor.documents().iter().enumerate() {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for index in first..last {
+                        let doc = &editor.documents()[index];
                         let tooltip = match doc.project_path() {
                             Some(p) => p.display().to_string(),
                             None => String::new(),
                         };
                         self.document_tab(ui, editor, index, doc.tab_label(), tooltip, out);
                     }
-                    // A strip wider than the bar hides tabs; the chevron
-                    // offers the first hidden one, which is a thing the click
-                    // can complete.
-                    let overflowed = ui.available_width() < 0.0;
-                    let _ = overflowed;
+                    // A strip wider than the bar hides tabs; the chevron lists
+                    // the hidden ones, and a row in that list activates it.
+                    let hidden: Vec<usize> =
+                        (0..total).filter(|i| !(first..last).contains(i)).collect();
+                    if hidden.is_empty() {
+                        self.tab_overflow_open = false;
+                        return;
+                    }
+                    let chevron = ui::icons::ui_icon_button_id(
+                        ui,
+                        "chevron-down",
+                        ui::strings::tr("ui.chrome.more.tabs"),
+                        design::TextRole::Secondary,
+                        Some(Self::tab_overflow_id()),
+                    );
+                    if chevron.clicked() {
+                        self.tab_overflow_open = !self.tab_overflow_open;
+                    }
+                    if self.tab_overflow_open {
+                        self.tab_overflow_menu(ui, editor, &hidden, chevron.rect, out);
+                    }
                 });
             });
     }
 
+    /// The list the tab strip's chevron opens: one row per hidden document,
+    /// in strip order. A click activates that document and closes the list.
+    fn tab_overflow_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        editor: &Editor,
+        hidden: &[usize],
+        anchor: egui::Rect,
+        out: &mut ChromeOutput,
+    ) {
+        let tokens = design::current_tokens(ui);
+        let width = Self::tab_width(tokens);
+        let area = egui::Area::new(egui::Id::new("raster-tabs-overflow"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(egui::pos2(
+                anchor.right() - width,
+                anchor.bottom() + Space::Hair.pt(),
+            ))
+            .show(ui.ctx(), |ui| {
+                overlay_frame(ui.ctx()).show(ui, |ui| {
+                    ui.set_min_width(width);
+                    ui.set_max_width(width);
+                    for &index in hidden {
+                        let label = editor.documents()[index].tab_label();
+                        let row = design::list_row(ui, &label, false);
+                        // Marked with a stable id (hover only, so it never
+                        // takes the click) so a test can name the row.
+                        ui.interact(
+                            row.rect,
+                            Self::tab_overflow_item_id(index),
+                            egui::Sense::hover(),
+                        );
+                        if row.clicked() {
+                            out.activate = Some(index);
+                            self.tab_overflow_open = false;
+                        }
+                    }
+                });
+            });
+        // A press anywhere else dismisses it, like every popup.
+        let pressed_outside = ui.input(|i| {
+            i.pointer.any_pressed()
+                && i.pointer
+                    .interact_pos()
+                    .is_some_and(|p| !area.response.rect.contains(p) && !anchor.contains(p))
+        });
+        if pressed_outside {
+            self.tab_overflow_open = false;
+        }
+    }
+
     /// One Photopea document tab: capped width, truncated title (the dirty
-    /// dot rides in `tab_label`), close button, middle-click close, drag to
-    /// reorder.
+    /// dot rides in `tab_label`), the close control *inside* the tab,
+    /// middle-click close, drag to reorder.
     fn document_tab(
         &mut self,
         ui: &mut egui::Ui,
@@ -1479,49 +1725,65 @@ impl Chrome {
     ) -> egui::Rect {
         let selected = editor.active_index() == Some(index);
         let tokens = design::current_tokens(ui);
-        let height = tokens.metrics.control_height;
-        let tab_width = Self::TAB_MAX_WIDTH_PT;
+        let height = tokens
+            .metrics
+            .control_height
+            .max(tokens.metrics.min_hit_target + Space::XSmall.pt());
+        let tab_width = Self::tab_width(tokens);
         // The interaction carries a deterministic id so tests (and the drag
         // bookkeeping) can name the tab: `ui::interact` with an explicit id.
         let (rect, _) = ui.allocate_exact_size(egui::vec2(tab_width, height), egui::Sense::hover());
         let response = ui.interact(rect, Self::tab_id(index), egui::Sense::click_and_drag());
+        let rounding =
+            design::egui_theme::rounding(design::Radius::Small.resolve(&tokens.radii, height));
         if selected {
+            // The active tab is the panel surface: it reads as the sheet the
+            // canvas below belongs to, lifted off the header band.
             ui.painter().rect_filled(
                 rect,
-                design::egui_theme::rounding(design::Radius::Small.resolve(&tokens.radii, height)),
-                design::color32(tokens.palette.color(design::ColorRole::SurfaceElevated)),
+                rounding,
+                design::color32(tokens.palette.color(design::ColorRole::SurfacePanel)),
+            );
+        } else if response.hovered() {
+            ui.painter().rect_filled(
+                rect,
+                rounding,
+                design::color32(tokens.palette.color(design::ColorRole::ControlFillHovered)),
             );
         }
+        // The close control's well, inside the tab's right edge. The title
+        // gets what is left of the tab to its left.
+        let well = tokens.metrics.min_hit_target;
+        let close_rect = egui::Rect::from_center_size(
+            egui::pos2(
+                rect.right() - Space::XSmall.pt() - well * 0.5,
+                rect.center().y,
+            ),
+            egui::Vec2::splat(well),
+        );
+        let pad = Space::Small.pt();
+        let title_room = (close_rect.left() - rect.left() - pad * 2.0).max(0.0);
         // The title truncates to the tab, with an ellipsis when it had to:
         // Photopea never lets one long name widen the strip.
-        let font = egui::TextStyle::Small.resolve(ui.style());
         let color = design::color32(if selected {
             tokens.palette.text(design::TextRole::Primary)
         } else {
             tokens.palette.text(design::TextRole::Secondary)
         });
-        let mut shown = label.clone();
-        let mut galley = ui
-            .painter()
-            .layout_no_wrap(shown.clone(), font.clone(), color);
-        if galley.size().x > tab_width - 12.0 {
-            let ellipsis = '\u{2026}';
-            while shown.chars().count() > 1 {
-                shown.pop();
-                let candidate = format!("{shown}{ellipsis}");
-                let g = ui
-                    .painter()
-                    .layout_no_wrap(candidate.clone(), font.clone(), color);
-                if g.size().x <= tab_width - 12.0 {
-                    galley = g;
-                    break;
-                }
-            }
-        }
-        let pos = egui::pos2(rect.left() + 6.0, rect.center().y - galley.size().y * 0.5);
+        let mut job = egui::text::LayoutJob::single_section(
+            label,
+            egui::TextFormat {
+                font_id: design::egui_theme::font_id(tokens, TypeRole::Body),
+                color,
+                ..Default::default()
+            },
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(title_room);
+        let galley = ui.painter().layout_job(job);
+        let pos = egui::pos2(rect.left() + pad, rect.center().y - galley.size().y * 0.5);
         ui.painter().galley(pos, galley, color);
         let tip = if tooltip.is_empty() {
-            "not saved yet".to_string()
+            ui::strings::tr("ui.chrome.not.saved.yet").to_string()
         } else {
             tooltip
         };
@@ -1570,11 +1832,16 @@ impl Chrome {
         }
         // Drawn, not typed. The panel headers' close is `ui::icons`' drawing,
         // and a tab close built the other way — a "×" handed to a text button
-        // — is one font change away from being an empty square again.
+        // — is one font change away from being an empty square again. Drawn
+        // in a child laid over the well, so its rect is inside the tab's; it
+        // is registered after the tab, so it wins the hit test over it.
+        let mut well_ui = ui.new_child(egui::UiBuilder::new().max_rect(close_rect).layout(
+            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+        ));
         if ui::icons::ui_icon_button_id(
-            ui,
+            &mut well_ui,
             "close",
-            "Close",
+            ui::strings::tr("ui.chrome.close.tab"),
             design::TextRole::Secondary,
             Some(Self::tab_close_id(index)),
         )
@@ -1585,23 +1852,47 @@ impl Chrome {
         rect
     }
 
-    /// Photopea's start screen: New / Open buttons and the recent-files list,
-    /// drawn over the canvas area while no document is open.
+    /// The tab strip's overflow chevron.
+    pub fn tab_overflow_id() -> egui::Id {
+        egui::Id::new("raster-tabs-more")
+    }
+
+    /// One row of the overflow list: the hidden document at `index`.
+    pub fn tab_overflow_item_id(index: usize) -> egui::Id {
+        egui::Id::new(("raster-tabs-more-item", index))
+    }
+
+    /// Photopea's start screen, drawn over the canvas area while no document
+    /// is open: a title, the New / Open / Templates cards and a grid of recent
+    /// files with their thumbnails.
     ///
     /// Every emission is one the shell already performs — `Action::NewDocument`,
     /// `Action::Open`, `ChromeOutput::open_recent` — so a headless click
-    /// exercises the same path the real click does.
-    fn start_screen(&self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
+    /// exercises the same path the real click does. The Templates card is the
+    /// exception in *shape* only: a preset row opens the same New Document
+    /// dialog File ▸ New does, seeded with that preset, through the dialog
+    /// host this chrome owns.
+    fn start_screen(&mut self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
         if !editor.documents().is_empty() {
+            self.start_templates_open = false;
             return;
         }
+        let tokens = design::current_theme(ctx).tokens();
+        self.refresh_recent_thumbs(ctx, editor);
+        // Centred in the room the docks and bands left — the canvas area —
+        // not in the window, or the docks would cover its right-hand third.
+        let room = ctx.available_rect();
+        let offset = room.center() - ctx.screen_rect().center();
+        let card_gap = Space::Medium.pt();
+        let card_size = Self::start_card_size(tokens);
+        let columns = 3.0;
+        let width = card_size.x * columns + card_gap * (columns - 1.0);
         egui::Area::new(egui::Id::new("raster-start-screen"))
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .anchor(egui::Align2::CENTER_CENTER, offset)
             .order(egui::Order::Middle)
             .show(ctx, |ui| {
-                let tokens = design::current_tokens(ui);
+                ui.set_width(width);
                 ui.vertical_centered(|ui| {
-                    ui.add_space(design::Space::XXLarge.pt());
                     ui.label(
                         egui::RichText::new("Raster Studio")
                             .color(design::color32(
@@ -1609,57 +1900,50 @@ impl Chrome {
                             ))
                             .font(design::egui_theme::font_id(tokens, design::TypeRole::Title)),
                     );
-                    ui.add_space(design::Space::Medium.pt());
+                    ui.add_space(design::Space::Large.pt());
                     ui.horizontal(|ui| {
-                        for (label, id, action) in [
-                            ("New", "raster-start-new", Action::NewDocument),
-                            ("Open…", "raster-start-open", Action::Open),
-                        ] {
-                            let (rect, _) = ui.allocate_exact_size(
-                                egui::vec2(96.0, tokens.metrics.control_height),
-                                egui::Sense::hover(),
-                            );
-                            let response =
-                                ui.interact(rect, egui::Id::new(id), egui::Sense::click());
-                            // Painted by hand, so the label has to be stated
-                            // for the accessibility tree (C14).
-                            response.widget_info(|| {
-                                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label)
-                            });
-                            if response.hovered() {
-                                ui.painter().rect_filled(
-                                    rect,
-                                    design::egui_theme::rounding(
-                                        design::Radius::Medium
-                                            .resolve(&tokens.radii, rect.height()),
-                                    ),
-                                    design::color32(
-                                        tokens.palette.color(design::ColorRole::AccentSubtle),
-                                    ),
-                                );
-                            }
-                            let font = design::egui_theme::font_id(tokens, design::TypeRole::Body);
-                            let galley = ui.painter().layout_no_wrap(
-                                label.to_string(),
-                                font,
-                                design::color32(tokens.palette.text(design::TextRole::Primary)),
-                            );
-                            ui.painter().galley(
-                                egui::pos2(
-                                    rect.center().x - galley.size().x * 0.5,
-                                    rect.center().y - galley.size().y * 0.5,
-                                ),
-                                galley,
-                                egui::Color32::WHITE,
-                            );
-                            if response.clicked() {
-                                out.actions.push(action);
-                            }
+                        ui.spacing_mut().item_spacing.x = card_gap;
+                        if Self::start_card(
+                            ui,
+                            "raster-start-new",
+                            ui::strings::tr("ui.chrome.start.new"),
+                            ui::strings::tr("ui.chrome.start.new.hint"),
+                            false,
+                        )
+                        .clicked()
+                        {
+                            out.actions.push(Action::NewDocument);
+                        }
+                        if Self::start_card(
+                            ui,
+                            "raster-start-open",
+                            ui::strings::tr("ui.chrome.start.open"),
+                            ui::strings::tr("ui.chrome.start.open.hint"),
+                            false,
+                        )
+                        .clicked()
+                        {
+                            out.actions.push(Action::Open);
+                        }
+                        if Self::start_card(
+                            ui,
+                            "raster-start-templates",
+                            ui::strings::tr("ui.chrome.start.templates"),
+                            ui::strings::tr("ui.chrome.start.templates.hint"),
+                            self.start_templates_open,
+                        )
+                        .clicked()
+                        {
+                            self.start_templates_open = !self.start_templates_open;
                         }
                     });
-                    ui.add_space(design::Space::Medium.pt());
+                    if self.start_templates_open {
+                        ui.add_space(design::Space::Small.pt());
+                        self.start_templates(ui, width);
+                    }
+                    ui.add_space(design::Space::Large.pt());
                     ui.label(
-                        egui::RichText::new("Recent")
+                        egui::RichText::new(ui::strings::tr("ui.chrome.start.recent"))
                             .color(design::color32(
                                 tokens.palette.text(design::TextRole::Tertiary),
                             ))
@@ -1668,58 +1952,307 @@ impl Chrome {
                                 design::TypeRole::Footnote,
                             )),
                     );
-                    for (index, path) in editor.recent().entries().iter().enumerate().take(8) {
-                        let name = path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| path.display().to_string());
-                        let height = tokens.metrics.list_row_height;
-                        let width = ui.available_width().min(280.0);
-                        let (rect, _) =
-                            ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
-                        let response = ui
-                            .interact(rect, Self::start_recent_id(index), egui::Sense::click())
-                            .on_hover_text(path.display().to_string());
-                        // Painted by hand; the row's accessible name is the
-                        // file's name (C14).
-                        response.widget_info(|| {
-                            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.clone())
-                        });
-                        if response.hovered() {
-                            ui.painter().rect_filled(
-                                rect,
-                                egui::Rounding::ZERO,
-                                design::color32(
-                                    tokens.palette.color(design::ColorRole::ControlFillHovered),
-                                ),
-                            );
-                        }
-                        let font = design::egui_theme::font_id(tokens, design::TypeRole::Body);
-                        let galley = ui.painter().layout_no_wrap(
-                            name,
-                            font,
-                            design::color32(tokens.palette.text(design::TextRole::Secondary)),
-                        );
-                        let pos =
-                            egui::pos2(rect.left() + 6.0, rect.center().y - galley.size().y * 0.5);
-                        ui.painter().galley(pos, galley, egui::Color32::WHITE);
-                        if response.clicked() {
-                            out.open_recent = Some(path.clone());
-                        }
-                    }
+                    ui.add_space(design::Space::Small.pt());
                     if editor.recent().is_empty() {
                         ui.colored_label(
                             design::color32(tokens.palette.text(design::TextRole::Tertiary)),
-                            "No recent files yet",
+                            ui::strings::tr("ui.chrome.start.no.recent"),
                         );
+                    } else {
+                        self.start_recent_grid(ui, editor, width, card_gap, out);
                     }
                 });
             });
     }
 
-    /// The recent row's id, so a headless test can click entry `index`.
+    /// A start-screen card: a bordered, rounded tile with a headline and a
+    /// one-line hint. Painted by hand so the label is stated for the
+    /// accessibility tree (C14) and the card's rect is the thing a test reads.
+    fn start_card(
+        ui: &mut egui::Ui,
+        id: &'static str,
+        label: &str,
+        hint: &str,
+        selected: bool,
+    ) -> egui::Response {
+        let tokens = design::current_tokens(ui);
+        let (rect, _) = ui.allocate_exact_size(Self::start_card_size(tokens), egui::Sense::hover());
+        let response = ui.interact(rect, egui::Id::new(id), egui::Sense::click());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+        let radius = design::egui_theme::rounding(
+            design::Radius::Medium.resolve(&tokens.radii, rect.height()),
+        );
+        let fill = if selected {
+            design::ColorRole::AccentSubtle
+        } else if response.hovered() {
+            design::ColorRole::ControlFillHovered
+        } else {
+            design::ColorRole::SurfaceElevated
+        };
+        ui.painter().rect(
+            rect,
+            radius,
+            design::color32(tokens.palette.color(fill)),
+            egui::Stroke::new(
+                tokens.borders.hairline,
+                design::color32(tokens.palette.color(design::ColorRole::SeparatorHairline)),
+            ),
+        );
+        let pad = tokens.metrics.panel_padding + Space::Small.pt();
+        let title = ui.painter().layout_no_wrap(
+            label.to_string(),
+            design::egui_theme::font_id(tokens, design::TypeRole::Headline),
+            design::color32(tokens.palette.text(design::TextRole::Primary)),
+        );
+        let title_pos = egui::pos2(rect.left() + pad, rect.top() + pad);
+        let mut job = egui::text::LayoutJob::single_section(
+            hint.to_string(),
+            egui::TextFormat {
+                font_id: design::egui_theme::font_id(tokens, design::TypeRole::Footnote),
+                color: design::color32(tokens.palette.text(design::TextRole::Secondary)),
+                ..Default::default()
+            },
+        );
+        job.wrap = egui::text::TextWrapping::wrap_at_width(rect.width() - pad * 2.0);
+        let hint_galley = ui.painter().layout_job(job);
+        let hint_pos = egui::pos2(
+            rect.left() + pad,
+            rect.bottom() - pad - hint_galley.size().y,
+        );
+        // The galleys carry their own colours; the tint passed here is egui's
+        // fallback for a section without one, so it is the same colour.
+        let primary = design::color32(tokens.palette.text(design::TextRole::Primary));
+        ui.painter().galley(title_pos, title, primary);
+        ui.painter().galley(hint_pos, hint_galley, primary);
+        response
+    }
+
+    /// One card's footprint, on the grid: two inspector labels wide, a
+    /// headline plus a hint plus the padding around them tall.
+    fn start_card_size(tokens: &design::Tokens) -> egui::Vec2 {
+        egui::vec2(
+            tokens.metrics.inspector_label_width * 2.0,
+            tokens.metrics.control_height * 2.0
+                + tokens.metrics.panel_padding * 2.0
+                + Space::Small.pt() * 2.0,
+        )
+    }
+
+    /// The Templates card's list: the New dialog's own presets, grouped as
+    /// that dialog groups them. A row opens that dialog seeded with the preset.
+    fn start_templates(&mut self, ui: &mut egui::Ui, width: f32) {
+        use ui::dialogs::new_document::{PresetGroup, PRESETS};
+        let tokens = design::current_tokens(ui);
+        let column = tokens.metrics.inspector_label_width * 2.0;
+        let gap = Space::Medium.pt();
+        let mut chosen: Option<usize> = None;
+        overlay_frame(ui.ctx()).show(ui, |ui| {
+            ui.set_width(width);
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                for group in PresetGroup::ALL {
+                    ui.vertical(|ui| {
+                        ui.set_width(column);
+                        design::section_header(ui, group.label());
+                        for (index, preset) in PRESETS.iter().enumerate() {
+                            if preset.group != *group {
+                                continue;
+                            }
+                            let row = design::list_row(ui, preset.name, false);
+                            ui.interact(
+                                row.rect,
+                                Self::start_template_id(index),
+                                egui::Sense::hover(),
+                            );
+                            if row.clicked() {
+                                chosen = Some(index);
+                            }
+                        }
+                    });
+                }
+            });
+        });
+        if let Some(index) = chosen {
+            let mut dialog = ui::dialogs::NewDocumentDialog::default();
+            dialog.apply_preset(index);
+            self.dialogs
+                .open(ActiveDialog::NewDocument(Box::new(dialog)));
+            self.start_templates_open = false;
+        }
+    }
+
+    /// The recent-files grid: a thumbnail over a name per file, as many
+    /// columns as the start screen's width allows.
+    fn start_recent_grid(
+        &mut self,
+        ui: &mut egui::Ui,
+        editor: &Editor,
+        width: f32,
+        gap: f32,
+        out: &mut ChromeOutput,
+    ) {
+        let tokens = design::current_tokens(ui);
+        let cell = Self::start_recent_cell_size(tokens);
+        let columns = ((width + gap) / (cell.x + gap)).floor().max(1.0) as usize;
+        let entries: Vec<(usize, &PathBuf)> = editor
+            .recent()
+            .entries()
+            .iter()
+            .enumerate()
+            .take(START_RECENT_MAX)
+            .collect();
+        for row in entries.chunks(columns) {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                for (index, path) in row {
+                    self.start_recent_cell(ui, *index, path, cell, out);
+                }
+            });
+            ui.add_space(Space::Small.pt());
+        }
+    }
+
+    /// A recent-file cell: thumbnail (or a plain well while it has none),
+    /// then the file name, truncated to the cell.
+    fn start_recent_cell(
+        &self,
+        ui: &mut egui::Ui,
+        index: usize,
+        path: &Path,
+        cell: egui::Vec2,
+        out: &mut ChromeOutput,
+    ) {
+        let tokens = design::current_tokens(ui);
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.display().to_string());
+        let (rect, _) = ui.allocate_exact_size(cell, egui::Sense::hover());
+        let response = ui
+            .interact(rect, Self::start_recent_id(index), egui::Sense::click())
+            .on_hover_text(path.display().to_string());
+        // Painted by hand; the cell's accessible name is the file's name
+        // (C14).
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.clone())
+        });
+        let radius = design::egui_theme::rounding(
+            design::Radius::Small.resolve(&tokens.radii, tokens.metrics.control_height),
+        );
+        if response.hovered() {
+            ui.painter().rect_filled(
+                rect.expand(Space::XSmall.pt()),
+                radius,
+                design::color32(tokens.palette.color(design::ColorRole::ControlFillHovered)),
+            );
+        }
+        let thumb_rect = egui::Rect::from_min_size(
+            rect.min,
+            egui::vec2(cell.x, cell.y - tokens.metrics.list_row_height),
+        );
+        ui.painter().rect_filled(
+            thumb_rect,
+            radius,
+            design::color32(tokens.palette.color(design::ColorRole::SurfaceSunken)),
+        );
+        if let Some(Some(tex)) = self.recent_thumbs.get(path) {
+            // Fit the image inside the well, centred, aspect kept.
+            let size = tex.size_vec2();
+            let scale = (thumb_rect.width() / size.x).min(thumb_rect.height() / size.y);
+            let fitted = egui::Rect::from_center_size(thumb_rect.center(), size * scale);
+            // A texture is painted through a tint; white is "as uploaded", the
+            // only tint that is not a design decision.
+            ui.painter().image(
+                tex.id(),
+                fitted,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        }
+        let color = design::color32(tokens.palette.text(design::TextRole::Secondary));
+        let mut job = egui::text::LayoutJob::single_section(
+            name,
+            egui::TextFormat {
+                font_id: design::egui_theme::font_id(tokens, design::TypeRole::Footnote),
+                color,
+                ..Default::default()
+            },
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(cell.x);
+        let galley = ui.painter().layout_job(job);
+        let label_rect =
+            egui::Rect::from_min_max(egui::pos2(rect.left(), thumb_rect.bottom()), rect.max);
+        ui.painter().galley(
+            egui::pos2(
+                label_rect.center().x - galley.size().x * 0.5,
+                label_rect.center().y - galley.size().y * 0.5,
+            ),
+            galley,
+            color,
+        );
+        if response.clicked() {
+            out.open_recent = Some(path.to_path_buf());
+        }
+    }
+
+    /// A recent cell's footprint: the card width, a 3:2 thumbnail well and a
+    /// list row for the name.
+    fn start_recent_cell_size(tokens: &design::Tokens) -> egui::Vec2 {
+        let width = tokens.metrics.inspector_label_width * 2.0;
+        egui::vec2(
+            width,
+            Space::XXLarge.pt() * 3.0 + tokens.metrics.list_row_height,
+        )
+    }
+
+    /// Keep one uploaded thumbnail per recent file, decoded once — never per
+    /// frame. A `.rstudio` package's own `previews/preview.png` is read; a
+    /// flat image is decoded through `raster` and box-filtered down. One
+    /// decode per frame, so a long list spreads its cost over frames instead
+    /// of freezing the first one. `None` in the map records a file that could
+    /// not be read, so it is not retried every frame.
+    fn refresh_recent_thumbs(&mut self, ctx: &egui::Context, editor: &Editor) {
+        let wanted: Vec<PathBuf> = editor
+            .recent()
+            .entries()
+            .iter()
+            .take(START_RECENT_MAX)
+            .cloned()
+            .collect();
+        self.recent_thumbs.retain(|path, _| wanted.contains(path));
+        let Some(path) = wanted
+            .into_iter()
+            .find(|p| !self.recent_thumbs.contains_key(p))
+        else {
+            return;
+        };
+        let texture = recent_thumb_image(&path, RECENT_THUMB_EDGE).map(|img| {
+            ctx.load_texture(
+                format!("recent-{}", path.display()),
+                img,
+                egui::TextureOptions::LINEAR,
+            )
+        });
+        self.recent_thumbs.insert(path, texture);
+        // Another entry may still be waiting; the next frame takes it.
+        ctx.request_repaint();
+    }
+
+    /// The uploaded thumbnails, for tests that ask what the start screen has.
+    #[cfg(test)]
+    pub(crate) fn recent_thumbs_for_test(&self) -> &HashMap<PathBuf, Option<egui::TextureHandle>> {
+        &self.recent_thumbs
+    }
+
+    /// The recent cell's id, so a headless test can click entry `index`.
     pub fn start_recent_id(index: usize) -> egui::Id {
         egui::Id::new(("raster-start-recent", index))
+    }
+
+    /// The Templates list's row for preset `index` (into
+    /// `ui::dialogs::new_document::PRESETS`).
+    pub fn start_template_id(index: usize) -> egui::Id {
+        egui::Id::new(("raster-start-template", index))
     }
 
     /// The status strip.
@@ -1732,9 +2265,12 @@ impl Chrome {
     /// document(s)", the reason an action refused. `ui::StatusBar` has no field
     /// for that string, and dropping it would take the only report a user gets
     /// of half the shell's work off the screen.
+    ///
+    /// The document's title is *not* here: the tab strip carries it, and a
+    /// strip that repeats the tab is one more thing to read for nothing.
     fn status_bar(&mut self, ctx: &egui::Context, editor: &Editor, out: &mut ChromeOutput) {
         egui::TopBottomPanel::bottom("raster-status")
-            .frame(panel_frame(ctx, SurfaceRole::Panel, Space::Hair))
+            .frame(panel_frame(ctx, SurfaceRole::Header, Space::Hair))
             .show(ctx, |ui| {
                 let tokens = design::current_tokens(ui);
                 let dim = design::color32(tokens.palette.text(TextRole::Secondary));
@@ -1742,10 +2278,6 @@ impl Chrome {
                     ui.spacing_mut().item_spacing.x = Space::Small.pt();
                     match editor.active() {
                         Some(doc) => {
-                            ui.label(
-                                egui::RichText::new(doc.title())
-                                    .text_style(design::egui_theme::text_style(TypeRole::Footnote)),
-                            );
                             // Photopea's bottom-left: the zoom is editable, the
                             // dimensions are not. Committing parses the
                             // Navigator's grammar and hands the camera the
@@ -1759,7 +2291,7 @@ impl Chrome {
                             ui.colored_label(dim, ui::status::format_dimensions(&doc.document));
                         }
                         None => {
-                            ui.colored_label(dim, "No document");
+                            ui.colored_label(dim, ui::strings::tr("ui.chrome.no.document"));
                         }
                     }
                     // The readouts chevron: the fields that would crowd the
@@ -1767,7 +2299,7 @@ impl Chrome {
                     if ui::icons::ui_icon_button_id(
                         ui,
                         "chevron-right",
-                        "More readouts",
+                        ui::strings::tr("ui.chrome.more.readouts"),
                         design::TextRole::Secondary,
                         Some(Self::status_readouts_id()),
                     )
@@ -1779,7 +2311,13 @@ impl Chrome {
                         self.readouts_menu(ui, editor, dim);
                     }
                     ui.colored_label(dim, self.workspace.status.tool_hint());
-                    ui.colored_label(dim, format!("{} px", editor.brush().size as i32));
+                    // The size readout belongs to the tools that *have* a size
+                    // — decided from the options schema, so "Move (V) 24 px"
+                    // cannot come back with the next tool that is added.
+                    let tool = editor.effective_tool();
+                    if tool_has_size(tool) {
+                        ui.colored_label(dim, format!("{} px", editor.brush().size as i32));
+                    }
                     if let Some(status) = editor.status() {
                         // Laid out and placed by hand, because this is the one
                         // label whose length the application does not control:
@@ -1921,6 +2459,180 @@ impl Chrome {
             out.actions.push(Action::ShowFileInfo);
         }
     }
+}
+
+/// Which tabs the strip shows: `[first, last)` into the document list.
+///
+/// Everything, when `fits` is enough; otherwise a window of `fits` tabs that
+/// keeps the active document in view, sliding only as far as it has to — the
+/// first tabs stay put while the active one is among them, the way a browser
+/// strip does.
+fn visible_tab_range(total: usize, fits: usize, active: Option<usize>) -> (usize, usize) {
+    if total == 0 {
+        return (0, 0);
+    }
+    let fits = fits.max(1);
+    if total <= fits {
+        return (0, total);
+    }
+    let active = active.unwrap_or(0).min(total - 1);
+    let first = if active < fits { 0 } else { active + 1 - fits };
+    (first, first + fits)
+}
+
+/// Whether the status strip's size readout applies to `tool`: true when the
+/// tool's options schema carries a `size` key, the same schema the options bar
+/// draws its slider from. Asked of the registry, never of a list of tools.
+fn tool_has_size(tool: ToolId) -> bool {
+    tools::registry::info(tool).is_some_and(|info| {
+        ui::tool_options::schema_for(info)
+            .iter()
+            .any(|spec| spec.key == "size")
+    })
+}
+
+/// An intent that can only mean something *to a document*. With no document
+/// open there is nothing for it to land on, so the empty-state docks drop it.
+fn is_document_directed(intent: &ui::Intent) -> bool {
+    matches!(
+        intent,
+        ui::Intent::Document(_)
+            | ui::Intent::EditLayerKind { .. }
+            | ui::Intent::SelectLayers { .. }
+            | ui::Intent::SetGroupExpanded { .. }
+            | ui::Intent::EnterTextLayer { .. }
+            | ui::Intent::SetEditTarget { .. }
+            | ui::Intent::HistoryJump(_)
+            | ui::Intent::SetZoom(_)
+            | ui::Intent::SetViewCenter(_)
+    )
+}
+
+/// A recent file's thumbnail, decoded and fitted under `max_edge` texels.
+///
+/// A `.rstudio` package carries its own composite preview at
+/// `project_format::PREVIEW_FILE`; that PNG is read and decoded. Anything
+/// else is decoded whole through `raster`'s codec facade and box-filtered
+/// down. `None` for a file that is gone, unreadable, or not an image.
+fn recent_thumb_image(path: &Path, max_edge: u32) -> Option<egui::ColorImage> {
+    let preview = path.join(project_format::PREVIEW_FILE);
+    let decoded = if preview.is_file() {
+        raster::decode_bytes(&std::fs::read(preview).ok()?).ok()?
+    } else if path.is_file() {
+        raster::decode_path(path).ok()?
+    } else {
+        return None;
+    };
+    let (width, height, rgba8) =
+        box_downscale(decoded.width, decoded.height, &decoded.rgba8, max_edge);
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [width as usize, height as usize],
+        &rgba8,
+    ))
+}
+
+/// W2-X: the whole canvas composited and box-averaged so its long edge is at
+/// most `max_edge`, read in bands of [`PREVIEW_BAND_ROWS`] source rows.
+///
+/// One integer factor for the whole image (so every output pixel averages the
+/// same block), each band a whole number of output rows, and the band is the
+/// only full-resolution buffer alive: a 3628x2041 scene is read as eight
+/// bands of 3.7 MB rather than one of 30 MB. `None` for an empty canvas or a
+/// composite that failed.
+fn composite_preview(
+    open: &mut crate::doc::OpenDocument,
+    max_edge: u32,
+) -> Option<(u32, u32, Vec<u8>)> {
+    let rect = open.canvas_rect();
+    let (width, height) = (rect.width, rect.height);
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let factor = width.max(height).div_ceil(max_edge.max(1)).max(1);
+    let out_w = (width / factor).max(1);
+    let out_h = (height / factor).max(1);
+    let mut out = vec![0u8; (out_w as usize) * (out_h as usize) * 4];
+    // Output rows per band: a whole number, so a block never straddles two
+    // bands.
+    let rows_per_band = (PREVIEW_BAND_ROWS / factor).max(1);
+    let block = u64::from(factor) * u64::from(factor);
+    let mut oy = 0u32;
+    while oy < out_h {
+        let band_rows = rows_per_band.min(out_h - oy);
+        let y0 = oy * factor;
+        let band_h = (band_rows * factor).min(height - y0);
+        let band = open
+            .composite(raster::PixelRect::new(
+                rect.x,
+                rect.y + i64::from(y0),
+                width,
+                band_h,
+            ))
+            .ok()?;
+        let stride = width as usize * 4;
+        for by in 0..band_rows {
+            for ox in 0..out_w {
+                let mut sum = [0u64; 4];
+                for y in by * factor..((by + 1) * factor).min(band_h) {
+                    let row = y as usize * stride;
+                    for x in ox * factor..((ox + 1) * factor).min(width) {
+                        let i = row + x as usize * 4;
+                        for (c, acc) in sum.iter_mut().enumerate() {
+                            *acc += u64::from(band[i + c]);
+                        }
+                    }
+                }
+                let o = ((oy + by) as usize * out_w as usize + ox as usize) * 4;
+                for (c, acc) in sum.iter().enumerate() {
+                    out[o + c] = (acc / block) as u8;
+                }
+            }
+        }
+        oy += band_rows;
+    }
+    Some((out_w, out_h, out))
+}
+
+/// Shrink straight-alpha RGBA8 by an integer factor so the longest edge is at
+/// most `max_edge`, averaging each factor-by-factor block. An image already
+/// small enough comes back untouched.
+fn box_downscale(width: u32, height: u32, rgba8: &[u8], max_edge: u32) -> (u32, u32, Vec<u8>) {
+    let long = width.max(height);
+    if long == 0 || rgba8.len() < (width as usize) * (height as usize) * 4 {
+        return (0, 0, Vec::new());
+    }
+    let factor = long.div_ceil(max_edge.max(1)).max(1);
+    if factor == 1 {
+        return (width, height, rgba8.to_vec());
+    }
+    let out_w = (width / factor).max(1);
+    let out_h = (height / factor).max(1);
+    let mut out = vec![0u8; (out_w as usize) * (out_h as usize) * 4];
+    let stride = width as usize * 4;
+    for oy in 0..out_h {
+        for ox in 0..out_w {
+            let mut sum = [0u64; 4];
+            let mut n = 0u64;
+            for y in oy * factor..((oy + 1) * factor).min(height) {
+                let row = y as usize * stride;
+                for x in ox * factor..((ox + 1) * factor).min(width) {
+                    let i = row + x as usize * 4;
+                    for (c, acc) in sum.iter_mut().enumerate() {
+                        *acc += u64::from(rgba8[i + c]);
+                    }
+                    n += 1;
+                }
+            }
+            let o = (oy as usize * out_w as usize + ox as usize) * 4;
+            for (c, acc) in sum.iter().enumerate() {
+                out[o + c] = (acc / n.max(1)) as u8;
+            }
+        }
+    }
+    (out_w, out_h, out)
 }
 
 /// Default width of the layers and history docks, on the 4pt grid.
@@ -2112,12 +2824,12 @@ mod tests {
             "\\a directory with a long name".repeat(12)
         ));
 
-        let painted = painted_text(&mut ed);
-        // The status bar is the bottom-most panel of the window.
-        let row: Vec<&(String, egui::Rect)> = painted
-            .iter()
-            .filter(|(_, r)| r.center().y > 900.0 - 40.0)
-            .collect();
+        // The status bar's own shapes — not a dock row whose galley runs
+        // past its clip into the bar's band (egui clips at draw time, not in
+        // the shape list), which is what the bottom of the Brushes panel is.
+        let mut window = Window::new(&mut ed);
+        let painted = window.status_bar_texts(&mut ed);
+        let row: Vec<&(String, egui::Rect)> = painted.iter().collect();
         assert!(
             row.len() >= 4,
             "the status bar drew {row:?}, so this test is not looking at it"
@@ -2704,34 +3416,38 @@ mod tests {
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
             chrome.ui(ctx, &mut ed);
         });
-        assert!(!chrome.workspace().dock.is_open(ui::PanelId::Navigator));
+        // Actions is the one panel the default (Essentials) layout leaves
+        // closed — W2-D opened Channels and Paths with Layers, and Navigator
+        // sits in the narrow right column — so it is the one whose opening
+        // this test can watch.
+        let panel = ui::PanelId::Actions;
+        assert!(
+            !chrome.workspace().dock.is_open(panel),
+            "the default layout opens {panel:?}, so opening it proves nothing"
+        );
 
-        chrome.workspace.emit(ui::Intent::SetPanelOpen {
-            panel: ui::PanelId::Navigator,
-            open: true,
-        });
+        chrome
+            .workspace
+            .emit(ui::Intent::SetPanelOpen { panel, open: true });
         let mut out = ChromeOutput::default();
         let _ = ctx.run(raw_input(Vec::new()), |ctx| {
             out = chrome.ui(ctx, &mut ed);
         });
         assert_eq!(
             out.workspace,
-            vec![ui::Intent::SetPanelOpen {
-                panel: ui::PanelId::Navigator,
-                open: true
-            }],
+            vec![ui::Intent::SetPanelOpen { panel, open: true }],
             "{out:?}"
         );
         assert!(
-            chrome.workspace().dock.is_open(ui::PanelId::Navigator),
+            chrome.workspace().dock.is_open(panel),
             "the panel was reported but never opened"
         );
 
         // ...and the next frame really draws it.
         let painted: Vec<String> = painted_text_with(&ctx, &mut chrome, &mut ed);
         assert!(
-            painted.iter().any(|t| t == ui::PanelId::Navigator.title()),
-            "the Navigator never appeared: {painted:?}"
+            painted.iter().any(|t| t == panel.title()),
+            "the {panel:?} panel never appeared: {painted:?}"
         );
     }
 
@@ -3083,6 +3799,69 @@ mod tests {
 
         fn panels_on(&self, side: ui::DockSide) -> Vec<ui::PanelId> {
             self.chrome.workspace().dock.panels_on(side)
+        }
+
+        /// Every shape one more frame painted, pre-tessellation.
+        fn shapes(&mut self, editor: &mut Editor) -> Vec<egui::Shape> {
+            let chrome = &mut self.chrome;
+            let full = self.ctx.run(raw_input(Vec::new()), |ctx| {
+                let _ = chrome.ui(ctx, editor);
+            });
+            full.shapes
+                .iter()
+                .map(|clipped| clipped.shape.clone())
+                .collect()
+        }
+
+        /// Every string one more frame painted, with where it landed.
+        fn painted_text_rects(&mut self, editor: &mut Editor) -> Vec<(String, egui::Rect)> {
+            self.shapes(editor)
+                .into_iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_string(),
+                        egui::Rect::from_min_size(text.pos, text.galley.size()),
+                    )),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// Every string the status bar itself painted on one more frame,
+        /// with where it landed.
+        ///
+        /// The bar's shapes are the ones clipped to the bar: egui clips a
+        /// galley at draw time, not in the shape list, so a dock row laid
+        /// out just above the bar keeps its full rectangle in
+        /// `FullOutput::shapes` even where the bar is painted over it. A
+        /// band-of-the-window filter caught those rows; this does not.
+        fn status_bar_texts(&mut self, editor: &mut Editor) -> Vec<(String, egui::Rect)> {
+            let chrome = &mut self.chrome;
+            let full = self.ctx.run(raw_input(Vec::new()), |ctx| {
+                let _ = chrome.ui(ctx, editor);
+            });
+            let bar = self
+                .panel_rect("raster-status")
+                .expect("the status bar was drawn");
+            full.shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if clipped.clip_rect.min.y >= bar.top() - 0.5 => {
+                        Some((
+                            text.galley.text().to_string(),
+                            egui::Rect::from_min_size(text.pos, text.galley.size()),
+                        ))
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// The rectangle egui gave a named panel on the last frame, or
+        /// `None` when no such panel was ever drawn on this context.
+        fn panel_rect(&self, id: &str) -> Option<egui::Rect> {
+            egui::containers::panel::PanelState::load(&self.ctx, egui::Id::new(id))
+                .map(|state| state.rect)
         }
 
         /// The screen rect a drawn widget occupies, for width assertions.
@@ -3627,12 +4406,473 @@ mod tests {
         let tab = window
             .read_rect(Chrome::tab_id(0))
             .expect("the tab was drawn");
+        let max_width = Chrome::tab_width(design::Theme::Dark.tokens());
         assert!(
-            tab.width() <= Chrome::TAB_MAX_WIDTH_PT + 1.0,
+            tab.width() <= max_width + 1.0,
             "a {}-character title widened the tab to {}",
             long.len(),
             tab.width()
         );
+    }
+
+    // ------------------------------------------------------------------
+    // W2-A: Photopea's chrome layout — band order, the tab strip's extent,
+    // the empty state's docks, the status readouts, the tab's close control
+    // and the start screen's cards and thumbnails. Each of these is red on
+    // the layout this replaced.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn the_options_bar_sits_above_the_tab_strip_which_runs_only_over_the_canvas() {
+        // Photopea: menu, then the options bar across the whole window, then
+        // the tab strip over the canvas alone — right of the tool column,
+        // left of the docks. The strip used to be a full-width band between
+        // the menu and the options bar.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&png(dir.path(), "a.png")).unwrap();
+        let mut window = Window::new(&mut ed);
+        window.settle(&mut ed);
+
+        let menu = window.panel_rect("raster-menu-bar").expect("the menu bar");
+        let options = window
+            .panel_rect("raster-tool-options")
+            .expect("the options bar");
+        let tabs = window.panel_rect("raster-tabs").expect("the tab strip");
+        let tools = window.panel_rect("raster-tools").expect("the tool column");
+        let right = window
+            .panel_rect("raster-dock-right")
+            .expect("the default layout docks panels on the right");
+        assert!(
+            menu.bottom() <= options.top() + 0.5,
+            "the menu bar {menu:?} is not above the options bar {options:?}"
+        );
+        assert!(
+            options.bottom() <= tabs.top() + 0.5,
+            "the options bar {options:?} is not above the tab strip {tabs:?}"
+        );
+        assert!(
+            tabs.left() >= tools.right() - 0.5,
+            "the tab strip {tabs:?} runs across the tool column {tools:?}"
+        );
+        assert!(
+            tabs.right() <= right.left() + 0.5,
+            "the tab strip {tabs:?} runs under the right dock {right:?}"
+        );
+        assert!(
+            options.left() < tools.right() && options.width() > tabs.width(),
+            "the options bar {options:?} is not the full-width band above the strip {tabs:?}"
+        );
+    }
+
+    #[test]
+    fn with_no_document_the_docks_are_drawn_and_the_tab_strip_is_not() {
+        // Photopea keeps its panels up on the start screen. The docks used to
+        // be drawn only for an active document, which left the right half of
+        // the window empty; and the strip used to be an empty 20pt band.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        assert!(ed.documents().is_empty());
+        let mut window = Window::new(&mut ed);
+        let texts = window.painted_texts(&mut ed);
+
+        let dock = ui::DockState::default();
+        let open: Vec<ui::PanelId> = ui::DockSide::ALL
+            .iter()
+            .flat_map(|side| dock.panels_on(*side))
+            .collect();
+        assert!(open.len() >= 5, "the default layout opens {open:?}");
+        for panel in &open {
+            assert!(
+                texts.iter().any(|t| t == panel.title()),
+                "the {} panel header is not drawn on the start screen; drawn: {texts:?}",
+                panel.title()
+            );
+        }
+        assert!(
+            window.panel_rect("raster-dock-right").is_some(),
+            "the right dock is not drawn on the start screen"
+        );
+        assert!(
+            window.panel_rect("raster-tabs").is_none(),
+            "an empty tab strip is drawn with no document"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == ui::strings::tr("ui.chrome.no.document")),
+            "the status strip does not say there is no document: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn the_empty_state_docks_draw_in_both_themes_without_panicking() {
+        // The docks are drawn against a document with no layers and no size;
+        // a panel that divides by the canvas size shows up here, not on a
+        // user's first launch.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        for theme in design::Theme::ALL {
+            let ctx = egui::Context::default();
+            install_theme(&ctx, *theme);
+            let mut chrome = Chrome::new();
+            let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+                let _ = chrome.ui(ctx, &mut ed);
+            });
+            for panel in ui::PanelId::ALL.iter().copied() {
+                chrome
+                    .workspace
+                    .emit(ui::Intent::SetPanelOpen { panel, open: true });
+            }
+            for _ in 0..3 {
+                let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+                    let _ = chrome.ui(ctx, &mut ed);
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_state_panel_control_reaches_no_document() {
+        // The empty state's docks are real panels with real buttons. A click
+        // on the Layers footer's + must not come out as a document command
+        // (there is no document) and must not be reported as unrouted either
+        // — it is simply nothing, the way a disabled control is.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        assert!(ed.documents().is_empty());
+        let mut window = Window::new(&mut ed);
+        let out = window.click(&mut ed, ui::view::ids::new_layer());
+        assert!(
+            out.commands.is_empty() && out.layer_kind.is_empty() && out.select_layer.is_none(),
+            "a click with no document open produced {out:?}"
+        );
+        assert!(
+            out.unrouted.is_empty(),
+            "the empty state reported a control as unrouted: {:?}",
+            out.unrouted
+        );
+    }
+
+    #[test]
+    fn the_status_bar_sizes_only_the_tools_whose_schema_has_a_size() {
+        // The strip used to say "Move (V) 24 px". The size readout follows
+        // the options schema — the same one the options bar draws its slider
+        // from — and the document title is the tab's, not the strip's.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&png(dir.path(), "a.png")).unwrap();
+        let mut window = Window::new(&mut ed);
+        let is_size_readout = |t: &String| {
+            t.strip_suffix(" px")
+                .is_some_and(|n| n.parse::<i32>().is_ok())
+        };
+
+        // Only the status bar's own shapes: a panel prints pixel counts of
+        // its own (the Brushes panel's "Pencil 1px" rows sit right above the
+        // bar in the narrow column, and their galleys run into its band).
+        let strip = |window: &mut Window, ed: &mut Editor| -> Vec<String> {
+            window
+                .status_bar_texts(ed)
+                .into_iter()
+                .map(|(t, _)| t)
+                .collect()
+        };
+
+        ed.set_tool(tools::ToolId::Move);
+        let texts = strip(&mut window, &mut ed);
+        assert!(
+            texts.iter().any(|t| t.starts_with("Move")),
+            "the Move tool is not the one on screen: {texts:?}"
+        );
+        assert!(
+            !texts.iter().any(is_size_readout),
+            "Move has no size, but a size is painted: {texts:?}"
+        );
+
+        ed.set_tool(tools::ToolId::Brush);
+        let texts = strip(&mut window, &mut ed);
+        let size = ed.brush().size as i32;
+        assert!(
+            texts.iter().any(|t| *t == format!("{size} px")),
+            "the Brush's {size} px is not painted: {texts:?}"
+        );
+
+        // The title once, on the tab; the status bar does not repeat it.
+        let title = ed.active().unwrap().title().to_string();
+        let in_status_strip: Vec<(String, egui::Rect)> = window
+            .status_bar_texts(&mut ed)
+            .into_iter()
+            .filter(|(t, _)| *t == title)
+            .collect();
+        assert!(
+            in_status_strip.is_empty(),
+            "the status strip repeats the tab's title: {in_status_strip:?}"
+        );
+        let bar = window.panel_rect("raster-status").unwrap();
+        let placed = window.painted_text_rects(&mut ed);
+        assert!(
+            placed
+                .iter()
+                .any(|(t, r)| *t == title && r.center().y < bar.top()),
+            "the title is not on the tab either: {placed:?}"
+        );
+    }
+
+    #[test]
+    fn tool_has_size_follows_the_registry_schema() {
+        assert!(tool_has_size(tools::ToolId::Brush));
+        assert!(!tool_has_size(tools::ToolId::Move));
+        // Every tool with a size key says so; every tool without does not —
+        // the predicate is the schema, not a list.
+        for info in tools::registry::all() {
+            let in_schema = ui::tool_options::schema_for(info)
+                .iter()
+                .any(|o| o.key == "size");
+            assert_eq!(tool_has_size(info.id), in_schema, "{:?}", info.id);
+        }
+    }
+
+    #[test]
+    fn a_tabs_close_control_sits_inside_its_tab() {
+        // The close mark used to be allocated *after* the tab rect, outside
+        // it, so the strip read as "title, gap, x, title, gap, x".
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&png(dir.path(), "a.png")).unwrap();
+        ed.open_path(&png(dir.path(), "b.png")).unwrap();
+        let mut window = Window::new(&mut ed);
+        window.settle(&mut ed);
+        for index in 0..2 {
+            let tab = window
+                .read_rect(Chrome::tab_id(index))
+                .expect("the tab was drawn");
+            let close = window
+                .read_rect(Chrome::tab_close_id(index))
+                .expect("the close control was drawn");
+            assert!(
+                tab.contains_rect(close),
+                "tab {index}'s close control {close:?} is outside the tab {tab:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tab_title_is_not_small_print() {
+        // 9pt (`TextStyle::Small`) is a caption, not a document name.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&png(dir.path(), "a.png")).unwrap();
+        let mut window = Window::new(&mut ed);
+        window.settle(&mut ed);
+        let tokens = design::Theme::Dark.tokens();
+        let want = design::egui_theme::font_id(tokens, TypeRole::Body).size;
+        let shapes = window.shapes(&mut ed);
+        let tab = window.read_rect(Chrome::tab_id(0)).expect("the tab");
+        let sizes: Vec<f32> = shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Text(t) if tab.contains(t.pos) && t.galley.text() == "a.png" => {
+                    t.galley.job.sections.first().map(|s| s.format.font_id.size)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!sizes.is_empty(), "no title painted inside the tab {tab:?}");
+        assert!(
+            sizes.iter().all(|s| (*s - want).abs() < 0.01),
+            "the tab title is set at {sizes:?}pt, not the Body size {want}pt"
+        );
+    }
+
+    #[test]
+    fn visible_tab_range_keeps_the_active_tab_in_view() {
+        assert_eq!(visible_tab_range(0, 4, None), (0, 0));
+        assert_eq!(visible_tab_range(3, 4, Some(2)), (0, 3));
+        assert_eq!(visible_tab_range(10, 4, Some(1)), (0, 4));
+        assert_eq!(visible_tab_range(10, 4, Some(3)), (0, 4));
+        assert_eq!(visible_tab_range(10, 4, Some(4)), (1, 5));
+        assert_eq!(visible_tab_range(10, 4, Some(9)), (6, 10));
+        assert_eq!(visible_tab_range(10, 0, Some(9)), (9, 10));
+        assert_eq!(visible_tab_range(10, 4, None), (0, 4));
+    }
+
+    #[test]
+    fn the_overflow_chevron_lists_the_hidden_tabs_and_a_row_activates_one() {
+        // `let _ = overflowed;` used to be the whole overflow story.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        for i in 0..14 {
+            ed.open_path(&png(dir.path(), &format!("doc-{i:02}.png")))
+                .unwrap();
+        }
+        let mut window = Window::new(&mut ed);
+        window.settle(&mut ed);
+        let hidden = (0..14)
+            .find(|i| window.read_rect(Chrome::tab_id(*i)).is_none())
+            .expect("fourteen tabs fit in the strip; widen the list");
+        let out = window.click(&mut ed, Chrome::tab_overflow_id());
+        assert!(out.activate.is_none(), "{out:?}");
+        // The list is drawn from the frame the chevron was clicked in; one
+        // more frame registers its rows' rectangles.
+        let _ = window.frame(&mut ed);
+        let out = window.click(&mut ed, Chrome::tab_overflow_item_id(hidden));
+        assert_eq!(out.activate, Some(hidden), "{out:?}");
+    }
+
+    #[test]
+    fn the_start_screen_draws_cards_and_a_thumbnail_for_a_recent_project() {
+        // Photopea's start screen: New / Open / Templates cards, and recents
+        // with thumbnails. Ours was two borderless text buttons and a list of
+        // names. The `.rstudio` package's own preview is the thumbnail.
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("scene.rstudio");
+        project_format::save_project(&project, &editor_core::Document::new(16, 16, "scene"))
+            .unwrap();
+        assert!(
+            project.join(project_format::PREVIEW_FILE).is_file(),
+            "the fixture package carries no preview"
+        );
+        let mut recent = crate::recent::RecentFiles::new();
+        recent.record(&project);
+        let mut ed = Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            recent,
+            Box::new(ScriptedDialogs::new()),
+        );
+        ed.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+        assert!(ed.documents().is_empty());
+
+        let mut window = Window::new(&mut ed);
+        let shapes = window.shapes(&mut ed);
+        let tokens = design::Theme::Dark.tokens();
+        let mut cards = 0;
+        for id in [
+            "raster-start-new",
+            "raster-start-open",
+            "raster-start-templates",
+        ] {
+            let rect = window
+                .read_rect(egui::Id::new(id))
+                .unwrap_or_else(|| panic!("{id} was never drawn"));
+            assert!(
+                rect.height() >= tokens.metrics.control_height * 2.0
+                    && rect.width() >= tokens.metrics.inspector_label_width,
+                "{id} is a text button, not a card: {rect:?}"
+            );
+            let painted = shapes.iter().any(|s| match s {
+                egui::Shape::Rect(r) => {
+                    r.fill.a() > 0
+                        && r.rect.expand(1.0).contains_rect(rect)
+                        && rect.expand(1.0).contains_rect(r.rect)
+                }
+                _ => false,
+            });
+            assert!(painted, "no card rectangle is painted for {id} at {rect:?}");
+            cards += 1;
+        }
+        assert!(cards >= 2);
+
+        let texture = window
+            .chrome
+            .recent_thumbs_for_test()
+            .get(&project)
+            .cloned()
+            .flatten()
+            .expect("the recent project's preview was not decoded into a texture");
+        assert!(
+            painted_texture_ids(&shapes).contains(&texture.id()),
+            "the thumbnail texture is not painted on the start screen"
+        );
+        // And the cell is still the thing a click opens.
+        let out = window.click(&mut ed, Chrome::start_recent_id(0));
+        assert_eq!(out.open_recent, Some(project.clone()), "{out:?}");
+    }
+
+    #[test]
+    fn a_recent_thumbnail_is_decoded_once_not_per_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = png(dir.path(), "photo.png");
+        let mut recent = crate::recent::RecentFiles::new();
+        recent.record(&image);
+        let mut ed = Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            recent,
+            Box::new(ScriptedDialogs::new()),
+        );
+        ed.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+        let mut window = Window::new(&mut ed);
+        let first = window
+            .chrome
+            .recent_thumbs_for_test()
+            .get(&image)
+            .cloned()
+            .flatten()
+            .expect("the PNG was not decoded into a thumbnail")
+            .id();
+        for _ in 0..3 {
+            let _ = window.frame(&mut ed);
+        }
+        let again = window
+            .chrome
+            .recent_thumbs_for_test()
+            .get(&image)
+            .cloned()
+            .flatten()
+            .expect("the thumbnail was dropped")
+            .id();
+        assert_eq!(
+            first, again,
+            "the thumbnail was re-uploaded on a later frame"
+        );
+    }
+
+    #[test]
+    fn box_downscale_fits_under_the_edge_and_averages() {
+        // 8x4 of two colours side by side, down to an edge of 4: 4x2, each
+        // output pixel the mean of a 2x2 block of one colour.
+        let mut rgba = Vec::new();
+        for _y in 0..4 {
+            for x in 0..8 {
+                let v = if x < 4 { 0u8 } else { 200u8 };
+                rgba.extend_from_slice(&[v, v, v, 255]);
+            }
+        }
+        let (w, h, out) = box_downscale(8, 4, &rgba, 4);
+        assert_eq!((w, h), (4, 2));
+        assert_eq!(&out[0..4], &[0, 0, 0, 255]);
+        assert_eq!(&out[3 * 4..4 * 4], &[200, 200, 200, 255]);
+        // Already small enough: untouched.
+        let (w, h, same) = box_downscale(8, 4, &rgba, 8);
+        assert_eq!((w, h), (4 * 2, 4));
+        assert_eq!(same, rgba);
+    }
+
+    #[test]
+    fn a_template_row_opens_the_new_document_dialog_seeded_with_that_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(&dir.path().join("config"));
+        assert!(ed.documents().is_empty());
+        let mut window = Window::new(&mut ed);
+        let out = window.click(&mut ed, egui::Id::new("raster-start-templates"));
+        assert!(
+            out.actions.is_empty() && !out.dialog_open,
+            "the Templates card must unfold the list, not act: {out:?}"
+        );
+        window.settle(&mut ed);
+        let preset = 3;
+        let out = window.click(&mut ed, Chrome::start_template_id(preset));
+        assert!(out.dialog_open, "no dialog opened: {out:?}");
+        match window.chrome.dialogs_for_test().active_for_test() {
+            ActiveDialog::NewDocument(dialog) => {
+                assert_eq!(dialog.preset(), Some(preset), "the wrong preset is seeded");
+                let want = &ui::dialogs::new_document::PRESETS[preset];
+                assert_eq!(dialog.pixel_width(), want.width as u32);
+            }
+            other => panic!("the active dialog is {other:?}, not New Document"),
+        }
     }
 
     #[test]
@@ -3650,51 +4890,339 @@ mod tests {
         ed.open_path(&p).unwrap();
 
         let mut window = Window::new(&mut ed);
-        let before = window.panels_on(ui::DockSide::Right);
-        assert!(before.len() >= 3, "the right rail holds {before:?}");
-        // The reorder control belongs to the ACTIVE tab of the bottom group
-        // (History), and groups travel whole: one click moves History+Color
-        // one slot up the rail's stack.
-        let panel = *before.last().unwrap();
-        let panel = if window.chrome.workspace().dock.is_active(panel) {
-            panel
-        } else {
-            *before
-                .iter()
-                .rev()
-                .find(|p| window.chrome.workspace().dock.is_active(**p))
-                .unwrap()
-        };
-        let from = before.len() - 1;
+        let side = ui::DockSide::Right;
+        let before = window.panels_on(side);
+        let groups = window.chrome.workspace().dock.groups_on(side);
+        assert!(groups.len() >= 2, "the right rail holds {groups:?}");
+        // The reorder control belongs to the ACTIVE tab of the bottom group,
+        // and groups travel whole: one click moves that group one slot up the
+        // rail's stack, whatever the preset put there. Stated in terms of the
+        // groups the dock reports rather than a named layout, so it holds
+        // when the preset changes shape again.
+        let from = groups.len() - 1;
+        let bottom: Vec<ui::PanelId> = groups[from].1.clone();
+        let above: Vec<ui::PanelId> = groups[from - 1].1.clone();
+        let panel = bottom
+            .iter()
+            .copied()
+            .find(|p| window.chrome.workspace().dock.is_active(*p))
+            .expect("the bottom group shows a tab");
+        let index_before = before.iter().position(|q| *q == panel).unwrap();
 
         window.click(&mut ed, ui::view::ids::panel_menu(panel));
         let out = window.click(&mut ed, ui::view::ids::panel_reorder(panel, true));
 
-        // One click on the up chevron moved the group one slot up: History
-        // now sits between Adjustments and Layers instead of after Layers.
-        let after = window.panels_on(ui::DockSide::Right);
+        // One click on the up chevron moved the group exactly one slot up:
+        // the panel's index dropped by the size of the group it climbed over
+        // — no more (the double-apply this test exists for), no less.
+        let after = window.panels_on(side);
         assert_eq!(
             after.iter().position(|q| *q == panel),
-            Some(from - 2),
-            "one click on the up chevron moved {panel:?} from {from} to {after:?}"
+            Some(index_before - above.len()),
+            "one click on the up chevron moved {panel:?} from {index_before} to {after:?}"
         );
-        // The other panels are otherwise untouched, still tabbed together.
-        let mut expected = before.clone();
-        expected.remove(from);
-        expected.remove(from - 1);
-        expected.insert(from - 2, panel);
-        let partner = if panel == ui::PanelId::History {
-            ui::PanelId::Color
-        } else {
-            ui::PanelId::History
-        };
-        expected.insert(from - 1, partner);
+        // The group above followed it down, untouched inside; nothing else
+        // moved.
+        let at = before.iter().position(|p| *p == above[0]).unwrap();
+        let mut expected: Vec<ui::PanelId> = before[..at].to_vec();
+        expected.extend(bottom.iter().copied());
+        expected.extend(above.iter().copied());
         assert_eq!(after, expected);
+        let after_groups = window.chrome.workspace().dock.groups_on(side);
+        assert_eq!(after_groups[from - 1].1, bottom);
+        assert_eq!(after_groups[from].1, above);
         assert_eq!(
             out.workspace,
-            vec![ui::Intent::ReorderPanel { panel, to: 1 }],
+            vec![ui::Intent::ReorderPanel {
+                panel,
+                to: u8::try_from(from - 1).unwrap()
+            }],
             "the click meant {out:?}"
         );
+    }
+
+    /// W2-X: the Navigator's thumbnail, the Histogram's bins and the Info
+    /// panel's colour rows are fed by this chrome from the live composite —
+    /// `Workspace::set_composite_preview` and `set_info_sample` had no caller
+    /// after wave 2, so all three drew their empty state for the life of a
+    /// session. One frame with a document is enough; a second frame with
+    /// nothing changed rebuilds nothing; closing the document clears them.
+    #[test]
+    fn the_navigator_histogram_and_info_panel_are_fed_from_the_composite() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        assert!(chrome.workspace().navigator_texture.is_none());
+        assert_eq!(chrome.workspace().histogram.generation(), None);
+        assert_eq!(chrome.workspace().info.sampled, None);
+
+        // One frame, with the pointer over the middle of the window — where
+        // the freshly opened image is centred.
+        let centre = egui::pos2(700.0, 450.0);
+        let full = ctx.run(raw_input(vec![egui::Event::PointerMoved(centre)]), |ctx| {
+            chrome.ui(ctx, &mut ed);
+        });
+        let w = chrome.workspace();
+        let tex = w
+            .navigator_texture
+            .as_ref()
+            .expect("no composite preview after a frame with a document");
+        // The 8x8 test image needs no downscale: the preview is the image.
+        assert_eq!(tex.size(), [8, 8]);
+        assert_eq!(
+            w.histogram.generation(),
+            Some(ed.revision()),
+            "the histogram was not counted from this revision"
+        );
+        assert!(
+            w.histogram.bins().is_some(),
+            "the histogram has no bins to draw"
+        );
+        // ...and the Navigator really draws that texture, this frame.
+        assert!(
+            full.shapes.iter().any(|c| match &c.shape {
+                egui::Shape::Mesh(m) => m.texture_id == tex.id(),
+                _ => false,
+            }),
+            "the Navigator never painted the composite preview"
+        );
+        // The Info panel: the pixel under the pointer is the png's [9; 4].
+        let sampled = w
+            .info
+            .sampled
+            .expect("no Info sample with the pointer over the image");
+        for c in sampled {
+            assert!((c - 9.0 / 255.0).abs() < 1e-6, "sampled {sampled:?}");
+        }
+        let (px, py) = w.info.pointer.expect("no Info pointer position");
+        assert!(
+            (0.0..8.0).contains(&px) && (0.0..8.0).contains(&py),
+            "{px}, {py}"
+        );
+
+        // Nothing changed: the same texture is kept, not re-uploaded.
+        let id = tex.id();
+        let revision = ed.revision();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            chrome.ui(ctx, &mut ed);
+        });
+        assert_eq!(ed.revision(), revision, "a frame alone moved the revision");
+        assert_eq!(
+            chrome.workspace().navigator_texture.as_ref().unwrap().id(),
+            id
+        );
+        assert_eq!(chrome.workspace().info.sampled, Some(sampled));
+
+        // The pointer off the image: the rows go back to their dash.
+        let _ = ctx.run(
+            raw_input(vec![egui::Event::PointerMoved(egui::pos2(-10.0, -10.0))]),
+            |ctx| {
+                chrome.ui(ctx, &mut ed);
+            },
+        );
+        assert_eq!(chrome.workspace().info.sampled, None);
+        assert_eq!(chrome.workspace().info.pointer, None);
+
+        // The document closes: the preview goes with it.
+        ed.dispatch(Action::CloseDocument).unwrap();
+        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+            chrome.ui(ctx, &mut ed);
+        });
+        assert!(chrome.workspace().navigator_texture.is_none());
+        assert_eq!(chrome.workspace().histogram.generation(), None);
+    }
+
+    /// W2-X: the palette footer's Q shows the *editor's* quick-mask state,
+    /// whichever route toggled it — the control itself, the `Q` chord or the
+    /// Select menu all end in `Editor::toggle_quick_mask` — and never lights
+    /// ahead of the editor. Driven through the real footer control and the
+    /// real menu-bridge route.
+    #[test]
+    fn the_footer_quick_mask_control_lights_from_the_editor_and_not_its_own_click() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+        let mut window = Window::new(&mut ed);
+        let t = design::Theme::Dark.tokens();
+        let accent = design::color32(t.palette.color(design::ColorRole::AccentSubtle));
+        let engaged = |window: &mut Window, ed: &mut Editor| {
+            let rect = window
+                .read_rect(ui::palette::quick_mask_control())
+                .expect("Q was not drawn");
+            window.shapes(ed).iter().any(|s| match s {
+                egui::Shape::Rect(r) => r.fill == accent && r.rect.contains_rect(rect.shrink(1.0)),
+                _ => false,
+            })
+        };
+
+        assert!(!ed.quick_mask());
+        assert!(!window.chrome.workspace().palette.quick_mask);
+        assert!(
+            !engaged(&mut window, &mut ed),
+            "Q lit before anything engaged it"
+        );
+
+        // A click on Q: the footer raises the Select menu's action and the
+        // chrome routes it to the menu channel for the shell — it does not
+        // flip the mirrored flag itself.
+        let out = window.click(&mut ed, ui::palette::quick_mask_control());
+        assert!(
+            out.menu.contains(&ui::MenuAction::ToggleQuickMask),
+            "the click meant {out:?}"
+        );
+        assert!(
+            !window.chrome.workspace().palette.quick_mask,
+            "the footer lit before the editor engaged"
+        );
+        // The shell performs it against the editor; the next frame mirrors it.
+        crate::menu_bridge::perform(ui::MenuAction::ToggleQuickMask, &mut ed).unwrap();
+        assert!(ed.quick_mask());
+        window.frame(&mut ed);
+        assert!(
+            window.chrome.workspace().palette.quick_mask,
+            "the engaged state never reached the footer"
+        );
+        assert!(
+            engaged(&mut window, &mut ed),
+            "the engaged Q has no accent fill"
+        );
+
+        // Off again through the same route (the Q chord and the Select menu
+        // both end here): the light goes.
+        crate::menu_bridge::perform(ui::MenuAction::ToggleQuickMask, &mut ed).unwrap();
+        assert!(!ed.quick_mask());
+        window.frame(&mut ed);
+        assert!(!window.chrome.workspace().palette.quick_mask);
+        assert!(
+            !engaged(&mut window, &mut ed),
+            "Q stays lit after the editor left quick mask"
+        );
+    }
+
+    /// W2-X: Photopea's F. The footer's control asks for the cycle (the
+    /// chrome answers with `Action::CycleScreenMode`, which the shell
+    /// performs); the editor holds the mode; the chrome drops the tool
+    /// column, the options bar and the docks in both full-screen modes and
+    /// the menu bar in the last, and mirrors the mode back to the footer.
+    #[test]
+    fn f_cycles_the_screen_mode_and_full_screen_drops_the_docks_then_the_menu() {
+        use ui::palette::ScreenMode;
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+        let mut window = Window::new(&mut ed);
+        let bands = |window: &mut Window, ed: &mut Editor| {
+            let texts = window.painted_texts(ed);
+            let menu = texts.iter().any(|t| t == "File");
+            let docks = window
+                .read_rect(ui::dock::ids::column(ui::DockSide::Right))
+                .is_some();
+            let tools = window.read_rect(ui::view::ids::tool_slot(0)).is_some();
+            let options = window
+                .read_rect(ui::view::ids::tool_options_reset(ed.effective_tool()))
+                .is_some();
+            (menu, docks, tools, options)
+        };
+
+        assert_eq!(ed.screen_mode(), ScreenMode::Standard);
+        assert_eq!(bands(&mut window, &mut ed), (true, true, true, true));
+
+        // The footer's F: a request the chrome turns into the action, not a
+        // mode it changes itself.
+        let out = window.click(&mut ed, ui::palette::screen_mode_control());
+        assert_eq!(out.actions, vec![Action::CycleScreenMode], "{out:?}");
+        assert_eq!(
+            ed.screen_mode(),
+            ScreenMode::Standard,
+            "the chrome changed the mode instead of asking"
+        );
+
+        // The shell performs it: full screen with the menu bar.
+        ed.dispatch(Action::CycleScreenMode).unwrap();
+        assert_eq!(ed.screen_mode(), ScreenMode::FullScreenWithMenu);
+        window.settle(&mut ed);
+        assert_eq!(
+            window.chrome.workspace().palette.screen_mode,
+            ScreenMode::FullScreenWithMenu,
+            "the footer's mirror did not follow the editor"
+        );
+        assert_eq!(
+            bands(&mut window, &mut ed),
+            (true, false, false, false),
+            "(menu, docks, tools, options) in Full Screen With Menu Bar"
+        );
+
+        // Again: full screen, no menu bar either.
+        ed.dispatch(Action::CycleScreenMode).unwrap();
+        assert_eq!(ed.screen_mode(), ScreenMode::FullScreen);
+        window.settle(&mut ed);
+        assert_eq!(
+            bands(&mut window, &mut ed),
+            (false, false, false, false),
+            "(menu, docks, tools, options) in Full Screen"
+        );
+
+        // And round to Standard: everything comes back.
+        ed.dispatch(Action::CycleScreenMode).unwrap();
+        assert_eq!(ed.screen_mode(), ScreenMode::Standard);
+        window.settle(&mut ed);
+        assert_eq!(bands(&mut window, &mut ed), (true, true, true, true));
+        assert_eq!(
+            window.chrome.workspace().palette.screen_mode,
+            ScreenMode::Standard
+        );
+    }
+
+    /// W2-X: the menu bar and the options bar are one header band across the
+    /// top of the window — the header shade, not the panel shade the columns
+    /// use. Read from the panel frames the chrome really paints.
+    #[test]
+    fn the_menu_and_options_bands_are_painted_in_the_header_shade() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = png(dir.path(), "a.png");
+        let mut ed = editor(&dir.path().join("config"));
+        ed.open_path(&p).unwrap();
+        let mut window = Window::new(&mut ed);
+        let shapes = window.shapes(&mut ed);
+        let t = design::Theme::Dark.tokens();
+        let header = design::color32(t.palette.surface(design::SurfaceRole::Header));
+        let panel = design::color32(t.palette.surface(design::SurfaceRole::Panel));
+        assert_ne!(
+            header, panel,
+            "the theme cannot tell the header from a panel"
+        );
+        for name in ["raster-menu-bar", "raster-tool-options"] {
+            let band = window
+                .panel_rect(name)
+                .unwrap_or_else(|| panic!("{name} was not drawn"));
+            let fills: Vec<egui::Color32> = shapes
+                .iter()
+                .filter_map(|s| match s {
+                    egui::Shape::Rect(r)
+                        if (r.rect.min - band.min).length() < 1.0
+                            && (r.rect.max - band.max).length() < 1.0 =>
+                    {
+                        Some(r.fill)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                fills.contains(&header),
+                "{name} {band:?} is not filled with the header shade: {fills:?}"
+            );
+            assert!(
+                !fills.contains(&panel),
+                "{name} is still filled with the panel shade: {fills:?}"
+            );
+        }
     }
 
     #[test]

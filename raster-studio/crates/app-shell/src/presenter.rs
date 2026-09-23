@@ -25,6 +25,7 @@ use raster::mipmap::{downsample_rgba8_2x, level_count, level_dimensions, MipErro
 use raster::{PixelRect, TileCoord, TILE_SIZE};
 use render::{GpuContext, GpuTexture};
 
+use crate::dirty::DirtyTiles;
 use crate::doc::{DocumentError, DocumentId, OpenDocument};
 
 /// The most texels the presenter will put on the GPU for one document.
@@ -317,6 +318,61 @@ pub fn tile_upload_rect(coord: TileCoord, width: u32, height: u32) -> Option<Pix
     Some(PixelRect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
 }
 
+/// What [`CanvasPresenter::sync`] will recomposite and upload for a dirty set.
+///
+/// The decision is separated from the GPU work so it can be checked without
+/// a device: "an undo re-uploads only the tiles the stroke touched" is a
+/// claim about this plan, and a test counts the plan's tiles the same way
+/// `sync` walks them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UploadPlan {
+    /// Nothing changed inside the canvas.
+    Nothing,
+    /// The whole fitted texture is recomposited and rewritten.
+    Whole,
+    /// Each named tile is recomposited and written into its own texel rect.
+    Tiles(Vec<(TileCoord, PixelRect)>),
+}
+
+impl UploadPlan {
+    /// How many separate tile rectangles this plan uploads (`0` for
+    /// [`UploadPlan::Whole`], which is one upload but not a tile one).
+    pub fn tile_count(&self) -> usize {
+        match self {
+            UploadPlan::Tiles(t) => t.len(),
+            _ => 0,
+        }
+    }
+}
+
+/// Decide what `sync` uploads for `dirty` on a `width` x `height` document
+/// shown at `fit`.
+///
+/// A downscaled document still gets a per-tile upload, because tiles are 256
+/// px and aligned: for `fit.level <= 8` a dirty tile is an aligned `256 >>
+/// level` square of the texture and nothing else touches those texels. Only a
+/// fit coarser than that — where tiles share a texel — has to recomposite the
+/// whole document, and recompositing on every dab is seconds of frozen UI on
+/// a document that large. Tiles outside the canvas own no texel and are
+/// dropped, so a rect that hangs off the edge costs nothing.
+pub fn plan_uploads(dirty: &DirtyTiles, width: u32, height: u32, fit: PresentFit) -> UploadPlan {
+    if dirty.is_empty() {
+        return UploadPlan::Nothing;
+    }
+    if dirty.is_all() || !fit.supports_tiled_upload(width, height) {
+        return UploadPlan::Whole;
+    }
+    let tiles: Vec<(TileCoord, PixelRect)> = dirty
+        .tiles()
+        .filter_map(|coord| fitted_tile_rect(coord, width, height, fit).map(|r| (coord, r)))
+        .collect();
+    if tiles.is_empty() {
+        UploadPlan::Nothing
+    } else {
+        UploadPlan::Tiles(tiles)
+    }
+}
+
 /// What one [`CanvasPresenter::sync`] did — enough for a caller to know whether
 /// the renderer has to be re-pointed, and enough for a test to see that a small
 /// edit stayed small.
@@ -593,42 +649,30 @@ impl CanvasPresenter {
                 tile_uploads: 0,
             });
         }
-        if dirty.is_empty() {
-            return Ok(SyncReport::default());
-        }
-
         let mut report = SyncReport::default();
-        // A downscaled document still gets a per-tile upload, because tiles are
-        // 256 px and aligned: for `fit.level <= 8` a dirty tile is an aligned
-        // `256 >> level` square of this texture and nothing else touches those
-        // texels. Only a fit coarser than that — where tiles share a texel —
-        // has to recomposite the whole document, and recompositing on every
-        // dab is seconds of frozen UI on a document this large.
-        if dirty.is_all() || !fit.supports_tiled_upload(width, height) {
-            let whole = PixelRect::new(0, 0, fit.width, fit.height);
-            let rgba = self.composite_fitted(doc, fit)?;
-            let texture = self.texture.as_ref().expect("checked immediately above");
-            write_rect(gpu, texture, whole, &rgba);
-            report.full_uploads = 1;
-        } else {
-            for coord in dirty.tiles() {
-                let Some(texels) = fitted_tile_rect(coord, width, height, fit) else {
-                    continue;
-                };
-                let rgba = self.composite_masked(doc, source_rect_for(texels, fit.level))?;
-                let (rgba, w, h) = downscale_levels(
-                    &rgba,
-                    texels.width << u32::from(fit.level),
-                    texels.height << u32::from(fit.level),
-                    fit.level,
-                )?;
-                debug_assert_eq!((w, h), (texels.width, texels.height));
+        match plan_uploads(&dirty, width, height, fit) {
+            UploadPlan::Nothing => return Ok(SyncReport::default()),
+            UploadPlan::Whole => {
+                let whole = PixelRect::new(0, 0, fit.width, fit.height);
+                let rgba = self.composite_fitted(doc, fit)?;
                 let texture = self.texture.as_ref().expect("checked immediately above");
-                write_rect(gpu, texture, texels, &rgba);
-                report.tile_uploads += 1;
+                write_rect(gpu, texture, whole, &rgba);
+                report.full_uploads = 1;
             }
-            if report.tile_uploads == 0 {
-                return Ok(SyncReport::default());
+            UploadPlan::Tiles(tiles) => {
+                for (_, texels) in tiles {
+                    let rgba = self.composite_masked(doc, source_rect_for(texels, fit.level))?;
+                    let (rgba, w, h) = downscale_levels(
+                        &rgba,
+                        texels.width << u32::from(fit.level),
+                        texels.height << u32::from(fit.level),
+                        fit.level,
+                    )?;
+                    debug_assert_eq!((w, h), (texels.width, texels.height));
+                    let texture = self.texture.as_ref().expect("checked immediately above");
+                    write_rect(gpu, texture, texels, &rgba);
+                    report.tile_uploads += 1;
+                }
             }
         }
 
@@ -2010,5 +2054,291 @@ mod tests {
             ..Default::default()
         }
         .did_nothing());
+    }
+
+    // ------------------------------------------------ incremental uploads ---
+
+    /// A solid tile the fixtures paint with.
+    fn solid_tile(doc: &mut OpenDocument, value: u8) -> raster::TileHash {
+        let mut tile = raster::Tile::transparent(raster::PixelFormat::Rgba8);
+        tile.data_mut().fill(value);
+        doc.tiles.insert_tile(&tile)
+    }
+
+    fn paint(doc: &mut OpenDocument, layer: layer_model::LayerId, coords: &[TileCoord], value: u8) {
+        let hash = solid_tile(doc, value);
+        let delta = editor_core::pixels::TileDelta::new(
+            coords
+                .iter()
+                .map(|c| editor_core::pixels::TileEdit::set(*c, hash))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        doc.apply(editor_core::Command::PaintTiles {
+            target: editor_core::pixels::PixelTarget::Layer(layer),
+            delta,
+        })
+        .unwrap();
+    }
+
+    /// The plan `sync` would follow for the outstanding dirty set, at the fit
+    /// the presenter chooses for the document on a device with room for it.
+    fn plan_for(doc: &mut OpenDocument) -> UploadPlan {
+        let (w, h) = (doc.document.width(), doc.document.height());
+        let fit = PresentFit::choose(w, h, 8192);
+        assert!(fit.is_exact(), "the fixture fits the device at 100%");
+        let dirty = doc.take_dirty();
+        plan_uploads(&dirty, w, h, fit)
+    }
+
+    /// The finding: undo and redo used to mark the whole canvas, so one
+    /// Ctrl+Z on a 4K document recomposited and re-uploaded 256 tiles to put
+    /// two of them back.
+    #[test]
+    fn an_undo_of_a_stroke_re_uploads_only_the_strokes_tiles_on_a_4k_canvas() {
+        let mut doc =
+            crate::doc::OpenDocument::blank(crate::doc::DocumentId(7), 4096, 4096, "big", 32)
+                .unwrap();
+        let layer = doc.document.layers.root()[0];
+        assert_eq!(
+            plan_for(&mut doc),
+            UploadPlan::Whole,
+            "the first frame is a full upload"
+        );
+
+        let stroke = [TileCoord::new(3, 3, 0), TileCoord::new(4, 3, 0)];
+        paint(&mut doc, layer, &stroke, 200);
+        let forward = plan_for(&mut doc);
+        assert_eq!(forward.tile_count(), 2, "the stroke itself: {forward:?}");
+
+        assert!(doc.undo().unwrap());
+        let undo = plan_for(&mut doc);
+        let UploadPlan::Tiles(tiles) = &undo else {
+            panic!("an undo re-uploaded the whole 4096x4096 canvas: {undo:?}");
+        };
+        assert_eq!(
+            tiles.iter().map(|(c, _)| *c).collect::<Vec<_>>(),
+            stroke.to_vec(),
+            "exactly the stroke's tiles come back, of 256 on the canvas"
+        );
+        assert!(tiles.len() < 16 * 16);
+
+        assert!(doc.redo().unwrap());
+        let redo = plan_for(&mut doc);
+        assert_eq!(redo.tile_count(), 2, "and the redo: {redo:?}");
+        assert_ne!(redo, UploadPlan::Whole);
+    }
+
+    /// A re-order changes what every pixel beneath the moved layer is made
+    /// of; there is no rectangle, and the honest answer stays the whole canvas
+    /// on the way forward, on undo and on redo.
+    #[test]
+    fn a_layer_reorder_still_re_uploads_the_whole_canvas() {
+        let mut doc =
+            crate::doc::OpenDocument::blank(crate::doc::DocumentId(8), 1024, 1024, "two", 32)
+                .unwrap();
+        let top = layer_model::Layer::raster("Top");
+        let top_id = top.id;
+        doc.apply(editor_core::Command::create_layer(top)).unwrap();
+        let _ = plan_for(&mut doc);
+
+        doc.apply(editor_core::Command::MoveLayer {
+            layer_id: top_id,
+            parent: None,
+            index: 1,
+        })
+        .unwrap();
+        assert_eq!(plan_for(&mut doc), UploadPlan::Whole, "forward");
+        assert!(doc.undo().unwrap());
+        assert_eq!(plan_for(&mut doc), UploadPlan::Whole, "undo");
+        assert!(doc.redo().unwrap());
+        assert_eq!(plan_for(&mut doc), UploadPlan::Whole, "redo");
+    }
+
+    /// Write `rgba` into `texture` at `rect`, as `write_rect` does on the GPU.
+    fn blit(texture: &mut [u8], width: u32, rect: PixelRect, rgba: &[u8]) {
+        let row_bytes = (rect.width * 4) as usize;
+        assert_eq!(rgba.len(), row_bytes * rect.height as usize);
+        for row in 0..rect.height {
+            let src = row as usize * row_bytes;
+            let dst = (((rect.y as u32 + row) * width + rect.x as u32) * 4) as usize;
+            texture[dst..dst + row_bytes].copy_from_slice(&rgba[src..src + row_bytes]);
+        }
+    }
+
+    /// Apply the presenter's plan to a CPU stand-in for the texture, exactly
+    /// the way `sync` applies it to the GPU one: whole → recomposite all,
+    /// tiles → recomposite each rect and write it in place.
+    fn sync_cpu(doc: &mut OpenDocument, texture: &mut [u8]) -> UploadPlan {
+        let (w, h) = (doc.document.width(), doc.document.height());
+        let plan = plan_for(doc);
+        match &plan {
+            UploadPlan::Nothing => {}
+            UploadPlan::Whole => {
+                let rgba = doc.composite(PixelRect::new(0, 0, w, h)).unwrap();
+                texture.copy_from_slice(&rgba);
+            }
+            UploadPlan::Tiles(tiles) => {
+                for (_, rect) in tiles {
+                    let rgba = doc.composite(*rect).unwrap();
+                    blit(texture, w, *rect, &rgba);
+                }
+            }
+        }
+        plan
+    }
+
+    /// The correctness pin for partial invalidation: after every step — a
+    /// stroke, its undo and redo, a moved layer's undo (the spot it left has
+    /// to clear), a property change, a text keystroke, a delete's undo — the
+    /// incrementally maintained texture is byte-identical to a fresh full
+    /// composite. And the partial path really ran: most of those steps
+    /// uploaded fewer tiles than the canvas has.
+    #[test]
+    fn partial_uploads_after_undo_match_a_full_recomposite_byte_for_byte() {
+        let mut doc = framed(1024, 768); // 4 x 3 tiles
+        let base = doc.document.layers.root()[0];
+        let full = PixelRect::new(0, 0, 1024, 768);
+        let mut texture = vec![0u8; 1024 * 768 * 4];
+        let mut partial_steps = 0usize;
+
+        let mut check = |doc: &mut OpenDocument, texture: &mut Vec<u8>, what: &str| {
+            let plan = sync_cpu(doc, texture);
+            let fresh = doc.composite(full).unwrap();
+            assert!(
+                *texture == fresh,
+                "{what}: the incrementally updated texture differs from a full recomposite ({plan:?})"
+            );
+            if let UploadPlan::Tiles(t) = &plan {
+                assert!(t.len() < 12, "{what}: {} tiles is not partial", t.len());
+                partial_steps += 1;
+            }
+            plan
+        };
+
+        assert_eq!(
+            check(&mut doc, &mut texture, "first frame"),
+            UploadPlan::Whole
+        );
+
+        // A stroke on the base layer, undone and redone.
+        paint(&mut doc, base, &[TileCoord::new(1, 0, 0)], 30);
+        assert_eq!(check(&mut doc, &mut texture, "stroke").tile_count(), 1);
+        assert!(doc.undo().unwrap());
+        assert_eq!(check(&mut doc, &mut texture, "undo stroke").tile_count(), 1);
+        assert!(doc.redo().unwrap());
+        assert_eq!(check(&mut doc, &mut texture, "redo stroke").tile_count(), 1);
+
+        // A layer that moves: its undo must clear where it went *and* redraw
+        // where it came from.
+        let ink = layer_model::Layer::raster("Ink");
+        let ink_id = ink.id;
+        doc.apply(editor_core::Command::create_layer(ink)).unwrap();
+        check(&mut doc, &mut texture, "create ink");
+        paint(&mut doc, ink_id, &[TileCoord::new(0, 0, 0)], 250);
+        check(&mut doc, &mut texture, "paint ink");
+        doc.apply(editor_core::Command::TransformLayer {
+            layer_id: ink_id,
+            matrix: [1.0, 0.0, 0.0, 1.0, 300.0, 0.0],
+        })
+        .unwrap();
+        check(&mut doc, &mut texture, "move ink");
+        // Where it returns to (tile 0,0) plus where it left (x 300..556
+        // grown by the compositor's two-pixel bilinear margin reaches row
+        // 1): five of the twelve tiles.
+        assert!(doc.undo().unwrap());
+        let plan = check(&mut doc, &mut texture, "undo move");
+        assert!(
+            matches!(&plan, UploadPlan::Tiles(t) if t.len() == 5),
+            "{plan:?}"
+        );
+        assert!(doc.redo().unwrap());
+        let plan = check(&mut doc, &mut texture, "redo move");
+        assert!(
+            matches!(&plan, UploadPlan::Tiles(t) if t.len() == 5),
+            "{plan:?}"
+        );
+
+        // A property change on the moved layer.
+        doc.apply(editor_core::Command::SetLayerProperties {
+            layer_id: ink_id,
+            patch: editor_core::LayerPatch {
+                opacity: Some(0.4),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        check(&mut doc, &mut texture, "opacity");
+        assert!(doc.undo().unwrap());
+        let plan = check(&mut doc, &mut texture, "undo opacity");
+        assert!(
+            matches!(&plan, UploadPlan::Tiles(t) if t.len() == 4),
+            "{plan:?}"
+        );
+
+        // Text: a keystroke on a live draft.
+        let original = layer_model::TextLayer {
+            text: "Hi".to_string(),
+            font_family: "DejaVu Sans".to_string(),
+            size_px: 40.0,
+            ..layer_model::TextLayer::default()
+        };
+        let text =
+            layer_model::Layer::with_kind("Type", layer_model::LayerKind::Text(original.clone()));
+        let text_id = text.id;
+        doc.apply(editor_core::Command::create_layer(text)).unwrap();
+        check(&mut doc, &mut texture, "create text");
+        doc.apply_text_draft(
+            text_id,
+            layer_model::LayerKind::Text(layer_model::TextLayer {
+                text: "Hi there, this is a longer line".to_string(),
+                ..original
+            }),
+        )
+        .unwrap();
+        let plan = check(&mut doc, &mut texture, "keystroke");
+        assert!(matches!(plan, UploadPlan::Tiles(_)), "{plan:?}");
+
+        // A delete and its undo.
+        doc.apply(editor_core::Command::DeleteLayer { layer_id: ink_id })
+            .unwrap();
+        check(&mut doc, &mut texture, "delete ink");
+        assert!(doc.undo().unwrap());
+        let plan = check(&mut doc, &mut texture, "undo delete");
+        assert!(matches!(plan, UploadPlan::Tiles(_)), "{plan:?}");
+
+        assert!(
+            partial_steps >= 8,
+            "only {partial_steps} steps took the partial path; the pin proved nothing"
+        );
+    }
+
+    #[test]
+    fn the_upload_plan_drops_tiles_outside_the_canvas_and_names_the_rest() {
+        let fit = PresentFit::choose(600, 300, 8192);
+        assert_eq!(
+            plan_uploads(&DirtyTiles::none(), 600, 300, fit),
+            UploadPlan::Nothing
+        );
+        assert_eq!(
+            plan_uploads(&DirtyTiles::all(), 600, 300, fit),
+            UploadPlan::Whole
+        );
+        let mut d = DirtyTiles::none();
+        d.insert(TileCoord::new(2, 1, 0)); // the bottom-right partial tile
+        d.insert(TileCoord::new(9, 9, 0)); // off the canvas: no texel to write
+        d.insert(TileCoord::new(-1, 0, 0)); // off the other side
+        let plan = plan_uploads(&d, 600, 300, fit);
+        assert_eq!(
+            plan,
+            UploadPlan::Tiles(vec![(
+                TileCoord::new(2, 1, 0),
+                PixelRect::new(512, 256, 88, 44)
+            )])
+        );
+        assert_eq!(plan.tile_count(), 1);
+        let mut off = DirtyTiles::none();
+        off.insert(TileCoord::new(9, 9, 0));
+        assert_eq!(plan_uploads(&off, 600, 300, fit), UploadPlan::Nothing);
     }
 }

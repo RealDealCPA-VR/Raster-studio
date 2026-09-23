@@ -512,6 +512,7 @@ pub fn menu_twin(action: Action) -> Option<MenuAction> {
         Action::Export
         | Action::OpenProject
         | Action::TogglePanels
+        | Action::CycleScreenMode
         | Action::SelectTool(_)
         | Action::TemporaryHand
         | Action::DecreaseBrushSize
@@ -592,6 +593,9 @@ impl Keymap {
         add(Chord::ctrl(Key::character('0')), ZoomFit);
         add(Chord::ctrl(Key::character('1')), ZoomActualPixels);
         add(Chord::plain(Key::Tab), TogglePanels);
+        // W2-X: Photopea's F walks the three screen modes. Plain F is free in
+        // the menu table and no tool answers to it (`f_cycles_the_screen_mode`).
+        add(Chord::plain(Key::character('f')), CycleScreenMode);
         // Painting / colour
         add(Chord::plain(Key::character('[')), DecreaseBrushSize);
         add(Chord::plain(Key::character(']')), IncreaseBrushSize);
@@ -1061,6 +1065,34 @@ mod tests {
             found[0].actions,
             vec![Action::Save, Action::Export],
             "a repeated identical binding is not a conflict"
+        );
+    }
+
+    /// W2-X: Photopea's `F` cycles the screen mode. W2-C pinned the chord
+    /// free in both tables until `Action::CycleScreenMode` existed; now the
+    /// application table owns it, the menu table still does not claim it,
+    /// and no tool letter collides with it.
+    #[test]
+    fn f_cycles_the_screen_mode() {
+        let map = Keymap::default();
+        let f = Chord::plain(Key::character('f'));
+        assert_eq!(
+            map.resolve(&f),
+            Some(Action::CycleScreenMode),
+            "plain F must cycle the screen mode"
+        );
+        assert_eq!(
+            map.menu_action_for(&f),
+            None,
+            "plain F is claimed by the menu table"
+        );
+        assert_eq!(
+            map.resolve_any(&f),
+            Some(Resolved::App(Action::CycleScreenMode))
+        );
+        assert!(
+            ToolKey::new('f').is_none(),
+            "a tool answers to F, so the chord would be two things"
         );
     }
 

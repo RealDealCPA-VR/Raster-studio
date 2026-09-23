@@ -49,7 +49,7 @@ use compositor::TileSource;
 
 /// Make a layer name safe for a file name: keep letters, digits, spaces,
 /// underscore and hyphen, collapse runs, and refuse a bare dot.
-fn safe_file_name(name: &str) -> String {
+pub(crate) fn safe_file_name(name: &str) -> String {
     let mut out: String = name
         .chars()
         .map(|c| {
@@ -277,15 +277,71 @@ pub struct NoSuchTab {
 }
 
 /// What one autosave pass did.
+///
+/// W2-G: an autosave is a job. `started` names every document the pass
+/// handed to a worker; `written` and `failed` name the ones whose job had
+/// *completed* by the time the pass returned — all of them under the inline
+/// spawner the tests run with, none of them under worker threads, where the
+/// completions arrive through [`Editor::poll_saves`] on later frames.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AutosaveReport {
+    pub started: Vec<(DocumentId, PathBuf)>,
     pub written: Vec<(DocumentId, PathBuf)>,
     pub failed: Vec<(DocumentId, String)>,
 }
 
 impl AutosaveReport {
     pub fn is_empty(&self) -> bool {
-        self.written.is_empty() && self.failed.is_empty()
+        self.started.is_empty() && self.written.is_empty() && self.failed.is_empty()
+    }
+}
+
+/// A save (Ctrl+S, Save As, autosave) running on a worker.
+struct PendingSave {
+    id: DocumentId,
+    kind: crate::jobs::SaveKind,
+    target: PathBuf,
+    /// The document's title at spawn time, for the status line.
+    title: String,
+    /// Shared with the worker; read once a frame for the status bar.
+    progress: std::sync::Arc<project_format::SaveProgress>,
+    rx: std::sync::mpsc::Receiver<crate::jobs::SaveOutcome>,
+    /// The status text last shown for this save, so the poll rewrites the
+    /// status line only when the numbers move — and only while the line
+    /// still shows this save's own text (a newer message is not overwritten).
+    shown: Option<String>,
+    /// W2-G: a Ctrl+S / Save As the user pressed while this *autosave* was
+    /// running, queued to start the moment it lands. Two writers to one
+    /// package at once would race the swap, and dropping the user's save
+    /// behind the timer's is not an answer either.
+    follow_up: Option<PathBuf>,
+}
+
+/// W2-G: the side file a document's commands are journaled to while a save of
+/// its snapshot runs on a worker — a sibling of the package, so the swap that
+/// replaces the package never touches it.
+pub const JOURNAL_HOLD_SUFFIX: &str = "journal-hold";
+
+/// W2-G: where the journal hold of the package at `project` lives:
+/// `P.rstudio` → `P.rstudio.journal-hold`, next to it.
+pub fn journal_hold_path(project: &Path) -> PathBuf {
+    let mut name = project.as_os_str().to_os_string();
+    name.push(format!(".{JOURNAL_HOLD_SUFFIX}"));
+    PathBuf::from(name)
+}
+
+/// The status-bar line for a save in flight. Pure, so the wording — and the
+/// fact that it carries the tile count once the worker has one — is pinned
+/// by a test rather than read off a screenshot.
+pub fn save_status_text(title: &str, kind: crate::jobs::SaveKind, done: u64, total: u64) -> String {
+    let verb = match kind {
+        crate::jobs::SaveKind::Save => "Saving",
+        crate::jobs::SaveKind::Autosave { .. } => "Autosaving",
+    };
+    if total == 0 {
+        format!("{verb} {title}…")
+    } else {
+        format!("{verb} {title}… {done}/{total} tiles")
     }
 }
 
@@ -473,6 +529,16 @@ pub struct Editor {
     /// The import generation: bumped when pending imports are cancelled, so
     /// a stale completion can never apply.
     import_generation: u64,
+    /// W2-G: how jobs (imports, saves, exports) are started. Worker threads
+    /// in the desktop binary ([`Editor::new`]), inline under
+    /// [`Editor::with_state`], whatever a test injects through
+    /// [`Editor::set_spawner`].
+    spawner: crate::jobs::Spawner,
+    /// W2-G: saves in flight — Ctrl+S, Save As and autosave alike — each with
+    /// the receiver its completion arrives on.
+    save_jobs: Vec<PendingSave>,
+    /// W2-G: Export As batches in flight.
+    export_jobs: Vec<std::sync::mpsc::Receiver<crate::jobs::ExportOutcome>>,
     /// Fingerprint of what Edit ▸ Copy last wrote to the OS image clipboard
     /// (card 052's ownership policy): paste compares the OS payload against
     /// it, so the editor's OWN copy pastes through the internal route (same
@@ -535,6 +601,10 @@ pub struct Editor {
     active_pattern: Option<String>,
 
     panels_visible: bool,
+    /// W2-X: Photopea's `F` cycle. The chrome mirrors it into
+    /// `PaletteState::screen_mode` and gates its bands on it; the shell sets
+    /// the window full screen from it. The editor is the one source of truth.
+    screen_mode: ui::palette::ScreenMode,
     preferences_open: bool,
     /// Whether the File ▸ File Info… window (document metadata) is up.
     file_info_open: bool,
@@ -682,10 +752,17 @@ fn mint_session_tag() -> String {
 
 impl Editor {
     /// Build an editor over an existing configuration directory.
+    ///
+    /// This is the editor the application runs (see [`Editor::native`]), so
+    /// its jobs — imports, saves, autosaves, exports — run on worker threads:
+    /// the interaction thread never blocks on a disk. [`Editor::with_state`]
+    /// is the deterministic constructor the tests build on.
     pub fn new(paths: AppPaths, dialogs: Box<dyn FileDialogs>) -> Self {
         let prefs = Preferences::load(&paths.preferences_file());
         let recent = RecentFiles::load(&paths.recent_file());
-        Editor::with_state(paths, prefs, recent, dialogs)
+        let mut editor = Editor::with_state(paths, prefs, recent, dialogs);
+        editor.spawner = crate::jobs::spawn_thread;
+        editor
     }
 
     /// The editor the desktop binary runs: real dialogs, real config directory.
@@ -693,6 +770,12 @@ impl Editor {
         Editor::new(AppPaths::discover(), Box::new(NativeDialogs))
     }
 
+    /// An editor over explicit state, with every job run **inline**: a save,
+    /// an export or an import completes before the call that started it
+    /// returns. That is the deterministic mode the unit tests run in;
+    /// [`Editor::new`] switches to worker threads, and a test that wants to
+    /// watch a job *in flight* injects a queueing spawner through
+    /// [`Editor::set_spawner`].
     pub fn with_state(
         paths: AppPaths,
         prefs: Preferences,
@@ -713,6 +796,9 @@ impl Editor {
             image_clipboard: Box::new(crate::clipboard::OsClipboard),
             import_jobs: Vec::new(),
             import_generation: 0,
+            spawner: crate::jobs::run_inline,
+            save_jobs: Vec::new(),
+            export_jobs: Vec::new(),
             os_copy_fingerprint: None,
             os_image_probe: None,
             app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -731,6 +817,7 @@ impl Editor {
             gradient_ramp: layer_model::Gradient::default(),
             active_pattern: None,
             panels_visible: true,
+            screen_mode: ui::palette::ScreenMode::Standard,
             preferences_open: false,
             file_info_open: false,
             paint_channel: None,
@@ -1366,6 +1453,11 @@ impl Editor {
     /// directory. A layer is composited *alone* (every other layer hidden) over
     /// transparent, through the real compositor — the same isolation the merge
     /// path uses — so effects and blends are honoured per layer.
+    ///
+    /// W2-G: the per-layer composites and encodes run on a worker against a
+    /// snapshot ([`crate::jobs::spawn_layer_export_with`]); the completion —
+    /// the count written, or why not — reaches the status line through
+    /// [`Editor::poll_exports`].
     pub fn export_layers(&mut self) -> Result<String, String> {
         let Some(dir) = self.pick_export_folder() else {
             return Err("Export Layers: no destination chosen".to_string());
@@ -1373,48 +1465,19 @@ impl Editor {
         let doc = self
             .active()
             .ok_or_else(|| "No document is open".to_string())?;
-        let ids: Vec<LayerId> = doc.document.layers.iter_depth_first();
-        let rect = doc.canvas_rect();
-        let mut written = 0usize;
-        for id in ids {
-            let mut staged = doc.document.clone();
-            for other in staged.layers.iter_depth_first() {
-                if other != id {
-                    if let Some(l) = staged.layers.get_mut(other) {
-                        l.visible = false;
-                    }
-                }
-            }
-            let canvas = compositor::composite_region(
-                &staged,
-                &doc.tiles,
-                rect,
-                0,
-                compositor::CompositeOptions::default(),
-            )
-            .map_err(|e| e.to_string())?;
-            let rgba8 = canvas.to_rgba8(&doc.document.meta.color_space);
-            let name = doc
-                .document
-                .layers
-                .get(id)
-                .map(|l| safe_file_name(&l.name))
-                .unwrap_or_else(|| "layer".to_string());
-            let path = dir.join(format!("{name}.png"));
-            raster::encode_to_path(
-                &path,
-                raster::ExportFormat::Png,
-                doc.document.width(),
-                doc.document.height(),
-                raster::EncodedPixels::Rgba8(&rgba8),
-                &raster::EncodeOptions::default(),
-            )
-            .map_err(|e| e.to_string())?;
-            written += 1;
-        }
-        self.status = Some(format!("Exported {written} layer(s) to {}", dir.display()));
+        let job = crate::jobs::LayerExportJob {
+            id: doc.id(),
+            document: doc.document.clone(),
+            tiles: doc.tiles.clone(),
+            dir: dir.clone(),
+        };
+        let rx = crate::jobs::spawn_layer_export_with(job, self.spawner);
+        self.export_jobs.push(rx);
+        self.status = Some(format!("Exporting layers to {}…", dir.display()));
         self.touch();
-        Ok("Exported layers".to_string())
+        // Inline spawner: already done. Threads: the frame loop polls.
+        self.poll_exports();
+        Ok("Exporting layers".to_string())
     }
 
     /// File ▸ Print…: render the active document's full composite to a
@@ -3486,6 +3549,11 @@ impl Editor {
         self.panels_visible
     }
 
+    /// W2-X: which of Photopea's three screen modes the window is in.
+    pub fn screen_mode(&self) -> ui::palette::ScreenMode {
+        self.screen_mode
+    }
+
     pub fn temporary_hand(&self) -> bool {
         self.temporary_hand
     }
@@ -3599,6 +3667,7 @@ impl Editor {
         let depth = self.prefs.history_depth;
         let id = self.mint_id();
         let doc = if Self::is_project_path(path) {
+            Self::absorb_journal_hold(path);
             OpenDocument::open_project(id, path, depth)?
         } else {
             OpenDocument::open_image(id, path, depth)?
@@ -3648,12 +3717,19 @@ impl Editor {
         if dirty {
             match self.dialogs.confirm_close(&title) {
                 CloseChoice::Cancel => return Err(ActionError::Cancelled(action)),
-                CloseChoice::Save => self.save_document(index, false)?,
+                // Waited for, not merely started: the tab is about to go, and
+                // a save that fails after it has gone would take the work
+                // with it. Closing is the one moment blocking is the right
+                // answer.
+                CloseChoice::Save => self.save_document_and_wait(index, false)?,
                 CloseChoice::Discard => {}
             }
         }
-        if let Some(doc) = self.docs.get(index) {
+        if let Some(doc) = self.docs.get_mut(index) {
             let id = doc.id();
+            // Discarded while a save of it still runs: the commands held
+            // aside are the ones the user just chose to lose.
+            Self::settle_journal_hold(doc.end_journal_hold(), None);
             self.discard_autosave(id);
             // Card 050: closing either half of an embedded-contents session
             // ends the session - a dangling one would let a later commit
@@ -3678,6 +3754,14 @@ impl Editor {
     // -------------------------------------------------------------- saving
 
     /// Save the document at `index`. `force_dialog` is Save As.
+    ///
+    /// W2-G: the write runs on a job thread against a snapshot of the
+    /// document (see [`crate::jobs`]). This picks the target (the picker is a
+    /// native dialog and has to stay on this thread), starts the job, and
+    /// returns; [`Editor::poll_saves`] applies the completion — path
+    /// adoption, the dirty flag, the recent list, the status line — back on
+    /// this thread. A second save of a document whose save is still in flight
+    /// is refused with a reason, which the shell puts on the status line.
     fn save_document(&mut self, index: usize, force_dialog: bool) -> Result<(), ActionError> {
         let action = if force_dialog {
             Action::SaveAs
@@ -3687,32 +3771,435 @@ impl Editor {
         let Some(doc) = self.docs.get(index) else {
             return Err(ActionError::unavailable(action, "no document is open"));
         };
+        let id = doc.id();
+        let title = doc.title().to_string();
+        let running = self.save_jobs.iter().find(|p| p.id == id).map(|p| p.kind);
+        match running {
+            // A save the user asked for is already writing this document:
+            // there is nothing a second one would add.
+            Some(crate::jobs::SaveKind::Save) => {
+                return Err(ActionError::unavailable(
+                    action,
+                    format!("{title} is already being saved"),
+                ));
+            }
+            // The timer's autosave is writing it: the user's save is not
+            // dropped behind it, it is queued to run the moment it lands
+            // (with whatever the document has become by then).
+            Some(crate::jobs::SaveKind::Autosave { .. }) => {
+                let target = self.choose_save_target(index, force_dialog, action)?;
+                if let Some(pending) = self.save_jobs.iter_mut().find(|p| p.id == id) {
+                    pending.follow_up = Some(target.clone());
+                }
+                self.status = Some(format!(
+                    "Saving {title} to {} once the autosave finishes…",
+                    target.display()
+                ));
+                self.touch();
+                return Ok(());
+            }
+            None => {}
+        }
+        let target = self.choose_save_target(index, force_dialog, action)?;
+        self.start_save(index, crate::jobs::SaveKind::Save, target);
+        // Under the inline spawner the job has already completed; apply it
+        // now so the caller sees the saved state. Under worker threads this
+        // finds nothing yet and the frame loop picks it up.
+        self.poll_saves();
+        Ok(())
+    }
+
+    /// Where a save of the document at `index` goes: its own package, or —
+    /// for Save As and a document that has none — wherever the picker says.
+    fn choose_save_target(
+        &mut self,
+        index: usize,
+        force_dialog: bool,
+        action: Action,
+    ) -> Result<PathBuf, ActionError> {
+        let doc = &self.docs[index];
         let existing = doc.project_path().map(Path::to_path_buf);
-        let target = match (force_dialog, existing) {
-            (false, Some(path)) => path,
+        match (force_dialog, existing) {
+            (false, Some(path)) => Ok(path),
             _ => {
                 let suggested = doc.suggested_save_path();
                 match self.dialogs.pick_save_path(&suggested) {
-                    Some(p) => p,
-                    None => return Err(ActionError::Cancelled(action)),
+                    Some(p) => Ok(p),
+                    None => Err(ActionError::Cancelled(action)),
                 }
             }
+        }
+    }
+
+    /// [`Editor::save_document`], then block until that save has landed.
+    ///
+    /// For the two moments a save must be *done* rather than started: closing
+    /// the tab and quitting. A save already in flight for the document is
+    /// waited for first; if the document is still dirty afterwards (edited
+    /// while it ran) a fresh one is started and waited for too.
+    fn save_document_and_wait(
+        &mut self,
+        index: usize,
+        force_dialog: bool,
+    ) -> Result<(), ActionError> {
+        let action = if force_dialog {
+            Action::SaveAs
+        } else {
+            Action::Save
         };
-        let version = self.app_version.clone();
-        let doc = self
-            .docs
-            .get_mut(index)
-            .expect("index checked immediately above");
-        doc.save_to(&target, &version)
-            .map_err(|e| ActionError::failed(action, e))?;
+        let Some(doc) = self.docs.get(index) else {
+            return Err(ActionError::unavailable(action, "no document is open"));
+        };
         let id = doc.id();
-        // The work now lives somewhere the user chose, so the safety net goes.
-        self.discard_autosave(id);
-        self.recent.record(&target);
-        let _ = self.recent.save(&self.paths.recent_file());
-        self.status = Some(format!("Saved {}", target.display()));
-        self.touch();
+        // A loop, not one wait: an autosave that lands may start the save the
+        // user queued behind it, and that one has to land too.
+        while self.save_in_flight(id) {
+            self.wait_for_save(id)
+                .map_err(|e| ActionError::failed(action, e))?;
+        }
+        let doc = &self.docs[index];
+        if !force_dialog && !doc.is_dirty() && doc.project_path().is_some() {
+            return Ok(());
+        }
+        self.save_document(index, force_dialog)?;
+        while self.save_in_flight(id) {
+            self.wait_for_save(id)
+                .map_err(|e| ActionError::failed(action, e))?;
+        }
         Ok(())
+    }
+
+    /// Snapshot the document at `index` and hand it to a worker.
+    ///
+    /// From this moment until the completion is applied, the document's
+    /// commands are journaled to a side file ([`OpenDocument::begin_journal_hold`])
+    /// rather than to the package journal the worker is about to copy and
+    /// swap out from under them; [`Editor::finish_save`] absorbs the side
+    /// file into whichever journal the document has once the save has landed.
+    /// A document with a package holds next to it, where the next open after
+    /// a crash finds it ([`journal_hold_path`]); one without holds in the
+    /// scratch directory.
+    fn start_save(&mut self, index: usize, kind: crate::jobs::SaveKind, target: PathBuf) {
+        let side = match self.docs[index].project_path() {
+            Some(project) => journal_hold_path(project),
+            None => {
+                let scratch = self.prefs.scratch_dir(&self.paths);
+                if let Err(e) = std::fs::create_dir_all(&scratch) {
+                    tracing::warn!("cannot create the scratch directory: {e}");
+                }
+                scratch.join(format!(
+                    "hold-{}-{}.journal",
+                    self.session_tag,
+                    self.docs[index].id().0
+                ))
+            }
+        };
+        self.docs[index].begin_journal_hold(side);
+        let doc = &self.docs[index];
+        let progress = project_format::SaveProgress::new();
+        let job = crate::jobs::SaveJob {
+            id: doc.id(),
+            kind,
+            target: target.clone(),
+            // The snapshot: a content-addressed document plus its tile map.
+            // The worker owns these; the user may keep editing the live ones.
+            document: doc.document.clone(),
+            tiles: doc.tiles.clone(),
+            app_version: self.app_version.clone(),
+            progress: progress.clone(),
+        };
+        let title = doc.title().to_string();
+        let id = doc.id();
+        let rx = crate::jobs::spawn_save_with(job, self.spawner);
+        let shown = save_status_text(&title, kind, 0, 0);
+        self.status = Some(shown.clone());
+        self.save_jobs.push(PendingSave {
+            id,
+            kind,
+            target,
+            title,
+            progress,
+            rx,
+            shown: Some(shown),
+            follow_up: None,
+        });
+        self.touch();
+    }
+
+    /// W2-G: the progress record of the save of `id` in flight, if any — what
+    /// the status line reads once a frame.
+    pub fn save_progress_of(
+        &self,
+        id: DocumentId,
+    ) -> Option<std::sync::Arc<project_format::SaveProgress>> {
+        self.save_jobs
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.progress.clone())
+    }
+
+    /// Start the save the user queued behind an autosave, now that it has
+    /// landed. The document may have been closed meanwhile; then there is
+    /// nothing to save.
+    fn start_follow_up(&mut self, id: DocumentId, target: Option<PathBuf>) {
+        let Some(target) = target else { return };
+        if let Some(index) = self.docs.iter().position(|d| d.id() == id) {
+            self.start_save(index, crate::jobs::SaveKind::Save, target);
+        }
+    }
+
+    /// `true` while a save of the document `id` is running.
+    pub fn save_in_flight(&self, id: DocumentId) -> bool {
+        self.save_jobs.iter().any(|p| p.id == id)
+    }
+
+    /// `true` while any save (Ctrl+S, Save As, autosave) is running.
+    pub fn saves_pending(&self) -> bool {
+        !self.save_jobs.is_empty()
+    }
+
+    /// `true` while any job — import, save or export — is in flight, so the
+    /// frame loop knows to keep polling.
+    pub fn jobs_pending(&self) -> bool {
+        self.imports_pending() || self.saves_pending() || !self.export_jobs.is_empty()
+    }
+
+    /// Apply every finished job of every kind. Once a frame.
+    pub fn poll_jobs(&mut self) {
+        self.poll_imports();
+        self.poll_saves();
+        self.poll_exports();
+    }
+
+    /// W2-G: apply every save that has finished, and refresh the status line
+    /// for the ones still running.
+    pub fn poll_saves(&mut self) {
+        let mut report = AutosaveReport::default();
+        self.poll_saves_into(&mut report);
+    }
+
+    fn poll_saves_into(&mut self, report: &mut AutosaveReport) {
+        if self.save_jobs.is_empty() {
+            return;
+        }
+        let jobs = std::mem::take(&mut self.save_jobs);
+        for mut pending in jobs {
+            match pending.rx.try_recv() {
+                Ok(outcome) => {
+                    self.finish_save(outcome, report);
+                    self.start_follow_up(pending.id, pending.follow_up.take());
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // Still running: show how far it has got, when that moved
+                    // — but only while the status line still shows this
+                    // save's own text. A message something else put there
+                    // since ("already being saved", a tool's) stays; the
+                    // completion says its piece when the save lands.
+                    let text = save_status_text(
+                        &pending.title,
+                        pending.kind,
+                        pending.progress.tiles_done(),
+                        pending.progress.tiles_total(),
+                    );
+                    if pending.shown.as_deref() != Some(text.as_str()) {
+                        if self.status == pending.shown {
+                            self.status = Some(text.clone());
+                            self.touch();
+                        }
+                        pending.shown = Some(text);
+                    }
+                    self.save_jobs.push(pending);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // The worker died without reporting — a panic in the
+                    // writer. The previous package is intact (nothing is
+                    // swapped in until the whole package is built), so the
+                    // only loss is this attempt, and it is said.
+                    let outcome = crate::jobs::SaveOutcome {
+                        id: pending.id,
+                        kind: pending.kind,
+                        target: pending.target,
+                        result: Err("the save worker stopped without reporting".to_string()),
+                    };
+                    self.finish_save(outcome, report);
+                    self.start_follow_up(pending.id, pending.follow_up.take());
+                }
+            }
+        }
+    }
+
+    /// Block until the save of `id` has landed, then apply it (and start the
+    /// save queued behind it, if it was an autosave with one).
+    ///
+    /// Only a failed *Save* is an error here: a failed autosave costs the
+    /// safety net, not the save the caller is about to wait for.
+    fn wait_for_save(&mut self, id: DocumentId) -> Result<(), String> {
+        let Some(at) = self.save_jobs.iter().position(|p| p.id == id) else {
+            return Ok(());
+        };
+        let mut pending = self.save_jobs.remove(at);
+        let kind = pending.kind;
+        let follow_up = pending.follow_up.take();
+        let outcome = pending.rx.recv().unwrap_or(crate::jobs::SaveOutcome {
+            id: pending.id,
+            kind: pending.kind,
+            target: pending.target,
+            result: Err("the save worker stopped without reporting".to_string()),
+        });
+        let mut report = AutosaveReport::default();
+        self.finish_save(outcome, &mut report);
+        self.start_follow_up(id, follow_up);
+        match (kind, report.failed.into_iter().next()) {
+            (crate::jobs::SaveKind::Save, Some((_, reason))) => Err(reason),
+            _ => Ok(()),
+        }
+    }
+
+    /// W2-G: the journal hold of a save that has finished. Its records are
+    /// commands accepted after the snapshot, so they go after the marker of
+    /// whichever package the document now has: the one just written, or —
+    /// when the save failed — the one it still had. A document with no
+    /// package journals nothing, and the side file simply goes.
+    fn settle_journal_hold(side: Option<PathBuf>, package: Option<&Path>) {
+        let Some(side) = side else { return };
+        match package {
+            Some(package) => {
+                if let Err(e) = project_format::CommandJournal::absorb(
+                    &side,
+                    &package.join(project_format::JOURNAL_FILE),
+                ) {
+                    tracing::warn!(
+                        "cannot move the commands journaled during the save into {}: {e}",
+                        package.display()
+                    );
+                }
+            }
+            None => {
+                if let Err(e) = std::fs::remove_file(&side) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!("cannot clear the journal hold {}: {e}", side.display());
+                    }
+                }
+            }
+        }
+    }
+
+    /// W2-G: a crash while a save of `project` ran on a worker leaves the
+    /// commands accepted meanwhile in the hold next to it; move them into the
+    /// package's journal — after its marker, whichever save won — before the
+    /// journal is read. Once per open, before [`session::recoverable`] or
+    /// [`OpenDocument::open_project`], and only for a real package (nothing
+    /// to absorb into otherwise).
+    fn absorb_journal_hold(project: &Path) {
+        if !project.join(project_format::MANIFEST_FILE).is_file() {
+            return;
+        }
+        Self::settle_journal_hold(Some(journal_hold_path(project)), Some(project));
+    }
+
+    /// Block until every save in flight has landed. For shutdown: a process
+    /// must not exit with a package half-built on a worker.
+    pub fn wait_for_saves(&mut self) {
+        while let Some(pending) = self.save_jobs.first() {
+            let id = pending.id;
+            let _ = self.wait_for_save(id);
+        }
+    }
+
+    /// What a landed save does to the live state — on this thread, the only
+    /// one that may touch it.
+    fn finish_save(&mut self, outcome: crate::jobs::SaveOutcome, report: &mut AutosaveReport) {
+        let crate::jobs::SaveOutcome {
+            id,
+            kind,
+            target,
+            result,
+        } = outcome;
+        // The hold is over either way; where its records go depends on how
+        // the save ended (see below).
+        let held = self
+            .docs
+            .iter_mut()
+            .find(|d| d.id() == id)
+            .and_then(OpenDocument::end_journal_hold);
+        match result {
+            Ok(saved) => {
+                match kind {
+                    crate::jobs::SaveKind::Save => {
+                        let mut edited_meanwhile = false;
+                        if let Some(doc) = self.docs.iter_mut().find(|d| d.id() == id) {
+                            // Clean only if the live document is still the
+                            // snapshot that was written. An edit made while
+                            // the worker ran leaves it dirty: the package
+                            // does not hold that edit yet.
+                            let unchanged = doc.document_digest() == Some(saved.document);
+                            edited_meanwhile = !unchanged;
+                            doc.adopt_saved(&target, unchanged);
+                        }
+                        // The work now lives somewhere the user chose, so the
+                        // safety net goes.
+                        self.discard_autosave(id);
+                        self.recent.record(&target);
+                        let _ = self.recent.save(&self.paths.recent_file());
+                        self.status = Some(if edited_meanwhile {
+                            format!(
+                                "Saved {} (edits made during the save are not in it yet)",
+                                target.display()
+                            )
+                        } else {
+                            format!("Saved {}", target.display())
+                        });
+                    }
+                    crate::jobs::SaveKind::Autosave { scratch } => {
+                        if scratch {
+                            self.autosaves.insert(id, target.clone());
+                        } else {
+                            // A document that gained a package since the last
+                            // pass has just been written there; its scratch
+                            // copy is now a stale duplicate.
+                            self.discard_autosave(id);
+                        }
+                        tracing::info!("autosaved {}", target.display());
+                        // Autosave says nothing on success unless it was
+                        // showing its progress: then the line is put back to
+                        // something that is not a stale "Autosaving…".
+                        if self
+                            .status
+                            .as_deref()
+                            .is_some_and(|s| s.starts_with("Autosaving"))
+                        {
+                            self.status = Some(format!("Autosaved {}", target.display()));
+                        }
+                        report.written.push((id, target.clone()));
+                    }
+                }
+                // The package at `target` ends with the marker the worker
+                // wrote for this snapshot; the commands accepted while it
+                // ran belong after that marker, and this is what makes
+                // crash recovery replay exactly them — not the ones the
+                // snapshot already holds, and not fewer.
+                Self::settle_journal_hold(held, Some(&target));
+                self.touch();
+            }
+            Err(reason) => {
+                // The previous package is exactly as it was, and so is its
+                // marker: the held commands go after it.
+                let package = self
+                    .docs
+                    .iter()
+                    .find(|d| d.id() == id)
+                    .and_then(|d| d.project_path().map(Path::to_path_buf));
+                Self::settle_journal_hold(held, package.as_deref());
+                let what = match kind {
+                    crate::jobs::SaveKind::Save => "Save",
+                    crate::jobs::SaveKind::Autosave { .. } => "Autosave",
+                };
+                tracing::warn!("{what} of {} failed: {reason}", target.display());
+                self.status = Some(format!("{what} failed: {reason}"));
+                report.failed.push((id, reason));
+                self.touch();
+            }
+        }
     }
 
     // ------------------------------------------------------------ autosave
@@ -3752,19 +4239,25 @@ impl Editor {
     /// recorded in [`Editor::autosave_paths`] so the crash marker can point the
     /// next start at it, and **stays dirty** — the user has still not saved it
     /// anywhere they chose.
+    ///
+    /// W2-G: each write is a job on a worker, the same route Ctrl+S takes
+    /// ([`Editor::start_save`]); this pass *starts* one per dirty document
+    /// and the completions are applied by [`Editor::poll_saves`]. A document
+    /// whose save is already in flight is skipped — the next pass catches
+    /// whatever it was edited into.
     pub fn autosave_now(&mut self) -> AutosaveReport {
         let mut report = AutosaveReport::default();
         let scratch = self.prefs.scratch_dir(&self.paths);
-        let version = self.app_version.clone();
         let tag = self.session_tag.clone();
-        // Read out before the mutable walk over `self.docs`; a document that
-        // was recovered from a previous run's autosave keeps writing to that
-        // same package rather than starting a second one.
+        // A document that was recovered from a previous run's autosave keeps
+        // writing to that same package rather than starting a second one.
         let existing = self.autosaves.clone();
-        let mut fresh: Vec<(DocumentId, PathBuf)> = Vec::new();
-        let mut adopted: Vec<DocumentId> = Vec::new();
 
-        for doc in self.docs.iter_mut().filter(|d| d.is_dirty()) {
+        let mut to_start: Vec<(usize, crate::jobs::SaveKind, PathBuf)> = Vec::new();
+        for (index, doc) in self.docs.iter().enumerate() {
+            if !doc.is_dirty() || self.save_in_flight(doc.id()) {
+                continue;
+            }
             let id = doc.id();
             let (target, is_scratch) = match doc.project_path() {
                 Some(p) => (p.to_path_buf(), false),
@@ -3775,33 +4268,22 @@ impl Editor {
                     (path, true)
                 }
             };
-            if let Some(parent) = target.parent() {
-                if let Err(e) = std::fs::create_dir_all(parent) {
-                    report.failed.push((id, e.to_string()));
-                    continue;
-                }
-            }
-            match doc.write_snapshot(&target, &version) {
-                Ok(()) => {
-                    if is_scratch {
-                        fresh.push((id, target.clone()));
-                    } else {
-                        adopted.push(id);
-                    }
-                    report.written.push((id, target));
-                }
-                Err(e) => report.failed.push((id, e.to_string())),
-            }
+            to_start.push((
+                index,
+                crate::jobs::SaveKind::Autosave {
+                    scratch: is_scratch,
+                },
+                target,
+            ));
         }
-
-        for (id, path) in fresh {
-            self.autosaves.insert(id, path);
+        for (index, kind, target) in to_start {
+            report.started.push((self.docs[index].id(), target.clone()));
+            self.start_save(index, kind, target);
         }
-        // A document that gained a package since the last pass has just been
-        // written there; its scratch copy is now a stale duplicate.
-        for id in adopted {
-            self.discard_autosave(id);
-        }
+        // Under the inline spawner every job above has already completed;
+        // collect them so the report says what was written. Under worker
+        // threads this finds nothing yet.
+        self.poll_saves_into(&mut report);
         if !report.is_empty() {
             self.touch();
         }
@@ -3894,6 +4376,10 @@ impl Editor {
 
     fn recover_projects(&mut self, previous: &SessionRecord, report: &mut RecoveryReport) {
         for project in &previous.open_projects {
+            // A crash during a save leaves the commands accepted meanwhile
+            // in the hold next to the package; they are part of what is
+            // recoverable, so they go into the journal before it is read.
+            Self::absorb_journal_hold(project);
             let found = match session::recoverable(project) {
                 Ok(Some(found)) => found,
                 Ok(None) => continue,
@@ -3940,6 +4426,7 @@ impl Editor {
             | Action::OpenProject
             | Action::Quit
             | Action::TogglePanels
+            | Action::CycleScreenMode
             | Action::ShowPreferences
             | Action::ShowFileInfo
             | Action::SelectTool(_)
@@ -4107,6 +4594,11 @@ impl Editor {
                 self.touch();
                 Ok(Effect::Panels)
             }
+            Action::CycleScreenMode => {
+                self.screen_mode = self.screen_mode.next();
+                self.touch();
+                Ok(Effect::Panels)
+            }
             Action::ShowPreferences => {
                 self.preferences_open = !self.preferences_open;
                 if !self.preferences_open {
@@ -4222,7 +4714,12 @@ impl Editor {
     /// The interaction thread stays responsive while the disk and the codecs
     /// work; [`Self::poll_imports`] applies the finished job.
     pub fn request_open(&mut self, path: &Path) {
-        let rx = crate::jobs::spawn_import(path.to_path_buf(), self.import_generation);
+        let rx = crate::jobs::spawn_import_with(
+            path.to_path_buf(),
+            self.import_generation,
+            self.prefs.history_depth,
+            self.spawner,
+        );
         self.import_jobs.push(rx);
         self.status = Some(format!("Opening {}…", path.display()));
         self.touch();
@@ -4303,13 +4800,13 @@ impl Editor {
                     self.touch();
                 }
             },
-            crate::jobs::ImportOutcome::Psd { bytes, .. } => match bytes {
-                Ok(bytes) => {
+            crate::jobs::ImportOutcome::Psd { parsed, .. } => match parsed {
+                Ok(import) => {
+                    // W2-G: the layered parse already happened on the worker;
+                    // this thread only wraps the result.
                     let id = self.mint_id();
-                    match OpenDocument::open_psd_bytes(id, &path, &bytes, depth) {
-                        Ok(doc) => self.install_opened(doc, &path),
-                        Err(e) => self.report_failed_open(&path, e),
-                    }
+                    let doc = OpenDocument::open_psd_import(id, &path, *import);
+                    self.install_opened(doc, &path);
                 }
                 Err(e) => {
                     self.dialogs.report_error(
@@ -4359,6 +4856,105 @@ impl Editor {
         self.touch();
     }
 
+    /// W2-G: how this editor starts its jobs. See [`crate::jobs::Spawner`].
+    pub fn spawner(&self) -> crate::jobs::Spawner {
+        self.spawner
+    }
+
+    /// W2-G: replace how jobs are started — worker threads, inline, or a
+    /// test's own queue. Jobs already in flight are unaffected.
+    pub fn set_spawner(&mut self, spawner: crate::jobs::Spawner) {
+        self.spawner = spawner;
+    }
+
+    /// W2-G: run an Export As batch (the dialog's job, into the folder the
+    /// picker chose) on a worker against a snapshot of the active document.
+    /// The completion — the files written, or why not — reaches the status
+    /// line through [`Editor::poll_exports`].
+    pub fn request_export(&mut self, job: ui::dialogs::ExportJob, dir: PathBuf) {
+        let Some(doc) = self.active() else {
+            self.set_status("Export needs an open document");
+            return;
+        };
+        let export = crate::jobs::ExportJob {
+            id: doc.id(),
+            document: doc.document.clone(),
+            tiles: doc.tiles.clone(),
+            job,
+            dir: dir.clone(),
+        };
+        let rx = crate::jobs::spawn_export_with(export, self.spawner);
+        self.export_jobs.push(rx);
+        self.status = Some(format!("Exporting to {}…", dir.display()));
+        self.touch();
+        // Inline spawner: already done. Threads: the frame loop polls.
+        self.poll_exports();
+    }
+
+    /// W2-G: apply every export that has finished.
+    pub fn poll_exports(&mut self) {
+        if self.export_jobs.is_empty() {
+            return;
+        }
+        let jobs = std::mem::take(&mut self.export_jobs);
+        for rx in jobs {
+            match rx.try_recv() {
+                Ok(outcome) => self.finish_export(outcome),
+                Err(std::sync::mpsc::TryRecvError::Empty) => self.export_jobs.push(rx),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.status = Some(
+                        "Export failed: the export worker stopped without reporting".to_string(),
+                    );
+                    self.touch();
+                }
+            }
+        }
+    }
+
+    fn finish_export(&mut self, outcome: crate::jobs::ExportOutcome) {
+        use crate::jobs::ExportRoute;
+        match outcome.result {
+            Ok(paths) => {
+                // A `.psd` export's fidelity notes belong on the document,
+                // where File Info reads them.
+                if let Some(notes) = outcome.psd_notes {
+                    if let Some(doc) = self.docs.iter_mut().find(|d| d.id() == outcome.id) {
+                        doc.set_psd_notes(notes);
+                    }
+                }
+                self.status = Some(match outcome.route {
+                    ExportRoute::File => format!("Exported {}", outcome.dir.display()),
+                    ExportRoute::Layers => format!(
+                        "Exported {} layer(s) to {}",
+                        paths.len(),
+                        outcome.dir.display()
+                    ),
+                    ExportRoute::Batch => {
+                        let last = paths.last().map(|p| p.display().to_string());
+                        format!(
+                            "Exported {} file(s) to {}",
+                            paths.len(),
+                            last.unwrap_or_default()
+                        )
+                    }
+                });
+            }
+            Err(e) => {
+                tracing::warn!("export to {} failed: {e}", outcome.dir.display());
+                self.status = Some(format!("Export failed: {e}"));
+                // The user asked for this one file by name: a dialog, as the
+                // synchronous route gave, not only a status line.
+                if outcome.route == ExportRoute::File {
+                    self.dialogs.report_error(
+                        "Export failed",
+                        &format!("{}\n\n{e}", outcome.dir.display()),
+                    );
+                }
+            }
+        }
+        self.touch();
+    }
+
     /// File ▸ Open Project…, through the platform's *folder* picker.
     ///
     /// A package is a directory, so this is the only route by which the
@@ -4391,17 +4987,56 @@ impl Editor {
         Ok(Effect::Saved)
     }
 
+    /// File ▸ Export…: one flattened file (or a layered `.psd`).
+    ///
+    /// W2-G: the composite and the encode run on a worker against a snapshot
+    /// ([`crate::jobs::spawn_file_export_with`]); this thread picks the file,
+    /// runs the two checks that need the live document, and starts the job.
+    /// The completion reaches the status line through
+    /// [`Editor::poll_exports`], and a failure the error dialog as well.
     fn act_export(&mut self) -> Result<Effect, ActionError> {
+        let action = Action::Export;
         let index = self.active.expect("`can` required a document");
         let suggested = self.docs[index].suggested_export_path();
         let Some(target) = self.dialogs.pick_export_path(&suggested) else {
-            return Err(ActionError::Cancelled(Action::Export));
+            return Err(ActionError::Cancelled(action));
         };
-        self.docs[index]
-            .export_to(&target)
-            .map_err(|e| ActionError::failed(Action::Export, e))?;
-        self.status = Some(format!("Exported {}", target.display()));
+        let doc = &self.docs[index];
+        if crate::doc::exports_as_psd(&target) {
+            // Card 077: the original `.psd` this document was opened from is
+            // never silently overwritten with this build's reduced export.
+            if let Some(source) = doc.source_path() {
+                if crate::doc::exports_as_psd(source) && crate::doc::same_path(source, &target) {
+                    return Err(ActionError::failed(
+                        action,
+                        DocumentError::OriginalOverwrite(source.to_path_buf()),
+                    ));
+                }
+            }
+        } else if crate::doc::export_format_for(&target).is_none() {
+            return Err(ActionError::failed(
+                action,
+                DocumentError::UnknownExportFormat(
+                    target
+                        .extension()
+                        .map(|e| e.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| target.display().to_string()),
+                ),
+            ));
+        }
+        let job = crate::jobs::FileExportJob {
+            id: doc.id(),
+            target: target.clone(),
+            document: doc.document.clone(),
+            tiles: doc.tiles.clone(),
+            sixteen_bit: doc.is_sixteen_bit(),
+        };
+        let rx = crate::jobs::spawn_file_export_with(job, self.spawner);
+        self.export_jobs.push(rx);
+        self.status = Some(format!("Exporting {}…", target.display()));
         self.touch();
+        // Inline spawner: already done. Threads: the frame loop polls.
+        self.poll_exports();
         Ok(Effect::Exported)
     }
 
@@ -4412,7 +5047,8 @@ impl Editor {
                 let title = self.docs[index].title().to_string();
                 match self.dialogs.confirm_close(&title) {
                     CloseChoice::Cancel => return Err(ActionError::Cancelled(Action::Quit)),
-                    CloseChoice::Save => self.save_document(index, false)?,
+                    // Waited for: the process is about to exit.
+                    CloseChoice::Save => self.save_document_and_wait(index, false)?,
                     CloseChoice::Discard => {}
                 }
             }
@@ -4662,6 +5298,30 @@ pub fn layer_kind_name(kind: &LayerKind) -> &'static str {
 /// Duration between autosaves, exposed for the shell's frame scheduler.
 pub fn autosave_period(prefs: &Preferences) -> Option<Duration> {
     prefs.autosave_interval()
+}
+
+#[cfg(test)]
+mod save_status_tests {
+    use super::save_status_text;
+    use crate::jobs::SaveKind;
+
+    /// W2-G: the status line names the save and, once the worker has counted
+    /// its tiles, how far along it is.
+    #[test]
+    fn the_status_line_carries_the_tile_count_once_there_is_one() {
+        assert_eq!(
+            save_status_text("a.png", SaveKind::Save, 0, 0),
+            "Saving a.png…"
+        );
+        assert_eq!(
+            save_status_text("a.png", SaveKind::Save, 340, 1900),
+            "Saving a.png… 340/1900 tiles"
+        );
+        assert_eq!(
+            save_status_text("a.png", SaveKind::Autosave { scratch: true }, 2, 16),
+            "Autosaving a.png… 2/16 tiles"
+        );
+    }
 }
 
 #[cfg(test)]

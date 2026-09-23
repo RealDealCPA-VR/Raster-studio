@@ -364,9 +364,10 @@ fn a_symlinked_tile_shard_is_refused_by_the_loader() {
     }
 
     // The blobs are still readable through the link...
-    assert!(inside
-        .join(format!("{}.tile", blobs[0].0.to_hex()))
-        .is_file());
+    assert!(
+        crate::tiles::stored_blob_path(&pkg, blobs[0].0).is_some(),
+        "the blob is reachable through the link"
+    );
     // ...and the package is refused anyway.
     let err = open_project(&pkg).unwrap_err();
     assert!(
@@ -1404,4 +1405,257 @@ fn a_preview_can_be_turned_off() {
     assert_eq!(report.preview, None);
     assert!(!pkg.join(PREVIEW_FILE).exists());
     assert!(open_project(&pkg).unwrap().preview.is_none());
+}
+
+// ------------------------------------------------- save cost (W2-G)
+
+/// A tile source that counts how often the save asks it for pixels — the
+/// measure of "this save re-encoded a tile" that does not depend on timing.
+struct Counting<'a> {
+    inner: &'a compositor::MemoryTileSource,
+    asked: std::sync::atomic::AtomicUsize,
+}
+
+impl<'a> Counting<'a> {
+    fn over(inner: &'a compositor::MemoryTileSource) -> Self {
+        Counting {
+            inner,
+            asked: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn asked(&self) -> usize {
+        self.asked.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl crate::TileBytes for Counting<'_> {
+    fn tile_bytes(&self, hash: TileHash) -> Option<&[u8]> {
+        self.asked
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        compositor::TileSource::tile(self.inner, hash)
+    }
+}
+
+/// Every tile blob file under `pkg/tiles`, by name.
+fn tile_files(pkg: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(shards) = std::fs::read_dir(pkg.join(crate::TILES_DIR)) else {
+        return out;
+    };
+    for shard in shards {
+        for blob in std::fs::read_dir(shard.unwrap().path()).unwrap() {
+            out.push(blob.unwrap().path());
+        }
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn a_second_save_of_an_unchanged_document_writes_no_new_tile_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let pkg = dir.path().join("Same.rstudio");
+    let (doc, source, blobs) = painted();
+    // The preview composites through the source too; it is off here so the
+    // count below is the tile pass and nothing else.
+    let mut o = opts();
+    o.write_preview = false;
+
+    let first = Counting::over(&source);
+    let report = save_project_with(&pkg, &doc, &first, &o).unwrap();
+    assert_eq!(report.tiles.blobs_written, 3, "{report:?}");
+    assert_eq!(report.tiles.blobs_reused, 0);
+    assert_eq!(first.asked(), 3, "the first save produces every tile");
+    let files_after_first = tile_files(&pkg);
+    assert_eq!(files_after_first.len(), 3);
+
+    // The same document, saved over its own package: nothing is produced.
+    let second = Counting::over(&source);
+    let report = save_project_with(&pkg, &doc, &second, &o).unwrap();
+    assert_eq!(second.asked(), 0, "a reused tile is never asked for");
+    assert_eq!(report.tiles.blobs_written, 0, "{report:?}");
+    assert_eq!(report.tiles.bytes_written, 0, "{report:?}");
+    assert_eq!(report.tiles.encoded_bytes_written, 0, "{report:?}");
+    assert_eq!(report.tiles.blobs_reused, 3, "{report:?}");
+    assert_eq!(report.tiles.file_syncs, 0, "a reused blob owes no fsync");
+    assert_eq!(
+        tile_files(&pkg),
+        files_after_first,
+        "same files, same names"
+    );
+
+    // Strongest form: with NO source at all the save still succeeds, because
+    // every tile it needs is already in the package it is replacing.
+    save_project_with(&pkg, &doc, &NoTiles, &o).unwrap();
+
+    // And what came back is still every byte behind every hash.
+    let loaded = open_project(&pkg).unwrap();
+    for (hash, bytes) in &blobs {
+        let stored = loaded.tiles.get(asset_store::BlobHash(hash.0)).unwrap();
+        assert_eq!(&*stored, bytes.as_slice());
+    }
+}
+
+#[test]
+fn an_edit_to_one_layer_rewrites_only_that_layers_changed_tiles() {
+    let dir = tempfile::tempdir().unwrap();
+    let pkg = dir.path().join("Edit.rstudio");
+    let (mut doc, mut source, blobs) = painted();
+    let mut o = opts();
+    o.write_preview = false;
+    save_project_with(&pkg, &doc, &source, &o).unwrap();
+
+    // Repaint one tile of the one layer; the other layer tile and the mask
+    // tile are untouched.
+    let layer_id = doc.layers.root()[0];
+    let green = solid_tile([20, 200, 40, 255]);
+    let gh = source.insert_bytes(green.clone());
+    doc.pixels.apply(
+        PixelKey::Layer(layer_id),
+        &TileDelta::single(TileEdit::set(TileCoord::new(0, 0, 0), gh)),
+    );
+
+    let counting = Counting::over(&source);
+    let report = save_project_with(&pkg, &doc, &counting, &o).unwrap();
+    assert_eq!(counting.asked(), 1, "only the changed tile is produced");
+    assert_eq!(report.tiles.blobs_written, 1, "{report:?}");
+    assert_eq!(report.tiles.bytes_written, green.len() as u64);
+    assert_eq!(report.tiles.blobs_reused, 2, "{report:?}");
+    assert_eq!(report.tiles.file_syncs, 1, "one new blob, one fsync");
+
+    let loaded = open_project(&pkg).unwrap();
+    assert_eq!(
+        &*loaded.tiles.get(asset_store::BlobHash(gh.0)).unwrap(),
+        green.as_slice()
+    );
+    // The blue layer tile and the mask coverage tile came across untouched.
+    for (hash, bytes) in &blobs[1..] {
+        assert_eq!(
+            &*loaded.tiles.get(asset_store::BlobHash(hash.0)).unwrap(),
+            bytes.as_slice()
+        );
+    }
+}
+
+#[test]
+fn tile_blobs_are_compressed_on_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let pkg = dir.path().join("Small.rstudio");
+    let (doc, source, blobs) = painted();
+    let report = save_project_with(&pkg, &doc, &source, &opts()).unwrap();
+    let pixel_bytes: u64 = blobs.iter().map(|(_, b)| b.len() as u64).sum();
+    assert_eq!(report.tiles.bytes_written, pixel_bytes);
+    let on_disk: u64 = tile_files(&pkg)
+        .iter()
+        .map(|p| std::fs::metadata(p).unwrap().len())
+        .sum();
+    assert_eq!(report.tiles.encoded_bytes_written, on_disk);
+    assert!(
+        on_disk * 20 < pixel_bytes,
+        "flat tiles should shrink by more than 20x: {on_disk} of {pixel_bytes}"
+    );
+    for file in tile_files(&pkg) {
+        assert_eq!(
+            file.extension().unwrap(),
+            crate::COMPRESSED_TILE_EXT,
+            "{file:?}"
+        );
+    }
+}
+
+#[test]
+fn a_v2_package_with_raw_tile_blobs_still_opens() {
+    // The old-format fixture: what every package written before compression
+    // looks like — layout version 2, every blob a raw `.tile`. Built by
+    // converting a fresh package rather than checked in, so it tracks the
+    // document model.
+    use std::io::Read;
+    let dir = tempfile::tempdir().unwrap();
+    let pkg = dir.path().join("Old.rstudio");
+    let (doc, source, blobs) = painted();
+    save_project_with(&pkg, &doc, &source, &opts()).unwrap();
+
+    for file in tile_files(&pkg) {
+        let encoded = std::fs::read(&file).unwrap();
+        let mut pixels = Vec::new();
+        flate2::read::DeflateDecoder::new(&encoded[..])
+            .read_to_end(&mut pixels)
+            .unwrap();
+        std::fs::remove_file(&file).unwrap();
+        std::fs::write(file.with_extension(crate::TILE_EXT), pixels).unwrap();
+    }
+    let mut m = read_manifest(&pkg);
+    m.manifest_version = 2;
+    m.seal();
+    write_manifest(&pkg, &m);
+    for file in tile_files(&pkg) {
+        assert_eq!(file.extension().unwrap(), crate::TILE_EXT);
+    }
+
+    let loaded = open_project(&pkg).unwrap();
+    assert_eq!(loaded.manifest.manifest_version, 2);
+    assert_eq!(loaded.document, doc);
+    for (hash, bytes) in &blobs {
+        assert_eq!(
+            &*loaded.tiles.get(asset_store::BlobHash(hash.0)).unwrap(),
+            bytes.as_slice()
+        );
+    }
+
+    // Saving over it reuses the raw blobs too (verified by hash), and the
+    // result opens as the current layout.
+    let mut o = opts();
+    o.write_preview = false;
+    let report = save_project_with(&pkg, &doc, &NoTiles, &o).unwrap();
+    assert_eq!(report.tiles.blobs_reused, 3, "{report:?}");
+    let loaded = open_project(&pkg).unwrap();
+    assert_eq!(loaded.manifest.manifest_version, crate::MANIFEST_VERSION);
+    assert_eq!(loaded.document, doc);
+}
+
+#[test]
+fn a_failing_second_save_leaves_the_reused_package_intact() {
+    // Reuse hard-links blobs between the temp package and the one it is
+    // replacing. A save that fails after linking must still remove its temp
+    // without taking the shared bytes with it.
+    let dir = tempfile::tempdir().unwrap();
+    let pkg = dir.path().join("Work.rstudio");
+    let (mut doc, source, blobs) = painted();
+    let original = doc.clone();
+    let mut o = opts();
+    o.write_preview = false;
+    save_project_with(&pkg, &doc, &source, &o).unwrap();
+
+    // A new tile the source does not have: the save links the three old
+    // blobs, then fails on the fourth.
+    let layer_id = doc.layers.root()[0];
+    doc.pixels.apply(
+        PixelKey::Layer(layer_id),
+        &TileDelta::single(TileEdit::set(TileCoord::new(3, 3, 0), TileHash([0xAB; 32]))),
+    );
+    let err = save_project_with(&pkg, &doc, &source, &o).unwrap_err();
+    assert!(matches!(err, ProjectError::MissingTile { .. }), "{err}");
+
+    let leftovers: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n != "Work.rstudio")
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "the failed save's temp was removed: {leftovers:?}"
+    );
+
+    let loaded = open_project(&pkg).unwrap();
+    assert_eq!(
+        loaded.document, original,
+        "the previous package is what it was"
+    );
+    for (hash, bytes) in &blobs {
+        assert_eq!(
+            &*loaded.tiles.get(asset_store::BlobHash(hash.0)).unwrap(),
+            bytes.as_slice()
+        );
+    }
 }

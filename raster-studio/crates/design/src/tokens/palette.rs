@@ -80,6 +80,22 @@ pub enum ColorRole {
 
     /// Color of drop shadows at full elevation opacity.
     ShadowColor,
+
+    // ---- data colours ----------------------------------------------------
+    // The colour a *measurement* is drawn in: a histogram curve, a channel
+    // thumbnail's tint. They are still the theme's to choose — the red
+    // channel is drawn in *a* red that clears the panel and the plot well
+    // in each appearance — which is why they are roles and not literals in
+    // the panel that paints them.
+    /// The red component channel: the Histogram's red curve, the Channels
+    /// panel's red thumbnail tint.
+    ChannelRed,
+    /// The green component channel.
+    ChannelGreen,
+    /// The blue component channel.
+    ChannelBlue,
+    /// The luminosity curve, and any other single-channel reading.
+    Luminance,
 }
 
 impl ColorRole {
@@ -120,6 +136,21 @@ impl ColorRole {
         Self::SelectionStroke,
         Self::FocusRing,
         Self::ShadowColor,
+        Self::ChannelRed,
+        Self::ChannelGreen,
+        Self::ChannelBlue,
+        Self::Luminance,
+    ];
+
+    /// The roles that colour *data* rather than chrome: a histogram curve or
+    /// a channel tint. Each is held to SC 1.4.11's 3:1 over the panel body
+    /// and over the sunken well a plot is drawn in, in both appearances —
+    /// `crates/design/tests/token_gates.rs` is the gate.
+    pub const DATA: &'static [ColorRole] = &[
+        Self::ChannelRed,
+        Self::ChannelGreen,
+        Self::ChannelBlue,
+        Self::Luminance,
     ];
 }
 
@@ -330,6 +361,12 @@ pub const LIGHT_ROLES: &[(ColorRole, Srgba)] = &[
     (ColorRole::SelectionStroke, Srgba::hex(0x0B62CE)),
     (ColorRole::FocusRing, Srgba::hexa(0x0B62CE99)),
     (ColorRole::ShadowColor, Srgba::hexa(0x0000002E)),
+    // Data colours: deep enough to clear 3:1 over the #CCCCCC well the
+    // histogram is plotted in, still unmistakably red / green / blue.
+    (ColorRole::ChannelRed, Srgba::hex(0xC81E1E)),
+    (ColorRole::ChannelGreen, Srgba::hex(0x1A7436)),
+    (ColorRole::ChannelBlue, Srgba::hex(0x1F5FCC)),
+    (ColorRole::Luminance, Srgba::hex(0x4A4A50)),
 ];
 
 /// Dark appearance — Photopea's: a mid-grey chrome (#474747 panel bodies,
@@ -380,6 +417,12 @@ pub const DARK_ROLES: &[(ColorRole, Srgba)] = &[
     (ColorRole::SelectionStroke, Srgba::hex(0x7FB3F5)),
     (ColorRole::FocusRing, Srgba::hexa(0x7FB3F5B3)),
     (ColorRole::ShadowColor, Srgba::hexa(0x00000080)),
+    // Data colours: light enough to clear 3:1 over the #474747 panel body
+    // (the Channels thumbnails) and the #232323 well (the Histogram plot).
+    (ColorRole::ChannelRed, Srgba::hex(0xFF6B6B)),
+    (ColorRole::ChannelGreen, Srgba::hex(0x5FD068)),
+    (ColorRole::ChannelBlue, Srgba::hex(0x6FA8FF)),
+    (ColorRole::Luminance, Srgba::hex(0xD6D6D6)),
 ];
 
 #[cfg(test)]

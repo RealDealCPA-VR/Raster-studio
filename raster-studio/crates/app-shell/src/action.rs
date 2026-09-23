@@ -133,6 +133,12 @@ pub enum Action {
     ZoomFit,
     ZoomActualPixels,
     TogglePanels,
+    /// W2-X: Photopea's `F` — Standard, Full Screen With Menu Bar, Full
+    /// Screen, and round again. The mode is [`crate::Editor::screen_mode`]'s;
+    /// the chrome hides the docks and the tool column in both full-screen
+    /// modes and the menu bar in the last, and the shell sets the window
+    /// borderless full screen for the two.
+    CycleScreenMode,
     // ---- Tools / painting ----
     SelectTool(ToolKey),
     /// Hold to borrow the hand tool; released by [`crate::Editor::release_temporary_hand`].
@@ -174,6 +180,7 @@ const FIXED: &[Action] = &[
     Action::ZoomFit,
     Action::ZoomActualPixels,
     Action::TogglePanels,
+    Action::CycleScreenMode,
     Action::TemporaryHand,
     Action::DecreaseBrushSize,
     Action::IncreaseBrushSize,
@@ -224,6 +231,7 @@ impl Action {
             Action::ZoomFit => "zoom-fit".into(),
             Action::ZoomActualPixels => "zoom-actual-pixels".into(),
             Action::TogglePanels => "toggle-panels".into(),
+            Action::CycleScreenMode => "cycle-screen-mode".into(),
             Action::SelectTool(k) => format!("select-tool-{}", k.char()),
             Action::TemporaryHand => "temporary-hand".into(),
             Action::DecreaseBrushSize => "decrease-brush-size".into(),
@@ -275,7 +283,8 @@ impl Action {
             | Action::ZoomOut
             | Action::ZoomFit
             | Action::ZoomActualPixels
-            | Action::TogglePanels => Category::View,
+            | Action::TogglePanels
+            | Action::CycleScreenMode => Category::View,
             Action::SelectTool(_)
             | Action::TemporaryHand
             | Action::DecreaseBrushSize
@@ -314,6 +323,7 @@ impl Action {
             Action::ZoomFit => "Fit on Screen".into(),
             Action::ZoomActualPixels => "Actual Pixels".into(),
             Action::TogglePanels => "Hide / Show Panels".into(),
+            Action::CycleScreenMode => "Screen Mode".into(),
             Action::SelectTool(k) => match tools::registry::by_shortcut(k.char()).first() {
                 Some(id) => match tools::registry::info(*id) {
                     Some(info) => info.name.to_string(),

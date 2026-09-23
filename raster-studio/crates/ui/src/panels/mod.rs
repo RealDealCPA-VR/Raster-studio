@@ -14,6 +14,7 @@
 pub mod brushes;
 pub mod channels;
 pub mod color;
+pub mod histogram;
 pub mod history;
 pub mod layers;
 pub mod navigator;
