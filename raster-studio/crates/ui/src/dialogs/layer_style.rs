@@ -18,8 +18,12 @@
 //!
 //! # About the preview
 //!
-//! The preview here is deliberately labelled *approximate*. There is no layer
-//! effect renderer in the compositor yet, and drawing one inside a dialog would
+//! The preview here is deliberately a labelled *approximate* schematic. The
+//! real rendering is the compositor's (`compositor::effects::render`, called
+//! from its layer composite), and the canvas shows that result. Nine of the
+//! ten effects render there; Pattern Overlay, like a glow or stroke filled
+//! with a pattern, draws nothing, because the compositor has no asset store
+//! (see its "Honest gaps"). Drawing the effects again inside a dialog would
 //! be a second implementation that silently disagrees with the first. What is
 //! **not** approximate is the geometry: [`shadow_offset`] is the shared
 //! angle-and-distance arithmetic every one of these effects needs, and it is

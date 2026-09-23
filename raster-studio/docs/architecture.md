@@ -1,7 +1,8 @@
 # Architecture
 
 Raster Studio is a native, local-first desktop image editor. One process, one
-window, no server, no sidecar, no network stack.
+window, no server, no sidecar, no network stack. The only other process it
+starts is the user's web browser, for the Help menu's fixed URLs.
 
 The keystone decision is stated in [`PLAN.md`](PLAN.md) §D2 and is what the rest
 of this document falls out of:
@@ -49,15 +50,43 @@ Two things follow, and they are the reason for the split:
                                     │
                                     ▼
                 render::Canvas + render_shaders::QUAD_WGSL
-                (pan/zoom camera affine, transparency checkerboard)
+                (pan/zoom/rotate/flip camera affine, transparency
+                 checkerboard, drawn inside the canvas area; a second
+                 line pass, render::Overlay, draws the selection ants)
                                     │
                                     ▼
                      egui pass (LoadOp::Load) ──▶ swapchain
 ```
 
-The document is the only source of pixels on screen. `OpenDocument::composite`
-is the single entry point the canvas has; there is no second path in which an
-image is drawn without being in the document.
+The document, plus any live preview lens (an uncommitted transform or a stroke
+being dragged), is the only source of image pixels on screen.
+`OpenDocument::composite` is the single entry point the canvas has; there is no
+second path in which an image is drawn without being in the document. Gesture
+feedback (the crop shade, marquee, brush ring, guides, rulers) is drawn by egui
+over the canvas.
+
+The document is fitted and drawn inside the canvas area — the rectangle between
+the tool column, the docks, the bars and the status line — and pointer mapping,
+overlays, zoom anchors and Fit all use that same rectangle (W5). A document
+larger than `MAX_PRESENT_TEXELS` (2^27 texels, `app-shell/src/presenter.rs`)
+is shown at a power-of-two mip level and composited in bands; edits invalidate
+only their dirty rectangle (`app_shell::dirty`).
+
+## Threading
+
+The UI thread owns the documents. File ▸ Open's decode and PSD parse, save,
+autosave, Export As, File ▸ Export and Export Layers each run on a worker
+thread (`app-shell/src/jobs.rs`); drag-and-drop, recent files and the
+command-line argument still decode on the UI thread through
+`Editor::open_path`. A save or an export works on a cloned `Document`
+and tile snapshot. The UI thread polls each job once a frame; an import result
+from a cancelled (stale) generation is dropped unread, and a save's outcome
+decides whether the live document is clean by comparing its digest with the
+snapshot's. While a save of a document runs, the commands applied to it are
+journaled to a side file beside the package (`P.rstudio.journal-hold`) and
+absorbed into the package journal exactly once when the save lands, or on the
+next open after a crash (`project_format::CommandJournal::absorb`). A worker
+panic still aborts the process: the release profile sets `panic = "abort"`.
 
 ## Crate graph
 
@@ -66,20 +95,27 @@ Solid edges are real `[dependencies]` entries in the manifests.
 ```
 apps/studio-desktop
   ├── telemetry                                  (tracing init, local bundles)
-  └── app-shell ── winit · wgpu · egui-wgpu · egui-winit · rfd · dirs
+  └── app-shell ── winit · wgpu · egui · egui-wgpu · egui-winit · rfd · dirs
+        │           · arboard · webbrowser · accesskit_winit
         ├── ui ── design
         │     └── editor-core · layer-model · tools · compositor · selection
         │        · filters · adjustments · vector · text-engine · raster · color
         ├── render ── render-shaders                      (presentation only)
         ├── compositor
         ├── project-format
+        ├── psd
         ├── tools
+        ├── filters · adjustments · selection · text-engine
         ├── editor-core
         ├── layer-model
+        ├── asset-store
+        ├── telemetry
         ├── design
+        ├── color
         └── raster
 
 compositor      ── editor-core · layer-model · raster · color · adjustments
+                   · text-engine · vector · filters
 project-format  ── editor-core · layer-model · raster · asset-store · compositor
 tools           ── editor-core · layer-model · raster · color
                    · filters · selection · vector
@@ -88,13 +124,13 @@ filters         ── raster · color
 adjustments     ── color · layer-model
 editor-core     ── layer-model · color · raster
 text-engine     ── layer-model · cosmic-text
-psd             ── layer-model
+psd             ── layer-model · flate2
 asset-store     ── raster
-raster          ── color · image
+raster          ── color · image · bytemuck · flate2 · blake3
 design          ── egui
 
-leaves:   color · vector · layer-model · render-shaders
-detached: licensing · updater   (no crate in the workspace depends on either)
+leaves (no workspace deps): color · vector · layer-model · render-shaders
+                            · telemetry · design
 ```
 
 `tests/integration` sits above everything and drives `app_shell::doc::OpenDocument`
@@ -108,11 +144,11 @@ the manifests actually support.
 | Rule | Status |
 | --- | --- |
 | `color`, `vector` and `layer-model` are leaf domain crates: no I/O, no GPU, no document | Holds. Their only dependencies are `serde`, `glam`, `uuid` and `thiserror`. |
-| `compositor` is a pure function `(document, source, region, level) -> pixels` | Holds. No `std::fs`, no `wgpu`, no globals; it takes tile bytes through the `TileSource` trait. |
+| `compositor` is a pure function `(document, source, region, level) -> pixels` | Mostly. No `std::fs`, no `wgpu`; it takes tile bytes through the `TileSource` trait. It does keep process-wide `static`s: input-keyed caches (`shape.rs`, `bounds.rs`) and a font engine seeded from the system font directories and `RASTER_STUDIO_FONT_DIRS` (`text.rs`). |
 | `editor-core` owns the document, commands and history — no GPU, no disk | Holds. It names `raster` only for the *vocabulary* of tile identity and geometry. |
 | `ui` is a view: it never mutates the document | Holds. Nothing in `crates/ui` holds a `&mut Document`; controls resolve to an `Intent` that the shell performs. Its only `std::fs` calls are inside `#[cfg(test)]` source-scanning tests. |
 | All wgpu lives below `render` | **Partly.** `render` owns every pipeline, shader and texture type, and no crate other than `app-shell` and `render` names `wgpu`. But `app-shell` owns the window, the surface, the command encoder and the egui pass, so it names `wgpu` too. The accurate rule is: *`render` owns the GPU work; `app-shell` owns the frame.* Nothing above `app-shell` touches either. |
-| `project-format` owns all persistence | **Of the project.** The `.rstudio` package, its tiles, assets, preview and journal are entirely its business. The application's *own* state — `preferences.json`, `recent.json`, `sessions/{pid}.json`, scratch autosaves — is `app-shell`'s (`prefs.rs`, `recent.rs`, `session.rs`), and image import/export file I/O is `raster`'s (`codec.rs`, `export.rs`). |
+| `project-format` owns all persistence | **Of the project.** The `.rstudio` package, its tiles, assets, preview and journal are entirely its business. App state is `app-shell`'s: `preferences.json` (including swatches and brush presets), `recent.json`, `sessions/{pid}.json`, `actions.json`, scratch autosaves and the journal-hold side file. `presets.json` is `asset-store`'s. Flat-image codec I/O is `raster`'s (`codec.rs`, `export.rs`). `app-shell` itself also reads import bytes, writes layered `.psd`, the Print PDF and the diagnostics file, and reads `.cube` LUTs and recent-file previews. |
 
 ## What each crate owns
 
@@ -124,7 +160,7 @@ the manifests actually support.
 | `design` | Tokens (colour, type scale, 4pt grid, radii, elevation, motion), the egui theme, themed widgets |
 | `editor-core` | `Document`, `Command`, `History`, the `PixelStore` of tile hashes, `Selection` |
 | `layer-model` | Layer tree, groups, masks, effects data, and the reference math for all 27 blend modes |
-| `compositor` | The authoritative CPU tile compositor, its tile cache, and the adjustment application path |
+| `compositor` | The authoritative CPU tile compositor, its tile cache, the adjustment application path, and the layer effects (`effects.rs`: nine of the ten render; Pattern Overlay and pattern-filled glows/strokes draw nothing, as the crate has no asset store) |
 | `raster` | Tiles, tile grids, mip chains, pixel formats, the codec facade, export |
 | `color` | Colour spaces, transfer functions, premultiply, CIELAB, HSL/HSV |
 | `selection` | Marquee, lasso, wand, colour range, morphology on fractional coverage, outline extraction |
@@ -138,8 +174,6 @@ the manifests actually support.
 | `psd` | `.psd` read and write, written from the published format documentation |
 | `render` | wgpu: context, textures, mip generation, the camera affine, the quad pass, offscreen readback |
 | `render-shaders` | The WGSL sources (`quad`, `composite`, `mipmap`) as embedded constants |
-| `licensing` | Offline Ed25519 entitlement verification |
-| `updater` | Ed25519 verification of an update manifest |
 | `telemetry` | `tracing` initialisation and a local diagnostic bundle |
 
 ## What is built but not wired in
@@ -157,22 +191,20 @@ Stated here rather than left for someone to discover:
 - **`render::CompositePass` and `composite.wgsl` are unused by the application.**
   They are constructed only in `crates/render/tests/gpu.rs`. Nothing composites
   on the GPU; see [`render-pipeline.md`](render-pipeline.md).
-- **`licensing` and `updater` have no dependents.** No code path in `app-shell`
-  verifies an entitlement or an update manifest. They are library code with
-  their own tests, not a shipped control.
 - **`asset-store`'s disk backend is not on the application's path.**
   `project-format` builds the memory-only store (`assets::new_store`), and
   `AssetStore::open` — the write-through, symlink-checked, refcount-journalled
   variant — is called only from that crate's own tests.
-- **`layer-model::LayerEffects` is data the compositor ignores.** A styled layer
-  saves, reloads and edits; it renders unstyled.
+- **Stylus pressure has no source.** `Shell::set_pen_pressure` is the seam the
+  pressure-aware stroke engine reads through, but only tests call it; no
+  winit tablet event is subscribed.
 
 ## Non-goals, and where they are enforced
 
 | Principle | Where it holds |
 | --- | --- |
-| No cloud, no account, no telemetry upload | There is no networking code in the workspace — no `std::net`, no socket type, no HTTP or TLS crate anywhere in the binary's dependency graph. `telemetry::DiagnosticBundle` is written locally and defaults `upload_consented` to `false`. |
-| No AI sidecar, no external runtime | Removed in full ([`PLAN.md`](PLAN.md) §D3). No process is spawned, no interpreter is bundled, and there is no copyleft boundary to police — see [`../LICENSES/THIRD_PARTY_NOTICES.md`](../LICENSES/THIRD_PARTY_NOTICES.md). |
+| No cloud, no account, no telemetry upload | There is no networking code in the workspace — no `std::net`, no socket type, no HTTP or TLS crate anywhere in the binary's dependency graph (Help items hand a fixed URL to the user's browser). `telemetry::DiagnosticBundle` is written locally and defaults `upload_consented` to `false`. |
+| No AI sidecar, no external runtime | Removed in full ([`PLAN.md`](PLAN.md) §D3). No interpreter or sidecar. The only process the app starts is the user's browser, for fixed Help URLs (`webbrowser`); the build script runs `git` for the version stamp. No interpreter is bundled, and there is no copyleft boundary to police — see [`../LICENSES/THIRD_PARTY_NOTICES.md`](../LICENSES/THIRD_PARTY_NOTICES.md). |
 | Always editable | Every user-visible edit is an invertible `editor_core::Command`; adjustments are parametric; pixels are referenced by content hash so a stroke across a hundred tiles is one small command and one undo step. |
 | The native format is authoritative | `.rstudio` carries a mandatory package version *and* a mandatory document version, an integrity seal, the pixels, and a command journal. See [`file-format.md`](file-format.md). |
 | Correctness does not require a GPU | `compositor` is the only thing that decides what a pixel is. GPU-backed tests detect the absence of an adapter and skip. |

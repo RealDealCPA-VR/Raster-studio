@@ -467,10 +467,17 @@ impl OpenDocument {
             surface.format() == raster::PixelFormat::Rgba16
         };
         Self::open_image_decoded(id, path, image, history_depth).map(|mut open| {
-            open.source_sixteen_bit = sixteen_bit;
-            open.document.meta.bit_depth = if sixteen_bit { 16 } else { 8 };
+            open.record_source_depth(sixteen_bit);
             open
         })
+    }
+
+    /// Record the depth the source file arrived in: the 16-bit export route
+    /// honours it and the document's bit depth says so. One place for the
+    /// synchronous open and the off-thread File > Open import alike.
+    pub fn record_source_depth(&mut self, sixteen_bit: bool) {
+        self.source_sixteen_bit = sixteen_bit;
+        self.document.meta.bit_depth = if sixteen_bit { 16 } else { 8 };
     }
 
     /// Card 087: build the document an off-thread import job decoded. The

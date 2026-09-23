@@ -29,11 +29,14 @@
 //!   the layers panel say "No layers yet" under a visible photograph.
 //! * **There is one chrome.** [`chrome::Chrome`] owns a [`ui::Workspace`] and
 //!   draws it: the nine menus, the tool palette and its fly-outs, the options
-//!   bar and all thirteen docked panels are the `ui` crate's, reached from the
-//!   binary. What this crate still draws itself is what that crate has no model
-//!   for — the document tab strip, preferences, and the transient status
-//!   message. [`menu_bridge::pick`] is the single translation from
-//!   [`ui::Intent`] to something the shell performs.
+//!   bar, all fifteen docked panels and the dialogs (Preferences included,
+//!   hosted by [`dialog_host`]) are the `ui` crate's, reached from the binary.
+//!   What this crate still draws itself is what that crate has no model for —
+//!   the document tab strip, the start screen, the canvas extras
+//!   ([`canvas_extras`]: rulers, guides, grid, cursors, the brush ring, the
+//!   context menu) and the transient status message. [`menu_bridge::pick`] is
+//!   the single translation from [`ui::Intent`] to something the shell
+//!   performs.
 //! * **The UI emits commands.** [`chrome`] takes `&Editor` and returns a
 //!   [`chrome::ChromeOutput`]; every document change goes through
 //!   [`editor_core::History`], so undo and redo are uniform. A field of that
@@ -45,18 +48,8 @@
 //!   and an action that cannot apply right now returns the reason a disabled
 //!   menu item shows.
 //!
-//! # Known gaps
+//! # How two edits land
 //!
-//! Stated rather than implied:
-//!
-//! * **A view rotation cannot be shown.** [`tool_input`] drives the Rotate View
-//!   tool like any other, but [`render::Camera`] is axis-aligned by
-//!   construction, so the angle has nowhere to be written back to. Hand and
-//!   Zoom reach the screen in full.
-//! * **A selection gesture is not undoable.** `editor-core` models the
-//!   selection as a field rather than a command, so a marquee changes the
-//!   document directly and marks it dirty. Named in [`tools::SelectionEdit`]'s
-//!   own documentation, not invented here.
 //! * **A stroke is previewed, then committed once (W4-B).**
 //!   `tools::StrokeTool::commit` still emits the stroke's single `PaintTiles`
 //!   command from `on_pointer_up` alone, but each Move sample publishes the
@@ -64,33 +57,32 @@
 //!   preview lens, so the stroke shows while it is dragged; the release
 //!   commits exactly those pixels and Escape leaves no trace. See
 //!   [`tool_input`].
-//! * **A crop's rotation and scale ride on the layer transforms.** (A slice set *is* exported:
-//!   File > Export > Slices writes one file per region, see [`slices_export`].)
-//!   The crop is performed as one undoable step, straighten, W x H x
-//!   Resolution and Delete Cropped Pixels included (W4-D) — see
-//!   `crop_apply::crop`, which [`tool_input::ToolPointer::commit`] calls
-//!   ([`tool_input::crop_command`] is its geometry half alone); the rotation
-//!   and the scale are carried by the root layers' transforms rather than
-//!   baked into their pixels.
-//! * **The right button does nothing on the canvas.** There is no context menu
-//!   to give it, and [`ui::canvas::InputRouter`] would hand a `Secondary` press
-//!   to the active tool exactly as it hands it a `Primary` one — so a right-drag
-//!   would paint. [`shell::pointer_button`] refuses it rather than leaving the
-//!   user a stroke they did not ask for.
-//! * **A text run cannot be re-entered.** A Type-tool click makes a text layer
-//!   and opens it for typing; clicking *back into* an existing one to move the
-//!   caret does not, because placing a caret needs the glyph boxes
-//!   `ui::canvas::text_overlay` computes and a hit test the canvas does not
-//!   run. The run can still be edited from the Properties panel's text field.
-//!   Nor does the Pen draw curves: a click makes a corner, and dragging out of
-//!   one to pull a control handle is not wired. See `tools::text` and
-//!   `tools::pen`.
-//! * **The scratch location is shown, not edited.** The preferences window
-//!   ([`chrome`]) covers theme, UI scale, autosave interval, history depth and
-//!   the whole keymap; the scratch directory is displayed read-only because
-//!   changing it needs a folder picker that is not wired.
-//! * **File ▸ New has no size dialog.** It makes a
-//!   [`editor::NEW_DOCUMENT_SIZE`] canvas.
+//! * **A crop is one undoable step (W4-D).** Straighten, W x H x Resolution
+//!   and Delete Cropped Pixels included — see `crop_apply::crop`, which
+//!   [`tool_input::ToolPointer::commit`] calls ([`tool_input::crop_command`]
+//!   is its geometry half alone). A slice set is exported by File > Export >
+//!   Slices, one file per region ([`slices_export`]).
+//!
+//! # Known gaps
+//!
+//! Stated rather than implied:
+//!
+//! * **A crop's rotation and scale ride on the layer transforms.** They are
+//!   carried by the root layers' transforms rather than baked into their
+//!   pixels; Delete Cropped Pixels clears raster layers' own pixels only
+//!   (layer masks, text and shape layers keep their content); and the
+//!   Resolution field converts to pixels but is not stored on the document.
+//! * **Stylus pressure has no source.** [`shell::Shell::set_pen_pressure`] is
+//!   the seam the pressure-aware stroke engine reads through, but only tests
+//!   call it: no winit tablet or touch event is subscribed, so a pen paints at
+//!   full pressure.
+//! * **The right button never reaches a tool.** It opens the canvas context
+//!   menu ([`canvas_extras`]); [`shell::pointer_button`] refuses it as a tool
+//!   press, because [`ui::canvas::InputRouter`] would hand a `Secondary` press
+//!   to the active tool exactly as it hands it a `Primary` one — so a
+//!   right-drag would paint.
+//! * **The scratch location is typed, not picked.** The preferences window
+//!   edits it as a text field; there is no folder picker.
 //! * **Tab does not move keyboard focus between widgets.** Tab is a shortcut
 //!   here (Hide/Show Panels, and with Ctrl the document tabs), and egui's focus
 //!   navigation would both swallow it and then claim every later key press. See

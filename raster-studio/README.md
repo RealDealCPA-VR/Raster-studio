@@ -6,7 +6,7 @@ file covers only what you need to build and work inside the workspace.
 ```bash
 # from this directory
 cargo check --workspace --all-targets   # type-check everything
-cargo test  --workspace                 # ~3,000 tests
+cargo test  --workspace                 # ~4,500 tests
 cargo run   -p studio-desktop           # launch
 cargo run   -p studio-desktop -- img.png
 ```
@@ -25,8 +25,10 @@ rather than fail, so they can run on a runner without a GPU.
 | Path | What it holds |
 | --- | --- |
 | `apps/studio-desktop` | The executable |
-| `crates/` | The 22 library crates — see the root README for the map |
+| `crates/` | The 20 library crates — see the root README for the map |
 | `docs/PLAN.md` | The audit, the architecture decisions, and the build order |
+| `docs/PRODUCTION-TODO.md`, `docs/CORRECTIONS-TODO.md` | The production plan and the correction queue — history; each header says what is still open |
+| `../CHANGELOG.md` | What each fix wave changed |
 | `docs/parity-matrix.md` | Feature-by-feature status, kept honest |
 | `docs/architecture.md` | The crate graph and the layering rules |
 | `docs/render-pipeline.md` | The CPU compositor and what the GPU does |
@@ -49,4 +51,8 @@ is an error there, and that an item used only under `#[cfg(windows)]` is dead
 code on Linux. The workflow also starts on a `v*` tag push (`on.push.tags`),
 and on a tag — or on a manual run with `release_dry_run` ticked — its `release`
 job builds the three installers as workflow-run artifacts (no GitHub Release
-is created) — see `apps/studio-desktop/packaging/README.md`.
+is created) — see `apps/studio-desktop/packaging/README.md`. That job has never
+run: no tag exists and no manual run has been made.
+
+What the app can and cannot do yet, and the licence situation (no licence has
+been chosen), are in the [root README](../README.md).

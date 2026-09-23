@@ -1,21 +1,41 @@
 # Raster Studio — Task List
 
-> Current checkpoint (2026-09-20): cards T001–T076 are recorded verified at
-> `37fb975`; independent focused verification of the T072–T076 PSD/import work
-> passes. Current work is tracked in [Thumbnail workflow progress](raster-studio/docs/THUMBNAIL-WORKFLOW-PROGRESS.md)
-> (the agent goal ledger formerly kept under `.pi/` is no longer tracked). Current checkpoint (2026-09-20, third update): T077–T081 (incl. the Phase 8
-> gate), T079 (editable text export), T088–T090 and T092 are verified and pushed;
-> T082–T086 have captured automated evidence (docs/evidence/ screenshots, release
-> GPU + performance suites). Explicitly open: the human visual judgment on the
-> evidence shots, the T091 acceptance walk, T081/T079 independent-editor evidence
-> (pending), T087 (conditional, no measured blocker), 093–098 optional deferred. Historical wave labels
-> below have not been re-audited. Separate hardware verification remains open as C14 in
-> [Corrections TODO](raster-studio/docs/CORRECTIONS-TODO.md).
+> **What is open now (2026-09-23, `0e4a6fd`).** Six fix waves landed after
+> the checkpoints recorded below: `53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727` +
+> `7bb295a`, `b477a09`, `0e4a6fd` (see the root `CHANGELOG.md`). The one
+> current list of what is missing is the root README's "What is still missing
+> vs Photopea"; the row-by-row state is `raster-studio/docs/parity-matrix.md`.
+> The open engineering items are: stylus pressure (no tablet event feeds
+> `Shell::set_pen_pressure`); keyboard focus navigation (Tab toggles the
+> panels); the P2.5b residue (16-bit edits compute at 8-bit precision, opening
+> a 16-bit file gives 8-bit tiles, PSD export is 8-bit — 16-bit `.rstudio`
+> save and reopen is **done**, W5); localisation of `menu.rs`, `src/panels`
+> and `src/canvas`; PSD export verified in Photoshop/Photopea and editable-text
+> (TySh) export; C14 hardware checks (macOS bundle launch, trusted signing, a
+> human screen-reader walk); the release job, which has never run; the runtime
+> window icon, `.icns` and notarisation; and the licence, which the owner has
+> not chosen. `raster-studio/docs/main-window.png` was retaken at `0e4a6fd`; every other
+> committed screenshot under `raster-studio/docs/` (`shot-c2.png`,
+> `linux-shot.png`, `final-gate-shot.png`, `evidence/t082-*`, `evidence/t091-*`)
+> predates the wave-0 tool-column fix and the wave-2 chrome and must be
+> retaken before anyone judges the look from it.
+>
+> Earlier checkpoints, kept as history: T001–T092 are verified except T091
+> (the human acceptance walk; its automated part ran). T087 is implemented
+> (`app-shell/src/jobs.rs`). T079/T081 have independent-*reader* evidence
+> (`aadbe95`); reopening the export in Photoshop/Photopea is a human step.
+> 093–098 are optional and deferred.
 
 Derived from `raster-studio/docs/PLAN.md`. Every task is scoped to **one crate**,
 carries its own tests, and is executed by a **doer/reviewer pair**.
 
-Status: ⬜ not started · 🔶 in progress · ✅ done (compiles, tested, reviewed)
+Status: **historical plan** — the ⬜ markers below were never maintained and
+many of those items are done (ICO/SVG export, rotate view, CI, pen curves;
+`crates/ai-runtime` no longer exists). Current state lives in
+`raster-studio/docs/parity-matrix.md` and the root README.
+
+Legend (as originally written): ⬜ not started · 🔶 in progress · ✅ done
+(compiles, tested, reviewed)
 
 Gate for every wave: `cargo check --workspace --all-targets` and
 `cargo test --workspace` both green before the next wave starts.

@@ -4192,3 +4192,40 @@ fn alt_and_ctrl_backspace_fill_with_the_foreground_and_background_colours() {
     ed.dispatch(Action::Undo).unwrap();
     assert_eq!(pixel(&mut ed), before, "two undos restore the pixels");
 }
+
+/// File > Open decodes on a worker (card 087); that route must record a 16-bit
+/// source's depth exactly as the synchronous open (drag-and-drop, recent
+/// files) does, or a 16-bit PNG opened from the menu exported at 8 bits.
+#[test]
+fn file_open_on_the_worker_records_a_sixteen_bit_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let grad16: Vec<u16> = (0..32 * 32)
+        .flat_map(|p| {
+            let v = ((p % 32) as u32 * 65535 / 31) as u16;
+            [v, v, v, u16::MAX]
+        })
+        .collect();
+    let source = dir.path().join("deep.png");
+    raster::encode_to_path(
+        &source,
+        raster::ExportFormat::Png,
+        32,
+        32,
+        raster::EncodedPixels::Rgba16(&grad16),
+        &raster::EncodeOptions::default(),
+    )
+    .unwrap();
+
+    let mut ed = bare(dir.path(), ScriptedDialogs::new());
+    ed.request_open(&source);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while ed.active().is_none() && std::time::Instant::now() < deadline {
+        ed.poll_imports();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let doc = ed.active().expect("the import finished");
+    assert_eq!(
+        doc.document.meta.bit_depth, 16,
+        "File > Open lost the 16-bit depth the synchronous open records"
+    );
+}

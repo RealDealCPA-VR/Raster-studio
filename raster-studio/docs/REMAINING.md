@@ -1,5 +1,14 @@
 # Raster Studio — Remaining Work Spec
 
+> **Historical (2026-08).** Every item in this spec is closed. Its
+> "Remaining" and "Residual" notes are *not* current: several are done since
+> (channel-limited eraser and filters, linked smart objects, per-layer
+> thumbnail caching, ICC payloads, 16-bit compositing and 16-bit `.rstudio`
+> save), and `cargo audit` is clean only through two ignores in
+> `.cargo/audit.toml` that expire 2027-03-01. Superseded by
+> [`parity-matrix.md`](parity-matrix.md), the root README's "What is
+> still missing vs Photopea", and the root `CHANGELOG.md`.
+
 This is the working spec for what is still required to finish the project. It is
 re-derived from the code on `main` (post wave-8) and from
 [`parity-matrix.md`](parity-matrix.md), and it is kept honest per the project's

@@ -7,7 +7,12 @@ tested, and reachable from the UI. Anything else is 🔶 (partial, with the gap
 named) or ⬜ (not started). Nothing is marked done on the strength of a type
 existing — that is exactly the failure this project was rebuilt to escape.
 
-Status: ✅ done · 🔶 partial · ⬜ not started
+Status: ✅ done · 🔶 partial (gap named) · ⬜ not started · 🚫 decided not to
+ship (reason given) · ❌ deliberately limited (reason given)
+
+**Re-checked at `0e4a6fd` (2026-09-23)**, after six fix waves (see the root
+`CHANGELOG.md`), against a read-only audit of `b477a09` and the wave-5 diff;
+every row whose notes changed cites the code or test it rests on.
 
 > **Reachability is part of the bar.** A final audit found rows marked done whose
 > feature the application had no route to. Those are corrected below and the
@@ -28,12 +33,12 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 ### Document & canvas
 | Capability | Status | Notes |
 | --- | --- | --- |
-| Open PNG / JPEG / WebP / TIFF / GIF / BMP / ICO / TGA | ✅ | ICC preserved; 16-bit decoded without precision loss |
+| Open PNG / JPEG / WebP / TIFF / GIF / BMP / ICO / TGA | ✅ | ICC preserved; File ▸ Open decodes on a worker thread, while drag-and-drop, recent files and the command-line argument open on the UI thread; on every route a 16-bit source opens as RGBA8 tiles in a document that records 16 bits (`OpenDocument::record_source_depth`; test `file_open_on_the_worker_records_a_sixteen_bit_source`) — Image ▸ Mode ▸ 16 Bits widens the tiles |
 | New document with presets | ✅ | screen, print and social presets; colour mode and background |
 | Pan / zoom / fit / 100% / rotate view / flip view | ✅ | zoom-to-cursor keeps the point under the pointer fixed |
 | Transparency checkerboard | ✅ | fixed pixel size, drawn inside the image for alpha pixels |
-| Rulers, guides, smart guides, grid, snapping | ✅ | guides live in view state, so they are not saved — see gaps |
-| Multi-document tabs | ✅ | |
+| Rulers, guides, smart guides, grid, snapping | ✅ | guides are saved with the document and changed by an undoable `Command::SetGuides`; View ▸ New Guide / Clear / Lock Guides; rulers honour the Units preference; pixel grid at 800% and above |
+| Multi-document tabs | ✅ | the document is fitted, centred and drawn inside the canvas area, not under the panels (W5; `the_document_is_fitted_centred_and_confined_to_the_canvas_area`) |
 
 ### Layers
 | Capability | Status | Notes |
@@ -52,11 +57,11 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Capability | Status | Notes |
 | --- | --- | --- |
 | Undo / redo with a history panel | ✅ | clickable stack with snapshots; a stroke is one step |
-| Command journal + crash recovery | ✅ | anchored to a save marker, so replay cannot duplicate work |
+| Command journal + crash recovery | ✅ | anchored to a save marker, so replay cannot duplicate work; commands made while a save runs go to a `.journal-hold` side file and are absorbed exactly once afterwards, or on the next open after a crash (W2, W5) |
 | Cut / copy / paste / clear | ✅ | incl. Copy Merged, Paste Special (Paste in Place, Paste Into, Paste Outside), Layer Via Cut/Copy |
 | Edit ▸ Purge (Clipboard / Histories / All) | ✅ | W4-H; Histories and All ask first — the second choice within 10 s confirms (a status-line confirmation, not a modal: the dialog seam has no yes/no question for it yet) |
-| Free transform (scale/rotate/skew/distort/perspective/warp) | ✅ | interactive gestures apply real, undoable commands; singular matrices are refused rather than writing NaN |
-| Crop, trim, image size, canvas size, rotate canvas | ✅ | crop and the fixed transforms apply real edits; image/canvas size dialogs remain partial |
+| Free transform (scale/rotate/skew/distort/perspective/warp) | ✅ | interactive gestures apply real, undoable commands; singular matrices are refused rather than writing NaN; with a partial pixel selection, Free Transform and Move float only the selected pixels as one undo step (W5, `tools::transform::float_selection`; `free_transform_with_a_selection_scales_only_the_selected_pixels`, `move_with_a_selection_moves_only_the_selected_pixels`) |
+| Crop, trim, image size, canvas size, rotate canvas | ✅ | crop (ratio presets, W×H×resolution, straighten, Delete Cropped Pixels, overlay — W4), trim, the Image Size and Canvas Size dialogs and the rotations each apply as one undo step; a crop's rotation and scale ride the layer transforms rather than being baked |
 
 ### Selection
 | Capability | Status | Notes |
@@ -65,7 +70,6 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Lasso (free / polygonal / magnetic) | ✅ | |
 | Magic wand / quick select / colour range | ✅ | tolerance, contiguous flag, anti-aliasing |
 | Select Subject | 🚫 | decided Tier C: no segmentation model ships, and the menu carries no item for it (P2.12) |
-| Accessibility (screen readers / AccessKit) | ✅ (wired) | egui's `accesskit` feature is on: the adapter is initialised at window build, its action requests route through a typed user event, and egui publishes a labelled node per widget; keyboard focus follows egui's Tab navigation with its focused-widget visuals. The on-device screen-reader walk needs assistive tooling on the host. |
 | Modify: feather, expand, contract, smooth, border | ✅ | true morphology on fractional coverage |
 | Invert, grow, similar, transform selection | ✅ | |
 | Quick mask, save/load selection | ✅ | quick mask composes (`Q` / Select ▸ Edit in Quick Mask Mode: edits land in a scratch mask, leaving converts the painted coverage into the selection); selection itself (outline, marching ants, save/load) is reachable |
@@ -78,14 +82,17 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Clone stamp, healing, spot healing, patch, red-eye | ✅ | |
 | Dodge / burn / sponge, blur / sharpen / smudge | ✅ | |
 | Eyedropper, move, hand, zoom, rotate view | ✅ | |
-| Tablet pressure | 🔶 | the engine consumes it; egui 0.29 carries no pressure, so the shell must feed it |
+| Ruler (Straighten Layer), Color Sampler, History Brush | ✅ | W4-G |
+| Pencil Auto Erase, Pattern Stamp, Colour Replacement, Background / Magic Eraser, Pattern Fill, Slice, Refine Boundary | ✅ | every palette tool is driven through the real pointer route by `tests/integration/tests/tool_routes.rs`; `tools::ToolId::ALL` has 56 tools |
+| Live stroke preview, brush-size ring, per-tool cursors, right-click canvas menu | ✅ | W4-B/C; the right button opens the menu and never reaches a tool (`a_right_click_on_the_canvas_opens_its_menu_and_a_row_performs`) |
+| Tablet pressure | 🔶 | the stroke engine consumes pressure and the shell has a seam for it (`Shell::set_pen_pressure`), but only tests call it: no tablet event feeds it, so a pen paints at full pressure |
 
 ### Adjustments
 | Capability | Status | Notes |
 | --- | --- | --- |
-| Brightness/Contrast, Levels, Curves, Exposure | ✅ | Curves is a Fritsch-Carlson monotone spline |
+| Brightness/Contrast, Levels, Curves, Exposure | ✅ | Curves is a Fritsch-Carlson monotone spline, edited as a draggable curve over the histogram with a channel choice (W5, `ui::dialogs::adjustment_dialog::curve_widget`); Levels shows its histogram; Ctrl+L / Ctrl+M open them |
 | Vibrance, Hue/Saturation, Colour Balance | ✅ | |
-| B&W, Photo Filter, Channel Mixer, Invert | ✅ | |
+| B&W, Photo Filter, Channel Mixer, Invert | ✅ | Invert opens no dialog: Image ▸ Adjustments ▸ Invert or Ctrl+I applies it at once (W5-E, `AdjustmentId::has_dialog`, ui/src/menu.rs; test `ctrl_i_inverts_the_layer_at_once_without_a_dialog`) |
 | Posterize, Threshold, Gradient Map, Selective Colour | ✅ | |
 | Auto tone / contrast / colour | ✅ | |
 | Desaturate, Equalize | ✅ | W4-E: Image ▸ Adjustments, no dialog, one undo step; Desaturate is Shift+Ctrl+U and keeps linear luminance; Equalize reads the histogram of the selected pixels. Destructive-only, as in Photopea |
@@ -95,7 +102,7 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 ### File
 | Capability | Status | Notes |
 | --- | --- | --- |
-| Save / open the native `.rstudio` project | ✅ | integrity-sealed, version-gated, crash-safe swap |
+| Save / open the native `.rstudio` project | ✅ | integrity-sealed, version-gated, crash-safe swap; tiles deflate-compressed and reused from the package being replaced; saved on a worker thread with the journal held; File ▸ Open accepts a package through its `manifest.json` (W5) |
 | Pixel data persisted | ✅ | reopening composites to byte-identical output |
 | Export PNG / JPEG / WebP / TIFF / GIF / BMP / ICO / SVG with presets | ✅ | correct un-premultiply and linear→sRGB on the way out; ICO carries 16/32/48/256 px entries; SVG wraps the raster composite as an embedded PNG (vector shape layers are not written as paths yet) |
 | WebP lossy with a quality slider | ❌ | W4-H: kept lossless on purpose. The WebP encoder already in the tree (`image-webp` 0.2, behind `image` 0.25) writes lossless VP8L only. Pure-Rust lossy encoders exist on crates.io and were evaluated on 2026-09-23 (encode 256×128 and 257×131 RGBA test images at quality 50 and 90, decode with `image-webp` 0.2.4, measure RGB PSNR; `cargo audit` on a lockfile holding the three permissively licensed crates found no advisories): `zenwebp` 0.4 is AGPL-3.0-only (or a commercial licence), so it is out on licence; `webp-rust` 0.3.1 (MIT) measured 15–17 dB PSNR at every quality, and its quality-90 stream for the 257×131 image was rejected by `image-webp` with `BitStreamError`; `vaam-image-webp` 0.1.0 (MIT/Apache-2.0) reached 30–40 dB on the 256×128 images but 22–23 dB on the 257×131 ones, and was first published on 2026-09-22; `tiny-webp` 0.1.0 (MIT/Apache-2.0, no dependencies with `default-features = false`) measured 34–44 dB on all four images, but it is a single 0.1.0 release first published on 2026-09-04 with 23 downloads. `tiny-webp` is the candidate to adopt once it has a track record; adopting it means a workspace manifest change and a quality slider in Export As. Until then the Export As row is labelled “WebP (lossless)” and has no quality control |
@@ -105,12 +112,13 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 ### Application
 | Capability | Status | Notes |
 | --- | --- | --- |
-| Menu bar wired to real commands | 🔶 | nine menus; every item is wired or explicitly disabled |
-| Keyboard shortcuts | ✅ | full customisable keymap with conflict detection |
-| Panels | ✅ | Layers, History, Adjustments, Properties, Colour, Swatches, Brushes, Channels, Paths, Navigator, Info |
+| Menu bar wired to real commands | ✅ | nine menus; every enabled item routes to real code (`every_enabled_menu_item_really_does_something`, `no_enabled_menu_item_resolves_to_a_no_op`); five items are disabled permanently, each with a stated reason (Image ▸ Mode ▸ Lab / CMYK / Indexed, Filter ▸ Convert for Smart Filters, View ▸ Proof Colors / Gamut Warning — see Tier C) |
+| Keyboard shortcuts | ✅ | full customisable keymap with conflict detection; Photoshop's Ctrl+L / M / U / B / I, Backspace, Alt+Backspace and Ctrl+Backspace are bound (W5) |
+| Panels | ✅ | 15 (`ui::dock::PanelId::ALL`): Layers, History, Adjustments, Properties, Color, Swatches, Brushes, Character, Paragraph, Navigator, Info, Channels, Paths, Actions, Histogram — in two dock columns (W2) |
 | Tool options bar | ✅ | generated from each tool's options schema |
-| Photopea visual design | 🔶 | one token system, light and dark, WCAG AA asserted by test; the fit and finish is converging on Photopea’s density and neutral greys (P1 wave) |
-| Preferences | ✅ | persisted, including the keymap editor |
+| Photopea visual design | 🔶 | one token system, light and dark, WCAG AA asserted by test; Photopea's chrome order and two dock columns landed in W2; the fit and finish is still converging on Photopea’s density and neutral greys |
+| Preferences | ✅ | persisted, including the keymap editor; keymap edits apply live; Units drive rulers and readouts; the scratch directory is an editable text field (no folder picker) |
+| Accessibility (screen readers / AccessKit) | 🔶 | egui's `accesskit` feature is on: the adapter is initialised at window build, its action requests route through a typed user event, and egui publishes a labelled node per widget. **No keyboard focus navigation:** Tab is withheld from egui and toggles the panels (`app-shell/src/shell.rs` `withhold_from_egui`; `tab_is_never_handed_to_egui_unless_egui_is_recording_it`). The on-device screen-reader walk needs a host with assistive tooling (C14). |
 
 ---
 
@@ -118,8 +126,8 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 
 | Capability | Status | Notes |
 | --- | --- | --- |
-| Text layers with real shaping and fonts | ✅ | bidi, ligatures, kerning, contextual forms via cosmic-text; a type tool creates and edits text layers |
-| Vector paths, pen tool, shape layers | ✅ | Bézier pen and shape layers reachable from the UI |
+| Text layers with real shaping and fonts | ✅ | bidi, ligatures, kerning, contextual forms via cosmic-text; a Type click inside a text layer places the caret; switching tools or Escape confirms the text (W5) |
+| Vector paths, pen tool, shape layers | ✅ | the Pen drags out smooth anchors and Alt breaks a handle; Add / Delete / Convert Anchor, Path / Direct Selection; shapes with fill / stroke, width and corner radius; Custom Shape library |
 | Filters: blur family | ✅ | separable Gaussian; every filter in the Filter menu applies against the live document |
 | Filters: sharpen, noise, distort, stylize, pixelate, render | ✅ | the whole library is reachable from the Filter menu |
 | Filters: Photopea one-click and parity rows | ✅ | Blur ▸ Average, Blur, Blur More, Smart Blur; Sharpen ▸ Sharpen, Sharpen More, Sharpen Edges; Distort ▸ Displace (map: the layer itself or a seeded cloud field — no external PSD map picker); Pixelate ▸ Facet, Fragment, Mezzotint; Stylize ▸ Extrude, Tiles, Trace Contour. Each opens the generated FilterDialog with live preview (`the_photopea_parity_filters_preview_through_their_dialogs`) |
@@ -127,15 +135,15 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Smart objects | ✅ | placed raster sources with editable transforms, embedded + linked origins, replace-contents refresh, full-extent storage; verified through real routes (cards 044–050, interchange tests) |
 | PSD import | ✅ | groups, masks (with density/feather), blend modes, all four channel encodings, editable-text subset, the four mapped effects, ICC retention, full layer extents; a per-layer fidelity report (`PsdNotes`) names exactly what did not map — see `docs/PSD-THUMBNAIL-SUPPORT.md` |
 | PSD export | 🔶 | layered export verified by independent re-read (structure, masks, effects as editable lfx2 descriptors, appearance-preserving text/shape/smart-object fallback pixels, merged preview matching the composite at ≤1/255); NOT yet verified in Photoshop/Photopea (card 081's manual step is pending) and editable text export (TySh) is blocked on an independently verified engine-data payload — see `docs/PSD-THUMBNAIL-SUPPORT.md` |
-| Channels panel | 🔶 | isolation is real and changes the canvas; per-channel *editing* is still not implemented — see the gaps list |
-| Paths panel | 🔶 | |
+| Channels panel | 🔶 | isolate, then paint, erase, fill, filter or bake an adjustment into one RGB component (`mask_paint_to_channel`); saved-selection rows load; thumbnails. Gap: alpha / mask coverage cannot be isolated; no per-channel histogram |
+| Paths panel | ✅ | the Pen's uncommitted path is the work path (`the_pens_uncommitted_path_is_the_paths_panels_work_path`); save as a named path; Fill, Stroke, Load as Selection, Make Work Path from Selection, New, Delete (W4) |
 | Colour management | ✅ | sRGB and Display P3 are real; an embedded ICC profile is carried, composites through its profile and re-tags on export — `a_tagged_image_composites_through_its_profile_and_retags_on_export` |
-| 16-bit per channel | 🔶 | a user can work at 16 bits: New Document accepts 16 bits (RGBA16 base tiles), Image > Mode > 8/16 Bits/Channel converts every raster tile in one undoable step (8 -> 16 lossless, 16 -> 8 rounded), a tool stroke on a 16-bit layer lands as RGBA16 tiles keeping the untouched pixels' 16-bit codes, the compositor composites RGBA16 tiles in `f32`, and a 16-bit document exports 16 bits to PNG/TIFF (`mode_sixteen_then_a_brush_stroke_then_a_png_export_round_trips_at_sixteen_bits`); the whole-layer edits (transforms, filters, adjustments, fills, Image Size, Canvas Size, Grayscale) read a 16-bit tile rounded to 8 bits and land 16-bit tiles again, so they compute at 8-bit precision (P2.5b, see the gaps list) |
-| Actions / recorded command replay | 🔶 | commands are serialisable and replayable; there is no recording UI |
-| Batch export | 🔶 | multiple presets in one run |
-| Brush / gradient / layer-style editors | 🔶 | |
+| 16-bit per channel | 🔶 | a user can work at 16 bits: New Document accepts 16 bits (RGBA16 base tiles), Image > Mode > 8/16 Bits/Channel converts every raster tile in one undoable step (8 -> 16 lossless, 16 -> 8 rounded), a tool stroke on a 16-bit layer lands as RGBA16 tiles keeping the untouched pixels' 16-bit codes, the compositor composites RGBA16 tiles in `f32`, a 16-bit document exports 16 bits to PNG/TIFF (`mode_sixteen_then_a_brush_stroke_then_a_png_export_round_trips_at_sixteen_bits`), and it saves and reopens as `.rstudio` with the same RGBA16 tiles (W5, `a_16_bit_document_saves_and_reopens_with_the_same_pixels`); the whole-layer edits (transforms, filters, adjustments, fills, Image Size, Canvas Size, Grayscale) read a 16-bit tile rounded to 8 bits and land 16-bit tiles again, so they compute at 8-bit precision (P2.5b, see the gaps list) |
+| Actions / recorded command replay | 🔶 | the Actions panel records, stops and replays (`recording_three_edits_replays_onto_a_second_document`); named actions show their steps and save to / load from `actions.json`, size-capped and written atomically (W5). Gap: no File ▸ Automate ▸ Batch over a folder |
+| Batch export | 🔶 | Export As runs several presets in one run (`raster::export::export_batch_to_dir`); Export Layers and Export Slices write one file per layer / slice. Gap: no batch over several documents or files |
+| Brush / gradient / layer-style editors | 🔶 | the Brush editor, the Gradient editor (stops paint) and the Layer Style dialog (ten effects plus a Blending Options page) are hosted dialogs; nine of the ten effects render in the compositor (`compositor::effects::render`). Gap: Pattern Overlay, like a glow or stroke filled with a pattern, draws nothing, because the compositor has no asset store to resolve the pattern's `AssetId` (`compositor/src/effects.rs`, module "Honest gaps" and the `pattern_overlay` branch of `render`). The Layer Style dialog's own preview is a labelled approximate schematic; the canvas shows the real composite |
 | Autosave | ✅ | |
-| Localization | 🔶 | Scope, stated exactly (P3.12/P6.6): the string catalogue (`crates/ui/src/strings.rs`) and its 209 `tr()` call sites cover `src/view` and `src/dialogs`, enforced by the `no_localized_literals` gate. NOT localized: `src/menu.rs` (every menu label — a large user-facing surface — is still an English literal), `src/panels` and `src/canvas`. Three whole-file exemptions carry **161 prose literals** (`filter_dialog.rs` 89, `new_document.rs` 40, `preferences.rs` 32); they clear with the `tools::OptionSpec`/`DocumentPreset` label-key refactor the gate's own comment names (the gradient editor's `name_key` is the pattern). No claim of translation support beyond the catalogue's locale keying is made. |
+| Localization | 🔶 | Scope, stated exactly (P3.12/P6.6): the string catalogue (`crates/ui/src/strings.rs`) and its ~470 `tr()` call sites cover `src/view` and `src/dialogs`, enforced by the `no_localized_literals` gate. NOT localized: `src/menu.rs` (every menu label — a large user-facing surface — is still an English literal), `src/panels` and `src/canvas` (0 `tr()` calls). Two whole-file exemptions (`filter_dialog.rs`, `new_document.rs`) and three named literals in `preferences.rs` remain (`ui/tests/no_localized_literals.rs`); the file exemptions clear with the `tools::OptionSpec`/`DocumentPreset` label-key refactor the gate's own comment names (the gradient editor's `name_key` is the pattern). No claim of translation support beyond the catalogue's locale keying is made. |
 
 ---
 
@@ -148,13 +156,15 @@ Status: ✅ done · 🔶 partial · ⬜ not started
 | Sketch / XD / Figma import | Proprietary formats with little overlap with raster editing. |
 | Camera RAW | Per-sensor demosaic and profiles; belongs behind a finished colour pipeline. |
 | Liquify, Vanishing Point, Puppet Warp | Deep mesh-warp tooling, beyond the transform mesh that exists. |
-| Content-aware fill / Select Subject | Requires ML inference we deliberately do not bundle. |
+| Content-aware fill / Select Subject / Object Selection | Requires ML inference we deliberately do not bundle. |
+| Image ▸ Mode ▸ Lab / CMYK / Indexed | Every layer is stored as RGBA tiles; each mode needs a pixel store the tile model does not have. The three items are greyed with that reason (`ui::menu::ColorMode::unsupported_reason`). |
+| View ▸ Proof Colors / Gamut Warning | No output profile to soft-proof against, and the composite reaches the screen as clipped sRGB, so out-of-gamut pixels cannot be told apart. Both items are greyed with that reason (`ui::view_flag_unavailable`). |
 | Filter ▸ Render ▸ Lighting Effects | A per-pixel light rig (spot/omni/infinite lights, a bump channel, material gloss) with an interactive on-canvas light editor; the parameter-schema dialog cannot express the light handles, and a slider-only version would not be Lighting Effects. |
 | Image ▸ Adjustments ▸ HDR Toning | Photoshop's HDR Toning flattens the image and runs a local-adaptation tone mapper (edge glow, detail, shadow/highlight, a curve) meant for 32-bit merges; this build has no 32-bit document mode for it to act on, and a slider set without the local adaptation would not be HDR Toning. |
 | Image ▸ Adjustments ▸ Match Color | Matches statistics against *another open document or layer* as source; that needs a cross-document source picker and luminance/colour-intensity/fade model this build does not have, and Photopea's own implementation is minimal. |
 | Vertical Type tool | Deferred by W4-G. The text engine lays out horizontal lines only: `crates/text-engine/src/lib.rs` states "Vertical writing modes are not implemented", and neither `text_engine::TextRun` nor `layer_model::TextLayer` carries an orientation. Adding a Vertical Type entry to the palette would create an ordinary horizontal text layer under a vertical tool's name, so no `ToolId` exists for it. It needs vertical shaping and line layout (glyph rotation for Latin runs, upright CJK, right-to-left column order) plus a stored orientation on the layer; the tool can then be a Type variant. |
 | Smart Filters (non-destructive filter stacks on smart objects) | The smart-object layer kind carries no filter stack and the compositor has no re-apply pass; Convert for Smart Filters stays greyed with that reason until both exist. |
-| Licensing and auto-update crates | Dropped from the workspace (P3.2): both were complete and tested with zero dependents — entitlement checks and update feeds are release-engineering for a shipped product, not this build. |
+| Licensing and auto-update crates | Dropped from the workspace (P3.2); neither crate exists: both were complete and tested with zero dependents — entitlement checks and update feeds are release-engineering for a shipped product, not this build. |
 | Video and animation timeline | Out of scope for a raster editor v1. |
 | Collaboration, cloud, mobile | Explicit non-goals: this is a local-first desktop app. |
 | Perfect PSD round-tripping | We target correct reopen in Photoshop and Photopea, not byte fidelity. |
@@ -206,19 +216,22 @@ Kept here rather than buried, because a ✅ with a footnote is still a claim:
   readers that need only coverage (the compositor's `alpha_bounds` for the
   Move tool and the Properties panel, the Move tool's auto-select pick) read
   RGBA16 alpha through `raster::tile_alpha16`.
-- **Native tablet events need a pen.** Pressure is wired through the shell
-  seam (`Shell::set_pen_pressure`) and the stroke engine is pressure-aware,
-  but subscribing to one device's winit tablet events requires hardware on
-  the host.
+- **Stylus pressure is not read.** The stroke engine is pressure-aware and
+  the shell has a seam for it (`Shell::set_pen_pressure`), but only tests
+  call it: no winit tablet or touch event is subscribed, so a pen paints at
+  full pressure.
+- **No keyboard focus navigation.** Tab is withheld from egui and toggles
+  the panels; controls are reached with the pointer.
 - **The OS printer-spooler dialog.** Print ▸ As PDF renders the composite to a
   tested single-page PDF; talking to an actual printer spooler is OS-only and
   not part of the build.
-- **Disabled menu items are gone; one conditional refusal remains.** After
-  C7, every enabled menu item routes to real code. The only refusal in
-  `unavailable_reason` besides the File-Info note is an adjustment clicked
-  while its parameters still sit at the identity — the status line says to
-  add it as an adjustment layer and edit it in Properties instead. The
-  route coverage is pinned by `menu_bridge`'s
+- **Five menu items are disabled permanently, each with its reason:** Image
+  ▸ Mode ▸ Lab / CMYK / Indexed (`ColorMode::unsupported_reason`), Filter ▸
+  Convert for Smart Filters (`SMART_FILTERS_UNSUPPORTED`), View ▸ Proof
+  Colors and Gamut Warning (`ui::view_flag_unavailable`). Every other
+  enabled item routes to real code; `menu_bridge::unavailable_reason` keeps
+  only the File-Info note (no XMP). An adjustment dialog refuses to confirm
+  an all-identity setting. The route coverage is pinned by `menu_bridge`'s
   `no_enabled_menu_item_resolves_to_a_no_op` digest.
 - **Per-channel masking stops at colour components.** The Channels panel
   isolates, paints into, erases within, fills, filters and bakes adjustments
@@ -228,10 +241,14 @@ Kept here rather than buried, because a ✅ with a footnote is still a claim:
   command reaches history and the journal. An alpha or mask-coverage target
   paints normally rather than being isolatable, and the panel has no
   per-channel histogram.
-- **Quick mask composes** (Tier C, landed): `Q` toggles it, pixel edits land
-  in a scratch mask, and leaving turns the painted coverage into the
-  selection; the selection itself, its outline, marching ants and save/load
-  are all reachable.
+- **Absent and not yet placed in Tier C:** Perspective Crop, Freeform Pen,
+  Content-Aware Move, the Type Mask tools, a separate Slice Select tool;
+  Lens Correction, Adaptive Wide Angle, the Blur Gallery (Field / Iris /
+  Tilt-Shift); Layer Comps and Tool Presets panels; File ▸ Automate / Batch
+  and Scripts; vector masks (PSD import rasterises them).
+- **Release job never run.** CI's `release` job (a `v*` tag or a manual
+  `release_dry_run`) has not run; no tag exists.
+
 ## Release gate
 
 1. Every Tier A row is ✅ or has its gap named above.

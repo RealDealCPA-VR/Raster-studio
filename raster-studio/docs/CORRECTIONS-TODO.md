@@ -10,6 +10,18 @@ todo is complete"*; it is not. Four gates are green (3399 tests, clippy, fmt,
 check), the fifth (`cargo audit`) fails, the P5 queue was never worked, and the
 app's own committed screenshot shows a window with no tool buttons.
 
+> **Status at `0e4a6fd` (2026-09-23):** C1–C13 are done (C2 was re-opened
+> and fixed in wave 0, `53dd398`: the tool column now draws — see the
+> retaken `docs/main-window.png`). Only **C14** is open: macOS bundle
+> launch, trusted signing and a human screen-reader walk. The test counts
+> below (3399/3402) are history; the suite is now about 4,500 `#[test]`s.
+> Notes below that call a shot "populated" (C1, C11) were written against
+> images that still showed the broken column, and C2's 2026-09-02
+> paragraph names a test that no longer exists (the real one is
+> `ui/tests/headless_workspace.rs`); they are kept as history. Everything
+> else still open in the project is listed in the root README's "What is
+> still missing vs Photopea".
+
 ---
 
 ## How to work this file

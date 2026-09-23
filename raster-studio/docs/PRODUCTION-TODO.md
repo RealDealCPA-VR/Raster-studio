@@ -3,11 +3,36 @@
 **Goal:** ship-ready Raster Studio whose style and UI/UX match
 [Photopea](https://www.photopea.com/).
 
-> **Picking up work?** Start at
-> [`CORRECTIONS-TODO.md`](CORRECTIONS-TODO.md) — every item still open in this
-> file (the P5 and P6 queues below) pulled into one ordered, directly
-> implementable list with a Validate line each. This file is the evidence and
-> the history; that one is the work.
+> **What is open now (2026-09-23, `0e4a6fd`).** Six fix waves landed after
+> the checkpoints recorded below: `53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727` +
+> `7bb295a`, `b477a09`, `0e4a6fd` (see the root `CHANGELOG.md`). The one
+> current list of what is missing is the root README's "What is still missing
+> vs Photopea"; the row-by-row state is `raster-studio/docs/parity-matrix.md`.
+> In this file's terms: **P2.5b** is mostly done (waves 3–5); **P3.11** has
+> its AccessKit half, not keyboard focus navigation; **P6.6** is documented
+> but not migrated; **P5.5** is C14. Tools are 56 and panels 15, not the
+> 47 and 13 of the baseline below; `unavailable_reason` keeps only the
+> File-Info arm, and five menu items are disabled with stated reasons (Image ▸
+> Mode ▸ Lab / CMYK / Indexed, Convert for Smart Filters, Proof Colors / Gamut
+> Warning). The open engineering items are: stylus pressure (no tablet event
+> feeds `Shell::set_pen_pressure`); keyboard focus navigation (Tab toggles the
+> panels); the P2.5b residue (16-bit edits compute at 8-bit precision, opening
+> a 16-bit file gives 8-bit tiles, PSD export is 8-bit — 16-bit `.rstudio`
+> save and reopen is **done**, W5); localisation of `menu.rs`, `src/panels`
+> and `src/canvas`; PSD export verified in Photoshop/Photopea and editable-text
+> (TySh) export; C14 hardware checks (macOS bundle launch, trusted signing, a
+> human screen-reader walk); the release job, which has never run; the runtime
+> window icon, `.icns` and notarisation; and the licence, which the owner has
+> not chosen. `docs/main-window.png` was retaken at `0e4a6fd`; every other
+> committed screenshot (`docs/shot-c2.png`, `docs/linux-shot.png`,
+> `docs/final-gate-shot.png`, `docs/evidence/t082-*`, `docs/evidence/t091-*`)
+> predates the wave-0 tool-column fix and the wave-2 chrome and must be
+> retaken before anyone judges the look from it.
+
+> **Picking up work?** The list above is current. Of
+> [`CORRECTIONS-TODO.md`](CORRECTIONS-TODO.md) — the P5 and P6 queues below
+> pulled into one ordered list with a Validate line each — only C14 is still
+> open. This file is the evidence and the history.
 
 **How to use this file.** Each task is one self-contained unit of work: an
 action, the files it touches, and a **Validate** line that is objectively

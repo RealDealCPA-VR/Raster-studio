@@ -5158,11 +5158,18 @@ impl Editor {
         let depth = self.prefs.history_depth;
         let path = outcome.path().clone();
         match outcome {
-            crate::jobs::ImportOutcome::Image { decoded, .. } => match decoded {
+            crate::jobs::ImportOutcome::Image {
+                decoded,
+                sixteen_bit,
+                ..
+            } => match decoded {
                 Ok(image) => {
                     let id = self.mint_id();
                     match OpenDocument::open_image_decoded(id, &path, image, depth) {
-                        Ok(doc) => self.install_opened(doc, &path),
+                        Ok(mut doc) => {
+                            doc.record_source_depth(sixteen_bit);
+                            self.install_opened(doc, &path)
+                        }
                         Err(e) => self.report_failed_open(&path, e),
                     }
                 }

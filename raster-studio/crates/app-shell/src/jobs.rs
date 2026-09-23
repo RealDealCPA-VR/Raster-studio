@@ -83,6 +83,10 @@ pub enum ImportOutcome {
         path: PathBuf,
         generation: u64,
         decoded: Result<crate::import::DecodedImage, String>,
+        /// The source carries 16 bits per channel. Recorded off-thread the
+        /// same way the synchronous `OpenDocument::open_image` does, so File >
+        /// Open and drag-and-drop agree on a 16-bit PNG/TIFF's depth.
+        sixteen_bit: bool,
     },
     /// A `.psd`, read *and* parsed off-thread: the layered document, its
     /// tiles and the fidelity notes arrive ready to wrap. (Before W2-G only
@@ -181,6 +185,7 @@ fn failed_outcome(path: PathBuf, generation: u64, reason: String) -> ImportOutco
             path,
             generation,
             decoded: Err(reason),
+            sixteen_bit: false,
         }
     }
 }
@@ -203,16 +208,22 @@ fn run(path: PathBuf, generation: u64, history_depth: usize) -> ImportOutcome {
             parsed,
         }
     } else {
-        let decoded = match read_bounded(&path) {
+        let (decoded, sixteen_bit) = match read_bounded(&path) {
             Ok(bytes) => {
-                crate::import::DecodedImage::decode_bytes(&bytes).map_err(|e| e.to_string())
+                let decoded =
+                    crate::import::DecodedImage::decode_bytes(&bytes).map_err(|e| e.to_string());
+                let sixteen_bit = decoded.is_ok()
+                    && raster::decode_surface_bytes(&bytes, raster::ImportLimits::default())
+                        .is_ok_and(|s| s.format() == raster::PixelFormat::Rgba16);
+                (decoded, sixteen_bit)
             }
-            Err(e) => Err(e.to_string()),
+            Err(e) => (Err(e.to_string()), false),
         };
         ImportOutcome::Image {
             path,
             generation,
             decoded,
+            sixteen_bit,
         }
     }
 }
@@ -657,6 +668,7 @@ mod tests {
                 path: p,
                 generation,
                 decoded,
+                ..
             } => {
                 assert_eq!(p, path);
                 assert_eq!(generation, 3);
@@ -744,6 +756,7 @@ mod tests {
                 path,
                 generation,
                 decoded,
+                ..
             } => {
                 assert_eq!(path, PathBuf::from("photo.png"));
                 assert_eq!(generation, 4);
