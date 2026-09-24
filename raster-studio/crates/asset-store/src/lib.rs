@@ -53,9 +53,14 @@
 //! concurrently from many threads (`Arc<AssetStore>`). One process is assumed
 //! to own a given store root; there is no cross-process file locking.
 
+pub mod abr;
+/// W9-H: Photoshop style libraries (`.asl`).
+pub mod asl;
 mod disk;
 mod hex;
 pub mod presets;
+/// W9-N: Photoshop / Photopea resource files (.pat .grd .csh .aco .ase .icc).
+pub mod resources;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;

@@ -65,6 +65,7 @@
 #![forbid(unsafe_code)]
 
 pub mod blur;
+pub mod blur_gallery;
 pub mod buffer;
 pub mod content_aware;
 pub mod defringe;

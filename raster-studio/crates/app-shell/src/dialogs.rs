@@ -23,10 +23,18 @@ pub enum CloseChoice {
 
 /// File filters, shared by the native dialog and the tests' assertions.
 pub const IMAGE_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "webp", "tif", "tiff", "gif", "bmp", "ico", "tga",
+    "png", "jpg", "jpeg", "webp", "tif", "tiff", "gif", "bmp", "ico", "tga", "svg",
 ];
+/// W9-N: Photoshop / Photopea resource files File > Open feeds into their
+/// libraries (patterns, gradients, custom shapes, swatches, a profile) — see
+/// `asset_store::resources`. `.atn` is listed so choosing one says why it
+/// does not import.
+pub const RESOURCE_EXTENSIONS: &[&str] = asset_store::resources::ResourceKind::EXTENSIONS;
 /// Extension of a Raster Studio project package (a directory).
 pub const PROJECT_EXTENSION: &str = "rstudio";
+/// W9-E: extension of a Photoshop brush file, which File > Open reads into
+/// the Brushes panel ([`crate::editor::Editor::import_abr`]).
+pub const ABR_EXTENSION: &str = "abr";
 /// W5-D: File ▸ Open's filters, in the order the picker lists them. A
 /// package is a folder, which a file picker cannot return — but the user can
 /// step into it and pick its `manifest.json`, and the editor maps any file
@@ -39,14 +47,47 @@ pub fn open_file_filters() -> Vec<(&'static str, Vec<&'static str>)> {
     let mut everything = project.clone();
     everything.extend_from_slice(IMAGE_EXTENSIONS);
     everything.push(PSD_EXTENSION);
+    // W9-E: a Photoshop brush file opens into the Brushes panel.
+    everything.push(ABR_EXTENSION);
+    // W9-N: resource files feed their libraries.
+    everything.extend_from_slice(RESOURCE_EXTENSIONS);
+    // W9-K: a font file loads its faces for the session.
+    everything.extend_from_slice(FONT_EXTENSIONS);
+    // W9-H: a Photoshop style library adds its styles to the style presets.
+    everything.push(ASL_EXTENSION);
     let mut images = IMAGE_EXTENSIONS.to_vec();
     images.push(PSD_EXTENSION);
     vec![
         ("Raster Studio projects and images", everything),
         ("Raster Studio project", project),
         ("Images", images),
+        ("Fonts", FONT_EXTENSIONS.to_vec()),
+        ("Photoshop brushes", vec![ABR_EXTENSION]),
+        ("Photoshop resources", RESOURCE_EXTENSIONS.to_vec()),
+        ("Photoshop styles", vec![ASL_EXTENSION]),
         ("All files", vec!["*"]),
     ]
+}
+
+/// W9-H: extension of a Photoshop style library, whose styles
+/// [`crate::editor::Editor::import_style_library`] adds to the style presets.
+pub const ASL_EXTENSION: &str = "asl";
+
+/// W9-H: whether `path` names a style library (by extension, any case).
+pub fn is_style_library_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case(ASL_EXTENSION))
+}
+
+/// W9-K: the font files File > Open loads for the session.
+pub const FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
+
+/// W9-K: whether `path` names a font file (by extension, any case).
+pub fn is_font_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| FONT_EXTENSIONS.iter().any(|f| f.eq_ignore_ascii_case(e)))
 }
 
 /// Extension of a layered Photoshop document, which the export path writes
@@ -117,6 +158,7 @@ impl ExportPickerRequest {
             ("TIFF", &["tif", "tiff"]),
             ("GIF", &["gif"]),
             ("BMP", &["bmp"]),
+            ("TGA", &["tga"]),
         ]);
         if !psd {
             filters.push(("Photoshop", &[PSD_EXTENSION]));
@@ -625,6 +667,15 @@ mod tests {
                 "the open dialog offers .{ext}, which the codec cannot decode"
             );
         }
+        // W9-N: every resource extension the default filter offers is one
+        // File > Open routes to a library rather than to the image decoder.
+        let default_filter = &open_file_filters()[0].1;
+        for ext in RESOURCE_EXTENSIONS {
+            assert!(default_filter.contains(ext), ".{ext} is not offered");
+            let path = PathBuf::from(format!("/lib/thing.{ext}"));
+            assert!(crate::editor::Editor::is_resource_path(&path), ".{ext}");
+        }
+        assert!(default_filter.contains(&"svg"), "SVG is not offered");
         // ...and it does not offer the project extension, which it could never
         // return: `pick_open_project` is that question.
         assert!(

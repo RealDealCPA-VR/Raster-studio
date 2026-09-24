@@ -2465,7 +2465,16 @@ mod tests {
                 ExportFormat::Svg => crate::codec::svg_raster_payload(&file.bytes).unwrap(),
                 _ => file.bytes.clone(),
             };
-            let decoded = decode_surface_bytes(&raster, ImportLimits::default()).unwrap();
+            // W9-N: TGA has no magic number; it is read back as what it is.
+            let decoded = match format {
+                ExportFormat::Tga => crate::codec::decode_surface_bytes_as(
+                    &raster,
+                    ImportLimits::default(),
+                    crate::codec::ImportFormat::Tga,
+                ),
+                _ => decode_surface_bytes(&raster, ImportLimits::default()),
+            }
+            .unwrap();
             let SurfacePixels::Rgba8(px) = decoded.pixels else {
                 unreachable!()
             };
@@ -3008,7 +3017,16 @@ mod tests {
                 ExportFormat::Svg => crate::codec::svg_raster_payload(&file.bytes).unwrap(),
                 _ => file.bytes.clone(),
             };
-            let decoded = decode_surface_bytes(&raster, ImportLimits::default()).unwrap();
+            // W9-N: TGA has no magic number; it is read back as what it is.
+            let decoded = match format {
+                ExportFormat::Tga => crate::codec::decode_surface_bytes_as(
+                    &raster,
+                    ImportLimits::default(),
+                    crate::codec::ImportFormat::Tga,
+                ),
+                _ => decode_surface_bytes(&raster, ImportLimits::default()),
+            }
+            .unwrap();
             if format.supports_icc() {
                 assert_eq!(
                     decoded.icc_profile.as_deref(),

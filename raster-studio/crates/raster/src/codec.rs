@@ -42,6 +42,10 @@ use image::{ExtendedColorType, ImageDecoder, ImageEncoder};
 use crate::export::ExportError;
 use crate::format::PixelFormat;
 
+/// W9-N: SVG import (rasterised by `resvg`).
+#[path = "svg_import.rs"]
+pub mod svg_import;
+
 /// A decoded image in packed RGBA8, plus dimensions.
 ///
 /// The convenience shape: always 8 bits per channel, whatever the file held.
@@ -192,17 +196,18 @@ pub struct ImageInfo {
 
 /// Container formats the importer accepts.
 ///
-/// Multi-image containers are read as a **single** image: the first frame of an
-/// animated GIF or WebP, the first page of a multi-page TIFF, the first entry of
-/// an ICO. Nothing in this crate models an image sequence, and silently
-/// concatenating frames would be worse than taking the first one.
+/// Multi-image containers are read here as a **single** image: the first frame
+/// of an animated GIF, APNG or WebP, the first page of a multi-page TIFF, the
+/// first entry of an ICO. Animations have their own road:
+/// [`crate::animation::decode_animation_bytes`] returns every composited frame,
+/// and the app's importer turns each into a `_a_` frame layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImportFormat {
     Png,
     Jpeg,
     WebP,
     Tiff,
-    /// Read as the first frame; animation is not modelled.
+    /// Read here as the first frame; see [`crate::animation`] for every frame.
     Gif,
     Bmp,
     /// Read as the first entry in the icon directory.
@@ -226,6 +231,9 @@ pub enum ImportFormat {
     /// this variant existed, a `.psd` reached `image`, which cannot identify
     /// one, and the user was told "could not identify the image format".
     Psd,
+    /// W9-N: an SVG, rasterised at its own size by `resvg` (see
+    /// `svg_import`). Recognised by content as well as by extension.
+    Svg,
 }
 
 impl ImportFormat {
@@ -233,7 +241,7 @@ impl ImportFormat {
     ///
     /// Recognises, not decodes — see [`ImportFormat::Psd`] and
     /// [`ImportFormat::is_decodable_here`].
-    pub const ALL: [ImportFormat; 9] = [
+    pub const ALL: [ImportFormat; 10] = [
         ImportFormat::Png,
         ImportFormat::Jpeg,
         ImportFormat::WebP,
@@ -243,6 +251,7 @@ impl ImportFormat {
         ImportFormat::Ico,
         ImportFormat::Tga,
         ImportFormat::Psd,
+        ImportFormat::Svg,
     ];
 
     /// Short stable name for logs and UI.
@@ -257,6 +266,7 @@ impl ImportFormat {
             ImportFormat::Ico => "ICO",
             ImportFormat::Tga => "TGA",
             ImportFormat::Psd => "PSD",
+            ImportFormat::Svg => "SVG",
         }
     }
 
@@ -296,6 +306,7 @@ impl ImportFormat {
             "ico" | "cur" => ImportFormat::Ico,
             "tga" | "targa" | "icb" | "vda" | "vst" => ImportFormat::Tga,
             "psd" => ImportFormat::Psd,
+            "svg" => ImportFormat::Svg,
             _ => return None,
         })
     }
@@ -326,7 +337,7 @@ impl ImportFormat {
             ImportFormat::Bmp => image::ImageFormat::Bmp,
             ImportFormat::Ico => image::ImageFormat::Ico,
             ImportFormat::Tga => image::ImageFormat::Tga,
-            ImportFormat::Psd => return None,
+            ImportFormat::Psd | ImportFormat::Svg => return None,
         })
     }
 }
@@ -770,6 +781,10 @@ pub fn probe_reader_with_hint<R: BufRead + Seek>(
     limits: ImportLimits,
     hint: Option<ImportFormat>,
 ) -> Result<ImageInfo, CodecError> {
+    let mut source = source;
+    if svg_import::is_svg_source(&mut source, hint)? {
+        return svg_import::probe_svg(source, limits);
+    }
     let reader = reader_for(source, limits, hint)?;
     let format = import_format_of(&reader)?;
     let mut decoder = reader.into_decoder()?;
@@ -869,6 +884,10 @@ pub fn decode_surface_reader_with_hint<R: BufRead + Seek>(
     limits: ImportLimits,
     hint: Option<ImportFormat>,
 ) -> Result<DecodedSurface, CodecError> {
+    let mut source = source;
+    if svg_import::is_svg_source(&mut source, hint)? {
+        return svg_import::decode_svg(source, limits);
+    }
     let reader = reader_for(source, limits, hint)?;
     let source_format = import_format_of(&reader)?;
     let mut decoder = reader.into_decoder()?;
@@ -995,6 +1014,9 @@ pub enum ExportFormat {
     Gif,
     /// BMP. Lossless, alpha, 8 bit, no ICC.
     Bmp,
+    /// W9-N: Truevision TGA. Lossless, alpha, 8 bit, no ICC (the `image`
+    /// crate's TGA encoder, 32-bit BGRA).
+    Tga,
     /// Windows icon. One file carrying the image at every size in
     /// [`ICO_SIZES`] (16, 32, 48 and 256 px square), each a PNG entry with
     /// full alpha. A non-square image is fitted inside each square, centred,
@@ -1012,13 +1034,14 @@ pub const ICO_SIZES: [u32; 4] = [16, 32, 48, 256];
 
 impl ExportFormat {
     /// Every format the exporter can write.
-    pub const ALL: [ExportFormat; 8] = [
+    pub const ALL: [ExportFormat; 9] = [
         ExportFormat::Png,
         ExportFormat::Jpeg(90),
         ExportFormat::WebP,
         ExportFormat::Tiff,
         ExportFormat::Gif,
         ExportFormat::Bmp,
+        ExportFormat::Tga,
         ExportFormat::Ico,
         ExportFormat::Svg,
     ];
@@ -1058,6 +1081,7 @@ impl ExportFormat {
             | ExportFormat::Tiff
             | ExportFormat::WebP
             | ExportFormat::Bmp
+            | ExportFormat::Tga
             | ExportFormat::Ico
             | ExportFormat::Svg => AlphaSupport::Full,
             ExportFormat::Gif => AlphaSupport::Binary,
@@ -1095,6 +1119,7 @@ impl ExportFormat {
             ExportFormat::Tiff => "tif",
             ExportFormat::Gif => "gif",
             ExportFormat::Bmp => "bmp",
+            ExportFormat::Tga => "tga",
             ExportFormat::Ico => "ico",
             ExportFormat::Svg => "svg",
         }
@@ -1109,6 +1134,7 @@ impl ExportFormat {
             ExportFormat::Tiff => "image/tiff",
             ExportFormat::Gif => "image/gif",
             ExportFormat::Bmp => "image/bmp",
+            ExportFormat::Tga => "image/x-tga",
             ExportFormat::Ico => "image/vnd.microsoft.icon",
             ExportFormat::Svg => "image/svg+xml",
         }
@@ -1291,6 +1317,15 @@ pub fn encode_into<W: Write + Seek>(
             let rgba = pixels.require_rgba8(format)?;
             let mut enc = image::codecs::bmp::BmpEncoder::new(&mut *out);
             enc.encode(rgba, width, height, ExtendedColorType::Rgba8)?;
+        }
+        ExportFormat::Tga => {
+            let rgba = pixels.require_rgba8(format)?;
+            image::codecs::tga::TgaEncoder::new(&mut *out).write_image(
+                rgba,
+                width,
+                height,
+                ExtendedColorType::Rgba8,
+            )?;
         }
         ExportFormat::Ico => {
             let rgba = pixels.require_rgba8(format)?;
@@ -1718,8 +1753,15 @@ mod tests {
                 continue;
             }
 
-            let decoded =
-                decode_bytes(&bytes).unwrap_or_else(|e| panic!("{format:?} failed to decode: {e}"));
+            // TGA has no magic number, so it is read back as what it is.
+            let decoded = match format {
+                ExportFormat::Tga => {
+                    decode_surface_bytes_as(&bytes, ImportLimits::default(), ImportFormat::Tga)
+                        .map(DecodedSurface::into_decoded_image)
+                }
+                _ => decode_bytes(&bytes),
+            }
+            .unwrap_or_else(|e| panic!("{format:?} failed to decode: {e}"));
             assert_eq!(
                 (decoded.width, decoded.height),
                 (w, h),
@@ -1732,6 +1774,7 @@ mod tests {
                 | ExportFormat::Tiff
                 | ExportFormat::WebP
                 | ExportFormat::Bmp
+                | ExportFormat::Tga
                 | ExportFormat::Ico
                 | ExportFormat::Svg => {
                     assert_eq!(decoded.rgba8, px, "{format:?} is supposed to be lossless");
@@ -1920,15 +1963,16 @@ mod tests {
         );
 
         // --- GIF and BMP are covered as writable formats above; JPEG/PNG/
-        // WebP/TIFF too. That is all eight containers this module decodes; the
-        // ninth, PSD, is recognised here and decoded by `app-shell`.
-        assert_eq!(ImportFormat::ALL.len(), 9);
+        // WebP/TIFF too; SVG (W9-N) has its own tests in `svg_import`. That
+        // is all nine containers this module decodes; the tenth, PSD, is
+        // recognised here and decoded by `app-shell`.
+        assert_eq!(ImportFormat::ALL.len(), 10);
         assert_eq!(
             ImportFormat::ALL
                 .iter()
                 .filter(|f| f.is_decodable_here())
                 .count(),
-            8
+            9
         );
     }
 
@@ -2419,8 +2463,8 @@ mod tests {
             assert_eq!(from_file, in_memory, "{format:?} differed on disk");
 
             // ...and the file on disk is decodable through the streaming path.
-            // (An SVG is not an import format; an ICO decodes to its largest
-            // entry.)
+            // (The SVG wrapper is checked by its own round-trip test; an ICO
+            // decodes to its largest entry.)
             if format != ExportFormat::Svg {
                 let decoded = decode_surface_path(&path, ImportLimits::default()).unwrap();
                 let side = if format == ExportFormat::Ico { 256 } else { 8 };
@@ -3221,5 +3265,29 @@ mod tests {
         out.extend_from_slice(&chunk(b"iCCP", &iccp));
         out.extend_from_slice(&base[AFTER_IHDR..]);
         out
+    }
+
+    /// W9-N: Export As > TGA writes a file the TGA decoder reads back pixel
+    /// for pixel, alpha included, through the extension-hinted path File >
+    /// Open takes.
+    #[test]
+    fn tga_export_round_trips_with_alpha() {
+        let (w, h) = (5u32, 3u32);
+        let mut px = checker_rgba8(w, h);
+        px[3] = 7; // one partially transparent pixel
+        assert!(ExportFormat::ALL.contains(&ExportFormat::Tga));
+        assert_eq!(ExportFormat::Tga.extension(), "tga");
+        assert!(ExportFormat::Tga.supports_alpha());
+        let bytes = encode(ExportFormat::Tga, w, h, &px).unwrap();
+        let back =
+            decode_surface_bytes_as(&bytes, ImportLimits::default(), ImportFormat::Tga).unwrap();
+        // Content sniffing overrides the hint, so this is only TGA if the
+        // bytes are: an uncompressed true-colour TGA header, 32 bits.
+        assert_eq!(back.source_format, ImportFormat::Tga);
+        assert!(!bytes.starts_with(b"BM"), "a BMP was written");
+        assert!(matches!(bytes[2], 2 | 10), "TGA image type {}", bytes[2]);
+        assert_eq!(bytes[16], 32, "bits per pixel");
+        assert_eq!((back.width, back.height), (w, h));
+        assert_eq!(back.pixels, SurfacePixels::Rgba8(px));
     }
 }

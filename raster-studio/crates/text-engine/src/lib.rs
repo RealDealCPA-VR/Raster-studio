@@ -92,7 +92,9 @@ mod font;
 mod layout;
 mod model;
 mod raster;
+mod shared;
 mod style;
+pub mod warp;
 
 pub use edit::CaretStop;
 pub use font::{
@@ -106,11 +108,13 @@ pub use raster::{
     fill_linear, rasterize, render_linear, synthetic_bold_radius, CoverageMask, GlyphImage,
     GlyphKey, GlyphRasterCache, LinearImage,
 };
+pub use shared::{register_session_font, with_shared_library};
 pub use style::{
     resolve_style, AntiAlias, Caps, CharStyle, FontSlant, FontStretch, FontWeight, ScriptPosition,
     StyleOverride, StyleRun, SCRIPT_SIZE_FACTOR, SMALL_CAPS_SIZE_FACTOR, SUBSCRIPT_DROP,
     SUPERSCRIPT_RISE,
 };
+pub use warp::{outline_svg, warp_point, Distortion, PathMap};
 
 /// Whether the text engine is implemented.
 ///

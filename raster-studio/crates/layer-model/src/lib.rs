@@ -36,6 +36,7 @@
 pub mod artboard;
 pub mod blend;
 pub mod effects;
+pub mod fill;
 pub mod ids;
 pub mod layer;
 pub mod mask;
@@ -52,12 +53,16 @@ pub use effects::{
     Rgba, SatinEffect, ShadowEffect, StrokeEffect, StrokePosition, MAX_PATTERN_EDGE,
     MAX_PATTERN_PIXELS,
 };
+// W9-B: live fill layers.
+pub use fill::{FillLayer, FillSource, GradientFill};
 pub use ids::{AssetId, LayerId, MaskId};
 pub use layer::{
     AdjustmentKind, AdjustmentLayer, AssetOrigin, AssetRecord, AutoAdjustment, ClippingMode,
     GeneratorLayer, GroupBlending, GroupLayer, Layer, LayerKind, LockState, RasterLayer, ShapeCap,
     ShapeFillRule, ShapeJoin, ShapeLayer, ShapeStroke, SmartObjectLayer, TextLayer,
 };
-pub use mask::{LayerMask, MaskError, MaskKind};
+// W9-F: shape fill paint (gradient / pattern) and stroke alignment.
+pub use layer::{ShapeFill, ShapeFillPaint, ShapeGradientFill, ShapeStrokeAlign};
+pub use mask::{LayerMask, MaskError, MaskKind, VectorMask};
 pub use smart_filter::{stack_is_active, SmartFilter, SmartParam};
 pub use tree::{ClippingGroup, DetachedSubtree, LayerTree, TreeError};

@@ -268,6 +268,37 @@ pub fn difference(a: &Path, b: &Path) -> Result<Path, VectorError> {
     )
 }
 
+/// W9-F: fold a stack of paths into one with `op`, bottom first: the
+/// running result is combined with each later path in turn, so
+/// `fold([a, b, c], Difference)` is `(a - b) - c` — Photoshop's Combine
+/// Shapes over a layer stack, and Path Selection's merge of components.
+/// Each input is read with `rule`; the result fills [`FillRule::NonZero`].
+/// An empty list is an empty path.
+pub fn fold(paths: &[Path], op: BoolOp, rule: FillRule) -> Result<Path, VectorError> {
+    let Some((first, rest)) = paths.split_first() else {
+        return Ok(Path::new());
+    };
+    let mut acc = if rest.is_empty() {
+        // One operand still goes through the machinery once, so the result
+        // is normalised the same way a combined one is.
+        boolean(
+            first,
+            &Path::new(),
+            BoolOp::Union,
+            rule,
+            crate::DEFAULT_TOLERANCE,
+        )?
+    } else {
+        first.clone()
+    };
+    for (i, next) in rest.iter().enumerate() {
+        // After the first step the running result is a non-zero region.
+        let r = if i == 0 { rule } else { FillRule::NonZero };
+        acc = boolean(&acc, next, op, r, crate::DEFAULT_TOLERANCE)?;
+    }
+    Ok(acc)
+}
+
 /// Exactly one of `a` and `b`.
 pub fn xor(a: &Path, b: &Path) -> Result<Path, VectorError> {
     boolean(
@@ -598,6 +629,38 @@ mod tests {
         assert!(!contains(&x, point(7.0, 7.0), FillRule::NonZero));
         assert!(contains(&x, point(2.0, 2.0), FillRule::NonZero));
         assert!(contains(&x, point(13.0, 13.0), FillRule::NonZero));
+    }
+
+    /// W9-F: the fold the Combine Shapes commands run. Unite of two
+    /// overlapping rectangles covers exactly their union; subtract-front,
+    /// intersect and exclude agree with the pairwise ops.
+    #[test]
+    fn unite_of_two_overlapping_rectangles_covers_their_union() {
+        let a = sq(0.0, 0.0, 10.0);
+        let b = sq(5.0, 5.0, 10.0);
+        let u = fold(&[a.clone(), b.clone()], BoolOp::Union, FillRule::NonZero).unwrap();
+        assert_eq!(area(&u), 175.0, "10x10 + 10x10 - the 5x5 overlap");
+        assert_eq!(u.subpaths().len(), 1, "one outline, not two");
+        for p in [point(1.0, 1.0), point(14.0, 14.0), point(7.0, 7.0)] {
+            assert!(contains(&u, p, FillRule::NonZero), "{p:?}");
+        }
+        assert!(!contains(&u, point(14.0, 1.0), FillRule::NonZero));
+        let ops = [
+            (BoolOp::Difference, 75.0),
+            (BoolOp::Intersection, 25.0),
+            (BoolOp::Xor, 150.0),
+        ];
+        for (op, want) in ops {
+            let got = fold(&[a.clone(), b.clone()], op, FillRule::NonZero).unwrap();
+            assert_eq!(area(&got), want, "{op:?}");
+        }
+        // Three operands fold left to right: (a - b) - c.
+        let c = sq(0.0, 0.0, 5.0);
+        let d = fold(&[a, b, c], BoolOp::Difference, FillRule::NonZero).unwrap();
+        assert_eq!(area(&d), 50.0);
+        assert!(fold(&[], BoolOp::Union, FillRule::NonZero)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

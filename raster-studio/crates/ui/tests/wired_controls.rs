@@ -815,6 +815,8 @@ fn the_layer_row_context_menu_offers_the_layer_operations() {
             "Layer",
             "Merge Down",
             "Create Clipping Mask",
+            // W9-A: Photopea's Select Pixels (the active layer's alpha).
+            "Select Pixels",
         ],
         "the layer row menu's item set"
     );

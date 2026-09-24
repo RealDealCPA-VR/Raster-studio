@@ -277,6 +277,8 @@ impl BrushEditorDialog {
             );
         }
 
+        self.dynamics_sections(ui);
+
         if let Some(reason) = self.blocked_reason() {
             ui.add_space(Space::Small.pt());
             warning(ui, reason);
@@ -288,6 +290,164 @@ impl BrushEditorDialog {
             self.blocked_reason().as_deref(),
             &["Reset"],
         )
+    }
+
+    /// W9-E: Photopea's Brush panel sections past the tip — Tip (which
+    /// shape is stamped), Shape Dynamics, Scattering, Color Dynamics and
+    /// Transfer. Each is a collapsing section, closed until opened, so the
+    /// dialog stays the height it was for a brush that uses none of them.
+    fn dynamics_sections(&mut self, ui: &mut egui::Ui) {
+        use crate::strings::tr;
+        let tip_caption = match self.settings.tip {
+            tools::brush::BrushTip::Round => tr("ui.brush_editor.tip.round").to_string(),
+            tools::brush::BrushTip::Sampled(id) => match tools::brush::sampled_tip(id) {
+                Some(t) => format!(
+                    "{} {} x {}",
+                    tr("ui.brush_editor.tip.sampled"),
+                    t.width(),
+                    t.height()
+                ),
+                None => tr("ui.brush_editor.tip.missing").to_string(),
+            },
+        };
+        design::section_header(ui, "Tip");
+        caption(ui, tip_caption);
+
+        let mut d = self.settings.dynamics;
+        let mut changed = false;
+        let section = |ui: &mut egui::Ui,
+                       id: &str,
+                       title: &str,
+                       body: &mut dyn FnMut(&mut egui::Ui) -> bool| {
+            egui::CollapsingHeader::new(title)
+                .id_salt(("brush-editor-section", id))
+                .default_open(false)
+                .show(ui, |ui| body(ui))
+                .body_returned
+                .unwrap_or(false)
+        };
+        changed |= section(
+            ui,
+            "shape",
+            tr("ui.brush_editor.shape.dynamics"),
+            &mut |ui| {
+                let mut c = design::slider_row(
+                    ui,
+                    tr("ui.brush_editor.size.jitter"),
+                    &mut d.size_jitter,
+                    0.0..=1.0,
+                )
+                .changed();
+                c |= design::slider_row(
+                    ui,
+                    tr("ui.brush_editor.min.diameter"),
+                    &mut d.min_diameter,
+                    0.0..=1.0,
+                )
+                .changed();
+                c |= design::slider_row(
+                    ui,
+                    tr("ui.brush_editor.angle.jitter"),
+                    &mut d.angle_jitter,
+                    0.0..=1.0,
+                )
+                .changed();
+                c |= design::slider_row(
+                    ui,
+                    tr("ui.brush_editor.roundness.jitter"),
+                    &mut d.roundness_jitter,
+                    0.0..=1.0,
+                )
+                .changed();
+                c |= design::slider_row(
+                    ui,
+                    tr("ui.brush_editor.min.roundness"),
+                    &mut d.min_roundness,
+                    0.0..=1.0,
+                )
+                .changed();
+                c
+            },
+        );
+        changed |= section(ui, "scatter", "Scattering", &mut |ui| {
+            let mut c = design::slider_row(ui, "Scatter", &mut d.scatter, 0.0..=10.0).changed();
+            c |= checkbox_row(
+                ui,
+                tr("ui.brush_editor.both.axes"),
+                &mut d.scatter_both_axes,
+            )
+            .changed();
+            let mut count = d.count as f32;
+            if design::slider_row(ui, "Count", &mut count, 1.0..=16.0).changed() {
+                d.count = count.round().clamp(1.0, 16.0) as u32;
+                c = true;
+            }
+            c |= design::slider_row(
+                ui,
+                tr("ui.brush_editor.count.jitter"),
+                &mut d.count_jitter,
+                0.0..=1.0,
+            )
+            .changed();
+            c
+        });
+        changed |= section(
+            ui,
+            "colour",
+            tr("ui.brush_editor.color.dynamics"),
+            &mut |ui| {
+                let mut c = design::slider_row(
+                    ui,
+                    tr("ui.brush_editor.fg.bg.jitter"),
+                    &mut d.fg_bg_jitter,
+                    0.0..=1.0,
+                )
+                .changed();
+                c |= design::slider_row(
+                    ui,
+                    tr("ui.brush_editor.hue.jitter"),
+                    &mut d.hue_jitter,
+                    0.0..=1.0,
+                )
+                .changed();
+                c |= design::slider_row(
+                    ui,
+                    tr("ui.brush_editor.saturation.jitter"),
+                    &mut d.saturation_jitter,
+                    0.0..=1.0,
+                )
+                .changed();
+                c |= design::slider_row(
+                    ui,
+                    tr("ui.brush_editor.brightness.jitter"),
+                    &mut d.brightness_jitter,
+                    0.0..=1.0,
+                )
+                .changed();
+                caption(ui, tr("ui.brush_editor.colour.varies.per.stroke"));
+                c
+            },
+        );
+        changed |= section(ui, "transfer", "Transfer", &mut |ui| {
+            let mut c = design::slider_row(
+                ui,
+                tr("ui.brush_editor.opacity.jitter"),
+                &mut d.opacity_jitter,
+                0.0..=1.0,
+            )
+            .changed();
+            c |= design::slider_row(
+                ui,
+                tr("ui.brush_editor.flow.jitter"),
+                &mut d.flow_jitter,
+                0.0..=1.0,
+            )
+            .changed();
+            c
+        });
+        if changed {
+            self.settings_mut().dynamics = d;
+        }
     }
 
     fn preview(&mut self, ui: &mut egui::Ui) {
@@ -562,5 +722,133 @@ mod tests {
             let mut pencil = BrushEditorDialog::new(BrushSettings::pencil(3.0));
             assert!(pencil.show(ctx).is_open());
         });
+    }
+
+    /// W9-E: every text one settled frame of the dialog draws, with its rect.
+    fn drawn(
+        ctx: &Context,
+        dialog: &mut BrushEditorDialog,
+        events: Vec<egui::Event>,
+    ) -> Vec<(String, egui::Rect)> {
+        let input = |events: Vec<egui::Event>| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1600.0, 1600.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let out = ctx.run(input(events), |ctx| {
+            let _ = dialog.show(ctx);
+        });
+        out.shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) => Some((
+                    t.galley.text().to_string(),
+                    t.galley.rect.translate(t.pos.to_vec2()),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_dialog_draws_the_tip_and_dynamics_sections_and_they_open() {
+        let ctx = Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut dialog = BrushEditorDialog::default();
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            texts = drawn(&ctx, &mut dialog, Vec::new());
+        }
+        let has = |texts: &[(String, egui::Rect)], s: &str| texts.iter().any(|(t, _)| t == s);
+        for header in [
+            "Tip",
+            "Round (computed)",
+            "Shape Dynamics",
+            "Scattering",
+            "Color Dynamics",
+            "Transfer",
+        ] {
+            assert!(has(&texts, header), "{header:?} not drawn: {texts:?}");
+        }
+        assert!(!has(&texts, "Size jitter"), "sections start closed");
+        // Click the Shape Dynamics header: its sliders appear.
+        let at = texts
+            .iter()
+            .find(|(t, _)| t == "Shape Dynamics")
+            .map(|(_, r)| r.center())
+            .unwrap();
+        let click = vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            },
+        ];
+        drawn(&ctx, &mut dialog, click);
+        for _ in 0..3 {
+            texts = drawn(&ctx, &mut dialog, Vec::new());
+        }
+        for label in [
+            "Size jitter",
+            "Min diameter",
+            "Angle jitter",
+            "Roundness jitter",
+        ] {
+            assert!(has(&texts, label), "{label:?} not drawn once opened");
+        }
+    }
+
+    #[test]
+    fn dynamics_change_the_preview_and_ride_out_with_the_saved_brush() {
+        let mut dialog = BrushEditorDialog::default();
+        dialog.settings_mut().size = 12.0;
+        dialog.settings_mut().size_pressure = false;
+        let plain = dialog.preview_coverage(PREVIEW_SIZE.0, PREVIEW_SIZE.1);
+        let plain_count = dialog.preview_dab_count();
+        dialog.settings_mut().dynamics.scatter = 2.0;
+        dialog.settings_mut().dynamics.count = 2;
+        dialog.settings_mut().dynamics.size_jitter = 0.5;
+        let scattered = dialog.preview_coverage(PREVIEW_SIZE.0, PREVIEW_SIZE.1);
+        assert_ne!(plain, scattered, "the preview ignored the dynamics");
+        assert_eq!(dialog.preview_dab_count(), plain_count * 2);
+        match dialog.confirm() {
+            Some(DialogAction::SetBrush { settings, .. }) => {
+                assert_eq!(settings.dynamics.scatter, 2.0);
+                assert_eq!(settings.dynamics.count, 2);
+                assert_eq!(settings.dynamics.size_jitter, 0.5);
+            }
+            other => panic!("expected brush settings, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_sampled_tip_is_named_in_the_tip_section() {
+        let id = tools::brush::TipId([0xE7; 32]);
+        tools::brush::register_sampled_tip(
+            id,
+            tools::brush::SampledTip::new(3, 2, vec![255; 6]).unwrap(),
+        );
+        let ctx = Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut dialog = BrushEditorDialog::new(BrushSettings {
+            tip: tools::brush::BrushTip::Sampled(id),
+            ..Default::default()
+        });
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            texts = drawn(&ctx, &mut dialog, Vec::new());
+        }
+        assert!(texts.iter().any(|(t, _)| t == "Sampled 3 x 2"), "{texts:?}");
     }
 }

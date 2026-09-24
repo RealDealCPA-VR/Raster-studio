@@ -406,13 +406,14 @@ fn read_mask(cur: &mut Cursor<'_>, opts: &ReadOptions) -> PsdResult<Option<PsdMa
         feather_px: 0.0,
         data: Vec::new(),
         real: None,
+        vector_density: None,
+        vector_feather_px: None,
     };
 
     if flags & 0b1_0000 != 0 {
         // Mask parameters, present only when bit 4 says so. The user-mask
-        // density and feather parameterise *this* mask; the vector-mask pair
-        // parameterises the vector mask, which this model keeps only as the
-        // `real` record — skipped, not lost (the bytes stay in the section).
+        // density and feather parameterise *this* mask; W9-G: the vector-mask
+        // pair parameterises the layer's `vmsk`/`vsms` vector mask.
         let params = cur.u8()?;
         if params & 0b1 != 0 {
             mask.density = cur.u8()?;
@@ -421,10 +422,10 @@ fn read_mask(cur: &mut Cursor<'_>, opts: &ReadOptions) -> PsdResult<Option<PsdMa
             mask.feather_px = cur.f64()?;
         }
         if params & 0b100 != 0 {
-            cur.skip(1)?; // vector mask density
+            mask.vector_density = Some(cur.u8()?);
         }
         if params & 0b1000 != 0 {
-            cur.skip(8)?; // vector mask feather
+            mask.vector_feather_px = Some(cur.f64()?);
         }
     }
 

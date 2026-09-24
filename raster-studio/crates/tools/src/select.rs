@@ -37,14 +37,61 @@ const MAGNETIC_ANCHOR_SPACING: f32 = 12.0;
 pub const MAX_FEATHER_PX: f32 = 250.0;
 
 /// The options bar's `mode` choices, in the registry's order: New, Add,
-/// Subtract, Intersect. A choice index is looked up here, so the registry's
-/// spec and this table must agree.
+/// Subtract, Intersect, Exclude. A choice index is looked up here, so the
+/// registry's spec ([`SELECTION_MODE_LABELS`]) and this table must agree.
+///
+/// W9-L: Exclude is the XOR — `selection::BooleanOp::Exclude`, which keeps
+/// what exactly one of the old and the new selection covers. It has no
+/// modifier chord (Shift adds, Alt subtracts, both intersect, as before), so
+/// the Mode control is how it is reached.
 pub const SELECTION_MODES: &[BooleanOp] = &[
     BooleanOp::Replace,
     BooleanOp::Add,
     BooleanOp::Subtract,
     BooleanOp::Intersect,
+    BooleanOp::Exclude,
 ];
+
+/// W9-L: the labels the registry's selection `mode` choice shows, index for
+/// index with [`SELECTION_MODES`].
+pub const SELECTION_MODE_LABELS: &[&str] = &["New", "Add", "Subtract", "Intersect", "Exclude"];
+
+/// W9-L: the rectangular and elliptical marquees' **Style** choice, in the
+/// registry's order.
+pub const MARQUEE_STYLE_LABELS: &[&str] = &["Normal", "Fixed Ratio", "Fixed Size"];
+
+/// The default Width / Height the marquee Style fields start at: a 1:1 ratio
+/// under Fixed Ratio, a 64 x 64 px box under Fixed Size.
+pub const MARQUEE_STYLE_DEFAULT_PX: f32 = 64.0;
+
+/// The largest Width / Height the marquee Style fields accept.
+pub const MARQUEE_STYLE_MAX_PX: f32 = 30_000.0;
+
+/// W9-L: how a rectangular or elliptical marquee's drag is constrained — the
+/// options bar's Style, Width and Height.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MarqueeStyle {
+    /// The drag is the box (Shift squares it).
+    Normal,
+    /// The box keeps `width : height`, sized by the drag's larger extent.
+    FixedRatio { width: f32, height: f32 },
+    /// The box is exactly `width` x `height` pixels; the press places it and
+    /// the drag only says which way from the press it opens.
+    FixedSize { width: f32, height: f32 },
+}
+
+impl MarqueeStyle {
+    /// The style a Style choice index and the two fields name. `None` for an
+    /// index past [`MARQUEE_STYLE_LABELS`].
+    pub fn from_choice(index: usize, width: f32, height: f32) -> Option<Self> {
+        match index {
+            0 => Some(MarqueeStyle::Normal),
+            1 => Some(MarqueeStyle::FixedRatio { width, height }),
+            2 => Some(MarqueeStyle::FixedSize { width, height }),
+            _ => None,
+        }
+    }
+}
 
 fn mode_from_choice(key: &str, index: usize) -> Result<BooleanOp, ToolError> {
     SELECTION_MODES
@@ -178,6 +225,12 @@ pub struct MarqueeTool {
     pub from_center: bool,
     /// The options bar's Mode / Feather / Anti-alias.
     pub options: SelectionOptions,
+    /// W9-L: the options bar's Style (`style`), with its Width
+    /// (`style_width`) and Height (`style_height`). Read by the rectangle and
+    /// the ellipse; the single-row/column marquees have no box to constrain.
+    pub style: MarqueeStyle,
+    style_index: usize,
+    style_size: Vec2,
     anchor: Option<Vec2>,
     current: Option<Vec2>,
     /// W4-A: whether Shift was held on the last sample, so the published
@@ -194,6 +247,9 @@ impl MarqueeTool {
             shape,
             from_center: false,
             options: SelectionOptions::default(),
+            style: MarqueeStyle::Normal,
+            style_index: 0,
+            style_size: Vec2::splat(MARQUEE_STYLE_DEFAULT_PX),
             anchor: None,
             current: None,
             shift: false,
@@ -244,19 +300,69 @@ impl MarqueeTool {
     /// mask — reading it back from `self` there would silently produce a
     /// zero-area box.
     fn corners(&self, a: Vec2, to: Vec2, shift: bool) -> (Vec2, Vec2) {
-        let mut b = to;
-        if shift {
-            // Constrain to a square, keeping the drag's dominant extent.
-            let d = b - a;
-            let s = d.x.abs().max(d.y.abs());
-            b = a + Vec2::new(s * d.x.signum(), s * d.y.signum());
-        }
+        // The side of the press the drag went to; a click with no drag
+        // opens right and down.
+        let side = |v: f32| if v < 0.0 { -1.0 } else { 1.0 };
+        let raw = to - a;
+        let d = match self.style {
+            MarqueeStyle::Normal => {
+                if shift {
+                    // Constrain to a square, keeping the drag's dominant extent.
+                    let s = raw.x.abs().max(raw.y.abs());
+                    Vec2::new(s * raw.x.signum(), s * raw.y.signum())
+                } else {
+                    raw
+                }
+            }
+            // W9-L: the larger extent (in ratio units) sizes the box, so the
+            // box always reaches the pointer on one axis.
+            MarqueeStyle::FixedRatio { width, height } => {
+                let r = width / height;
+                let w = raw.x.abs().max(raw.y.abs() * r);
+                Vec2::new(w * side(raw.x), w / r * side(raw.y))
+            }
+            // W9-L: the size is the size; from the centre it is split about
+            // the press rather than doubled.
+            MarqueeStyle::FixedSize { width, height } => {
+                let size = if self.from_center {
+                    Vec2::new(width, height) * 0.5
+                } else {
+                    Vec2::new(width, height)
+                };
+                Vec2::new(size.x * side(raw.x), size.y * side(raw.y))
+            }
+        };
         if self.from_center {
-            let d = b - a;
             (a - d, a + d)
         } else {
-            (a, b)
+            (a, a + d)
         }
+    }
+
+    /// W9-L: adopt one of the three Style keys. `Ok(false)` when `key` is
+    /// not one of them.
+    fn set_style(&mut self, key: &str, setting: ToolSetting) -> Result<bool, ToolError> {
+        match (key, setting) {
+            ("style", ToolSetting::Choice(i)) if i < MARQUEE_STYLE_LABELS.len() => {
+                self.style_index = i;
+            }
+            ("style_width", ToolSetting::Float(v)) => {
+                self.style_size.x = finite("style_width", v)?.clamp(0.01, MARQUEE_STYLE_MAX_PX);
+            }
+            ("style_height", ToolSetting::Float(v)) => {
+                self.style_size.y = finite("style_height", v)?.clamp(0.01, MARQUEE_STYLE_MAX_PX);
+            }
+            ("style" | "style_width" | "style_height", _) => {
+                return Err(ToolError::OptionKindMismatch {
+                    key: key.to_owned(),
+                })
+            }
+            _ => return Ok(false),
+        }
+        self.style =
+            MarqueeStyle::from_choice(self.style_index, self.style_size.x, self.style_size.y)
+                .unwrap_or(MarqueeStyle::Normal);
+        Ok(true)
     }
 }
 
@@ -340,9 +446,11 @@ impl Tool for MarqueeTool {
         self.current = None;
     }
 
-    /// Exactly the registry's `SELECTION_OPTS` keys; anything else is refused.
+    /// Exactly the registry's `SELECTION_OPTS` keys, plus the W9-L Style
+    /// keys the rectangular and elliptical marquees declare
+    /// (`MARQUEE_OPTS`); anything else is refused.
     fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
-        if self.options.set(key, setting)? {
+        if self.options.set(key, setting)? || self.set_style(key, setting)? {
             Ok(())
         } else {
             Err(unknown(key))
@@ -1131,6 +1239,161 @@ mod option_tests {
         assert_eq!(mag.magnetic.search_radius, 1);
         assert!(matches!(
             mag.set_setting("search_radius", ToolSetting::Float(3.0)),
+            Err(ToolError::OptionKindMismatch { .. })
+        ));
+    }
+}
+
+/// W9-L: the selection XOR and the marquee Style, driven the way the shell
+/// drives them — the registry builds the tool, the options bar's values
+/// arrive through `set_setting` under the registry's own keys, and a real
+/// press / drag / release produces the edit that is folded into the
+/// document's selection.
+#[cfg(test)]
+mod w9l_tests {
+    use super::*;
+    use crate::registry;
+    use crate::tiles::MemoryTiles;
+    use raster::PixelRect;
+
+    const SIDE: u32 = 128;
+
+    /// One gesture on a fresh registry-built tool holding `settings`.
+    fn gesture(
+        id: ToolId,
+        settings: &[(&str, ToolSetting)],
+        from: (f32, f32),
+        to: (f32, f32),
+    ) -> SelectionEdit {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, SIDE, SIDE));
+        let mut tool = registry::make(id);
+        for (key, value) in settings {
+            tool.set_setting(key, *value)
+                .unwrap_or_else(|e| panic!("{id:?} refused {key}: {e}"));
+        }
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(from.0, from.1))
+            .unwrap();
+        tool.on_pointer_move(&mut ctx, PointerEvent::at(to.0, to.1))
+            .unwrap();
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(to.0, to.1))
+            .unwrap();
+        let mut edits = ctx.drain_selection();
+        assert_eq!(edits.len(), 1, "one gesture, one edit");
+        edits.pop().unwrap()
+    }
+
+    fn bounds(edit: &SelectionEdit) -> (IVec2, IVec2) {
+        edit.incoming.bounds().expect("a non-empty selection")
+    }
+
+    fn choice_of(id: ToolId, key: &str, label: &str) -> usize {
+        let spec = registry::info(id)
+            .and_then(|i| i.options.iter().find(|o| o.key == key))
+            .unwrap_or_else(|| panic!("{id:?} declares no {key}"));
+        match spec.kind {
+            crate::registry::OptionKind::Choice { choices, .. } => choices
+                .iter()
+                .position(|c| *c == label)
+                .unwrap_or_else(|| panic!("{key} has no {label:?}: {choices:?}")),
+            other => panic!("{key} is not a choice: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_exclude_mode_xors_a_marquee_with_the_selection_it_meets() {
+        // Every selection tool's Mode offers it, at the index the tools
+        // crate's own table maps to Exclude.
+        for id in [
+            ToolId::RectMarquee,
+            ToolId::EllipseMarquee,
+            ToolId::SingleRowMarquee,
+            ToolId::SingleColumnMarquee,
+            ToolId::Lasso,
+            ToolId::PolygonalLasso,
+            ToolId::MagneticLasso,
+            ToolId::MagicWand,
+            ToolId::QuickSelect,
+        ] {
+            let index = choice_of(id, "mode", "Exclude");
+            assert_eq!(SELECTION_MODES[index], BooleanOp::Exclude, "{id:?}");
+            assert!(
+                registry::make(id)
+                    .set_setting("mode", ToolSetting::Choice(index))
+                    .is_ok(),
+                "{id:?} refuses its own Exclude"
+            );
+        }
+        let exclude = choice_of(ToolId::RectMarquee, "mode", "Exclude");
+        let edit = gesture(
+            ToolId::RectMarquee,
+            &[("mode", ToolSetting::Choice(exclude))],
+            (40.0, 40.0),
+            (80.0, 80.0),
+        );
+        assert_eq!(edit.op, BooleanOp::Exclude);
+        // Folded into an existing 20..60 box, the way the shell folds it.
+        let base = Selection::Rect {
+            min: IVec2::new(20, 20),
+            max: IVec2::new(60, 60),
+        };
+        let canvas = selection::Rect::from_xywh(0, 0, SIDE, SIDE);
+        let out = edit.apply(canvas, &base).unwrap();
+        let at = |x: i32, y: i32| out.coverage_at(IVec2::new(x, y));
+        assert_eq!(at(30, 30), 1.0, "only the old box: kept");
+        assert_eq!(at(70, 70), 1.0, "only the new box: added");
+        assert_eq!(at(50, 50), 0.0, "both: taken out (the XOR)");
+        assert_eq!(at(10, 10), 0.0, "neither: empty");
+    }
+
+    #[test]
+    fn fixed_ratio_keeps_w_to_h_whatever_the_drag_and_normal_is_the_drag() {
+        let ratio = choice_of(ToolId::RectMarquee, "style", "Fixed Ratio");
+        // Normal: the drag is the box.
+        let normal = gesture(ToolId::RectMarquee, &[], (10.0, 10.0), (30.0, 50.0));
+        assert_eq!(bounds(&normal), (IVec2::new(10, 10), IVec2::new(30, 50)));
+        // 2 : 1 — a drag 20 wide and 40 tall is sized by its height in ratio
+        // units: 80 x 40.
+        let settings = [
+            ("style", ToolSetting::Choice(ratio)),
+            ("style_width", ToolSetting::Float(2.0)),
+            ("style_height", ToolSetting::Float(1.0)),
+        ];
+        let edit = gesture(ToolId::RectMarquee, &settings, (10.0, 10.0), (30.0, 50.0));
+        assert_eq!(bounds(&edit), (IVec2::new(10, 10), IVec2::new(90, 50)));
+        // Dragged up and left, it opens up and left.
+        let edit = gesture(ToolId::RectMarquee, &settings, (100.0, 100.0), (60.0, 90.0));
+        assert_eq!(bounds(&edit), (IVec2::new(60, 80), IVec2::new(100, 100)));
+        // The ellipse is constrained the same way.
+        let edit = gesture(
+            ToolId::EllipseMarquee,
+            &settings,
+            (10.0, 10.0),
+            (30.0, 50.0),
+        );
+        let (min, max) = bounds(&edit);
+        assert_eq!((max - min).x, 2 * (max - min).y, "{min:?}..{max:?}");
+    }
+
+    #[test]
+    fn fixed_size_places_a_box_of_exactly_that_size_at_the_press() {
+        let fixed = choice_of(ToolId::RectMarquee, "style", "Fixed Size");
+        let settings = [
+            ("style", ToolSetting::Choice(fixed)),
+            ("style_width", ToolSetting::Float(30.0)),
+            ("style_height", ToolSetting::Float(20.0)),
+        ];
+        // A click with no drag, and a long drag: the same 30 x 20.
+        let click = gesture(ToolId::RectMarquee, &settings, (5.0, 5.0), (5.0, 5.0));
+        assert_eq!(bounds(&click), (IVec2::new(5, 5), IVec2::new(35, 25)));
+        let drag = gesture(ToolId::RectMarquee, &settings, (5.0, 5.0), (120.0, 90.0));
+        assert_eq!(bounds(&drag), (IVec2::new(5, 5), IVec2::new(35, 25)));
+        // Released up-left of the press, the box opens that way.
+        let back = gesture(ToolId::RectMarquee, &settings, (60.0, 60.0), (10.0, 10.0));
+        assert_eq!(bounds(&back), (IVec2::new(30, 40), IVec2::new(60, 60)));
+        // A size of the wrong kind is refused, not dropped.
+        assert!(matches!(
+            registry::make(ToolId::RectMarquee).set_setting("style_width", ToolSetting::Bool(true)),
             Err(ToolError::OptionKindMismatch { .. })
         ));
     }

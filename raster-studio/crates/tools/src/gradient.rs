@@ -17,9 +17,11 @@
 
 use color::{
     linear_to_srgb, premultiply, srgb_to_linear as srgb_to_linear_scalar, srgb_to_linear3,
+    unpremultiply,
 };
 use editor_core::{Command, Selection};
 use glam::{IVec2, Vec2};
+use layer_model::BlendMode;
 use raster::PixelRect;
 use serde::{Deserialize, Serialize};
 
@@ -373,6 +375,40 @@ impl Default for GradientSettings {
     }
 }
 
+/// W9-L: the source pixel a fill lays down once a paint blend mode has had
+/// its say — the W3C model `Cs' = (1 - ab) * Cs + ab * B(Cb, Cs)`, in straight
+/// linear colour, handed back premultiplied with the source's own alpha so
+/// the caller's source-over composite is unchanged. Where the destination is
+/// transparent the source shows unblended. Shared by the gradient and the
+/// paint bucket; it is the same formula the stroke tools composite through.
+pub(crate) fn blend_source(mode: BlendMode, src: [f32; 4], dst: [f32; 4]) -> [f32; 4] {
+    if mode == BlendMode::Normal || src[3] <= 0.0 {
+        return src;
+    }
+    let s = unpremultiply(src);
+    let d = unpremultiply(dst);
+    let ab = dst[3].clamp(0.0, 1.0);
+    let b = mode.blend_rgb([d[0], d[1], d[2]], [s[0], s[1], s[2]]);
+    premultiply([
+        (1.0 - ab) * s[0] + ab * b[0],
+        (1.0 - ab) * s[1] + ab * b[1],
+        (1.0 - ab) * s[2] + ab * b[2],
+        s[3],
+    ])
+}
+
+/// W9-L: `src` (premultiplied, alpha `a`) over `dst`, through `mode`.
+pub(crate) fn composite_over(mode: BlendMode, src: [f32; 4], dst: [f32; 4]) -> [f32; 4] {
+    let s = blend_source(mode, src, dst);
+    let a = s[3];
+    [
+        s[0] + dst[0] * (1.0 - a),
+        s[1] + dst[1] * (1.0 - a),
+        s[2] + dst[2] * (1.0 - a),
+        a + dst[3] * (1.0 - a),
+    ]
+}
+
 /// The dithered straight-alpha linear colour the ramp puts at one pixel.
 ///
 /// Both renderers below go through this, so the layer and the mask see exactly
@@ -422,6 +458,29 @@ pub fn render_gradient(
     settings: &GradientSettings,
     selection: &Selection,
 ) {
+    render_gradient_with_mode(
+        patch,
+        rect,
+        start,
+        end,
+        settings,
+        selection,
+        BlendMode::Normal,
+    );
+}
+
+/// W9-L: [`render_gradient`] composited through a paint blend mode — what
+/// the Gradient tool's options-bar Mode ([`crate::BLEND_MODE_KEY`]) holds.
+/// `Normal` is exactly [`render_gradient`].
+pub fn render_gradient_with_mode(
+    patch: &mut ColorPatch,
+    rect: PixelRect,
+    start: Vec2,
+    end: Vec2,
+    settings: &GradientSettings,
+    selection: &Selection,
+    mode: BlendMode,
+) {
     let opacity = settings.opacity.clamp(0.0, 1.0);
     for y in rect.y..rect.bottom() {
         for x in rect.x..rect.right() {
@@ -434,15 +493,7 @@ pub fn render_gradient(
             let a = c[3] * opacity * clip;
             let src = premultiply([c[0], c[1], c[2], a]);
             let dst = patch.get(p);
-            patch.set(
-                p,
-                [
-                    src[0] + dst[0] * (1.0 - a),
-                    src[1] + dst[1] * (1.0 - a),
-                    src[2] + dst[2] * (1.0 - a),
-                    a + dst[3] * (1.0 - a),
-                ],
-            );
+            patch.set(p, composite_over(mode, src, dst));
         }
     }
 }
@@ -480,6 +531,11 @@ pub fn render_gradient_coverage(
 /// The gradient tool: drag to set the axis, release to commit.
 pub struct GradientTool {
     pub settings: GradientSettings,
+    /// W9-L: the blend mode the ramp composites onto the layer through —
+    /// the options bar's Mode ([`crate::BLEND_MODE_KEY`]). `Normal` is
+    /// source-over exactly as before. A mask target has no colour to blend
+    /// with, so the coverage renderer reads only the opacity.
+    pub mode: BlendMode,
     start: Option<Vec2>,
     current: Option<Vec2>,
 }
@@ -488,6 +544,7 @@ impl GradientTool {
     pub fn new(settings: GradientSettings) -> Self {
         Self {
             settings,
+            mode: BlendMode::Normal,
             start: None,
             current: None,
         }
@@ -590,7 +647,15 @@ impl Tool for GradientTool {
                     ramp: ctx.ramp.clone(),
                     ..self.settings.clone()
                 };
-                render_gradient(&mut patch, rect, start, end, &settings, &ctx.selection);
+                render_gradient_with_mode(
+                    &mut patch,
+                    rect,
+                    start,
+                    end,
+                    &settings,
+                    &ctx.selection,
+                    self.mode,
+                );
                 patch.commit(ctx.tiles, key)?
             }
             PaintTarget::Mask => {
@@ -622,9 +687,20 @@ impl Tool for GradientTool {
 
     /// The registry's four Gradient options — `shape` (Style), `dither`,
     /// `reverse`, `opacity` — each landing on the [`GradientSettings`] field
-    /// `ramp_at` and the renderers read.
+    /// `ramp_at` and the renderers read; and (W9-L) the options bar's paint
+    /// Mode ([`crate::BLEND_MODE_KEY`], a Choice indexing
+    /// [`BlendMode::ALL`], clamped like every Choice), which
+    /// [`render_gradient_with_mode`] composites through.
     fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
         match (key, setting) {
+            (crate::BLEND_MODE_KEY, ToolSetting::Choice(i)) => {
+                let last = BlendMode::ALL.len() - 1;
+                self.mode = crate::blend_mode_from_choice(i.min(last)).unwrap_or(BlendMode::Normal);
+                Ok(())
+            }
+            (crate::BLEND_MODE_KEY, _) => Err(ToolError::OptionKindMismatch {
+                key: key.to_owned(),
+            }),
             ("shape", ToolSetting::Choice(i)) => {
                 self.settings.shape =
                     *GradientShape::ALL
@@ -999,5 +1075,101 @@ mod option_tests {
         tiles.apply_delta(key, &delta);
         let a = tiles.pixel(key, 32, 8)[3];
         assert!((62..=65).contains(&a), "opacity 0.25 -> alpha {a}");
+    }
+}
+
+/// W9-L: the Gradient composites its ramp through the options bar's Mode.
+/// Driven as the shell drives it: the registry builds the tool, the Mode
+/// arrives through `set_setting` under `BLEND_MODE_KEY`, a real drag commits.
+#[cfg(test)]
+mod w9l_tests {
+    use super::*;
+
+    use crate::registry;
+    use crate::tiles::MemoryTiles;
+    use editor_core::PixelKey;
+    use layer_model::LayerId;
+
+    const SIDE: u32 = 64;
+
+    /// A 64x64 opaque mid-grey layer (sRGB 128), in one tile.
+    fn grey_layer(tiles: &mut MemoryTiles, key: PixelKey) {
+        let ts = raster::TILE_SIZE as usize;
+        let mut data = vec![0u8; ts * ts * 4];
+        for y in 0..SIDE as usize {
+            for x in 0..SIDE as usize {
+                let i = (y * ts + x) * 4;
+                data[i..i + 4].copy_from_slice(&[128, 128, 128, 255]);
+            }
+        }
+        tiles.put(key, raster::TileCoord::new(0, 0, 0), data);
+    }
+
+    fn mode_index(mode: BlendMode) -> usize {
+        BlendMode::ALL.iter().position(|m| *m == mode).unwrap()
+    }
+
+    /// A white-to-white ramp dragged across the grey layer, with the Mode at
+    /// `mode` (untouched when `None`); the pixel it leaves mid-drag.
+    fn white_ramp_over_grey(mode: Option<BlendMode>) -> [u8; 4] {
+        let mut tiles = MemoryTiles::new();
+        let layer = LayerId::new();
+        let key = PixelKey::Layer(layer);
+        grey_layer(&mut tiles, key);
+        let mut tool = registry::make(ToolId::Gradient);
+        tool.set_setting("dither", ToolSetting::Bool(false))
+            .unwrap();
+        if let Some(mode) = mode {
+            tool.set_setting(crate::BLEND_MODE_KEY, ToolSetting::Choice(mode_index(mode)))
+                .expect("the Gradient answers the Mode key");
+        }
+        let delta = {
+            let mut ctx =
+                ToolContext::new(&mut tiles, PixelRect::new(0, 0, SIDE, SIDE)).with_layer(layer);
+            ctx.ramp = GradientRamp::two([1.0; 3], [1.0; 3]);
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(0.0, 8.0))
+                .unwrap();
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(64.0, 8.0))
+                .unwrap();
+            // An identity blend changes nothing and emits nothing.
+            match ctx.drain().pop() {
+                Some(Command::PaintTiles { delta, .. }) => Some(delta),
+                None => None,
+                other => panic!("expected a paint: {other:?}"),
+            }
+        };
+        if let Some(delta) = delta {
+            tiles.apply_delta(key, &delta);
+        }
+        tiles.pixel(key, 32, 8)
+    }
+
+    #[test]
+    fn the_gradient_composites_through_the_mode_it_is_given() {
+        assert!(crate::composites_strokes(ToolId::Gradient));
+        assert_eq!(white_ramp_over_grey(None), [255, 255, 255, 255]);
+        assert_eq!(
+            white_ramp_over_grey(Some(BlendMode::Normal)),
+            [255, 255, 255, 255]
+        );
+        // Multiply by white is the identity: the grey survives.
+        let multiply = white_ramp_over_grey(Some(BlendMode::Multiply));
+        for c in &multiply[..3] {
+            assert!((i32::from(*c) - 128).abs() <= 1, "Multiply: {multiply:?}");
+        }
+        // Screen with white is white; Difference with white inverts.
+        assert_eq!(white_ramp_over_grey(Some(BlendMode::Screen))[0], 255);
+        let diff = white_ramp_over_grey(Some(BlendMode::Difference));
+        // In linear light: |1 - lin(128)| = 0.784, which encodes as 229.
+        assert!(
+            (i32::from(diff[0]) - 229).abs() <= 1,
+            "Difference with white inverts the grey's light: {diff:?}"
+        );
+        // The Mode's kind is checked like every option's.
+        assert!(matches!(
+            registry::make(ToolId::Gradient)
+                .set_setting(crate::BLEND_MODE_KEY, ToolSetting::Float(1.0)),
+            Err(ToolError::OptionKindMismatch { .. })
+        ));
     }
 }

@@ -32,6 +32,7 @@ use crate::error::ToolError;
 use crate::patch::{ColorPatch, CoveragePatch, TileBox, MAX_PATCH_TILES};
 use crate::tiles::TileAccess;
 use crate::tool::ToolSetting;
+use crate::tool::{CompositeSampler, SampleLayers, SAMPLE_LAYERS_KEY};
 use crate::tool::{PaintTarget, Pattern, PointerEvent, Tool, ToolContext, ToolId};
 
 /// Which tones a dodge/burn/sponge dab acts on.
@@ -675,6 +676,25 @@ struct SmudgeRun {
     sources: BTreeMap<TileCoord, Option<TileHash>>,
     carried: Option<[f32; 4]>,
     applied: usize,
+    /// W9-D: with Sample other than Current Layer, the composite each tile
+    /// the walk reached, smudged along with the layer: the colour is picked
+    /// up from here and the layer is laid toward it.
+    sampled: BTreeMap<TileCoord, ColorPatch>,
+}
+
+/// W9-D: a [`ColorPatch`] over the tiles covering `rect`, holding the shell's
+/// composite of `layers` there rather than any layer's bytes. `key` only
+/// shapes the patch; nothing is ever committed from it.
+fn load_composite(
+    sampler: &dyn CompositeSampler,
+    layers: SampleLayers,
+    key: PixelKey,
+    rect: PixelRect,
+) -> Result<ColorPatch, ToolError> {
+    let mut patch = ColorPatch::load(&crate::tiles::MemoryTiles::new(), key, rect)?;
+    let pixels = sampler.composite(layers, patch.rect())?;
+    patch.replace(pixels)?;
+    Ok(patch)
 }
 
 impl SmudgeRun {
@@ -709,10 +729,32 @@ impl SmudgeRun {
         access: &dyn TileAccess,
         key: PixelKey,
         p: IVec2,
+        sample: Option<(&dyn CompositeSampler, SampleLayers)>,
     ) -> Result<[f32; 4], ToolError> {
         let ts = TILE_SIZE as i32;
         let coord = TileCoord::new(p.x.div_euclid(ts), p.y.div_euclid(ts), 0);
-        Ok(self.plane(access, key, coord)?.get(p))
+        match sample {
+            None => Ok(self.plane(access, key, coord)?.get(p)),
+            Some(sample) => Ok(self.sampled_plane(sample, key, coord)?.get(p)),
+        }
+    }
+
+    /// W9-D: the composite over one tile, composited the first time the walk
+    /// reads it.
+    fn sampled_plane(
+        &mut self,
+        (sampler, layers): (&dyn CompositeSampler, SampleLayers),
+        key: PixelKey,
+        coord: TileCoord,
+    ) -> Result<&mut ColorPatch, ToolError> {
+        Ok(match self.sampled.entry(coord) {
+            std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::btree_map::Entry::Vacant(e) => {
+                let (ox, oy) = coord.pixel_origin();
+                let rect = PixelRect::new(ox, oy, TILE_SIZE, TILE_SIZE);
+                e.insert(load_composite(sampler, layers, key, rect)?)
+            }
+        })
     }
 
     /// Apply the dabs after the last applied one — [`apply_smudge`]'s walk,
@@ -727,6 +769,7 @@ impl SmudgeRun {
         strength: f32,
         opacity: f32,
         selection: &Selection,
+        sample: Option<(&dyn CompositeSampler, SampleLayers)>,
     ) -> Result<BTreeSet<TileCoord>, ToolError> {
         let strength = strength.clamp(0.0, 1.0);
         let opacity = opacity.clamp(0.0, 1.0);
@@ -743,6 +786,7 @@ impl SmudgeRun {
                     access,
                     key,
                     IVec2::new(first.x.round() as i32, first.y.round() as i32),
+                    sample,
                 )?
             }
         };
@@ -759,7 +803,12 @@ impl SmudgeRun {
                     let (tx0, ty0) = (x0.max(ox), y0.max(oy));
                     let tx1 = x1.min(ox + TILE_SIZE as i64);
                     let ty1 = y1.min(oy + TILE_SIZE as i64);
-                    let plane = self.plane(access, key, coord)?;
+                    self.plane(access, key, coord)?;
+                    if let Some(sample) = sample {
+                        self.sampled_plane(sample, key, coord)?;
+                    }
+                    let plane = self.planes.get_mut(&coord).ok_or(ToolError::Degenerate)?;
+                    let mut read = self.sampled.get_mut(&coord);
                     for y in ty0..ty1 {
                         for x in tx0..tx1 {
                             let (x, y) = (x as i32, y as i32);
@@ -773,13 +822,35 @@ impl SmudgeRun {
                                 continue;
                             }
                             let dst = plane.get(p);
+                            let Some(read) = read.as_deref_mut() else {
+                                plane.set(
+                                    p,
+                                    [
+                                        dst[0] + (carried[0] - dst[0]) * a * strength,
+                                        dst[1] + (carried[1] - dst[1]) * a * strength,
+                                        dst[2] + (carried[2] - dst[2]) * a * strength,
+                                        dst[3] + (carried[3] - dst[3]) * a * strength,
+                                    ],
+                                );
+                                continue;
+                            };
+                            // W9-D: smudge the composite, and lay the layer
+                            // toward the smudged composite by the dab.
+                            let r = read.get(p);
+                            let r = [
+                                r[0] + (carried[0] - r[0]) * a * strength,
+                                r[1] + (carried[1] - r[1]) * a * strength,
+                                r[2] + (carried[2] - r[2]) * a * strength,
+                                r[3] + (carried[3] - r[3]) * a * strength,
+                            ];
+                            read.set(p, r);
                             plane.set(
                                 p,
                                 [
-                                    dst[0] + (carried[0] - dst[0]) * a * strength,
-                                    dst[1] + (carried[1] - dst[1]) * a * strength,
-                                    dst[2] + (carried[2] - dst[2]) * a * strength,
-                                    dst[3] + (carried[3] - dst[3]) * a * strength,
+                                    dst[0] + (r[0] - dst[0]) * a,
+                                    dst[1] + (r[1] - dst[1]) * a,
+                                    dst[2] + (r[2] - dst[2]) * a,
+                                    dst[3] + (r[3] - dst[3]) * a,
                                 ],
                             );
                         }
@@ -791,6 +862,7 @@ impl SmudgeRun {
                 access,
                 key,
                 IVec2::new(d.center.x.round() as i32, d.center.y.round() as i32),
+                sample,
             )?;
             let pickup = strength;
             carried = [
@@ -1322,6 +1394,7 @@ pub(crate) mod refine_tests {
                 angle: 0.0,
                 roundness: 1.0,
                 aliased: false,
+                tip: crate::brush::BrushTip::Round,
             })
             .collect();
         let buf = StrokeBuffer::rasterize(&dabs, rect).unwrap();
@@ -1374,6 +1447,7 @@ pub(crate) mod refine_tests {
                 angle: 0.0,
                 roundness: 1.0,
                 aliased: false,
+                tip: crate::brush::BrushTip::Round,
             })
             .collect();
         let buf2 = StrokeBuffer::rasterize(&dabs2, rect2).unwrap();
@@ -1410,6 +1484,7 @@ pub(crate) mod refine_tests {
                 angle: 0.0,
                 roundness: 1.0,
                 aliased: false,
+                tip: crate::brush::BrushTip::Round,
             })
             .collect();
         let buf2 = StrokeBuffer::rasterize(&dabs2, rect).unwrap();
@@ -1654,6 +1729,13 @@ pub struct StrokeTool {
     /// W8-D: the Content-Aware release handed over rather than synthesised
     /// here, waiting for [`Tool::take_deferred_commit`].
     deferred: Option<DeferredStroke>,
+    /// W9-D: the Sample choice ([`SAMPLE_LAYERS_KEY`]) of the Clone Stamp,
+    /// the healing brushes, Blur, Sharpen and Smudge: where the stroke reads
+    /// its source pixels. It always writes the active layer.
+    pub sample_layers: SampleLayers,
+    /// W9-D: the shell's composite, taken at the press of a stroke whose
+    /// Sample is not Current Layer and kept until its release.
+    sampler: Option<std::sync::Arc<dyn CompositeSampler>>,
 }
 
 /// W7-I: the Spot Healing Brush's Type option key (a Choice: 0 Proximity
@@ -1910,6 +1992,54 @@ impl StrokeTool {
             smudge: None,
             spot_content_aware: false,
             deferred: None,
+            sample_layers: SampleLayers::Current,
+            sampler: None,
+        }
+    }
+
+    /// W9-D: `true` when this stroke reads the shell's composite rather than
+    /// the layer it paints.
+    fn samples_composite(&self) -> bool {
+        self.sample_layers != SampleLayers::Current
+    }
+
+    /// W9-D: the sampler and scope a sampled smudge walk reads, `None` for
+    /// Sample = Current Layer; refused when the press was lent no sampler.
+    fn smudge_sample(&self) -> Result<Option<(&dyn CompositeSampler, SampleLayers)>, ToolError> {
+        if !self.samples_composite() {
+            return Ok(None);
+        }
+        let sampler = self.sampler.as_deref().ok_or(ToolError::Degenerate)?;
+        Ok(Some((sampler, self.sample_layers)))
+    }
+
+    /// W9-D: the pixels a stroke READS over `rect`: the layer at `key` for
+    /// Sample = Current Layer, the shell's composite otherwise (only the
+    /// tiles covering `rect` are composited). The writes always go to `key`.
+    fn load_read(
+        &self,
+        access: &dyn TileAccess,
+        key: PixelKey,
+        rect: PixelRect,
+    ) -> Result<ColorPatch, ToolError> {
+        match self.smudge_sample()? {
+            None => ColorPatch::load(access, key, rect),
+            Some((sampler, layers)) => load_composite(sampler, layers, key, rect),
+        }
+    }
+
+    /// W9-D: the source a clone/heal reads at `rect` (already offset): the
+    /// composite when sampling it, else the clone source layer (or `key`).
+    fn load_source(
+        &self,
+        access: &dyn TileAccess,
+        key: PixelKey,
+        rect: PixelRect,
+    ) -> Result<ColorPatch, ToolError> {
+        if self.samples_composite() {
+            self.load_read(access, key, rect)
+        } else {
+            ColorPatch::load(access, self.clone.key.unwrap_or(key), rect)
         }
     }
 
@@ -1935,7 +2065,23 @@ impl StrokeTool {
         let context = intersect(grow(rect, margin), clip).unwrap_or(rect);
         let buf = StrokeBuffer::rasterize(dabs, rect)?;
         let mut patch = ColorPatch::load(access, key, context)?;
-        apply_content_aware_spot(&mut patch, &buf, context, self.settings.opacity, selection)?;
+        if self.samples_composite() {
+            // W9-D: synthesise from the composite, lay into the layer.
+            let read = self.load_read(access, key, context)?;
+            if let Some(synthesis) = SpotSynthesis::gather(&read, &buf, context)? {
+                let target = synthesis.run()?;
+                lay_in_content_aware_spot(
+                    &mut patch,
+                    &buf,
+                    context,
+                    self.settings.opacity,
+                    selection,
+                    &target,
+                )?;
+            }
+        } else {
+            apply_content_aware_spot(&mut patch, &buf, context, self.settings.opacity, selection)?;
+        }
         patch.commit(access, key)
     }
 
@@ -2017,7 +2163,9 @@ impl StrokeTool {
             (ctx.paint_target, &self.op, self.spot_content_aware)
         {
             // W7-I: the Content-Aware type synthesises on release.
-            if ctx.defer_heavy_commits {
+            // W9-D: a heal sampling the composite runs here, because the
+            // deferred finish's staleness check re-reads the LAYER's pixels.
+            if ctx.defer_heavy_commits && !self.samples_composite() {
                 // W8-D: ... or, when the shell runs heavy finishes on a
                 // worker, hands the snapshot over and emits nothing here.
                 self.deferred = self.defer_content_aware_spot(
@@ -2051,6 +2199,7 @@ impl StrokeTool {
                 *strength,
                 self.settings.opacity,
                 &ctx.selection,
+                self.smudge_sample()?,
             )?;
             let coords: Vec<TileCoord> = run.planes.keys().copied().collect();
             run.encode(&mut *ctx.tiles, key, coords)?
@@ -2155,14 +2304,13 @@ impl StrokeTool {
                     );
                 } else {
                     let source = if self.op.needs_source() {
-                        let src_key = self.clone.key.unwrap_or(key);
                         let src_rect = PixelRect::new(
                             rect.x + self.offset.x as i64,
                             rect.y + self.offset.y as i64,
                             rect.width,
                             rect.height,
                         );
-                        Some(ColorPatch::load(access, src_key, src_rect)?)
+                        Some(self.load_source(access, key, src_rect)?)
                     } else {
                         None
                     };
@@ -2280,14 +2428,22 @@ impl StrokeTool {
             PaintTarget::Layer => {
                 let mut patch = ColorPatch::load(access, key, need)?;
                 let source = if self.op.needs_source() {
-                    let src_key = self.clone.key.unwrap_or(key);
                     let src_rect = PixelRect::new(
                         need.x + self.offset.x as i64,
                         need.y + self.offset.y as i64,
                         need.width,
                         need.height,
                     );
-                    Some(ColorPatch::load(access, src_key, src_rect)?)
+                    Some(self.load_source(access, key, src_rect)?)
+                } else {
+                    None
+                };
+                // W9-D: the neighbourhood the op reads (what a blur blurs,
+                // what a heal takes its low frequencies from) is the
+                // composite over the same tiles when sampling it; the writes
+                // below still mix the LAYER's pixels toward the answer.
+                let read = if self.samples_composite() {
+                    Some(self.load_read(access, key, need)?)
                 } else {
                     None
                 };
@@ -2301,7 +2457,7 @@ impl StrokeTool {
                 for (_, w) in &windows {
                     let aux = local_aux(
                         &self.op,
-                        patch.buffer(),
+                        read.as_ref().unwrap_or(&patch).buffer(),
                         patch.origin(),
                         &buf,
                         &sources,
@@ -2456,6 +2612,11 @@ impl StrokeTool {
             {
                 self.smudge = None;
             }
+            let sample = match (self.sampler.as_deref(), self.sample_layers) {
+                (_, SampleLayers::Current) => None,
+                (Some(sampler), layers) => Some((sampler, layers)),
+                (None, _) => return Err(ToolError::Degenerate),
+            };
             let run = self.smudge.get_or_insert_with(SmudgeRun::default);
             let touched = run.advance(
                 side.base,
@@ -2465,6 +2626,7 @@ impl StrokeTool {
                 *strength,
                 self.settings.opacity,
                 env.selection,
+                sample,
             )?;
             let delta = run.encode(&mut side, key, touched.iter().copied())?;
             for coord in touched {
@@ -2631,7 +2793,12 @@ impl Tool for StrokeTool {
             self.offset = self.clone.begin_stroke(pos).ok_or(ToolError::Degenerate)?;
         }
         if self.use_foreground {
-            let fg = ctx.foreground;
+            // W9-E: Color Dynamics jitter the stroke's colour once, seeded
+            // by the brush and the stroke's first point (replayable).
+            let fg = self
+                .settings
+                .dynamics
+                .stroke_color(ctx.foreground, ctx.background, pos);
             match &mut self.op {
                 StrokeOp::Paint { color } | StrokeOp::ColorReplacement { color, .. } => *color = fg,
                 _ => {}
@@ -2643,6 +2810,13 @@ impl Tool for StrokeTool {
             }
             _ => {}
         }
+        // W9-D: a stroke sampling the composite holds the shell's sampler
+        // from its press to its release; refused when none was lent.
+        self.sampler = if self.samples_composite() {
+            Some(ctx.composite_sampler.clone().ok_or(ToolError::Degenerate)?)
+        } else {
+            None
+        };
         self.emitter = Some(DabEmitter::begin(self.settings, pos, event.pressure)?);
         self.previewed = 0;
         self.smudge = None;
@@ -2671,10 +2845,13 @@ impl Tool for StrokeTool {
             let to_layer = ctx.sample_to_layer.unwrap_or(glam::Affine2::IDENTITY);
             e.finish(to_layer.transform_point2(event.pos), event.pressure)?;
         }
-        self.commit(ctx)
+        let committed = self.commit(ctx);
+        self.sampler = None;
+        committed
     }
 
     fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {
+        self.sampler = None;
         self.emitter = None;
         self.previewed = 0;
         self.smudge = None;
@@ -2872,6 +3049,21 @@ impl Tool for StrokeTool {
                 self.spot_content_aware = index >= 1;
                 Ok(())
             }
+            // W9-D: the retouching tools' Sample: 0 Current Layer, 1 Current
+            // & Below, 2 All Layers (an index past the end clamps).
+            (
+                SAMPLE_LAYERS_KEY,
+                ToolSetting::Choice(index),
+                StrokeOp::CloneStamp
+                | StrokeOp::Healing { .. }
+                | StrokeOp::SpotHealing
+                | StrokeOp::Blur { .. }
+                | StrokeOp::Sharpen { .. }
+                | StrokeOp::Smudge { .. },
+            ) => {
+                self.sample_layers = SampleLayers::from_choice(index);
+                Ok(())
+            }
             // ----- a known key with the wrong kind of value ---------------
             ("strength", _, StrokeOp::RefineBoundary { .. } | StrokeOp::Smudge { .. })
             | ("radius", _, StrokeOp::Blur { .. })
@@ -2885,7 +3077,17 @@ impl Tool for StrokeTool {
             | ("exposure" | "range", _, StrokeOp::Dodge { .. } | StrokeOp::Burn { .. })
             | ("mode", _, StrokeOp::Sponge { .. })
             | ("aligned", _, StrokeOp::CloneStamp | StrokeOp::Healing { .. })
-            | (SPOT_HEAL_TYPE_KEY, _, StrokeOp::SpotHealing) => mismatch(),
+            | (SPOT_HEAL_TYPE_KEY, _, StrokeOp::SpotHealing)
+            | (
+                SAMPLE_LAYERS_KEY,
+                _,
+                StrokeOp::CloneStamp
+                | StrokeOp::Healing { .. }
+                | StrokeOp::SpotHealing
+                | StrokeOp::Blur { .. }
+                | StrokeOp::Sharpen { .. }
+                | StrokeOp::Smudge { .. },
+            ) => mismatch(),
             _ => unknown(),
         }
     }
@@ -2905,6 +3107,7 @@ mod tests {
             roundness: 1.0,
             flow,
             aliased: false,
+            tip: crate::brush::BrushTip::Round,
         }
     }
 

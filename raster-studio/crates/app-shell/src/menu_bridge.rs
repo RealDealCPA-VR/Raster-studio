@@ -65,6 +65,10 @@ mod color_mode;
 // W7-I: Content-Aware Fill and Content-Aware Scale, run on a worker.
 pub(crate) mod content_aware_job;
 
+// W9-H: Photoshop style libraries (.asl) into the style presets, and the
+// style presets as the Layer Style dialog's Styles grid lists them.
+pub mod asl_import;
+
 /// Shown on an item the shared menu model allows but this build cannot perform.
 ///
 /// Kept as the *fallback* only. Every item this build genuinely cannot do now
@@ -242,6 +246,18 @@ pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
         .iter()
         .any(|d| d.history.can_undo() || d.history.can_redo());
     context.theme = editor.preferences().theme.resolve(design::Theme::Dark);
+    // W9-G: Layer ▸ Vector Mask ▸ Current Path reads the Paths panel, which
+    // is the workspace's; `perform` only holds the editor, so the path the
+    // menu was enabled for is parked here, frame by frame.
+    let current = editor.active().and_then(|open| {
+        workspace
+            .paths
+            .selected_path(&open.document)
+            .or_else(|| workspace.paths.work_path.clone())
+            .map(|p| compositor::vector_mask::svg_of(&p))
+    });
+    context.has_current_path = current.is_some();
+    set_current_vector_path(current);
     // The multi-selection lives on the DOCUMENT (`Editor::set_layer_selection`
     // puts it there); the workspace's Layers panel echoes it a frame later.
     // Layer ▸ Distribute needs the count the document holds, not the echo.
@@ -1402,6 +1418,11 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         | MenuAction::Rasterize(ui::menu::RasterizeTarget::LayerStyle)
         | MenuAction::Rasterize(ui::menu::RasterizeTarget::Layer)
         | MenuAction::Rasterize(ui::menu::RasterizeTarget::SmartObject) => editor.rasterize_layer(),
+        // W9-F: Layer > Combine Shapes.
+        MenuAction::CombineShapes(op) => combine_shapes(editor, op),
+        // W9-K: Layer > Text.
+        MenuAction::WarpText(item) => warp_text(editor, item),
+        MenuAction::ConvertTextToShape => convert_text_to_shape(editor),
         MenuAction::DefinePattern => editor.define_pattern_from_selection(),
         MenuAction::CopyLayerStyle => editor.copy_layer_style(),
         MenuAction::PasteLayerStyle => editor.paste_layer_style(),
@@ -1591,6 +1612,11 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         // changes themselves ride history since card 056.
         MenuAction::SaveSelection => save_selection(editor),
         MenuAction::LoadSelection => load_selection(editor),
+        // W9-A: Photopea's Select Pixels (a Ctrl+click on a layer or mask
+        // thumbnail, or the layer-row menu) — one undoable SetSelection.
+        MenuAction::SelectLayerPixels { layer, mask, op } => {
+            select_layer_pixels(editor, layer, mask, op)
+        }
         MenuAction::Reselect => reselect(editor),
         MenuAction::ToggleQuickMask => editor.toggle_quick_mask(),
         // W7-D: all five modes convert, each as one undo step
@@ -1642,6 +1668,12 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
             Some(spec) => puppet_warp_with(editor, &spec),
             None => Err(dialog_refused(action, editor)),
         },
+        // W9-O: Filter > Blur Gallery > <kind>... confirmed; the blur is the
+        // dialog's (parked by `DialogHost::ui`).
+        MenuAction::BlurGallery(kind) => match crate::dialog_host::take_confirmed_blur_gallery() {
+            Some(spec) if spec.kind() == kind => blur_gallery_with(editor, &spec),
+            _ => Err(dialog_refused(action, editor)),
+        },
 
         // ---- Layer ---------------------------------------------------------
         MenuAction::LayerViaCopy => layer_via(editor, false),
@@ -1675,6 +1707,8 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         // Card 058: inverting coverage is a one-channel pixel edit on the
         // mask's tile map — undoable, layer pixels untouched.
         MenuAction::Mask(MaskOp::Invert) => invert_mask(editor),
+        // W9-G: Layer ▸ Vector Mask — one undoable mask patch each.
+        MenuAction::VectorMask(op) => vector_mask_op(editor, op),
         // ---- Rows a dialog answers ---------------------------------------
         // Image Size, Canvas Size, Arbitrary rotation, Layer Style, the
         // Filter Gallery, Refine Mask and Remove Color Fringe are questions,
@@ -1830,7 +1864,7 @@ fn dialog_refused(action: MenuAction, editor: &Editor) -> String {
                 Err(reason) => reason,
             }
         }
-        MenuAction::FilterGallery => {
+        MenuAction::FilterGallery | MenuAction::BlurGallery(_) => {
             return match pixel_layer(editor) {
                 Ok(_) => format!("{}: its dialog could not open", action.label()),
                 Err(reason) => reason,
@@ -2005,6 +2039,34 @@ pub(crate) fn liquify_with(
         Ok(())
     })?;
     Ok("Liquify applied".to_string())
+}
+
+/// W9-O: apply a Blur Gallery dialog's confirmed blur to the active layer at
+/// full resolution, folded by the selection, as one undoable step.
+pub(crate) fn blur_gallery_with(
+    editor: &mut Editor,
+    spec: &ui::dialogs::BlurGallerySpec,
+) -> Result<String, String> {
+    let name = action_name(MenuAction::BlurGallery(spec.kind()));
+    let size = canvas_of(editor)?;
+    if spec.image_size != size {
+        return Err(format!(
+            "The document changed size since {name} opened; open it again"
+        ));
+    }
+    if spec.is_identity() {
+        return Err(format!("{name} would change nothing: raise its blur first"));
+    }
+    edit_active_pixels(editor, &name, |buffer, _| {
+        *buffer = spec.apply(buffer);
+        Ok(())
+    })?;
+    Ok(format!("{name} applied"))
+}
+
+/// A menu row's label without its trailing ellipsis.
+fn action_name(action: MenuAction) -> String {
+    action.label().trim_end_matches('…').to_string()
 }
 
 /// W7-H: apply the Puppet Warp dialog's confirmed deformation to the active
@@ -3203,6 +3265,207 @@ fn load_selection(editor: &mut Editor) -> Result<String, String> {
     })
 }
 
+/// W9-A: Photopea's "Select Pixels" — a Ctrl+click on a layer thumbnail (or
+/// the layer-row menu) makes a selection from that layer's transparency; on a
+/// mask thumbnail, from the mask's coverage. `op` combines it with the live
+/// selection through the selection crate's boolean ops (Add with nothing live
+/// is a plain New, as in Photopea). Lands as one undoable
+/// `Command::SetSelection`. `layer: None` means the active layer.
+///
+/// The layer's alpha is the REAL compositor's answer over a staged copy of
+/// the document in which everything but the layer, its descendants and its
+/// ancestors is hidden, and the layer and its ancestors are neutralised
+/// (full opacity, no mask, no effects, no clipping) — so a text, shape,
+/// smart-object or transformed layer selects exactly the ink it draws, in
+/// document space, and a layer's opacity or mask does not thin the result
+/// (Photoshop loads the layer's transparency, not its contribution).
+fn select_layer_pixels(
+    editor: &mut Editor,
+    layer: Option<LayerId>,
+    mask: bool,
+    op: ui::dialogs::LoadOperation,
+) -> Result<String, String> {
+    use ui::dialogs::LoadOperation as Op;
+    let (w, h) = canvas_of(editor)?;
+    let canvas = canvas_rect(w, h);
+    let doc = editor.active().ok_or("No document is open")?;
+    let id = match layer {
+        Some(id) => id,
+        None => doc.document.active_layer().ok_or("Select a layer first")?,
+    };
+    let target = doc
+        .document
+        .layers
+        .get(id)
+        .ok_or("That layer is no longer in the document")?;
+    let name = target.name.clone();
+    let incoming = if mask {
+        let m = target
+            .mask
+            .as_ref()
+            .ok_or_else(|| format!("\"{name}\" has no mask"))?;
+        layer_mask_selection(doc, id, m, canvas)?
+    } else {
+        layer_alpha_selection(doc, id)?
+    };
+    let live = doc.document.selection.clone();
+    let has_live = live.bounds().is_some();
+    let replace = op == Op::New || (op == Op::Add && !has_live);
+    let next = if replace {
+        if incoming.bounds().is_none() {
+            return Err(format!(
+                "No pixels are selected: the {} of \"{name}\" is empty",
+                if mask { "mask" } else { "layer" }
+            ));
+        }
+        incoming
+    } else if !has_live {
+        return Err("There is no selection to combine with".to_string());
+    } else {
+        let boolean = match op {
+            Op::Subtract => selection::BooleanOp::Subtract,
+            Op::Intersect => selection::BooleanOp::Intersect,
+            _ => selection::BooleanOp::Add,
+        };
+        let combined = selection::combine_selection(canvas, &live, &incoming, boolean)
+            .map_err(|e| e.to_string())?;
+        // Nothing left selected is "no selection", as Deselect leaves it —
+        // an empty mask would read as a selection that covers nothing.
+        if combined.bounds().is_none() {
+            editor_core::Selection::None
+        } else {
+            combined
+        }
+    };
+    if next == live {
+        return Err("The selection is already that".to_string());
+    }
+    editor.apply_command(Command::SetSelection { selection: next });
+    let what = if mask {
+        format!("the mask of \"{name}\"")
+    } else {
+        format!("\"{name}\"")
+    };
+    Ok(match op {
+        Op::New => format!("Selected the pixels of {what}"),
+        Op::Add => format!("Added the pixels of {what} to the selection"),
+        Op::Subtract => format!("Subtracted the pixels of {what} from the selection"),
+        Op::Intersect => format!("Intersected the selection with the pixels of {what}"),
+    })
+}
+
+/// W9-A: `layer`'s transparency as a document-space selection — see
+/// [`select_layer_pixels`] for why the staged copy is shaped as it is.
+fn layer_alpha_selection(
+    doc: &crate::doc::OpenDocument,
+    layer: LayerId,
+) -> Result<editor_core::Selection, String> {
+    let mut staged = doc.document.clone();
+    let mut ancestors = Vec::new();
+    let mut parent = staged.layers.parent_of(layer);
+    while let Some(p) = parent {
+        ancestors.push(p);
+        parent = staged.layers.parent_of(p);
+    }
+    let within = |tree: &layer_model::LayerTree, mut at: LayerId| loop {
+        if at == layer {
+            return true;
+        }
+        match tree.parent_of(at) {
+            Some(p) => at = p,
+            None => return false,
+        }
+    };
+    let hidden: Vec<LayerId> = staged
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .filter(|&other| !within(&staged.layers, other) && !ancestors.contains(&other))
+        .collect();
+    for other in hidden {
+        if let Some(l) = staged.layers.get_mut(other) {
+            l.visible = false;
+        }
+    }
+    for id in std::iter::once(layer).chain(ancestors.iter().copied()) {
+        if let Some(l) = staged.layers.get_mut(id) {
+            l.visible = true;
+            l.opacity = 1.0;
+            l.fill_opacity = 1.0;
+            l.blend_mode = layer_model::BlendMode::Normal;
+            l.mask = None;
+            l.effects = layer_model::LayerEffects::default();
+            l.clipping = layer_model::ClippingMode::None;
+        }
+    }
+    let rect = doc.canvas_rect();
+    let composite = compositor::composite_region(
+        &staged,
+        &doc.tiles,
+        rect,
+        0,
+        compositor::CompositeOptions::default(),
+    )
+    .map_err(|e| e.to_string())?;
+    let alpha: Vec<u8> = composite
+        .pixels()
+        .iter()
+        .map(|px| (px[3].clamp(0.0, 1.0) * 255.0).round() as u8)
+        .collect();
+    let mask = selection::channel_to_selection(glam::IVec2::ZERO, rect.width, rect.height, &alpha)
+        .map_err(|e| e.to_string())?;
+    Ok(editor_core::Selection::Mask(mask))
+}
+
+/// W9-A: a layer mask's coverage as a document-space selection: the stored
+/// tiles reassembled (`selection::mask_tiles_to_selection`), carried through
+/// the mask's document pose (the layer's full placement composed with the
+/// mask's own transform — the compositor's pose), clipped to the canvas, and
+/// inverted over the canvas when the mask is.
+fn layer_mask_selection(
+    doc: &crate::doc::OpenDocument,
+    layer: LayerId,
+    mask: &layer_model::LayerMask,
+    canvas: selection::Rect,
+) -> Result<editor_core::Selection, String> {
+    use compositor::TileSource;
+    let tiles: Vec<selection::MaskTile> = doc
+        .document
+        .pixels
+        .tiles(editor_core::PixelKey::Mask(mask.id))
+        .map(|map| {
+            map.iter()
+                .filter(|(coord, _)| coord.level == 0)
+                .filter_map(|(coord, hash)| {
+                    doc.tiles.tile(hash).map(|bytes| selection::MaskTile {
+                        coord,
+                        coverage: bytes.to_vec(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let raw = selection::mask_tiles_to_selection(&tiles).map_err(|e| e.to_string())?;
+    let pose = crate::interaction_geometry::document_transform_of(&doc.document, layer, 0)
+        .map_err(|e| format!("{e:?}"))?
+        * *mask.transform;
+    let placed = if pose == glam::Affine2::IDENTITY {
+        raw
+    } else {
+        selection::transform(&raw, pose, selection::ResampleFilter::Bilinear)
+            .map_err(|e| e.to_string())?
+    };
+    let clip = selection::rectangle(canvas).map_err(|e| e.to_string())?;
+    let placed = selection::combine(&placed, &clip, selection::BooleanOp::Intersect)
+        .map_err(|e| e.to_string())?;
+    let selection = editor_core::Selection::Mask(placed);
+    if mask.inverted {
+        selection::invert_selection(&selection, canvas).map_err(|e| e.to_string())
+    } else {
+        Ok(selection)
+    }
+}
+
 /// Select ▸ Reselect: bring back the most recently saved selection and clear
 /// the store (the “Ctrl+Shift+D” shortcut).
 fn reselect(editor: &mut Editor) -> Result<String, String> {
@@ -3714,6 +3977,193 @@ fn ungroup_layers(editor: &mut Editor) -> Result<String, String> {
     Ok("Ungrouped".to_string())
 }
 
+/// W9-K: the active layer, when it is an unlocked text layer: its id and a
+/// copy of its payload.
+fn active_text_layer(editor: &Editor) -> Result<(LayerId, layer_model::TextLayer), String> {
+    let doc = editor.active().ok_or("No document is open")?;
+    let id = doc.document.active_layer().ok_or("Select a layer first")?;
+    let layer = doc
+        .document
+        .layers
+        .get(id)
+        .ok_or("The active layer is not in the document")?;
+    if layer.locked.all {
+        return Err("The layer is locked".to_string());
+    }
+    match &layer.kind {
+        layer_model::LayerKind::Text(text) => Ok((id, text.clone())),
+        _ => Err("The active layer is not a text layer".to_string()),
+    }
+}
+
+/// W9-K: Layer > Text > Warp Style > <row>: the active text layer's live
+/// warp takes the row's style (None clears it), as one undoable
+/// [`Command::SetLayerKind`]. The text stays editable; the compositor bends
+/// its glyph outlines on every render. Warp Text... is a question the dialog
+/// host asks (`DialogHost::open_for_menu_action`); a click reaches here only
+/// when there was no unlocked text layer to open it over, so the answer is
+/// that reason.
+fn warp_text(editor: &mut Editor, item: ui::menu::WarpTextItem) -> Result<String, String> {
+    let (id, mut text) = active_text_layer(editor)?;
+    if item == ui::menu::WarpTextItem::Dialog {
+        return Err("Warp Text needs the dialog; open it from Layer > Text".to_string());
+    }
+    let before = text.warp;
+    text.warp = item.apply(before);
+    if text.warp == before {
+        return Ok(format!("Warp Text: {} (no change)", item.label()));
+    }
+    editor.apply_command(Command::SetLayerKind {
+        layer_id: id,
+        kind: Box::new(layer_model::LayerKind::Text(text)),
+    });
+    Ok(format!("Warp Text: {}", item.label()))
+}
+
+/// W9-K: Layer > Text > Convert to Shape: the active text layer's glyph
+/// outlines (through its warp or path) become a shape layer filled with the
+/// text's colour, in the text layer's place - same parent, index, name,
+/// transform, opacity, blending and effects - as one undoable transaction.
+fn convert_text_to_shape(editor: &mut Editor) -> Result<String, String> {
+    let (id, text) = active_text_layer(editor)?;
+    let run = text_engine::TextRun::from(&text);
+    let svg = text_engine::with_shared_library(|library| {
+        let shaped = text_engine::shape(library, &run);
+        text_engine::outline_svg(library, &shaped)
+    });
+    if svg.is_empty() {
+        return Err("The text has no glyph outlines to convert".to_string());
+    }
+    let command = {
+        let doc = editor.active().ok_or("No document is open")?;
+        let source = doc
+            .document
+            .layers
+            .get(id)
+            .ok_or("The active layer is not in the document")?;
+        let space = &doc.document.meta.color_space;
+        let fill = text.style.fill;
+        let encoded = color::from_linear(space, [fill[0], fill[1], fill[2]]);
+        let mut shape = layer_model::Layer::with_kind(
+            source.name.clone(),
+            layer_model::LayerKind::Shape(layer_model::ShapeLayer {
+                path_svg: svg,
+                fill: Some([encoded[0], encoded[1], encoded[2], fill[3]]),
+                ..layer_model::ShapeLayer::default()
+            }),
+        );
+        shape.transform = source.transform;
+        shape.opacity = source.opacity;
+        shape.fill_opacity = source.fill_opacity;
+        shape.blend_mode = source.blend_mode;
+        shape.visible = source.visible;
+        shape.effects = source.effects.clone();
+        let new_id = shape.id;
+        let parent = doc.document.layers.parent_of(id);
+        let index = doc.document.layers.index_in_parent(id).unwrap_or(0);
+        Command::Transaction {
+            label: "Convert to Shape".to_string(),
+            commands: vec![
+                Command::create_layer(shape),
+                Command::MoveLayer {
+                    layer_id: new_id,
+                    parent,
+                    index,
+                },
+                Command::DeleteLayer { layer_id: id },
+            ],
+        }
+    };
+    editor.apply_command(command);
+    Ok("Converted the text to a shape".to_string())
+}
+
+/// W9-F: Layer > Combine Shapes > Unite / Subtract Front / Intersect /
+/// Exclude. The selected shape layers' paths are taken into document space
+/// through each layer's own transform chain, folded bottom to top with the
+/// vector boolean op (`tools::path_select::combine_shape_layers`), and
+/// written back into the bottom-most layer (in its own space, keeping its
+/// paint); the others are deleted. One transaction, so one Ctrl+Z restores
+/// every layer.
+fn combine_shapes(editor: &mut Editor, op: ui::menu::ShapeCombine) -> Result<String, String> {
+    use ui::menu::ShapeCombine as Sc;
+    let (command, base, count) = {
+        let doc = editor.active().ok_or("No document is open")?;
+        let mut picked = doc.document.layer_selection();
+        if let Some(active) = doc.document.active_layer() {
+            if !picked.contains(&active) {
+                picked.push(active);
+            }
+        }
+        // Depth-first is top-most first; the fold runs bottom first.
+        let bottom_up: Vec<LayerId> = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .rev()
+            .filter(|id| picked.contains(id))
+            .collect();
+        if bottom_up.len() < 2 {
+            return Err("Select two or more shape layers to combine".to_string());
+        }
+        let mut stack = Vec::with_capacity(bottom_up.len());
+        for id in &bottom_up {
+            let layer = doc
+                .document
+                .layers
+                .get(*id)
+                .ok_or("A selected layer is not in the document")?;
+            let layer_model::LayerKind::Shape(shape) = &layer.kind else {
+                return Err(format!("\"{}\" is not a shape layer", layer.name));
+            };
+            if layer.locked.all {
+                return Err(format!("\"{}\" is locked", layer.name));
+            }
+            let to_doc = crate::interaction_geometry::document_transform_of(&doc.document, *id, 0)
+                .map_err(|_| format!("\"{}\" cannot be placed in the document", layer.name))?;
+            stack.push((shape, to_doc));
+        }
+        let combine = match op {
+            Sc::Unite => tools::path_select::PathCombine::Unite,
+            Sc::SubtractFront => tools::path_select::PathCombine::Subtract,
+            Sc::Intersect => tools::path_select::PathCombine::Intersect,
+            Sc::Exclude => tools::path_select::PathCombine::Exclude,
+        };
+        let svg = tools::path_select::combine_shape_layers(&stack, combine).map_err(|e| {
+            format!(
+                "{}: nothing of the shapes could be combined ({e})",
+                op.label()
+            )
+        })?;
+        let mut shape = stack[0].0.clone();
+        shape.path_svg = svg;
+        // A boolean result is a non-zero region whatever the inputs used.
+        shape.fill_rule = layer_model::ShapeFillRule::NonZero;
+        let base = bottom_up[0];
+        let mut commands = vec![Command::SetLayerKind {
+            layer_id: base,
+            kind: Box::new(layer_model::LayerKind::Shape(shape)),
+        }];
+        commands.extend(
+            bottom_up[1..]
+                .iter()
+                .map(|id| Command::DeleteLayer { layer_id: *id }),
+        );
+        (
+            Command::Transaction {
+                label: op.label().to_string(),
+                commands,
+            },
+            base,
+            bottom_up.len(),
+        )
+    };
+    editor.apply_command(command);
+    editor.set_layer_selection(vec![base], Some(base));
+    Ok(format!("{}: {count} shape layers combined", op.label()))
+}
+
 enum MergeScope {
     /// The active layer and the one directly beneath it.
     Down,
@@ -3843,6 +4293,135 @@ fn merge(editor: &mut Editor, scope: MergeScope) -> Result<String, String> {
     };
     editor.apply_command(command);
     Ok(format!("{label} applied"))
+}
+
+thread_local! {
+    /// W9-G: the current path (SVG path data, document pixels) as of the
+    /// last [`context`] — see the note there.
+    static CURRENT_VECTOR_PATH: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// W9-G: `true` when `mask` is only a vector mask — vector kind, a path, and
+/// no pixel coverage stored under its id (the compositor then skips its
+/// pixel half; see `compositor::composite::Ctx::active_mask`).
+pub(crate) fn is_vector_only(doc: &editor_core::Document, mask: &layer_model::LayerMask) -> bool {
+    mask.kind == layer_model::MaskKind::Vector
+        && mask.vector.is_some()
+        && doc
+            .pixels
+            .tiles(editor_core::PixelKey::Mask(mask.id))
+            .is_none_or(|t| t.is_empty())
+}
+
+/// W9-G: park the path Layer ▸ Vector Mask ▸ Current Path will use.
+pub(crate) fn set_current_vector_path(path: Option<String>) {
+    CURRENT_VECTOR_PATH.with(|c| *c.borrow_mut() = path);
+}
+
+/// W9-K: the Paths panel's current path (selected, else the Work Path) the
+/// last menu context parked, in document space - what a Type click may flow
+/// text along. The pointer route never sees the workspace, so it reads this.
+pub(crate) fn current_vector_path() -> Option<String> {
+    CURRENT_VECTOR_PATH.with(|c| c.borrow().clone())
+}
+
+/// W9-G: Layer ▸ Vector Mask ▸ Reveal All / Hide All / Current Path /
+/// Delete / Disable-Enable. Each is one `SetLayerProperties` mask patch, so
+/// each is one undo step.
+///
+/// A vector mask lives on [`layer_model::LayerMask::vector`]: added beside an
+/// existing pixel mask, or as a vector-only mask
+/// ([`layer_model::LayerMask::vector_only`]) on a layer without one. Current
+/// Path maps the document-space path into the mask's layer space, so it
+/// lands where it was drawn whatever the layer's transform.
+fn vector_mask_op(editor: &mut Editor, op: ui::menu::VectorMaskOp) -> Result<String, String> {
+    use layer_model::{LayerMask, MaskId, VectorMask};
+    use ui::menu::VectorMaskOp as V;
+    let (command, message) = {
+        let doc = editor.active().ok_or("No document is open")?;
+        let id = doc.document.active_layer().ok_or("Select a layer first")?;
+        let layer = doc
+            .document
+            .layers
+            .get(id)
+            .ok_or("The active layer is not in the document")?;
+        let existing = layer.mask.clone();
+        let has_vector = existing.as_ref().is_some_and(|m| m.vector.is_some());
+        let with_vector = |v: VectorMask| match existing.clone() {
+            Some(mut m) => {
+                m.vector = Some(Box::new(v));
+                m
+            }
+            None => LayerMask::vector_only(MaskId::new(), v),
+        };
+        let (patch, message) = match op {
+            V::RevealAll | V::HideAll | V::CurrentPath if has_vector => {
+                return Err("The layer already has a vector mask".into())
+            }
+            V::RevealAll => (
+                editor_core::Patch::Set(with_vector(VectorMask::reveal_all())),
+                "Vector mask added (reveal all)",
+            ),
+            V::HideAll => (
+                editor_core::Patch::Set(with_vector(VectorMask::hide_all())),
+                "Vector mask added (hide all)",
+            ),
+            V::CurrentPath => {
+                let path = CURRENT_VECTOR_PATH
+                    .with(|c| c.borrow().clone())
+                    .ok_or("There is no path; draw one or select it in the Paths panel")?;
+                // Document pixels → the mask's layer space.
+                let mask_pose = existing
+                    .as_ref()
+                    .map_or(glam::Affine2::IDENTITY, |m| *m.transform);
+                let to_layer = (layer.transform * mask_pose).inverse();
+                let local = compositor::vector_mask::svg_transformed(&path, to_layer)
+                    .ok_or("The layer's transform cannot be inverted")?;
+                (
+                    editor_core::Patch::Set(with_vector(VectorMask::new(local))),
+                    "Vector mask added from the current path",
+                )
+            }
+            V::Delete | V::Toggle if !has_vector => {
+                return Err("The layer has no vector mask".into())
+            }
+            V::Delete => {
+                let mut m = existing.clone().expect("has_vector implies a mask");
+                // A vector-only mask goes entirely; a pixel mask it rode on
+                // stays.
+                if is_vector_only(&doc.document, &m) {
+                    (editor_core::Patch::Clear, "Vector mask deleted")
+                } else {
+                    m.vector = None;
+                    (editor_core::Patch::Set(m), "Vector mask deleted")
+                }
+            }
+            V::Toggle => {
+                let mut m = existing.clone().expect("has_vector implies a mask");
+                let v = m.vector.as_mut().expect("has_vector");
+                v.enabled = !v.enabled;
+                let message = if v.enabled {
+                    "Vector mask enabled"
+                } else {
+                    "Vector mask disabled"
+                };
+                (editor_core::Patch::Set(m), message)
+            }
+        };
+        (
+            Command::SetLayerProperties {
+                layer_id: id,
+                patch: editor_core::LayerPatch {
+                    mask: patch,
+                    ..Default::default()
+                },
+            },
+            message,
+        )
+    };
+    editor.apply_command(command);
+    Ok(message.to_string())
 }
 
 fn toggle_mask(editor: &mut Editor, link: bool) -> Result<String, String> {
@@ -4043,6 +4622,43 @@ fn create_mask(editor: &mut Editor, op: ui::menu::MaskOp) -> Result<String, Stri
             .unwrap_or_default();
         (layer_to_doc, content_tiles)
     };
+    // W9-G (review round 3): a pixel mask added beside a vector-only mask
+    // shares that mask's pose (`linked` + `transform`), so the vector half
+    // does not jump or silently re-link. The coverage is then built in the
+    // MASK's space: pre-imaged through layer ∘ mask transform, and the
+    // layer's content tiles carried into mask space through the inverse.
+    let vector_pose: Option<(bool, glam::Affine2)> = editor.active().and_then(|doc| {
+        let id = doc.document.active_layer()?;
+        let m = doc.document.layers.get(id)?.mask.as_ref()?;
+        is_vector_only(&doc.document, m).then_some((m.linked, *m.transform))
+    });
+    let (layer_to_doc, content_tiles) = match vector_pose {
+        Some((_, mask_t))
+            if mask_t != glam::Affine2::IDENTITY && mask_t.matrix2.determinant() != 0.0 =>
+        {
+            let to_mask = mask_t.inverse();
+            let ts = raster::TILE_SIZE as f32;
+            let mut mapped = Vec::with_capacity(content_tiles.len() * 2);
+            for c in &content_tiles {
+                let (x0, y0) = (c.x as f32 * ts, c.y as f32 * ts);
+                let pts = [
+                    to_mask.transform_point2(glam::Vec2::new(x0, y0)),
+                    to_mask.transform_point2(glam::Vec2::new(x0 + ts, y0)),
+                    to_mask.transform_point2(glam::Vec2::new(x0, y0 + ts)),
+                    to_mask.transform_point2(glam::Vec2::new(x0 + ts, y0 + ts)),
+                ];
+                for p in pts {
+                    mapped.push(raster::TileCoord::new(
+                        (p.x / ts).floor() as i32,
+                        (p.y / ts).floor() as i32,
+                        c.level,
+                    ));
+                }
+            }
+            (layer_to_doc * mask_t, mapped)
+        }
+        _ => (layer_to_doc, content_tiles),
+    };
     let mode = match op {
         ui::menu::MaskOp::RevealAll => pixels::MaskCoverageMode::RevealAll,
         ui::menu::MaskOp::HideAll => pixels::MaskCoverageMode::HideAll,
@@ -4062,20 +4678,27 @@ fn create_mask(editor: &mut Editor, op: ui::menu::MaskOp) -> Result<String, Stri
     let command = {
         let doc = editor.active_mut().ok_or("No document is open")?;
         let id = doc.document.active_layer().ok_or("Select a layer first")?;
-        if doc
-            .document
-            .layers
-            .get(id)
-            .is_some_and(|l| l.mask.is_some())
-        {
+        let existing = doc.document.layers.get(id).and_then(|l| l.mask.clone());
+        // W9-G: a vector-only mask has no pixel half yet; the new pixel mask
+        // joins it rather than being refused (or replacing it).
+        let keep_vector = existing
+            .as_ref()
+            .filter(|m| is_vector_only(&doc.document, m))
+            .and_then(|m| m.vector.clone());
+        if existing.is_some() && keep_vector.is_none() {
             return Err("The layer already has a mask — delete it first".to_string());
+        }
+        let mut new_mask = layer_model::LayerMask::new(layer_model::MaskId::new());
+        new_mask.vector = keep_vector;
+        if let (Some(old), Some(_)) = (existing.as_ref(), new_mask.vector.as_ref()) {
+            // The vector half keeps its pose (see `vector_pose` above).
+            new_mask.linked = old.linked;
+            new_mask.transform = old.transform.clone();
         }
         let mut commands = vec![Command::SetLayerProperties {
             layer_id: id,
             patch: editor_core::LayerPatch {
-                mask: editor_core::Patch::Set(layer_model::LayerMask::new(
-                    layer_model::MaskId::new(),
-                )),
+                mask: editor_core::Patch::Set(new_mask),
                 ..Default::default()
             },
         }];
@@ -4116,11 +4739,14 @@ fn apply_mask(editor: &mut Editor) -> Result<String, String> {
     let command = {
         let doc = editor.active_mut().ok_or("No document is open")?;
         let id = doc.document.active_layer().ok_or("Select a layer first")?;
+        // W9-G: a vector-only mask has no pixel coverage to bake — reading
+        // its absent tiles as "hidden" would erase the layer.
         let has_mask = doc
             .document
             .layers
             .get(id)
-            .is_some_and(|l| l.mask.is_some());
+            .and_then(|l| l.mask.as_ref())
+            .is_some_and(|m| !is_vector_only(&doc.document, m));
         if !has_mask {
             return Err("The layer has no mask".to_string());
         }
@@ -4156,11 +4782,29 @@ fn apply_mask(editor: &mut Editor) -> Result<String, String> {
             let a = i * 4 + 3;
             after[a] = ((after[a] as u32 * *c as u32) / 255) as u8;
         }
+        // W9-G: Apply bakes the PIXEL mask only. A vector mask riding on it
+        // stays, as a vector-only mask with the same pose (a fresh id, so it
+        // carries no coverage tiles).
+        let remaining = doc
+            .document
+            .layers
+            .get(id)
+            .and_then(|l| l.mask.as_ref())
+            .and_then(|m| {
+                let v = m.vector.clone()?;
+                let mut left = layer_model::LayerMask::vector_only(layer_model::MaskId::new(), *v);
+                left.linked = m.linked;
+                left.transform = m.transform.clone();
+                Some(left)
+            });
         let mut commands = vec![pixels::write_layer(doc, id, &after, "Apply Mask")?];
         commands.push(Command::SetLayerProperties {
             layer_id: id,
             patch: editor_core::LayerPatch {
-                mask: editor_core::Patch::Clear,
+                mask: match remaining {
+                    Some(m) => editor_core::Patch::Set(m),
+                    None => editor_core::Patch::Clear,
+                },
                 ..Default::default()
             },
         });
@@ -4394,6 +5038,86 @@ mod tests {
 
     fn editor(dir: &std::path::Path) -> Editor {
         with_recent(dir, RecentFiles::new())
+    }
+
+    /// W9-F: Layer > Combine Shapes > Unite over two overlapping rectangle
+    /// layers — the second moved by its layer transform — leaves one shape
+    /// layer whose path covers their union, in the bottom layer's own space;
+    /// one Undo brings both layers back. The menu resolves it only with two
+    /// or more layers selected.
+    #[test]
+    fn combine_shapes_unite_merges_two_overlapping_rectangles_into_their_union() {
+        use layer_model::{Layer, LayerKind, ShapeLayer};
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor_with_a_document(dir.path());
+        let bottom = Layer::with_kind(
+            "A",
+            LayerKind::Shape(ShapeLayer::from_svg("M10 10 L30 10 L30 30 L10 30 Z")),
+        );
+        let mut top = Layer::with_kind(
+            "B",
+            LayerKind::Shape(ShapeLayer::from_svg("M0 0 L20 0 L20 20 L0 20 Z")),
+        );
+        // B's path sits at 20..40 in the document.
+        top.transform = glam::Affine2::from_translation(glam::vec2(20.0, 20.0));
+        let (a, b) = (bottom.id, top.id);
+        ed.apply_command(Command::create_layer(bottom));
+        ed.apply_command(Command::create_layer(top));
+        ed.set_layer_selection(vec![a], Some(a));
+        let one = context(&mut ed, &Workspace::new());
+        assert!(matches!(
+            MenuAction::CombineShapes(ui::menu::ShapeCombine::Unite).resolve(&one),
+            ui::menu::Resolution::Disabled(_)
+        ));
+        ed.set_layer_selection(vec![a, b], Some(b));
+        let two = context(&mut ed, &Workspace::new());
+        assert!(
+            !matches!(
+                MenuAction::CombineShapes(ui::menu::ShapeCombine::Unite).resolve(&two),
+                ui::menu::Resolution::Disabled(_)
+            ),
+            "two shape layers selected: the item is live"
+        );
+        assert!(ui::menu::menu_bar(0)
+            .iter()
+            .any(|m| m.title == "Layer"
+                && format!("{:?}", m.entries).contains("CombineShapes(Unite)")));
+
+        let status = perform(
+            MenuAction::CombineShapes(ui::menu::ShapeCombine::Unite),
+            &mut ed,
+        )
+        .expect("combined");
+        assert!(status.contains("2 shape layers"), "{status}");
+        let doc = &ed.active().unwrap().document;
+        assert!(!doc.layers.contains(b), "the upper shape was merged away");
+        let LayerKind::Shape(merged) = &doc.layers.get(a).unwrap().kind else {
+            panic!("the bottom layer is no longer a shape");
+        };
+        let path = vector::parse_svg(&merged.path_svg).unwrap();
+        let area = vector::fill(&path, &vector::FillOptions::default())
+            .unwrap()
+            .area();
+        // 20x20 + 20x20 - the 10x10 overlap.
+        assert_eq!(area, 700.0);
+        for p in [(12.0, 12.0), (38.0, 38.0), (25.0, 25.0)] {
+            assert!(
+                vector::contains(&path, vector::point(p.0, p.1), vector::FillRule::NonZero),
+                "{p:?} is not covered"
+            );
+        }
+        assert!(!vector::contains(
+            &path,
+            vector::point(38.0, 12.0),
+            vector::FillRule::NonZero
+        ));
+
+        ed.dispatch(Action::Undo).expect("undo");
+        let doc = &ed.active().unwrap().document;
+        assert!(
+            doc.layers.contains(a) && doc.layers.contains(b),
+            "undo restores both"
+        );
     }
 
     /// Card 007: the Properties Layer/Mask control's intent lands as the
@@ -6015,6 +6739,268 @@ mod tests {
         );
     }
 
+    // ---- W9-G: Layer > Vector Mask ---------------------------------------
+
+    /// W9-G: the whole road — the Paths panel's Work Path enables Current
+    /// Path in the menu context, the click attaches a live vector mask, and
+    /// the application's own compositor hides the layer outside the path.
+    /// Disable/Enable and Delete are one undo step each.
+    #[test]
+    fn a_vector_mask_from_the_current_path_hides_the_layer_outside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let mut ws = Workspace::new();
+        ws.paths.work_path = Some(vector::parse_svg("M0 0 L48 0 L0 32 Z").unwrap());
+        ws.paths.work_selected = true;
+        let row = |op| MenuAction::VectorMask(op);
+        let click = |ed: &mut Editor, ws: &Workspace, action: MenuAction| {
+            let ctx = context(ed, ws);
+            match resolve(action, &ctx, ed).expect("the row is enabled") {
+                Pick::Menu(a) => perform(a, ed).expect("performed"),
+                other => panic!("{other:?}"),
+            };
+        };
+        let alpha_at = |ed: &mut Editor, x: usize, y: usize| {
+            let rgba = ed
+                .active_mut()
+                .unwrap()
+                .composite(raster::PixelRect::new(0, 0, 48, 32))
+                .unwrap();
+            rgba[(y * 48 + x) * 4 + 3]
+        };
+        assert_eq!(alpha_at(&mut ed, 46, 30), 255, "unmasked to begin with");
+
+        use ui::menu::VectorMaskOp as V;
+        assert!(context(&mut ed, &ws).has_current_path);
+        click(&mut ed, &ws, row(V::CurrentPath));
+        let mask = ed
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .get(layer)
+            .unwrap()
+            .mask
+            .clone();
+        let v = mask.and_then(|m| m.vector).expect("a live vector mask");
+        assert!(v.path_svg.contains('M'), "kept as a path: {}", v.path_svg);
+        assert_eq!(alpha_at(&mut ed, 2, 2), 255, "inside the triangle");
+        assert_eq!(alpha_at(&mut ed, 46, 30), 0, "outside the triangle");
+
+        let depth = ed.active().unwrap().history_depth();
+        click(&mut ed, &ws, row(V::Toggle));
+        assert_eq!(alpha_at(&mut ed, 46, 30), 255, "disabled");
+        assert_eq!(ed.active().unwrap().history_depth(), depth + 1);
+        assert!(ed.active_mut().unwrap().undo().unwrap());
+        assert_eq!(alpha_at(&mut ed, 46, 30), 0, "undo re-enables");
+
+        // A vector-only mask is not a pixel mask: Apply Mask has no coverage
+        // to bake (reading none would erase the layer), and adding a pixel
+        // mask keeps the vector one beside it.
+        use ui::menu::MaskOp;
+        let ctx = context(&mut ed, &ws);
+        assert!(resolve(MenuAction::Mask(MaskOp::Apply), &ctx, &ed).is_err());
+        click(&mut ed, &ws, MenuAction::Mask(MaskOp::RevealAll));
+        let both = ed.active().unwrap().document.layers.get(layer).unwrap();
+        let both = both.mask.clone().unwrap();
+        assert_eq!(both.kind, layer_model::MaskKind::Raster, "a pixel mask now");
+        assert!(both.vector.is_some(), "the vector mask survived");
+        assert_eq!(alpha_at(&mut ed, 2, 2), 255);
+        assert_eq!(alpha_at(&mut ed, 46, 30), 0, "the vector still hides");
+        assert!(ed.active_mut().unwrap().undo().unwrap());
+
+        click(&mut ed, &ws, row(V::Delete));
+        assert!(ed
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .get(layer)
+            .unwrap()
+            .mask
+            .is_none());
+        assert_eq!(alpha_at(&mut ed, 46, 30), 255, "deleted");
+
+        // Without a path the row is off, and says why.
+        let empty = Workspace::new();
+        let ctx = context(&mut ed, &empty);
+        assert!(!ctx.has_current_path);
+        assert!(resolve(row(V::CurrentPath), &ctx, &ed).is_err());
+    }
+
+    /// W9-G (review round 2): Layer > Layer Mask > Apply on a layer with
+    /// BOTH masks bakes the pixel mask and keeps the vector mask live.
+    #[test]
+    fn apply_mask_with_both_masks_keeps_the_vector_mask() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let mut ws = Workspace::new();
+        ws.paths.work_path = Some(vector::parse_svg("M0 0 L48 0 L0 32 Z").unwrap());
+        ws.paths.work_selected = true;
+        let click = |ed: &mut Editor, ws: &Workspace, action: MenuAction| {
+            let ctx = context(ed, ws);
+            match resolve(action, &ctx, ed).expect("the row is enabled") {
+                Pick::Menu(a) => perform(a, ed).expect("performed"),
+                other => panic!("{other:?}"),
+            };
+        };
+        let alpha_at = |ed: &mut Editor, x: usize, y: usize| {
+            let rgba = ed
+                .active_mut()
+                .unwrap()
+                .composite(raster::PixelRect::new(0, 0, 48, 32))
+                .unwrap();
+            rgba[(y * 48 + x) * 4 + 3]
+        };
+        use ui::menu::{MaskOp, VectorMaskOp as V};
+        click(&mut ed, &ws, MenuAction::VectorMask(V::CurrentPath));
+        click(&mut ed, &ws, MenuAction::Mask(MaskOp::RevealAll));
+        let path = |ed: &Editor| {
+            ed.active()
+                .unwrap()
+                .document
+                .layers
+                .get(layer)
+                .unwrap()
+                .mask
+                .clone()
+                .and_then(|m| m.vector)
+                .map(|v| v.path_svg)
+        };
+        let before = path(&ed).expect("both masks before Apply");
+        click(&mut ed, &ws, MenuAction::Mask(MaskOp::Apply));
+        assert_eq!(
+            path(&ed).as_deref(),
+            Some(before.as_str()),
+            "the vector mask survives Apply"
+        );
+        let doc = &ed.active().unwrap().document;
+        let mask = doc.layers.get(layer).unwrap().mask.clone().unwrap();
+        assert!(is_vector_only(doc, &mask), "only the vector mask is left");
+        assert_eq!(alpha_at(&mut ed, 2, 2), 255, "inside the triangle");
+        assert_eq!(alpha_at(&mut ed, 46, 30), 0, "the vector still hides");
+        // One undo step brings both masks back.
+        assert!(ed.active_mut().unwrap().undo().unwrap());
+        let doc = &ed.active().unwrap().document;
+        let mask = doc.layers.get(layer).unwrap().mask.clone().unwrap();
+        assert_eq!(mask.kind, layer_model::MaskKind::Raster);
+        assert!(mask.vector.is_some());
+    }
+
+    /// W9-G (review round 3): adding a pixel mask (Layer Mask > Reveal All)
+    /// to a layer whose vector-only mask was unlinked and then left behind by
+    /// a layer move keeps the vector mask's pose and its Linked=false — it
+    /// neither jumps with the layer nor silently re-links — and the new
+    /// pixel mask's coverage is laid in that same pose, so it reveals the
+    /// whole canvas.
+    #[test]
+    fn a_pixel_mask_added_beside_an_unlinked_vector_mask_keeps_its_pose() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let mut ws = Workspace::new();
+        ws.paths.work_path = Some(vector::parse_svg("M0 0 L24 0 L24 32 L0 32 Z").unwrap());
+        ws.paths.work_selected = true;
+        let click = |ed: &mut Editor, ws: &Workspace, action: MenuAction| {
+            let ctx = context(ed, ws);
+            match resolve(action, &ctx, ed).expect("the row is enabled") {
+                Pick::Menu(a) => perform(a, ed).expect("performed"),
+                other => panic!("{other:?}"),
+            };
+        };
+        let alpha_at = |ed: &mut Editor, x: usize, y: usize| {
+            let rgba = ed
+                .active_mut()
+                .unwrap()
+                .composite(raster::PixelRect::new(0, 0, 48, 32))
+                .unwrap();
+            rgba[(y * 48 + x) * 4 + 3]
+        };
+        let mask_of = |ed: &Editor| {
+            ed.active()
+                .unwrap()
+                .document
+                .layers
+                .get(layer)
+                .unwrap()
+                .mask
+                .clone()
+                .unwrap()
+        };
+        use ui::menu::{MaskOp, VectorMaskOp as V};
+        click(&mut ed, &ws, MenuAction::VectorMask(V::CurrentPath));
+        // Properties > Linked unchecked, then the layer moves 10px right.
+        let mut m = mask_of(&ed);
+        m.linked = false;
+        ed.apply_command(Command::SetLayerProperties {
+            layer_id: layer,
+            patch: editor_core::LayerPatch {
+                mask: editor_core::Patch::Set(m),
+                ..Default::default()
+            },
+        });
+        let shift = glam::Affine2::from_translation(glam::Vec2::new(10.0, 0.0));
+        ed.apply_command(Command::TransformLayer {
+            layer_id: layer,
+            matrix: shift.to_cols_array(),
+        });
+        let before = mask_of(&ed);
+        assert!(!before.linked);
+        assert_ne!(*before.transform, glam::Affine2::IDENTITY, "the mask held");
+        assert_eq!(alpha_at(&mut ed, 15, 16), 255, "inside the vector mask");
+        assert_eq!(alpha_at(&mut ed, 30, 16), 0, "the vector mask stayed put");
+
+        click(&mut ed, &ws, MenuAction::Mask(MaskOp::RevealAll));
+        let after = mask_of(&ed);
+        assert_eq!(
+            after.kind,
+            layer_model::MaskKind::Raster,
+            "a pixel mask now"
+        );
+        assert!(after.vector.is_some(), "the vector mask survived");
+        assert!(!after.linked, "still unlinked");
+        assert_eq!(*after.transform, *before.transform, "the pose is kept");
+        assert_eq!(alpha_at(&mut ed, 15, 16), 255, "inside the vector mask");
+        assert_eq!(alpha_at(&mut ed, 30, 16), 0, "the vector mask did not jump");
+
+        // With the vector half disabled, the pixel mask alone reveals the
+        // whole (moved) layer on the canvas: its coverage sits in the pose.
+        click(&mut ed, &ws, MenuAction::VectorMask(V::Toggle));
+        assert_eq!(alpha_at(&mut ed, 12, 16), 255, "pixel mask reveals");
+        assert_eq!(
+            alpha_at(&mut ed, 45, 16),
+            255,
+            "pixel mask reveals the far edge"
+        );
+        assert_eq!(
+            alpha_at(&mut ed, 5, 16),
+            0,
+            "left of the moved layer: no content"
+        );
+
+        // Reveal Selection samples the selection per pixel, so a coverage
+        // laid in the wrong pose would show a shifted band: undo the toggle
+        // and the Reveal All, select document x 30..46, and add the mask.
+        assert!(ed.active_mut().unwrap().undo().unwrap());
+        assert!(ed.active_mut().unwrap().undo().unwrap());
+        assert!(is_vector_only(
+            &ed.active().unwrap().document,
+            &mask_of(&ed)
+        ));
+        select_rect(&mut ed, (30, 0), (46, 32));
+        click(&mut ed, &ws, MenuAction::Mask(MaskOp::RevealSelection));
+        assert!(!mask_of(&ed).linked, "still unlinked");
+        click(&mut ed, &ws, MenuAction::VectorMask(V::Toggle));
+        assert_eq!(alpha_at(&mut ed, 40, 16), 255, "the selected band shows");
+        assert_eq!(
+            alpha_at(&mut ed, 25, 16),
+            0,
+            "left of the selection is hidden"
+        );
+    }
+
     // ---- Card 057: the four mask-creation ops ----------------------------
 
     /// Card 057: the four ops produce REAL coverage — a known two-colour
@@ -6857,6 +7843,106 @@ mod tests {
             total += a;
         }
         sum / total
+    }
+
+    /// W9-O: Filter > Blur Gallery > Iris Blur... is a live row that opens
+    /// its dialog over the active layer; Escape writes nothing; Enter parks
+    /// the blur, the pick rides `out.menu` to the `BlurGallery` arm, and it
+    /// lands as ONE history entry that leaves the focus sharp and blurs the
+    /// corners; undo restores the exact bytes.
+    #[test]
+    fn w9o_blur_gallery_opens_from_the_menu_and_lands_as_one_undo_step() {
+        use filters::blur_gallery::{BlurGallery, BlurGalleryKind, IrisBlur};
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let mut rgba = vec![255u8; 48 * 32 * 4];
+        for y in 0..32 {
+            for x in 0..48 {
+                if (x + y) % 2 == 1 {
+                    let i = (y * 48 + x) * 4;
+                    rgba[i..i + 3].copy_from_slice(&[0, 0, 0]);
+                }
+            }
+        }
+        let layer = w7h_paint(&mut ed, &rgba);
+        let before = pixels::read_layer(ed.active().unwrap(), layer);
+        let depth = ed.active().unwrap().history.undo_depth();
+        let action = MenuAction::BlurGallery(BlurGalleryKind::Iris);
+        let live = context(&mut ed, &Workspace::new());
+        match resolve(action, &live, &ed) {
+            Ok(Pick::Menu(a)) if a == action => {}
+            other => panic!("Filter > Blur Gallery > Iris Blur is not a live row: {other:?}"),
+        }
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut host = crate::dialog_host::DialogHost::default();
+        let iris = BlurGallery::Iris(IrisBlur {
+            center: [24.0, 16.0],
+            radii: [12.0, 12.0],
+            rotation_deg: 0.0,
+            focus: 0.5,
+            blur: 4.0,
+        });
+
+        // Cancel changes nothing.
+        assert!(host.open_for_menu_action(&action, &ed));
+        host.active_blur_gallery_dialog_for_test()
+            .set_gallery(iris.clone());
+        let _ = w7h_frame(&mut host, &ctx, &[]);
+        let out = w7h_frame(&mut host, &ctx, &[egui::Key::Escape]);
+        assert!(!host.is_open() && out.menu.is_empty());
+        assert!(crate::dialog_host::take_confirmed_blur_gallery().is_none());
+        assert!(perform(action, &mut ed).is_err());
+        assert_eq!(ed.active().unwrap().history.undo_depth(), depth);
+        assert_eq!(pixels::read_layer(ed.active().unwrap(), layer), before);
+
+        // Confirm lands one step.
+        assert!(host.open_for_menu_action(&action, &ed));
+        host.active_blur_gallery_dialog_for_test()
+            .set_gallery(iris.clone());
+        let _ = w7h_frame(&mut host, &ctx, &[]);
+        let out = w7h_frame(&mut host, &ctx, &[egui::Key::Enter]);
+        assert!(!host.is_open(), "Enter closed the dialog");
+        assert_eq!(out.menu, vec![action]);
+        let message = perform(action, &mut ed).unwrap();
+        assert!(message.contains("Iris Blur"), "{message}");
+        assert_eq!(
+            ed.active().unwrap().history.undo_depth(),
+            depth + 1,
+            "one confirmation is one history entry"
+        );
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        // The focus (within 6 px of the centre) is the source's exactly.
+        for y in 12..20 {
+            for x in 20..28 {
+                let i = (y * 48 + x) * 4;
+                assert_eq!(after[i..i + 4], before[i..i + 4], "({x},{y}) stayed sharp");
+            }
+        }
+        // The corner's checkerboard is blurred toward grey.
+        let spread = |buf: &[u8]| {
+            let mut vals = Vec::new();
+            for y in 0..6 {
+                for x in 0..6 {
+                    vals.push(buf[(y * 48 + x) * 4] as f32);
+                }
+            }
+            let max = vals.iter().cloned().fold(f32::MIN, f32::max);
+            let min = vals.iter().cloned().fold(f32::MAX, f32::min);
+            max - min
+        };
+        assert!(spread(&before) > 200.0);
+        assert!(
+            spread(&after) < 40.0,
+            "the corner blurred: {} -> {}",
+            spread(&before),
+            spread(&after)
+        );
+        // A second perform has nothing parked: no second entry.
+        assert!(perform(action, &mut ed).is_err());
+        assert_eq!(ed.active().unwrap().history.undo_depth(), depth + 1);
+        ed.active_mut().unwrap().undo().unwrap();
+        assert_eq!(pixels::read_layer(ed.active().unwrap(), layer), before);
     }
 
     /// W7-H: Filter > Liquify... is a live row that opens its dialog; Escape
@@ -9147,7 +10233,21 @@ mod tests {
         let brushes = reopened.presets().brushes();
         assert_eq!(brushes.len(), 1, "the preset survived the restart");
         let settings: tools::BrushSettings = serde_json::from_str(&brushes[0].1).unwrap();
-        assert_eq!(settings.size, 33.0, "the settings round-trip");
+        // W9-E: Define Brush Preset makes a brush FROM PIXELS (the probe
+        // layer), not a copy of the settings: a sampled tip whose pixels are
+        // stored with the presets and come back after the restart.
+        let tools::brush::BrushTip::Sampled(id) = settings.tip else {
+            panic!("the defined brush is not sampled: {settings:?}");
+        };
+        let stored = reopened
+            .presets()
+            .tip(asset_store::BlobHash(id.0))
+            .expect("the tip's pixels survived the restart");
+        assert_eq!(settings.size, stored.width.max(stored.height) as f32);
+        assert!(
+            tools::brush::sampled_tip(id).is_some(),
+            "the reopened editor registered the stored tip"
+        );
     }
 
     #[test]
@@ -9581,6 +10681,252 @@ mod tests {
 
     fn depth(ed: &Editor) -> usize {
         ed.active().unwrap().history_depth()
+    }
+
+    /// W9-A: Photopea's Select Pixels, driven through the REAL chrome — a
+    /// Ctrl+click on the drawn Layers-panel thumbnail, routed to `perform`
+    /// exactly as the shell routes it.
+    mod select_layer_pixels {
+        use super::*;
+        use ui::dialogs::LoadOperation as Op;
+
+        fn frame(
+            ctx: &egui::Context,
+            chrome: &mut crate::chrome::Chrome,
+            ed: &mut Editor,
+            events: Vec<egui::Event>,
+            modifiers: egui::Modifiers,
+        ) -> ChromeOutput {
+            let mut input = raw_input(events);
+            input.modifiers = modifiers;
+            let mut out = ChromeOutput::default();
+            let _ = ctx.run(input, |ctx| {
+                out = chrome.ui(ctx, ed);
+            });
+            out
+        }
+
+        /// Settle the layout, then press and release on the thumbnail of
+        /// `layer` with `modifiers` held; return what the click meant.
+        fn click_thumb(
+            ctx: &egui::Context,
+            chrome: &mut crate::chrome::Chrome,
+            ed: &mut Editor,
+            id: egui::Id,
+            modifiers: egui::Modifiers,
+        ) -> ChromeOutput {
+            for _ in 0..4 {
+                let _ = frame(ctx, chrome, ed, Vec::new(), egui::Modifiers::NONE);
+            }
+            let pos = ctx
+                .read_response(id)
+                .unwrap_or_else(|| panic!("{id:?} was never drawn"))
+                .rect
+                .center();
+            let button = |pressed: bool| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers,
+            };
+            let mut out = frame(
+                ctx,
+                chrome,
+                ed,
+                vec![egui::Event::PointerMoved(pos), button(true)],
+                modifiers,
+            );
+            let release = frame(ctx, chrome, ed, vec![button(false)], modifiers);
+            out.menu.extend(release.menu);
+            out.commands.extend(release.commands);
+            out.actions.extend(release.actions);
+            out
+        }
+
+        fn coverage(ed: &Editor, x: i32, y: i32) -> u8 {
+            match &ed.active().unwrap().document.selection {
+                editor_core::Selection::Mask(m) => m.coverage_at(glam::IVec2::new(x, y)),
+                other => panic!("expected a mask selection, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn a_ctrl_click_on_a_thumbnail_selects_exactly_the_layers_ink_and_shift_adds() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut ed = editor_with_a_document(dir.path());
+            let square = block_layer(&mut ed, "Square", 20, 30, 10);
+            let other = block_layer(&mut ed, "Other", 50, 50, 10);
+            assert_eq!(ed.active().unwrap().document.active_layer(), Some(other));
+            let ctx = egui::Context::default();
+            crate::chrome::install_theme(&ctx, design::Theme::Dark);
+            let mut chrome = crate::chrome::Chrome::new();
+
+            // Ctrl+click the Square's thumbnail: the chrome routes one
+            // Select Pixels for that layer.
+            let out = click_thumb(
+                &ctx,
+                &mut chrome,
+                &mut ed,
+                ui::view::ids::layer_content_thumb(square),
+                egui::Modifiers::COMMAND,
+            );
+            assert_eq!(
+                out.menu,
+                vec![MenuAction::SelectLayerPixels {
+                    layer: Some(square),
+                    mask: false,
+                    op: Op::New,
+                }],
+                "{out:?}"
+            );
+            let before = depth(&ed);
+            apply_output(&mut ed, out).unwrap();
+            assert_eq!(depth(&ed), before + 1, "one undo step");
+            assert_eq!(
+                ed.active().unwrap().document.selection.bounds(),
+                Some((glam::IVec2::new(20, 30), glam::IVec2::new(30, 40))),
+                "exactly the 10x10 square"
+            );
+            for (x, y) in [(20, 30), (29, 39), (25, 35)] {
+                assert_eq!(coverage(&ed, x, y), 255, "inside at ({x},{y})");
+            }
+            for (x, y) in [(19, 30), (30, 39), (25, 40), (55, 55)] {
+                assert_eq!(coverage(&ed, x, y), 0, "outside at ({x},{y})");
+            }
+            // Photopea's Ctrl+click does not change the active layer.
+            assert_eq!(ed.active().unwrap().document.active_layer(), Some(other));
+
+            // Ctrl+Shift+click the Other thumbnail: added to the selection.
+            let out = click_thumb(
+                &ctx,
+                &mut chrome,
+                &mut ed,
+                ui::view::ids::layer_content_thumb(other),
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            );
+            assert_eq!(
+                out.menu,
+                vec![MenuAction::SelectLayerPixels {
+                    layer: Some(other),
+                    mask: false,
+                    op: Op::Add,
+                }],
+                "{out:?}"
+            );
+            let before = depth(&ed);
+            apply_output(&mut ed, out).unwrap();
+            assert_eq!(depth(&ed), before + 1, "one undo step");
+            assert_eq!(
+                ed.active().unwrap().document.selection.bounds(),
+                Some((glam::IVec2::new(20, 30), glam::IVec2::new(60, 60)))
+            );
+            assert_eq!(coverage(&ed, 25, 35), 255, "the square is kept");
+            assert_eq!(coverage(&ed, 55, 55), 255, "the other block is added");
+            assert_eq!(coverage(&ed, 40, 45), 0, "the gap is not selected");
+
+            // One undo takes the add back and leaves the square.
+            ed.dispatch(Action::Undo).unwrap();
+            assert_eq!(
+                ed.active().unwrap().document.selection.bounds(),
+                Some((glam::IVec2::new(20, 30), glam::IVec2::new(30, 40)))
+            );
+        }
+
+        #[test]
+        fn subtract_intersect_and_the_row_menu_act_on_the_layers_alpha() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut ed = editor_with_a_document(dir.path());
+            let square = block_layer(&mut ed, "Square", 20, 20, 10);
+            // A live rect selection overlapping the square's right half.
+            ed.apply_command(Command::SetSelection {
+                selection: editor_core::Selection::Rect {
+                    min: glam::IVec2::new(25, 20),
+                    max: glam::IVec2::new(40, 30),
+                },
+            });
+            let sub = MenuAction::SelectLayerPixels {
+                layer: Some(square),
+                mask: false,
+                op: Op::Subtract,
+            };
+            perform(sub, &mut ed).unwrap();
+            assert_eq!(
+                ed.active().unwrap().document.selection.bounds(),
+                Some((glam::IVec2::new(30, 20), glam::IVec2::new(40, 30))),
+                "the square is taken out of the rect"
+            );
+            ed.dispatch(Action::Undo).unwrap();
+            let inter = MenuAction::SelectLayerPixels {
+                layer: Some(square),
+                mask: false,
+                op: Op::Intersect,
+            };
+            perform(inter, &mut ed).unwrap();
+            assert_eq!(
+                ed.active().unwrap().document.selection.bounds(),
+                Some((glam::IVec2::new(25, 20), glam::IVec2::new(30, 30))),
+                "only the overlap is kept"
+            );
+
+            // The layer-row menu's row (the active layer) resolves and
+            // performs through the same bridge.
+            ed.apply_command(Command::SetSelection {
+                selection: editor_core::Selection::None,
+            });
+            let chrome = crate::chrome::Chrome::new();
+            let menu_ctx = context(&mut ed, chrome.workspace());
+            let row = ui::context_menu::layer_items(&menu_ctx)
+                .into_iter()
+                .find(|i| i.label == "Select Pixels")
+                .expect("the row menu carries Select Pixels");
+            let intent = resolve_intent(row.action, &menu_ctx, &ed).unwrap();
+            assert_eq!(intent, ui::Intent::Action(row.action));
+            perform(row.action, &mut ed).unwrap();
+            assert_eq!(
+                ed.active().unwrap().document.selection.bounds(),
+                Some((glam::IVec2::new(20, 20), glam::IVec2::new(30, 30)))
+            );
+        }
+
+        #[test]
+        fn a_mask_thumbnail_selects_the_mask_coverage() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut ed = editor_with_a_document(dir.path());
+            let layer = block_layer(&mut ed, "Masked", 0, 0, 64);
+            ed.apply_command(Command::SetSelection {
+                selection: editor_core::Selection::Rect {
+                    min: glam::IVec2::new(8, 12),
+                    max: glam::IVec2::new(18, 22),
+                },
+            });
+            perform(MenuAction::Mask(ui::menu::MaskOp::RevealSelection), &mut ed).unwrap();
+            ed.apply_command(Command::SetSelection {
+                selection: editor_core::Selection::None,
+            });
+            assert!(ed
+                .active()
+                .unwrap()
+                .document
+                .layers
+                .get(layer)
+                .unwrap()
+                .mask
+                .is_some());
+            perform(
+                MenuAction::SelectLayerPixels {
+                    layer: Some(layer),
+                    mask: true,
+                    op: Op::New,
+                },
+                &mut ed,
+            )
+            .unwrap();
+            assert_eq!(
+                ed.active().unwrap().document.selection.bounds(),
+                Some((glam::IVec2::new(8, 12), glam::IVec2::new(18, 22))),
+                "the mask's revealed rect, not the layer's 64x64 ink"
+            );
+        }
     }
 
     #[test]
@@ -10721,5 +12067,529 @@ mod tests {
             }
             assert!(red(&flat, 23) > 20, "the PSD holds the blurred pixels");
         }
+    }
+}
+
+#[cfg(test)]
+mod w9k_text_menu_tests {
+    use super::*;
+    use crate::dialogs::ScriptedDialogs;
+    use crate::prefs::AppPaths;
+    use crate::recent::RecentFiles;
+    use layer_model::{Layer, LayerKind, TextLayer};
+
+    fn editor_with(dir: &std::path::Path, dialogs: ScriptedDialogs) -> Editor {
+        Editor::with_state(
+            AppPaths::rooted(dir.join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(dialogs),
+        )
+    }
+
+    /// A document holding one DejaVu Sans text layer at `at`, active.
+    fn with_text(
+        dir: &std::path::Path,
+        text: &str,
+        size: f32,
+        at: (f32, f32),
+    ) -> (Editor, LayerId) {
+        let bytes = dejavu::sans::regular().to_vec();
+        compositor::load_font(bytes.clone());
+        text_engine::register_session_font(bytes);
+        let mut ed = editor_with(dir, ScriptedDialogs::new());
+        ed.dispatch(Action::NewDocument).expect("a document");
+        let mut layer = Layer::with_kind(
+            "Type",
+            LayerKind::Text(TextLayer::legacy(text, "DejaVu Sans", size)),
+        );
+        layer.transform = glam::Affine2::from_translation(glam::vec2(at.0, at.1));
+        let id = layer.id;
+        ed.apply_command(Command::create_layer(layer));
+        ed.set_active_layer(id);
+        (ed, id)
+    }
+
+    /// The composite as RGBA8.
+    fn pixels(ed: &Editor) -> (u32, u32, Vec<u8>) {
+        let open = ed.active().unwrap();
+        let rect = open.canvas_rect();
+        let canvas = compositor::composite_region(
+            &open.document,
+            &open.tiles,
+            rect,
+            0,
+            compositor::CompositeOptions::default(),
+        )
+        .unwrap();
+        (
+            open.document.width(),
+            open.document.height(),
+            canvas.to_rgba8(&open.document.meta.color_space),
+        )
+    }
+
+    /// Ink blobs (dark columns) left to right, as centroids.
+    fn dark_blobs(w: u32, h: u32, rgba: &[u8]) -> Vec<(f32, f32)> {
+        let mut blobs = Vec::new();
+        let mut acc: Option<(f64, f64, f64)> = None;
+        for x in 0..w {
+            let mut col = (0.0, 0.0, 0.0);
+            for y in 0..h {
+                let i = ((y * w + x) * 4) as usize;
+                // Dark AND opaque: black text over a transparent or a white
+                // background alike.
+                let a = f64::from(rgba[i + 3]);
+                let ink = a - f64::from(rgba[i]) * a / 255.0;
+                if ink > 32.0 {
+                    col.0 += ink * f64::from(x);
+                    col.1 += ink * f64::from(y);
+                    col.2 += ink;
+                }
+            }
+            if col.2 > 0.0 {
+                let a = acc.get_or_insert((0.0, 0.0, 0.0));
+                a.0 += col.0;
+                a.1 += col.1;
+                a.2 += col.2;
+            } else if let Some(a) = acc.take() {
+                blobs.push(((a.0 / a.2) as f32, (a.1 / a.2) as f32));
+            }
+        }
+        if let Some(a) = acc {
+            blobs.push(((a.0 / a.2) as f32, (a.1 / a.2) as f32));
+        }
+        blobs
+    }
+
+    fn warp_of(ed: &Editor, id: LayerId) -> layer_model::text::TextWarp {
+        match &ed.active().unwrap().document.layers.get(id).unwrap().kind {
+            LayerKind::Text(t) => t.warp,
+            other => panic!("not text: {other:?}"),
+        }
+    }
+
+    /// W9-K: Layer > Text > Warp Style > Arc is a live menu row over a text
+    /// layer (and greyed with a reason over a raster one); performing it
+    /// stores the warp on the layer as one undo step, and the composited
+    /// canvas shows the bars bent onto an arc. The canvas is composited
+    /// BEFORE the warp (a text layer is always on screen before the user
+    /// warps it), so a cache that keyed the text without its warp would
+    /// serve the flat bars - round-2 review defect 1.
+    #[test]
+    fn warp_text_arc_from_the_layer_menu_bends_the_composited_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, id) = with_text(dir.path(), "I   I   I   I   I", 48.0, (40.0, 200.0));
+        let arc = MenuAction::WarpText(ui::menu::WarpTextItem::Style(
+            layer_model::text::WarpStyle::Arc,
+        ));
+        assert!(ui::menu::menu_bar(0)
+            .iter()
+            .any(|m| m.title == "Layer"
+                && format!("{:?}", m.entries).contains("WarpText(Style(Arc))")));
+        let ctx = context(&mut ed, &Workspace::new());
+        assert!(resolve_intent(arc, &ctx, &ed).is_ok(), "live over text");
+
+        let flat = |ed: &Editor| {
+            let (w, h, rgba) = pixels(ed);
+            let blobs = dark_blobs(w, h, &rgba);
+            assert_eq!(blobs.len(), 5, "five bars: {blobs:?}");
+            blobs.iter().all(|b| (b.1 - blobs[0].1).abs() < 2.0)
+        };
+        assert!(flat(&ed), "the bars start on one baseline");
+
+        let status = perform(arc, &mut ed).expect("warped");
+        assert!(status.contains("Arc"), "{status}");
+        let doc = &ed.active().unwrap().document;
+        let LayerKind::Text(text) = &doc.layers.get(id).unwrap().kind else {
+            panic!("still a text layer");
+        };
+        assert_eq!(text.warp.style, layer_model::text::WarpStyle::Arc);
+        assert_eq!(text.text, "I   I   I   I   I", "the text stays editable");
+
+        let (w, h, rgba) = pixels(&ed);
+        let blobs = dark_blobs(w, h, &rgba);
+        assert_eq!(blobs.len(), 5, "five bars: {blobs:?}");
+        assert!(
+            blobs[0].1 - blobs[2].1 > 12.0 && blobs[4].1 - blobs[2].1 > 12.0,
+            "the middle bar rides above the ends on the canvas: {blobs:?}"
+        );
+
+        // One Undo takes the warp off, and the canvas follows it back.
+        ed.dispatch(Action::Undo).unwrap();
+        assert!(!warp_of(&ed, id).is_active(), "one undo takes the warp off");
+        assert!(flat(&ed), "the undone warp leaves the canvas flat again");
+
+        // Over a raster layer the row is greyed with a reason.
+        let raster = Layer::raster("Pixels");
+        let rid = raster.id;
+        ed.apply_command(Command::create_layer(raster));
+        ed.set_active_layer(rid);
+        let ctx = context(&mut ed, &Workspace::new());
+        assert_eq!(
+            resolve_intent(arc, &ctx, &ed).unwrap_err(),
+            "The active layer is not a text layer"
+        );
+    }
+
+    /// W9-K: Layer > Text > Warp Text... opens the Warp Text dialog over the
+    /// active text layer (round-2 defect 2: the bend and both distortions
+    /// are fields, not fixed menu steps); its confirmation stores the style
+    /// and all three numbers as one undo step, and the composited canvas -
+    /// already drawn once before the warp - moves.
+    #[test]
+    fn warp_text_dialog_sets_style_bend_and_distortions_as_one_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, id) = with_text(dir.path(), "I   I   I   I   I", 48.0, (40.0, 200.0));
+        let dialog_row = MenuAction::WarpText(ui::menu::WarpTextItem::Dialog);
+        assert_eq!(dialog_row.label(), "Warp Text…");
+        assert!(
+            ui::menu::menu_bar(0)
+                .iter()
+                .any(|m| m.title == "Layer"
+                    && format!("{:?}", m.entries).contains("WarpText(Dialog)"))
+        );
+        let (_, _, before) = pixels(&ed);
+        let steps = ed.active().unwrap().history_depth();
+
+        let mut chrome = crate::chrome::Chrome::new();
+        let menu_ctx = context(&mut ed, chrome.workspace());
+        let intent = resolve_intent(dialog_row, &menu_ctx, &ed).expect("live over text");
+        let mut out = crate::chrome::ChromeOutput::default();
+        chrome.menu_click(intent, &ed, &mut out);
+        assert!(chrome.dialog_open(), "Warp Text... opens its dialog");
+        assert!(out.is_empty());
+        {
+            let dialog = chrome.dialogs_for_test().active_warp_text_dialog_for_test();
+            dialog.set_style(layer_model::text::WarpStyle::Flag);
+            dialog.set_amounts(80, -40, 30);
+        }
+        // A settle frame, then Enter, through the host's own `ui`.
+        let out = {
+            let ctx = egui::Context::default();
+            design::apply_theme(&ctx, design::Theme::Dark);
+            let mut out = crate::chrome::ChromeOutput::default();
+            let host = chrome.dialogs_for_test();
+            let input = |events: Vec<egui::Event>| egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input(Vec::new()), |ctx| host.ui(ctx, None, &mut out));
+            let enter = egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+            };
+            let _ = ctx.run(input(vec![enter]), |ctx| host.ui(ctx, None, &mut out));
+            out
+        };
+        assert!(!chrome.dialog_open());
+        assert_eq!(out.commands.len(), 1, "{out:?}");
+        assert!(out.menu.is_empty() && out.actions.is_empty(), "{out:?}");
+        for command in out.commands {
+            ed.apply_command(command);
+        }
+
+        let warp = warp_of(&ed, id);
+        assert_eq!(warp.style, layer_model::text::WarpStyle::Flag);
+        assert!((warp.bend - 0.8).abs() < 1e-6, "{warp:?}");
+        assert!((warp.horizontal + 0.4).abs() < 1e-6, "{warp:?}");
+        assert!((warp.vertical - 0.3).abs() < 1e-6, "{warp:?}");
+        assert_eq!(
+            ed.active().unwrap().history_depth(),
+            steps + 1,
+            "one undo step"
+        );
+        let (_, _, after) = pixels(&ed);
+        assert_ne!(before, after, "the confirmed warp reaches the canvas");
+
+        ed.dispatch(Action::Undo).unwrap();
+        assert!(!warp_of(&ed, id).is_active());
+        let (_, _, undone) = pixels(&ed);
+        assert_eq!(before, undone, "undo restores the unwarped canvas");
+
+        // With no text layer the row is refused with the reason.
+        let raster = Layer::raster("Pixels");
+        let rid = raster.id;
+        ed.apply_command(Command::create_layer(raster));
+        ed.set_active_layer(rid);
+        assert_eq!(
+            perform(dialog_row, &mut ed).unwrap_err(),
+            "The active layer is not a text layer"
+        );
+    }
+
+    /// W9-K: Layer > Text > Convert to Shape replaces the text layer with a
+    /// shape layer in its place whose composited coverage matches the text's.
+    #[test]
+    fn convert_to_shape_makes_a_shape_layer_whose_coverage_matches_the_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, id) = with_text(dir.path(), "Convert me", 72.0, (30.0, 60.0));
+        let (w, h, before) = pixels(&ed);
+        let index = ed
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .index_in_parent(id)
+            .unwrap();
+
+        perform(MenuAction::ConvertTextToShape, &mut ed).expect("converted");
+        let doc = &ed.active().unwrap().document;
+        assert!(!doc.layers.contains(id), "the text layer is replaced");
+        let shape_id = doc
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .find(|l| matches!(doc.layers.get(*l).unwrap().kind, LayerKind::Shape(_)))
+            .expect("a shape layer");
+        let shape = doc.layers.get(shape_id).unwrap();
+        assert_eq!(doc.layers.index_in_parent(shape_id), Some(index));
+        assert_eq!(
+            shape.transform.translation,
+            glam::vec2(30.0, 60.0),
+            "the shape keeps the text's placement"
+        );
+
+        let (_, _, after) = pixels(&ed);
+        // Dark AND opaque, as in `dark_blobs`.
+        let ink = |p: &[u8], i: usize| {
+            let a = i32::from(p[i * 4 + 3]);
+            a - i32::from(p[i * 4]) * a / 255
+        };
+        let (mut inked, mut differ) = (0usize, 0usize);
+        for i in 0..(w * h) as usize {
+            let (a, b) = (ink(&before, i), ink(&after, i));
+            if a > 128 || b > 128 {
+                inked += 1;
+                if (a > 128) != (b > 128) {
+                    differ += 1;
+                }
+            }
+        }
+        assert!(inked > 1000, "the text drew ink: {inked}");
+        assert!(
+            (differ as f64) < inked as f64 * 0.03,
+            "the shape covers what the text covered: {differ} of {inked} ink pixels differ"
+        );
+
+        ed.dispatch(Action::Undo).unwrap();
+        let doc = &ed.active().unwrap().document;
+        assert!(doc.layers.contains(id) && !doc.layers.contains(shape_id));
+    }
+
+    /// W9-K: Type on a Path through the shell's real pointer route: with the
+    /// Type tool current, a click on a shape layer's circle outline creates a
+    /// text layer whose baseline is that circle (the shell hands the tool the
+    /// document's shape paths), and typing then draws glyphs on the circle.
+    #[test]
+    fn a_type_click_on_a_circle_shape_through_the_shell_makes_path_text() {
+        use ui::canvas::{PointerInput, PointerPhase};
+        let dir = tempfile::tempdir().unwrap();
+        compositor::load_font(dejavu::sans::regular().to_vec());
+        let png = dir.path().join("canvas.png");
+        let (w, h) = (300u32, 300u32);
+        std::fs::write(
+            &png,
+            raster::encode(
+                raster::ExportFormat::Png,
+                w,
+                h,
+                &vec![255u8; (w * h * 4) as usize],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut ed = editor_with(dir.path(), ScriptedDialogs::new());
+        ed.open_path(&png).unwrap();
+        let viewport = glam::vec2(400.0, 400.0);
+        {
+            let doc = ed.active_mut().unwrap();
+            doc.set_viewport(viewport);
+            doc.camera.zoom = 1.0;
+            doc.camera.center = glam::vec2(w as f32 / 2.0, h as f32 / 2.0);
+        }
+        let circle = vector::shapes::circle(vector::point(150.0, 150.0), 80.0);
+        ed.apply_command(Command::create_layer(Layer::with_kind(
+            "Circle",
+            LayerKind::Shape(layer_model::ShapeLayer::from_svg(vector::to_svg(&circle))),
+        )));
+        ed.set_tool(ToolId::Type);
+        let screen = |x: f32, y: f32| viewport * 0.5 + glam::vec2(x - 150.0, y - 150.0);
+        let mut pointer = crate::ToolPointer::new();
+        // The top of the circle.
+        for phase in [PointerPhase::Down, PointerPhase::Up] {
+            pointer.handle(
+                &mut ed,
+                PointerInput::at(phase, screen(150.0, 70.0)),
+                false,
+                &[],
+            );
+        }
+        let doc = &ed.active().unwrap().document;
+        let text = doc
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .find_map(|id| match &doc.layers.get(id)?.kind {
+                LayerKind::Text(t) => Some(t.clone()),
+                _ => None,
+            })
+            .expect("the click made a text layer");
+        let path = text.path.expect("the click on the outline made path text");
+        assert!(path.closed);
+        for p in &path.points {
+            let (x, y) = (p[0] + 150.0, p[1] + 70.0);
+            let r = ((x - 150.0).powi(2) + (y - 150.0).powi(2)).sqrt();
+            assert!((r - 80.0).abs() < 0.5, "the baseline is the circle: {r}");
+        }
+    }
+
+    /// W9-K (round 2, defect 3): Type on a Path follows the outline the
+    /// user SEES. A moved shape layer's outline is hit where it is drawn (its
+    /// transform applies) and the baseline is that drawn outline; and the
+    /// Paths panel's Work Path is offered too, through the real pointer route.
+    #[test]
+    fn type_on_a_path_follows_a_moved_shape_and_the_work_path() {
+        use ui::canvas::{PointerInput, PointerPhase};
+        compositor::load_font(dejavu::sans::regular().to_vec());
+        let (w, h) = (300u32, 300u32);
+        let viewport = glam::vec2(400.0, 400.0);
+        let open = |dir: &std::path::Path| {
+            let png = dir.join("canvas.png");
+            std::fs::write(
+                &png,
+                raster::encode(
+                    raster::ExportFormat::Png,
+                    w,
+                    h,
+                    &vec![255u8; (w * h * 4) as usize],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let mut ed = editor_with(dir, ScriptedDialogs::new());
+            ed.open_path(&png).unwrap();
+            let doc = ed.active_mut().unwrap();
+            doc.set_viewport(viewport);
+            doc.camera.zoom = 1.0;
+            doc.camera.center = glam::vec2(w as f32 / 2.0, h as f32 / 2.0);
+            ed.set_tool(ToolId::Type);
+            ed
+        };
+        let screen = |x: f32, y: f32| viewport * 0.5 + glam::vec2(x - 150.0, y - 150.0);
+        let click = |ed: &mut Editor, x: f32, y: f32| {
+            let mut pointer = crate::ToolPointer::new();
+            for phase in [PointerPhase::Down, PointerPhase::Up] {
+                pointer.handle(ed, PointerInput::at(phase, screen(x, y)), false, &[]);
+            }
+        };
+        let path_text = |ed: &Editor| {
+            let doc = &ed.active().unwrap().document;
+            doc.layers
+                .iter_depth_first()
+                .into_iter()
+                .find_map(|id| {
+                    let layer = doc.layers.get(id)?;
+                    match &layer.kind {
+                        LayerKind::Text(t) => Some((layer.transform, t.clone())),
+                        _ => None,
+                    }
+                })
+                .expect("the click made a text layer")
+        };
+
+        // A circle shape (centre 150,150, r 60) moved down by 40: the user
+        // sees it centred at (150,190). Its drawn top is (150,130), 40 px
+        // from where the stored outline's top is.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = open(dir.path());
+        let circle = vector::shapes::circle(vector::point(150.0, 150.0), 60.0);
+        let mut shape = Layer::with_kind(
+            "Circle",
+            LayerKind::Shape(layer_model::ShapeLayer::from_svg(vector::to_svg(&circle))),
+        );
+        shape.transform = glam::Affine2::from_translation(glam::vec2(0.0, 40.0));
+        ed.apply_command(Command::create_layer(shape));
+        click(&mut ed, 150.0, 130.0);
+        let (pose, text) = path_text(&ed);
+        let path = text
+            .path
+            .expect("the click on the drawn outline made path text");
+        for p in &path.points {
+            let q = pose.transform_point2(glam::vec2(p[0], p[1]));
+            let r = ((q.x - 150.0).powi(2) + (q.y - 190.0).powi(2)).sqrt();
+            assert!(
+                (r - 60.0).abs() < 0.5,
+                "the baseline is the drawn circle: {q}"
+            );
+        }
+
+        // The Work Path (a circle, centre 150,150, r 50), no shape layer at
+        // all: the menu context parks it the way every frame does, and a
+        // Type click on it makes path text along it.
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = open(dir.path());
+        let mut ws = Workspace::new();
+        ws.paths.work_path = Some(vector::shapes::circle(vector::point(150.0, 150.0), 50.0));
+        let _ = context(&mut ed, &ws);
+        click(&mut ed, 150.0, 100.0);
+        let (pose, text) = path_text(&ed);
+        let path = text
+            .path
+            .expect("the click on the Work Path made path text");
+        assert!(path.closed);
+        for p in &path.points {
+            let q = pose.transform_point2(glam::vec2(p[0], p[1]));
+            let r = ((q.x - 150.0).powi(2) + (q.y - 150.0).powi(2)).sqrt();
+            assert!((r - 50.0).abs() < 0.5, "the baseline is the Work Path: {q}");
+        }
+    }
+
+    /// W9-K: File > Open of a .ttf loads the font for the session: no
+    /// document opens, the compositor can shape the family, and the Type
+    /// tool's Font list offers it. A file that is not a font is refused.
+    #[test]
+    fn file_open_of_a_font_file_makes_its_family_available() {
+        let dir = tempfile::tempdir().unwrap();
+        let font = dir.path().join("Extra.ttf");
+        std::fs::write(&font, dejavu::serif_condensed::regular()).unwrap();
+        let mut probe = text_engine::FontLibrary::empty();
+        probe.load_bytes(dejavu::serif_condensed::regular().to_vec());
+        let family = probe.family_names()[0].clone();
+        assert!(
+            crate::dialogs::open_file_filters()
+                .iter()
+                .any(|(label, ext)| *label == "Fonts" && ext.contains(&"ttf")),
+            "File > Open offers font files"
+        );
+
+        let junk = dir.path().join("junk.otf");
+        std::fs::write(&junk, b"not a font").unwrap();
+        let mut ed = editor_with(dir.path(), ScriptedDialogs::new().opening(&junk));
+        assert!(ed.dispatch(Action::Open).is_err(), "not a font");
+
+        let mut ed = editor_with(dir.path(), ScriptedDialogs::new().opening(&font));
+        let docs_before = ed.documents().len();
+        ed.dispatch(Action::Open).expect("the font loads");
+        assert_eq!(
+            ed.documents().len(),
+            docs_before,
+            "a font is not a document"
+        );
+        assert!(
+            compositor::font_families().contains(&family),
+            "the compositor shapes {family}"
+        );
+        assert!(
+            tools::registry::type_font_choices().contains(&family.as_str()),
+            "the Type tool's Font list offers {family}"
+        );
     }
 }

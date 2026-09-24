@@ -8,6 +8,7 @@
 //! field simply ignores that part of the preset.
 
 use design::{contrast_ratio_over, Srgba, TextSize};
+use tools::brush::{BrushDynamics, BrushTip};
 use tools::{BrushSettings, ToolId};
 
 use crate::tool_options::{OptionValue, ToolOptions};
@@ -29,6 +30,16 @@ pub struct BrushesState {
     /// W4-I: user edits (capture, remove) this session; `0` lets a preset
     /// list restored from the preferences file replace the defaults.
     edits: u64,
+    /// W9-E: how many of the brush library's entries
+    /// ([`tools::brush::library_since`]) this panel has taken in.
+    library_seen: usize,
+    /// W9-E: the tip and dynamics of the preset last applied, waiting for the
+    /// chrome to lay them over the tool's brush
+    /// ([`Self::take_extras_over`]) — they have no options-bar keys.
+    applied_extras: Option<(ToolId, BrushTip, BrushDynamics)>,
+    /// W9-E: the preset last applied carried a non-round tip or dynamics, so
+    /// the next apply must reach the brush even if no option key changes.
+    extras_live: bool,
 }
 
 impl Default for BrushesState {
@@ -37,6 +48,11 @@ impl Default for BrushesState {
             presets: default_presets(),
             active: None,
             edits: 0,
+            // Only what is published from now on: brushes made before this
+            // panel existed belong to whatever panel was there then.
+            library_seen: tools::brush::library_len(),
+            applied_extras: None,
+            extras_live: false,
         }
     }
 }
@@ -132,6 +148,12 @@ impl BrushesState {
             return Vec::new();
         };
         let s = preset.settings;
+        // W9-E: a sampled tip or dynamics travel beside the option writes;
+        // when either is (or was) in play the size write is sent even if
+        // unchanged, so the chrome re-reads the brush and lays them over it.
+        let extras = s.tip != BrushTip::Round || s.dynamics != BrushDynamics::default();
+        let force = extras || self.extras_live;
+        self.extras_live = extras;
         let writes: [(&'static str, OptionValue); 10] = [
             ("size", OptionValue::Float(s.size)),
             ("hardness", OptionValue::Float(s.hardness)),
@@ -145,15 +167,59 @@ impl BrushesState {
             ("flow_pressure", OptionValue::Bool(s.flow_pressure)),
         ];
         self.active = Some(index);
-        writes
+        let sent: Vec<(&'static str, OptionValue)> = writes
             .into_iter()
-            .filter(|(key, value)| options.set(tool, key, *value))
-            .collect()
+            .filter(|(key, value)| {
+                let changed = options.set(tool, key, *value);
+                changed || (force && *key == "size" && options.get(tool, key).is_some())
+            })
+            .collect();
+        // Pending only when something is sent: a pending set nobody reads
+        // would otherwise land on a later, unrelated options-bar edit.
+        self.applied_extras = (!sent.is_empty()).then_some((tool, s.tip, s.dynamics));
+        sent
+    }
+
+    /// W9-E: `base` with the tip and dynamics of the preset last applied to
+    /// `tool` laid over it (once — the pending extras are consumed), or
+    /// `base` unchanged when none is waiting.
+    pub fn take_extras_over(&mut self, tool: ToolId, base: BrushSettings) -> BrushSettings {
+        match self.applied_extras {
+            Some((for_tool, tip, dynamics)) if for_tool == tool => {
+                self.applied_extras = None;
+                BrushSettings {
+                    tip,
+                    dynamics,
+                    ..base
+                }
+            }
+            _ => base,
+        }
+    }
+
+    /// W9-E: take in the brushes made outside the panel since the last
+    /// call — Edit > Define Brush Preset, a `.abr` from File > Open — as
+    /// new presets at the end of the list. Returns how many arrived.
+    pub fn absorb_library(&mut self) -> usize {
+        let (fresh, seen) = tools::brush::library_since(self.library_seen);
+        self.library_seen = seen;
+        let n = fresh.len();
+        for (name, settings) in fresh {
+            if name.trim().is_empty() {
+                continue;
+            }
+            self.presets.push(BrushPreset { name, settings });
+            // A user edit like a capture: the preferences keep the list, and a
+            // saved list is not restored over it.
+            self.edits += 1;
+        }
+        n
     }
 
     /// Drop the selection highlight once the live brush no longer matches the
     /// preset it came from.
     pub fn sync(&mut self, options: &ToolOptions, tool: ToolId) {
+        self.absorb_library();
         let Some(index) = self.active else { return };
         let matches = self.presets.get(index).is_some_and(|p| {
             let live = options.brush_settings(tool);
@@ -419,5 +485,61 @@ mod tests {
         options.set(ToolId::Brush, "size", OptionValue::Float(999.0));
         s.sync(&options, ToolId::Brush);
         assert_eq!(s.active(), None);
+    }
+
+    #[test]
+    fn a_published_brush_is_listed_and_applying_it_carries_its_tip_and_dynamics() {
+        let mut s = BrushesState::new();
+        let before = s.len();
+        let id = tools::brush::TipId([0xA1; 32]);
+        let sampled = BrushSettings {
+            size: 37.0,
+            tip: BrushTip::Sampled(id),
+            dynamics: BrushDynamics {
+                scatter: 1.5,
+                ..Default::default()
+            },
+            ..BrushSettings::default()
+        };
+        tools::brush::publish_library_brush("W9E Panel Probe", sampled);
+        let mut options = ToolOptions::new();
+        // The panel's per-frame sync takes it in.
+        s.sync(&options, ToolId::Brush);
+        let index = s
+            .presets()
+            .iter()
+            .position(|p| p.name == "W9E Panel Probe")
+            .expect("the published brush is listed");
+        assert!(s.len() > before);
+        assert!(s.edits() > 0, "a listed brush is kept by the preferences");
+        assert_eq!(s.absorb_library(), 0, "taken in once");
+
+        let writes = s.apply(index, &mut options, ToolId::Brush);
+        assert!(writes.iter().any(|(k, _)| *k == "size"));
+        // The chrome lays the extras over the tool's brush, once.
+        let base = BrushSettings::default();
+        let applied = s.take_extras_over(ToolId::Brush, base);
+        assert_eq!(applied.tip, BrushTip::Sampled(id));
+        assert_eq!(applied.dynamics.scatter, 1.5);
+        assert_eq!(s.take_extras_over(ToolId::Brush, base), base);
+        // Re-applying the same preset still reaches the brush (the size write
+        // is sent even though the value did not change).
+        let again = s.apply(index, &mut options, ToolId::Brush);
+        assert_eq!(again.len(), 1, "{again:?}");
+        assert_eq!(
+            s.take_extras_over(ToolId::Brush, base).tip,
+            BrushTip::Sampled(id)
+        );
+        // And applying a plain round preset afterwards brings the tip back
+        // to round rather than leaving the sampled one in force.
+        let round = s
+            .presets()
+            .iter()
+            .position(|p| p.name == "Hard Round 24")
+            .unwrap();
+        s.apply(round, &mut options, ToolId::Brush);
+        let back = s.take_extras_over(ToolId::Brush, applied);
+        assert_eq!(back.tip, BrushTip::Round);
+        assert_eq!(back.dynamics, BrushDynamics::default());
     }
 }

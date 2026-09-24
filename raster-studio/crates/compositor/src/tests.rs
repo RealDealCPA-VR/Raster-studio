@@ -2628,10 +2628,17 @@ fn an_effect_rides_the_layers_opacity_blend_mode_and_mask() {
     );
     assert_px(filled.get(24, 24), [1.0; 4], 1e-4, "the layer is gone");
 
-    // A blend mode applies to the styled result as a whole. `Screen` against a
-    // white backdrop is white everywhere, shadow included.
+    // W9-H: the layer's blend mode applies to the layer and its interior
+    // effects; an exterior effect blends with its **own** mode against the
+    // backdrop, as in Photoshop. `Screen` against a white backdrop whitens
+    // the layer, while the Normal-mode shadow still lands black.
     let screened = build(&|t, id| t.doc.layers.get_mut(id).unwrap().blend_mode = BlendMode::Screen);
-    assert_px(screened.get(36, 24), [1.0; 4], 1e-4, "screened shadow");
+    assert_px(
+        screened.get(36, 24),
+        [0.0, 0.0, 0.0, 1.0],
+        1e-4,
+        "the shadow keeps its own mode",
+    );
     assert_px(screened.get(24, 24), [1.0; 4], 1e-4, "screened layer");
 
     // A mask hides the effect along with the pixels it was traced from.
@@ -2801,6 +2808,7 @@ fn a_layer_with_no_effects_takes_the_plain_path_and_a_dormant_style_changes_noth
         gradient_overlay: Some(layer_model::GradientOverlayEffect::default()),
         pattern_overlay: Some(layer_model::PatternOverlayEffect::default()),
         stroke: Some(layer_model::StrokeEffect::default()),
+        ..Default::default()
     };
     let after = composite_rect(&styled, &src, rect(0, 0, 64, 64), 0, opts()).unwrap();
     assert_eq!(

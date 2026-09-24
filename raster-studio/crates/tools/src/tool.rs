@@ -723,6 +723,61 @@ pub struct TextHitCaret {
     pub caret: usize,
 }
 
+/// W9-D: the options-bar key of the retouching tools' Sample choice.
+pub const SAMPLE_LAYERS_KEY: &str = "sample";
+
+/// W9-D: which layers a retouching stroke reads its source pixels from — the
+/// Sample choice of the Clone Stamp, the Healing Brush, the Spot Healing
+/// Brush, Blur, Sharpen and Smudge. [`SampleLayers::Current`] reads the layer
+/// being painted, as every stroke did before; the other two read the
+/// composite the shell hands over through [`ToolContext::composite_sampler`]
+/// and still write onto the active layer, which may be empty (non-destructive
+/// retouching on a layer of its own).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SampleLayers {
+    /// The layer being painted.
+    #[default]
+    Current,
+    /// The composite of the visible layers at and below the active one.
+    CurrentAndBelow,
+    /// The composite of every visible layer.
+    All,
+}
+
+impl SampleLayers {
+    /// The options bar's labels, in [`SampleLayers::from_choice`] order.
+    pub const CHOICES: &'static [&'static str] =
+        &["Current Layer", "Current & Below", "All Layers"];
+
+    /// The variant a Choice index names; an index past the end clamps to the
+    /// last entry, the options bar's own rule.
+    pub fn from_choice(index: usize) -> Self {
+        match index {
+            0 => SampleLayers::Current,
+            1 => SampleLayers::CurrentAndBelow,
+            _ => SampleLayers::All,
+        }
+    }
+}
+
+/// W9-D: the composite a retouching stroke with a Sample other than Current
+/// Layer reads, computed by the shell on demand — only over the rects the
+/// stroke asks for, so a stroke composites the tiles it reaches and nothing
+/// else. The shell builds one at the press from the document as committed
+/// then; the stroke keeps it until its release, so what it reads cannot move
+/// under it.
+pub trait CompositeSampler: Send + Sync {
+    /// The composite of `layers` (never [`SampleLayers::Current`]) over
+    /// `rect`, which is in the PAINT TARGET's pixel space (the active layer's
+    /// pixels): linear, premultiplied RGBA, `rect.width × rect.height`,
+    /// row-major.
+    fn composite(
+        &self,
+        layers: SampleLayers,
+        rect: PixelRect,
+    ) -> Result<filters::FilterBuffer, ToolError>;
+}
+
 pub struct ToolContext<'a> {
     /// The layer the tool edits.
     pub active_layer: Option<LayerId>,
@@ -765,6 +820,12 @@ pub struct ToolContext<'a> {
     /// anchors and rebuilds its kind from these. Filled by the shell; empty
     /// by default.
     pub shape_paths: Vec<(LayerId, layer_model::ShapeLayer)>,
+    /// W9-K: the outlines a Type click may start Type on a Path along, as SVG
+    /// path data in DOCUMENT space: the Paths panel's current path (the
+    /// selected one, else the Work Path) first, then every visible shape
+    /// layer's outline through its layer transform, top-most first. Filled by
+    /// the shell for the Type tools only; empty by default.
+    pub type_path_outlines: Vec<String>,
     /// Card 035: the ACTIVE layer's parent chain as one transform (parent
     /// space → document space), filled by the shell from the compositor's
     /// parent convention. A whole-layer transform delta computed in document
@@ -863,6 +924,13 @@ pub struct ToolContext<'a> {
     /// own geometry. Empty by default (a bare harness), in which case the
     /// active layer is the one there is.
     pub rectify_layers: Vec<(LayerId, glam::Affine2)>,
+    /// W9-D: the composite a retouching stroke's Sample choice reads when it
+    /// is not Current Layer, filled by the shell at the press that begins
+    /// such a stroke (see [`CompositeSampler`]). `None` in a bare harness and
+    /// for every other tool; a stroke asking for it then is refused
+    /// ([`ToolError::Degenerate`], the refusal a clone stamp with no source
+    /// gives) rather than silently reading the active layer instead.
+    pub composite_sampler: Option<std::sync::Arc<dyn CompositeSampler>>,
 
     commands: Vec<Command>,
     selection_edits: Vec<SelectionEdit>,
@@ -903,6 +971,7 @@ impl<'a> ToolContext<'a> {
             samplers: None,
             defer_heavy_commits: false,
             rectify_layers: Vec::new(),
+            composite_sampler: None,
             active_layer_parent_transform: None,
             snap_candidates: Vec::new(),
             snap_threshold_doc: 8.0,
@@ -930,6 +999,7 @@ impl<'a> ToolContext<'a> {
             layer_stack: Vec::new(),
             text_hit: None,
             shape_paths: Vec::new(),
+            type_path_outlines: Vec::new(),
             tiles,
             commands: Vec::new(),
             selection_edits: Vec::new(),
@@ -1059,6 +1129,23 @@ impl<'a> ToolContext<'a> {
                 self.active_layer.ok_or(ToolError::NoActiveLayer)?,
             )),
         }
+    }
+
+    /// W9-D: the sampled composite of `layers` over `rect` (paint-target
+    /// pixels), or `None` for [`SampleLayers::Current`] — the caller reads
+    /// the layer itself then. Refused when the shell lent no sampler.
+    pub fn sampled_composite(
+        &self,
+        layers: SampleLayers,
+        rect: PixelRect,
+    ) -> Option<Result<filters::FilterBuffer, ToolError>> {
+        if layers == SampleLayers::Current {
+            return None;
+        }
+        Some(match &self.composite_sampler {
+            Some(sampler) => sampler.composite(layers, rect),
+            None => Err(ToolError::Degenerate),
+        })
     }
 
     /// How much of one pixel the current selection lets an edit through.

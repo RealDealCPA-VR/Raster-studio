@@ -364,6 +364,10 @@ fn placements(
     cache: &mut GlyphRasterCache,
     text: &ShapedText,
 ) -> Vec<Placement> {
+    // W9-K: a warped or path-bound text fills its bent outlines instead.
+    if let Some(distortion) = crate::warp::Distortion::of(text) {
+        return distorted_placements(library, cache, text, &distortion);
+    }
     let mut out = Vec::with_capacity(text.glyphs.len());
     for glyph in &text.glyphs {
         let color = text.style_of(glyph).color;
@@ -386,6 +390,68 @@ fn placements(
         }
     }
     out
+}
+
+/// W9-K: every glyph outline (and every decoration rule) pushed through the
+/// warp or path map and filled, one placement per glyph.
+fn distorted_placements(
+    library: &mut FontLibrary,
+    cache: &mut GlyphRasterCache,
+    text: &ShapedText,
+    distortion: &crate::warp::Distortion,
+) -> Vec<Placement> {
+    let mut out = Vec::with_capacity(text.glyphs.len() + text.decorations.len());
+    let mut push = |contours: &[Vec<[f32; 2]>], color: [f32; 4]| {
+        let Some((left, top, width, height, data)) = crate::warp::fill_polygons(contours) else {
+            return;
+        };
+        let image = GlyphImage {
+            left: 0,
+            top: 0,
+            width,
+            height,
+            data,
+        };
+        let image = if text.anti_alias == AntiAlias::None {
+            threshold(&image)
+        } else {
+            image
+        };
+        out.push(Placement {
+            image: Arc::new(image),
+            left,
+            top,
+            color,
+        });
+    };
+    for glyph in &text.glyphs {
+        let color = text.style_of(glyph).color;
+        let Some(commands) = crate::warp::glyph_commands(library, &mut cache.swash, glyph) else {
+            continue;
+        };
+        let contours = crate::warp::glyph_contours(&commands, glyph, Some(distortion));
+        push(&contours, color);
+    }
+    for decoration in &text.decorations {
+        let Some(rect) = drawable_rect(&decoration.rect) else {
+            continue;
+        };
+        push(
+            &[crate::warp::rect_contour(&rect, distortion)],
+            decoration.color,
+        );
+    }
+    out
+}
+
+/// The decorations drawn as flat rectangles: all of them for flat text, none
+/// for warped or path-bound text, whose rules are already bent placements.
+fn flat_decorations(text: &ShapedText) -> &[crate::layout::Decoration] {
+    if text.warp.is_active() || text.path.is_some() {
+        &[]
+    } else {
+        &text.decorations
+    }
 }
 
 /// A decoration rectangle reduced to something a mask can actually hold.
@@ -425,7 +491,7 @@ fn bounds(text: &ShapedText, placed: &[Placement]) -> Option<(i32, i32, i32, i32
         max_x = max_x.max(placement.left + placement.image.width as i32);
         max_y = max_y.max(placement.top + placement.image.height as i32);
     }
-    for decoration in &text.decorations {
+    for decoration in flat_decorations(text) {
         let Some(rect) = drawable_rect(&decoration.rect) else {
             continue;
         };
@@ -456,7 +522,7 @@ pub fn rasterize(
     for placement in &placed {
         blit(&mut mask, placement);
     }
-    for decoration in &text.decorations {
+    for decoration in flat_decorations(text) {
         fill_rect(&mut mask, &decoration.rect);
     }
     mask
@@ -640,7 +706,7 @@ pub fn render_linear(
             blit(mask, placement);
         }
     }
-    for decoration in &text.decorations {
+    for decoration in flat_decorations(text) {
         let key = group_for(decoration.color, &mut order, &mut groups);
         colors.insert(key, decoration.color);
         if let Some(mask) = groups.get_mut(&key) {

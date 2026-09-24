@@ -149,18 +149,26 @@ macro_rules! with_paint {
             c("stroke", "Stroke", PaintSource::CHOICES, 0),
             col("stroke_color", "Custom Stroke Colour", [0.0, 0.0, 0.0, 1.0]),
             f("stroke_width", "Stroke Width", 0.0, 500.0, DEFAULT_STROKE_WIDTH),
+            // W9-F: stroke alignment, cap, join and dash / gap (in widths).
+            c("stroke_align", "Align", crate::shape::STROKE_ALIGN_CHOICES, 1),
+            c("stroke_cap", "Caps", crate::shape::STROKE_CAP_CHOICES, 0),
+            c("stroke_join", "Corners", crate::shape::STROKE_JOIN_CHOICES, 0),
+            f("stroke_dash", "Dash (0 = solid)", 0.0, 100.0, 0.0),
+            f("stroke_gap", "Gap", 0.0, 100.0, 0.0),
         ]
     };
 }
 
 /// A shape tool's options: the mode, From Centre, the kind's own geometry
-/// keys, then the paint.
+/// keys, then the paint. W9-F: the mode offers Path (the outline becomes the
+/// Work Path) and the fill can be a colour, the gradient or the pattern.
 macro_rules! shape_opts {
     ($($extra:expr),* $(,)?) => {
         with_paint!(
-            c("mode", "Mode", &["Shape Layer", "Rasterize"], 0),
+            c("mode", "Mode", ShapeMode::CHOICES, 0),
             b("from_center", "From Centre", false),
             $($extra,)*
+            c("fill_type", "Fill Type", crate::shape::FillType::CHOICES, 0),
         )
     };
 }
@@ -185,14 +193,43 @@ const BRUSH_OPTS: &[OptionSpec] = &[
     b("opacity_pressure", "Opacity from Pressure", false),
 ];
 
+/// W9-L: the selection Mode every selection tool offers — New, Add,
+/// Subtract, Intersect and Exclude (XOR), index for index with
+/// [`crate::select::SELECTION_MODES`].
+const SELECTION_MODE: OptionSpec = c("mode", "Mode", crate::select::SELECTION_MODE_LABELS, 0);
+
 const SELECTION_OPTS: &[OptionSpec] = &[
-    c("mode", "Mode", &["New", "Add", "Subtract", "Intersect"], 0),
+    SELECTION_MODE,
     f("feather", "Feather", 0.0, 250.0, 0.0),
     b("antialias", "Anti-alias", true),
 ];
 
+/// W9-L: the rectangular and elliptical marquees add Photopea's Style —
+/// Normal, Fixed Ratio (W : H) or Fixed Size (W x H px) — to the shared
+/// selection controls.
+const MARQUEE_OPTS: &[OptionSpec] = &[
+    SELECTION_MODE,
+    f("feather", "Feather", 0.0, 250.0, 0.0),
+    b("antialias", "Anti-alias", true),
+    c("style", "Style", crate::select::MARQUEE_STYLE_LABELS, 0),
+    f(
+        "style_width",
+        "W",
+        0.01,
+        crate::select::MARQUEE_STYLE_MAX_PX,
+        crate::select::MARQUEE_STYLE_DEFAULT_PX,
+    ),
+    f(
+        "style_height",
+        "H",
+        0.01,
+        crate::select::MARQUEE_STYLE_MAX_PX,
+        crate::select::MARQUEE_STYLE_DEFAULT_PX,
+    ),
+];
+
 const WAND_OPTS: &[OptionSpec] = &[
-    c("mode", "Mode", &["New", "Add", "Subtract", "Intersect"], 0),
+    SELECTION_MODE,
     f("tolerance", "Tolerance", 0.0, 1.0, 32.0 / 255.0),
     b("contiguous", "Contiguous", true),
     b("antialias", "Anti-alias", true),
@@ -213,7 +250,19 @@ const CLONE_OPTS: &[OptionSpec] = &[
     f("spacing", "Spacing", 0.01, 10.0, 0.05),
     f("opacity", "Opacity", 0.0, 1.0, 1.0),
     b("aligned", "Aligned", true),
+    // W9-D: where the stamp reads (Current Layer / Current & Below / All
+    // Layers); it always writes the active layer.
+    SAMPLE_OPT,
 ];
+
+/// W9-D: the Sample choice the Clone Stamp, the healing brushes, Blur,
+/// Sharpen and Smudge share ([`crate::tool::SampleLayers`]).
+const SAMPLE_OPT: OptionSpec = c(
+    crate::tool::SAMPLE_LAYERS_KEY,
+    "Sample",
+    crate::tool::SampleLayers::CHOICES,
+    0,
+);
 
 const TONE_OPTS: &[OptionSpec] = &[
     f("size", "Size", 1.0, 5000.0, 60.0),
@@ -224,6 +273,178 @@ const TONE_OPTS: &[OptionSpec] = &[
 
 const SHAPE_OPTS: &[OptionSpec] = shape_opts!();
 
+/// W9-K: the generic families every Font list starts with, in index order.
+pub const GENERIC_FONT_FAMILIES: &[&str] = &["sans-serif", "serif", "monospace"];
+
+/// W9-K: the live Type-tool Font list: [`GENERIC_FONT_FAMILIES`], then every
+/// installed family registered so far, in registration order.
+static FONT_CHOICES: std::sync::RwLock<&'static [&'static str]> =
+    std::sync::RwLock::new(GENERIC_FONT_FAMILIES);
+
+/// W9-K: the Type tools' Font choices right now. The options bar draws this
+/// list and [`crate::text::TypeTool`] maps a held index through it, so the
+/// two agree by construction.
+pub fn type_font_choices() -> &'static [&'static str] {
+    *FONT_CHOICES
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// W9-K: add installed families to the Font list and return the list.
+///
+/// Append-only - a family already listed keeps its index, so an index the
+/// options bar already holds never starts naming a different family when a
+/// font is loaded later. The list only grows when a name is new; each growth
+/// leaks one small slice (fonts are added a handful of times a session).
+pub fn register_font_families<S: AsRef<str>>(
+    names: impl IntoIterator<Item = S>,
+) -> &'static [&'static str] {
+    let mut guard = FONT_CHOICES
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut list: Vec<&'static str> = guard.to_vec();
+    let before = list.len();
+    for name in names {
+        let name = name.as_ref();
+        if !name.is_empty() && !list.contains(&name) {
+            list.push(Box::leak(name.to_owned().into_boxed_str()));
+        }
+    }
+    if list.len() != before {
+        *guard = Box::leak(list.into_boxed_slice());
+    }
+    *guard
+}
+
+/// W9-K: the Type tools' Font option with the live choices in place of the
+/// static table's three.
+pub fn type_font_spec() -> OptionSpec {
+    OptionSpec {
+        key: "font_family",
+        label: "Font",
+        kind: OptionKind::Choice {
+            choices: type_font_choices(),
+            default: 0,
+        },
+    }
+}
+
+/// W9-N: the Custom Shape tool's Shape option key.
+pub const CUSTOM_SHAPE_KEY: &str = "preset";
+
+/// W9-N: the built-in library's labels, the start of the live Shape list.
+const BUILTIN_SHAPE_NAMES: &[&str] = &vector::CUSTOM_SHAPE_NAMES;
+
+/// W9-N: the live Custom Shape list - the built-in library's labels, then
+/// every custom shape a `.csh` import registered, in registration order -
+/// and the imported shapes' paths, in that list's order past the built-in
+/// entries. One lock, so a reader never sees a name without its path.
+static CUSTOM_SHAPES: std::sync::RwLock<(&'static [&'static str], Vec<vector::Path>)> =
+    std::sync::RwLock::new((BUILTIN_SHAPE_NAMES, Vec::new()));
+
+/// W9-N: the Custom Shape tool's Shape choices right now. The options bar
+/// draws this list and [`crate::shape::ShapeTool`] maps a held index through
+/// [`custom_shape_at`], so the two agree by construction.
+pub fn custom_shape_choices() -> &'static [&'static str] {
+    CUSTOM_SHAPES
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .0
+}
+
+/// W9-N: add imported custom shapes to the Shape list and return the list.
+///
+/// Append-only, like [`register_font_families`]: a name already listed keeps
+/// its index (its path is replaced, so a re-import of an edited library draws
+/// the new outline), so an index the options bar holds never starts naming a
+/// different shape. A path that is empty, non-finite or has zero width or
+/// height is skipped (the tool fits the path's bounds into the drag box), and
+/// so is a name that is a built-in entry's.
+pub fn register_custom_shapes<S: AsRef<str>>(
+    shapes: impl IntoIterator<Item = (S, vector::Path)>,
+) -> &'static [&'static str] {
+    let mut guard = CUSTOM_SHAPES
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (names, paths) = &mut *guard;
+    let mut list: Vec<&'static str> = names.to_vec();
+    let before = list.len();
+    for (name, path) in shapes {
+        let name = name.as_ref();
+        let b = path.bounds();
+        let usable = !name.is_empty()
+            && !path.is_empty()
+            && path.is_finite()
+            && b.max.x - b.min.x > 0.0
+            && b.max.y - b.min.y > 0.0;
+        if !usable || BUILTIN_SHAPE_NAMES.contains(&name) {
+            continue;
+        }
+        match list.iter().position(|n| *n == name) {
+            Some(at) => {
+                if let Some(slot) = paths.get_mut(at - BUILTIN_SHAPE_NAMES.len()) {
+                    *slot = path;
+                }
+            }
+            None => {
+                list.push(Box::leak(name.to_owned().into_boxed_str()));
+                paths.push(path);
+            }
+        }
+    }
+    if list.len() != before {
+        *names = Box::leak(list.into_boxed_slice());
+    }
+    names
+}
+
+/// W9-N: [`register_custom_shapes`] from SVG path data (an imported shape's
+/// unit-square outline); an outline that does not parse is skipped.
+pub fn register_custom_shape_outlines<S: AsRef<str>, D: AsRef<str>>(
+    outlines: impl IntoIterator<Item = (S, D)>,
+) -> &'static [&'static str] {
+    register_custom_shapes(
+        outlines
+            .into_iter()
+            .filter_map(|(name, d)| Some((name, vector::parse_svg(d.as_ref()).ok()?))),
+    )
+}
+
+/// W9-N: the shape a Shape choice `index` names - a built-in entry, or an
+/// imported one past them. An index past the end clamps to the last entry,
+/// the options bar's own `conform` rule.
+pub fn custom_shape_at(index: usize) -> (String, vector::Path) {
+    let builtin = vector::CustomShape::ALL.len();
+    if index >= builtin {
+        let guard = CUSTOM_SHAPES
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (names, paths) = &*guard;
+        if let Some(last) = paths.len().checked_sub(1) {
+            let at = (index - builtin).min(last);
+            if let Some(name) = names.get(builtin + at) {
+                return ((*name).to_owned(), paths[at].clone());
+            }
+        }
+    }
+    let last = vector::CustomShape::ALL[builtin - 1];
+    let shape = vector::CustomShape::from_index(index).unwrap_or(last);
+    (shape.name().to_owned(), shape.path())
+}
+
+/// W9-N: the Custom Shape tool's Shape option with the live choices in place
+/// of the static table's built-in ten.
+pub fn custom_shape_spec() -> OptionSpec {
+    OptionSpec {
+        key: CUSTOM_SHAPE_KEY,
+        label: "Shape",
+        kind: OptionKind::Choice {
+            choices: custom_shape_choices(),
+            default: 0,
+        },
+    }
+}
+
 /// W8-C: the Type tools' options (face, size and default style), with
 /// `$extra` in front — every Type tool shares this list, and the two Type
 /// Mask tools add the selection Mode their confirm combines with
@@ -233,16 +454,12 @@ macro_rules! type_opts {
     $($extra,)*
     f("size_px", "Size", 4.0, 512.0, 24.0),
     // The three CSS generic families, which `text_engine` resolves to
-    // installed fonts (W1-B2). The installed family list cannot be
-    // offered here: an [`OptionKind::Choice`] is `&'static` const
-    // data and `text::TypeTool::set_setting` reads this very table
-    // back by index, so a live list needs a dynamic option kind first.
-    c(
-        "font_family",
-        "Font",
-        &["sans-serif", "serif", "monospace"],
-        0,
-    ),
+    // installed fonts (W1-B2). W9-K: this static table is only the
+    // start of the list - the live Font choice is [`type_font_choices`]
+    // (these three, then every installed family the UI registered with
+    // [`register_font_families`]), which the options bar draws and
+    // `text::TypeTool::set_setting` indexes.
+    c("font_family", "Font", GENERIC_FONT_FAMILIES, 0),
     // W3-J: the Type tool's DEFAULT style - what the Character and
     // Paragraph panels edit with no text layer selected, held on the
     // workspace like every option and seeded into the next layer the
@@ -390,7 +607,7 @@ const TOOLS: &[ToolInfo] = &[
         "marquee-rect",
         Cursor::Crosshair,
         Some('m'),
-        SELECTION_OPTS,
+        MARQUEE_OPTS,
     ),
     t(
         ToolId::EllipseMarquee,
@@ -400,7 +617,7 @@ const TOOLS: &[ToolInfo] = &[
         "marquee-ellipse",
         Cursor::Crosshair,
         Some('m'),
-        SELECTION_OPTS,
+        MARQUEE_OPTS,
     ),
     t(
         ToolId::SingleRowMarquee,
@@ -451,7 +668,7 @@ const TOOLS: &[ToolInfo] = &[
         Cursor::Crosshair,
         Some('l'),
         &[
-            c("mode", "Mode", &["New", "Add", "Subtract", "Intersect"], 0),
+            SELECTION_MODE,
             i("search_radius", "Width", 1, 256, 24),
             f("edge_weight", "Contrast", 0.0, 4.0, 1.0),
         ],
@@ -475,7 +692,7 @@ const TOOLS: &[ToolInfo] = &[
         Cursor::BrushRing,
         Some('w'),
         &[
-            c("mode", "Mode", &["New", "Add", "Subtract", "Intersect"], 0),
+            SELECTION_MODE,
             f("radius", "Size", 1.0, 500.0, 8.0),
             f("tolerance", "Tolerance", 0.0, 1.0, 16.0 / 255.0),
         ],
@@ -593,6 +810,7 @@ const TOOLS: &[ToolInfo] = &[
             // W7-I: Proximity Match diffuses the surroundings inward;
             // Content-Aware synthesises the brushed area by PatchMatch.
             c("type", "Type", &["Proximity Match", "Content-Aware"], 0),
+            SAMPLE_OPT,
         ],
     ),
     t(
@@ -607,6 +825,7 @@ const TOOLS: &[ToolInfo] = &[
             f("size", "Size", 1.0, 5000.0, 40.0),
             f("softness", "Softness", 0.5, 64.0, 4.0),
             b("aligned", "Aligned", true),
+            SAMPLE_OPT,
         ],
     ),
     t(
@@ -829,6 +1048,7 @@ const TOOLS: &[ToolInfo] = &[
             f("size", "Size", 1.0, 5000.0, 40.0),
             f("radius", "Strength", 0.1, 64.0, 3.0),
             f("opacity", "Opacity", 0.0, 1.0, 1.0),
+            SAMPLE_OPT,
         ],
     ),
     t(
@@ -843,6 +1063,7 @@ const TOOLS: &[ToolInfo] = &[
             f("size", "Size", 1.0, 5000.0, 40.0),
             f("amount", "Strength", 0.0, 4.0, 1.0),
             f("opacity", "Opacity", 0.0, 1.0, 1.0),
+            SAMPLE_OPT,
         ],
     ),
     t(
@@ -856,6 +1077,7 @@ const TOOLS: &[ToolInfo] = &[
         &[
             f("size", "Size", 1.0, 5000.0, 40.0),
             f("strength", "Strength", 0.0, 1.0, 0.5),
+            SAMPLE_OPT,
         ],
     ),
     t(
@@ -1042,7 +1264,21 @@ const TOOLS: &[ToolInfo] = &[
         // `A`, Photopea's path-tool letter; Direct Selection shares it and
         // the letter cycles between them.
         Some('a'),
-        &[],
+        // W9-F: merge or align the clicked path's components.
+        &[
+            c(
+                "combine",
+                "Combine",
+                crate::path_select::PathCombine::CHOICES,
+                0,
+            ),
+            c(
+                "align",
+                "Align Components",
+                crate::path_select::PathAlign::CHOICES,
+                0,
+            ),
+        ],
     ),
     t(
         ToolId::DirectSelection,
@@ -1171,12 +1407,58 @@ const TOOLS: &[ToolInfo] = &[
         "transform",
         Cursor::Arrow,
         None,
-        &[c(
-            "mode",
-            "Mode",
-            &["Scale", "Rotate", "Skew", "Distort", "Perspective", "Warp"],
-            0,
-        )],
+        // W9-L: Photopea's numeric bar — reference point, X/Y, W/H %, Link,
+        // Angle, H/V Skew, Interpolation — and the Warp presets. The
+        // geometry keys apply together on an edit-counter change
+        // (`crate::transform::TransformTool::apply_pending_numeric`).
+        &[
+            c(
+                "mode",
+                "Mode",
+                &["Scale", "Rotate", "Skew", "Distort", "Perspective", "Warp"],
+                0,
+            ),
+            c(
+                crate::transform::keys::REFERENCE,
+                "Reference",
+                crate::transform::REFERENCE_LABELS,
+                crate::transform::REFERENCE_CENTRE,
+            ),
+            f(crate::transform::keys::X, "X", -100_000.0, 100_000.0, 0.0),
+            f(crate::transform::keys::Y, "Y", -100_000.0, 100_000.0, 0.0),
+            f(crate::transform::keys::W, "W %", -10_000.0, 10_000.0, 100.0),
+            f(crate::transform::keys::H, "H %", -10_000.0, 10_000.0, 100.0),
+            b(crate::transform::keys::LINK, "Link", false),
+            f(crate::transform::keys::ANGLE, "Angle", -180.0, 180.0, 0.0),
+            f(
+                crate::transform::keys::SKEW_H,
+                "H Skew",
+                -crate::transform::MAX_SKEW_DEG,
+                crate::transform::MAX_SKEW_DEG,
+                0.0,
+            ),
+            f(
+                crate::transform::keys::SKEW_V,
+                "V Skew",
+                -crate::transform::MAX_SKEW_DEG,
+                crate::transform::MAX_SKEW_DEG,
+                0.0,
+            ),
+            c(
+                crate::transform::keys::INTERPOLATION,
+                "Interpolation",
+                crate::transform::INTERPOLATION_LABELS,
+                2,
+            ),
+            c(
+                crate::transform::keys::WARP,
+                "Warp",
+                crate::transform::WARP_PRESET_LABELS,
+                0,
+            ),
+            f(crate::transform::keys::BEND, "Bend", -100.0, 100.0, 50.0),
+            i(crate::transform::keys::NUMERIC_SEQ, "Edit", 0, i32::MAX, 0),
+        ],
     ),
 ];
 
@@ -1348,7 +1630,7 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
             },
         )),
         ToolId::Pen => Box::new(crate::pen::PenTool::default()),
-        ToolId::PathSelect => Box::new(crate::path_select::PathSelectTool),
+        ToolId::PathSelect => Box::new(crate::path_select::PathSelectTool::default()),
         ToolId::DirectSelection => Box::new(crate::path_select::DirectSelectionTool::default()),
         ToolId::Type => Box::new(crate::text::TypeTool::default()),
         ToolId::Rectangle => Box::new(ShapeTool::new(ShapeKind::Rectangle, ShapeMode::VectorLayer)),

@@ -412,8 +412,11 @@ fn composites_strokes_is_exactly_the_set_that_answers_the_mode_key() {
     }
     assert!(!tools::composites_strokes(ToolId::Patch));
     assert!(!tools::composites_strokes(ToolId::RedEye));
-    assert!(!tools::composites_strokes(ToolId::Gradient));
-    assert!(!tools::composites_strokes(ToolId::PaintBucket));
+    // W9-L: the Gradient and the Paint Bucket composite their ramp / fill
+    // through the Mode, so they are offered it and answer it.
+    assert!(tools::composites_strokes(ToolId::Gradient));
+    assert!(tools::composites_strokes(ToolId::PaintBucket));
+    assert!(!tools::composites_strokes(ToolId::PatternFill));
     assert!(!tools::composites_strokes(ToolId::Hand));
     assert!(matches!(
         registry::make(ToolId::Patch).set_setting(BLEND_MODE_KEY, ToolSetting::Choice(1)),

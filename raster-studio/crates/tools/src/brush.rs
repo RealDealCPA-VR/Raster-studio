@@ -21,6 +21,10 @@
 //! position it stamps along, and pulls the filter to the true endpoint when the
 //! pointer lifts so the stroke still ends where the hand did.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
+
 use glam::{IVec2, Vec2};
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +66,16 @@ pub struct BrushSettings {
     pub min_size_ratio: f32,
     /// Skip anti-aliasing: every pixel is fully in or fully out (the pencil).
     pub aliased: bool,
+    /// W9-E: the shape every dab stamps — the computed round tip, or a
+    /// grayscale sample (Define Brush Preset, an imported `.abr`) scaled to
+    /// `size` and rotated/squashed by `angle`/`roundness`. Absent from older
+    /// saved brushes, which therefore load round.
+    #[serde(default)]
+    pub tip: BrushTip,
+    /// W9-E: Photopea's Brush-panel dynamics (shape, scatter, colour,
+    /// transfer). All off by default and absent from older saved brushes.
+    #[serde(default)]
+    pub dynamics: BrushDynamics,
 }
 
 impl Default for BrushSettings {
@@ -80,6 +94,8 @@ impl Default for BrushSettings {
             opacity_pressure: false,
             min_size_ratio: 0.1,
             aliased: false,
+            tip: BrushTip::Round,
+            dynamics: BrushDynamics::default(),
         }
     }
 }
@@ -123,6 +139,7 @@ impl BrushSettings {
         // Never 1.0: a filter with coefficient 1 never converges on the input.
         self.smoothing = self.smoothing.clamp(0.0, 0.99);
         self.min_size_ratio = self.min_size_ratio.clamp(0.0, 1.0);
+        self.dynamics = self.dynamics.validated()?;
         Ok(self)
     }
 
@@ -176,6 +193,8 @@ pub struct Dab {
     /// How much coverage this single dab contributes, `0..=1`.
     pub flow: f32,
     pub aliased: bool,
+    /// W9-E: the tip this dab stamps; see [`BrushSettings::tip`].
+    pub tip: BrushTip,
 }
 
 impl Dab {
@@ -211,8 +230,39 @@ impl Dab {
     }
 
     /// Coverage at an exact point, before `flow`.
+    ///
+    /// A sampled tip whose image is not registered in this process (a preset
+    /// whose pixels were never loaded) falls back to the round tip rather
+    /// than painting nothing.
     pub fn coverage_at(&self, p: Vec2) -> f32 {
-        self.falloff(self.norm(p))
+        match self.sampled() {
+            Some(tip) => self.sampled_coverage(&tip, p),
+            None => self.falloff(self.norm(p)),
+        }
+    }
+
+    /// The registered image behind a [`BrushTip::Sampled`] dab.
+    fn sampled(&self) -> Option<Arc<SampledTip>> {
+        match self.tip {
+            BrushTip::Round => None,
+            BrushTip::Sampled(id) => sampled_tip(id),
+        }
+    }
+
+    /// Coverage of a sampled tip at `p`: the point is taken into the dab's
+    /// rotated, squashed frame, where the tip image's longer side spans the
+    /// diameter, and the image is sampled bilinearly there.
+    fn sampled_coverage(&self, tip: &SampledTip, p: Vec2) -> f32 {
+        let d = p - self.center;
+        let (s, c) = self.angle.sin_cos();
+        let x = d.x * c + d.y * s;
+        let y = -d.x * s + d.y * c;
+        let rx = self.radius.max(1e-4);
+        let ry = (self.radius * self.roundness).max(1e-4);
+        let long = tip.width.max(tip.height) as f32;
+        let tx = x / rx * long * 0.5 + tip.width as f32 * 0.5;
+        let ty = y / ry * long * 0.5 + tip.height as f32 * 0.5;
+        tip.sample(tx, ty)
     }
 
     /// The pixel the dab's centre falls inside.
@@ -249,6 +299,23 @@ impl Dab {
     /// pencil produces, which a blanket "small dabs are one pixel" rule would
     /// wrongly collapse to a dot.
     pub fn coverage_pixel(&self, x: i32, y: i32) -> f32 {
+        if let Some(tip) = self.sampled() {
+            // A sampled tip is its own shape; the round rim rules below do
+            // not apply to it. Aliased, it is thresholded at half coverage.
+            if self.aliased {
+                let c = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+                return if self.sampled_coverage(&tip, c) >= 0.5 {
+                    1.0
+                } else {
+                    0.0
+                };
+            }
+            let mut sum = 0.0;
+            for (dx, dy) in PIXEL_SAMPLES {
+                sum += self.sampled_coverage(&tip, Vec2::new(x as f32 + dx, y as f32 + dy));
+            }
+            return sum * 0.25;
+        }
         if self.aliased {
             let cp = self.center_pixel();
             if cp.x == x && cp.y == y {
@@ -257,9 +324,8 @@ impl Dab {
             let c = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
             return if self.norm(c) < 1.0 { 1.0 } else { 0.0 };
         }
-        const OFFS: [(f32, f32); 4] = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)];
         let mut sum = 0.0;
-        for (dx, dy) in OFFS {
+        for (dx, dy) in PIXEL_SAMPLES {
             sum += self.coverage_at(Vec2::new(x as f32 + dx, y as f32 + dy));
         }
         sum * 0.25
@@ -267,7 +333,13 @@ impl Dab {
 
     /// Half-open pixel bounds the dab can possibly touch.
     pub fn bounds(&self) -> (IVec2, IVec2) {
-        let r = self.radius.max(0.0) + 1.0;
+        // A sampled tip is a rectangle whose longer side is the diameter, so
+        // rotated its corners reach up to sqrt(2) radii from the centre.
+        let reach = match self.tip {
+            BrushTip::Round => 1.0,
+            BrushTip::Sampled(_) => std::f32::consts::SQRT_2,
+        };
+        let r = self.radius.max(0.0) * reach + 1.0;
         let lo = IVec2::new(
             (self.center.x - r).floor() as i32,
             (self.center.y - r).floor() as i32,
@@ -292,6 +364,10 @@ pub struct DabEmitter {
     /// Distance travelled since the last dab, carried across segments.
     since_dab: f32,
     last_pressure: f32,
+    /// W9-E: the per-stroke generator the dynamics draw from, seeded from
+    /// [`BrushDynamics::seed`] and the stroke's first point, so the same
+    /// stroke replays to the same dabs.
+    rng: StrokeRng,
     dabs: Vec<Dab>,
     /// The raw path, kept for tools whose algorithm wants the gesture rather
     /// than the stamps (quick select, magnetic lasso, patch).
@@ -309,10 +385,11 @@ impl DabEmitter {
             cursor: pos,
             since_dab: 0.0,
             last_pressure: pressure.clamp(0.0, 1.0),
+            rng: StrokeRng::for_stroke(settings.dynamics.seed, pos),
             dabs: Vec::new(),
             raw: vec![pos],
         };
-        me.stamp(pos, me.last_pressure);
+        me.stamp(pos, me.last_pressure, Vec2::X);
         Ok(me)
     }
 
@@ -328,16 +405,63 @@ impl DabEmitter {
         &self.raw
     }
 
-    fn stamp(&mut self, center: Vec2, pressure: f32) {
-        self.dabs.push(Dab {
+    /// Stamp at `center`, travelling along `dir` (a unit vector; scatter
+    /// throws dabs across it).
+    ///
+    /// With every dynamic off this is exactly one dab of the settings' own
+    /// shape. Otherwise it is `count` dabs (fewer by `count_jitter`), each
+    /// with its own jittered size, angle, roundness and alpha and thrown
+    /// off the path by `scatter` — all drawn from the stroke's seeded
+    /// generator, in a fixed order, so a replay is identical.
+    fn stamp(&mut self, center: Vec2, pressure: f32, dir: Vec2) {
+        let s = self.settings;
+        let base = Dab {
             center,
-            radius: self.settings.radius_at(pressure),
-            hardness: self.settings.hardness,
-            angle: self.settings.angle,
-            roundness: self.settings.roundness,
-            flow: self.settings.dab_alpha_at(pressure),
-            aliased: self.settings.aliased,
-        });
+            radius: s.radius_at(pressure),
+            hardness: s.hardness,
+            angle: s.angle,
+            roundness: s.roundness,
+            flow: s.dab_alpha_at(pressure),
+            aliased: s.aliased,
+            tip: s.tip,
+        };
+        let d = s.dynamics;
+        if d.is_off() {
+            self.dabs.push(base);
+            return;
+        }
+        let count_draw = self.rng.next_f32();
+        let count = ((d.count.max(1) as f32) * (1.0 - d.count_jitter * count_draw))
+            .round()
+            .max(1.0) as u32;
+        let perp = Vec2::new(-dir.y, dir.x);
+        for _ in 0..count {
+            let draws = [
+                self.rng.next_f32(),
+                self.rng.next_f32(),
+                self.rng.next_f32(),
+                self.rng.next_f32(),
+                self.rng.next_f32(),
+                self.rng.next_f32(),
+                self.rng.next_f32(),
+            ];
+            let mut dab = base;
+            let throw = d.scatter * s.size;
+            dab.center += perp * throw * (2.0 * draws[0] - 1.0);
+            if d.scatter_both_axes {
+                dab.center += dir * throw * (2.0 * draws[1] - 1.0);
+            }
+            if d.size_jitter > 0.0 {
+                dab.radius *= (1.0 - d.size_jitter * draws[2]).max(d.min_diameter);
+            }
+            dab.angle += d.angle_jitter * std::f32::consts::PI * (2.0 * draws[3] - 1.0);
+            if d.roundness_jitter > 0.0 {
+                dab.roundness *= (1.0 - d.roundness_jitter * draws[4]).max(d.min_roundness);
+                dab.roundness = dab.roundness.max(0.01);
+            }
+            dab.flow *= (1.0 - d.flow_jitter * draws[5]) * (1.0 - d.opacity_jitter * draws[6]);
+            self.dabs.push(dab);
+        }
     }
 
     /// Feed one pointer sample.
@@ -390,11 +514,368 @@ impl DabEmitter {
             travelled += need;
             self.since_dab = 0.0;
             let t = travelled / len;
-            self.stamp(from + dir * travelled, p0 + (pressure - p0) * t);
+            self.stamp(from + dir * travelled, p0 + (pressure - p0) * t, dir);
         }
         self.since_dab += len - travelled;
         self.cursor = to;
         self.last_pressure = pressure;
+    }
+}
+
+/// Where the four coverage samples of one pixel sit: the quarter points of
+/// the pixel square.
+const PIXEL_SAMPLES: [(f32, f32); 4] = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)];
+
+// ---------------------------------------------------------------------------
+// W9-E: dynamics
+// ---------------------------------------------------------------------------
+
+/// Photopea's Brush panel, minus the tip: Shape Dynamics, Scattering, Color
+/// Dynamics and Transfer. Every amount is a fraction `0..=1` unless noted,
+/// and every one of them is zero — off — by default.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BrushDynamics {
+    /// How far below full size a dab may randomly shrink.
+    pub size_jitter: f32,
+    /// The floor size jitter cannot go under, as a fraction of the size.
+    pub min_diameter: f32,
+    /// Random rotation, as a fraction of a half turn either way.
+    pub angle_jitter: f32,
+    /// How far below the brush's roundness a dab may randomly squash.
+    pub roundness_jitter: f32,
+    /// The floor roundness jitter cannot go under, as a fraction.
+    pub min_roundness: f32,
+    /// How far a dab is thrown off the path, in diameters (`0..=10`).
+    pub scatter: f32,
+    /// Throw along the path as well as across it.
+    pub scatter_both_axes: bool,
+    /// Dabs stamped at every spacing step (`1..=16`).
+    pub count: u32,
+    /// How much of `count` may randomly be left out.
+    pub count_jitter: f32,
+    /// Foreground-to-background mix, drawn once per stroke.
+    pub fg_bg_jitter: f32,
+    /// Hue shift, as a fraction of a half turn either way, per stroke.
+    pub hue_jitter: f32,
+    /// Saturation shift either way, per stroke.
+    pub saturation_jitter: f32,
+    /// Brightness shift either way, per stroke.
+    pub brightness_jitter: f32,
+    /// How much of a dab's alpha may randomly be withheld (Transfer: Opacity
+    /// Jitter). Applied per dab, under the stroke's opacity ceiling.
+    pub opacity_jitter: f32,
+    /// Transfer: Flow Jitter, per dab.
+    pub flow_jitter: f32,
+    /// The brush's own seed; mixed with the stroke's first point to give
+    /// each stroke its own — replayable — sequence.
+    pub seed: u64,
+}
+
+impl Default for BrushDynamics {
+    fn default() -> Self {
+        Self {
+            size_jitter: 0.0,
+            min_diameter: 0.0,
+            angle_jitter: 0.0,
+            roundness_jitter: 0.0,
+            min_roundness: 0.25,
+            scatter: 0.0,
+            scatter_both_axes: false,
+            count: 1,
+            count_jitter: 0.0,
+            fg_bg_jitter: 0.0,
+            hue_jitter: 0.0,
+            saturation_jitter: 0.0,
+            brightness_jitter: 0.0,
+            opacity_jitter: 0.0,
+            flow_jitter: 0.0,
+            seed: 0,
+        }
+    }
+}
+
+impl BrushDynamics {
+    /// Whether the per-dab dynamics are all off, so a spacing step is one
+    /// plain dab. (Colour dynamics act per stroke and do not count here.)
+    pub fn is_off(&self) -> bool {
+        self.size_jitter == 0.0
+            && self.angle_jitter == 0.0
+            && self.roundness_jitter == 0.0
+            && self.scatter == 0.0
+            && self.count <= 1
+            && self.opacity_jitter == 0.0
+            && self.flow_jitter == 0.0
+    }
+
+    /// Whether any colour dynamic is on.
+    pub fn has_color(&self) -> bool {
+        self.fg_bg_jitter > 0.0
+            || self.hue_jitter > 0.0
+            || self.saturation_jitter > 0.0
+            || self.brightness_jitter > 0.0
+    }
+
+    /// Refuse non-finite amounts; clamp the rest into their ranges.
+    pub fn validated(mut self) -> Result<Self, ToolError> {
+        for (what, v) in [
+            ("size jitter", self.size_jitter),
+            ("minimum diameter", self.min_diameter),
+            ("angle jitter", self.angle_jitter),
+            ("roundness jitter", self.roundness_jitter),
+            ("minimum roundness", self.min_roundness),
+            ("scatter", self.scatter),
+            ("count jitter", self.count_jitter),
+            ("foreground/background jitter", self.fg_bg_jitter),
+            ("hue jitter", self.hue_jitter),
+            ("saturation jitter", self.saturation_jitter),
+            ("brightness jitter", self.brightness_jitter),
+            ("opacity jitter", self.opacity_jitter),
+            ("flow jitter", self.flow_jitter),
+        ] {
+            finite(what, v)?;
+        }
+        let unit = |v: f32| v.clamp(0.0, 1.0);
+        self.size_jitter = unit(self.size_jitter);
+        self.min_diameter = unit(self.min_diameter);
+        self.angle_jitter = unit(self.angle_jitter);
+        self.roundness_jitter = unit(self.roundness_jitter);
+        self.min_roundness = unit(self.min_roundness);
+        self.scatter = self.scatter.clamp(0.0, 10.0);
+        self.count = self.count.clamp(1, 16);
+        self.count_jitter = unit(self.count_jitter);
+        self.fg_bg_jitter = unit(self.fg_bg_jitter);
+        self.hue_jitter = unit(self.hue_jitter);
+        self.saturation_jitter = unit(self.saturation_jitter);
+        self.brightness_jitter = unit(self.brightness_jitter);
+        self.opacity_jitter = unit(self.opacity_jitter);
+        self.flow_jitter = unit(self.flow_jitter);
+        Ok(self)
+    }
+
+    /// The colour a stroke starting at `start` paints with: `fg` (straight
+    /// alpha, **linear** RGBA, as [`crate::ToolContext::foreground`] holds
+    /// it) mixed toward `bg` and shifted in hue, saturation and brightness by
+    /// the colour jitters, drawn from the same seed the stroke's dabs use.
+    /// With every colour jitter off it is `fg` exactly.
+    pub fn stroke_color(&self, fg: [f32; 4], bg: [f32; 4], start: Vec2) -> [f32; 4] {
+        if !self.has_color() {
+            return fg;
+        }
+        // A separate stream from the dabs' (a different salt), so turning a
+        // colour jitter on does not reshuffle the shape of the stroke.
+        let mut rng = StrokeRng::for_stroke(self.seed ^ 0xC010_C010_C010_C010, start);
+        let mix = self.fg_bg_jitter * rng.next_f32();
+        let mut rgb = [0.0f32; 3];
+        for (i, c) in rgb.iter_mut().enumerate() {
+            let linear = fg[i] + (bg[i] - fg[i]) * mix;
+            *c = color::linear_to_srgb(linear.clamp(0.0, 1.0));
+        }
+        let mut hsv = color::model::rgb_to_hsv(rgb);
+        hsv[0] =
+            (hsv[0] + self.hue_jitter * 180.0 * (2.0 * rng.next_f32() - 1.0)).rem_euclid(360.0);
+        hsv[1] = (hsv[1] + self.saturation_jitter * (2.0 * rng.next_f32() - 1.0)).clamp(0.0, 1.0);
+        hsv[2] = (hsv[2] + self.brightness_jitter * (2.0 * rng.next_f32() - 1.0)).clamp(0.0, 1.0);
+        let out = color::model::hsv_to_rgb(hsv);
+        [
+            color::srgb_to_linear(out[0]),
+            color::srgb_to_linear(out[1]),
+            color::srgb_to_linear(out[2]),
+            fg[3],
+        ]
+    }
+}
+
+/// SplitMix64: small, fast, and — the point — the same sequence on every
+/// machine for the same seed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StrokeRng(u64);
+
+impl StrokeRng {
+    /// The generator for a stroke that starts at `start` with brush seed
+    /// `seed`.
+    pub fn for_stroke(seed: u64, start: Vec2) -> Self {
+        let pos = (u64::from(start.x.to_bits()) << 32) | u64::from(start.y.to_bits());
+        let mut me = Self(seed ^ pos.rotate_left(17) ^ 0x9E37_79B9_7F4A_7C15);
+        me.next_u64();
+        me
+    }
+
+    pub fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// Uniform in `[0, 1)`.
+    pub fn next_f32(&mut self) -> f32 {
+        (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32
+    }
+}
+
+// ---------------------------------------------------------------------------
+// W9-E: sampled tips
+// ---------------------------------------------------------------------------
+
+/// The identity of a sampled tip: the content hash (BLAKE3, computed by
+/// `asset_store::presets::tip_hash`) of its pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TipId(pub [u8; 32]);
+
+/// The shape a brush stamps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum BrushTip {
+    /// The computed elliptical tip with its hardness falloff.
+    #[default]
+    Round,
+    /// A grayscale image registered with [`register_sampled_tip`].
+    Sampled(TipId),
+}
+
+/// The longest side a sampled tip may have (Photoshop's own limit is 5000).
+pub const MAX_TIP_SIDE: u32 = 5000;
+
+/// A grayscale tip image: one coverage byte per pixel, `255` = full paint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SampledTip {
+    width: u32,
+    height: u32,
+    alpha: Vec<u8>,
+}
+
+impl SampledTip {
+    /// A tip from `width * height` coverage bytes. Refuses an empty image,
+    /// one past [`MAX_TIP_SIDE`], or a buffer of the wrong length.
+    pub fn new(width: u32, height: u32, alpha: Vec<u8>) -> Result<Self, ToolError> {
+        if width == 0 || height == 0 || width > MAX_TIP_SIDE || height > MAX_TIP_SIDE {
+            return Err(ToolError::Degenerate);
+        }
+        if alpha.len() != width as usize * height as usize {
+            return Err(ToolError::Degenerate);
+        }
+        Ok(Self {
+            width,
+            height,
+            alpha,
+        })
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn alpha(&self) -> &[u8] {
+        &self.alpha
+    }
+
+    fn texel(&self, x: i64, y: i64) -> f32 {
+        if x < 0 || y < 0 || x >= i64::from(self.width) || y >= i64::from(self.height) {
+            return 0.0;
+        }
+        f32::from(self.alpha[y as usize * self.width as usize + x as usize]) / 255.0
+    }
+
+    /// Bilinear coverage at `(x, y)` in image pixels (pixel `i` is centred on
+    /// `i + 0.5`); zero outside the image.
+    pub fn sample(&self, x: f32, y: f32) -> f32 {
+        if !x.is_finite() || !y.is_finite() {
+            return 0.0;
+        }
+        let fx = x - 0.5;
+        let fy = y - 0.5;
+        let x0 = fx.floor();
+        let y0 = fy.floor();
+        let tx = fx - x0;
+        let ty = fy - y0;
+        let (x0, y0) = (x0 as i64, y0 as i64);
+        let a = self.texel(x0, y0) * (1.0 - tx) + self.texel(x0 + 1, y0) * tx;
+        let b = self.texel(x0, y0 + 1) * (1.0 - tx) + self.texel(x0 + 1, y0 + 1) * tx;
+        a * (1.0 - ty) + b * ty
+    }
+}
+
+type TipTable = RwLock<HashMap<TipId, Arc<SampledTip>>>;
+
+fn tip_table() -> &'static TipTable {
+    static TIPS: OnceLock<TipTable> = OnceLock::new();
+    TIPS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+thread_local! {
+    /// The last tip looked up on this thread: a stroke stamps thousands of
+    /// pixels of one tip, and this spares each of them the table's lock.
+    static LAST_TIP: RefCell<Option<(TipId, Arc<SampledTip>)>> = const { RefCell::new(None) };
+}
+
+/// Make `tip` available to every dab whose [`BrushTip::Sampled`] names `id`.
+///
+/// The table is process-wide because a [`Dab`] is a small `Copy` value
+/// carried through every stroke path; it names its tip, it cannot own it.
+/// Ids are content hashes, so registering the same id twice is registering
+/// the same pixels.
+pub fn register_sampled_tip(id: TipId, tip: SampledTip) -> Arc<SampledTip> {
+    let tip = Arc::new(tip);
+    if let Ok(mut table) = tip_table().write() {
+        table.insert(id, tip.clone());
+    }
+    tip
+}
+
+/// The registered tip `id`, if any.
+pub fn sampled_tip(id: TipId) -> Option<Arc<SampledTip>> {
+    let cached = LAST_TIP.with(|last| {
+        last.borrow()
+            .as_ref()
+            .filter(|(k, _)| *k == id)
+            .map(|(_, t)| t.clone())
+    });
+    if cached.is_some() {
+        return cached;
+    }
+    let found = tip_table().read().ok()?.get(&id).cloned()?;
+    LAST_TIP.with(|last| *last.borrow_mut() = Some((id, found.clone())));
+    Some(found)
+}
+
+// ---------------------------------------------------------------------------
+// W9-E: the brush library
+// ---------------------------------------------------------------------------
+
+/// Brushes made outside the Brushes panel — Edit > Define Brush Preset, a
+/// `.abr` opened with File > Open — waiting to be listed in it.
+///
+/// Append-only and process-wide: the panel remembers how many it has taken
+/// ([`library_since`]) and picks up the rest on its next frame, which is how a
+/// brush the editor makes reaches a panel the editor does not own.
+fn library() -> &'static Mutex<Vec<(String, BrushSettings)>> {
+    static LIBRARY: OnceLock<Mutex<Vec<(String, BrushSettings)>>> = OnceLock::new();
+    LIBRARY.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Offer a named brush to the Brushes panel.
+pub fn publish_library_brush(name: impl Into<String>, settings: BrushSettings) {
+    if let Ok(mut lib) = library().lock() {
+        lib.push((name.into(), settings));
+    }
+}
+
+/// How many brushes have been published so far.
+pub fn library_len() -> usize {
+    library().lock().map_or(0, |lib| lib.len())
+}
+
+/// The published brushes from index `seen` on, and the new count to
+/// remember.
+pub fn library_since(seen: usize) -> (Vec<(String, BrushSettings)>, usize) {
+    match library().lock() {
+        Ok(lib) => (lib.get(seen..).unwrap_or_default().to_vec(), lib.len()),
+        Err(_) => (Vec::new(), seen),
     }
 }
 
@@ -599,6 +1080,7 @@ mod tests {
             roundness: 1.0,
             flow: 1.0,
             aliased: false,
+            tip: BrushTip::Round,
         };
         assert_eq!(d.coverage_at(Vec2::ZERO), 1.0);
         assert_eq!(d.coverage_at(Vec2::new(4.0, 0.0)), 1.0);
@@ -624,6 +1106,7 @@ mod tests {
             roundness: 0.2,
             flow: 1.0,
             aliased: true,
+            tip: BrushTip::Round,
         };
         // Rotated a quarter turn: the long axis now runs vertically.
         assert!(d.coverage_at(Vec2::new(0.0, 9.0)) > 0.0);
@@ -641,6 +1124,7 @@ mod tests {
             roundness: 1.0,
             flow: 1.0,
             aliased: true,
+            tip: BrushTip::Round,
         };
         for y in 0..12 {
             for x in 0..12 {
@@ -663,6 +1147,7 @@ mod tests {
             roundness: 1.0,
             flow: 1.0,
             aliased: true,
+            tip: BrushTip::Round,
         };
         assert_eq!(at(10.0, 10.0).radius, 0.5);
 
@@ -707,6 +1192,7 @@ mod tests {
             roundness: 1.0,
             flow: 1.0,
             aliased: true,
+            tip: BrushTip::Round,
         };
         let count = |d: &Dab| {
             let (lo, hi) = d.bounds();
@@ -765,5 +1251,237 @@ mod tests {
         assert!(
             DabEmitter::begin(BrushSettings::default(), Vec2::new(f32::NAN, 0.0), 1.0).is_err()
         );
+    }
+
+    // ---------------------------------------------------------------- W9-E
+
+    fn jittery(dynamics: BrushDynamics) -> BrushSettings {
+        BrushSettings {
+            size: 20.0,
+            spacing: 0.25,
+            size_pressure: false,
+            dynamics,
+            ..Default::default()
+        }
+    }
+
+    fn stroke(settings: BrushSettings) -> Vec<Dab> {
+        let mut e = DabEmitter::begin(settings, Vec2::new(3.0, 50.0), 1.0).unwrap();
+        for i in 1..20 {
+            e.extend(Vec2::new(3.0 + i as f32 * 10.0, 50.0), 1.0)
+                .unwrap();
+        }
+        e.finish(Vec2::new(203.0, 50.0), 1.0).unwrap();
+        e.dabs().to_vec()
+    }
+
+    #[test]
+    fn size_jitter_varies_the_dab_radius_and_a_seeded_stroke_replays_identically() {
+        let settings = jittery(BrushDynamics {
+            size_jitter: 0.8,
+            min_diameter: 0.25,
+            seed: 7,
+            ..Default::default()
+        });
+        let dabs = stroke(settings);
+        let radii: Vec<f32> = dabs.iter().map(|d| d.radius).collect();
+        let lo = radii.iter().cloned().fold(f32::MAX, f32::min);
+        let hi = radii.iter().cloned().fold(0.0f32, f32::max);
+        assert!(hi - lo > 3.0, "radii barely varied: {lo}..{hi}");
+        assert!(hi <= 10.0 + 1e-4, "jitter only shrinks: {hi}");
+        assert!(lo >= 10.0 * 0.25 - 1e-4, "went under the floor: {lo}");
+        // The same settings over the same path are the same dabs.
+        assert_eq!(dabs, stroke(settings), "a replay differed");
+        // A different seed is a different stroke.
+        let other = BrushSettings {
+            dynamics: BrushDynamics {
+                seed: 8,
+                ..settings.dynamics
+            },
+            ..settings
+        };
+        assert_ne!(dabs, stroke(other));
+        // With the jitter off every dab is full size.
+        assert!(stroke(jittery(BrushDynamics::default()))
+            .iter()
+            .all(|d| d.radius == 10.0));
+    }
+
+    #[test]
+    fn scatter_throws_dabs_off_the_path_and_count_multiplies_them() {
+        let plain = stroke(jittery(BrushDynamics::default()));
+        assert!(plain.iter().all(|d| d.center.y == 50.0));
+        let scattered = stroke(jittery(BrushDynamics {
+            scatter: 1.0,
+            count: 3,
+            seed: 1,
+            ..Default::default()
+        }));
+        let off = scattered
+            .iter()
+            .map(|d| (d.center.y - 50.0).abs())
+            .fold(0.0f32, f32::max);
+        assert!(off > 5.0, "scatter moved dabs at most {off}px off the path");
+        assert!(
+            scattered
+                .iter()
+                .all(|d| (d.center.y - 50.0).abs() <= 20.0 + 1e-3),
+            "scatter 1.0 throws at most one diameter"
+        );
+        assert_eq!(scattered.len(), plain.len() * 3, "count is per step");
+        // One axis only: along-path position is untouched.
+        let xs: Vec<f32> = scattered.iter().map(|d| d.center.x).collect();
+        assert!(xs.chunks(3).all(|c| c[0] == c[1] && c[1] == c[2]));
+    }
+
+    #[test]
+    fn angle_roundness_and_transfer_jitter_vary_the_dab() {
+        let dabs = stroke(jittery(BrushDynamics {
+            angle_jitter: 1.0,
+            roundness_jitter: 0.9,
+            min_roundness: 0.2,
+            flow_jitter: 0.5,
+            opacity_jitter: 0.5,
+            seed: 3,
+            ..Default::default()
+        }));
+        let distinct = |f: &dyn Fn(&Dab) -> f32| {
+            let mut v: Vec<u32> = dabs.iter().map(|d| f(d).to_bits()).collect();
+            v.sort_unstable();
+            v.dedup();
+            v.len()
+        };
+        assert!(distinct(&|d| d.angle) > 10);
+        assert!(distinct(&|d| d.roundness) > 10);
+        assert!(distinct(&|d| d.flow) > 10);
+        assert!(dabs.iter().all(|d| d.roundness >= 0.2 - 1e-6));
+        assert!(dabs.iter().all(|d| (0.0..=1.0).contains(&d.flow)));
+    }
+
+    #[test]
+    fn colour_dynamics_shift_the_stroke_colour_deterministically() {
+        let fg = [0.8, 0.1, 0.1, 1.0];
+        let bg = [0.0, 0.0, 0.9, 1.0];
+        let off = BrushDynamics::default();
+        assert_eq!(off.stroke_color(fg, bg, Vec2::ZERO), fg);
+        let on = BrushDynamics {
+            hue_jitter: 0.5,
+            fg_bg_jitter: 1.0,
+            seed: 11,
+            ..Default::default()
+        };
+        let a = on.stroke_color(fg, bg, Vec2::new(4.0, 4.0));
+        assert_eq!(a, on.stroke_color(fg, bg, Vec2::new(4.0, 4.0)));
+        let colours: Vec<[f32; 4]> = (0..8)
+            .map(|i| on.stroke_color(fg, bg, Vec2::new(i as f32, 0.0)))
+            .collect();
+        assert!(colours.iter().any(|c| *c != fg), "no stroke was recoloured");
+        assert!(colours.windows(2).any(|w| w[0] != w[1]));
+        assert!(colours
+            .iter()
+            .all(|c| c[3] == 1.0 && c[..3].iter().all(|v| (0.0..=1.0).contains(v))));
+    }
+
+    #[test]
+    fn a_sampled_tip_stamps_its_own_shape() {
+        // A 4x4 tip that is ink only in its left half: a vertical bar.
+        let mut alpha = vec![0u8; 16];
+        for y in 0..4 {
+            alpha[y * 4] = 255;
+            alpha[y * 4 + 1] = 255;
+        }
+        let id = TipId([0xB0; 32]);
+        register_sampled_tip(id, SampledTip::new(4, 4, alpha).unwrap());
+        let dab = Dab {
+            center: Vec2::new(20.0, 20.0),
+            radius: 8.0,
+            hardness: 1.0,
+            angle: 0.0,
+            roundness: 1.0,
+            flow: 1.0,
+            aliased: false,
+            tip: BrushTip::Sampled(id),
+        };
+        // Left of centre is ink, right is not — a round tip would paint both.
+        assert!(dab.coverage_at(Vec2::new(15.0, 20.0)) > 0.9);
+        assert!(
+            dab.coverage_at(Vec2::new(15.0, 14.0)) > 0.9,
+            "the bar is tall"
+        );
+        assert_eq!(dab.coverage_at(Vec2::new(25.0, 20.0)), 0.0);
+        let round = Dab {
+            tip: BrushTip::Round,
+            ..dab
+        };
+        assert!(round.coverage_at(Vec2::new(25.0, 20.0)) > 0.9);
+        // Rotated a quarter turn, the bar lies along the top instead.
+        let turned = Dab {
+            angle: std::f32::consts::FRAC_PI_2,
+            ..dab
+        };
+        assert!(turned.coverage_at(Vec2::new(20.0, 15.0)) > 0.9);
+        assert_eq!(turned.coverage_at(Vec2::new(20.0, 25.0)), 0.0);
+        // Scaled by the radius: at half the radius the bar is half as far.
+        let small = Dab { radius: 4.0, ..dab };
+        assert_eq!(small.coverage_at(Vec2::new(15.0, 20.0)), 0.0);
+        assert!(small.coverage_at(Vec2::new(18.0, 20.0)) > 0.9);
+        // And the emitter carries the tip from the settings onto every dab.
+        let settings = BrushSettings {
+            tip: BrushTip::Sampled(id),
+            ..Default::default()
+        };
+        let e = straight(settings, 30.0);
+        assert!(e.dabs().iter().all(|d| d.tip == BrushTip::Sampled(id)));
+        // An unregistered tip falls back to the round shape.
+        let missing = Dab {
+            tip: BrushTip::Sampled(TipId([0x5E; 32])),
+            ..dab
+        };
+        assert_eq!(
+            missing.coverage_at(Vec2::new(25.0, 20.0)),
+            round.coverage_at(Vec2::new(25.0, 20.0))
+        );
+    }
+
+    #[test]
+    fn a_sampled_tip_refuses_bad_geometry_and_old_brushes_load_round() {
+        assert!(SampledTip::new(0, 4, vec![]).is_err());
+        assert!(SampledTip::new(2, 2, vec![0; 3]).is_err());
+        assert!(SampledTip::new(MAX_TIP_SIDE + 1, 1, vec![0; MAX_TIP_SIDE as usize + 1]).is_err());
+        let mut json = serde_json::to_value(BrushSettings::default()).unwrap();
+        json.as_object_mut().unwrap().remove("tip");
+        json.as_object_mut().unwrap().remove("dynamics");
+        let back: BrushSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(back.tip, BrushTip::Round);
+        assert_eq!(back.dynamics, BrushDynamics::default());
+        let sampled = BrushSettings {
+            tip: BrushTip::Sampled(TipId([9; 32])),
+            ..Default::default()
+        };
+        let round_trip: BrushSettings =
+            serde_json::from_str(&serde_json::to_string(&sampled).unwrap()).unwrap();
+        assert_eq!(round_trip, sampled);
+        // Nonsense dynamics are refused or clamped.
+        assert!(BrushSettings {
+            dynamics: BrushDynamics {
+                scatter: f32::NAN,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .validated()
+        .is_err());
+        let clamped = BrushSettings {
+            dynamics: BrushDynamics {
+                count: 999,
+                size_jitter: 7.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .validated()
+        .unwrap();
+        assert_eq!(clamped.dynamics.count, 16);
+        assert_eq!(clamped.dynamics.size_jitter, 1.0);
     }
 }

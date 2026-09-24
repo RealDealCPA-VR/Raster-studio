@@ -223,6 +223,10 @@ impl Editor {
                 tracing::warn!("could not write the panel presets: {e}");
             }
         }
+        // W9-N: swatches (and a gradient) File > Open brought in from a
+        // resource file join the panels after the saved list was restored;
+        // the next frame's sync writes them to the preferences file.
+        self.drain_panel_imports(w);
     }
 }
 

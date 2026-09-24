@@ -211,6 +211,13 @@ pub struct ShapedText {
     pub frame_height: Option<f32>,
     /// W3-J: how the rasteriser treats glyph edges - the base style's mode.
     pub anti_alias: AntiAlias,
+    /// W9-K: the run's Warp Text envelope. Layout positions stay unwarped
+    /// (the caret and hit test answer in them); the rasteriser bends the
+    /// glyph outlines through [`crate::warp::Distortion`].
+    pub warp: layer_model::text::TextWarp,
+    /// W9-K: the run's Type-on-a-Path baseline, likewise applied by the
+    /// rasteriser to the glyph outlines.
+    pub path: Option<layer_model::text::TextPath>,
 }
 
 impl ShapedText {
@@ -385,6 +392,8 @@ pub fn shape(library: &mut FontLibrary, run: &TextRun) -> ShapedText {
         line_height,
         frame_height,
         anti_alias: run.style.anti_alias,
+        warp: run.warp,
+        path: run.path.clone(),
     };
 
     let paragraph_step = run.paragraph.space_before + run.paragraph.space_after;

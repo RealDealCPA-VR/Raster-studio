@@ -20,11 +20,24 @@
 //! is straight-alpha sRGB (the document's space, which the compositor
 //! decodes); the foreground reaches a tool in linear space and is encoded on
 //! the way in, and a custom colour is decoded on the way to a pixel.
+//!
+//! # W9-F: Path mode, gradient and pattern fills, stroke options
+//!
+//! A third commit mode, **Path**, makes no layer and paints nothing: the
+//! drawn outline becomes the Work Path, the same temporary path the Pen's
+//! uncommitted path is, published through [`Tool::live_geometry`] until the
+//! next drag or Escape (read back with [`ShapeTool::work_path`]). A fill may
+//! be a colour, the current gradient or the current pattern (`fill_type`),
+//! and a stroke carries its alignment, cap, join and dash (`stroke_align`,
+//! `stroke_cap`, `stroke_join`, `stroke_dash`, `stroke_gap`).
 
 use color::{linear_to_srgb3, premultiply, srgb_to_linear3};
 use editor_core::{Command, Selection};
 use glam::{IVec2, Vec2};
-use layer_model::{Layer, LayerKind, ShapeLayer, ShapeStroke};
+use layer_model::{
+    Layer, LayerKind, ShapeCap, ShapeFillPaint, ShapeGradientFill, ShapeJoin, ShapeLayer,
+    ShapeStroke, ShapeStrokeAlign,
+};
 use raster::PixelRect;
 use vector::{
     fill::{fill, FillOptions},
@@ -94,19 +107,98 @@ pub enum ShapeMode {
     VectorLayer,
     /// Coverage filled into the active layer's pixels.
     Rasterize,
+    /// W9-F: no layer and no pixels — the outline becomes the Work Path, as
+    /// the Pen's Path mode's does.
+    Path,
 }
 
 impl ShapeMode {
-    /// The mode a registry `mode` choice index names: `0` is "Shape Layer",
-    /// anything else is "Rasterize" — the registry's two-entry list, in its
-    /// order.
+    /// The registry's `mode` labels, in [`Self::from_choice`]'s order. Path
+    /// is appended so a stored index 0 or 1 still means what it meant.
+    pub const CHOICES: &'static [&'static str] = &["Shape Layer", "Rasterize", "Path"];
+
+    /// The mode a registry `mode` choice index names; out of range clamps to
+    /// the last entry.
     pub fn from_choice(index: usize) -> Self {
-        if index == 0 {
-            ShapeMode::VectorLayer
-        } else {
-            ShapeMode::Rasterize
+        match index {
+            0 => ShapeMode::VectorLayer,
+            1 => ShapeMode::Rasterize,
+            _ => ShapeMode::Path,
         }
     }
+}
+
+/// W9-F: what a shape's fill is painted with when it is filled at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FillType {
+    /// The fill source's colour (foreground or custom).
+    #[default]
+    Colour,
+    /// The current gradient, fitted to the shape's bounds.
+    Gradient,
+    /// The current pattern, tiled from the layer's origin.
+    Pattern,
+}
+
+impl FillType {
+    pub const CHOICES: &'static [&'static str] = &["Colour", "Gradient", "Pattern"];
+
+    pub fn from_choice(index: usize) -> Self {
+        match index {
+            0 => FillType::Colour,
+            1 => FillType::Gradient,
+            _ => FillType::Pattern,
+        }
+    }
+}
+
+/// W9-F: the stroke alignment labels, in `ShapeStrokeAlign` order.
+pub const STROKE_ALIGN_CHOICES: &[&str] = &["Inside", "Centre", "Outside"];
+/// W9-F: the stroke cap labels, in `ShapeCap` order.
+pub const STROKE_CAP_CHOICES: &[&str] = &["Butt", "Round", "Square"];
+/// W9-F: the stroke join labels, in `ShapeJoin` order.
+pub const STROKE_JOIN_CHOICES: &[&str] = &["Miter", "Round", "Bevel"];
+
+/// The stroke alignment a choice index names.
+pub fn stroke_align_from_choice(index: usize) -> ShapeStrokeAlign {
+    match index {
+        0 => ShapeStrokeAlign::Inside,
+        1 => ShapeStrokeAlign::Center,
+        _ => ShapeStrokeAlign::Outside,
+    }
+}
+
+/// The stroke cap a choice index names.
+pub fn stroke_cap_from_choice(index: usize) -> ShapeCap {
+    match index {
+        0 => ShapeCap::Butt,
+        1 => ShapeCap::Round,
+        _ => ShapeCap::Square,
+    }
+}
+
+/// The stroke join a choice index names.
+pub fn stroke_join_from_choice(index: usize) -> ShapeJoin {
+    match index {
+        0 => ShapeJoin::Miter,
+        1 => ShapeJoin::Round,
+        _ => ShapeJoin::Bevel,
+    }
+}
+
+/// W9-F: a dash pattern in document pixels from Photoshop's dash / gap
+/// lengths, both in multiples of the stroke width. A zero dash is a solid
+/// stroke; a zero gap with a dash repeats the dash length.
+pub fn dash_pattern(width: f32, dash: f32, gap: f32) -> Vec<f32> {
+    if !(dash > 0.0 && width > 0.0) || !dash.is_finite() {
+        return Vec::new();
+    }
+    let gap = if gap > 0.0 && gap.is_finite() {
+        gap
+    } else {
+        dash
+    };
+    vec![dash * width, gap * width]
 }
 
 /// Where a fill or a stroke takes its colour from.
@@ -147,6 +239,15 @@ pub const PAINT_KEYS: &[&str] = &[
     "stroke",
     "stroke_color",
     "stroke_width",
+    // W9-F: the stroke's placement and shape.
+    "stroke_align",
+    "stroke_cap",
+    "stroke_join",
+    "stroke_dash",
+    "stroke_gap",
+    // W9-F: what the fill paints with (the shape tools offer it; the pen's
+    // layers take the colour).
+    "fill_type",
 ];
 
 /// How a shape is painted: a fill, a stroke, and where each takes its colour.
@@ -160,6 +261,18 @@ pub struct ShapePaint {
     pub stroke_color: [f32; 4],
     /// Total stroke width in document pixels.
     pub stroke_width: f32,
+    /// W9-F: where the stroke sits relative to the path.
+    pub stroke_align: ShapeStrokeAlign,
+    /// W9-F: the stroke's end treatment.
+    pub stroke_cap: ShapeCap,
+    /// W9-F: the stroke's corner treatment.
+    pub stroke_join: ShapeJoin,
+    /// W9-F: dash length in stroke widths; `0` is a solid stroke.
+    pub stroke_dash: f32,
+    /// W9-F: gap length in stroke widths; `0` repeats the dash length.
+    pub stroke_gap: f32,
+    /// W9-F: colour, gradient or pattern fill.
+    pub fill_type: FillType,
 }
 
 impl Default for ShapePaint {
@@ -170,6 +283,12 @@ impl Default for ShapePaint {
             stroke: PaintSource::None,
             stroke_color: [0.0, 0.0, 0.0, 1.0],
             stroke_width: DEFAULT_STROKE_WIDTH,
+            stroke_align: ShapeStrokeAlign::Center,
+            stroke_cap: ShapeCap::Butt,
+            stroke_join: ShapeJoin::Miter,
+            stroke_dash: 0.0,
+            stroke_gap: 0.0,
+            fill_type: FillType::Colour,
         }
     }
 }
@@ -222,7 +341,37 @@ impl ShapePaint {
                     self.stroke_width = w.max(0.0);
                 })
             }
-            ("fill" | "stroke" | "fill_color" | "stroke_color" | "stroke_width", _) => mismatch(),
+            ("stroke_align", ToolSetting::Choice(i)) => {
+                self.stroke_align = stroke_align_from_choice(i);
+                Ok(())
+            }
+            ("stroke_cap", ToolSetting::Choice(i)) => {
+                self.stroke_cap = stroke_cap_from_choice(i);
+                Ok(())
+            }
+            ("stroke_join", ToolSetting::Choice(i)) => {
+                self.stroke_join = stroke_join_from_choice(i);
+                Ok(())
+            }
+            ("stroke_dash", ToolSetting::Float(v)) => {
+                crate::error::finite("dash length", v).map(|v| {
+                    self.stroke_dash = v.max(0.0);
+                })
+            }
+            ("stroke_gap", ToolSetting::Float(v)) => {
+                crate::error::finite("gap length", v).map(|v| {
+                    self.stroke_gap = v.max(0.0);
+                })
+            }
+            ("fill_type", ToolSetting::Choice(i)) => {
+                self.fill_type = FillType::from_choice(i);
+                Ok(())
+            }
+            (
+                "fill" | "stroke" | "fill_color" | "stroke_color" | "stroke_width" | "stroke_align"
+                | "stroke_cap" | "stroke_join" | "stroke_dash" | "stroke_gap" | "fill_type",
+                _,
+            ) => mismatch(),
             _ => return None,
         })
     }
@@ -250,14 +399,44 @@ impl ShapePaint {
         }
     }
 
-    /// The layer stroke, or `None` when the shape is unstroked.
+    /// The layer stroke, or `None` when the shape is unstroked. Carries the
+    /// alignment, cap, join and dash the options set (W9-F).
     pub fn layer_stroke(&self, foreground_linear: [f32; 4]) -> Option<ShapeStroke> {
         self.stroke_rgba(foreground_linear)
             .map(|color| ShapeStroke {
                 color,
                 width_px: self.stroke_width,
+                cap: self.stroke_cap,
+                join: self.stroke_join,
+                dash: dash_pattern(self.stroke_width, self.stroke_dash, self.stroke_gap),
+                align: self.stroke_align,
                 ..ShapeStroke::default()
             })
+    }
+
+    /// W9-F: the shape layer for `path` with the fill type resolved against
+    /// the context's current gradient and pattern: a gradient fill takes the
+    /// gradient the Gradient tool paints with, a pattern fill the active
+    /// pattern. With no pattern set, a pattern fill falls back to the colour.
+    pub fn layer_in(&self, path: &Path, ctx: &ToolContext<'_>) -> ShapeLayer {
+        let mut shape = self.layer(path, ctx.foreground);
+        if shape.fill.is_some() {
+            shape.fill_paint = match self.fill_type {
+                FillType::Colour => ShapeFillPaint::Solid,
+                FillType::Gradient => ShapeFillPaint::Gradient(ShapeGradientFill {
+                    gradient: ramp_to_gradient(&ctx.ramp),
+                    ..ShapeGradientFill::default()
+                }),
+                FillType::Pattern => match ctx.pattern.as_ref().and_then(pattern_tile) {
+                    Some(tile) => ShapeFillPaint::Pattern(layer_model::PatternFill {
+                        tile: Some(tile),
+                        ..layer_model::PatternFill::default()
+                    }),
+                    None => ShapeFillPaint::Solid,
+                },
+            };
+        }
+        shape
     }
 
     /// The fill colour a pixel tool paints with (linear).
@@ -298,13 +477,142 @@ impl ShapePaint {
     }
 
     /// The stroke's outline as a fillable path — what rasterising the stroke
-    /// fills. Empty when the width paints nothing.
+    /// fills. Empty when the width paints nothing. W9-F: with the cap, join,
+    /// dash and alignment the options set; an inside or outside stroke is a
+    /// doubled stroke intersected with (or cut by) the path's own region.
     pub fn outline(&self, path: &Path) -> Result<Path, ToolError> {
-        Ok(stroke(
+        let centred_width = match self.stroke_align {
+            ShapeStrokeAlign::Center => self.stroke_width,
+            _ => self.stroke_width * 2.0,
+        };
+        let dash = dash_pattern(self.stroke_width, self.stroke_dash, self.stroke_gap);
+        let style = StrokeStyle {
+            width: f64::from(centred_width),
+            cap: match self.stroke_cap {
+                ShapeCap::Butt => vector::Cap::Butt,
+                ShapeCap::Round => vector::Cap::Round,
+                ShapeCap::Square => vector::Cap::Square,
+            },
+            join: match self.stroke_join {
+                ShapeJoin::Miter => vector::Join::Miter,
+                ShapeJoin::Round => vector::Join::Round,
+                ShapeJoin::Bevel => vector::Join::Bevel,
+            },
+            dash: (!dash.is_empty()).then(|| vector::Dash {
+                pattern: dash.iter().map(|v| f64::from(*v)).collect(),
+                offset: 0.0,
+            }),
+            ..StrokeStyle::new(f64::from(centred_width))
+        };
+        let band = stroke(path, &style)?;
+        let op = match self.stroke_align {
+            ShapeStrokeAlign::Center => return Ok(band),
+            ShapeStrokeAlign::Inside => vector::BoolOp::Intersection,
+            ShapeStrokeAlign::Outside => vector::BoolOp::Difference,
+        };
+        Ok(vector::boolean::boolean(
+            &band,
             path,
-            &StrokeStyle::new(f64::from(self.stroke_width)),
+            op,
+            vector::FillRule::NonZero,
+            vector::DEFAULT_TOLERANCE,
         )?)
     }
+}
+
+/// W9-F: the tools' linear gradient ramp as the layer model stores a
+/// gradient: sRGB colour stops, and the opacity ramp as alpha stops.
+pub fn ramp_to_gradient(ramp: &crate::gradient::GradientRamp) -> layer_model::Gradient {
+    let stops = ramp
+        .color_stops()
+        .iter()
+        .map(|s| {
+            let c = encode([s.color[0], s.color[1], s.color[2], 1.0]);
+            layer_model::GradientStop {
+                position: s.position,
+                color: c,
+                midpoint: 0.5,
+            }
+        })
+        .collect();
+    let alpha_stops = ramp
+        .opacity_stops()
+        .iter()
+        .map(|s| layer_model::GradientStop {
+            position: s.position,
+            color: [0.0, 0.0, 0.0, s.opacity],
+            midpoint: 0.5,
+        })
+        .collect();
+    layer_model::Gradient {
+        stops,
+        alpha_stops,
+        ..layer_model::Gradient::default()
+    }
+}
+
+/// W9-F: the context's pattern as a stored tile (its pixels travel with the
+/// fill), or `None` when it cannot be one.
+fn pattern_tile(p: &crate::tool::Pattern) -> Option<layer_model::PatternTile> {
+    let (w, h) = (p.width(), p.height());
+    let mut rgba = Vec::with_capacity(w as usize * h as usize * 4);
+    for y in 0..i64::from(h) {
+        for x in 0..i64::from(w) {
+            rgba.extend_from_slice(&p.sample(x, y));
+        }
+    }
+    layer_model::PatternTile::new("Pattern", w, h, rgba).ok()
+}
+
+/// W9-F: a path as the anchors and handles a pen session publishes — what
+/// the shell's Work Path row and overlay are built from. Each subpath is
+/// flattened into one anchor list; a closed subpath repeats its first anchor
+/// so the drawn outline closes. Quadratics are raised to cubics.
+pub fn path_anchors(path: &Path) -> (Vec<Vec2>, Vec<[Vec2; 2]>) {
+    let v = |p: vector::Point| Vec2::new(p.x as f32, p.y as f32);
+    let mut anchors: Vec<Vec2> = Vec::new();
+    let mut handles: Vec<[Vec2; 2]> = Vec::new();
+    let mut start: Option<Vec2> = None;
+    for el in path.elements() {
+        match *el {
+            vector::PathEl::MoveTo(p) => {
+                let p = v(p);
+                anchors.push(p);
+                handles.push([p, p]);
+                start = Some(p);
+            }
+            vector::PathEl::LineTo(p) => {
+                let p = v(p);
+                anchors.push(p);
+                handles.push([p, p]);
+            }
+            vector::PathEl::QuadTo(c, p) => {
+                let (c, p) = (v(c), v(p));
+                if let (Some(a), Some(h)) = (anchors.last().copied(), handles.last_mut()) {
+                    h[1] = a + (c - a) * (2.0 / 3.0);
+                }
+                anchors.push(p);
+                handles.push([p + (c - p) * (2.0 / 3.0), p]);
+            }
+            vector::PathEl::CurveTo(c1, c2, p) => {
+                let p = v(p);
+                if let Some(h) = handles.last_mut() {
+                    h[1] = v(c1);
+                }
+                anchors.push(p);
+                handles.push([v(c2), p]);
+            }
+            vector::PathEl::ClosePath => {
+                if let Some(s) = start {
+                    if anchors.last() != Some(&s) {
+                        anchors.push(s);
+                        handles.push([s, s]);
+                    }
+                }
+            }
+        }
+    }
+    (anchors, handles)
 }
 
 fn finite_color(key: &str, c: [f32; 4]) -> Result<[f32; 4], ToolError> {
@@ -413,6 +721,18 @@ pub fn rasterize_path(
     clip: PixelRect,
     selection: &Selection,
 ) -> Result<(), ToolError> {
+    rasterize_path_shaded(patch, path, &|_| color, clip, selection)
+}
+
+/// W9-F: fill a path's coverage into a patch with a colour per pixel
+/// (straight-alpha linear) - a gradient or pattern fill.
+pub fn rasterize_path_shaded(
+    patch: &mut ColorPatch,
+    path: &Path,
+    color_at: &dyn Fn(IVec2) -> [f32; 4],
+    clip: PixelRect,
+    selection: &Selection,
+) -> Result<(), ToolError> {
     let mask = path_coverage(path, clip)?;
     let origin = mask.origin();
     for y in 0..mask.height() as i32 {
@@ -422,6 +742,7 @@ pub fn rasterize_path(
             if cov <= 0.0 || patch.index_of(p).is_none() {
                 continue;
             }
+            let color = color_at(p);
             let a = (color[3] * cov * selection.coverage_at(p)).clamp(0.0, 1.0);
             if a <= 0.0 {
                 continue;
@@ -505,7 +826,31 @@ pub fn rasterize_painted(
         PaintTarget::Layer => {
             let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
             if let Some(color) = fill_color {
-                rasterize_path(&mut patch, path, color, rect, &ctx.selection)?;
+                // W9-F: a gradient runs bottom to top across the path's
+                // bounds (the layer form's default angle); a pattern tiles
+                // from the document origin.
+                let b = path.bounds();
+                let (y0, y1) = (b.min.y as f32, b.max.y as f32);
+                let ramp = &ctx.ramp;
+                let pattern = ctx.pattern.as_ref();
+                let shade = |p: IVec2| -> [f32; 4] {
+                    match (paint.fill_type, pattern) {
+                        (FillType::Gradient, _) if y1 > y0 => {
+                            ramp.sample((y1 - (p.y as f32 + 0.5)) / (y1 - y0))
+                        }
+                        (FillType::Pattern, Some(pat)) => {
+                            let s = pat.sample(i64::from(p.x), i64::from(p.y));
+                            decode([
+                                f32::from(s[0]) / 255.0,
+                                f32::from(s[1]) / 255.0,
+                                f32::from(s[2]) / 255.0,
+                                f32::from(s[3]) / 255.0,
+                            ])
+                        }
+                        _ => color,
+                    }
+                };
+                rasterize_path_shaded(&mut patch, path, &shade, rect, &ctx.selection)?;
             }
             if let (Some(color), Some(outline)) = (stroke_color, &outline) {
                 rasterize_path(&mut patch, outline, color, rect, &ctx.selection)?;
@@ -542,6 +887,9 @@ pub struct ShapeTool {
     /// Shift as the last pointer sample carried it, so the live preview and
     /// the W/H readout show the constrained box the release will commit.
     shift: bool,
+    /// W9-F: the Work Path the last Path-mode drag made, until the next drag
+    /// or a cancel.
+    work_path: Option<Path>,
 }
 
 impl ShapeTool {
@@ -554,7 +902,13 @@ impl ShapeTool {
             anchor: None,
             current: None,
             shift: false,
+            work_path: None,
         }
+    }
+
+    /// W9-F: the Work Path a Path-mode drag made, in document pixels.
+    pub fn work_path(&self) -> Option<&Path> {
+        self.work_path.as_ref()
     }
 
     /// The path as it would commit right now, for the live overlay.
@@ -616,6 +970,8 @@ impl Tool for ShapeTool {
         self.anchor = Some(event.pos);
         self.current = Some(event.pos);
         self.shift = event.modifiers.shift;
+        // A new outline replaces the Work Path, as a new pen path does.
+        self.work_path = None;
         Ok(())
     }
 
@@ -655,13 +1011,13 @@ impl Tool for ShapeTool {
                         .unwrap_or("Shape")
                         .to_string(),
                 };
-                let layer = Layer::with_kind(
-                    name,
-                    LayerKind::Shape(self.paint.layer(&path, ctx.foreground)),
-                );
+                let layer =
+                    Layer::with_kind(name, LayerKind::Shape(self.paint.layer_in(&path, ctx)));
                 ctx.emit(Command::create_layer(layer));
             }
             ShapeMode::Rasterize => rasterize_painted(ctx, &path, &self.paint)?,
+            // W9-F: no command at all; the outline is the Work Path.
+            ShapeMode::Path => self.work_path = Some(path),
         }
         Ok(())
     }
@@ -670,6 +1026,23 @@ impl Tool for ShapeTool {
         self.anchor = None;
         self.current = None;
         self.shift = false;
+        self.work_path = None;
+    }
+
+    /// W9-F: a Path-mode outline is published as a pen path session, which
+    /// is what the shell's Paths panel shows as its Work Path row and the
+    /// overlay draws with its anchors. Nothing while dragging (the preview
+    /// draws the shape) or when there is no Work Path.
+    fn live_geometry(&self) -> Option<crate::tool::SessionGeometry> {
+        if self.anchor.is_some() {
+            return None;
+        }
+        let (anchors, handles) = path_anchors(self.work_path.as_ref()?);
+        (!anchors.is_empty()).then_some(crate::tool::SessionGeometry::Path {
+            anchors,
+            handles,
+            closing: false,
+        })
     }
 
     fn is_active(&self) -> bool {
@@ -743,10 +1116,9 @@ impl Tool for ShapeTool {
             }
             ("width", _, ShapeKind::Line { .. }) => mismatch(),
             ("preset", ToolSetting::Choice(index), ShapeKind::Custom { path, name }) => {
-                let last = CustomShape::ALL[CustomShape::ALL.len() - 1];
-                let shape = CustomShape::from_index(index).unwrap_or(last);
-                *path = shape.path();
-                *name = shape.name().to_owned();
+                // W9-N: the live list - the built-in library, then the
+                // custom shapes a `.csh` import registered.
+                (*name, *path) = crate::registry::custom_shape_at(index);
                 Ok(())
             }
             ("preset", _, ShapeKind::Custom { .. }) => mismatch(),
@@ -972,6 +1344,77 @@ mod tests {
         for key in PAINT_KEYS {
             assert!(paint.set(key, ToolSetting::Int(3)).is_some(), "{key}");
         }
+    }
+
+    /// W9-F: Path mode commits no layer and paints nothing; the outline is
+    /// the Work Path, published as a closed pen-path session over the box.
+    #[test]
+    fn path_mode_leaves_no_new_layer_but_a_work_path() {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 256, 256))
+            .with_layer(layer_model::LayerId::new());
+        let mut boxed: Box<dyn Tool> = Box::new(ShapeTool::default());
+        let tool = boxed.as_mut();
+        tool.set_setting("mode", ToolSetting::Choice(2)).unwrap();
+        assert!(tool.live_geometry().is_none(), "no Work Path yet");
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(10.0, 20.0))
+            .unwrap();
+        tool.on_pointer_move(&mut ctx, PointerEvent::at(60.0, 70.0))
+            .unwrap();
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(60.0, 70.0))
+            .unwrap();
+        assert!(ctx.commands().is_empty(), "{:?}", ctx.commands());
+        let Some(crate::tool::SessionGeometry::Path { anchors, .. }) = tool.live_geometry() else {
+            panic!("the outline is not published as the Work Path");
+        };
+        assert_eq!(anchors.first(), Some(&Vec2::new(10.0, 20.0)));
+        assert_eq!(anchors.last(), anchors.first(), "the rectangle closes");
+        assert!(anchors.contains(&Vec2::new(60.0, 70.0)));
+        Tool::cancel(tool, &mut ctx);
+        assert!(tool.live_geometry().is_none(), "Escape drops the Work Path");
+    }
+
+    /// W9-F: the stroke options and a gradient fill type reach the layer.
+    #[test]
+    fn stroke_options_and_a_gradient_fill_reach_the_layer() {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 256, 256));
+        let mut tool = ShapeTool::default();
+        for (key, value) in [
+            ("stroke", ToolSetting::Choice(1)),
+            ("stroke_width", ToolSetting::Float(3.0)),
+            ("stroke_align", ToolSetting::Choice(2)),
+            ("stroke_cap", ToolSetting::Choice(1)),
+            ("stroke_join", ToolSetting::Choice(2)),
+            ("stroke_dash", ToolSetting::Float(2.0)),
+            ("stroke_gap", ToolSetting::Float(1.0)),
+            ("fill_type", ToolSetting::Choice(1)),
+        ] {
+            tool.set_setting(key, value).unwrap();
+        }
+        drag(&mut tool, &mut ctx, (10.0, 10.0), (60.0, 40.0));
+        let shape = created_shape(&mut ctx);
+        let st = shape.stroke.expect("stroked");
+        assert_eq!(st.align, ShapeStrokeAlign::Outside);
+        assert_eq!(st.cap, ShapeCap::Round);
+        assert_eq!(st.join, ShapeJoin::Bevel);
+        assert_eq!(st.dash, vec![6.0, 3.0], "dash and gap are in widths");
+        let ShapeFillPaint::Gradient(g) = &shape.fill_paint else {
+            panic!("not a gradient fill: {:?}", shape.fill_paint);
+        };
+        assert_eq!(g.gradient.stops.len(), ctx.ramp.color_stops().len());
+    }
+
+    #[test]
+    fn a_dashed_rasterised_stroke_leaves_gaps() {
+        let (solid, k1) = rasterised(stroke_only(2.0));
+        let (dashed, k2) = rasterised(|tool| {
+            stroke_only(2.0)(tool);
+            tool.set_setting("stroke_dash", ToolSetting::Float(4.0))
+                .unwrap();
+        });
+        let (a, b) = (inked(&solid, k1), inked(&dashed, k2));
+        assert!(b > 0 && b * 4 < a * 3, "dashed {b} vs solid {a}");
     }
 
     #[test]

@@ -614,8 +614,19 @@ pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
                             w.emit(Intent::ResetToolOptions(tool));
                         }
                         separator(ui);
-                        for spec in &specs {
-                            option_control(w, ui, tool, spec);
+                        // W9-L: Free Transform's numeric row reads the live
+                        // session back, so it is drawn by `transform_row`.
+                        if tool == ToolId::FreeTransform {
+                            transform_row(w, ui, &specs);
+                        } else {
+                            for spec in &specs {
+                                option_control(w, ui, tool, spec);
+                            }
+                        }
+                        // W9-L: the Move tool's Align / Distribute buttons.
+                        if tool == ToolId::Move {
+                            separator(ui);
+                            move_align_row(w, ui);
                         }
                         if wants_gradient_stops(info) {
                             separator(ui);
@@ -624,6 +635,326 @@ pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
                     });
                 });
         });
+}
+
+// ---------------------------------------------------------------------------
+// W9-L: Free Transform's numeric row and the Move tool's align buttons
+// ---------------------------------------------------------------------------
+
+/// W9-L: the Move options bar's pseudo-keys for its six Align buttons, under
+/// which each is marked (`ids::tool_option(ToolId::Move, ..)`), in
+/// Photopea's order: left, centre, right, top, middle, bottom.
+pub const MOVE_ALIGN_KEYS: [(crate::menu::AlignEdge, &str); 6] = [
+    (crate::menu::AlignEdge::Left, "align_left"),
+    (crate::menu::AlignEdge::HorizontalCenter, "align_centre"),
+    (crate::menu::AlignEdge::Right, "align_right"),
+    (crate::menu::AlignEdge::Top, "align_top"),
+    (crate::menu::AlignEdge::VerticalCenter, "align_middle"),
+    (crate::menu::AlignEdge::Bottom, "align_bottom"),
+];
+
+/// W9-L: the Move options bar's two Distribute buttons and their pseudo-keys.
+pub const MOVE_DISTRIBUTE_KEYS: [(crate::menu::DistributeAxis, &str); 2] = [
+    (
+        crate::menu::DistributeAxis::Horizontal,
+        "distribute_horizontal",
+    ),
+    (crate::menu::DistributeAxis::Vertical, "distribute_vertical"),
+];
+
+/// W9-L: Align left / centre / right / top / middle / bottom and Distribute
+/// horizontally / vertically. Each button raises the Layer menu's own
+/// action ([`MenuAction::AlignLayers`] / [`MenuAction::DistributeLayers`]),
+/// so the bar and the menu run one command and cannot drift; the button
+/// captions are the menu items' own labels.
+fn move_align_row(w: &mut Workspace, ui: &mut Ui) {
+    ui.label(hint(ui, crate::strings::tr("ui.toolbar.align")));
+    for (edge, key) in MOVE_ALIGN_KEYS {
+        let action = MenuAction::AlignLayers(edge);
+        let response = super::labelled_button(
+            ui,
+            &action.label(),
+            true,
+            super::ids::tool_option(ToolId::Move, key),
+        );
+        if response.clicked() {
+            w.emit(Intent::Action(action));
+        }
+    }
+    separator(ui);
+    ui.label(hint(ui, crate::strings::tr("ui.toolbar.distribute")));
+    for (axis, key) in MOVE_DISTRIBUTE_KEYS {
+        let action = MenuAction::DistributeLayers(axis);
+        let response = super::labelled_button(
+            ui,
+            &action.label(),
+            true,
+            super::ids::tool_option(ToolId::Move, key),
+        );
+        if response.clicked() {
+            w.emit(Intent::Action(action));
+        }
+    }
+}
+
+/// W9-L: write a whole set of numeric fields for Free Transform and bump its
+/// edit counter, so the tool applies them together
+/// (`tools::transform::TransformTool::apply_pending_numeric`). Every field is
+/// written, not only the edited one: the fields are absolute, and the ones
+/// the user did not touch must say where the quad is now, not where it was
+/// the last time somebody typed.
+///
+/// The counter only ever moves on to a number no earlier edit used: the
+/// options-bar Reset puts the held counter back to its default 0, while a
+/// live session still remembers the last number it applied, so the next
+/// number is one past the higher of the held counter and the highest this
+/// bar ever wrote (kept in egui memory). The tool applies on any change of
+/// the counter, not only an increase.
+pub(crate) fn commit_numeric(
+    w: &mut Workspace,
+    ctx: &egui::Context,
+    n: tools::transform::NumericTransform,
+) {
+    use tools::transform::keys;
+    let tool = ToolId::FreeTransform;
+    let set = |w: &mut Workspace, key: &'static str, value: OptionValue| {
+        if w.options.set(tool, key, value) {
+            w.emit(Intent::SetToolOption { tool, key, value });
+        }
+    };
+    set(w, keys::REFERENCE, OptionValue::Choice(n.reference));
+    set(w, keys::X, OptionValue::Float(n.x));
+    set(w, keys::Y, OptionValue::Float(n.y));
+    set(w, keys::W, OptionValue::Float(n.w));
+    set(w, keys::H, OptionValue::Float(n.h));
+    set(w, keys::ANGLE, OptionValue::Float(n.angle));
+    set(w, keys::SKEW_H, OptionValue::Float(n.skew_h));
+    set(w, keys::SKEW_V, OptionValue::Float(n.skew_v));
+    let held = w
+        .options
+        .get(tool, keys::NUMERIC_SEQ)
+        .and_then(OptionValue::as_int)
+        .unwrap_or(0);
+    let high_id = egui::Id::new(("raster-w9l-transform-seq-high", tool));
+    let high: i32 = ctx.data(|d| d.get_temp(high_id)).unwrap_or(0);
+    let seq = held.max(high).saturating_add(1);
+    ctx.data_mut(|d| d.insert_temp(high_id, seq));
+    set(w, keys::NUMERIC_SEQ, OptionValue::Int(seq));
+}
+
+/// W9-L: Free Transform's options bar — Mode, the reference-point grid,
+/// X / Y, W / H %, Link, Angle, H / V Skew, Interpolation, and the Warp
+/// preset with its Bend.
+///
+/// The numeric fields show the LIVE session read back at the chosen
+/// reference point (`NumericTransform::read` over the published
+/// `canvas.sessions.transform`), and are off while no transform is live.
+/// Editing one writes the whole set plus the edit counter
+/// ([`commit_numeric`]). Picking a Warp preset (or moving Bend under one)
+/// does the same and puts the Mode on Warp.
+fn transform_row(w: &mut Workspace, ui: &mut Ui, specs: &[OptionSpec]) {
+    use tools::transform::{keys, NumericTransform, REFERENCE_CENTRE};
+    let tool = ToolId::FreeTransform;
+    let spec = |key: &str| specs.iter().find(|s| s.key == key).copied();
+    if let Some(s) = spec("mode") {
+        option_control(w, ui, tool, &s);
+    }
+    separator(ui);
+
+    let reference = w
+        .options
+        .get(tool, keys::REFERENCE)
+        .and_then(OptionValue::as_choice)
+        .unwrap_or(REFERENCE_CENTRE)
+        .min(8);
+    let live = w
+        .canvas
+        .sessions
+        .transform
+        .as_ref()
+        .map(|(state, _)| NumericTransform::read(state, reference));
+    // The set this bar last wrote, the edit counter it wrote it under and
+    // the read-back of the quad it was written over. While the published
+    // quad is still that one (the application has not applied the edit
+    // yet), the fields show — and the next edit builds on — what was
+    // typed, so a second edit never overwrites the first with the stale
+    // read-back. Once the quad moves (applied, or dragged) it is the truth.
+    let pending_id = egui::Id::new(("raster-w9l-transform-pending", tool));
+    let held_seq = w
+        .options
+        .get(tool, keys::NUMERIC_SEQ)
+        .and_then(OptionValue::as_int)
+        .unwrap_or(0);
+    let pending: Option<(i32, NumericTransform, NumericTransform)> =
+        ui.data(|d| d.get_temp(pending_id));
+    let shown = match (live, pending) {
+        (Some(now), Some((seq, typed, over))) if seq == held_seq && now == over => Some(typed),
+        _ => live,
+    };
+    let remember = |w: &Workspace, ui: &Ui, typed: NumericTransform| {
+        if let Some(over) = live {
+            let seq = w
+                .options
+                .get(tool, keys::NUMERIC_SEQ)
+                .and_then(OptionValue::as_int)
+                .unwrap_or(0);
+            ui.data_mut(|d| d.insert_temp(pending_id, (seq, typed, over)));
+        }
+    };
+    reference_grid(w, ui, reference);
+
+    type Field = fn(&mut NumericTransform) -> &mut f32;
+    let fields: [(&'static str, Field); 7] = [
+        (keys::X, |n| &mut n.x),
+        (keys::Y, |n| &mut n.y),
+        (keys::W, |n| &mut n.w),
+        (keys::H, |n| &mut n.h),
+        (keys::ANGLE, |n| &mut n.angle),
+        (keys::SKEW_H, |n| &mut n.skew_h),
+        (keys::SKEW_V, |n| &mut n.skew_v),
+    ];
+    for (key, field) in fields {
+        let Some(s) = spec(key) else { continue };
+        if key == keys::ANGLE {
+            if let Some(link) = spec(keys::LINK) {
+                option_control(w, ui, tool, &link);
+            }
+        }
+        let OptionKind::Float { min, max, default } = s.kind else {
+            continue;
+        };
+        let mut value = match shown {
+            Some(mut n) => *field(&mut n),
+            None => w
+                .options
+                .get(tool, key)
+                .and_then(OptionValue::as_float)
+                .unwrap_or(default),
+        };
+        ui.label(hint(ui, s.label));
+        let response = ui.add_enabled(
+            live.is_some(),
+            egui::DragValue::new(&mut value)
+                .range(min..=max)
+                .speed(0.5)
+                .max_decimals(2),
+        );
+        super::mark(ui, response.rect, super::ids::tool_option(tool, key));
+        if response.changed() {
+            if let Some(mut n) = shown {
+                *field(&mut n) = value;
+                commit_numeric(w, ui.ctx(), n);
+                remember(w, ui, n);
+            }
+        }
+    }
+    separator(ui);
+    if let Some(s) = spec(keys::INTERPOLATION) {
+        option_control(w, ui, tool, &s);
+    }
+    separator(ui);
+    let warp_before = w.options.get(tool, keys::WARP);
+    let bend_before = w.options.get(tool, keys::BEND);
+    for key in [keys::WARP, keys::BEND] {
+        if let Some(s) = spec(key) {
+            option_control(w, ui, tool, &s);
+        }
+    }
+    let warp = w
+        .options
+        .get(tool, keys::WARP)
+        .and_then(OptionValue::as_choice)
+        .unwrap_or(0);
+    let warp_changed = w.options.get(tool, keys::WARP) != warp_before;
+    let bend_changed = w.options.get(tool, keys::BEND) != bend_before;
+    if let Some(n) = shown {
+        if warp_changed || (bend_changed && warp > 0) {
+            if warp > 0 {
+                // The Warp mode's index in the registry's Mode choice.
+                let warp_mode = tools::transform::TransformMode::ALL
+                    .iter()
+                    .position(|m| *m == tools::transform::TransformMode::Warp)
+                    .unwrap_or(0);
+                if w.options.set(tool, "mode", OptionValue::Choice(warp_mode)) {
+                    w.emit(Intent::SetToolOption {
+                        tool,
+                        key: "mode",
+                        value: OptionValue::Choice(warp_mode),
+                    });
+                }
+            }
+            commit_numeric(w, ui.ctx(), n);
+            remember(w, ui, n);
+        }
+    }
+}
+
+/// W9-L: the reference cells' hover text, index for index with
+/// `tools::transform::REFERENCE_LABELS` (row-major from the top left).
+const REFERENCE_TIP_KEYS: [&str; 9] = [
+    "ui.toolbar.reference.top.left",
+    "ui.toolbar.reference.top",
+    "ui.toolbar.reference.top.right",
+    "ui.toolbar.reference.left",
+    "ui.toolbar.reference.centre",
+    "ui.toolbar.reference.right",
+    "ui.toolbar.reference.bottom.left",
+    "ui.toolbar.reference.bottom",
+    "ui.toolbar.reference.bottom.right",
+];
+
+/// W9-L: the 3 x 3 reference-point grid. Each cell is marked
+/// `ids::tool_option_choice(FreeTransform, "reference", i)`; a click picks
+/// that point, and the X / Y fields then read the quad at it.
+fn reference_grid(w: &mut Workspace, ui: &mut Ui, reference: usize) {
+    use tools::transform::keys;
+    let tool = ToolId::FreeTransform;
+    let t = current_tokens(ui);
+    let side = t.metrics.control_height;
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
+    let cell = side / 3.0;
+    let stroke = egui::Stroke::new(
+        t.borders.hairline,
+        color32(t.palette.color(ColorRole::ControlStroke)),
+    );
+    for (i, tip_key) in REFERENCE_TIP_KEYS.iter().enumerate() {
+        let min = rect.min + Vec2::new((i % 3) as f32 * cell, (i / 3) as f32 * cell);
+        let r = egui::Rect::from_min_size(min, Vec2::splat(cell));
+        let response = ui.interact(
+            r,
+            super::ids::tool_option_choice(tool, keys::REFERENCE, i),
+            Sense::click(),
+        );
+        if ui.is_rect_visible(r) {
+            let dot = r.shrink(Space::Hair.pt());
+            if i == reference {
+                ui.painter().rect_filled(
+                    dot,
+                    egui::Rounding::ZERO,
+                    color32(t.palette.color(ColorRole::Accent)),
+                );
+            } else if response.hovered() {
+                ui.painter().rect_filled(
+                    dot,
+                    egui::Rounding::ZERO,
+                    color32(t.palette.color(ColorRole::ControlFillHovered)),
+                );
+            }
+            ui.painter().rect_stroke(dot, egui::Rounding::ZERO, stroke);
+        }
+        let response = response.on_hover_text(crate::strings::tr(tip_key));
+        if response.clicked() && i != reference {
+            let value = OptionValue::Choice(i);
+            if w.options.set(tool, keys::REFERENCE, value) {
+                w.emit(Intent::SetToolOption {
+                    tool,
+                    key: keys::REFERENCE,
+                    value,
+                });
+            }
+        }
+    }
+    super::mark(ui, rect, super::ids::tool_option(tool, keys::REFERENCE));
 }
 
 /// The Ruler options bar's pseudo-key for its Straighten Layer button, under
@@ -1034,5 +1365,467 @@ mod tests {
             None,
             None
         ));
+    }
+}
+
+/// W9-L: the options bar drawn headless — the real `tool_options` — and
+/// driven by pointer events: Free Transform's numeric row against a live
+/// session, its reference grid and Warp presets, the Move tool's Align /
+/// Distribute buttons, the Mode combo on the Gradient and the Paint Bucket,
+/// and the marquee's Exclude and Style.
+#[cfg(test)]
+mod w9l_tests {
+    use super::*;
+    use raster::PixelRect;
+    use tools::transform::{keys, NumericTransform, TransformMode, TransformState};
+
+    struct Bar {
+        ctx: egui::Context,
+        w: Workspace,
+    }
+
+    impl Bar {
+        fn new(tool: ToolId) -> Self {
+            let ctx = egui::Context::default();
+            design::apply_theme(&ctx, design::Theme::Dark);
+            let mut w = Workspace::new();
+            w.absorb(&Intent::SelectTool(tool));
+            Self { ctx, w }
+        }
+
+        fn frame(&mut self, events: Vec<egui::Event>) -> Vec<Intent> {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(4000.0, 400.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let w = &mut self.w;
+            let _ = self.ctx.run(input, |ctx| tool_options(w, ctx));
+            self.w.drain_intents()
+        }
+
+        fn rect(&mut self, id: egui::Id) -> Option<egui::Rect> {
+            for _ in 0..3 {
+                self.frame(Vec::new());
+            }
+            self.ctx.read_response(id).map(|r| r.rect)
+        }
+
+        fn press(at: egui::Pos2, pressed: bool) -> egui::Event {
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            }
+        }
+
+        fn click(&mut self, id: egui::Id) -> Vec<Intent> {
+            let at = self
+                .rect(id)
+                .unwrap_or_else(|| panic!("{id:?} was not drawn"))
+                .center();
+            self.frame(vec![
+                egui::Event::PointerMoved(at),
+                Self::press(at, true),
+                Self::press(at, false),
+            ])
+        }
+
+        fn drag(&mut self, id: egui::Id, by: egui::Vec2) -> Vec<Intent> {
+            let from = self
+                .rect(id)
+                .unwrap_or_else(|| panic!("{id:?} was not drawn"))
+                .center();
+            let mut out = self.frame(vec![
+                egui::Event::PointerMoved(from),
+                Self::press(from, true),
+            ]);
+            for step in 1..=4 {
+                let at = from + by * (step as f32 / 4.0);
+                out.extend(self.frame(vec![egui::Event::PointerMoved(at)]));
+            }
+            out.extend(self.frame(vec![
+                egui::Event::PointerMoved(from + by),
+                Self::press(from + by, false),
+            ]));
+            out
+        }
+    }
+
+    fn writes(intents: &[Intent]) -> Vec<(&'static str, OptionValue)> {
+        intents
+            .iter()
+            .filter_map(|i| match i {
+                Intent::SetToolOption { key, value, .. } => Some((*key, *value)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn last_write(intents: &[Intent], key: &str) -> Option<OptionValue> {
+        writes(intents)
+            .into_iter()
+            .rev()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v)
+    }
+
+    fn with_session(bar: &mut Bar) -> TransformState {
+        let state = TransformState::new(PixelRect::new(0, 0, 200, 100));
+        bar.w.canvas.sessions.transform = Some((state.clone(), TransformMode::Scale));
+        state
+    }
+
+    fn tool_setting(value: OptionValue) -> tools::ToolSetting {
+        match value {
+            OptionValue::Float(v) => tools::ToolSetting::Float(v),
+            OptionValue::Int(v) => tools::ToolSetting::Int(v),
+            OptionValue::Bool(v) => tools::ToolSetting::Bool(v),
+            OptionValue::Choice(v) => tools::ToolSetting::Choice(v),
+            OptionValue::Color(v) => tools::ToolSetting::Color(v),
+        }
+    }
+
+    #[test]
+    fn the_free_transform_row_draws_every_field_and_the_grid() {
+        let mut bar = Bar::new(ToolId::FreeTransform);
+        with_session(&mut bar);
+        let tool = ToolId::FreeTransform;
+        for key in [
+            "mode",
+            keys::REFERENCE,
+            keys::X,
+            keys::Y,
+            keys::W,
+            keys::H,
+            keys::LINK,
+            keys::ANGLE,
+            keys::SKEW_H,
+            keys::SKEW_V,
+            keys::INTERPOLATION,
+            keys::WARP,
+            keys::BEND,
+        ] {
+            let rect = bar.rect(super::super::ids::tool_option(tool, key));
+            assert!(rect.is_some_and(|r| r.width() > 0.0), "{key} is not drawn");
+        }
+        // The nine reference cells tile the grid's square, row-major.
+        let grid = bar
+            .rect(super::super::ids::tool_option(tool, keys::REFERENCE))
+            .unwrap();
+        for i in 0..9 {
+            let cell = bar
+                .rect(super::super::ids::tool_option_choice(
+                    tool,
+                    keys::REFERENCE,
+                    i,
+                ))
+                .unwrap_or_else(|| panic!("reference cell {i}"));
+            assert!(
+                grid.expand(0.5).contains_rect(cell),
+                "cell {i} outside the grid"
+            );
+            let (col, row) = ((i % 3) as f32, (i / 3) as f32);
+            assert!((cell.left() - grid.left() - col * cell.width()).abs() < 0.5);
+            assert!((cell.top() - grid.top() - row * cell.height()).abs() < 0.5);
+        }
+        // The edit counter is never drawn: it is the bar's own bookkeeping.
+        assert!(bar
+            .rect(super::super::ids::tool_option(tool, keys::NUMERIC_SEQ))
+            .is_none());
+    }
+
+    #[test]
+    fn dragging_w_writes_the_whole_set_and_the_tool_lands_on_it() {
+        let mut bar = Bar::new(ToolId::FreeTransform);
+        let state = with_session(&mut bar);
+        let tool = ToolId::FreeTransform;
+        let intents = bar.drag(
+            super::super::ids::tool_option(tool, keys::W),
+            egui::vec2(40.0, 0.0),
+        );
+        let w = last_write(&intents, keys::W)
+            .and_then(OptionValue::as_float)
+            .expect("W was written");
+        assert!(w > 100.0, "dragging right grew W: {w}");
+        // The untouched fields went with it, read back from the live quad —
+        // the centre of 0..200 x 0..100 — and the counter moved.
+        assert_eq!(
+            last_write(&intents, keys::X),
+            Some(OptionValue::Float(100.0))
+        );
+        assert_eq!(
+            last_write(&intents, keys::Y),
+            Some(OptionValue::Float(50.0))
+        );
+        assert!(matches!(
+            last_write(&intents, keys::NUMERIC_SEQ),
+            Some(OptionValue::Int(n)) if n >= 1
+        ));
+
+        // Those writes, converted at the shell's boundary and handed to a
+        // live Free Transform the way a press hands them, move its quad to
+        // exactly the W the bar wrote.
+        let mut tiles = tools::MemoryTiles::new();
+        let mut ctx = tools::ToolContext::new(&mut tiles, state.source);
+        let mut ft = tools::registry::make(tool);
+        let far = tools::PointerEvent::at(900.0, 900.0);
+        ft.on_pointer_down(&mut ctx, far).unwrap();
+        ft.on_pointer_up(&mut ctx, far).unwrap();
+        for (key, value) in bar.w.options.held(tool) {
+            ft.set_setting(&key, tool_setting(value)).unwrap();
+        }
+        ft.on_pointer_down(&mut ctx, far).unwrap();
+        let Some(tools::SessionGeometry::Transform { state: live, .. }) = ft.live_geometry() else {
+            panic!("no live transform")
+        };
+        let back = NumericTransform::read(&live, tools::transform::REFERENCE_CENTRE);
+        assert!((back.w - w).abs() < 1e-3, "tool W {} vs bar W {w}", back.w);
+        assert!((back.h - 100.0).abs() < 1e-3, "H untouched: {}", back.h);
+    }
+
+    /// Round 2: an edit the application has not applied yet (the published
+    /// quad is still the old one) is what the fields show and what the next
+    /// edit builds on: W then H, with the quad never moving, writes both.
+    #[test]
+    fn a_second_edit_before_the_quad_moves_keeps_the_first() {
+        let mut bar = Bar::new(ToolId::FreeTransform);
+        with_session(&mut bar);
+        let tool = ToolId::FreeTransform;
+        bar.drag(
+            super::super::ids::tool_option(tool, keys::W),
+            egui::vec2(-40.0, 0.0),
+        );
+        let typed_w = bar
+            .w
+            .options
+            .get(tool, keys::W)
+            .and_then(OptionValue::as_float)
+            .expect("W was written");
+        assert!(typed_w < 100.0, "{typed_w}");
+        let intents = bar.drag(
+            super::super::ids::tool_option(tool, keys::H),
+            egui::vec2(-40.0, 0.0),
+        );
+        let h = last_write(&intents, keys::H)
+            .and_then(OptionValue::as_float)
+            .expect("H was written");
+        assert!(h < 100.0, "{h}");
+        assert_eq!(
+            bar.w.options.get(tool, keys::W),
+            Some(OptionValue::Float(typed_w)),
+            "the H edit overwrote the typed W with the stale read-back"
+        );
+        // Once the quad moves (the application applied it), the live
+        // read-back is the truth again.
+        let mut moved = TransformState::new(PixelRect::new(0, 0, 200, 100));
+        moved.corners = [
+            glam::Vec2::new(10.0, 0.0),
+            glam::Vec2::new(210.0, 0.0),
+            glam::Vec2::new(210.0, 100.0),
+            glam::Vec2::new(10.0, 100.0),
+        ];
+        bar.w.canvas.sessions.transform = Some((moved, TransformMode::Scale));
+        let intents = bar.drag(
+            super::super::ids::tool_option(tool, keys::ANGLE),
+            egui::vec2(40.0, 0.0),
+        );
+        assert_eq!(
+            last_write(&intents, keys::X),
+            Some(OptionValue::Float(110.0)),
+            "the moved quad's centre"
+        );
+        assert_eq!(
+            last_write(&intents, keys::W),
+            Some(OptionValue::Float(100.0)),
+            "the moved quad's W"
+        );
+    }
+
+    #[test]
+    fn with_no_live_transform_the_numeric_fields_do_nothing() {
+        let mut bar = Bar::new(ToolId::FreeTransform);
+        let intents = bar.drag(
+            super::super::ids::tool_option(ToolId::FreeTransform, keys::W),
+            egui::vec2(40.0, 0.0),
+        );
+        assert!(writes(&intents).is_empty(), "{intents:?}");
+    }
+
+    #[test]
+    fn a_reference_cell_click_picks_that_point() {
+        let mut bar = Bar::new(ToolId::FreeTransform);
+        with_session(&mut bar);
+        let tool = ToolId::FreeTransform;
+        let intents = bar.click(super::super::ids::tool_option_choice(
+            tool,
+            keys::REFERENCE,
+            0,
+        ));
+        assert_eq!(
+            writes(&intents),
+            vec![(keys::REFERENCE, OptionValue::Choice(0))]
+        );
+        // X now reads the top-left corner: a W drag writes X = 0, not 100.
+        let intents = bar.drag(
+            super::super::ids::tool_option(tool, keys::W),
+            egui::vec2(40.0, 0.0),
+        );
+        assert_eq!(last_write(&intents, keys::X), None, "X = 0 is the default");
+        assert_eq!(
+            bar.w.options.get(tool, keys::X),
+            Some(OptionValue::Float(0.0))
+        );
+    }
+
+    #[test]
+    fn a_warp_preset_pick_writes_the_preset_puts_the_mode_on_warp_and_bumps_the_counter() {
+        let mut bar = Bar::new(ToolId::FreeTransform);
+        with_session(&mut bar);
+        let tool = ToolId::FreeTransform;
+        let arc = tools::transform::WARP_PRESET_LABELS
+            .iter()
+            .position(|l| *l == "Arc")
+            .unwrap();
+        bar.click(super::super::ids::tool_option(tool, keys::WARP));
+        let intents = bar.click(super::super::ids::tool_option_choice(tool, keys::WARP, arc));
+        assert_eq!(
+            last_write(&intents, keys::WARP),
+            Some(OptionValue::Choice(arc))
+        );
+        let warp_mode = TransformMode::ALL
+            .iter()
+            .position(|m| *m == TransformMode::Warp)
+            .unwrap();
+        assert_eq!(
+            last_write(&intents, "mode"),
+            Some(OptionValue::Choice(warp_mode))
+        );
+        assert_eq!(
+            last_write(&intents, keys::NUMERIC_SEQ),
+            Some(OptionValue::Int(1))
+        );
+    }
+
+    #[test]
+    fn the_move_bar_align_and_distribute_buttons_raise_the_layer_menu_actions() {
+        use crate::menu::{AlignEdge, DistributeAxis};
+        let mut bar = Bar::new(ToolId::Move);
+        let mut lefts = Vec::new();
+        for (edge, key) in MOVE_ALIGN_KEYS {
+            let id = super::super::ids::tool_option(ToolId::Move, key);
+            lefts.push(bar.rect(id).expect("drawn").left());
+            let intents = bar.click(id);
+            assert_eq!(
+                intents,
+                vec![Intent::Action(MenuAction::AlignLayers(edge))],
+                "{key}"
+            );
+        }
+        assert!(
+            lefts.windows(2).all(|p| p[0] < p[1]),
+            "left to right: {lefts:?}"
+        );
+        assert_eq!(
+            MOVE_ALIGN_KEYS.map(|(e, _)| e),
+            [
+                AlignEdge::Left,
+                AlignEdge::HorizontalCenter,
+                AlignEdge::Right,
+                AlignEdge::Top,
+                AlignEdge::VerticalCenter,
+                AlignEdge::Bottom
+            ]
+        );
+        for (axis, key) in MOVE_DISTRIBUTE_KEYS {
+            let intents = bar.click(super::super::ids::tool_option(ToolId::Move, key));
+            assert_eq!(
+                intents,
+                vec![Intent::Action(MenuAction::DistributeLayers(axis))]
+            );
+        }
+        assert_eq!(
+            MOVE_DISTRIBUTE_KEYS.map(|(a, _)| a),
+            [DistributeAxis::Horizontal, DistributeAxis::Vertical]
+        );
+        // The buttons are the Move tool's alone.
+        let mut brush = Bar::new(ToolId::Brush);
+        assert!(brush
+            .rect(super::super::ids::tool_option(ToolId::Move, "align_left"))
+            .is_none());
+    }
+
+    #[test]
+    fn the_gradient_and_the_bucket_are_offered_the_mode_and_pattern_fill_is_not() {
+        let multiply = layer_model::BlendMode::ALL
+            .iter()
+            .position(|m| *m == layer_model::BlendMode::Multiply)
+            .unwrap();
+        for tool in [ToolId::Gradient, ToolId::PaintBucket] {
+            let mut bar = Bar::new(tool);
+            let id = super::super::ids::tool_option(tool, BLEND_MODE_KEY);
+            assert!(bar.rect(id).is_some(), "{tool:?} has no Mode combo");
+            bar.click(id);
+            let intents = bar.click(super::super::ids::tool_option_choice(
+                tool,
+                BLEND_MODE_KEY,
+                multiply,
+            ));
+            assert_eq!(
+                writes(&intents),
+                vec![(BLEND_MODE_KEY, OptionValue::Choice(multiply))],
+                "{tool:?}"
+            );
+            // ...and the tool the registry builds answers the forwarded key.
+            let mut t = tools::registry::make(tool);
+            for (key, value) in bar.w.options.held(tool) {
+                t.set_setting(&key, tool_setting(value))
+                    .unwrap_or_else(|e| panic!("{tool:?} refused {key}: {e}"));
+            }
+        }
+        let mut bar = Bar::new(ToolId::PatternFill);
+        assert!(bar
+            .rect(super::super::ids::tool_option(
+                ToolId::PatternFill,
+                BLEND_MODE_KEY
+            ))
+            .is_none());
+    }
+
+    #[test]
+    fn the_marquee_offers_exclude_and_a_style_with_its_width_and_height() {
+        let tool = ToolId::RectMarquee;
+        let mut bar = Bar::new(tool);
+        for key in ["style", "style_width", "style_height"] {
+            assert!(
+                bar.rect(super::super::ids::tool_option(tool, key))
+                    .is_some(),
+                "{key} is not drawn"
+            );
+        }
+        let exclude = tools::select::SELECTION_MODE_LABELS
+            .iter()
+            .position(|l| *l == "Exclude")
+            .unwrap();
+        bar.click(super::super::ids::tool_option(tool, "mode"));
+        let intents = bar.click(super::super::ids::tool_option_choice(tool, "mode", exclude));
+        assert_eq!(
+            writes(&intents),
+            vec![("mode", OptionValue::Choice(exclude))]
+        );
+        let fixed = tools::select::MARQUEE_STYLE_LABELS
+            .iter()
+            .position(|l| *l == "Fixed Size")
+            .unwrap();
+        bar.click(super::super::ids::tool_option(tool, "style"));
+        let intents = bar.click(super::super::ids::tool_option_choice(tool, "style", fixed));
+        assert_eq!(
+            writes(&intents),
+            vec![("style", OptionValue::Choice(fixed))]
+        );
     }
 }

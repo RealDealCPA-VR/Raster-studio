@@ -21,6 +21,22 @@
 //!   (open) or a triangle (closed).
 //! * **Alt**-click on an anchor converts it: a smooth anchor becomes a corner
 //!   and a corner grows a symmetric pair of handles.
+//!
+//! # W9-F: combining and aligning path components
+//!
+//! Path Select's options bar carries Photoshop's two component operations as
+//! choices, applied to the shape layer the click selects, as one
+//! [`Command::SetLayerKind`] step:
+//!
+//! * **Combine** (`combine`: Unite / Subtract / Intersect / Exclude) merges the
+//!   path's components into one outline with that boolean operation, folded
+//!   bottom (first drawn) to top ([`vector::fold`]) — Photoshop's "Merge Shape
+//!   Components".
+//! * **Align** (`align`: Left / Horizontal Centres / Right / Top / Vertical
+//!   Centres / Bottom) moves each component so that edge meets the same edge
+//!   of all the components' joint bounds.
+//!
+//! Left on their first entry (`Select Only` / `None`) a click only selects.
 
 use glam::Vec2;
 
@@ -39,13 +55,204 @@ const HIT_TOLERANCE: f64 = 6.0;
 /// Selection to grab it.
 const ANCHOR_RADIUS: f64 = 8.0;
 
+/// W9-F: how Path Select combines the clicked path's components.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PathCombine {
+    /// Select only.
+    #[default]
+    None,
+    Unite,
+    /// Subtract each later component from the ones before it.
+    Subtract,
+    Intersect,
+    Exclude,
+}
+
+impl PathCombine {
+    /// The `combine` option's labels, in [`Self::from_choice`]'s order.
+    pub const CHOICES: &'static [&'static str] = &[
+        "Select Only",
+        "Unite",
+        "Subtract Front",
+        "Intersect",
+        "Exclude",
+    ];
+
+    pub fn from_choice(index: usize) -> Self {
+        match index {
+            0 => PathCombine::None,
+            1 => PathCombine::Unite,
+            2 => PathCombine::Subtract,
+            3 => PathCombine::Intersect,
+            _ => PathCombine::Exclude,
+        }
+    }
+
+    /// The boolean operation, `None` for select-only.
+    pub fn op(self) -> Option<vector::BoolOp> {
+        match self {
+            PathCombine::None => None,
+            PathCombine::Unite => Some(vector::BoolOp::Union),
+            PathCombine::Subtract => Some(vector::BoolOp::Difference),
+            PathCombine::Intersect => Some(vector::BoolOp::Intersection),
+            PathCombine::Exclude => Some(vector::BoolOp::Xor),
+        }
+    }
+}
+
+/// W9-F: which edge Path Select aligns the clicked path's components on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PathAlign {
+    #[default]
+    None,
+    Left,
+    HorizontalCenter,
+    Right,
+    Top,
+    VerticalCenter,
+    Bottom,
+}
+
+impl PathAlign {
+    /// The `align` option's labels, in [`Self::from_choice`]'s order.
+    pub const CHOICES: &'static [&'static str] = &[
+        "None",
+        "Left Edges",
+        "Horizontal Centres",
+        "Right Edges",
+        "Top Edges",
+        "Vertical Centres",
+        "Bottom Edges",
+    ];
+
+    pub fn from_choice(index: usize) -> Self {
+        match index {
+            0 => PathAlign::None,
+            1 => PathAlign::Left,
+            2 => PathAlign::HorizontalCenter,
+            3 => PathAlign::Right,
+            4 => PathAlign::Top,
+            5 => PathAlign::VerticalCenter,
+            _ => PathAlign::Bottom,
+        }
+    }
+}
+
+/// W9-F: a path's components — one path per `MoveTo` run.
+pub fn components(path: &vector::Path) -> Vec<vector::Path> {
+    let mut out: Vec<Vec<PathEl>> = Vec::new();
+    for el in path.elements() {
+        match el {
+            PathEl::MoveTo(_) => out.push(vec![*el]),
+            _ => match out.last_mut() {
+                Some(run) => run.push(*el),
+                None => out.push(vec![*el]),
+            },
+        }
+    }
+    out.into_iter().map(vector::Path::from_elements).collect()
+}
+
+/// W9-F: merge a path's components with `op`, first drawn at the bottom.
+/// `None` when there is nothing to merge (one component) or nothing
+/// survives.
+pub fn combine_components(
+    path: &vector::Path,
+    op: vector::BoolOp,
+) -> Result<Option<vector::Path>, ToolError> {
+    let parts = components(path);
+    if parts.len() < 2 {
+        return Ok(None);
+    }
+    let merged = vector::fold(&parts, op, FillRule::NonZero)?;
+    Ok((!merged.is_empty()).then_some(merged))
+}
+
+/// W9-F: move each component of `path` so its `edge` meets the same edge of
+/// all the components' joint bounds. `None` when nothing moves.
+pub fn align_components(path: &vector::Path, edge: PathAlign) -> Option<vector::Path> {
+    let parts = components(path);
+    if parts.len() < 2 || edge == PathAlign::None {
+        return None;
+    }
+    let all = path.bounds();
+    let mut out = vector::Path::new();
+    let mut moved = false;
+    for part in &parts {
+        let b = part.bounds();
+        let (dx, dy) = match edge {
+            PathAlign::None => (0.0, 0.0),
+            PathAlign::Left => (all.min.x - b.min.x, 0.0),
+            PathAlign::Right => (all.max.x - b.max.x, 0.0),
+            PathAlign::HorizontalCenter => ((all.min.x + all.max.x - b.min.x - b.max.x) * 0.5, 0.0),
+            PathAlign::Top => (0.0, all.min.y - b.min.y),
+            PathAlign::Bottom => (0.0, all.max.y - b.max.y),
+            PathAlign::VerticalCenter => (0.0, (all.min.y + all.max.y - b.min.y - b.max.y) * 0.5),
+        };
+        moved |= dx != 0.0 || dy != 0.0;
+        out.extend(&part.transform(&vector::Affine::translate(dx, dy)));
+    }
+    moved.then_some(out)
+}
+
+/// W9-F: the geometry of Layer > Combine Shapes. `stack` is the selected
+/// shape layers bottom first, each with its layer-to-document transform; the
+/// paths are taken into document space, folded bottom to top with
+/// `combine`'s boolean op ([`vector::fold`], each read with the bottom
+/// layer's fill rule) and brought back into the bottom layer's own space.
+/// Returns that SVG path data; [`ToolError::Degenerate`] when fewer than two
+/// layers are given, `combine` is select-only, a transform cannot be
+/// inverted, or nothing of the shapes remains.
+pub fn combine_shape_layers(
+    stack: &[(&layer_model::ShapeLayer, glam::Affine2)],
+    combine: PathCombine,
+) -> Result<String, ToolError> {
+    let (Some(op), Some((base, base_to_doc))) = (combine.op(), stack.first()) else {
+        return Err(ToolError::Degenerate);
+    };
+    if stack.len() < 2 {
+        return Err(ToolError::Degenerate);
+    }
+    let affine = |t: glam::Affine2| {
+        let m = t.matrix2;
+        vector::Affine::new([
+            f64::from(m.x_axis.x),
+            f64::from(m.x_axis.y),
+            f64::from(m.y_axis.x),
+            f64::from(m.y_axis.y),
+            f64::from(t.translation.x),
+            f64::from(t.translation.y),
+        ])
+    };
+    let mut paths = Vec::with_capacity(stack.len());
+    for (shape, to_doc) in stack {
+        let path = svg::parse(&shape.path_svg)?;
+        paths.push(path.transform(&affine(*to_doc)));
+    }
+    let rule = match base.fill_rule {
+        layer_model::ShapeFillRule::NonZero => FillRule::NonZero,
+        layer_model::ShapeFillRule::EvenOdd => FillRule::EvenOdd,
+    };
+    let merged = vector::fold(&paths, op, rule)?;
+    let back = base_to_doc.inverse();
+    if merged.is_empty() || !back.is_finite() {
+        return Err(ToolError::Degenerate);
+    }
+    Ok(svg::to_svg(&merged.transform(&affine(back))))
+}
+
 /// Path Select: click a path to select the shape layer that owns it.
 ///
 /// Layers are tested top-most first (the same order the shell fills
 /// [`ToolContext::shape_paths`] in), and a hit is a click within
-/// [`HIT_TOLERANCE`] of the path's outline or inside its fill.
+/// [`HIT_TOLERANCE`] of the path's outline or inside its fill. W9-F: with a
+/// `combine` or `align` option set, the click also merges or aligns that
+/// path's components.
 #[derive(Default)]
-pub struct PathSelectTool;
+pub struct PathSelectTool {
+    pub combine: PathCombine,
+    pub align: PathAlign,
+}
 
 impl PathSelectTool {
     /// The topmost shape layer whose path sits under `p`.
@@ -77,6 +284,7 @@ impl Tool for PathSelectTool {
     ) -> Result<(), ToolError> {
         if let Some(id) = self.path_under(ctx, event.pos) {
             ctx.emit_request(crate::tool::ToolRequest::SelectLayer(id));
+            self.apply_component_ops(ctx, id)?;
         }
         Ok(())
     }
@@ -101,6 +309,63 @@ impl Tool for PathSelectTool {
 
     fn is_active(&self) -> bool {
         false
+    }
+
+    /// W9-F: `combine` and `align`, the two options the registry declares.
+    fn set_setting(
+        &mut self,
+        key: &str,
+        setting: crate::tool::ToolSetting,
+    ) -> Result<(), ToolError> {
+        match (key, setting) {
+            ("combine", crate::tool::ToolSetting::Choice(i)) => {
+                self.combine = PathCombine::from_choice(i);
+                Ok(())
+            }
+            ("align", crate::tool::ToolSetting::Choice(i)) => {
+                self.align = PathAlign::from_choice(i);
+                Ok(())
+            }
+            ("combine" | "align", _) => Err(ToolError::OptionKindMismatch {
+                key: key.to_owned(),
+            }),
+            _ => Err(ToolError::UnknownOption {
+                key: key.to_owned(),
+            }),
+        }
+    }
+}
+
+impl PathSelectTool {
+    /// W9-F: merge then align the clicked layer's path components, as one
+    /// `SetLayerKind` step; nothing when neither option changes the path.
+    fn apply_component_ops(&self, ctx: &mut ToolContext<'_>, id: LayerId) -> Result<(), ToolError> {
+        let Some((_, shape)) = ctx.shape_paths.iter().find(|(l, _)| *l == id) else {
+            return Ok(());
+        };
+        let Ok(mut path) = svg::parse(&shape.path_svg) else {
+            return Ok(());
+        };
+        let mut changed = false;
+        if let Some(op) = self.combine.op() {
+            if let Some(merged) = combine_components(&path, op)? {
+                path = merged;
+                changed = true;
+            }
+        }
+        if let Some(aligned) = align_components(&path, self.align) {
+            path = aligned;
+            changed = true;
+        }
+        if changed {
+            let mut next = shape.clone();
+            next.path_svg = svg::to_svg(&path);
+            ctx.emit(Command::SetLayerKind {
+                layer_id: id,
+                kind: Box::new(LayerKind::Shape(next)),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -408,6 +673,58 @@ mod tests {
     use crate::tool::Modifiers;
     use layer_model::ShapeLayer;
     use raster::PixelRect;
+
+    /// W9-F: Path Select's Unite merges the clicked layer's two overlapping
+    /// rectangles into one outline covering their union; Align Left moves
+    /// both components onto the joint left edge.
+    #[test]
+    fn path_select_combine_and_align_edit_the_clicked_path() {
+        let two = "M0 0 L10 0 L10 10 L0 10 Z M5 5 L15 5 L15 15 L5 15 Z";
+        let id = LayerId::new();
+        let run = |key: &str, choice: usize| {
+            let mut tiles = MemoryTiles::new();
+            let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64));
+            ctx.shape_paths = vec![(id, ShapeLayer::from_svg(two))];
+            let mut tool = PathSelectTool::default();
+            tool.set_setting(key, crate::tool::ToolSetting::Choice(choice))
+                .unwrap();
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(2.0, 2.0))
+                .unwrap();
+            let cmds = ctx.drain();
+            let Some(Command::SetLayerKind { layer_id, kind }) = cmds.first() else {
+                panic!("{key}: no edit: {cmds:?}");
+            };
+            assert_eq!(*layer_id, id);
+            let LayerKind::Shape(s) = &**kind else {
+                panic!("not a shape");
+            };
+            svg::parse(&s.path_svg).unwrap()
+        };
+        let united = run("combine", 1);
+        assert_eq!(components(&united).len(), 1, "one outline");
+        let area = vector::fill(&united, &vector::FillOptions::default())
+            .unwrap()
+            .area();
+        assert_eq!(area, 175.0, "the union of two overlapping 10x10 squares");
+
+        let aligned = run("align", 1);
+        let parts = components(&aligned);
+        assert_eq!(parts.len(), 2);
+        assert!(
+            parts.iter().all(|p| p.bounds().min.x == 0.0),
+            "both on x = 0"
+        );
+
+        // Select Only emits no edit, just the selection.
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64));
+        ctx.shape_paths = vec![(id, ShapeLayer::from_svg(two))];
+        PathSelectTool::default()
+            .on_pointer_down(&mut ctx, PointerEvent::at(2.0, 2.0))
+            .unwrap();
+        assert!(ctx.commands().is_empty());
+        assert_eq!(ctx.requests().len(), 1);
+    }
 
     fn square_ctx(tiles: &mut MemoryTiles) -> ToolContext<'_> {
         let mut ctx = ToolContext::new(tiles, PixelRect::new(0, 0, 256, 256));

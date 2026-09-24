@@ -611,6 +611,9 @@ pub struct Editor {
     /// [`Self::set_active_pattern`] picks another. Threaded into the tool
     /// context per gesture like the ramp and the colours.
     active_pattern: Option<String>,
+    /// W9-N: swatches and a gradient a resource file brought in, waiting for
+    /// the chrome's workspace (see `resource_import`).
+    panel_imports: resource_import::PanelImports,
 
     panels_visible: bool,
     /// W2-X: Photopea's `F` cycle. The chrome mirrors it into
@@ -875,6 +878,15 @@ impl Editor {
         ui::strings::set_locale(prefs.locale());
         let keymap = Keymap::with_overrides(prefs.keymap_overrides.clone());
         let presets = asset_store::presets::PresetStore::load(&AppPaths::presets_file(&paths));
+        // W9-E: the stored sampled tips, so a brush that names one paints it.
+        for tip in presets.tips() {
+            if let (Some(hash), Ok(image)) = (
+                asset_store::BlobHash::from_hex(&tip.hash),
+                tools::brush::SampledTip::new(tip.width, tip.height, tip.alpha8.clone()),
+            ) {
+                tools::brush::register_sampled_tip(tools::brush::TipId(hash.0), image);
+            }
+        }
         Editor {
             paths,
             prefs,
@@ -907,6 +919,7 @@ impl Editor {
             doc_colors: std::collections::HashMap::new(),
             gradient_ramp: layer_model::Gradient::default(),
             active_pattern: None,
+            panel_imports: resource_import::PanelImports::default(),
             panels_visible: true,
             screen_mode: ui::palette::ScreenMode::Standard,
             preferences_open: false,
@@ -2666,6 +2679,173 @@ impl Editor {
         Ok("Duplicated document".to_string())
     }
 
+    // ---- W9-I: duplicate a layer into another open document -------------
+
+    /// W9-I: Layer ▸ Duplicate Layer…'s Destination ▸ Document, and a layer
+    /// row dropped on another document's tab (Photopea's drag-to-tab).
+    ///
+    /// Copies `layer` of the **active** document (with its whole subtree when
+    /// it is a group) into the open document `target`: every pixel and mask
+    /// tile is filed content-addressed into the target's own tile store, the
+    /// layers keep their transform (so they sit at the same position), their
+    /// effects, masks and blend settings, and a smart object's asset record
+    /// travels with it. The copy lands at the top of the target's stack as
+    /// **one** undo step in the target — nothing is recorded in the source —
+    /// and the target becomes the active document with the copy active.
+    /// `name` renames the copied layer; `None` keeps its name.
+    pub fn duplicate_layer_into_document(
+        &mut self,
+        layer: LayerId,
+        target: crate::doc::DocumentId,
+        name: Option<String>,
+    ) -> Result<String, String> {
+        let source_index = self
+            .active
+            .ok_or_else(|| "No document is open".to_string())?;
+        let target_index = self
+            .docs
+            .iter()
+            .position(|d| d.id() == target)
+            .ok_or_else(|| "That document is no longer open".to_string())?;
+        if target_index == source_index {
+            return Err("The layer is already in that document".to_string());
+        }
+        let source = &self.docs[source_index];
+        if source.is_sixteen_bit() && !self.docs[target_index].is_sixteen_bit() {
+            return Err("A 16-bit layer cannot be copied into an 8-bit document".to_string());
+        }
+        let subtree = source.document.layers.subtree_ids(layer);
+        if subtree.is_empty() {
+            return Err("The layer is not in this document".to_string());
+        }
+        // Fresh ids for every copied layer and mask: the target may already
+        // hold these very layers (a second drop), and ids are unique per tree.
+        let fresh: std::collections::HashMap<LayerId, LayerId> =
+            subtree.iter().map(|id| (*id, LayerId::new())).collect();
+        /// A tile map's pixels as (tile, bytes), read out of the source store.
+        type Pixels = Vec<(raster::TileCoord, Vec<u8>)>;
+        let mut copies = Vec::new();
+        let mut moves = Vec::new();
+        let mut tiles: Vec<(editor_core::PixelTarget, Pixels)> = Vec::new();
+        let mut assets = Vec::new();
+        let read = |map: Option<&editor_core::TileMap>| -> Pixels {
+            map.map(|m| {
+                m.iter()
+                    .filter_map(|(coord, hash)| {
+                        compositor::TileSource::tile(&source.tiles, hash)
+                            .map(|bytes| (coord, bytes.to_vec()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+        };
+        for old in &subtree {
+            let original = source
+                .document
+                .layers
+                .get(*old)
+                .ok_or_else(|| "The layer is not in this document".to_string())?;
+            let new_id = fresh[old];
+            let mut copy = original.clone();
+            copy.id = new_id;
+            if *old == layer {
+                if let Some(name) = name.as_ref() {
+                    copy.name = name.clone();
+                }
+            }
+            if let LayerKind::Group(group) = &mut copy.kind {
+                // A group must arrive empty; its children follow as moves.
+                for (index, child) in group.children.iter().enumerate() {
+                    if let Some(child) = fresh.get(child) {
+                        moves.push(Command::MoveLayer {
+                            layer_id: *child,
+                            parent: Some(new_id),
+                            index,
+                        });
+                    }
+                }
+                group.children.clear();
+            }
+            if let LayerKind::SmartObject(object) = &copy.kind {
+                if let Some(record) = source
+                    .document
+                    .assets()
+                    .iter()
+                    .find(|r| r.id == object.asset)
+                {
+                    assets.push(record.clone());
+                }
+            }
+            let old_mask = copy.mask.as_mut().map(|m| {
+                let old = m.id;
+                m.id = MaskId::new();
+                old
+            });
+            tiles.push((
+                editor_core::PixelTarget::Layer(new_id),
+                read(source.document.layer_tiles(*old)),
+            ));
+            if let Some(old_mask) = old_mask {
+                tiles.push((
+                    editor_core::PixelTarget::Mask(new_id),
+                    read(
+                        source
+                            .document
+                            .pixels
+                            .tiles(editor_core::PixelKey::Mask(old_mask)),
+                    ),
+                ));
+            }
+            copies.push(copy);
+        }
+        let label_name = source
+            .document
+            .layers
+            .get(layer)
+            .map(|l| l.name.clone())
+            .unwrap_or_default();
+        let target_title = self.docs[target_index].title().to_string();
+        let root_copy = fresh[&layer];
+
+        let doc = &mut self.docs[target_index];
+        for record in assets {
+            if doc.document.asset_origin(record.id).is_none() {
+                doc.document.set_asset_origin(record);
+            }
+        }
+        // Children are created before their group is filled, and every
+        // create lands at the top of the root: create in reverse so the
+        // copied root ends on top, then seat the children.
+        let mut commands: Vec<Command> = copies
+            .into_iter()
+            .rev()
+            .map(Command::create_layer)
+            .collect();
+        commands.extend(moves);
+        for (target, bytes) in tiles {
+            let edits: Vec<_> = bytes
+                .into_iter()
+                .map(|(coord, bytes)| {
+                    editor_core::TileEdit::set(coord, doc.tiles.insert_bytes(bytes))
+                })
+                .collect();
+            if !edits.is_empty() {
+                commands.push(Command::paint_tiles(target, edits).map_err(|e| e.to_string())?);
+            }
+        }
+        doc.apply(Command::Transaction {
+            label: format!("Duplicate {label_name}"),
+            commands,
+        })
+        .map_err(|e| e.to_string())?;
+        let _ = doc.document.set_active_layer(Some(root_copy));
+        self.active = Some(target_index);
+        self.touch();
+        let status = format!("Duplicated {label_name} into {target_title}");
+        self.status = Some(status.clone());
+        Ok(status)
+    }
+
     /// Layer ▸ Smart Object ▸ Edit Contents…: open a smart object's stored
     /// pixels in a scratch document so they can be edited as their own raster,    /// keeping the (parent, layer) pair so a later [`Self::commit_smart_object_contents`]
     /// writes the edits back as one undoable step on the parent. This is the
@@ -2887,55 +3067,35 @@ impl Editor {
         Ok("Committed smart object contents".to_string())
     }
 
-    /// Layer ▸ New Fill Layer ▸ Solid Color: add a raster layer filled with
-    /// the current foreground colour across the whole canvas.
+    /// Layer ▸ New Fill Layer ▸ Solid Color, without its dialog: add a LIVE
+    /// fill layer (W9-B, [`layer_model::LayerKind::Fill`]) in the current
+    /// foreground colour. It owns no pixels — the compositor evaluates it over
+    /// the whole canvas — and stays re-editable from its dialog and the
+    /// Properties panel. The menu row opens the dialog first
+    /// ([`crate::dialog_host`]); this is what a keyboard/script path runs.
     pub fn new_solid_fill_layer(&mut self) -> Result<String, String> {
-        let (w, h) = self
-            .active()
-            .map(|d| (d.document.width(), d.document.height()))
+        let color = self.foreground().map(|c| c.clamp(0.0, 1.0));
+        let source = layer_model::FillSource::Solid { color };
+        let layer = layer_model::Layer::with_kind(
+            source.kind_name(),
+            layer_model::LayerKind::Fill(layer_model::FillLayer::new(source)),
+        );
+        self.active()
             .ok_or_else(|| "No document is open".to_string())?;
-        let fg = self.foreground();
-        let [r, g, b, a] = [
-            (fg[0].clamp(0.0, 1.0) * 255.0).round() as u8,
-            (fg[1].clamp(0.0, 1.0) * 255.0).round() as u8,
-            (fg[2].clamp(0.0, 1.0) * 255.0).round() as u8,
-            (fg[3].clamp(0.0, 1.0) * 255.0).round() as u8,
-        ];
-        let pixels = {
-            let n = (w as usize) * (h as usize) * 4;
-            let mut v = Vec::with_capacity(n);
-            for _ in 0..(w as usize * h as usize) {
-                v.extend_from_slice(&[r, g, b, a]);
-            }
-            v
-        };
-        let command = {
-            let doc = self.active_mut().ok_or("No document is open")?;
-            let layer = layer_model::Layer::raster("Color Fill");
-            let new_id = layer.id;
-            let grid = raster::TileGrid::from_rgba8(w, h, &pixels).map_err(|e| e.to_string())?;
-            let mut edits = Vec::new();
-            for (coord, tile) in grid.iter() {
-                let hash = doc.tiles.insert_bytes(tile.data().to_vec());
-                edits.push(editor_core::pixels::TileEdit::set(coord, hash));
-            }
-            Command::Transaction {
-                label: "New Fill Layer".to_string(),
-                commands: vec![
-                    Command::create_layer(layer),
-                    Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(new_id), edits)
-                        .map_err(|e| e.to_string())?,
-                ],
-            }
-        };
-        self.apply_command(command);
+        self.apply_command(Command::Transaction {
+            label: "New Fill Layer".to_string(),
+            commands: vec![Command::create_layer(layer)],
+        });
         Ok("Added solid color fill layer".to_string())
     }
 
-    /// Layer ▸ New Fill Layer ▸ Pattern: add a raster layer tiled with the
-    /// most recently defined user pattern. Like the Solid Color layer, the
-    /// pattern is *baked* into the layer's pixels at creation rather than a
-    /// live generator — a one-step undoable fill, honest about being a raster.
+    /// Layer ▸ New Fill Layer ▸ Pattern, on the dialog-less road only (the
+    /// menu row opens the Pattern Fill dialog, which creates a LIVE fill
+    /// layer — W9-B): add a raster layer tiled with the most recently defined
+    /// user pattern, *baked* into its pixels as one undoable step. This road
+    /// still bakes because `menu_bridge`'s
+    /// `a_new_pattern_fill_layer_tiles_the_latest_pattern` reads the result's
+    /// stored tiles; the dialog is the road a user takes.
     pub fn new_pattern_fill_layer(&mut self) -> Result<String, String> {
         let (w, h) = self
             .active()
@@ -3147,65 +3307,225 @@ impl Editor {
         self.copied_style.as_ref()
     }
 
+    /// W9-E: Edit ▸ Define Brush Preset makes a brush FROM PIXELS, as
+    /// Photopea does: the active layer's pixels inside the selection (the
+    /// whole layer with none) become a sampled tip, dark and opaque = paint,
+    /// white or transparent = none, cropped to where there is ink. The tip is
+    /// stored with the presets (so it survives a restart), registered with
+    /// the brush engine, listed in the Brushes panel, and — when the active
+    /// tool stamps dabs — becomes its brush at the sample's own size.
     pub fn define_brush_preset(&mut self) -> Result<String, String> {
-        let tool = self.effective_tool();
-        let settings = self.brush_for(tool);
-        let json = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
-        let n = self.presets.brushes().len() + 1;
-        let name = format!("Brush {n}");
-        self.presets.define_brush(&name, json);
-        Ok(format!("Defined brush preset “{name}”"))
-    }
-
-    /// Layer ▸ New Fill Layer ▸ Gradient: add a raster layer holding a linear
-    /// gradient from the current foreground (left) to the background (right)
-    /// across the whole canvas. Like the Solid Color layer, the gradient is
-    /// *baked* into the layer's pixels at creation rather than a live
-    /// generator — a one-step undoable fill, honest about being a raster.
-    pub fn new_gradient_fill_layer(&mut self) -> Result<String, String> {
-        let (w, h) = self
+        let (layer, w, h) = self
             .active()
-            .map(|d| (d.document.width(), d.document.height()))
+            .and_then(|d| {
+                d.document
+                    .active_layer()
+                    .map(|l| (l, d.document.width(), d.document.height()))
+            })
             .ok_or_else(|| "No document is open".to_string())?;
-        let fg = self.foreground();
-        let bg = self.background();
-        let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
-        let far = [to_u8(fg[0]), to_u8(fg[1]), to_u8(fg[2]), to_u8(fg[3])];
-        let near = [to_u8(bg[0]), to_u8(bg[1]), to_u8(bg[2]), to_u8(bg[3])];
-        let mut pixels = Vec::with_capacity((w as usize) * (h as usize) * 4);
-        let denom = (w.max(1)) as f32;
-        for _ in 0..h {
-            for x in 0..w {
-                let t = x as f32 / denom;
-                let row = [
-                    (far[0] as f32 * (1.0 - t) + near[0] as f32 * t).round() as u8,
-                    (far[1] as f32 * (1.0 - t) + near[1] as f32 * t).round() as u8,
-                    (far[2] as f32 * (1.0 - t) + near[2] as f32 * t).round() as u8,
-                    (far[3] as f32 * (1.0 - t) + near[3] as f32 * t).round() as u8,
-                ];
-                pixels.extend_from_slice(&row);
+        let doc = self.active().ok_or("No document is open")?;
+        let selection = &doc.document.selection;
+        let has_selection = selection.bounds().is_some();
+        let (x0, y0, x1, y1) = match selection.bounds() {
+            Some((lo, hi)) => (
+                lo.x.clamp(0, w as i32) as u32,
+                lo.y.clamp(0, h as i32) as u32,
+                hi.x.clamp(0, w as i32) as u32,
+                hi.y.clamp(0, h as i32) as u32,
+            ),
+            None => (0, 0, w, h),
+        };
+        if x1 <= x0 || y1 <= y0 {
+            return Err("The selection is empty".to_string());
+        }
+        let pixels = crate::menu_bridge::pixels::read_layer(doc, layer);
+        let (pw, ph) = ((x1 - x0) as usize, (y1 - y0) as usize);
+        let mut ink = vec![0u8; pw * ph];
+        for y in 0..ph {
+            for x in 0..pw {
+                let (dx, dy) = (x0 as usize + x, y0 as usize + y);
+                let i = (dy * w as usize + dx) * 4;
+                let [r, g, b, a] = [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]];
+                let luma =
+                    (0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b)) / 255.0;
+                let sel = selection.coverage_at(glam::IVec2::new(dx as i32, dy as i32));
+                let v = (1.0 - luma) * (f32::from(a) / 255.0) * sel;
+                ink[y * pw + x] = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
             }
         }
-        let command = {
-            let doc = self.active_mut().ok_or("No document is open")?;
-            let layer = layer_model::Layer::raster("Gradient Fill");
-            let new_id = layer.id;
-            let grid = raster::TileGrid::from_rgba8(w, h, &pixels).map_err(|e| e.to_string())?;
-            let mut edits = Vec::new();
-            for (coord, tile) in grid.iter() {
-                let hash = doc.tiles.insert_bytes(tile.data().to_vec());
-                edits.push(editor_core::pixels::TileEdit::set(coord, hash));
+        let (tw, th, alpha) = Self::crop_and_fit_tip(pw, ph, &ink).ok_or_else(|| {
+            "The brush would be empty: define it from dark or opaque pixels".to_string()
+        })?;
+        let n = self.presets.brushes().len() + 1;
+        let name = format!("Sampled Brush {n}");
+        let tool = self.effective_tool();
+        let settings = self.install_sampled_brush(&name, tw, th, alpha, tool)?;
+        if registry::make(tool).brush().is_some() {
+            self.set_brush(settings);
+        }
+        Ok(format!(
+            "Defined brush preset “{name}” ({tw}×{th}) from the active layer's pixels{}",
+            if has_selection {
+                " inside the selection"
+            } else {
+                ""
             }
-            Command::Transaction {
-                label: "New Gradient Fill".to_string(),
-                commands: vec![
-                    Command::create_layer(layer),
-                    Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(new_id), edits)
-                        .map_err(|e| e.to_string())?,
-                ],
+        ))
+    }
+
+    /// W9-E: crop `ink` (`pw * ph` coverage bytes) to its non-zero bounds
+    /// and, past [`tools::brush::MAX_TIP_SIDE`], box-shrink it by the least
+    /// whole factor that fits. `None` when there is no ink at all.
+    fn crop_and_fit_tip(pw: usize, ph: usize, ink: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+        let (mut lx, mut ly, mut hx, mut hy) = (usize::MAX, usize::MAX, 0, 0);
+        for y in 0..ph {
+            for x in 0..pw {
+                if ink[y * pw + x] > 0 {
+                    lx = lx.min(x);
+                    ly = ly.min(y);
+                    hx = hx.max(x + 1);
+                    hy = hy.max(y + 1);
+                }
             }
+        }
+        if lx == usize::MAX {
+            return None;
+        }
+        let (cw, ch) = (hx - lx, hy - ly);
+        let max = tools::brush::MAX_TIP_SIDE as usize;
+        let k = cw.max(ch).div_ceil(max).max(1);
+        let (tw, th) = (cw.div_ceil(k), ch.div_ceil(k));
+        let mut out = vec![0u8; tw * th];
+        for ty in 0..th {
+            for tx in 0..tw {
+                let (mut sum, mut n) = (0u32, 0u32);
+                for y in ly + ty * k..(ly + (ty + 1) * k).min(hy) {
+                    for x in lx + tx * k..(lx + (tx + 1) * k).min(hx) {
+                        sum += u32::from(ink[y * pw + x]);
+                        n += 1;
+                    }
+                }
+                out[ty * tw + tx] = (sum / n.max(1)) as u8;
+            }
+        }
+        Some((tw as u32, th as u32, out))
+    }
+
+    /// W9-E: store, register and list one sampled tip as a named brush built
+    /// on `tool`'s current brush, sized to the tip's longer side.
+    fn install_sampled_brush(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+        alpha: Vec<u8>,
+        tool: ToolId,
+    ) -> Result<BrushSettings, String> {
+        let hash = self.presets.define_tip(width, height, alpha.clone());
+        let id = tools::brush::TipId(hash.0);
+        let tip = tools::brush::SampledTip::new(width, height, alpha).map_err(|e| e.to_string())?;
+        tools::brush::register_sampled_tip(id, tip);
+        let settings = BrushSettings {
+            size: width.max(height) as f32,
+            hardness: 1.0,
+            angle: 0.0,
+            roundness: 1.0,
+            aliased: false,
+            tip: tools::brush::BrushTip::Sampled(id),
+            ..self.brush_for(tool)
         };
-        self.apply_command(command);
+        let json = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
+        self.presets.define_brush(name, json);
+        tools::brush::publish_library_brush(name, settings);
+        Ok(settings)
+    }
+
+    /// W9-E: File ▸ Open of a `.abr`: every sampled brush in it becomes a
+    /// named brush in the Brushes panel (and in the stored presets, tip
+    /// pixels included). The file is untrusted: it is size-checked before it
+    /// is read and parsed with bounds on every length
+    /// ([`asset_store::abr`]); a malformed one is an error, never a panic.
+    pub fn import_abr(&mut self, path: &Path) -> Result<String, String> {
+        let len = std::fs::metadata(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .len();
+        if len > asset_store::abr::MAX_ABR_BYTES as u64 {
+            return Err(format!(
+                "{} is larger than a brush file may be",
+                path.display()
+            ));
+        }
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let brushes = asset_store::abr::parse_abr(&bytes).map_err(|e| {
+            format!(
+                "{} is not a brush file this build reads: {e}",
+                path.display()
+            )
+        })?;
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Brush".to_string());
+        let tool = self.effective_tool();
+        let count = brushes.len();
+        for (i, brush) in brushes.into_iter().enumerate() {
+            let name = format!("{stem} {}", i + 1);
+            self.install_sampled_brush(&name, brush.width, brush.height, brush.alpha8, tool)?;
+        }
+        let _ = self.presets.save(&self.paths.presets_file());
+        let message = format!(
+            "Added {count} brush{} from {} to the Brushes panel",
+            if count == 1 { "" } else { "es" },
+            path.display()
+        );
+        self.status = Some(message.clone());
+        self.touch();
+        Ok(message)
+    }
+
+    /// W9-E: `true` for a path File ▸ Open routes to [`Self::import_abr`].
+    pub fn is_abr_path(path: &Path) -> bool {
+        path.extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case(crate::dialogs::ABR_EXTENSION))
+    }
+
+    /// Layer ▸ New Fill Layer ▸ Gradient, without its dialog: add a LIVE
+    /// gradient fill layer (W9-B) running from the current foreground (left)
+    /// to the background (right) across the whole canvas. Nothing is baked:
+    /// the ramp, angle, scale and style stay editable, and a canvas resize
+    /// re-fits it.
+    pub fn new_gradient_fill_layer(&mut self) -> Result<String, String> {
+        let fg = self.foreground().map(|c| c.clamp(0.0, 1.0));
+        let bg = self.background().map(|c| c.clamp(0.0, 1.0));
+        let source = layer_model::FillSource::Gradient(layer_model::GradientFill {
+            gradient: layer_model::Gradient {
+                stops: vec![
+                    layer_model::GradientStop {
+                        position: 0.0,
+                        color: fg,
+                        midpoint: 0.5,
+                    },
+                    layer_model::GradientStop {
+                        position: 1.0,
+                        color: bg,
+                        midpoint: 0.5,
+                    },
+                ],
+                ..layer_model::Gradient::default()
+            },
+            angle_deg: 0.0,
+            ..layer_model::GradientFill::default()
+        });
+        let layer = layer_model::Layer::with_kind(
+            source.kind_name(),
+            layer_model::LayerKind::Fill(layer_model::FillLayer::new(source)),
+        );
+        self.active()
+            .ok_or_else(|| "No document is open".to_string())?;
+        self.apply_command(Command::Transaction {
+            label: "New Gradient Fill".to_string(),
+            commands: vec![Command::create_layer(layer)],
+        });
         Ok("Added gradient fill layer".to_string())
     }
 
@@ -3976,6 +4296,10 @@ impl Editor {
         let doc = if Self::is_project_path(path) {
             Self::absorb_journal_hold(path);
             OpenDocument::open_project(id, path, depth)?
+        } else if let Some(doc) = Self::open_animated(id, path, depth)? {
+            // W9-J: recent files, drag-and-drop and startup files open an
+            // animation as frame layers, exactly as File > Open's job does.
+            doc
         } else {
             OpenDocument::open_image(id, path, depth)?
         };
@@ -3991,12 +4315,55 @@ impl Editor {
         Ok(id)
     }
 
+    /// W9-J: `path` as a document of `_a_` frame layers when it is an
+    /// animated GIF / APNG / WebP of two or more frames; `None` for anything
+    /// else, which then opens the ordinary way. An animation that cannot be
+    /// read (damaged later frames, past the frame bounds) is `None` too, so
+    /// it still opens as its first frame, as it did before.
+    fn open_animated(
+        id: DocumentId,
+        path: &Path,
+        history_depth: usize,
+    ) -> Result<Option<OpenDocument>, DocumentError> {
+        let animation =
+            match raster::animation::decode_animation_path(path, raster::ImportLimits::default()) {
+                Ok(Some(animation)) => animation,
+                Ok(None) => return Ok(None),
+                Err(e) => {
+                    tracing::warn!(
+                        "{}: animation unreadable, opening the first frame: {e}",
+                        path.display()
+                    );
+                    return Ok(None);
+                }
+            };
+        let title = crate::import::DecodedImage::title_for(path);
+        let imported = crate::import::document_from_animation(&animation, &title, history_depth)?;
+        let import = crate::import::PsdImport {
+            imported,
+            notes: crate::import::PsdNotes::default(),
+            merged_preview: None,
+        };
+        Ok(Some(OpenDocument::open_psd_import(id, path, import)))
+    }
+
     /// Open several files, as a drag-and-drop delivers them. Returns the ids
     /// that opened; failures are reported to the user and the path is dropped
     /// from the recent list rather than left pointing at something broken.
     pub fn open_paths(&mut self, paths: &[PathBuf]) -> Vec<DocumentId> {
         let mut opened = Vec::new();
         for path in paths {
+            // W9-N: a dropped resource file feeds its library, as File > Open
+            // does; it opens no tab.
+            if Self::is_resource_path(path) {
+                if let Err(e) = self.open_resource(path) {
+                    self.dialogs
+                        .report_error("Cannot open this file", &e.to_string());
+                    self.status = Some(format!("Could not open {}", path.display()));
+                    self.touch();
+                }
+                continue;
+            }
             match self.open_path(path) {
                 Ok(id) => opened.push(id),
                 Err(e) => {
@@ -5087,6 +5454,18 @@ impl Editor {
         let Some(path) = self.dialogs.pick_open_file() else {
             return Err(ActionError::Cancelled(Action::Open));
         };
+        // W9-K: a font file is not a document - its faces load for the
+        // session and the Type tool's Font list offers its family.
+        if crate::dialogs::is_font_path(&path) {
+            self.load_font_file(&path)
+                .map_err(|e| ActionError::failed(Action::Open, e))?;
+            return Ok(Effect::Tool);
+        }
+        // W9-N: a resource file (patterns, gradients, shapes, swatches, a
+        // profile) feeds its library instead of opening as a picture.
+        if Self::is_resource_path(&path) {
+            return self.open_resource(&path);
+        }
         // W5-D: a pick inside a `.rstudio` package (its manifest) opens the
         // project — the import worker only decodes images, so the package
         // opens here, as File > Open Project does.
@@ -5095,12 +5474,55 @@ impl Editor {
                 .map_err(|e| ActionError::failed(Action::Open, e))?;
             return Ok(Effect::DocumentSet);
         }
+        // W9-E: a brush file adds brushes to the Brushes panel; it is not a
+        // document, so it never reaches the image import worker.
+        if Self::is_abr_path(&path) {
+            self.import_abr(&path)
+                .map_err(|e| ActionError::failed(Action::Open, e))?;
+            return Ok(Effect::Tool);
+        }
+        // W9-H: a style library adds its styles to the style presets (the
+        // Layer Style dialog's Styles grid); it is not a document either.
+        if crate::dialogs::is_style_library_path(&path) {
+            self.import_style_library(&path)
+                .map_err(|e| ActionError::failed(Action::Open, e))?;
+            return Ok(Effect::Tool);
+        }
         // Card 087: the read and decode run off the interaction thread; the
         // document appears (or the failure is reported) when the shell polls
         // the finished job. The picker itself stays on this thread — native
         // file dialogs must be.
         self.request_open(&path);
         Ok(Effect::DocumentSet)
+    }
+
+    /// W9-K: File > Open of a `.ttf`/`.otf`/`.ttc`: load every face in the
+    /// file for the rest of the session - into the compositor's library (so
+    /// text renders in it), as a session font (so Convert to Shape can read
+    /// its outlines), and into the Type tool's Font list. Returns the status
+    /// line; a file with no font in it is refused and changes nothing.
+    pub fn load_font_file(&mut self, path: &Path) -> Result<String, String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut probe = text_engine::FontLibrary::empty();
+        let faces = probe.load_bytes(bytes.clone()).len();
+        if faces == 0 {
+            return Err(format!(
+                "{} is not a font this build can read",
+                path.display()
+            ));
+        }
+        compositor::load_font(bytes.clone());
+        text_engine::register_session_font(bytes);
+        let families = probe.family_names();
+        tools::registry::register_font_families(compositor::font_families());
+        let status = format!(
+            "Loaded font {} ({faces} face{})",
+            families.join(", "),
+            if faces == 1 { "" } else { "s" }
+        );
+        self.status = Some(status.clone());
+        self.touch();
+        Ok(status)
     }
 
     /// Card 087: start reading and decoding `path` on a worker thread.
@@ -5224,7 +5646,40 @@ impl Editor {
                     self.touch();
                 }
             },
+            // W9-J: an animation arrives as a layered document of `_a_` frame
+            // layers; like a `.psd`, only the wrapping happens here. It goes
+            // through the one public wrapper that records the source path,
+            // with no fidelity notes to report.
+            crate::jobs::ImportOutcome::Animated { parsed, .. } => match parsed {
+                Ok(imported) => {
+                    let id = self.mint_id();
+                    let import = crate::import::PsdImport {
+                        imported: *imported,
+                        notes: crate::import::PsdNotes::default(),
+                        merged_preview: None,
+                    };
+                    let doc = OpenDocument::open_psd_import(id, &path, import);
+                    self.install_opened(doc, &path);
+                }
+                Err(e) => self.report_failed_open_reason(&path, &e),
+            },
         }
+    }
+
+    /// W9-J: an import job's failure, reported like every other failed open.
+    fn report_failed_open_reason(&mut self, path: &Path, reason: &str) {
+        self.dialogs.report_error(
+            "Cannot open this file",
+            &format!(
+                "{}
+
+{reason}",
+                path.display()
+            ),
+        );
+        self.recent.forget(path);
+        self.status = Some(format!("Could not open {}", path.display()));
+        self.touch();
     }
 
     fn install_opened(&mut self, doc: OpenDocument, path: &Path) {
@@ -5284,6 +5739,35 @@ impl Editor {
             self.set_status("Export needs an open document");
             return;
         };
+        // W9-J: rows marked Animated, in a format that can hold one, write an
+        // animation when the document has `_a_` frame layers; the rest go
+        // through the ordinary batch below.
+        let mut job = job;
+        if !crate::import::animation_frame_layers(&doc.document).is_empty() {
+            let (animated, still): (Vec<_>, Vec<_>) = job.entries.into_iter().partition(|e| {
+                e.enabled && e.animated && raster::animation::can_animate(e.preset.format)
+            });
+            job.entries = still;
+            if !animated.is_empty() {
+                let rx = spawn_animated_export(
+                    doc.id(),
+                    doc.document.clone(),
+                    doc.tiles.clone(),
+                    job.base_name.clone(),
+                    animated,
+                    dir.clone(),
+                    self.spawner,
+                );
+                self.export_jobs.push(rx);
+            }
+            if job.entries.is_empty() {
+                self.status = Some(format!("Exporting to {}…", dir.display()));
+                self.touch();
+                self.poll_exports();
+                return;
+            }
+        }
+        let doc = self.active().expect("checked above");
         let export = crate::jobs::ExportJob {
             id: doc.id(),
             document: doc.document.clone(),
@@ -5724,6 +6208,7 @@ pub fn layer_kind_name(kind: &LayerKind) -> &'static str {
         LayerKind::Shape(_) => "shape",
         LayerKind::SmartObject(_) => "smart object",
         LayerKind::Generator(_) => "generator",
+        LayerKind::Fill(_) => "fill",
     }
 }
 
@@ -5958,3 +6443,106 @@ mod tests;
 #[path = "actions_library.rs"]
 mod actions_library;
 pub use actions_library::NamedAction;
+
+// W9-N: File > Open of a resource file (.pat .grd .csh .aco .ase .icc .atn).
+#[path = "resource_import.rs"]
+mod resource_import;
+
+// W9-J: Export As rows marked Animated, for a document with `_a_` frame
+// layers — one frame per frame layer (Photopea's convention), written on a
+// worker like every other Export As row.
+
+/// Spawn the worker that writes `rows` as animations of `document`'s frame
+/// layers into `dir`. The completion arrives on the receiver as an ordinary
+/// Export As batch outcome, so [`Editor::poll_exports`] reports it.
+fn spawn_animated_export(
+    id: DocumentId,
+    document: editor_core::Document,
+    tiles: compositor::MemoryTileSource,
+    base_name: String,
+    rows: Vec<ui::dialogs::ExportEntry>,
+    dir: PathBuf,
+    spawn: crate::jobs::Spawner,
+) -> std::sync::mpsc::Receiver<crate::jobs::ExportOutcome> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker_tx = tx.clone();
+    let worker_dir = dir.clone();
+    let body: Box<dyn FnOnce() + Send> = Box::new(move || {
+        let result = write_animated_rows(&document, &tiles, &base_name, &rows, &worker_dir);
+        let _ = worker_tx.send(crate::jobs::ExportOutcome {
+            id,
+            dir: worker_dir,
+            route: crate::jobs::ExportRoute::Batch,
+            result,
+            psd_notes: None,
+        });
+    });
+    if let Err(e) = spawn(format!("export-animation:{}", dir.display()), body) {
+        let _ = tx.send(crate::jobs::ExportOutcome {
+            id,
+            dir,
+            route: crate::jobs::ExportRoute::Batch,
+            result: Err(format!("could not start the export worker: {e}")),
+            psd_notes: None,
+        });
+    }
+    rx
+}
+
+/// Composite the frames once, then write each row: scaled by its preset,
+/// encoded as an animated GIF / APNG / WebP, and written beside a temporary
+/// name first so a failed write never leaves half a file at the real one.
+fn write_animated_rows(
+    document: &editor_core::Document,
+    tiles: &compositor::MemoryTileSource,
+    base_name: &str,
+    rows: &[ui::dialogs::ExportEntry],
+    dir: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    let frames =
+        crate::import::composite_animation_frames(document, tiles).map_err(|e| e.to_string())?;
+    let (w, h) = (document.width(), document.height());
+    let space = &document.meta.color_space;
+    let mut written = Vec::with_capacity(rows.len());
+    for row in rows {
+        let (tw, th) = row.preset.target_size(w, h).map_err(|e| e.to_string())?;
+        let scaled;
+        let out: &[raster::animation::AnimationFrame] = if (tw, th) == (w, h) {
+            &frames
+        } else {
+            scaled = frames
+                .iter()
+                .map(|frame| {
+                    let linear = raster::linear_from_rgba8(w, h, &frame.rgba8, space)?;
+                    let resized = raster::resample(&linear, tw, th, row.preset.filter)?;
+                    Ok(raster::animation::AnimationFrame {
+                        rgba8: raster::rgba8_from_linear(&resized, space)?,
+                        delay_ms: frame.delay_ms,
+                    })
+                })
+                .collect::<Result<Vec<_>, raster::ExportError>>()
+                .map_err(|e| e.to_string())?;
+            &scaled
+        };
+        let bytes = raster::animation::encode_animation(row.preset.format, tw, th, out)
+            .map_err(|e| e.to_string())?;
+        let path = dir.join(row.file_name(base_name));
+        let partial = path.with_extension(format!("{}.part", row.preset.format.extension()));
+        std::fs::write(&partial, &bytes)
+            .and_then(|()| std::fs::rename(&partial, &path))
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&partial);
+                format!("{}: {e}", path.display())
+            })?;
+        written.push(path);
+    }
+    Ok(written)
+}
+
+#[cfg(test)]
+#[path = "animation_tests.rs"]
+mod animation_tests;
+
+#[cfg(test)]
+#[path = "editor_brush_tests.rs"]
+mod editor_brush_tests;

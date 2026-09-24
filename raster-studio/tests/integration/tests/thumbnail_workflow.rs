@@ -563,6 +563,8 @@ fn a_styled_text_document_round_trips_through_the_native_package() {
             text: "Weekly digest".to_string(),
             font_family: "DejaVu Sans Condensed".to_string(),
             size_px: 48.0,
+            warp: Default::default(),
+            path: None,
             style: layer_model::text::BaseStyle {
                 weight: Weight(700),
                 fill: [1.0, 1.0, 1.0, 1.0],

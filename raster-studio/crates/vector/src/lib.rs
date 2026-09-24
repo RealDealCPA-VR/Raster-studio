@@ -100,7 +100,7 @@ pub mod stroke;
 pub mod svg;
 
 pub use affine::Affine;
-pub use boolean::{difference, intersection, union, xor, BoolOp};
+pub use boolean::{difference, fold, intersection, union, xor, BoolOp};
 pub use custom::{CustomShape, CUSTOM_SHAPE_NAMES};
 pub use error::VectorError;
 pub use fill::{fill, fill_polylines, FillOptions, FillRule, MAX_SAMPLES_PER_PIXEL};

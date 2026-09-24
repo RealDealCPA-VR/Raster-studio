@@ -93,6 +93,11 @@ thread_local! {
     /// [`ui::menu::MenuAction::DuplicateLayer`] pick that rides out of the
     /// same frame.
     static CONFIRMED_DUPLICATE_NAME: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// W9-I: a Duplicate Layer confirmed into ANOTHER open document, as
+    /// (source layer, target document, name), waiting for the chrome, which
+    /// holds the editor, to make the copy (`Chrome::copy_layers_across`).
+    static CONFIRMED_DUPLICATE_INTO: RefCell<Option<(layer_model::LayerId, crate::doc::DocumentId, String)>> =
+        const { RefCell::new(None) };
     /// W3-H: the spec the Color Range dialog confirmed, waiting for the
     /// [`ui::menu::MenuAction::ColorRange`] pick.
     static CONFIRMED_COLOR_RANGE: RefCell<Option<ui::dialogs::ColorRangeSpec>> =
@@ -114,6 +119,16 @@ thread_local! {
     /// the [`ui::menu::MenuAction::PuppetWarp`] pick.
     static CONFIRMED_PUPPET_WARP: RefCell<Option<ui::dialogs::PuppetWarpSpec>> =
         const { RefCell::new(None) };
+    /// W9-O: the blur a Blur Gallery dialog confirmed, waiting for the
+    /// [`ui::menu::MenuAction::BlurGallery`] pick of the same kind.
+    static CONFIRMED_BLUR_GALLERY: RefCell<Option<ui::dialogs::BlurGallerySpec>> =
+        const { RefCell::new(None) };
+}
+
+/// W9-O: the blur a Blur Gallery dialog confirmed, if one did since the last
+/// take. Consumed on read, so a confirmation is applied exactly once.
+pub(crate) fn take_confirmed_blur_gallery() -> Option<ui::dialogs::BlurGallerySpec> {
+    CONFIRMED_BLUR_GALLERY.with(|slot| slot.borrow_mut().take())
 }
 
 /// W7-H: the warp a Liquify dialog confirmed, if one did since the last take.
@@ -200,6 +215,14 @@ fn stage_confirmed_duplicate_name(name: String) {
 /// "<name> copy", which is what a chord with no dialog asked for.
 pub(crate) fn take_confirmed_duplicate_name() -> Option<String> {
     CONFIRMED_DUPLICATE_NAME.with(|slot| slot.borrow_mut().take())
+}
+
+/// W9-I: the cross-document copy a Duplicate Layer dialog confirmed, if one
+/// did since the last take, as (source layer, target document, name).
+/// Consumed on read.
+pub(crate) fn take_confirmed_duplicate_into(
+) -> Option<(layer_model::LayerId, crate::doc::DocumentId, String)> {
+    CONFIRMED_DUPLICATE_INTO.with(|slot| slot.borrow_mut().take())
 }
 
 fn stage_confirmed_refine_edge(spec: ui::dialogs::refine_mask::RefineMaskSpec) {
@@ -308,6 +331,16 @@ pub enum ActiveDialog {
     /// Edit > Puppet Warp (W7-H): pins on a mesh over the layer's ink. Its
     /// confirmed deformation is parked for the `PuppetWarp` arm.
     PuppetWarp(Box<ui::dialogs::PuppetWarpDialog>),
+    /// W9-B: Layer ▸ New Fill Layer ▸ Solid Color / Gradient / Pattern, and
+    /// re-editing a live fill layer. Confirms to a `CreateLayer` transaction
+    /// or a `SetLayerKind` — a plain command, one undo step.
+    FillLayer(Box<ui::dialogs::FillLayerDialog>),
+    /// Filter > Blur Gallery > <kind>... (W9-O): handles over a preview. Its
+    /// confirmed blur is parked for the `BlurGallery` arm.
+    BlurGallery(Box<ui::dialogs::BlurGalleryDialog>),
+    /// W9-K: Layer > Text > Warp Text... over the active text layer. Confirms
+    /// to a `SetLayerKind` carrying the whole new warp - one undo step.
+    WarpText(Box<ui::dialogs::WarpTextDialog>),
 }
 
 impl ActiveDialog {
@@ -342,7 +375,9 @@ impl ActiveDialog {
             Self::Adjustment(dialog) => dialog.show(ctx, sampler),
             Self::NewGuide(dialog) => dialog.show(ctx),
             Self::RenameLayer(dialog) => dialog.show(ctx),
+            Self::WarpText(dialog) => dialog.show(ctx),
             Self::RefineEdge(dialog) => dialog.show(ctx),
+            Self::FillLayer(dialog) => dialog.show(ctx, sampler),
             // Neither confirms to a `DialogAction`: `DialogHost::ui` drives
             // them before it reaches this generic show (see `is_special` and
             // the debug assertion there), and the host tests
@@ -358,6 +393,7 @@ impl ActiveDialog {
             | Self::SaveSelection(_)
             | Self::LoadSelection(_)
             | Self::Liquify(_)
+            | Self::BlurGallery(_)
             | Self::PuppetWarp(_) => DialogOutcome::Open,
         }
     }
@@ -379,6 +415,7 @@ impl ActiveDialog {
                 | Self::SaveSelection(_)
                 | Self::LoadSelection(_)
                 | Self::Liquify(_)
+                | Self::BlurGallery(_)
                 | Self::PuppetWarp(_)
         )
     }
@@ -537,6 +574,19 @@ impl DialogHost {
                 }
                 None => false,
             },
+            // W9-O: Filter > Blur Gallery > <kind>... opens over the active
+            // layer's pixels, like Liquify.
+            ui::menu::MenuAction::BlurGallery(kind) => {
+                match crate::menu_bridge::warp_source(editor) {
+                    Some(source) => {
+                        self.open(ActiveDialog::BlurGallery(Box::new(
+                            ui::dialogs::BlurGalleryDialog::new(*kind, &source),
+                        )));
+                        true
+                    }
+                    None => false,
+                }
+            }
             ui::menu::MenuAction::PuppetWarp => match crate::menu_bridge::warp_source(editor) {
                 Some(source) => {
                     let dialog = ui::dialogs::PuppetWarpDialog::new(&source);
@@ -578,12 +628,35 @@ impl DialogHost {
                 }
                 None => false,
             },
+            // W9-B: Layer ▸ New Fill Layer ▸ … asks for the colour, the
+            // gradient or the pattern before the live fill layer exists.
+            ui::menu::MenuAction::NewFillLayer(kind) => {
+                match new_fill_layer_dialog(editor, *kind) {
+                    Some(dialog) => {
+                        self.open(dialog);
+                        true
+                    }
+                    None => false,
+                }
+            }
+            // W9-B: on a fill layer, Edit Adjustment… (and the Properties
+            // page's "Edit fill") reopens its own dialog on its own source.
+            ui::menu::MenuAction::EditAdjustmentLayer if active_fill_layer(editor).is_some() => {
+                match edit_fill_layer_dialog(editor) {
+                    Some(dialog) => {
+                        self.open(dialog);
+                        true
+                    }
+                    None => false,
+                }
+            }
             // W4-E round 2: Layer ▸ Edit Adjustment… (and the Properties
             // panel's "Open editor…", the same intent) on a Color Lookup
             // layer reopens its dialog — the built-in looks and the .cube
             // loader — on the layer's own table; confirming edits the layer
             // in place. Every other adjustment layer falls through to the
-            // bridge, which reveals the Properties panel as before.
+            // bridge, which reveals the Properties panel as before. (A fill
+            // layer never reaches this arm: the W9-B arm above takes it.)
             ui::menu::MenuAction::EditAdjustmentLayer => match adjustment_layer_dialog(editor) {
                 Some(dialog) => {
                     self.open(dialog);
@@ -641,6 +714,21 @@ impl DialogHost {
                 }
                 None => false,
             },
+            // W9-H: Apply Style Preset opens the same dialog on its Styles
+            // page, a grid of every style preset (defined or imported from
+            // an `.asl`); the one clicked replaces the layer's style when
+            // the dialog is confirmed. With no preset it falls through to
+            // the bridge, whose message says none is defined.
+            ui::menu::MenuAction::ApplyStylePreset if !editor.presets().styles().is_empty() => {
+                match layer_style_dialog(editor, false) {
+                    Some(ActiveDialog::LayerStyle(mut dialog)) => {
+                        dialog.show_styles();
+                        self.open(ActiveDialog::LayerStyle(dialog));
+                        true
+                    }
+                    _ => false,
+                }
+            }
             // Image ▸ Trim… asks for the basis and the sides (W2-F); the
             // confirmed options are parked for the `Trim` arm.
             ui::menu::MenuAction::Trim => {
@@ -684,6 +772,16 @@ impl DialogHost {
                 }
                 None => false,
             },
+            // W9-K: Layer > Text > Warp Text... over the active text layer.
+            ui::menu::MenuAction::WarpText(ui::menu::WarpTextItem::Dialog) => {
+                match warp_text_dialog(editor) {
+                    Some(dialog) => {
+                        self.open(dialog);
+                        true
+                    }
+                    None => false,
+                }
+            }
             // Layer ▸ Rename Layer… over the active layer's name.
             ui::menu::MenuAction::RenameLayer => match rename_layer_dialog(editor) {
                 Some(dialog) => {
@@ -870,6 +968,17 @@ impl DialogHost {
         }
     }
 
+    /// W9-O: the open Blur Gallery dialog, for host-path tests.
+    #[cfg(test)]
+    pub(crate) fn active_blur_gallery_dialog_for_test(
+        &mut self,
+    ) -> &mut ui::dialogs::BlurGalleryDialog {
+        match self.active_for_test() {
+            ActiveDialog::BlurGallery(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the Blur Gallery dialog"),
+        }
+    }
+
     /// W7-H: the open Puppet Warp dialog, for host-path tests.
     #[cfg(test)]
     pub(crate) fn active_puppet_warp_dialog_for_test(
@@ -993,6 +1102,15 @@ impl DialogHost {
         match self.active_for_test() {
             ActiveDialog::RenameLayer(dialog) => dialog,
             other => panic!("the active dialog is {other:?}, not the rename dialog"),
+        }
+    }
+
+    /// W9-K: the open Warp Text dialog, for tests that move its fields.
+    #[cfg(test)]
+    pub(crate) fn active_warp_text_dialog_for_test(&mut self) -> &mut ui::dialogs::WarpTextDialog {
+        match self.active_for_test() {
+            ActiveDialog::WarpText(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not Warp Text"),
         }
     }
 
@@ -1184,8 +1302,19 @@ impl DialogHost {
             match dialog.show(ctx) {
                 DialogOutcome::Open => {}
                 DialogOutcome::Cancelled => self.active = None,
-                DialogOutcome::Confirmed(name) => {
-                    stage_confirmed_duplicate_name(name);
+                // W9-I: a Destination naming another open document parks
+                // the copy for the chrome instead; the menu arm copies
+                // within the active document only.
+                DialogOutcome::Confirmed(ui::dialogs::duplicate_layer::DuplicateLayerSpec {
+                    name,
+                    destination: Some(key),
+                }) => {
+                    let into = (dialog.source(), crate::doc::DocumentId(key), name);
+                    CONFIRMED_DUPLICATE_INTO.with(|slot| *slot.borrow_mut() = Some(into));
+                    self.active = None;
+                }
+                DialogOutcome::Confirmed(spec) => {
+                    stage_confirmed_duplicate_name(spec.name);
                     out.menu.push(ui::menu::MenuAction::DuplicateLayer);
                     self.active = None;
                 }
@@ -1254,6 +1383,20 @@ impl DialogHost {
                 DialogOutcome::Confirmed(spec) => {
                     CONFIRMED_LIQUIFY.with(|slot| *slot.borrow_mut() = Some(spec));
                     out.menu.push(ui::menu::MenuAction::Liquify);
+                    self.active = None;
+                }
+            }
+            return;
+        }
+        // W9-O: the Blur Gallery takes the same road, naming its kind.
+        if let ActiveDialog::BlurGallery(dialog) = active {
+            match dialog.show(ctx) {
+                DialogOutcome::Open => {}
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(spec) => {
+                    let kind = spec.kind();
+                    CONFIRMED_BLUR_GALLERY.with(|slot| *slot.borrow_mut() = Some(spec));
+                    out.menu.push(ui::menu::MenuAction::BlurGallery(kind));
                     self.active = None;
                 }
             }
@@ -1494,7 +1637,12 @@ fn layer_style_dialog(editor: &crate::Editor, blending: bool) -> Option<ActiveDi
     let layer = open.document.layers.get(id)?;
     let mut dialog = LayerStyleDialog::new(id, layer.name.clone(), layer.effects.clone())
         .with_blending(layer.blend_mode, layer.opacity, layer.fill_opacity)
-        .with_patterns(crate::doc::pattern_tiles(editor.presets()));
+        .with_patterns(crate::doc::pattern_tiles(editor.presets()))
+        // W9-H: the style presets (defined ones and `.asl` imports) as the
+        // Styles page's grid.
+        .with_styles(crate::menu_bridge::asl_import::style_presets(
+            editor.presets(),
+        ));
     if blending {
         dialog.show_blending();
     }
@@ -1511,6 +1659,21 @@ fn new_guide_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
             (open.document.width(), open.document.height()),
         ),
     )))
+}
+
+/// W9-K: a [`ui::dialogs::WarpTextDialog`] over the active text layer's
+/// payload. `None` when the active layer is not an unlocked text layer (the
+/// menu gates the same way; the bridge names the reason).
+fn warp_text_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
+    let open = editor.active()?;
+    let id = open.document.active_layer()?;
+    let layer = open.document.layers.get(id)?;
+    match &layer.kind {
+        layer_model::LayerKind::Text(text) if !layer.locked.all => Some(ActiveDialog::WarpText(
+            Box::new(ui::dialogs::WarpTextDialog::new(id, text.clone())),
+        )),
+        _ => None,
+    }
 }
 
 /// A [`ui::dialogs::RenameLayerDialog`] over the active layer's name. `None`
@@ -1534,8 +1697,18 @@ fn duplicate_layer_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
     let open = editor.active()?;
     let id = open.document.active_layer()?;
     let layer = open.document.layers.get(id)?;
+    // W9-I: Destination ▸ Document lists every open document, by identity.
+    let destinations = editor
+        .documents()
+        .iter()
+        .map(|d| ui::dialogs::duplicate_layer::DuplicateDestination {
+            key: d.id().0,
+            title: d.title().to_string(),
+        })
+        .collect();
     Some(ActiveDialog::DuplicateLayer(Box::new(
-        ui::dialogs::DuplicateLayerDialog::new(id, &layer.name),
+        ui::dialogs::DuplicateLayerDialog::new(id, &layer.name)
+            .with_destinations(open.id().0, destinations),
     )))
 }
 
@@ -1550,6 +1723,78 @@ fn image_size_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
     Some(ActiveDialog::ImageSize(Box::new(
         ImageSizeDialog::new(open.document.width(), open.document.height(), 72.0)
             .with_unit(editor.display_unit()),
+    )))
+}
+
+/// W9-B: the active layer and its fill, when it is a live fill layer.
+fn active_fill_layer(
+    editor: &crate::Editor,
+) -> Option<(layer_model::LayerId, layer_model::FillLayer)> {
+    let doc = editor.active()?;
+    let id = doc.document.active_layer()?;
+    match &doc.document.layers.get(id)?.kind {
+        layer_model::LayerKind::Fill(fill) => Some((id, fill.clone())),
+        _ => None,
+    }
+}
+
+/// W9-B: the dialog for a NEW fill layer of `kind`, seeded the way Photopea
+/// seeds it: the foreground colour; a foreground-to-background ramp; the
+/// latest defined pattern. `None` with no document, and for a Pattern fill
+/// with no pattern defined — the bridge then refuses loudly with the reason.
+fn new_fill_layer_dialog(
+    editor: &crate::Editor,
+    kind: ui::menu::FillLayerKind,
+) -> Option<ActiveDialog> {
+    editor.active()?;
+    let patterns = crate::doc::pattern_tiles(editor.presets());
+    let clamp = |c: [f32; 4]| c.map(|v| v.clamp(0.0, 1.0));
+    let source = match kind {
+        ui::menu::FillLayerKind::SolidColor => layer_model::FillSource::Solid {
+            color: clamp(editor.foreground()),
+        },
+        ui::menu::FillLayerKind::Gradient => {
+            layer_model::FillSource::Gradient(layer_model::GradientFill {
+                gradient: layer_model::Gradient {
+                    stops: vec![
+                        layer_model::GradientStop {
+                            position: 0.0,
+                            color: clamp(editor.foreground()),
+                            midpoint: 0.5,
+                        },
+                        layer_model::GradientStop {
+                            position: 1.0,
+                            color: clamp(editor.background()),
+                            midpoint: 0.5,
+                        },
+                    ],
+                    ..layer_model::Gradient::default()
+                },
+                ..layer_model::GradientFill::default()
+            })
+        }
+        ui::menu::FillLayerKind::Pattern => {
+            let latest = patterns.last()?.clone();
+            layer_model::FillSource::Pattern(layer_model::PatternFill {
+                tile: Some(latest),
+                ..layer_model::PatternFill::default()
+            })
+        }
+    };
+    Some(ActiveDialog::FillLayer(Box::new(
+        ui::dialogs::FillLayerDialog::new_layer(source, patterns),
+    )))
+}
+
+/// W9-B: the dialog re-editing the active fill layer's source.
+fn edit_fill_layer_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
+    let (id, fill) = active_fill_layer(editor)?;
+    Some(ActiveDialog::FillLayer(Box::new(
+        ui::dialogs::FillLayerDialog::edit_layer(
+            id,
+            fill,
+            crate::doc::pattern_tiles(editor.presets()),
+        ),
     )))
 }
 
@@ -1836,6 +2081,9 @@ fn export_as_dialog(editor: &crate::Editor, format: raster::ExportFormat) -> Opt
     dialog.set_format(format);
     // W7-D: so the dialog can say how a Lab / CMYK / Indexed document goes out.
     dialog.set_color_mode(open.document.meta.color_mode);
+    // W9-J: the Animated option is offered only when the document has `_a_`
+    // frame layers, and its caption names how many.
+    dialog.set_animation_frames(crate::import::animation_frame_layers(&open.document).len());
     Some(ActiveDialog::ExportAs(Box::new(dialog)))
 }
 
@@ -2682,5 +2930,268 @@ mod tests {
         let sel = &ed.active().unwrap().document.selection;
         assert_eq!(sel.coverage_at(glam::IVec2::new(1, 1)), 1.0);
         assert_eq!(sel.coverage_at(glam::IVec2::new(6, 6)), 0.0);
+    }
+}
+
+/// W9-B: the live fill layer, driven the way a user drives it — the menu row
+/// opens its dialog, the dialog's own keyboard confirms it, and the confirmed
+/// command is applied the way the shell applies every chrome command.
+#[cfg(test)]
+mod w9b_fill_layer_tests {
+    use super::*;
+    use crate::dialogs::ScriptedDialogs;
+    use crate::editor::Editor;
+    use crate::prefs::{AppPaths, Preferences};
+    use crate::recent::RecentFiles;
+
+    fn opened(dir: &std::path::Path) -> Editor {
+        std::fs::create_dir_all(dir).unwrap();
+        let png = dir.join("base.png");
+        std::fs::write(
+            &png,
+            raster::encode(raster::ExportFormat::Png, 8, 8, &[9u8; 8 * 8 * 4]).unwrap(),
+        )
+        .unwrap();
+        let mut ed = Editor::with_state(
+            AppPaths::rooted(dir.join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new()),
+        );
+        ed.open_path(&png).unwrap();
+        ed
+    }
+
+    fn raw_input(events: Vec<egui::Event>) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        }
+    }
+
+    /// Two settle frames, then Enter: what a user's OK does.
+    fn confirm_with_enter(host: &mut DialogHost) -> ChromeOutput {
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut out = ChromeOutput::default();
+        for _ in 0..2 {
+            let _ = ctx.run(raw_input(Vec::new()), |ctx| host.ui(ctx, None, &mut out));
+        }
+        assert!(host.is_open() && out.is_empty(), "the dialog waits for OK");
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        };
+        let _ = ctx.run(raw_input(vec![enter]), |ctx| host.ui(ctx, None, &mut out));
+        assert!(!host.is_open(), "Enter did not close the dialog");
+        out
+    }
+
+    fn fill_dialog(host: &mut DialogHost) -> &mut ui::dialogs::FillLayerDialog {
+        match host.active_for_test() {
+            ActiveDialog::FillLayer(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not a fill layer dialog"),
+        }
+    }
+
+    /// The one fill layer in the active document.
+    fn the_fill_layer(ed: &Editor) -> (layer_model::LayerId, layer_model::FillLayer) {
+        let doc = &ed.active().unwrap().document;
+        doc.layers
+            .iter_depth_first()
+            .into_iter()
+            .find_map(|id| match &doc.layers.get(id)?.kind {
+                layer_model::LayerKind::Fill(f) => Some((id, f.clone())),
+                _ => None,
+            })
+            .expect("a fill layer exists")
+    }
+
+    fn composite(ed: &mut Editor) -> Vec<u8> {
+        let open = ed.active_mut().unwrap();
+        let rect = open.canvas_rect();
+        open.composite(rect).unwrap()
+    }
+
+    fn every_pixel_is(rgba: &[u8], want: [u8; 4]) -> bool {
+        rgba.as_chunks::<4>().0.iter().all(|p| *p == want)
+    }
+
+    #[test]
+    fn new_solid_color_opens_its_dialog_and_ok_adds_a_live_fill_that_covers_the_canvas() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let mut host = DialogHost::default();
+        assert!(
+            host.open_for_menu_action(
+                &ui::menu::MenuAction::NewFillLayer(ui::menu::FillLayerKind::SolidColor),
+                &ed
+            ),
+            "Solid Color opens its dialog instead of baking"
+        );
+        fill_dialog(&mut host).set_color([1.0, 0.0, 0.0, 1.0]);
+        let out = confirm_with_enter(&mut host);
+        assert_eq!(out.commands.len(), 1, "OK is one command");
+        let depth = ed.active().unwrap().history.undo_depth();
+        for command in out.commands {
+            ed.apply_command(command);
+        }
+        assert_eq!(ed.active().unwrap().history.undo_depth(), depth + 1);
+
+        let (id, fill) = the_fill_layer(&ed);
+        assert_eq!(
+            fill.source,
+            layer_model::FillSource::Solid {
+                color: [1.0, 0.0, 0.0, 1.0]
+            }
+        );
+        assert!(
+            ed.active()
+                .unwrap()
+                .document
+                .layer_tiles(id)
+                .is_none_or(|m| m.is_empty()),
+            "a live fill stores no pixels"
+        );
+        assert!(
+            every_pixel_is(&composite(&mut ed), [255, 0, 0, 255]),
+            "the fill composites its colour everywhere"
+        );
+    }
+
+    #[test]
+    fn re_editing_the_colour_changes_the_composite_in_one_undo_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        ed.set_foreground([1.0, 0.0, 0.0, 1.0]);
+        ed.new_solid_fill_layer().unwrap();
+        let (id, _) = the_fill_layer(&ed);
+        ed.set_active_layer(id);
+        assert!(every_pixel_is(&composite(&mut ed), [255, 0, 0, 255]));
+        let depth = ed.active().unwrap().history.undo_depth();
+
+        // Layer > Edit Adjustment (the Properties page's "Edit fill") on a
+        // fill layer reopens its dialog on its own colour.
+        let mut host = DialogHost::default();
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::EditAdjustmentLayer, &ed));
+        let dialog = fill_dialog(&mut host);
+        assert!(dialog.is_edit() && dialog.layer() == id);
+        dialog.set_color([0.0, 0.0, 1.0, 1.0]);
+        let out = confirm_with_enter(&mut host);
+        for command in out.commands {
+            ed.apply_command(command);
+        }
+
+        assert_eq!(the_fill_layer(&ed).0, id, "the same layer, edited in place");
+        assert!(
+            every_pixel_is(&composite(&mut ed), [0, 0, 255, 255]),
+            "the new colour composites"
+        );
+        assert_eq!(
+            ed.active().unwrap().history.undo_depth(),
+            depth + 1,
+            "the edit is one undo step"
+        );
+        ed.active_mut().unwrap().undo().unwrap();
+        assert!(
+            every_pixel_is(&composite(&mut ed), [255, 0, 0, 255]),
+            "one undo brings the old colour back"
+        );
+    }
+
+    #[test]
+    fn a_fill_layer_survives_save_and_reopen_still_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        ed.set_foreground([0.0, 1.0, 0.0, 1.0]);
+        ed.set_background([0.0, 0.0, 1.0, 1.0]);
+        ed.new_gradient_fill_layer().unwrap();
+        let (_, before) = the_fill_layer(&ed);
+        let pixels = composite(&mut ed);
+
+        let project = dir.path().join("fill.rstudio");
+        ed.active_mut().unwrap().save_to(&project, "test").unwrap();
+        let mut reopened = opened(&dir.path().join("second"));
+        reopened.open_path(&project).unwrap();
+        let (_, after) = the_fill_layer(&reopened);
+        assert_eq!(
+            after, before,
+            "the fill layer reopened live, parameters intact"
+        );
+        assert_eq!(composite(&mut reopened), pixels, "and composites the same");
+    }
+
+    #[test]
+    fn rasterize_turns_a_fill_layer_into_the_same_pixels() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        ed.set_foreground([0.0, 1.0, 0.0, 1.0]);
+        ed.new_solid_fill_layer().unwrap();
+        let (id, _) = the_fill_layer(&ed);
+        ed.set_active_layer(id);
+        let before = composite(&mut ed);
+        ed.rasterize_layer().unwrap();
+        let doc = &ed.active().unwrap().document;
+        assert!(
+            doc.layers.iter_depth_first().into_iter().all(|l| !matches!(
+                doc.layers.get(l).unwrap().kind,
+                layer_model::LayerKind::Fill(_)
+            )),
+            "the fill layer became pixels"
+        );
+        assert_eq!(composite(&mut ed), before, "and draws what it drew");
+    }
+
+    #[test]
+    fn gradient_and_pattern_rows_open_their_dialogs_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let mut host = DialogHost::default();
+        assert!(host.open_for_menu_action(
+            &ui::menu::MenuAction::NewFillLayer(ui::menu::FillLayerKind::Gradient),
+            &ed
+        ));
+        assert_eq!(
+            fill_dialog(&mut host).kind(),
+            ui::menu::FillLayerKind::Gradient
+        );
+        fill_dialog(&mut host).gradient_mut().unwrap().angle_deg = 0.0;
+        let out = confirm_with_enter(&mut host);
+        for command in out.commands {
+            ed.apply_command(command);
+        }
+        assert!(matches!(
+            the_fill_layer(&ed).1.source,
+            layer_model::FillSource::Gradient(_)
+        ));
+
+        // No pattern defined: the row falls through to the bridge, which
+        // refuses loudly with the reason, rather than a dialog that cannot OK.
+        assert!(!host.open_for_menu_action(
+            &ui::menu::MenuAction::NewFillLayer(ui::menu::FillLayerKind::Pattern),
+            &ed
+        ));
+        ed.presets_mut()
+            .define_pattern(asset_store::presets::PatternPreset {
+                name: "Dots".into(),
+                width: 2,
+                height: 2,
+                rgba8: vec![255; 16],
+            });
+        assert!(host.open_for_menu_action(
+            &ui::menu::MenuAction::NewFillLayer(ui::menu::FillLayerKind::Pattern),
+            &ed
+        ));
+        assert_eq!(
+            fill_dialog(&mut host).kind(),
+            ui::menu::FillLayerKind::Pattern
+        );
     }
 }

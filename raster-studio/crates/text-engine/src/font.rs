@@ -197,8 +197,50 @@ impl FontLibrary {
             generic_serif: String::new(),
             generic_mono: String::new(),
         };
+        // W9-K: the user's own fonts folder, on top of the machine's.
+        if let Some(dir) = Self::user_font_dir() {
+            this.system.db_mut().load_fonts_dir(dir);
+        }
         this.repair_generic_families();
         this
+    }
+
+    /// W9-K: the folder of the user's own fonts, scanned by
+    /// [`Self::with_system_fonts`] on top of the machine's font folders:
+    /// `RASTER_STUDIO_USER_FONTS` when set, else `%APPDATA%\RasterStudio\fonts`
+    /// on Windows and `$XDG_DATA_HOME/raster-studio/fonts` (or
+    /// `~/.local/share/raster-studio/fonts`) elsewhere. `None` when no such
+    /// location can be named; the folder need not exist.
+    #[must_use]
+    pub fn user_font_dir() -> Option<std::path::PathBuf> {
+        if let Some(dir) = std::env::var_os("RASTER_STUDIO_USER_FONTS") {
+            return Some(dir.into());
+        }
+        if cfg!(windows) {
+            return std::env::var_os("APPDATA").map(|d| {
+                std::path::PathBuf::from(d)
+                    .join("RasterStudio")
+                    .join("fonts")
+            });
+        }
+        std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|h| std::path::PathBuf::from(h).join(".local").join("share"))
+            })
+            .map(|d| d.join("raster-studio").join("fonts"))
+    }
+
+    /// W9-K: add every face in the font file at `path` (TTF/OTF/TTC), and
+    /// return the handles added - empty when the file holds no font.
+    ///
+    /// # Errors
+    ///
+    /// The file could not be read.
+    pub fn load_file(&mut self, path: &std::path::Path) -> std::io::Result<Vec<FontId>> {
+        let bytes = std::fs::read(path)?;
+        Ok(self.load_bytes(bytes))
     }
 
     /// A library holding only the font files found in `dirs` (scanned

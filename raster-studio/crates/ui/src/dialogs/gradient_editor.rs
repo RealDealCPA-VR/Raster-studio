@@ -139,6 +139,50 @@ pub const PRESETS: &[GradientPreset] = &[
     },
 ];
 
+/// W9-N: the gradients File > Open of a `.grd` imported (and the ones the
+/// presets file kept from earlier sessions), in import order, by name. The
+/// preset strip lists them after [`PRESETS`]. Process-wide, like the Type
+/// tools' live Font list: the app shell registers once and every editor the
+/// dialog host (or a fill-layer dialog) opens shows them.
+static IMPORTED_PRESETS: std::sync::RwLock<Vec<(String, Gradient)>> =
+    std::sync::RwLock::new(Vec::new());
+
+/// W9-N: add imported gradients to the preset strip. A name already listed
+/// keeps its place and takes the new ramp; a new name is appended. A ramp
+/// with no colour stops is skipped. Returns how many the strip now lists.
+pub fn register_imported_gradients<S: AsRef<str>>(
+    gradients: impl IntoIterator<Item = (S, Gradient)>,
+) -> usize {
+    let mut list = IMPORTED_PRESETS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for (name, gradient) in gradients {
+        let name = name.as_ref();
+        if gradient.stops.is_empty() {
+            continue;
+        }
+        match list.iter_mut().find(|(have, _)| have == name) {
+            Some(slot) => slot.1 = gradient,
+            None => list.push((name.to_owned(), gradient)),
+        }
+    }
+    list.len()
+}
+
+/// W9-N: the widget id of imported gradient `index`'s chip in the preset
+/// strip - stable, so a test can find the drawn chip and click it.
+pub fn imported_chip_id(index: usize) -> egui::Id {
+    egui::Id::new("gradient_editor.imported_preset").with(index)
+}
+
+/// W9-N: the imported gradients the preset strip lists after [`PRESETS`].
+pub fn imported_gradients() -> Vec<(String, Gradient)> {
+    IMPORTED_PRESETS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
 /// The gradient editor dialog.
 #[derive(Clone, Debug)]
 pub struct GradientEditorDialog {
@@ -461,6 +505,23 @@ impl GradientEditorDialog {
         self.preset = Some(index);
     }
 
+    /// W9-N: load imported gradient `index` ([`imported_gradients`]'s
+    /// order), repaired as [`Self::new`] repairs any ramp. Returns whether
+    /// there was one.
+    pub fn apply_imported(&mut self, index: usize) -> bool {
+        let Some((_, gradient)) = imported_gradients().into_iter().nth(index) else {
+            return false;
+        };
+        self.gradient = Self::new(gradient).gradient;
+        // Different stops, so different identities (as for a preset).
+        for kind in StopKind::ALL {
+            self.reseed_keys(*kind);
+        }
+        self.selected = StopRef::default();
+        self.preset = None;
+        true
+    }
+
     /// The preset currently loaded, if the ramp has not been edited since.
     pub fn preset(&self) -> Option<usize> {
         self.preset
@@ -592,6 +653,20 @@ impl GradientEditorDialog {
                     .clicked()
                 {
                     self.apply_preset(index);
+                }
+            }
+            // W9-N: then the gradients a `.grd` import brought in.
+            for (index, (name, gradient)) in imported_gradients().iter().enumerate() {
+                let (rect, _) = ui.allocate_exact_size(sizes::preset_chip(), Sense::hover());
+                let response = ui.interact(rect, imported_chip_id(index), Sense::click());
+                if ui.is_rect_visible(rect) {
+                    let ramp: Vec<Rgba> = (0..=16)
+                        .map(|i| sample_gradient(gradient, i as f32 / 16.0))
+                        .collect();
+                    paint_ramp(ui, rect, &ramp, false);
+                }
+                if response.on_hover_text(name.as_str()).clicked() {
+                    self.apply_imported(index);
                 }
             }
         });

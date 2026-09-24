@@ -123,6 +123,10 @@ use crate::effects::StyleContext;
 use crate::error::CompositeError;
 use crate::source::TileSource;
 
+// W9-B: live fill layers, evaluated rather than stored.
+#[path = "fill.rs"]
+mod fill;
+
 /// Largest pre-image buffer the compositor allocates for one transformed
 /// layer: 2^22 pixels, 64 MiB of RGBA `f32`.
 ///
@@ -600,7 +604,8 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             | LayerKind::Generator(_)
             | LayerKind::Text(_)
             | LayerKind::Shape(_)
-            | LayerKind::SmartObject(_) => match self.style_reach(layer) {
+            | LayerKind::SmartObject(_)
+            | LayerKind::Fill(_) => match self.style_reach(layer) {
                 // The common path, untouched: no styles, so the layer's own
                 // pixels are the whole of its contribution.
                 None => {
@@ -611,7 +616,7 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
                     let work = self.style_rect(rect, margin);
                     let src = self.render_source(layer, work)?;
                     let styled = self.render_styled(layer, &src)?;
-                    self.blend_styled(&styled.sub(rect)?, layer, backdrop);
+                    self.blend_styled(&styled, rect, layer, backdrop)?;
                 }
             },
         }
@@ -643,7 +648,11 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
     }
 
     /// Apply the layer's effects to its own rendered shape.
-    fn render_styled(&self, layer: &Layer, src: &Canvas) -> Result<Canvas, CompositeError> {
+    fn render_styled(
+        &self,
+        layer: &Layer,
+        src: &Canvas,
+    ) -> Result<crate::effects::Styled, CompositeError> {
         let ctx = StyleContext {
             space: &self.space,
             blend: BlendContext {
@@ -736,7 +745,7 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             None => self.blend_source(&buf, base, backdrop),
             Some(_) => {
                 let styled = self.render_styled(base, &buf)?;
-                self.blend_styled(&styled.sub(rect)?, base, backdrop);
+                self.blend_styled(&styled, rect, base, backdrop)?;
             }
         }
         Ok(())
@@ -771,8 +780,25 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
     /// whose alpha is the layer's **shape** (content alpha × mask), before its
     /// opacity and blend mode are applied.
     fn render_source(&self, layer: &Layer, rect: PixelRect) -> Result<Canvas, CompositeError> {
+        // W9-B: a fill layer is unbounded and painted in document space, so
+        // its transform moves only its mask (through the mask's own pose).
+        if let LayerKind::Fill(fill) = &layer.kind {
+            let mut c = Canvas::transparent(rect)?;
+            self.paint_fill(layer, fill, &mut c);
+            if let Some(cov) = self.mask_coverage(layer, rect)? {
+                multiply_alpha(&mut c, &cov);
+            }
+            return Ok(c);
+        }
         let t = self.level_transform(layer);
-        let has_mask = self.active_mask(layer).is_some();
+        // W9-G: a vector mask is a mask too — its coverage is applied in
+        // document space below, like the pixel mask's.
+        let has_mask = self.active_mask(layer).is_some()
+            || layer
+                .mask
+                .as_ref()
+                .and_then(LayerMask::effective_vector)
+                .is_some();
 
         if is_identity(&t) {
             let mut c = self.render_content(layer, rect)?;
@@ -891,6 +917,8 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             LayerKind::Text(t) => Some(crate::text::ink_bounds(t, self.level)),
             LayerKind::Shape(s) => Some(crate::shape::ink_bounds(s, self.level)),
             LayerKind::Adjustment(_) => Some(EMPTY_RECT),
+            // W9-B: a fill layer covers everything; it has no extent to bound.
+            LayerKind::Fill(_) => None,
         }
     }
 
@@ -920,15 +948,13 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
         rect_from_bounds(x0, y0, x1, y1).unwrap_or(EMPTY_RECT)
     }
 
-    /// The mask a composite will actually read, if any.
+    /// The pixel mask a composite will actually read, if any.
     ///
-    /// [`MaskKind::Vector`] is a path rasterized on demand and this crate has
-    /// no rasterizer for one, so a vector mask that nobody has rasterized into
-    /// tiles resolves to `None` — the layer renders unmasked rather than
-    /// disappearing behind coverage that is zero only because it was never
-    /// computed. Tiles stored under the mask's id are honoured whatever the
-    /// kind says, so a rasterizer can start filling them in without this
-    /// changing.
+    /// A [`MaskKind::Vector`] mask's path lives on [`LayerMask::vector`] and
+    /// is rasterised by [`Ctx::vector_mask_coverage`] (W9-G); its pixel half
+    /// has no coverage tiles, so it resolves to `None` here — reading the
+    /// absent tiles would be zero coverage and hide the layer. Tiles stored
+    /// under the mask's id are honoured whatever the kind says.
     fn active_mask<'l>(&self, layer: &'l Layer) -> Option<&'l LayerMask> {
         let mask = layer.effective_mask()?;
         if mask.kind == MaskKind::Vector
@@ -965,8 +991,21 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             LayerKind::Text(t) => self.fill_text(t, &mut c),
             LayerKind::Shape(s) => self.fill_shape(s, &mut c),
             LayerKind::Adjustment(_) => {}
+            LayerKind::Fill(fill) => self.paint_fill(layer, fill, &mut c),
         }
         Ok(c)
+    }
+
+    /// W9-B: evaluate a fill layer over `out`'s rect.
+    fn paint_fill(&self, layer: &Layer, fill: &layer_model::FillLayer, out: &mut Canvas) {
+        let t = self.level_transform(layer);
+        let at = fill::FillPlacement {
+            space: &self.space,
+            doc: PixelRect::new(0, 0, self.width, self.height),
+            scale: 2f32.powi(-(self.level as i32)),
+            layer_origin: [t.translation.x, t.translation.y],
+        };
+        fill::paint(fill, out, &at);
     }
 
     /// Blit a text layer's shaped, rasterised ink into `out`.
@@ -1014,7 +1053,8 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             let lin = to_linear(&self.space, [c[0], c[1], c[2]]);
             [lin[0] * a, lin[1] * a, lin[2] * a, a]
         };
-        let fill = shape.fill.map(paint);
+        // W9-F: the fill is a shader (solid, gradient or pattern).
+        let fill = crate::shape::FillShader::new(shape, &cov, self.level, &self.space);
         let stroke = shape.stroke.as_ref().map(|s| paint(s.color));
         let overlap = intersect_rects(out.rect(), cov.rect);
         let stride = cov.rect.width as usize;
@@ -1023,9 +1063,11 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             for x in overlap.x..overlap.right() {
                 let i = row + (x - cov.rect.x) as usize;
                 let mut px = [0.0f32; 4];
-                if let Some(c) = fill {
+                if let Some(shader) = &fill {
                     let k = cov.fill.get(i).map_or(0.0, |v| f32::from(*v) / 255.0);
-                    px = scale4(c, k);
+                    if k > 0.0 {
+                        px = scale4(shader.at(x, y), k);
+                    }
                 }
                 if let Some(c) = stroke {
                     let k = cov.stroke.get(i).map_or(0.0, |v| f32::from(*v) / 255.0);
@@ -1045,13 +1087,43 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
         self.blend_into(src, layer, backdrop, false, w);
     }
 
-    /// Blend a layer's **styled** result over the backdrop.
+    /// Blend a layer's **styled** result over the backdrop, cropped to
+    /// `rect`.
+    ///
+    /// W9-H: the exterior passes (drop shadows, outer glow) go first, each
+    /// blended **into the backdrop** with its own mode, so a Multiply shadow
+    /// multiplies what is beneath the layer; then the body is blended with
+    /// the layer's own mode. Both are faded by the layer's overall opacity.
     ///
     /// Fill opacity is deliberately absent: it has already been applied to the
     /// layer's own pixels inside the style buffer, and applying it again would
     /// fade the effects with them — the one thing "fill" exists not to do.
-    fn blend_styled(&self, src: &Canvas, layer: &Layer, backdrop: &mut Canvas) {
-        self.blend_into(src, layer, backdrop, false, layer.effective_opacity());
+    fn blend_styled(
+        &self,
+        styled: &crate::effects::Styled,
+        rect: PixelRect,
+        layer: &Layer,
+        backdrop: &mut Canvas,
+    ) -> Result<(), CompositeError> {
+        let w = layer.effective_opacity();
+        if w > 0.0 {
+            let bctx = BlendContext {
+                space: &self.space,
+                blend_space: self.opts.blend_space,
+            };
+            for pass in &styled.exterior {
+                let ink = pass.ink.sub(rect)?;
+                for (d, s) in backdrop.pixels_mut().iter_mut().zip(ink.pixels()) {
+                    if s[3] <= 0.0 {
+                        continue;
+                    }
+                    let st = unpremultiply(*s);
+                    *d = blend_over(*d, [st[0], st[1], st[2]], s[3] * w, pass.mode, &bctx);
+                }
+            }
+        }
+        self.blend_into(&styled.body.sub(rect)?, layer, backdrop, false, w);
+        Ok(())
     }
 
     /// Composite a rendered source *atop* the buffer, keeping the buffer's
@@ -1075,6 +1147,10 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
         let stride = rect.width as i64;
         let (level, seed) = (self.level, self.opts.dissolve_seed);
         let source = src.pixels();
+        // W9-H: Blend If reads the layer's and the backdrop's encoded
+        // (document-space) colour, as Photoshop's 0..255 sliders do.
+        let blend_if = &layer.effects.extras.blend_if;
+        let blend_if = (!blend_if.is_identity()).then_some(blend_if);
         for (i, d) in dst.pixels_mut().iter_mut().enumerate() {
             let sp = source[i];
             if sp[3] <= 0.0 {
@@ -1083,6 +1159,15 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             let straight = unpremultiply(sp);
             let rgb = [straight[0], straight[1], straight[2]];
             let mut sa = sp[3] * w;
+            if let Some(b) = blend_if {
+                let under = unpremultiply(*d);
+                let enc_this = color::from_linear(&self.space, rgb);
+                let enc_under = color::from_linear(&self.space, [under[0], under[1], under[2]]);
+                sa *= b.weight(enc_this, enc_under);
+                if sa <= 0.0 {
+                    continue;
+                }
+            }
             if mode == BlendMode::Dissolve {
                 let x = rect.x + (i as i64) % stride;
                 let y = rect.y + (i as i64) / stride;
@@ -1147,9 +1232,73 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
         }
     }
 
-    /// The mask's resolved alpha multiplier over `rect`, or `None` when the
-    /// layer has no mask that can change the composite.
+    /// The layer's resolved mask alpha multiplier over `rect` — the pixel
+    /// mask's coverage times the vector mask's (W9-G: Photoshop's two masks
+    /// multiply) — or `None` when neither can change the composite.
     fn mask_coverage(
+        &self,
+        layer: &Layer,
+        rect: PixelRect,
+    ) -> Result<Option<Vec<f32>>, CompositeError> {
+        let pixel = self.pixel_mask_coverage(layer, rect)?;
+        let vector = self.vector_mask_coverage(layer, rect)?;
+        Ok(match (pixel, vector) {
+            (Some(mut p), Some(v)) => {
+                for (a, b) in p.iter_mut().zip(&v) {
+                    *a *= *b;
+                }
+                Some(p)
+            }
+            (p, None) => p,
+            (None, v) => v,
+        })
+    }
+
+    /// W9-G: the vector mask's alpha multiplier over `rect` (document space
+    /// at this level), or `None` when the layer has no vector mask that can
+    /// change the composite.
+    ///
+    /// The path is layer space in level-0 pixels, so it is mapped through the
+    /// mask's full document pose at this level — level scale ∘ layer transform
+    /// ∘ the mask's own transform — and scan-converted anti-aliased over the
+    /// rect grown by the feather's reach, blurred, then resolved through the
+    /// mask's invert and density.
+    fn vector_mask_coverage(
+        &self,
+        layer: &Layer,
+        rect: PixelRect,
+    ) -> Result<Option<Vec<f32>>, CompositeError> {
+        let Some(mask) = layer.mask.as_ref() else {
+            return Ok(None);
+        };
+        let Some(v) = mask.effective_vector() else {
+            return Ok(None);
+        };
+        let s = 2.0f32.powi(-(self.level as i32));
+        let pose =
+            self.level_transform(layer) * Affine2::from_scale(Vec2::splat(s)) * *mask.transform;
+        let (sample, radii) = self.feather_sample(v.feather_px(), rect);
+        Canvas::area(sample)?;
+        let Some(mut raw) = crate::vector_mask::path_coverage(&v.path_svg, pose, sample) else {
+            return Ok(None);
+        };
+        if radii.iter().sum::<i64>() > 0 {
+            raw = blur(raw, sample.width as usize, sample.height as usize, &radii);
+        }
+        let stride = sample.width as usize;
+        let mut out = Vec::with_capacity(Canvas::area(rect)?);
+        for y in rect.y..rect.bottom() {
+            let row = (y - sample.y) as usize * stride;
+            for x in rect.x..rect.right() {
+                out.push(v.coverage(raw[row + (x - sample.x) as usize]));
+            }
+        }
+        Ok(Some(out))
+    }
+
+    /// The pixel mask's resolved alpha multiplier over `rect`, or `None` when
+    /// the layer has no pixel mask that can change the composite.
+    fn pixel_mask_coverage(
         &self,
         layer: &Layer,
         rect: PixelRect,
@@ -1229,7 +1378,13 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
     /// tile cache key calls this too, so a clamped feather is described by its
     /// key exactly like an unclamped one.
     fn mask_sample(&self, mask: &LayerMask, base: PixelRect) -> (PixelRect, [i64; 3]) {
-        let mut radii = self.feather_radii(mask.feather_px());
+        self.feather_sample(mask.feather_px(), base)
+    }
+
+    /// [`Ctx::mask_sample`] for any feather radius — W9-G's vector mask has
+    /// its own.
+    fn feather_sample(&self, feather_px: f32, base: PixelRect) -> (PixelRect, [i64; 3]) {
+        let mut radii = self.feather_radii(feather_px);
         let total: i64 = radii.iter().sum();
         if total <= 0 || base.is_empty() {
             return (base, [0; 3]);
@@ -2079,6 +2234,17 @@ fn hash_layer_props(layer: &Layer, adjustment: Option<u64>, h: &mut DefaultHashe
             for v in m.transform.to_cols_array() {
                 hash_f32(v, h);
             }
+            // W9-G: the vector mask is decided entirely by its properties
+            // (it has no tiles), so they key the tile. Nothing is written
+            // for a mask without one, so its cached tiles survive.
+            if let Some(v) = &m.vector {
+                2u8.hash(h);
+                v.path_svg.hash(h);
+                v.enabled.hash(h);
+                v.inverted.hash(h);
+                hash_f32(v.density(), h);
+                hash_f32(v.feather_px(), h);
+            }
         }
         None => 0u8.hash(h),
     }
@@ -2087,6 +2253,11 @@ fn hash_layer_props(layer: &Layer, adjustment: Option<u64>, h: &mut DefaultHashe
     // cached tiles survive.
     if layer.effects.affects_composite() {
         hash_effects(&layer.effects, h);
+    }
+    // W9-H: contours, extra instances and Blend If. Blend If applies even
+    // with the effects switched off, so it keys the tile on its own.
+    if !layer.effects.extras.is_default() {
+        crate::effects::hash_extras(&layer.effects.extras, h);
     }
     match &layer.kind {
         LayerKind::Raster(r) => {
@@ -2144,6 +2315,7 @@ fn hash_layer_props(layer: &Layer, adjustment: Option<u64>, h: &mut DefaultHashe
                 }
                 None => 0u8.hash(h),
             }
+            crate::shape::hash_paint(s, h);
         }
         LayerKind::SmartObject(s) => {
             5u8.hash(h);
@@ -2159,6 +2331,10 @@ fn hash_layer_props(layer: &Layer, adjustment: Option<u64>, h: &mut DefaultHashe
         LayerKind::Generator(g) => {
             6u8.hash(h);
             g.provenance_key.hash(h);
+        }
+        LayerKind::Fill(f) => {
+            7u8.hash(h);
+            fill::hash_fill(f, h);
         }
     }
 }

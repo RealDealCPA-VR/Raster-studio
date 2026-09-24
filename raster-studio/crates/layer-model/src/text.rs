@@ -292,6 +292,132 @@ pub struct Kern {
     pub amount: f32,
 }
 
+/// W9-K: a Layer > Text > Warp Text style - the Photoshop/Photopea set.
+/// `None` is "no warp": the layer renders exactly as it did before warps
+/// existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum WarpStyle {
+    #[default]
+    None,
+    Arc,
+    ArcLower,
+    ArcUpper,
+    Arch,
+    Bulge,
+    Flag,
+    Wave,
+    Fish,
+    Rise,
+    Fisheye,
+    Inflate,
+    Squeeze,
+    Twist,
+}
+
+impl WarpStyle {
+    /// Every real style (not [`WarpStyle::None`]), in the Warp Text menu's
+    /// order.
+    pub const ALL: [WarpStyle; 13] = [
+        WarpStyle::Arc,
+        WarpStyle::ArcLower,
+        WarpStyle::ArcUpper,
+        WarpStyle::Arch,
+        WarpStyle::Bulge,
+        WarpStyle::Flag,
+        WarpStyle::Wave,
+        WarpStyle::Fish,
+        WarpStyle::Rise,
+        WarpStyle::Fisheye,
+        WarpStyle::Inflate,
+        WarpStyle::Squeeze,
+        WarpStyle::Twist,
+    ];
+
+    /// The style's display name.
+    pub const fn label(self) -> &'static str {
+        match self {
+            WarpStyle::None => "None",
+            WarpStyle::Arc => "Arc",
+            WarpStyle::ArcLower => "Arc Lower",
+            WarpStyle::ArcUpper => "Arc Upper",
+            WarpStyle::Arch => "Arch",
+            WarpStyle::Bulge => "Bulge",
+            WarpStyle::Flag => "Flag",
+            WarpStyle::Wave => "Wave",
+            WarpStyle::Fish => "Fish",
+            WarpStyle::Rise => "Rise",
+            WarpStyle::Fisheye => "Fisheye",
+            WarpStyle::Inflate => "Inflate",
+            WarpStyle::Squeeze => "Squeeze",
+            WarpStyle::Twist => "Twist",
+        }
+    }
+}
+
+/// W9-K: a live Warp Text envelope over the layer's glyph outlines. The
+/// text stays editable; the rasteriser bends the outlines on every render.
+///
+/// `bend`, `horizontal` and `vertical` are fractions in `-1..=1` (the
+/// dialog's -100 %..100 %); values outside are clamped when rendered.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TextWarp {
+    pub style: WarpStyle,
+    /// How strongly the style's envelope applies (Photoshop's 50 % default).
+    pub bend: f32,
+    /// Horizontal distortion: one end grows taller, the other shorter.
+    pub horizontal: f32,
+    /// Vertical distortion: the top grows wider, the bottom narrower.
+    pub vertical: f32,
+}
+
+impl Default for TextWarp {
+    fn default() -> Self {
+        Self {
+            style: WarpStyle::None,
+            bend: 0.5,
+            horizontal: 0.0,
+            vertical: 0.0,
+        }
+    }
+}
+
+impl TextWarp {
+    /// A style at the default 50 % bend with no distortion.
+    pub fn new(style: WarpStyle) -> Self {
+        Self {
+            style,
+            ..Self::default()
+        }
+    }
+
+    /// Whether the warp changes anything at all.
+    pub fn is_active(&self) -> bool {
+        self.style != WarpStyle::None
+    }
+
+    /// Whether this is the default "no warp" value - the one serde skips, so a
+    /// layer that never had a warp serialises byte-identically to before.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// W9-K: Type on a Path - the baseline the glyphs flow along, as a polyline
+/// in the text layer's own pixel space (the shape outline the Type tool was
+/// clicked on, flattened). `start` is the arc length where the text begins.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TextPath {
+    pub points: Vec<[f32; 2]>,
+    pub closed: bool,
+    pub start: f32,
+}
+
+/// Most vertices a text path may carry, so a corrupt payload cannot ask for
+/// an unbounded walk.
+pub const MAX_TEXT_PATH_POINTS: usize = 1 << 16;
+
 /// The persisted text layer: the legacy three fields plus the rich
 /// vocabulary, every rich field defaulted so legacy documents load unchanged.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -318,6 +444,13 @@ pub struct TextLayer {
     /// Manual kerning adjustments, in byte order.
     #[serde(default)]
     pub kerning: Vec<Kern>,
+    /// W9-K: Layer > Text > Warp Text. Skipped when default, so a document
+    /// without a warp serialises exactly as before.
+    #[serde(default, skip_serializing_if = "TextWarp::is_default")]
+    pub warp: TextWarp,
+    /// W9-K: Type on a Path - `Some` when the glyphs flow along a path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<TextPath>,
 }
 
 fn default_size_px() -> f32 {
@@ -335,6 +468,8 @@ impl Default for TextLayer {
             paragraph: Paragraph::default(),
             frame: Frame::default(),
             kerning: Vec::new(),
+            warp: TextWarp::default(),
+            path: None,
         }
     }
 }
@@ -407,6 +542,8 @@ mod tests {
                 index: 7,
                 amount: -20.0,
             }],
+            warp: TextWarp::default(),
+            path: None,
         };
 
         for layer in [headline, subhead] {
@@ -498,6 +635,8 @@ mod tests {
             paragraph: Paragraph::default(),
             frame: Frame::Point,
             kerning: Vec::new(),
+            warp: TextWarp::default(),
+            path: None,
         };
         assert_eq!(layer.style.weight, Weight::NORMAL);
         assert_eq!(
@@ -569,6 +708,10 @@ pub enum TextError {
     TextTooLong { len: usize, max: usize },
     #[error("{count} style spans is over the {max} cap")]
     TooManySpans { count: usize, max: usize },
+    #[error("a warp or text-path value must be finite, got {value}")]
+    NonFiniteWarp { value: f32 },
+    #[error("a text path of {count} points is over the {max} cap")]
+    TextPathTooLong { count: usize, max: usize },
 }
 
 /// Longest text a persisted layer may carry: a 4 MiB ceiling keeps an imported
@@ -636,6 +779,25 @@ impl TextLayer {
         for k in &self.kerning {
             if !k.amount.is_finite() {
                 return Err(TextError::NonFiniteKern { value: k.amount });
+            }
+        }
+        // W9-K: the warp and the path are geometry the rasteriser walks.
+        for value in [self.warp.bend, self.warp.horizontal, self.warp.vertical] {
+            if !value.is_finite() {
+                return Err(TextError::NonFiniteWarp { value });
+            }
+        }
+        if let Some(path) = &self.path {
+            if path.points.len() > MAX_TEXT_PATH_POINTS {
+                return Err(TextError::TextPathTooLong {
+                    count: path.points.len(),
+                    max: MAX_TEXT_PATH_POINTS,
+                });
+            }
+            for value in path.points.iter().flatten().chain([&path.start]) {
+                if !value.is_finite() {
+                    return Err(TextError::NonFiniteWarp { value: *value });
+                }
             }
         }
         if self.spans.len() > MAX_SPANS {
@@ -955,5 +1117,52 @@ mod vertical_tests {
         };
         let back: Paragraph = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
         assert!(back.vertical);
+    }
+}
+
+#[cfg(test)]
+mod w9k_warp_path_tests {
+    use super::*;
+
+    /// W9-K: a layer without a warp or path serialises with neither key, so
+    /// every older reader and every golden byte stays as it was; a warped,
+    /// path-bound layer round-trips both.
+    #[test]
+    fn warp_and_path_are_append_only_serde() {
+        let plain = TextLayer::legacy("Hi", "DejaVu Sans", 24.0);
+        let json = serde_json::to_value(&plain).unwrap();
+        assert!(json.get("warp").is_none(), "default warp is skipped");
+        assert!(json.get("path").is_none(), "no path is skipped");
+
+        let bent = TextLayer {
+            warp: TextWarp {
+                style: WarpStyle::Arc,
+                bend: -0.3,
+                horizontal: 0.1,
+                vertical: 0.0,
+            },
+            path: Some(TextPath {
+                points: vec![[0.0, 0.0], [10.0, 5.0]],
+                closed: false,
+                start: 2.0,
+            }),
+            ..plain.clone()
+        };
+        let back: TextLayer = serde_json::from_str(&serde_json::to_string(&bent).unwrap()).unwrap();
+        assert_eq!(back, bent);
+        assert!(!bent.is_legacy(), "a warp is more than the legacy fields");
+        assert!(bent.validate().is_ok());
+
+        let broken = TextLayer {
+            warp: TextWarp {
+                bend: f32::NAN,
+                ..TextWarp::new(WarpStyle::Flag)
+            },
+            ..plain
+        };
+        assert!(matches!(
+            broken.validate(),
+            Err(TextError::NonFiniteWarp { .. })
+        ));
     }
 }

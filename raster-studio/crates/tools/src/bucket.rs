@@ -11,6 +11,7 @@
 use color::{premultiply, srgb8_to_linear};
 use editor_core::{Command, SelectionMask};
 use glam::IVec2;
+use layer_model::BlendMode;
 use raster::PixelRect;
 use selection::{
     boolean::{combine, to_mask, BooleanOp},
@@ -154,6 +155,29 @@ pub fn fill_masked(
     pattern: Option<&Pattern>,
     opacity: f32,
 ) -> Result<(), ToolError> {
+    fill_masked_with_mode(
+        patch,
+        mask,
+        content,
+        foreground,
+        pattern,
+        opacity,
+        BlendMode::Normal,
+    )
+}
+
+/// W9-L: [`fill_masked`] through a paint blend mode — what the Paint
+/// Bucket's options-bar Mode composites through. `Normal` is exactly
+/// [`fill_masked`].
+pub fn fill_masked_with_mode(
+    patch: &mut ColorPatch,
+    mask: &SelectionMask,
+    content: &FillContent,
+    foreground: [f32; 4],
+    pattern: Option<&Pattern>,
+    opacity: f32,
+    mode: BlendMode,
+) -> Result<(), ToolError> {
     let Some((min, max)) = mask.bounds() else {
         return Ok(());
     };
@@ -175,15 +199,7 @@ pub fn fill_masked(
             }
             let src = premultiply([straight[0], straight[1], straight[2], a]);
             let dst = patch.get(p);
-            patch.set(
-                p,
-                [
-                    src[0] + dst[0] * (1.0 - a),
-                    src[1] + dst[1] * (1.0 - a),
-                    src[2] + dst[2] * (1.0 - a),
-                    a + dst[3] * (1.0 - a),
-                ],
-            );
+            patch.set(p, crate::gradient::composite_over(mode, src, dst));
         }
     }
     Ok(())
@@ -278,6 +294,10 @@ fn flood(
 pub struct PaintBucketTool {
     pub settings: FillSettings,
     pub content: FillContent,
+    /// W9-L: the options bar's paint Mode ([`crate::BLEND_MODE_KEY`]); the
+    /// layer fill composites through it. A mask fill has no colour to blend
+    /// with and reads only the opacity.
+    pub mode: BlendMode,
     seed: Option<IVec2>,
 }
 
@@ -286,6 +306,7 @@ impl PaintBucketTool {
         Self {
             settings,
             content,
+            mode: BlendMode::Normal,
             seed: None,
         }
     }
@@ -352,13 +373,14 @@ impl Tool for PaintBucketTool {
         let delta = match ctx.paint_target {
             PaintTarget::Layer => {
                 let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
-                fill_masked(
+                fill_masked_with_mode(
                     &mut patch,
                     &mask,
                     &self.content,
                     fg,
                     pattern.as_ref(),
                     opacity,
+                    self.mode,
                 )?;
                 patch.commit(ctx.tiles, key)?
             }
@@ -385,8 +407,23 @@ impl Tool for PaintBucketTool {
         self.seed = None;
     }
 
-    /// The registry's `FILL_OPTS`, straight onto [`PaintBucketTool::settings`].
+    /// The registry's `FILL_OPTS`, straight onto [`PaintBucketTool::settings`],
+    /// and (W9-L) the options bar's paint Mode ([`crate::BLEND_MODE_KEY`], a
+    /// Choice indexing [`BlendMode::ALL`], clamped like every Choice).
     fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        if key == crate::BLEND_MODE_KEY {
+            return match setting {
+                ToolSetting::Choice(i) => {
+                    let last = BlendMode::ALL.len() - 1;
+                    self.mode =
+                        crate::blend_mode_from_choice(i.min(last)).unwrap_or(BlendMode::Normal);
+                    Ok(())
+                }
+                _ => Err(ToolError::OptionKindMismatch {
+                    key: key.to_owned(),
+                }),
+            };
+        }
         self.settings.set(key, setting)
     }
 
@@ -705,6 +742,98 @@ mod option_tests {
         assert!(matches!(
             pf.set_setting("tolerance", ToolSetting::Float(0.5)),
             Err(ToolError::UnknownOption { .. })
+        ));
+    }
+}
+
+/// W9-L: the Paint Bucket composites its fill through the options bar's
+/// Mode, and its Opacity still scales it. Driven as the shell drives it.
+#[cfg(test)]
+mod w9l_tests {
+    use super::*;
+
+    use crate::registry;
+    use crate::tiles::MemoryTiles;
+    use editor_core::PixelKey;
+    use layer_model::LayerId;
+
+    const SIDE: u32 = 64;
+
+    /// A 64x64 opaque mid-grey layer (sRGB 128), in one tile.
+    fn grey_layer(tiles: &mut MemoryTiles, key: PixelKey) {
+        let ts = raster::TILE_SIZE as usize;
+        let mut data = vec![0u8; ts * ts * 4];
+        for y in 0..SIDE as usize {
+            for x in 0..SIDE as usize {
+                let i = (y * ts + x) * 4;
+                data[i..i + 4].copy_from_slice(&[128, 128, 128, 255]);
+            }
+        }
+        tiles.put(key, raster::TileCoord::new(0, 0, 0), data);
+    }
+
+    fn mode_index(mode: BlendMode) -> usize {
+        BlendMode::ALL.iter().position(|m| *m == mode).unwrap()
+    }
+
+    fn white_fill_over_grey(mode: Option<BlendMode>, opacity: f32) -> [u8; 4] {
+        let mut tiles = MemoryTiles::new();
+        let layer = LayerId::new();
+        let key = PixelKey::Layer(layer);
+        grey_layer(&mut tiles, key);
+        let mut tool = registry::make(ToolId::PaintBucket);
+        tool.set_setting("opacity", ToolSetting::Float(opacity))
+            .unwrap();
+        if let Some(mode) = mode {
+            tool.set_setting(crate::BLEND_MODE_KEY, ToolSetting::Choice(mode_index(mode)))
+                .expect("the Paint Bucket answers the Mode key");
+        }
+        let delta = {
+            let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, SIDE, SIDE))
+                .with_layer(layer)
+                .with_foreground([1.0, 1.0, 1.0, 1.0]);
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(4.0, 4.0))
+                .unwrap();
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(4.0, 4.0))
+                .unwrap();
+            // An identity blend changes nothing and emits nothing.
+            match ctx.drain().pop() {
+                Some(Command::PaintTiles { delta, .. }) => Some(delta),
+                None => None,
+                other => panic!("expected a paint: {other:?}"),
+            }
+        };
+        if let Some(delta) = delta {
+            tiles.apply_delta(key, &delta);
+        }
+        tiles.pixel(key, 20, 20)
+    }
+
+    #[test]
+    fn the_paint_bucket_composites_through_the_mode_it_is_given() {
+        assert!(crate::composites_strokes(ToolId::PaintBucket));
+        assert_eq!(white_fill_over_grey(None, 1.0), [255, 255, 255, 255]);
+        let multiply = white_fill_over_grey(Some(BlendMode::Multiply), 1.0);
+        for c in &multiply[..3] {
+            assert!((i32::from(*c) - 128).abs() <= 1, "Multiply: {multiply:?}");
+        }
+        let diff = white_fill_over_grey(Some(BlendMode::Difference), 1.0);
+        // In linear light: |1 - lin(128)| = 0.784, which encodes as 229.
+        assert!(
+            (i32::from(diff[0]) - 229).abs() <= 1,
+            "Difference with white inverts the grey's light: {diff:?}"
+        );
+        // Opacity still scales the blended fill: half a Difference lands
+        // between the grey and the full Difference.
+        let half = white_fill_over_grey(Some(BlendMode::Difference), 0.5);
+        assert!(
+            half[0] > 128 && half[0] < diff[0],
+            "half {half:?} vs full {diff:?}"
+        );
+        assert!(matches!(
+            registry::make(ToolId::PaintBucket)
+                .set_setting(crate::BLEND_MODE_KEY, ToolSetting::Bool(true)),
+            Err(ToolError::OptionKindMismatch { .. })
         ));
     }
 }

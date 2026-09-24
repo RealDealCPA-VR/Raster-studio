@@ -64,6 +64,7 @@ in the committed `Cargo.lock`.
 | `pollster` | 0.4.0 | Apache-2.0 OR MIT | `app-shell`, `render` — blocking on adapter/device requests |
 | `image` | 0.25.10 | MIT OR Apache-2.0 | `raster` — PNG, JPEG, WebP, TIFF, GIF, BMP, ICO, TGA |
 | `flate2` | 1.1.9 | MIT OR Apache-2.0 | `psd` — the ZIP channel encodings |
+| `resvg` | 0.45.1 | Apache-2.0 OR MIT | `raster` — W9-N: File ▸ Open rasterises an SVG (`raster::codec::svg_import`). Built with `text`, `system-fonts` and `raster-images` only (no `memmap-fonts`; resvg has no `svgz` switch, so `svg_import` inflates gzip itself through a capped reader and never calls `usvg::Tree::from_data`). It brings `usvg` 0.45.1, `svgtypes`, `roxmltree`, `simplecss`, `kurbo`, `rustybuzz` 0.20.1, `fontdb` 0.23 (already present through `cosmic-text`), `tiny-skia` 0.11.4, `zune-jpeg`, `gif` 0.13, `png` 0.17, `imagesize`, `data-url`, `xmlwriter`, `pico-args`, `float-cmp`, `strict-num`, `rgb`, `siphasher`, `fontconfig-parser` and the `unicode-*` shaping tables — every one MIT, Apache-2.0, Zlib or BSD (see below), none copyleft. `cargo audit` reports `rustybuzz` 0.20.1 as unmaintained (RUSTSEC-2026-0206, a warning, not a vulnerability), alongside the `ttf-parser` warning the tree already carried. |
 | `cosmic-text` | 0.17.2 | MIT OR Apache-2.0 | `text-engine` — shaping, layout, glyph rasterisation |
 | `tracing` | 0.1.44 | MIT | diagnostics |
 | `tracing-subscriber` | 0.3.23 | MIT | `telemetry` |
@@ -156,8 +157,9 @@ naming individually:
 - **`tiny-skia`, `tiny-skia-path`, `moxcms`, `pxfm`, `num_enum`, `arrayref`,
   `zerocopy` — BSD-2/3-Clause**, alone or as one option of a permissive choice.
   These carry an attribution and no-endorsement obligation; the notices belong in
-  the shipped licence file. `tiny-skia` reaches the graph only through
-  `sctk-adwaita` → `winit` and is therefore Linux/Wayland-only; `moxcms` and
+  the shipped licence file. `tiny-skia` reaches the graph through
+  `sctk-adwaita` → `winit` on Linux/Wayland and, since W9-N, through
+  `resvg` on every platform; `moxcms` and
   `pxfm` come in through `image`. (`ed25519-dalek`, `curve25519-dalek` and
   `subtle` are BSD-3-Clause too, but are not in the shipped graph — see
   "Declared, but not in the shipped binary" above.)

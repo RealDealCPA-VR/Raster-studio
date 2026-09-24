@@ -221,6 +221,25 @@ pub(crate) fn hash_layer(layer: &TextLayer) -> u64 {
         k.index.hash(&mut h);
         k.amount.to_bits().hash(&mut h);
     }
+    // W9-K: the warp and the text path bend the rasterised outlines, so they
+    // key the run and the tile. Nothing is written for a layer with neither,
+    // so an unwarped document keys exactly as before.
+    if !layer.warp.is_default() {
+        7u8.hash(&mut h);
+        layer.warp.style.hash(&mut h);
+        layer.warp.bend.to_bits().hash(&mut h);
+        layer.warp.horizontal.to_bits().hash(&mut h);
+        layer.warp.vertical.to_bits().hash(&mut h);
+    }
+    if let Some(path) = &layer.path {
+        8u8.hash(&mut h);
+        path.closed.hash(&mut h);
+        path.start.to_bits().hash(&mut h);
+        for p in &path.points {
+            p[0].to_bits().hash(&mut h);
+            p[1].to_bits().hash(&mut h);
+        }
+    }
     h.finish()
 }
 

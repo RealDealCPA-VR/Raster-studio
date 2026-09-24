@@ -2756,6 +2756,10 @@ mod w5d_tests;
 mod w5c_tests;
 
 #[cfg(test)]
+#[path = "shell_w9l_tests.rs"]
+mod w9l_tests;
+
+#[cfg(test)]
 #[path = "shell_pen_tests.rs"]
 mod pen_tests;
 

@@ -23,3 +23,9 @@ color.workspace = true
 # Reinterpreting `&[u16]` as `&[u8]` for 16-bit encoders, without a copy.
 bytemuck.workspace = true
 flate2.workspace = true
+# W9-N: File > Open rasterises an .svg through resvg (pure Rust,
+# Apache-2.0 OR MIT; recorded in LICENSES/THIRD_PARTY_NOTICES.md). No
+# `memmap-fonts` (no unsafe mmap of system font files). resvg has no switch
+# for svgz: usvg's `Tree::from_data` always inflates gzip, unbounded, so
+# `svg_import` inflates through a capped reader and calls `from_str` only.
+resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "raster-images"] }

@@ -18,6 +18,7 @@
 //! * Mip levels are filtered in linear, premultiplied space, so they neither
 //!   darken nor bleed color out of transparent pixels.
 
+pub mod animation;
 pub mod codec;
 pub mod depth;
 pub mod export;

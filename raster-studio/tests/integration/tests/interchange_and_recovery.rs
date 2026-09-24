@@ -1020,16 +1020,17 @@ fn importing_the_card073_fixture_reports_every_loss_and_keeps_the_layer_metadata
         tools::text::DEFAULT_FONT_FAMILY,
         "the reported default family, not a silent guess"
     );
-    assert_eq!(
-        headline.transform,
-        {
-            let [xx, xy, yx, yy, tx, ty] = card073::ROTATED;
-            glam::Affine2::from_cols_array(&[
-                xx as f32, xy as f32, yx as f32, yy as f32, tx as f32, ty as f32,
-            ])
-        },
-        "the TySh transform came across as the layer affine"
-    );
+    {
+        let [xx, xy, yx, yy, tx, ty] = card073::ROTATED;
+        let tysh = glam::Affine2::from_cols_array(&[
+            xx as f32, xy as f32, yx as f32, yy as f32, tx as f32, ty as f32,
+        ]);
+        assert_tysh_is_the_layer_at_its_baseline(
+            headline.transform,
+            tysh,
+            "the TySh transform came across as the layer affine at its anchor",
+        );
+    }
 
     // The masked portrait keeps its coverage as a raster mask.
     let portrait = doc.layers.get(root[3]).unwrap();
@@ -1300,16 +1301,16 @@ fn a_parseable_type_layer_imports_as_editable_text() {
         "the reported default family"
     );
     assert_eq!(text.size_px, tools::text::DEFAULT_SIZE_PX);
-    let expected = {
+    let tysh = {
         let [xx, xy, yx, yy, tx, ty] = card073::ROTATED;
         glam::Affine2::from_cols_array(&[
             xx as f32, xy as f32, yx as f32, yy as f32, tx as f32, ty as f32,
         ])
     };
-    assert_eq!(
+    assert_tysh_is_the_layer_at_its_baseline(
         doc.document.layers.get(layer).unwrap().transform,
-        expected,
-        "the TySh transform, as the layer affine"
+        tysh,
+        "the TySh transform, as the layer affine at its anchor",
     );
 
     // Editable for real: a text edit of the same class applies.
@@ -1339,6 +1340,7 @@ fn a_parseable_type_layer_imports_as_editable_text() {
 
     // A project save/reopen keeps the editable layer (a .psd export would not
     // — it has no home for text and says so).
+    let imported_transform = doc.document.layers.get(layer).unwrap().transform;
     let tmp = tempfile::tempdir().unwrap();
     let package = tmp.path().join("text-import.rstudio");
     doc.save_to(&package, app::APP_VERSION).unwrap();
@@ -1349,7 +1351,10 @@ fn a_parseable_type_layer_imports_as_editable_text() {
         panic!("the text layer survives a save/reopen");
     };
     assert_eq!(reopened.text, "EDITED");
-    assert_eq!(back.document.layers.get(layer).unwrap().transform, expected);
+    assert_eq!(
+        back.document.layers.get(layer).unwrap().transform,
+        imported_transform
+    );
 }
 
 /// T074: the other half of the subset. A `TySh` block whose descriptor has no
@@ -1684,8 +1689,23 @@ fn a_text_layer_exports_the_editable_subset_and_its_fallback_pixels() {
         .expect("the type layer is in the file");
     let text = record.text.as_ref().expect("the TySh block travels");
     assert_eq!(text.text.as_deref(), Some("SOLD TODAY"));
-    assert_eq!(text.transform[4], 6.0);
-    assert_eq!(text.transform[5], 10.0);
+    {
+        let t = text.transform;
+        let tysh = glam::Affine2::from_cols_array(&[
+            t[0] as f32,
+            t[1] as f32,
+            t[2] as f32,
+            t[3] as f32,
+            t[4] as f32,
+            t[5] as f32,
+        ]);
+        let layer = glam::Affine2::from_cols_array(&[1.0, 0.0, 0.0, 1.0, 6.0, 10.0]);
+        assert_tysh_is_the_layer_at_its_baseline(
+            layer,
+            tysh,
+            "the exported TySh anchors the layer at its first baseline",
+        );
+    }
     let engine = String::from_utf8_lossy(&text.raw);
     assert!(engine.contains("/Name (Montserrat)"), "{engine}");
     assert!(engine.contains("/FontSize 18"), "{engine}");
@@ -2276,4 +2296,31 @@ fn export_independent_reader_evidence() {
     )
     .expect("the composite reference renders");
     println!("exported {} (+ composite reference png)", path.display());
+}
+
+/// W9-C: Photoshop's TySh transform points at the text ANCHOR (the first
+/// line's baseline for point text), while this model's text layer origin is
+/// the top of the first line. So the TySh transform is the layer affine
+/// followed by a translation along the layer's own vertical axis by the
+/// first baseline: same linear part, origins apart by a positive multiple of
+/// the layer's y axis.
+fn assert_tysh_is_the_layer_at_its_baseline(layer: glam::Affine2, tysh: glam::Affine2, what: &str) {
+    let m = layer.matrix2;
+    let t = tysh.matrix2;
+    assert!(
+        (m.x_axis - t.x_axis).length() < 1e-4 && (m.y_axis - t.y_axis).length() < 1e-4,
+        "{what}: the rotation/scale travels unchanged: {layer:?} vs {tysh:?}"
+    );
+    let d = tysh.translation - layer.translation;
+    let y = m.y_axis;
+    let along = d.dot(y) / y.length_squared();
+    let off = (d - y * along).length();
+    assert!(
+        off < 1e-3,
+        "{what}: the origins differ only along the layer's y axis: d = {d:?}, y = {y:?}"
+    );
+    assert!(
+        along > 1.0,
+        "{what}: the TySh origin sits a baseline BELOW the layer's top ({along})"
+    );
 }

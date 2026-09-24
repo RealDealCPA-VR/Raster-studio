@@ -169,6 +169,12 @@ pub struct PsdMask {
     /// Mask samples, `bounds.width() * bounds.height()` at the document depth.
     pub data: Vec<u8>,
     pub real: Option<RealMask>,
+    /// W9-G: the VECTOR mask's density (`0..=255`) from the parameter block,
+    /// when the file carried one. The vector mask's path is the layer's
+    /// `vmsk`/`vsms` block ([`crate::shape::VectorPath`]).
+    pub vector_density: Option<u8>,
+    /// W9-G: the vector mask's feather radius in pixels, when carried.
+    pub vector_feather_px: Option<f64>,
 }
 
 impl PsdMask {
@@ -184,6 +190,8 @@ impl PsdMask {
             feather_px: 0.0,
             data,
             real: None,
+            vector_density: None,
+            vector_feather_px: None,
         }
     }
 }

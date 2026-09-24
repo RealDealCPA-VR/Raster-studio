@@ -536,6 +536,7 @@ pub fn layer_class_name(kind: &LayerKind) -> &'static str {
         LayerKind::Shape(_) => "shape",
         LayerKind::SmartObject(_) => "smart object",
         LayerKind::Generator(_) => "generator",
+        LayerKind::Fill(_) => "fill",
     }
 }
 
@@ -1321,6 +1322,8 @@ fn kind_owning_pixels(kind: &LayerKind) -> Result<(), &'static str> {
         LayerKind::Adjustment(_) => Err("adjustment"),
         LayerKind::Text(_) => Err("text"),
         LayerKind::Shape(_) => Err("shape"),
+        // W9-B: a fill layer is evaluated from its parameters, never stored.
+        LayerKind::Fill(_) => Err("fill"),
     }
 }
 

@@ -158,6 +158,7 @@ pub fn export_format_for(path: &Path) -> Option<raster::ExportFormat> {
         "tif" | "tiff" => raster::ExportFormat::Tiff,
         "gif" => raster::ExportFormat::Gif,
         "bmp" | "dib" => raster::ExportFormat::Bmp,
+        "tga" => raster::ExportFormat::Tga,
         _ => return None,
     })
 }
@@ -992,6 +993,8 @@ impl OpenDocument {
             // An adjustment rewrites every pixel beneath it; a group's bounds
             // do not include its children's own effects.
             LayerKind::Adjustment(_) | LayerKind::Group(_) => return false,
+            // W9-B: a fill layer covers the whole canvas, masked or not.
+            LayerKind::Fill(_) => return false,
             LayerKind::Raster(_)
             | LayerKind::Generator(_)
             | LayerKind::SmartObject(_)

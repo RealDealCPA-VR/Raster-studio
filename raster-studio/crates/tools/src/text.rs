@@ -55,14 +55,76 @@ pub const MAX_SIZE_PX: f32 = 512.0;
 /// past the end clamps to the last entry, the options bar's own `conform`
 /// rule; `None` only when the registry declares no such choice at all.
 pub fn font_family_choice(index: usize) -> Option<&'static str> {
-    let info = crate::registry::info(ToolId::Type)?;
-    let spec = info.options.iter().find(|o| o.key == "font_family")?;
-    let crate::registry::OptionKind::Choice { choices, .. } = spec.kind else {
-        return None;
-    };
+    // W9-K: the live list (the generics, then the installed families the UI
+    // registered), the one the options bar draws.
+    let choices = crate::registry::type_font_choices();
     choices
         .get(index.min(choices.len().checked_sub(1)?))
         .copied()
+}
+
+/// W9-K: how close (document pixels) a Type click must land to a shape
+/// layer's outline to start Type on a Path.
+pub const TYPE_ON_PATH_TOLERANCE_PX: f64 = 6.0;
+
+/// W9-K: Type on a Path - the text path a Type click at document point `at`
+/// starts, when it lands on one of `outlines` (SVG path data in DOCUMENT
+/// space, first match wins - see [`crate::tool::ToolContext::type_path_outlines`]:
+/// the current Work Path / selected path, then every visible shape layer
+/// through its transform): that outline, flattened, in the new text layer's
+/// own space (the layer sits at `at`), starting where the click met it.
+/// `None` when no outline is within [`TYPE_ON_PATH_TOLERANCE_PX`].
+pub fn text_path_at(outlines: &[String], at: Vec2) -> Option<layer_model::text::TextPath> {
+    let click = vector::Point::new(f64::from(at.x), f64::from(at.y));
+    for outline in outlines {
+        let Ok(path) = vector::svg::parse(outline) else {
+            continue;
+        };
+        if !vector::hit_stroke(&path, click, TYPE_ON_PATH_TOLERANCE_PX) {
+            continue;
+        }
+        // The flattened subpath nearest the click, and the arc length along
+        // it where the click projects.
+        let mut best: Option<(f64, f64, &vector::Polyline)> = None;
+        let polylines = path.flatten(0.25);
+        for poly in &polylines {
+            let mut run = 0.0;
+            let n = poly.points.len();
+            let edges = if poly.closed { n } else { n.saturating_sub(1) };
+            for i in 0..edges {
+                let (a, b) = (poly.points[i], poly.points[(i + 1) % n]);
+                let ab = b - a;
+                let len2 = ab.length_squared();
+                let t = if len2 > 0.0 {
+                    ((click - a).dot(ab) / len2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let q = a + ab * t;
+                let d = click.distance(q);
+                if best.is_none_or(|(bd, _, _)| d < bd) {
+                    best = Some((d, run + len2.sqrt() * t, poly));
+                }
+                run += len2.sqrt();
+            }
+        }
+        let (_, start, poly) = best?;
+        return Some(layer_model::text::TextPath {
+            points: poly
+                .points
+                .iter()
+                .map(|p| {
+                    [
+                        (p.x - f64::from(at.x)) as f32,
+                        (p.y - f64::from(at.y)) as f32,
+                    ]
+                })
+                .collect(),
+            closed: poly.closed,
+            start: start as f32,
+        });
+    }
+    None
 }
 
 /// W3-J: the choice lists the registry declares for the Type tool's default
@@ -907,9 +969,18 @@ impl Tool for TypeTool {
             });
             return Ok(());
         }
+        // W9-K: a click (not a drag) on a shape layer's outline with a
+        // horizontal Type tool starts Type on a Path along that outline.
+        let on_path =
+            if drag_width <= PARAGRAPH_DRAG_THRESHOLD_PX && self.mode == TypeMode::Horizontal {
+                text_path_at(&ctx.type_path_outlines, origin)
+            } else {
+                None
+            };
         let mut layer = Layer::with_kind(
             "Type",
             LayerKind::Text(TextLayer {
+                path: on_path,
                 frame: if drag_width > PARAGRAPH_DRAG_THRESHOLD_PX {
                     Frame::Box {
                         width: drag_width.max(PARAGRAPH_MIN_BOX_WIDTH_PX),
@@ -2383,5 +2454,119 @@ mod w7f_tests {
             assert_eq!(text.paragraph.vertical, vertical, "{mode:?}");
         }
         assert!(!is_type_mask(ToolId::Brush));
+    }
+}
+
+#[cfg(test)]
+mod w9k_type_on_path_tests {
+    use super::*;
+    use crate::tool::{PointerEvent, ToolContext};
+    use crate::MemoryTiles;
+    use raster::PixelRect;
+
+    /// W9-K: a Type click on an outline the shell offers (document space)
+    /// creates path text: the layer's path is that outline in the layer's own
+    /// space (the layer sits at the click), starting at the arc length where
+    /// the click met it; a click off every outline still makes plain point
+    /// text.
+    #[test]
+    fn a_type_click_on_a_shape_outline_starts_type_on_a_path() {
+        let circle = vector::shapes::circle(vector::point(200.0, 200.0), 100.0);
+        let shape = vector::svg::to_svg(&circle);
+
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 400, 400));
+        ctx.type_path_outlines = vec![shape.clone()];
+        let mut tool = TypeTool::default();
+        let at = Vec2::new(300.0, 201.0);
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(at.x, at.y))
+            .unwrap();
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(at.x, at.y))
+            .unwrap();
+        let commands = ctx.drain();
+        let Some(Command::CreateLayer { layer }) = commands.first() else {
+            panic!("a click creates a layer: {commands:?}");
+        };
+        let LayerKind::Text(text) = &layer.kind else {
+            panic!("text layer");
+        };
+        let path = text.path.as_ref().expect("the click was on the outline");
+        assert!(path.closed, "a circle is a closed path");
+        assert!(path.points.len() > 16, "flattened: {}", path.points.len());
+        for p in &path.points {
+            // Layer space: document point minus the click.
+            let (dx, dy) = (p[0] + at.x - 200.0, p[1] + at.y - 200.0);
+            let r = (dx * dx + dy * dy).sqrt();
+            assert!((r - 100.0).abs() < 0.5, "on the circle: {r}");
+        }
+        // The start is the click's projection: the point that far along the
+        // path is (within flattening) the click itself, in layer space ~0.
+        let map = text_engine_free_point_at(path, path.start);
+        assert!(
+            map[0].abs() < 1.5 && map[1].abs() < 1.5,
+            "the text starts at the click: {map:?}"
+        );
+
+        // Off the outline: ordinary point text.
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 400, 400));
+        ctx.type_path_outlines = vec![shape];
+        let mut tool = TypeTool::default();
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(200.0, 200.0))
+            .unwrap();
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(200.0, 200.0))
+            .unwrap();
+        let commands = ctx.drain();
+        let Some(Command::CreateLayer { layer }) = commands.first() else {
+            panic!("a click creates a layer");
+        };
+        let LayerKind::Text(text) = &layer.kind else {
+            panic!("text layer");
+        };
+        assert!(text.path.is_none(), "the centre is not on the outline");
+    }
+
+    /// The point `s` along a text path's polyline (test-local walk).
+    fn text_engine_free_point_at(path: &layer_model::text::TextPath, s: f32) -> [f32; 2] {
+        let mut pts = path.points.clone();
+        if path.closed {
+            pts.push(pts[0]);
+        }
+        let mut run = 0.0;
+        for w in pts.windows(2) {
+            let len = ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt();
+            if run + len >= s {
+                let t = (s - run) / len.max(1e-6);
+                return [
+                    w[0][0] + (w[1][0] - w[0][0]) * t,
+                    w[0][1] + (w[1][1] - w[0][1]) * t,
+                ];
+            }
+            run += len;
+        }
+        *pts.last().unwrap()
+    }
+
+    /// W9-K: the Font choice is the live list - a registered family gets an
+    /// index past the generics, keeps it, and that index is what the created
+    /// layer carries.
+    #[test]
+    fn a_registered_family_is_a_font_choice_the_tool_honours() {
+        let list = crate::registry::register_font_families(["W9K Test Family"]);
+        let index = list
+            .iter()
+            .position(|f| *f == "W9K Test Family")
+            .expect("registered");
+        assert!(index >= crate::registry::GENERIC_FONT_FAMILIES.len());
+        assert_eq!(&list[..3], crate::registry::GENERIC_FONT_FAMILIES);
+        // Registering again (or registering others) never moves it.
+        let again = crate::registry::register_font_families(["W9K Test Family", "W9K Other"]);
+        assert_eq!(again[index], "W9K Test Family");
+        assert_eq!(font_family_choice(index), Some("W9K Test Family"));
+
+        let mut tool = TypeTool::default();
+        tool.set_setting("font_family", crate::tool::ToolSetting::Choice(index))
+            .unwrap();
+        assert_eq!(tool.seed().font_family, "W9K Test Family");
     }
 }

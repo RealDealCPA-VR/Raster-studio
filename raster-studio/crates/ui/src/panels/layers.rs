@@ -33,6 +33,18 @@ use layer_model::{
 
 use crate::menu::LayerClass;
 
+/// W9-G: what a layer row needs to draw its vector-mask thumbnail: the
+/// path (layer space), its pose into the document (the layer's transform
+/// composed with the mask's own), the canvas it is fitted to, and whether
+/// it is enabled.
+#[derive(Clone, PartialEq, Debug)]
+pub struct VectorMaskThumb {
+    pub path_svg: String,
+    pub pose: glam::Affine2,
+    pub canvas: (u32, u32),
+    pub enabled: bool,
+}
+
 /// One drawable row.
 #[derive(Clone, PartialEq, Debug)]
 pub struct LayerRow {
@@ -50,6 +62,11 @@ pub struct LayerRow {
     pub has_mask: bool,
     pub mask_enabled: bool,
     pub mask_linked: bool,
+    /// W9-G: the mask's PIXEL half is live — `false` for a vector-only mask,
+    /// whose pixel half the compositor skips, so no pixel well is drawn.
+    pub pixel_mask: bool,
+    /// W9-G: the layer's vector mask, for its own thumbnail well.
+    pub vector_mask: Option<VectorMaskThumb>,
     /// How many layer-style slots are filled.
     pub effect_count: usize,
     pub effects_enabled: bool,
@@ -422,6 +439,17 @@ impl LayersModel {
                 has_mask: layer.mask.is_some(),
                 mask_enabled: layer.mask.as_ref().is_some_and(|m| m.enabled),
                 mask_linked: layer.mask.as_ref().is_some_and(|m| m.linked),
+                pixel_mask: layer.mask.is_some()
+                    && !crate::panels::properties::VectorMaskProperties::is_vector_only(doc, id),
+                vector_mask: layer.mask.as_ref().and_then(|m| {
+                    let v = m.vector.as_deref()?;
+                    Some(VectorMaskThumb {
+                        path_svg: v.path_svg.clone(),
+                        pose: layer.transform * *m.transform,
+                        canvas: (doc.width(), doc.height()),
+                        enabled: v.enabled,
+                    })
+                }),
                 effect_count: layer.effects.count(),
                 effects_enabled: layer.effects.enabled,
                 is_clipping: layer.is_clipping(),

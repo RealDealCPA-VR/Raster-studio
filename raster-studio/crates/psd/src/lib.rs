@@ -36,6 +36,10 @@
 //! * Adjustment layers, layer effects and type layers, recognised by key and
 //!   preserved byte for byte, with a full [`descriptor`] parser for reading
 //!   their contents and [`text`] for pulling the string out of a type layer.
+//! * W9-M: vector shape layers ([`shape`]: the `vmsk`/`vsms` path, the
+//!   `SoCo` fill, the `vstk` stroke and a `vogk` origination for rectangles)
+//!   and placed smart objects ([`placed`]: the `SoLd`/`PlLd` layer block and
+//!   the document's `lnk2`/`lnk3`/`lnkD` embedded files), read and written.
 //! * Greyscale and RGB at 8, 16 and 32 bits. CMYK, Lab, Indexed, Duotone,
 //!   Multichannel and Bitmap are **refused by name** rather than approximated,
 //!   because reading their samples as RGB produces pixels that are silently
@@ -48,19 +52,25 @@
 //! * **PSB** (`.psb`, version 2) is refused with
 //!   [`PsdError::UnsupportedVersion`]; its 64-bit section lengths are a
 //!   different parse.
-//! * **Vector-mask parameters** (the vector mask's own density and feather in
-//!   the parameter block) are skipped — the model keeps the vector mask only
-//!   as the `real` record. The raster mask's density and feather ARE parsed
-//!   ([`model::PsdMask::density`] / [`model::PsdMask::feather_px`]) and
-//!   written back.
+//! * **Vector masks** are carried, not rendered, here: the path is the
+//!   layer's `vmsk`/`vsms` block (decoded by [`shape::VectorPath`]) and
+//!   W9-G parses and writes the vector mask's own density and feather from
+//!   the parameter block ([`model::PsdMask::vector_density`] /
+//!   [`model::PsdMask::vector_feather_px`]) beside the raster mask's pair.
 //! * **Adjustment payloads** are preserved but not decoded into
 //!   `layer_model::AdjustmentKind`; [`model::Adjustment::descriptor`] gives a
 //!   caller the parsed tree to do it from.
-//! * **Type layers are read, not synthesised.** [`text`] extracts the string
-//!   and transform, and a type layer round-trips because its `TySh` block is
-//!   written back verbatim, but this crate will not build one from scratch:
-//!   Photoshop discards a type layer whose engine data does not describe every
-//!   character run, so a half-built block is worse than none.
+//! * **Type layers: the engine data covers the common styling, not all of
+//!   it.** [`text`] extracts the string and transform, and
+//!   [`engine_data`] reads the text engine's style runs (font via the
+//!   `FontSet`, size, fill, tracking, leading, faux bold/italic, caps,
+//!   underline/strikethrough, baseline) and paragraph runs (justification,
+//!   indents, spacing) plus the point/box frame, and writes them back for a
+//!   layer this build authored ([`text::build_styled`]). A type layer read
+//!   from a file still round-trips byte for byte, because its `TySh` block is
+//!   written back verbatim. The engine data's per-character kerning pairs,
+//!   OpenType feature switches and paragraph runs after the first are not
+//!   mapped (warp is the `TySh` warp descriptor, not engine data).
 //! * **The fallback compositor in [`flatten`] ignores clipping groups, layer
 //!   effects and adjustment layers.** Callers with a real renderer put its
 //!   output in [`model::PsdFile::merged`] instead.
@@ -130,15 +140,20 @@ pub mod bytes;
 pub mod codec;
 pub mod descriptor;
 pub mod effects;
+pub mod engine_data;
 pub mod error;
+/// W9-B: `SoCo` / `GdFl` / `PtFl` fill layers.
+pub mod fill;
 pub mod flatten;
 pub mod header;
 pub mod limits;
 pub mod model;
 pub mod packbits;
 pub mod pattern;
+pub mod placed;
 pub mod read;
 pub mod resource;
+pub mod shape;
 pub mod text;
 pub mod write;
 pub mod zip;
@@ -163,3 +178,5 @@ pub use write::{from_rgba8, write, write_with};
 mod probe;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vector_mask_tests;

@@ -150,6 +150,13 @@ impl PreviewSource {
             ExportFormat::Svg => raster::decode_bytes(
                 &raster::codec::svg_raster_payload(&bytes).unwrap_or_default(),
             )?,
+            // W9-N: TGA has no magic number; read it back as what it is.
+            ExportFormat::Tga => raster::codec::decode_surface_bytes_as(
+                &bytes,
+                raster::ImportLimits::default(),
+                raster::ImportFormat::Tga,
+            )?
+            .into_decoded_image(),
             _ => raster::decode_bytes(&bytes)?,
         };
         Ok(RenderedPreview {
@@ -179,6 +186,11 @@ pub struct ExportEntry {
     /// Appended to the base file name, before the extension. May be empty.
     pub suffix: String,
     pub preset: ExportPreset,
+    /// W9-J: write an animation — one frame per `_a_` layer — when the
+    /// document has frame layers and the format can hold one (GIF, PNG as
+    /// APNG, WebP). On by default, as Photopea exports an animated document;
+    /// a document without frame layers exports a still either way.
+    pub animated: bool,
 }
 
 impl ExportEntry {
@@ -188,6 +200,7 @@ impl ExportEntry {
             enabled: true,
             suffix: suffix.into(),
             preset: ExportPreset::new("export", format).with_scale(scale),
+            animated: true,
         }
     }
 
@@ -299,6 +312,10 @@ pub struct ExportAsDialog {
     /// W7-D: the exported document's colour mode
     /// (`editor_core::DocumentMeta::color_mode`), for [`Self::ink_note`].
     color_mode: u8,
+    /// W9-J: how many `_a_` frame layers the document has, as the host said
+    /// through [`Self::set_animation_frames`]. `None` (the host has not said)
+    /// and `Some(0)` both mean the Animated option is not offered on any row.
+    animation_frames: Option<usize>,
 }
 
 impl std::fmt::Debug for ExportAsDialog {
@@ -346,7 +363,23 @@ impl ExportAsDialog {
             cached: None,
             measured: RefCell::new(Vec::new()),
             color_mode: 0,
+            animation_frames: None,
         }
+    }
+
+    /// W9-J: the number of `_a_` frame layers in the document. With `0` the
+    /// Animated option is not offered at all.
+    pub fn set_animation_frames(&mut self, frames: usize) {
+        self.animation_frames = Some(frames);
+    }
+
+    /// W9-J: whether the selected row offers the Animated option: its format
+    /// can hold an animation and the host said the document has at least one
+    /// `_a_` frame layer. Until the host says so ([`Self::set_animation_frames`])
+    /// nothing is offered, so a still document never shows the option.
+    pub fn offers_animation(&self) -> bool {
+        raster::animation::can_animate(self.format())
+            && self.animation_frames.is_some_and(|n| n > 0)
     }
 
     /// W7-D: the colour mode of the document being exported, so the dialog
@@ -910,6 +943,25 @@ impl ExportAsDialog {
             }
         });
 
+        if self.offers_animation() {
+            let mut animated = entry.animated;
+            if checkbox_row(ui, "Animated", &mut animated).changed() {
+                if let Some(entry) = self.entry_mut(index) {
+                    entry.animated = animated;
+                }
+            }
+            let frames = self
+                .animation_frames
+                .map_or_else(String::new, |n| format!(" ({n})"));
+            caption(
+                ui,
+                format!(
+                    "{}: one frame per _a_ layer{frames}, bottom first; other layers show as the document has them",
+                    format_name(entry.preset.format)
+                ),
+            );
+        }
+
         design::section_header(ui, "Metadata");
         let mut include = entry.preset.include_metadata;
         if checkbox_row(
@@ -965,6 +1017,7 @@ pub fn format_name(format: ExportFormat) -> String {
         ExportFormat::Tiff => "TIFF".to_string(),
         ExportFormat::Gif => "GIF".to_string(),
         ExportFormat::Bmp => "BMP".to_string(),
+        ExportFormat::Tga => "TGA".to_string(),
         ExportFormat::Ico => "ICO".to_string(),
         ExportFormat::Svg => "SVG".to_string(),
     }
@@ -1303,6 +1356,82 @@ mod tests {
             }
             assert!(drawn, "{key} was never drawn");
         }
+    }
+
+    /// W9-J: every text the dialog draws in one frame (a few frames, so the
+    /// layout settles), on a screen large enough for the whole settings panel.
+    fn drawn_texts(dialog: &mut ExportAsDialog) -> Vec<String> {
+        let ctx = Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let input = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1600.0, 1400.0),
+            )),
+            ..Default::default()
+        };
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            let out = ctx.run(input(), |ctx| {
+                let _ = dialog.show(ctx);
+            });
+            texts = out
+                .shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+                    _ => None,
+                })
+                .collect();
+        }
+        texts
+    }
+
+    #[test]
+    fn the_animated_option_is_drawn_for_formats_that_animate_and_reaches_the_job() {
+        let mut dialog = dialog();
+        // Until the host names the frame count, a GIF row offers nothing.
+        dialog.set_format(ExportFormat::Gif);
+        assert!(!dialog.offers_animation(), "offered before the host said");
+        assert!(!drawn_texts(&mut dialog).iter().any(|t| t == "Animated"));
+        dialog.set_animation_frames(3);
+        for format in [ExportFormat::Gif, ExportFormat::Png, ExportFormat::WebP] {
+            dialog.set_format(format);
+            assert!(dialog.offers_animation(), "{format:?}");
+            let texts = drawn_texts(&mut dialog);
+            assert!(
+                texts.iter().any(|t| t == "Animated"),
+                "{format:?}: no Animated checkbox in {texts:?}"
+            );
+            assert!(
+                texts
+                    .iter()
+                    .any(|t| t.contains("one frame per _a_ layer (3)")),
+                "{format:?}: no frame caption in {texts:?}"
+            );
+        }
+        for format in [
+            ExportFormat::Jpeg(90),
+            ExportFormat::Tiff,
+            ExportFormat::Bmp,
+        ] {
+            dialog.set_format(format);
+            assert!(!dialog.offers_animation(), "{format:?}");
+            let texts = drawn_texts(&mut dialog);
+            assert!(
+                !texts.iter().any(|t| t == "Animated"),
+                "{format:?} cannot animate but offered it"
+            );
+        }
+        // A document known to have no frame layers is not offered it.
+        dialog.set_format(ExportFormat::Gif);
+        dialog.set_animation_frames(0);
+        assert!(!dialog.offers_animation());
+        assert!(!drawn_texts(&mut dialog).iter().any(|t| t == "Animated"));
+        // The row's choice travels in the job the shell exports.
+        assert!(dialog.job().entries[0].animated, "on by default");
+        dialog.entry_mut(0).unwrap().animated = false;
+        assert!(!dialog.job().entries[0].animated);
     }
 
     #[test]

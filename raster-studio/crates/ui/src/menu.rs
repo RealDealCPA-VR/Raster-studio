@@ -1109,6 +1109,98 @@ impl MaskOp {
     }
 }
 
+/// W9-G: a Layer ▸ Vector Mask operation.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub enum VectorMaskOp {
+    /// An empty, inverted path: everything shows.
+    RevealAll,
+    /// An empty path: nothing shows.
+    HideAll,
+    /// The Paths panel's selected path (or the pen's Work Path).
+    CurrentPath,
+    Delete,
+    /// Disable / enable the vector mask, keeping it.
+    Toggle,
+}
+
+impl VectorMaskOp {
+    pub const ALL: &'static [VectorMaskOp] = &[
+        VectorMaskOp::RevealAll,
+        VectorMaskOp::HideAll,
+        VectorMaskOp::CurrentPath,
+        VectorMaskOp::Delete,
+        VectorMaskOp::Toggle,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            VectorMaskOp::RevealAll => "Reveal All",
+            VectorMaskOp::HideAll => "Hide All",
+            VectorMaskOp::CurrentPath => "Current Path",
+            VectorMaskOp::Delete => "Delete Vector Mask",
+            VectorMaskOp::Toggle => "Disable / Enable Vector Mask",
+        }
+    }
+
+    /// `true` when the operation adds a vector mask.
+    const fn creates(self) -> bool {
+        matches!(
+            self,
+            VectorMaskOp::RevealAll | VectorMaskOp::HideAll | VectorMaskOp::CurrentPath
+        )
+    }
+}
+
+/// W9-K: one Layer ▸ Text row over the active text layer's live warp:
+/// `Dialog` opens Warp Text… (style, bend and both distortions), a `Style`
+/// row sets the style at once (None clears the warp).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum WarpTextItem {
+    Dialog,
+    Style(layer_model::text::WarpStyle),
+}
+
+impl WarpTextItem {
+    /// The dialog, then None and the thirteen styles.
+    pub const ALL: &'static [WarpTextItem] = &[
+        WarpTextItem::Dialog,
+        WarpTextItem::Style(layer_model::text::WarpStyle::None),
+        WarpTextItem::Style(layer_model::text::WarpStyle::Arc),
+        WarpTextItem::Style(layer_model::text::WarpStyle::ArcLower),
+        WarpTextItem::Style(layer_model::text::WarpStyle::ArcUpper),
+        WarpTextItem::Style(layer_model::text::WarpStyle::Arch),
+        WarpTextItem::Style(layer_model::text::WarpStyle::Bulge),
+        WarpTextItem::Style(layer_model::text::WarpStyle::Flag),
+        WarpTextItem::Style(layer_model::text::WarpStyle::Wave),
+        WarpTextItem::Style(layer_model::text::WarpStyle::Fish),
+        WarpTextItem::Style(layer_model::text::WarpStyle::Rise),
+        WarpTextItem::Style(layer_model::text::WarpStyle::Fisheye),
+        WarpTextItem::Style(layer_model::text::WarpStyle::Inflate),
+        WarpTextItem::Style(layer_model::text::WarpStyle::Squeeze),
+        WarpTextItem::Style(layer_model::text::WarpStyle::Twist),
+    ];
+
+    pub fn label(self) -> String {
+        match self {
+            WarpTextItem::Dialog => "Warp Text…".to_string(),
+            WarpTextItem::Style(style) => style.label().to_string(),
+        }
+    }
+
+    /// `warp` with this row applied: a style keeps the numbers (None clears
+    /// the whole warp). The dialog row changes nothing by itself - its
+    /// confirmation carries the whole new warp.
+    pub fn apply(self, warp: layer_model::text::TextWarp) -> layer_model::text::TextWarp {
+        match self {
+            WarpTextItem::Dialog => warp,
+            WarpTextItem::Style(layer_model::text::WarpStyle::None) => {
+                layer_model::text::TextWarp::default()
+            }
+            WarpTextItem::Style(style) => layer_model::text::TextWarp { style, ..warp },
+        }
+    }
+}
+
 /// A Layer ▸ Rasterize target.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum RasterizeTarget {
@@ -1138,6 +1230,35 @@ impl RasterizeTarget {
             RasterizeTarget::Shape => "Shape",
             RasterizeTarget::SmartObject => "Smart Object",
             RasterizeTarget::AllLayers => "All Layers",
+        }
+    }
+}
+
+/// W9-F: a Layer > Combine Shapes operation — merges the selected shape
+/// layers into the bottom-most one with a vector boolean op, folded bottom
+/// to top (so Subtract Front takes each upper shape out of those below).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub enum ShapeCombine {
+    Unite,
+    SubtractFront,
+    Intersect,
+    Exclude,
+}
+
+impl ShapeCombine {
+    pub const ALL: &'static [ShapeCombine] = &[
+        ShapeCombine::Unite,
+        ShapeCombine::SubtractFront,
+        ShapeCombine::Intersect,
+        ShapeCombine::Exclude,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            ShapeCombine::Unite => "Unite Shapes",
+            ShapeCombine::SubtractFront => "Subtract Front Shape",
+            ShapeCombine::Intersect => "Intersect Shape Areas",
+            ShapeCombine::Exclude => "Exclude Overlapping Shapes",
         }
     }
 }
@@ -1443,6 +1564,8 @@ pub enum MenuAction {
     DuplicateLayer,
     DeleteLayer,
     Mask(MaskOp),
+    /// W9-G: Layer ▸ Vector Mask.
+    VectorMask(VectorMaskOp),
     /// Open the editor for the *active adjustment layer's* parameters.
     ///
     /// Deliberately not [`MenuAction::ApplyAdjustment`], which bakes a new
@@ -1486,6 +1609,13 @@ pub enum MenuAction {
     EditSmartObjectContents,
     CommitSmartObjectContents,
     Rasterize(RasterizeTarget),
+    /// W9-F: Layer > Combine Shapes > ... over the selected shape layers.
+    CombineShapes(ShapeCombine),
+    /// W9-K: Layer ▸ Text ▸ Warp Text ▸ … over the active text layer.
+    WarpText(WarpTextItem),
+    /// W9-K: Layer ▸ Text ▸ Convert to Shape - the glyph outlines become a
+    /// shape layer in the text layer's place.
+    ConvertTextToShape,
     GroupLayers,
     UngroupLayers,
     ArrangeLayer(Arrange),
@@ -1535,6 +1665,17 @@ pub enum MenuAction {
     /// itself (selection → temporary coverage → dialog → selection), so it
     /// needs no layer mask. Lands as one [`Command::SetSelection`].
     RefineEdge,
+    /// W9-A: Photopea's "Select Pixels" — a selection built from a layer's
+    /// transparency (or, with `mask`, from its mask's coverage), combined
+    /// with the live selection by `op`. A Ctrl+click on a layer thumbnail
+    /// emits it for that row (Shift adds, Alt subtracts, Shift+Alt
+    /// intersects); the layer-row context menu emits it with `layer: None`,
+    /// which means the active layer. Lands as one [`Command::SetSelection`].
+    SelectLayerPixels {
+        layer: Option<LayerId>,
+        mask: bool,
+        op: crate::dialogs::LoadOperation,
+    },
 
     // ---- Filter --------------------------------------------------------
     LastFilter,
@@ -1542,6 +1683,10 @@ pub enum MenuAction {
     /// Filter ▸ Liquify… (W7-H): brush warping through a displacement field;
     /// the dialog's warp lands on the active layer as one undo step.
     Liquify,
+    /// Filter ▸ Blur Gallery ▸ <kind>… (W9-O): Field, Iris, Tilt-Shift, Path
+    /// and Spin blur, edited with on-image handles over a bounded preview;
+    /// the confirmed blur lands on the active layer as one undo step.
+    BlurGallery(filters::blur_gallery::BlurGalleryKind),
     /// Filter ▸ Convert for Smart Filters (W7-E). Converts the active layer
     /// to a smart object, whose `layer_model::SmartObjectLayer::filters` stack
     /// then receives every filter applied to it instead of its pixels being
@@ -1655,6 +1800,9 @@ impl LayerClass {
             LayerKind::Shape(_) => LayerClass::Shape,
             LayerKind::SmartObject(_) => LayerClass::SmartObject,
             LayerKind::Generator(_) => LayerClass::Generator,
+            // W9-B: a fill layer is edited the way an adjustment layer is -
+            // through its dialog and Properties, never with a brush.
+            LayerKind::Fill(_) => LayerClass::Adjustment,
         }
     }
 
@@ -1683,8 +1831,14 @@ pub struct ActiveLayer {
     pub class: LayerClass,
     pub visible: bool,
     pub locked: LockState,
+    /// The layer has a PIXEL mask. W9-G: a vector-only mask (vector kind,
+    /// no coverage tiles) is not one — Layer ▸ Layer Mask then adds a pixel
+    /// mask beside it and never bakes coverage it does not have.
     pub has_mask: bool,
     pub mask_enabled: bool,
+    /// W9-G: the layer carries a vector mask ([`layer_model::VectorMask`]).
+    pub has_vector_mask: bool,
+    pub vector_mask_enabled: bool,
     pub has_effects: bool,
     pub is_clipping: bool,
     pub parent: Option<LayerId>,
@@ -1704,8 +1858,21 @@ impl ActiveLayer {
             class: LayerClass::of(&layer.kind),
             visible: layer.visible,
             locked: layer.locked,
-            has_mask: layer.mask.is_some(),
+            has_mask: layer.mask.as_ref().is_some_and(|m| {
+                !(m.kind == layer_model::MaskKind::Vector
+                    && m.vector.is_some()
+                    && doc
+                        .pixels
+                        .tiles(editor_core::PixelKey::Mask(m.id))
+                        .is_none_or(|t| t.is_empty()))
+            }),
             mask_enabled: layer.mask.as_ref().is_some_and(|m| m.enabled),
+            has_vector_mask: layer.mask.as_ref().is_some_and(|m| m.vector.is_some()),
+            vector_mask_enabled: layer
+                .mask
+                .as_ref()
+                .and_then(|m| m.vector.as_ref())
+                .is_some_and(|v| v.enabled),
             has_effects: !layer.effects.is_empty(),
             is_clipping: layer.is_clipping(),
             parent,
@@ -1730,6 +1897,11 @@ pub struct MenuContext {
     pub has_document: bool,
     pub is_dirty: bool,
     pub has_path: bool,
+    /// W9-G: a vector path is current — the Paths panel's selected path or
+    /// the pen's Work Path — so Layer ▸ Vector Mask ▸ Current Path has
+    /// something to use. Filled by the application (the Paths panel state is
+    /// the workspace's, not the document's).
+    pub has_current_path: bool,
     /// The names of the recently opened files, most recent first, as the File
     /// menu should label them. The list's length *is* the recent-file count —
     /// there is deliberately no second counter to fall out of step with it.
@@ -1779,6 +1951,7 @@ impl Default for MenuContext {
             has_document: false,
             is_dirty: false,
             has_path: false,
+            has_current_path: false,
             recent_files: Vec::new(),
             open_documents: 0,
             can_undo: false,
@@ -1818,6 +1991,7 @@ impl MenuContext {
             has_document: true,
             is_dirty: doc.is_dirty(),
             has_path: doc.path().is_some(),
+            has_current_path: false,
             open_documents: 1,
             can_undo: history.can_undo(),
             can_redo: history.can_redo(),
@@ -2042,6 +2216,12 @@ impl MenuAction {
             MenuAction::DeleteLayer,
         ]);
         out.extend(MaskOp::ALL.iter().copied().map(MenuAction::Mask));
+        out.extend(
+            VectorMaskOp::ALL
+                .iter()
+                .copied()
+                .map(MenuAction::VectorMask),
+        );
         out.extend([
             MenuAction::EditAdjustmentLayer,
             MenuAction::CreateClippingMask,
@@ -2066,6 +2246,14 @@ impl MenuAction {
                 .copied()
                 .map(MenuAction::Rasterize),
         );
+        out.extend(
+            ShapeCombine::ALL
+                .iter()
+                .copied()
+                .map(MenuAction::CombineShapes),
+        );
+        out.extend(WarpTextItem::ALL.iter().copied().map(MenuAction::WarpText));
+        out.push(MenuAction::ConvertTextToShape);
         out.extend([MenuAction::GroupLayers, MenuAction::UngroupLayers]);
         out.extend(Arrange::ALL.iter().copied().map(MenuAction::ArrangeLayer));
         out.extend([
@@ -2111,6 +2299,12 @@ impl MenuAction {
             MenuAction::Liquify,
             MenuAction::ConvertForSmartFilters,
         ]);
+        out.extend(
+            filters::blur_gallery::BlurGalleryKind::ALL
+                .iter()
+                .copied()
+                .map(MenuAction::BlurGallery),
+        );
         out.extend(FilterId::ALL.iter().copied().map(MenuAction::Filter));
         // ---- View ----
         out.extend(ZoomCommand::ALL.iter().copied().map(MenuAction::Zoom));
@@ -2216,6 +2410,7 @@ impl MenuAction {
             MenuAction::DuplicateLayer => "Duplicate Layer…".into(),
             MenuAction::DeleteLayer => "Delete Layer".into(),
             MenuAction::Mask(m) => m.label().into(),
+            MenuAction::VectorMask(m) => m.label().into(),
             MenuAction::EditAdjustmentLayer => "Edit Adjustment…".into(),
             MenuAction::CreateClippingMask => "Create Clipping Mask".into(),
             MenuAction::ReleaseClippingMask => "Release Clipping Mask".into(),
@@ -2227,6 +2422,9 @@ impl MenuAction {
             MenuAction::EditSmartObjectContents => "Edit Contents…".into(),
             MenuAction::CommitSmartObjectContents => "Commit Contents".into(),
             MenuAction::Rasterize(t) => t.label().into(),
+            MenuAction::CombineShapes(c) => c.label().into(),
+            MenuAction::WarpText(item) => item.label(),
+            MenuAction::ConvertTextToShape => "Convert to Shape".into(),
             MenuAction::GroupLayers => "Group Layers".into(),
             MenuAction::UngroupLayers => "Ungroup Layers".into(),
             MenuAction::ArrangeLayer(a) => a.label().into(),
@@ -2256,10 +2454,14 @@ impl MenuAction {
             MenuAction::LoadSelection => "Load Selection…".into(),
             MenuAction::ToggleQuickMask => "Edit in Quick Mask Mode".into(),
             MenuAction::RefineEdge => "Refine Edge…".into(),
+            // W9-A: Photopea's layer-row / thumbnail "Select Pixels".
+            MenuAction::SelectLayerPixels { mask: false, .. } => "Select Pixels".into(),
+            MenuAction::SelectLayerPixels { mask: true, .. } => "Select Mask Pixels".into(),
 
             MenuAction::LastFilter => "Last Filter".into(),
             MenuAction::FilterGallery => "Filter Gallery…".into(),
             MenuAction::Liquify => "Liquify…".into(),
+            MenuAction::BlurGallery(kind) => kind.label().into(),
             MenuAction::PuppetWarp => "Puppet Warp".into(),
             MenuAction::ConvertForSmartFilters => "Convert for Smart Filters".into(),
             MenuAction::RefineMask => "Refine Mask…".into(),
@@ -2267,7 +2469,7 @@ impl MenuAction {
             MenuAction::CopyLayerStyle => "Copy Layer Style".into(),
             MenuAction::PasteLayerStyle => "Paste Layer Style".into(),
             MenuAction::DefineStylePreset => "New Style Preset".into(),
-            MenuAction::ApplyStylePreset => "Apply Latest Style Preset".into(),
+            MenuAction::ApplyStylePreset => "Apply Style Preset…".into(),
             MenuAction::Filter(f) => f.label().into(),
 
             MenuAction::Zoom(z) => z.label().into(),
@@ -2584,6 +2786,7 @@ impl MenuAction {
                 Err(r) => Resolution::Disabled(r),
             },
             MenuAction::Mask(op) => resolve_mask(op, ctx),
+            MenuAction::VectorMask(op) => resolve_vector_mask(op, ctx),
             // Both of these *are* the Properties panel: an adjustment layer's
             // parameters and a layer's blending mode, opacity and effects are
             // all edited there, through `Intent::EditLayerKind` and
@@ -2669,6 +2872,19 @@ impl MenuAction {
             },
             MenuAction::CommitSmartObjectContents => gate(ctx.need_document(), act(self)),
             MenuAction::Rasterize(target) => resolve_rasterize(target, ctx),
+            // W9-F: needs a shape layer active and at least one more layer
+            // selected; the bridge checks every selected layer is a shape.
+            MenuAction::CombineShapes(_) => match ctx.need_layer() {
+                Ok(l) if l.class != LayerClass::Shape => {
+                    Resolution::Disabled("The active layer is not a shape layer")
+                }
+                Ok(_) if ctx.selected_layers < 2 => {
+                    Resolution::Disabled("Select two or more shape layers to combine")
+                }
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::WarpText(_) | MenuAction::ConvertTextToShape => resolve_text_op(self, ctx),
             MenuAction::GroupLayers => gate(
                 ctx.need_document()
                     .or((ctx.selected_layers == 0).then_some("Select a layer first")),
@@ -2761,6 +2977,26 @@ impl MenuAction {
             ),
             MenuAction::ToggleQuickMask => gate(ctx.need_document(), act(self)),
             MenuAction::RefineEdge => gate(ctx.need_selection(), act(self)),
+            // W9-A: an explicit layer needs only a document (the bridge
+            // refuses a layer that has gone); `None` means the active layer,
+            // which must exist (and carry a mask for the mask variant).
+            // Subtract and Intersect need a live selection to act on.
+            MenuAction::SelectLayerPixels { layer, mask, op } => {
+                let missing = match layer {
+                    None => match ctx.need_layer() {
+                        Ok(l) if mask && !l.has_mask => Some("The active layer has no mask"),
+                        Ok(_) => None,
+                        Err(r) => Some(r),
+                    },
+                    Some(_) => ctx.need_document(),
+                };
+                let missing = missing.or(match op {
+                    crate::dialogs::LoadOperation::Subtract
+                    | crate::dialogs::LoadOperation::Intersect => ctx.need_selection(),
+                    _ => None,
+                });
+                gate(missing, act(self))
+            }
             MenuAction::SelectAllLayers => gate(
                 ctx.need_document()
                     .or((ctx.layer_count == 0).then_some("The document has no layers")),
@@ -2859,6 +3095,7 @@ impl MenuAction {
             MenuAction::FilterGallery
             | MenuAction::Filter(_)
             | MenuAction::Liquify
+            | MenuAction::BlurGallery(_)
             | MenuAction::PuppetWarp => match ctx.need_editable_pixels() {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
@@ -2934,6 +3171,30 @@ impl MenuAction {
     }
 }
 
+/// W9-G: Layer ▸ Vector Mask. The menu gates; the application performs —
+/// a vector mask is attached, edited or removed by one undoable
+/// `SetLayerProperties` the application builds from the layer's current mask
+/// (and, for Current Path, from the Paths panel it owns).
+fn resolve_vector_mask(op: VectorMaskOp, ctx: &MenuContext) -> Resolution {
+    let layer = match ctx.need_layer() {
+        Ok(l) => l,
+        Err(r) => return Resolution::Disabled(r),
+    };
+    if layer.locked.all {
+        return Resolution::Disabled("The layer is locked");
+    }
+    if op.creates() && layer.has_vector_mask {
+        return Resolution::Disabled("The layer already has a vector mask");
+    }
+    if !op.creates() && !layer.has_vector_mask {
+        return Resolution::Disabled("The layer has no vector mask");
+    }
+    if op == VectorMaskOp::CurrentPath && !ctx.has_current_path {
+        return Resolution::Disabled("There is no path; draw one or select it in the Paths panel");
+    }
+    act(MenuAction::VectorMask(op))
+}
+
 fn resolve_mask(op: MaskOp, ctx: &MenuContext) -> Resolution {
     let layer = match ctx.need_layer() {
         Ok(l) => l,
@@ -2970,6 +3231,19 @@ fn resolve_mask(op: MaskOp, ctx: &MenuContext) -> Resolution {
         // map — back to the application like the other coverage ops.
         MaskOp::Invert => act(MenuAction::Mask(op)),
         MaskOp::Toggle | MaskOp::ToggleLink => act(MenuAction::Mask(op)),
+    }
+}
+
+/// W9-K: the Layer ▸ Text rows act on an unlocked text layer; the edit
+/// itself needs the whole payload, so it runs in the shell.
+fn resolve_text_op(action: MenuAction, ctx: &MenuContext) -> Resolution {
+    match ctx.need_layer() {
+        Ok(l) if l.class != LayerClass::Text => {
+            Resolution::Disabled("The active layer is not a text layer")
+        }
+        Ok(l) if l.locked.all => Resolution::Disabled("The layer is locked"),
+        Ok(_) => act(action),
+        Err(r) => Resolution::Disabled(r),
     }
 }
 
@@ -3247,6 +3521,10 @@ fn layer_menu() -> Menu {
             Entry::submenu("Lock", items(LayerLock::ALL, MenuAction::LockLayer)),
             Entry::Separator,
             Entry::submenu("Layer Mask", items(MaskOp::ALL, MenuAction::Mask)),
+            Entry::submenu(
+                "Vector Mask",
+                items(VectorMaskOp::ALL, MenuAction::VectorMask),
+            ),
             item(MenuAction::RefineMask),
             item(MenuAction::RemoveColorFringe),
             item(MenuAction::CreateClippingMask),
@@ -3276,6 +3554,24 @@ fn layer_menu() -> Menu {
             Entry::submenu(
                 "Rasterize",
                 items(RasterizeTarget::ALL, MenuAction::Rasterize),
+            ),
+            Entry::submenu(
+                "Combine Shapes",
+                items(ShapeCombine::ALL, MenuAction::CombineShapes),
+            ),
+            // W9-K: Layer ▸ Text.
+            Entry::submenu(
+                "Text",
+                vec![
+                    item(MenuAction::WarpText(WarpTextItem::Dialog)),
+                    Entry::submenu("Warp Style", {
+                        let mut e = vec![item(MenuAction::WarpText(WarpTextItem::ALL[1]))];
+                        e.push(Entry::Separator);
+                        e.extend(items(&WarpTextItem::ALL[2..], MenuAction::WarpText));
+                        e
+                    }),
+                    item(MenuAction::ConvertTextToShape),
+                ],
             ),
             Entry::Separator,
             item(MenuAction::GroupLayers),
@@ -3339,6 +3635,13 @@ fn filter_menu() -> Menu {
         Entry::Separator,
         item(MenuAction::FilterGallery),
         item(MenuAction::Liquify),
+        Entry::submenu(
+            "Blur Gallery",
+            items(
+                &filters::blur_gallery::BlurGalleryKind::ALL,
+                MenuAction::BlurGallery,
+            ),
+        ),
         Entry::Separator,
         item(MenuAction::ConvertForSmartFilters),
         Entry::Separator,
@@ -4239,6 +4542,55 @@ mod tests {
             MenuAction::ReleaseClippingMask.resolve(&ctx).reason(),
             Some("The layer does not clip")
         );
+    }
+
+    #[test]
+    fn vector_mask_rows_gate_on_the_layer_its_vector_mask_and_a_path() {
+        let (doc, _g, inside, _b) = stacked_document();
+        let ctx = ctx_with_layer(&doc, inside);
+        let row = |op| MenuAction::VectorMask(op);
+        assert_eq!(
+            row(VectorMaskOp::RevealAll).resolve(&ctx).intent(),
+            Some(&Intent::Action(row(VectorMaskOp::RevealAll)))
+        );
+        assert_eq!(
+            row(VectorMaskOp::CurrentPath).resolve(&ctx).reason(),
+            Some("There is no path; draw one or select it in the Paths panel")
+        );
+        let pathed = MenuContext {
+            has_current_path: true,
+            ..ctx.clone()
+        };
+        assert_eq!(
+            row(VectorMaskOp::CurrentPath).resolve(&pathed).intent(),
+            Some(&Intent::Action(row(VectorMaskOp::CurrentPath)))
+        );
+        assert_eq!(
+            row(VectorMaskOp::Delete).resolve(&ctx).reason(),
+            Some("The layer has no vector mask")
+        );
+        let masked = MenuContext {
+            active: Some(ActiveLayer {
+                has_vector_mask: true,
+                vector_mask_enabled: true,
+                ..ctx.active.unwrap()
+            }),
+            ..pathed
+        };
+        assert_eq!(
+            row(VectorMaskOp::HideAll).resolve(&masked).reason(),
+            Some("The layer already has a vector mask")
+        );
+        for op in [VectorMaskOp::Delete, VectorMaskOp::Toggle] {
+            assert_eq!(
+                row(op).resolve(&masked).intent(),
+                Some(&Intent::Action(row(op)))
+            );
+        }
+        // Every row is in the action vocabulary the menu tree is checked against.
+        for op in VectorMaskOp::ALL {
+            assert!(MenuAction::all().contains(&row(*op)), "{op:?}");
+        }
     }
 
     #[test]

@@ -4,7 +4,7 @@ use glam::Affine2;
 use serde::{Deserialize, Serialize};
 
 use crate::blend::BlendMode;
-use crate::effects::{LayerEffects, Rgba};
+use crate::effects::{LayerEffects, PatternFill, Rgba};
 use crate::ids::{AssetId, LayerId, MaskId};
 use crate::mask::LayerMask;
 
@@ -21,6 +21,9 @@ pub enum LayerKind {
     Shape(ShapeLayer),
     SmartObject(SmartObjectLayer),
     Generator(GeneratorLayer),
+    /// W9-B: a live Solid Color / Gradient / Pattern fill layer. Appended
+    /// last, so every document written before it deserializes unchanged.
+    Fill(crate::fill::FillLayer),
 }
 
 impl LayerKind {
@@ -562,6 +565,21 @@ pub enum ShapeJoin {
     Bevel,
 }
 
+/// W9-F: where a shape layer's stroke sits relative to its path.
+///
+/// Photoshop's three stroke alignments. `Center` straddles the path, half the
+/// width either side; `Inside` keeps the whole width inside the region the
+/// path encloses and `Outside` the whole width outside it, so neither changes
+/// the shape's filled silhouette. An open path encloses the region its
+/// implicit closing segment makes, the same region its fill would paint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ShapeStrokeAlign {
+    Inside,
+    #[default]
+    Center,
+    Outside,
+}
+
 /// The stroke drawn along a shape layer's path.
 ///
 /// This is the shape's *own* stroke — the one the pen and shape tools set — and
@@ -586,6 +604,10 @@ pub struct ShapeStroke {
     pub dash: Vec<f32>,
     /// How far into the dash pattern the stroke starts.
     pub dash_offset: f32,
+    /// W9-F: where the stroke sits relative to the path. Appended under the
+    /// container's `#[serde(default)]`, so a stroke saved before it existed
+    /// loads centred, which is how it was always drawn.
+    pub align: ShapeStrokeAlign,
 }
 
 impl Default for ShapeStroke {
@@ -598,8 +620,47 @@ impl Default for ShapeStroke {
             miter_limit: 4.0,
             dash: Vec::new(),
             dash_offset: 0.0,
+            align: ShapeStrokeAlign::Center,
         }
     }
+}
+
+/// W9-F: a gradient painting a shape layer's interior — W9-B's gradient
+/// fill-layer parameters, reused so a gradient moves between a fill layer and
+/// a shape unchanged. On a shape the ramp is fitted to the shape's own filled
+/// bounds (Photoshop's "Align with layer") rather than to the document, and
+/// `offset_px` moves it from the centre of those bounds.
+pub type ShapeGradientFill = crate::fill::GradientFill;
+
+/// W9-F: what paints a filled shape's interior.
+///
+/// `Solid` is the default and means "the [`ShapeLayer::fill`] colour", which
+/// keeps every shape saved before this type existed painted exactly as it
+/// was. Whether a shape is filled at all is still `fill.is_some()`; the
+/// four-way reading (none / solid / gradient / pattern) is
+/// [`ShapeLayer::fill_kind`].
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub enum ShapeFillPaint {
+    #[default]
+    Solid,
+    Gradient(ShapeGradientFill),
+    Pattern(PatternFill),
+}
+
+impl ShapeFillPaint {
+    /// `true` for the default, flat-colour paint.
+    pub fn is_solid(&self) -> bool {
+        matches!(self, ShapeFillPaint::Solid)
+    }
+}
+
+/// W9-F: a shape layer's fill, read as the four choices the UI offers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShapeFill<'a> {
+    None,
+    Solid(Rgba),
+    Gradient(&'a ShapeGradientFill),
+    Pattern(&'a PatternFill),
 }
 
 /// Vector shape layer: a path plus how it is painted.
@@ -635,6 +696,11 @@ pub struct ShapeLayer {
     pub fill_rule: ShapeFillRule,
     /// Outline paint, or `None` for no stroke.
     pub stroke: Option<ShapeStroke>,
+    /// W9-F: a gradient or pattern painting the interior instead of the flat
+    /// `fill` colour. Appended and skipped when solid, so documents that
+    /// predate it load and save unchanged.
+    #[serde(default, skip_serializing_if = "ShapeFillPaint::is_solid")]
+    pub fill_paint: ShapeFillPaint,
 }
 
 impl Default for ShapeLayer {
@@ -644,6 +710,7 @@ impl Default for ShapeLayer {
             fill: Some(OPAQUE_BLACK),
             fill_rule: ShapeFillRule::NonZero,
             stroke: None,
+            fill_paint: ShapeFillPaint::Solid,
         }
     }
 }
@@ -661,6 +728,17 @@ impl ShapeLayer {
     /// with. A shape that is neither filled nor stroked contributes nothing.
     pub fn is_drawable(&self) -> bool {
         !self.path_svg.trim().is_empty() && (self.fill.is_some() || self.stroke.is_some())
+    }
+
+    /// W9-F: the fill as None / Solid / Gradient / Pattern. `fill` decides
+    /// whether the interior is painted at all, `fill_paint` what with.
+    pub fn fill_kind(&self) -> ShapeFill<'_> {
+        match (self.fill, &self.fill_paint) {
+            (None, _) => ShapeFill::None,
+            (Some(c), ShapeFillPaint::Solid) => ShapeFill::Solid(c),
+            (Some(_), ShapeFillPaint::Gradient(g)) => ShapeFill::Gradient(g),
+            (Some(_), ShapeFillPaint::Pattern(p)) => ShapeFill::Pattern(p),
+        }
     }
 }
 
@@ -1041,6 +1119,11 @@ mod tests {
                 miter_limit: 2.0,
                 dash: vec![6.0, 3.0],
                 dash_offset: 1.5,
+                align: ShapeStrokeAlign::Outside,
+            }),
+            fill_paint: ShapeFillPaint::Gradient(ShapeGradientFill {
+                angle_deg: 30.0,
+                ..ShapeGradientFill::default()
             }),
         };
         let layer = Layer::with_kind("Shape", LayerKind::Shape(s.clone()));
@@ -1057,11 +1140,33 @@ mod tests {
             |s: &mut ShapeLayer| s.stroke.as_mut().unwrap().dash.clear(),
             |s: &mut ShapeLayer| s.stroke.as_mut().unwrap().dash_offset = 0.0,
             |s: &mut ShapeLayer| s.stroke.as_mut().unwrap().miter_limit = 4.0,
+            |s: &mut ShapeLayer| s.stroke.as_mut().unwrap().align = ShapeStrokeAlign::Center,
+            |s: &mut ShapeLayer| s.fill_paint = ShapeFillPaint::Solid,
         ] {
             let mut other = s.clone();
             mutate(&mut other);
             assert_ne!(other, s);
         }
+    }
+
+    /// W9-F: a shape saved before fill paint and stroke alignment existed
+    /// loads solid and centred, and a solid fill writes no new key.
+    #[test]
+    fn a_shape_without_fill_paint_or_stroke_align_loads_solid_and_centred() {
+        let s: ShapeLayer = serde_json::from_str(
+            r#"{"path_svg":"M0 0 L4 4 Z","fill":[1,0,0,1],"stroke":{"width_px":2}}"#,
+        )
+        .unwrap();
+        assert_eq!(s.fill_paint, ShapeFillPaint::Solid);
+        assert_eq!(s.fill_kind(), ShapeFill::Solid([1.0, 0.0, 0.0, 1.0]));
+        assert_eq!(s.stroke.unwrap().align, ShapeStrokeAlign::Center);
+        let json = serde_json::to_string(&ShapeLayer::from_svg("M0 0 L1 1 Z")).unwrap();
+        assert!(!json.contains("fill_paint"), "{json}");
+        let mut g = ShapeLayer::from_svg("M0 0 L1 1 Z");
+        g.fill_paint = ShapeFillPaint::Gradient(ShapeGradientFill::default());
+        assert!(matches!(g.fill_kind(), ShapeFill::Gradient(_)));
+        g.fill = None;
+        assert_eq!(g.fill_kind(), ShapeFill::None, "fill decides on/off");
     }
 
     #[test]

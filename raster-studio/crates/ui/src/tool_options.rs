@@ -25,8 +25,10 @@
 //! [`ToolOptions`] map, travels on the same [`crate::Intent::SetToolOption`],
 //! and forwards to the tool with the rest of the touched set ([`ToolOptions::held`])
 //! under [`BLEND_MODE_KEY`] — the key the tools crate answers it by
-//! (`tools::BLEND_MODE_KEY`; the four source-over stroke tools composite
-//! their dabs through it). It used to be filtered out of the forward set as
+//! (`tools::BLEND_MODE_KEY`; six tools composite through it: the four
+//! source-over stroke tools Brush, Pencil, Clone Stamp and Pattern Stamp
+//! their dabs, and since W9-L the Gradient its ramp and the Paint Bucket its
+//! fill — exactly `tools::composites_strokes`). It used to be filtered out of the forward set as
 //! a key "no tool could answer", which is what made the Mode combo a dead
 //! control.
 //! A ramp cannot: it is a list of stops rather than a scalar, so it is stored
@@ -223,7 +225,49 @@ pub fn schema_for(info: &ToolInfo) -> Vec<OptionSpec> {
         specs.push(blend_mode_spec());
     }
     specs.extend_from_slice(info.options);
+    // W9-K: the Type tools' Font combo lists the installed families, not the
+    // static table's three generics.
+    if specs.iter().any(|s| s.key == FONT_FAMILY_KEY) {
+        refresh_font_choices();
+    }
+    // W9-K / W9-N: the live Font and Custom Shape lists.
+    for spec in &mut specs {
+        *spec = live_spec(*spec);
+    }
     specs
+}
+
+/// W9-K: the Type tools' font option key.
+pub const FONT_FAMILY_KEY: &str = "font_family";
+
+/// W9-K: register every family the compositor can shape with as a Type-tool
+/// Font choice and return the live list - the three generics, then the
+/// installed families (the same list the Character panel offers), then any
+/// loaded later (File > Open of a font file), each keeping its index.
+pub fn refresh_font_choices() -> &'static [&'static str] {
+    tools::registry::register_font_families(compositor::font_families())
+}
+
+/// `spec` with the live Font choices when it is the Type tools' font option.
+fn live_spec(spec: OptionSpec) -> OptionSpec {
+    if spec.key == FONT_FAMILY_KEY && matches!(spec.kind, OptionKind::Choice { .. }) {
+        tools::registry::type_font_spec()
+    } else if is_custom_shape_spec(&spec) {
+        // W9-N: the Custom Shape tool's Shape combo lists the built-in
+        // library, then every custom shape a `.csh` import registered.
+        tools::registry::custom_shape_spec()
+    } else {
+        spec
+    }
+}
+
+/// W9-N: whether `spec` is the Custom Shape tool's Shape option - its key,
+/// with the built-in library as the static table's choices (another tool's
+/// `preset` option lists something else).
+fn is_custom_shape_spec(spec: &OptionSpec) -> bool {
+    spec.key == tools::registry::CUSTOM_SHAPE_KEY
+        && matches!(spec.kind, OptionKind::Choice { choices, .. }
+            if choices.get(..vector::CUSTOM_SHAPE_NAMES.len()) == Some(&vector::CUSTOM_SHAPE_NAMES[..]))
 }
 
 /// W4-D round 2: whether the options bar shows `key` for `tool` given what
@@ -261,13 +305,10 @@ pub struct SelectionOptions {
     pub antialias: bool,
 }
 
-/// The four boolean modes the selection schema offers, in schema order.
-const SELECTION_MODES: [BooleanOp; 4] = [
-    BooleanOp::Replace,
-    BooleanOp::Add,
-    BooleanOp::Subtract,
-    BooleanOp::Intersect,
-];
+/// The boolean modes the selection schema offers, in schema order.
+/// W9-L: the tools crate's own table (Exclude included), so this read-back
+/// and the tool cannot disagree about an index.
+const SELECTION_MODES: &[BooleanOp] = tools::select::SELECTION_MODES;
 
 /// Per-tool option values, defaulted from the registry.
 ///
@@ -296,7 +337,11 @@ impl ToolOptions {
         if key == BLEND_MODE_KEY && wants_blend_mode(info) {
             return Some(blend_mode_spec());
         }
-        info.options.iter().copied().find(|o| o.key == key)
+        info.options
+            .iter()
+            .copied()
+            .find(|o| o.key == key)
+            .map(live_spec)
     }
 
     /// The current value of one option, or `None` when the tool has no such
@@ -407,6 +452,7 @@ impl ToolOptions {
                 .unwrap_or(d.opacity_pressure),
             min_size_ratio: d.min_size_ratio,
             aliased: d.aliased,
+            ..d
         }
     }
 
@@ -699,7 +745,7 @@ mod tests {
         let mut opts = ToolOptions::new();
         opts.set(ToolId::RectMarquee, "mode", OptionValue::Choice(99));
         let sel = opts.selection_options(ToolId::RectMarquee).unwrap();
-        assert_eq!(sel.mode, BooleanOp::Intersect);
+        assert_eq!(sel.mode, BooleanOp::Exclude);
     }
 
     #[test]
@@ -964,9 +1010,10 @@ mod held_tests {
     /// status-bar error on every press, and a key a tool accepts but never
     /// composites through is a dead control, so the offer set and the
     /// answer set must be the same set: the four source-over stroke tools
-    /// (Brush, Pencil, Clone Stamp, Pattern Stamp) get the combo and accept
-    /// the key; the retouching strokes, Patch, Red Eye, the fills, the
-    /// gradient and the magic eraser refuse the key and get no combo.
+    /// (Brush, Pencil, Clone Stamp, Pattern Stamp) and, since W9-L, the
+    /// Gradient and the Paint Bucket get the combo and accept the key; the
+    /// retouching strokes, Patch, Red Eye, Pattern Fill and the magic eraser
+    /// refuse the key and get no combo.
     #[test]
     fn the_mode_combo_is_offered_to_exactly_the_tools_that_answer_it() {
         let multiply = BlendMode::ALL
@@ -996,8 +1043,8 @@ mod held_tests {
         }
         assert!(mismatched.is_empty(), "{mismatched:?}");
         assert_eq!(
-            offered, 4,
-            "exactly the four source-over stroke tools get the combo: {offered}"
+            offered, 6,
+            "the four source-over stroke tools, the gradient and the paint bucket get the combo: {offered}"
         );
         // The retouching tools that do not lay a source colour over the
         // layer are not offered it: neither the two that do not stamp dabs
@@ -1351,5 +1398,107 @@ mod type_reaches_the_engine_tests {
         let b = path.bounds();
         assert!(b.min.x >= 9.99 && b.max.x <= 110.01 && b.min.y >= 9.99 && b.max.y <= 110.01);
         assert_eq!(shape.stroke.expect("stroke on").width_px, 4.0);
+    }
+
+    /// W9-K: the Type tool's Font combo lists the installed families (not
+    /// three generic names): a family the compositor gained from a font file
+    /// is a row of the real options bar's open combo, holding its index keeps
+    /// it (the static three-name table would clamp it to "monospace"), the
+    /// combo then shows that family, and the next Type click makes a layer in
+    /// it.
+    #[test]
+    fn the_type_font_combo_lists_the_installed_families_and_a_pick_reaches_the_layer() {
+        let bytes = egui::FontDefinitions::default()
+            .font_data
+            .get("Ubuntu-Light")
+            .expect("egui ships Ubuntu-Light")
+            .font
+            .to_vec();
+        let mut probe = text_engine::FontLibrary::empty();
+        probe.load_bytes(bytes.clone());
+        let family = probe.family_names().first().cloned().expect("a family");
+        assert!(compositor::load_font(bytes) > 0);
+
+        let mut w = crate::Workspace::new();
+        w.palette
+            .activate(&crate::PaletteModel::build(), ToolId::Type);
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(6000.0, 2000.0));
+        let frame = |w: &mut crate::Workspace, events: Vec<egui::Event>| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| crate::view::tool_options(w, ctx),
+            )
+        };
+        let _ = frame(&mut w, vec![]);
+        let _ = frame(&mut w, vec![]);
+        let key = crate::view::ids::tool_option(ToolId::Type, "font_family");
+        let combo = ctx
+            .read_response(key)
+            .expect("the Font combo is drawn")
+            .rect;
+        let at = combo.center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let _ = frame(&mut w, vec![egui::Event::PointerMoved(at), press(true)]);
+        let _ = frame(&mut w, vec![press(false)]);
+        let _ = frame(&mut w, vec![]);
+
+        let choices = tools::registry::type_font_choices();
+        let index = choices
+            .iter()
+            .position(|f| *f == family)
+            .unwrap_or_else(|| panic!("{family} is a Font choice: {choices:?}"));
+        assert!(index >= 3, "listed after the generics");
+        assert!(
+            ctx.read_response(crate::view::ids::tool_option_choice(
+                ToolId::Type,
+                "font_family",
+                index
+            ))
+            .is_some(),
+            "the open combo draws a row for {family}"
+        );
+
+        assert!(w
+            .options
+            .set(ToolId::Type, "font_family", OptionValue::Choice(index)));
+        assert_eq!(
+            w.options.get(ToolId::Type, "font_family"),
+            Some(OptionValue::Choice(index)),
+            "the held index is not clamped to the three generics"
+        );
+        let _ = frame(
+            &mut w,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        let out = frame(&mut w, vec![]);
+        let combo = ctx.read_response(key).expect("drawn").rect;
+        let shows = out.shapes.iter().any(|c| match &c.shape {
+            egui::Shape::Text(t) => {
+                t.galley.text() == family && combo.intersects(t.visual_bounding_rect())
+            }
+            _ => false,
+        });
+        assert!(shows, "the combo shows the picked family");
+        assert_eq!(
+            text_layer_from_options(&w.options, "Hi").font_family,
+            family
+        );
     }
 }

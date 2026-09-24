@@ -1071,12 +1071,165 @@ fn thumbnail(ui: &mut Ui, w: &mut Workspace, row: &LayerRow) {
     let height = (t.metrics.list_row_height * w.layers.thumb_scale.height()) - Space::XSmall.pt();
     let size = Vec2::new(height * 4.0 / 3.0, height);
     content_well(ui, w, row, size);
-    if row.has_mask {
+    // W9-G: a vector-only mask has no live pixel half, so no pixel well.
+    if row.has_mask && row.pixel_mask {
         // Card 055: a layer with a mask carries a second well — clicking it
         // aims edits at the mask coverage, the same state the Properties
         // Layer/Mask control mirrors.
         mask_well(ui, w, row, Vec2::new(size.x * 0.6, size.y));
+    } else if w.layers.mask_menu == Some(row.id) {
+        // The pixel well's popup has nothing left to present.
+        w.layers.mask_menu = None;
+        w.layers.mask_menu_fresh = false;
     }
+    if let Some(v) = &row.vector_mask {
+        vector_mask_well(ui, w, row, v, Vec2::new(size.x * 0.6, size.y));
+    }
+}
+
+/// W9-G: the vector-mask thumbnail well — the path's own rendering, fitted
+/// to the canvas, drawn beside the pixel mask's well (or alone, for a
+/// vector-only mask), crossed out while the vector mask is disabled.
+/// Clicking it selects the row and turns the Properties panel to the mask,
+/// where the vector mask's density, feather, invert and enable are edited.
+fn vector_mask_well(
+    ui: &mut Ui,
+    w: &mut Workspace,
+    row: &LayerRow,
+    v: &crate::panels::layers::VectorMaskThumb,
+    size: Vec2,
+) {
+    let t = current_tokens(ui);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let response = ui.interact(
+        rect,
+        super::ids::layer_vector_mask_thumb(row.id),
+        Sense::click(),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            true,
+            crate::strings::tr("ui.docks.vector.mask.thumbnail"),
+        )
+    });
+    if response.clicked() {
+        w.layers.select_only(row.id);
+        let selection = w.layers.selection().to_vec();
+        w.emit(Intent::SelectLayers {
+            layers: selection,
+            active: Some(row.id),
+        });
+        w.property_focus = crate::panels::properties::PropertyFocus::Mask;
+    }
+    let radius = Radius::Small.resolve(&t.radii, size.y);
+    super::checkerboard(ui.painter(), rect, Space::XSmall.pt());
+    match vector_mask_texture(ui, row.id, v, rect.size()) {
+        Some(tex) => {
+            ui.painter().image(
+                tex.id(),
+                rect,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+                crate::dialogs::controls::UNTINTED,
+            );
+        }
+        None => {
+            let side = rect.height() * 0.7;
+            let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(side));
+            super::paint_icon(ui, icon_rect, "mask", TextRole::Secondary);
+        }
+    }
+    if !v.enabled {
+        let cross = egui::Stroke::new(t.borders.thick, color32(t.palette.color(ColorRole::Danger)));
+        ui.painter()
+            .line_segment([rect.left_top(), rect.right_bottom()], cross);
+        ui.painter()
+            .line_segment([rect.right_top(), rect.left_bottom()], cross);
+    }
+    let border = egui::Stroke::new(
+        t.borders.hairline,
+        color32(t.palette.color(ColorRole::ControlStroke)),
+    );
+    ui.painter().rect_stroke(rect, rounding(radius), border);
+}
+
+/// W9-G: the vector mask's thumbnail texture, rendered by the compositor's
+/// own path scan converter at the well's pixel size and cached in egui's
+/// memory until the path, pose, canvas or size changes. `None` when the
+/// path does not render (unparseable), and the well falls back to its glyph.
+fn vector_mask_texture(
+    ui: &Ui,
+    layer: LayerId,
+    v: &crate::panels::layers::VectorMaskThumb,
+    size: Vec2,
+) -> Option<egui::TextureHandle> {
+    use std::hash::{Hash, Hasher};
+    let ppp = ui.ctx().pixels_per_point();
+    let (tw, th) = (
+        ((size.x * ppp).round() as u32).max(1),
+        ((size.y * ppp).round() as u32).max(1),
+    );
+    let (cw, ch) = (v.canvas.0.max(1), v.canvas.1.max(1));
+    let mut hasher = std::hash::DefaultHasher::new();
+    v.path_svg.hash(&mut hasher);
+    for c in v.pose.to_cols_array() {
+        c.to_bits().hash(&mut hasher);
+    }
+    (cw, ch, tw, th).hash(&mut hasher);
+    let key = hasher.finish();
+    let id = egui::Id::new(("raster-vector-mask-tex", layer));
+    if let Some((k, tex)) = ui
+        .ctx()
+        .data(|d| d.get_temp::<(u64, egui::TextureHandle)>(id))
+    {
+        if k == key {
+            return Some(tex);
+        }
+    }
+    let fit = glam::Affine2::from_scale(glam::Vec2::new(
+        tw as f32 / cw as f32,
+        th as f32 / ch as f32,
+    ));
+    let bytes = compositor::vector_mask::rendering(
+        &v.path_svg,
+        fit * v.pose,
+        raster::PixelRect::new(0, 0, tw, th),
+    )?;
+    let image = egui::ColorImage::from_gray([tw as usize, th as usize], &bytes);
+    let tex = ui.ctx().load_texture(
+        format!("vector-mask-thumb-{layer:?}"),
+        image,
+        egui::TextureOptions::LINEAR,
+    );
+    ui.ctx().data_mut(|d| d.insert_temp(id, (key, tex.clone())));
+    Some(tex)
+}
+
+/// W9-A: what a click on a layer thumbnail means when Ctrl (Cmd) is held —
+/// Photopea's "Select Pixels" for that layer (or its mask): Ctrl alone makes a
+/// new selection, Ctrl+Shift adds, Ctrl+Alt subtracts, Ctrl+Shift+Alt
+/// intersects. `None` for a click without Ctrl, which keeps the well's own
+/// meaning (aim edits at content or mask).
+fn select_pixels_click(ui: &Ui, layer: LayerId, mask: bool) -> Option<crate::menu::MenuAction> {
+    use crate::dialogs::LoadOperation as Op;
+    let m = ui.input(|i| i.modifiers);
+    if !m.command {
+        return None;
+    }
+    let op = match (m.shift, m.alt) {
+        (false, false) => Op::New,
+        (true, false) => Op::Add,
+        (false, true) => Op::Subtract,
+        (true, true) => Op::Intersect,
+    };
+    Some(crate::menu::MenuAction::SelectLayerPixels {
+        layer: Some(layer),
+        mask,
+        op,
+    })
 }
 
 /// The content thumbnail well (card 055): shows the layer's pixels and is
@@ -1102,18 +1255,25 @@ fn content_well(ui: &mut Ui, w: &mut Workspace, row: &LayerRow, size: Vec2) {
         )
     });
     if response.clicked() {
-        // Card 055: the click aims at THIS row — selecting it first, exactly
-        // as the row's own click does. Without the selection the target
-        // would resolve against the previously active layer while the
-        // clicked row's well showed the border.
-        w.layers.select_only(row.id);
-        let selection = w.layers.selection().to_vec();
-        w.emit(Intent::SelectLayers {
-            layers: selection,
-            active: Some(row.id),
-        });
-        w.property_focus = crate::panels::properties::PropertyFocus::Layer;
-        w.emit(crate::Intent::SetEditTarget { mask: false });
+        // W9-A: a Ctrl+click on the thumbnail loads the layer's transparency
+        // as a selection (Photopea); it neither selects the row nor moves the
+        // edit target. A Ctrl+click on the NAME keeps its multi-select.
+        if let Some(action) = select_pixels_click(ui, row.id, false) {
+            w.emit(Intent::Action(action));
+        } else {
+            // Card 055: the click aims at THIS row — selecting it first, exactly
+            // as the row's own click does. Without the selection the target
+            // would resolve against the previously active layer while the
+            // clicked row's well showed the border.
+            w.layers.select_only(row.id);
+            let selection = w.layers.selection().to_vec();
+            w.emit(Intent::SelectLayers {
+                layers: selection,
+                active: Some(row.id),
+            });
+            w.property_focus = crate::panels::properties::PropertyFocus::Layer;
+            w.emit(crate::Intent::SetEditTarget { mask: false });
+        }
     }
     let radius = Radius::Small.resolve(&t.radii, size.y);
     super::checkerboard(ui.painter(), rect, Space::XSmall.pt());
@@ -1190,16 +1350,22 @@ fn mask_well(ui: &mut Ui, w: &mut Workspace, row: &LayerRow, size: Vec2) {
         )
     });
     if response.clicked() {
-        // Card 055: the click aims at THIS row's mask — selecting the row
-        // first, so the target cannot resolve against another layer.
-        w.layers.select_only(row.id);
-        let selection = w.layers.selection().to_vec();
-        w.emit(Intent::SelectLayers {
-            layers: selection,
-            active: Some(row.id),
-        });
-        w.property_focus = crate::panels::properties::PropertyFocus::Mask;
-        w.emit(crate::Intent::SetEditTarget { mask: true });
+        // W9-A: a Ctrl+click on the mask thumbnail loads the mask's coverage
+        // as a selection, with the same modifier grammar as the content well.
+        if let Some(action) = select_pixels_click(ui, row.id, true) {
+            w.emit(Intent::Action(action));
+        } else {
+            // Card 055: the click aims at THIS row's mask — selecting the row
+            // first, so the target cannot resolve against another layer.
+            w.layers.select_only(row.id);
+            let selection = w.layers.selection().to_vec();
+            w.emit(Intent::SelectLayers {
+                layers: selection,
+                active: Some(row.id),
+            });
+            w.property_focus = crate::panels::properties::PropertyFocus::Mask;
+            w.emit(crate::Intent::SetEditTarget { mask: true });
+        }
     }
     if response.secondary_clicked() {
         // Card 059: the well's own popup — view modes + the mask ops. The
@@ -1470,6 +1636,13 @@ fn row_drag_position(
 ) -> Option<DropPosition> {
     if response.drag_started() {
         w.layers.begin_drag(row.id);
+        // W9-I: the row also rides egui's drag-and-drop payload, so a
+        // document tab (drawn by the application's chrome) can take it and
+        // copy the layer into that document.
+        egui::DragAndDrop::set_payload(
+            ui.ctx(),
+            crate::dialogs::duplicate_layer::LayerRowDrag { layer: row.id },
+        );
     }
     let dragged = w.layers.dragging()?;
     let pointer = ui.ctx().pointer_interact_pos()?;
@@ -2082,6 +2255,13 @@ fn properties_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &His
             transform_block(w, ui, doc, id);
             smart_object_properties(w, ui, doc, history, id);
         }
+        // W9-B: a live fill layer's colour / gradient / pattern, re-editable.
+        PropertiesSubject::Fill(id) => {
+            layer_properties(w, ui, doc, id);
+            for intent in crate::panels::properties::FillProperties::show(ui, doc, id) {
+                w.emit(intent);
+            }
+        }
     }
 
     // W5-E: with nothing open there is no layer and no mask to choose.
@@ -2498,6 +2678,65 @@ fn shape_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId)
             intents.push(props::ShapeProperties::set_stroke_width(doc, id, width));
         }
     }
+    // W9-F: the fill's type, then the stroke's alignment, caps, corners and
+    // dash - each a row of buttons (or a slider) editing the layer.
+    use crate::strings::tr;
+    if let (Some(kind), Some(_)) = (props::ShapeProperties::fill_type(doc, id), fill) {
+        design::inspector_field(ui, tr("ui.docks.shape.fill.type"), |ui| {
+            if kind == 2 {
+                ui.label(hint(ui, tr("ui.docks.shape.pattern")));
+            }
+            if let Some(i) = shape_choice_row(ui, SHAPE_FILL_TYPES, kind, |i| {
+                props::ids::shape_fill_type(id, i)
+            }) {
+                intents.push(props::ShapeProperties::set_fill_type(doc, id, i));
+            }
+        });
+    }
+    if let Some(stroke) = &stroke {
+        let align = match stroke.align {
+            layer_model::ShapeStrokeAlign::Inside => 0,
+            layer_model::ShapeStrokeAlign::Center => 1,
+            layer_model::ShapeStrokeAlign::Outside => 2,
+        };
+        design::inspector_field(ui, tr("ui.docks.shape.align"), |ui| {
+            if let Some(i) = shape_choice_row(ui, SHAPE_ALIGNS, align, |i| {
+                props::ids::shape_stroke_align(id, i)
+            }) {
+                intents.push(props::ShapeProperties::set_stroke_align(doc, id, i));
+            }
+        });
+        let cap = match stroke.cap {
+            layer_model::ShapeCap::Butt => 0,
+            layer_model::ShapeCap::Round => 1,
+            layer_model::ShapeCap::Square => 2,
+        };
+        design::inspector_field(ui, tr("ui.docks.shape.caps"), |ui| {
+            if let Some(i) =
+                shape_choice_row(ui, SHAPE_CAPS, cap, |i| props::ids::shape_stroke_cap(id, i))
+            {
+                intents.push(props::ShapeProperties::set_stroke_cap(doc, id, i));
+            }
+        });
+        let join = match stroke.join {
+            layer_model::ShapeJoin::Miter => 0,
+            layer_model::ShapeJoin::Round => 1,
+            layer_model::ShapeJoin::Bevel => 2,
+        };
+        design::inspector_field(ui, tr("ui.docks.shape.corners"), |ui| {
+            if let Some(i) = shape_choice_row(ui, SHAPE_JOINS, join, |i| {
+                props::ids::shape_stroke_join(id, i)
+            }) {
+                intents.push(props::ShapeProperties::set_stroke_join(doc, id, i));
+            }
+        });
+        let mut dash = props::ShapeProperties::stroke_dash_widths(stroke);
+        let response = design::slider_row(ui, tr("ui.docks.shape.dash"), &mut dash, 0.0..=20.0);
+        super::mark(ui, response.rect, props::ids::shape_stroke_dash(id));
+        if response.changed() {
+            intents.push(props::ShapeProperties::set_stroke_dash(doc, id, dash));
+        }
+    }
     // W3-J: corner radius, for a rectangle or rounded rectangle - the path
     // is re-rounded in place. Any other path has no corners to round.
     match props::ShapeProperties::corner_radius(doc, id) {
@@ -2520,6 +2759,47 @@ fn shape_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId)
     for intent in intents.into_iter().flatten() {
         w.emit(intent);
     }
+}
+
+/// W9-F: the catalogue keys of the shape page's choice rows, in the index
+/// order the panel model's setters take.
+const SHAPE_FILL_TYPES: &[&str] = &["ui.docks.shape.fill.colour", "ui.docks.shape.fill.gradient"];
+const SHAPE_ALIGNS: &[&str] = &[
+    "ui.docks.shape.align.inside",
+    "ui.docks.shape.align.centre",
+    "ui.docks.shape.align.outside",
+];
+const SHAPE_CAPS: &[&str] = &[
+    "ui.docks.shape.cap.butt",
+    "ui.docks.shape.cap.round",
+    "ui.docks.shape.cap.square",
+];
+const SHAPE_JOINS: &[&str] = &[
+    "ui.docks.shape.join.miter",
+    "ui.docks.shape.join.round",
+    "ui.docks.shape.join.bevel",
+];
+
+/// W9-F: one row of selectable buttons for the shape page, each labelled
+/// with `tr(key)`; the index picked this frame, if any. Each button is
+/// marked with `id_of(index)` so a frame test can find and click it.
+fn shape_choice_row(
+    ui: &mut Ui,
+    keys: &[&str],
+    current: usize,
+    id_of: impl Fn(usize) -> egui::Id,
+) -> Option<usize> {
+    let mut picked = None;
+    ui.horizontal(|ui| {
+        for (i, key) in keys.iter().enumerate() {
+            let r = ui.selectable_label(current == i, body(ui, crate::strings::tr(key)));
+            super::mark(ui, r.rect, id_of(i));
+            if r.clicked() && current != i {
+                picked = Some(i);
+            }
+        }
+    });
+    picked
 }
 
 /// The smart-object page: the source's name and kind, and the two actions
@@ -2584,6 +2864,36 @@ fn mask_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) 
         empty_state(ui, crate::strings::tr("ui.docks.this.layer.has.no.mask"));
         return;
     };
+    // W9-G: the vector mask's own rows. A vector-only mask has no live pixel
+    // half (the compositor skips it), so the pixel rows are not offered —
+    // moving them would change nothing on the canvas.
+    if props::VectorMaskProperties::of(doc, id).is_some() {
+        vector_mask_properties(w, ui, doc, id);
+        if props::VectorMaskProperties::is_vector_only(doc, id) {
+            let mut linked = mask.linked;
+            design::inspector_field(ui, "Linked", |ui| {
+                if ui
+                    .checkbox(
+                        &mut linked,
+                        hint(ui, crate::strings::tr("ui.docks.move.with.the.layer")),
+                    )
+                    .changed()
+                {
+                    if let Some(c) = MaskProperties::set_linked(doc, id, linked) {
+                        w.emit(Intent::Document(c));
+                    }
+                }
+            });
+            return;
+        }
+        ui.add_space(Space::XSmall.pt());
+        ui.label(text(
+            ui,
+            crate::strings::tr("ui.docks.pixel.mask"),
+            TextRole::Secondary,
+            TypeRole::Footnote,
+        ));
+    }
     let (mut density, mut feather) = (mask.density() * 100.0, mask.feather_px());
     let (mut inverted, mut enabled, mut linked) = (mask.inverted, mask.enabled, mask.linked);
 
@@ -2635,6 +2945,64 @@ fn mask_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) 
                 w.emit(Intent::Document(c));
             }
         }
+    });
+}
+
+/// W9-G: the vector mask's rows in the Properties panel — density, feather,
+/// invert, enable — each an undoable mask patch through
+/// [`props::VectorMaskProperties`]. Labelled apart from the pixel mask's rows, which
+/// sit under them when the layer has both masks.
+fn vector_mask_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) {
+    let Some(v) = props::VectorMaskProperties::of(doc, id) else {
+        return;
+    };
+    let (mut density, mut feather) = (v.density() * 100.0, v.feather_px());
+    let (mut inverted, mut enabled) = (v.inverted, v.enabled);
+    ui.label(text(
+        ui,
+        crate::strings::tr("ui.docks.vector.mask"),
+        TextRole::Secondary,
+        TypeRole::Footnote,
+    ));
+    ui.push_id("raster-vector-mask-rows", |ui| {
+        let density_label = crate::strings::tr("ui.docks.vector.density");
+        if design::slider_row(ui, density_label, &mut density, 0.0..=100.0).changed() {
+            if let Some(c) = props::VectorMaskProperties::set_density(doc, id, density / 100.0) {
+                w.emit(Intent::Document(c));
+            }
+        }
+        let feather_label = crate::strings::tr("ui.docks.vector.feather");
+        if design::slider_row(ui, feather_label, &mut feather, 0.0..=250.0).changed() {
+            if let Some(c) = props::VectorMaskProperties::set_feather(doc, id, feather) {
+                w.emit(Intent::Document(c));
+            }
+        }
+        design::inspector_field(ui, crate::strings::tr("ui.docks.vector.invert"), |ui| {
+            if ui
+                .checkbox(
+                    &mut inverted,
+                    hint(ui, crate::strings::tr("ui.docks.invert.coverage")),
+                )
+                .changed()
+            {
+                if let Some(c) = props::VectorMaskProperties::set_inverted(doc, id, inverted) {
+                    w.emit(Intent::Document(c));
+                }
+            }
+        });
+        design::inspector_field(ui, crate::strings::tr("ui.docks.vector.enabled"), |ui| {
+            if ui
+                .checkbox(
+                    &mut enabled,
+                    hint(ui, crate::strings::tr("ui.docks.apply.this.mask")),
+                )
+                .changed()
+            {
+                if let Some(c) = props::VectorMaskProperties::set_enabled(doc, id, enabled) {
+                    w.emit(Intent::Document(c));
+                }
+            }
+        });
     });
 }
 
@@ -5145,6 +5513,201 @@ mod tests {
         let flat = egui::Rect::from_min_size(egui::pos2(0.0, 10.0), egui::vec2(240.0, 0.0));
         // Any answer will do; not panicking is the assertion.
         let _ = drop_position(true, id, flat, 10.0);
+    }
+
+    // -----------------------------------------------------------------
+    // W9-A: Ctrl+click a layer (or mask) thumbnail = Select Pixels.
+    // -----------------------------------------------------------------
+
+    /// Draw the whole workspace (Layers panel only) for one frame of
+    /// `events` held under `modifiers`, and hand back what it emitted.
+    fn w9a_frame(
+        ctx: &egui::Context,
+        w: &mut Workspace,
+        doc: &Document,
+        events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+    ) -> Vec<Intent> {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            events,
+            modifiers,
+            ..Default::default()
+        };
+        let history = History::default();
+        let _ = ctx.run(input, |ctx| w.ui(ctx, doc, &history));
+        w.drain_intents()
+    }
+
+    /// Press and release on the widget `id` with `modifiers` held.
+    fn w9a_click(
+        ctx: &egui::Context,
+        w: &mut Workspace,
+        doc: &Document,
+        id: egui::Id,
+        modifiers: egui::Modifiers,
+    ) -> Vec<Intent> {
+        for _ in 0..3 {
+            let _ = w9a_frame(ctx, w, doc, Vec::new(), egui::Modifiers::NONE);
+        }
+        let pos = ctx
+            .read_response(id)
+            .unwrap_or_else(|| panic!("{id:?} was not drawn"))
+            .rect
+            .center();
+        let button = |pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers,
+        };
+        let mut out = w9a_frame(
+            ctx,
+            w,
+            doc,
+            vec![egui::Event::PointerMoved(pos), button(true)],
+            modifiers,
+        );
+        out.extend(w9a_frame(ctx, w, doc, vec![button(false)], modifiers));
+        out
+    }
+
+    fn w9a_workspace() -> (egui::Context, Workspace, Document, LayerId, LayerId) {
+        let mut doc = Document::new(64, 64, "w9a");
+        let ink = doc
+            .layers
+            .insert_at(layer_model::Layer::raster("Ink"), None, 0)
+            .unwrap();
+        doc.layers.get_mut(ink).unwrap().mask =
+            Some(layer_model::LayerMask::new(layer_model::MaskId::new()));
+        let other = doc
+            .layers
+            .insert_at(layer_model::Layer::raster("Other"), None, 1)
+            .unwrap();
+        doc.set_active_layer(Some(other)).unwrap();
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut w = Workspace::new();
+        w.dock.apply_layout(crate::LayoutId::Minimal);
+        w.dock.set_open(PanelId::Layers, true);
+        (ctx, w, doc, ink, other)
+    }
+
+    #[test]
+    fn a_ctrl_click_on_a_layer_thumbnail_asks_for_select_pixels_by_modifier() {
+        use crate::dialogs::LoadOperation as Op;
+        use crate::menu::MenuAction;
+        let (ctx, mut w, doc, ink, _other) = w9a_workspace();
+        let thumb = super::super::ids::layer_content_thumb(ink);
+        let cases = [
+            (egui::Modifiers::COMMAND, Op::New),
+            (egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Op::Add),
+            (
+                egui::Modifiers::COMMAND | egui::Modifiers::ALT,
+                Op::Subtract,
+            ),
+            (
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT | egui::Modifiers::ALT,
+                Op::Intersect,
+            ),
+        ];
+        for (modifiers, op) in cases {
+            let intents = w9a_click(&ctx, &mut w, &doc, thumb, modifiers);
+            // Exactly the one action: the thumbnail's Ctrl+click neither
+            // re-selects the row nor moves the edit target.
+            assert_eq!(
+                intents,
+                vec![Intent::Action(MenuAction::SelectLayerPixels {
+                    layer: Some(ink),
+                    mask: false,
+                    op,
+                })],
+                "{modifiers:?}"
+            );
+        }
+
+        // The mask thumbnail speaks the same grammar, for the mask.
+        let mask_thumb = super::super::ids::layer_mask_thumb(ink);
+        let intents = w9a_click(
+            &ctx,
+            &mut w,
+            &doc,
+            mask_thumb,
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        );
+        assert_eq!(
+            intents,
+            vec![Intent::Action(MenuAction::SelectLayerPixels {
+                layer: Some(ink),
+                mask: true,
+                op: Op::Add,
+            })]
+        );
+
+        // A plain click on the thumbnail keeps its card-055 meaning.
+        let intents = w9a_click(&ctx, &mut w, &doc, thumb, egui::Modifiers::NONE);
+        assert!(
+            intents
+                .iter()
+                .any(|i| matches!(i, Intent::SetEditTarget { mask: false })),
+            "{intents:?}"
+        );
+        assert!(
+            !intents
+                .iter()
+                .any(|i| matches!(i, Intent::Action(MenuAction::SelectLayerPixels { .. }))),
+            "{intents:?}"
+        );
+
+        // A Ctrl+click on the NAME keeps the multi-select toggle.
+        let name = crate::panels::layers::ids::name_label(ink);
+        let intents = w9a_click(&ctx, &mut w, &doc, name, egui::Modifiers::COMMAND);
+        assert!(
+            intents
+                .iter()
+                .any(|i| matches!(i, Intent::SelectLayers { active: Some(l), .. } if *l == ink)),
+            "{intents:?}"
+        );
+        assert!(
+            !intents
+                .iter()
+                .any(|i| matches!(i, Intent::Action(MenuAction::SelectLayerPixels { .. }))),
+            "{intents:?}"
+        );
+    }
+
+    #[test]
+    fn the_layer_row_menu_offers_select_pixels_for_the_active_layer() {
+        use crate::menu::MenuAction;
+        let (_ctx, w, doc, _ink, _other) = w9a_workspace();
+        let history = History::default();
+        let menu_ctx = w.menu_context(&doc, &history);
+        let items = crate::context_menu::layer_items(&menu_ctx);
+        let row = items
+            .iter()
+            .find(|i| i.label == "Select Pixels")
+            .expect("the row menu carries Select Pixels");
+        assert_eq!(
+            row.resolution.intent(),
+            Some(&Intent::Action(MenuAction::SelectLayerPixels {
+                layer: None,
+                mask: false,
+                op: crate::dialogs::LoadOperation::New,
+            }))
+        );
+        // Subtract needs a live selection, and says so.
+        let subtract = MenuAction::SelectLayerPixels {
+            layer: None,
+            mask: false,
+            op: crate::dialogs::LoadOperation::Subtract,
+        };
+        assert_eq!(
+            subtract.resolve(&menu_ctx).reason(),
+            Some("There is no selection")
+        );
     }
 
     // -----------------------------------------------------------------

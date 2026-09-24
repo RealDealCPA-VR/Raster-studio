@@ -2,21 +2,24 @@
 //!
 //! # The model
 //!
-//! A styled layer is composited in two stages. First its *own* contribution is
-//! built into a private buffer:
+//! A styled layer is composited in two stages. First its contribution is
+//! built:
 //!
-//! 1. the exterior effects — drop shadow, then outer glow — are drawn into an
-//!    empty buffer, so they end up **beneath** everything else;
-//! 2. the layer's own pixels are drawn over them at the layer's **fill**
-//!    opacity, with the interior effects composited **atop** them (Porter-Duff
-//!    `atop`, so an overlay can recolour the layer but never extend it) in
-//!    Photoshop's order: pattern overlay, gradient overlay, colour overlay,
-//!    satin, inner glow, inner shadow, bevel and emboss;
-//! 3. the stroke is drawn last, over the result, because it must be able to sit
-//!    outside the layer's own alpha.
+//! 1. the exterior effects — every drop shadow, then outer glow — are built
+//!    as separate [`ExteriorPass`]es. W9-H: each is blended **straight into
+//!    the backdrop beneath the layer** with its own blend mode (and the
+//!    layer's overall opacity), so a Multiply shadow multiplies what is under
+//!    it: it darkens a white backdrop and vanishes on a black one;
+//! 2. the layer's own pixels are drawn into a private buffer at the layer's
+//!    **fill** opacity, with the interior effects composited **atop** them
+//!    (Porter-Duff `atop`, so an overlay can recolour the layer but never
+//!    extend it) in Photoshop's order: pattern overlay, gradient overlays,
+//!    colour overlays, satin, inner glow, inner shadows, bevel and emboss;
+//! 3. the strokes are drawn last, over that buffer, because they must be able
+//!    to sit outside the layer's own alpha.
 //!
-//! Then that buffer is blended into the document with the layer's blend mode
-//! and its **overall** opacity. That split is what "fill opacity affects the
+//! Then that body buffer is blended into the document with the layer's blend
+//! mode and its **overall** opacity. That split is what "fill opacity affects the
 //! layer's pixels but not its effects" means, and it is the reason
 //! [`crate::composite`] stops folding the two opacities together the moment a
 //! layer is styled.
@@ -57,20 +60,26 @@
 //!   content-addressed [`PatternCache`] and sampled bilinearly with wrap-around.
 //!   A fill that names only an `AssetId` and carries no tile (nothing in this
 //!   build writes one) still draws nothing.
-//! * **Effect blend modes act inside the style buffer**, not against the
-//!   document beneath. A drop shadow is the first thing in an empty buffer, so
-//!   its own blend mode has nothing to blend with; the interior effects' modes
-//!   do act, against the layer's own pixels, which is where they read.
-//! * **Contours** (the response curves Photoshop puts on every effect),
-//!   `GlowEffect::jitter`, `StrokeEffect::overprint` and the distinction
-//!   between the three [`layer_model::BevelTechnique`]s are not implemented.
+//! * W9-H: **exterior effect modes act against the backdrop** (see above);
+//!   the interior effects' modes act against the layer's own pixels, which
+//!   is where Photoshop reads them. The strokes still blend inside the body
+//!   buffer.
+//! * W9-H: **contours** ([`layer_model::effects::Contour`]) reshape the
+//!   falloff of every drop and inner shadow and both glows, and the height
+//!   profile of bevel and emboss. `GlowEffect::jitter`,
+//!   `StrokeEffect::overprint` and the distinction between the three
+//!   [`layer_model::BevelTechnique`]s are not implemented.
 //!   `GlowEffect::range` is approximated as a remap of the falloff.
+//! * W9-H: drop shadow, inner shadow, stroke, colour overlay and gradient
+//!   overlay draw **every instance** the style lists
+//!   ([`layer_model::effects::StyleExtras`]), the extras above the primary.
 //! * **Reach is clamped** to [`MAX_REACH`] level pixels. Past that an effect
 //!   would need a working buffer many times the tile it is drawn into; the
 //!   clamp is part of the tile cache key, exactly as the mask feather's is.
 
 use color::{to_linear, ColorSpace};
 use filters::{box_blur, EdgeMode, FilterBuffer};
+use layer_model::effects::Contour;
 use layer_model::{
     BevelDirection, BevelEffect, BevelStyle, BlendMode, ColorOverlayEffect, FillStyle, GlowEffect,
     GlowSource, GlowTechnique, Gradient, GradientOverlayEffect, GradientStyle, LayerEffects,
@@ -111,9 +120,10 @@ pub fn reach(effects: &LayerEffects, level: u8) -> Option<i64> {
     let s = scale(level);
     let mut r = 0.0f32;
     let mut want = |v: f32| r = r.max(v);
-    for sh in [&effects.drop_shadow, &effects.inner_shadow]
+    for (sh, _) in effects
+        .drop_shadows()
         .into_iter()
-        .flatten()
+        .chain(effects.inner_shadows())
     {
         want(sh.distance_px.abs() * s + 2.0 * size(sh.size_px) * s);
     }
@@ -129,7 +139,7 @@ pub fn reach(effects: &LayerEffects, level: u8) -> Option<i64> {
     if let Some(b) = &effects.bevel_emboss {
         want(2.0 * (size(b.size_px) + size(b.soften_px)) * s);
     }
-    if let Some(st) = &effects.stroke {
+    for st in effects.strokes() {
         want(size(st.size_px) * s);
     }
     if !r.is_finite() {
@@ -334,21 +344,57 @@ fn pattern_field(
     Some((rgb, cov))
 }
 
+/// W9-H: one exterior effect (a drop shadow or the outer glow), rendered as
+/// premultiplied linear ink over the style's rect, to be blended **into the
+/// backdrop** with its own `mode` before the layer's body is drawn.
+pub(crate) struct ExteriorPass {
+    pub mode: BlendMode,
+    pub ink: Canvas,
+}
+
+/// W9-H: a styled layer split the way Photoshop composites it: the exterior
+/// passes (bottom-most first), which blend against the backdrop, and the
+/// body — the layer at fill opacity with its interior effects and strokes —
+/// which blends with the layer's own mode.
+pub(crate) struct Styled {
+    pub exterior: Vec<ExteriorPass>,
+    pub body: Canvas,
+}
+
+impl ExteriorPass {
+    fn from_ink(ink: &Ink, mode: BlendMode, rect: PixelRect) -> Result<Self, CompositeError> {
+        let mut c = Canvas::transparent(rect)?;
+        for (i, px) in c.pixels_mut().iter_mut().enumerate() {
+            let a = ink.alpha[i].clamp(0.0, 1.0);
+            if a > 0.0 {
+                let rgb = ink.rgb.at(i);
+                *px = [rgb[0] * a, rgb[1] * a, rgb[2] * a, a];
+            }
+        }
+        Ok(Self { mode, ink: c })
+    }
+}
+
 /// Draw `src` — the layer's shape, before opacity — with its style applied.
 ///
-/// The result covers the same rect as `src` and is premultiplied linear, ready
-/// to be blended down with the layer's blend mode and overall opacity.
+/// W9-H: the result is split into the exterior passes and the body (see
+/// [`Styled`]); each covers the same rect as `src` and is premultiplied
+/// linear.
 pub(crate) fn render(
     src: &Canvas,
     effects: &LayerEffects,
     fill_opacity: f32,
     ctx: &StyleContext<'_>,
-) -> Result<Canvas, CompositeError> {
+) -> Result<Styled, CompositeError> {
     let rect = src.rect();
     let (w, h) = (rect.width as usize, rect.height as usize);
     let mut out = Canvas::transparent(rect)?;
+    let mut exterior = Vec::new();
     if w == 0 || h == 0 {
-        return Ok(out);
+        return Ok(Styled {
+            exterior,
+            body: out,
+        });
     }
     let alpha: Vec<f32> = src.pixels().iter().map(|p| unit(p[3])).collect();
     let sdf = signed_distance(&alpha, w, h);
@@ -359,15 +405,16 @@ pub(crate) fn render(
         scale: scale(ctx.level),
     };
 
-    // 1. Behind the layer.
-    if let Some(e) = &effects.drop_shadow {
-        if let Some(ink) = drop_shadow(e, &sdf, &alpha, &g, ctx) {
-            draw(&mut out, &ink, e.blend_mode, false, &ctx.blend);
+    let contours = &effects.extras.contours;
+    // 1. Behind the layer: blended into the backdrop by the caller.
+    for (e, contour) in effects.drop_shadows() {
+        if let Some(ink) = drop_shadow(e, contour, &sdf, &alpha, &g, ctx) {
+            exterior.push(ExteriorPass::from_ink(&ink, e.blend_mode, rect)?);
         }
     }
     if let Some(e) = &effects.outer_glow {
-        if let Some(ink) = outer_glow(e, &sdf, &g, ctx) {
-            draw(&mut out, &ink, e.blend_mode, false, &ctx.blend);
+        if let Some(ink) = outer_glow(e, &contours.outer_glow, &sdf, &g, ctx) {
+            exterior.push(ExteriorPass::from_ink(&ink, e.blend_mode, rect)?);
         }
     }
 
@@ -387,12 +434,12 @@ pub(crate) fn render(
             draw(&mut interior, &ink, e.blend_mode, true, &ctx.blend);
         }
     }
-    if let Some(e) = &effects.gradient_overlay {
+    for e in effects.gradient_overlays() {
         if let Some(ink) = gradient_overlay(e, &alpha, &g, ctx) {
             draw(&mut interior, &ink, e.blend_mode, true, &ctx.blend);
         }
     }
-    if let Some(e) = &effects.color_overlay {
+    for e in effects.color_overlays() {
         let ink = color_overlay(e, &alpha, ctx);
         draw(&mut interior, &ink, e.blend_mode, true, &ctx.blend);
     }
@@ -402,29 +449,53 @@ pub(crate) fn render(
         }
     }
     if let Some(e) = &effects.inner_glow {
-        if let Some(ink) = inner_glow(e, &sdf, &alpha, &g, ctx) {
+        if let Some(ink) = inner_glow(e, &contours.inner_glow, &sdf, &alpha, &g, ctx) {
             draw(&mut interior, &ink, e.blend_mode, true, &ctx.blend);
         }
     }
-    if let Some(e) = &effects.inner_shadow {
-        if let Some(ink) = inner_shadow(e, &sdf, &alpha, &g, ctx) {
+    for (e, contour) in effects.inner_shadows() {
+        if let Some(ink) = inner_shadow(e, contour, &sdf, &alpha, &g, ctx) {
             draw(&mut interior, &ink, e.blend_mode, true, &ctx.blend);
         }
     }
     if let Some(e) = &effects.bevel_emboss {
-        for (ink, mode) in bevel(e, &sdf, &alpha, &g, ctx) {
+        for (ink, mode) in bevel(e, &contours.bevel, &sdf, &alpha, &g, ctx) {
             draw(&mut interior, &ink, mode, true, &ctx.blend);
         }
     }
     over(&mut out, &interior);
 
-    // 3. The stroke, which may sit outside the layer's own alpha.
-    if let Some(e) = &effects.stroke {
+    // 3. The strokes, which may sit outside the layer's own alpha.
+    for e in effects.strokes() {
         if let Some(ink) = stroke(e, &sdf, &g, ctx) {
             draw(&mut out, &ink, e.blend_mode, false, &ctx.blend);
         }
     }
-    Ok(out)
+    Ok(Styled {
+        exterior,
+        body: out,
+    })
+}
+
+/// W9-H: a falloff passed through its contour.
+fn apply_contour(field: &mut [f32], contour: &Contour) {
+    if contour.is_linear() {
+        return;
+    }
+    for v in field.iter_mut() {
+        *v = contour.eval(*v);
+    }
+}
+
+/// W9-H: every blend-if and extra-instance parameter that can change a
+/// pixel, for the tile cache key. The primary slots are keyed by the
+/// compositor's own `hash_effects`.
+pub(crate) fn hash_extras(x: &layer_model::effects::StyleExtras, h: &mut impl std::hash::Hasher) {
+    // `Debug` of these plain-data types prints every field, floats included
+    // bit-exactly enough to separate any two values a user can set.
+    use std::hash::Hash;
+    0x9Bu8.hash(h);
+    format!("{x:?}").hash(h);
 }
 
 /// Buffer geometry shared by every pass.
@@ -687,6 +758,7 @@ fn spread_and_sigma(size_px: f32, spread: f32, g: &Geometry) -> (f32, f32) {
 
 fn drop_shadow(
     e: &ShadowEffect,
+    contour: &Contour,
     sdf: &[f32],
     alpha: &[f32],
     g: &Geometry,
@@ -703,6 +775,7 @@ fn drop_shadow(
     let (grow, sigma) = spread_and_sigma(e.size_px, e.spread, g);
     let moved = shifted(sdf, g, dx, dy);
     let mut f = blur(&silhouette(&moved, grow), g, sigma);
+    apply_contour(&mut f, contour);
     add_noise(&mut f, e.noise, g, ctx);
     if e.knockout {
         for (v, a) in f.iter_mut().zip(alpha) {
@@ -720,6 +793,7 @@ fn drop_shadow(
 
 fn inner_shadow(
     e: &ShadowEffect,
+    contour: &Contour,
     sdf: &[f32],
     alpha: &[f32],
     g: &Geometry,
@@ -739,6 +813,7 @@ fn inner_shadow(
     let moved = shifted(sdf, g, dx, dy);
     let outside: Vec<f32> = silhouette(&moved, -choke).iter().map(|v| 1.0 - v).collect();
     let mut f = blur(&outside, g, sigma);
+    apply_contour(&mut f, contour);
     add_noise(&mut f, e.noise, g, ctx);
     for (v, a) in f.iter_mut().zip(alpha) {
         *v *= a * opacity;
@@ -826,12 +901,19 @@ fn glow_paint(
     }
 }
 
-fn outer_glow(e: &GlowEffect, sdf: &[f32], g: &Geometry, ctx: &StyleContext<'_>) -> Option<Ink> {
+fn outer_glow(
+    e: &GlowEffect,
+    contour: &Contour,
+    sdf: &[f32],
+    g: &Geometry,
+    ctx: &StyleContext<'_>,
+) -> Option<Ink> {
     let opacity = unit(e.opacity);
     if opacity <= 0.0 {
         return None;
     }
     let mut f = glow_falloff(e, sdf, g, true);
+    apply_contour(&mut f, contour);
     add_noise(&mut f, e.noise, g, ctx);
     let (rgb, fill_alpha) = glow_paint(&e.fill, &f, g, ctx)?;
     for (i, v) in f.iter_mut().enumerate() {
@@ -842,6 +924,7 @@ fn outer_glow(e: &GlowEffect, sdf: &[f32], g: &Geometry, ctx: &StyleContext<'_>)
 
 fn inner_glow(
     e: &GlowEffect,
+    contour: &Contour,
     sdf: &[f32],
     alpha: &[f32],
     g: &Geometry,
@@ -857,6 +940,7 @@ fn inner_glow(
         // Brightest deep inside, fading toward the edge.
         GlowSource::Center => sdf.iter().map(|s| (-*s / reach).clamp(0.0, 1.0)).collect(),
     };
+    apply_contour(&mut f, contour);
     add_noise(&mut f, e.noise, g, ctx);
     let (rgb, fill_alpha) = glow_paint(&e.fill, &f, g, ctx)?;
     for (i, (v, a)) in f.iter_mut().zip(alpha).enumerate() {
@@ -1040,6 +1124,7 @@ fn stroke(e: &StrokeEffect, sdf: &[f32], g: &Geometry, ctx: &StyleContext<'_>) -
 /// The highlight and shadow halves of a bevel, each with its own blend mode.
 fn bevel(
     e: &BevelEffect,
+    contour: &Contour,
     sdf: &[f32],
     alpha: &[f32],
     g: &Geometry,
@@ -1051,7 +1136,9 @@ fn bevel(
     }
     // A height field that rises from the edge inward over `width` pixels, then
     // softened. This is what makes the bevel read as a slope rather than a step.
-    let height: Vec<f32> = sdf.iter().map(|s| (-*s / width).clamp(0.0, 1.0)).collect();
+    let mut height: Vec<f32> = sdf.iter().map(|s| (-*s / width).clamp(0.0, 1.0)).collect();
+    // W9-H: the contour is the bevel's edge profile.
+    apply_contour(&mut height, contour);
     let height = blur(&height, g, (width / 3.0).max(0.5) + g.px(e.soften_px) / 3.0);
 
     let depth = if e.depth.is_finite() {
@@ -1263,6 +1350,11 @@ fn span<S>(
     };
     (i, i + 1, k)
 }
+
+/// W9-H: the style-fidelity tests drive the real composite.
+#[cfg(test)]
+#[path = "w9h_style_tests.rs"]
+mod w9h_style_tests;
 
 #[cfg(test)]
 mod tests {

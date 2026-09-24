@@ -78,6 +78,150 @@ pub struct LayerMask {
     feather_px: f32,
     /// Coverage is read as `1 - sample` when `true`.
     pub inverted: bool,
+    /// W9-G: the layer's vector mask, Photoshop's second mask. Its path's
+    /// anti-aliased coverage multiplies the layer's alpha *together with* the
+    /// pixel mask above; it has its own enable, density, feather and invert.
+    /// Omitted from the wire while absent, so a document that never had one
+    /// serializes exactly as before this field existed.
+    ///
+    /// A mask whose `kind` is [`MaskKind::Vector`] and that has no coverage
+    /// tiles is only this part: the compositor skips its pixel half.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector: Option<Box<VectorMask>>,
+}
+
+/// W9-G: a vector mask — a path whose anti-aliased coverage is an alpha
+/// multiplier.
+///
+/// The path is SVG path data in **layer space**, in level-0 pixels: it rides
+/// the layer's transform (and the owning [`LayerMask::transform`]) exactly as
+/// the pixel mask does. An empty path covers nothing, so it hides the whole
+/// layer; inverted, it reveals the whole layer — Photoshop's "Hide All" and
+/// "Reveal All" vector masks.
+///
+/// `density` and `feather_px` carry the same enforced invariants as the
+/// pixel mask's (see [`LayerMask`]), through the same kind of setters and
+/// the same validating deserialization.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "VectorMaskRepr")]
+pub struct VectorMask {
+    /// SVG path data, layer space, level-0 pixels. Filled non-zero.
+    pub path_svg: String,
+    /// A disabled vector mask is kept but contributes nothing.
+    pub enabled: bool,
+    /// See [`VectorMask::density`].
+    density: f32,
+    /// See [`VectorMask::feather_px`].
+    feather_px: f32,
+    /// Coverage is read as `1 - coverage` when `true`.
+    pub inverted: bool,
+}
+
+#[derive(Deserialize)]
+struct VectorMaskRepr {
+    #[serde(default)]
+    path_svg: String,
+    #[serde(default = "yes")]
+    enabled: bool,
+    #[serde(default = "one")]
+    density: f32,
+    #[serde(default)]
+    feather_px: f32,
+    #[serde(default)]
+    inverted: bool,
+}
+
+impl TryFrom<VectorMaskRepr> for VectorMask {
+    type Error = MaskError;
+
+    fn try_from(r: VectorMaskRepr) -> Result<Self, Self::Error> {
+        let mut m = VectorMask::new(r.path_svg);
+        m.enabled = r.enabled;
+        m.inverted = r.inverted;
+        m.set_density(r.density)?;
+        m.set_feather_px(r.feather_px)?;
+        Ok(m)
+    }
+}
+
+impl VectorMask {
+    /// An enabled, full-density, hard-edged vector mask over `path_svg`.
+    pub fn new(path_svg: impl Into<String>) -> Self {
+        Self {
+            path_svg: path_svg.into(),
+            enabled: true,
+            density: 1.0,
+            feather_px: 0.0,
+            inverted: false,
+        }
+    }
+
+    /// Photoshop's "Reveal All" vector mask: no path, inverted.
+    pub fn reveal_all() -> Self {
+        Self {
+            inverted: true,
+            ..Self::new("")
+        }
+    }
+
+    /// Photoshop's "Hide All" vector mask: no path.
+    pub fn hide_all() -> Self {
+        Self::new("")
+    }
+
+    /// Strength, always finite and in `0.0..=1.0`; the same fade as
+    /// [`LayerMask::density`].
+    pub fn density(&self) -> f32 {
+        self.density
+    }
+
+    /// Gaussian feather radius in document pixels, always finite and `>= 0`.
+    pub fn feather_px(&self) -> f32 {
+        self.feather_px
+    }
+
+    /// Set [`VectorMask::density`]: finite values clamp, non-finite refuse.
+    pub fn set_density(&mut self, density: f32) -> Result<(), MaskError> {
+        if !density.is_finite() {
+            return Err(MaskError::NonFinite { field: "density" });
+        }
+        self.density = density.clamp(0.0, 1.0);
+        Ok(())
+    }
+
+    /// Set [`VectorMask::feather_px`]: finite values clamp to `>= 0`,
+    /// non-finite refuse.
+    pub fn set_feather_px(&mut self, feather_px: f32) -> Result<(), MaskError> {
+        if !feather_px.is_finite() {
+            return Err(MaskError::NonFinite {
+                field: "feather_px",
+            });
+        }
+        self.feather_px = feather_px.max(0.0);
+        Ok(())
+    }
+
+    /// `true` when this vector mask can change the composite at all.
+    pub fn affects_composite(&self) -> bool {
+        self.enabled && self.density > 0.0
+    }
+
+    /// The alpha multiplier for one (already feathered) path-coverage sample:
+    /// `enabled`, then `inverted`, then `density`, exactly as
+    /// [`LayerMask::coverage`]. Total over all `f32`.
+    pub fn coverage(&self, sample: f32) -> f32 {
+        resolve(self.enabled, self.inverted, self.density, sample)
+    }
+}
+
+/// The shared enabled → inverted → density rule of both mask kinds.
+fn resolve(enabled: bool, inverted: bool, density: f32, sample: f32) -> f32 {
+    if !enabled {
+        return 1.0;
+    }
+    let s = unit(sample);
+    let m = if inverted { 1.0 - s } else { s };
+    unit(1.0 - unit(density) * (1.0 - m))
 }
 
 /// Deserialization shadow of [`LayerMask`]. Exists so `TryFrom` can push every
@@ -101,6 +245,8 @@ struct LayerMaskRepr {
     feather_px: f32,
     #[serde(default)]
     inverted: bool,
+    #[serde(default)]
+    vector: Option<Box<VectorMask>>,
 }
 
 fn yes() -> bool {
@@ -133,6 +279,7 @@ impl TryFrom<LayerMaskRepr> for LayerMask {
         m.transform = Box::new(r.transform);
         m.enabled = r.enabled;
         m.inverted = r.inverted;
+        m.vector = r.vector;
         m.set_density(r.density)?;
         m.set_feather_px(r.feather_px)?;
         Ok(m)
@@ -151,7 +298,21 @@ impl LayerMask {
             density: 1.0,
             feather_px: 0.0,
             inverted: false,
+            vector: None,
         }
+    }
+
+    /// W9-G: a mask that is only a vector mask — no pixel coverage.
+    pub fn vector_only(id: MaskId, vector: VectorMask) -> Self {
+        Self {
+            vector: Some(Box::new(vector)),
+            ..Self::vector(id)
+        }
+    }
+
+    /// W9-G: the vector mask when it can change the composite.
+    pub fn effective_vector(&self) -> Option<&VectorMask> {
+        self.vector.as_deref().filter(|v| v.affects_composite())
     }
 
     /// A vector mask with the same defaults.
@@ -230,14 +391,10 @@ impl LayerMask {
     /// composite into NaN (`f32::clamp` propagates NaN, it does not substitute
     /// a bound).
     pub fn coverage(&self, sample: f32) -> f32 {
-        if !self.enabled {
-            return 1.0;
-        }
-        let s = unit(sample);
-        let m = if self.inverted { 1.0 - s } else { s };
-        // `density` is enforced finite by the setters; `unit` is applied anyway
-        // so this function's totality does not depend on that enforcement.
-        unit(1.0 - unit(self.density) * (1.0 - m))
+        // `density` is enforced finite by the setters; `resolve` applies
+        // `unit` anyway so this function's totality does not depend on that
+        // enforcement.
+        resolve(self.enabled, self.inverted, self.density, sample)
     }
 }
 
@@ -394,6 +551,7 @@ mod tests {
             density: f32::NAN,
             feather_px: 0.0,
             inverted: false,
+            vector: None,
         })
         .unwrap_err();
         assert_eq!(err, MaskError::NonFinite { field: "density" });
@@ -407,6 +565,7 @@ mod tests {
             density: 1.0,
             feather_px: f32::INFINITY,
             inverted: false,
+            vector: None,
         })
         .unwrap_err();
         assert_eq!(
@@ -434,6 +593,40 @@ mod tests {
         assert_eq!(m, back);
         assert_eq!(back.density(), 0.75);
         assert_eq!(back.feather_px(), 4.5);
+    }
+
+    #[test]
+    fn a_vector_mask_round_trips_and_an_old_mask_has_none() {
+        let mut v = VectorMask::new("M0 0 L10 0 L0 10 Z");
+        v.set_density(0.5).unwrap();
+        v.set_feather_px(3.0).unwrap();
+        v.inverted = true;
+        let m = LayerMask::vector_only(MaskId::new(), v.clone());
+        let json = serde_json::to_string(&m).unwrap();
+        let back: LayerMask = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.vector.as_deref(), Some(&v));
+        assert_eq!(back.kind, MaskKind::Vector);
+        // A mask without one omits the key entirely and loads as `None`.
+        let plain = serde_json::to_string(&mask()).unwrap();
+        assert!(!plain.contains("vector"), "{plain}");
+        let back: LayerMask = serde_json::from_str(&plain).unwrap();
+        assert!(back.vector.is_none());
+    }
+
+    #[test]
+    fn a_vector_mask_resolves_like_a_pixel_mask_and_validates_on_load() {
+        let mut v = VectorMask::new("");
+        assert_eq!(v.coverage(0.0), 0.0);
+        v.set_density(0.5).unwrap();
+        assert_eq!(v.coverage(0.0), 0.5, "density 50% halves the hiding");
+        v.inverted = true;
+        assert_eq!(v.coverage(0.0), 1.0);
+        v.enabled = false;
+        assert!(!v.affects_composite());
+        assert!(VectorMask::reveal_all().inverted && VectorMask::hide_all().path_svg.is_empty());
+        let m: VectorMask = serde_json::from_str(r#"{"density":7.0,"feather_px":-2.0}"#).unwrap();
+        assert_eq!((m.density(), m.feather_px()), (1.0, 0.0));
+        assert!(v.set_feather_px(f32::NAN).is_err());
     }
 
     #[cfg(test)]

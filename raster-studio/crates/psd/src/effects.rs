@@ -455,6 +455,41 @@ fn enumerated_value(type_id: &str, value: &str) -> Value {
 /// returns `None` so the caller keeps its existing "not imported" note
 /// instead of writing a meaningless block.
 pub fn export_effects(effects: &LayerEffects) -> Option<(Vec<u8>, Vec<String>)> {
+    export_impl(effects, None)
+}
+
+/// W9-M: [`export_effects`] that also writes a pattern overlay whose pattern
+/// carries its own pixels, as a `patternFill` descriptor naming the pattern,
+/// and returns that pattern so the caller can put it in the document's `Patt`
+/// block (the block the reference resolves against —
+/// [`crate::pattern::encode_block`]). A pattern overlay with no pixels (only
+/// an asset id) is still named as unmapped.
+pub fn export_effects_with_patterns(
+    effects: &LayerEffects,
+) -> Option<(Vec<u8>, Vec<String>, Vec<crate::pattern::PsdPattern>)> {
+    let mut patterns = Vec::new();
+    let (data, unmapped) = export_impl(effects, Some(&mut patterns))?;
+    Some((data, unmapped, patterns))
+}
+
+/// A stable id for a pattern, from its content, so the same pattern used
+/// twice is written once.
+///
+/// The same spelling [`crate::fill::encode_pattern_fill`] uses, so a pattern
+/// that fills one layer and overlays another is written once.
+pub fn pattern_id(tile: &layer_model::effects::PatternTile) -> String {
+    format!(
+        "rs-{:016x}-{}x{}",
+        tile.content_hash(),
+        tile.width(),
+        tile.height()
+    )
+}
+
+fn export_impl(
+    effects: &LayerEffects,
+    patterns: Option<&mut Vec<crate::pattern::PsdPattern>>,
+) -> Option<(Vec<u8>, Vec<String>)> {
     let mut top = crate::Descriptor::new("Lfx2");
     let _ = top.push("masterFXSwitch", Value::Bool(effects.enabled));
     let _ = top.push("Scl ", percent_value(1.0));
@@ -572,8 +607,40 @@ pub fn export_effects(effects: &LayerEffects) -> Option<(Vec<u8>, Vec<String>)> 
     if effects.gradient_overlay.is_some() {
         unmapped.push("gradient overlay".into());
     }
-    if effects.pattern_overlay.is_some() {
-        unmapped.push("pattern overlay".into());
+    if let Some(overlay) = &effects.pattern_overlay {
+        match (patterns, overlay.pattern.tile.as_ref()) {
+            (Some(out), Some(tile)) => {
+                let id = pattern_id(tile);
+                let fill = &overlay.pattern;
+                let mut d = crate::Descriptor::new("patternFill");
+                let _ = d.push("enab", Value::Bool(true));
+                let _ = d.push("Md  ", enumerated_value("BlnM", blnm(overlay.blend_mode)));
+                let _ = d.push("Opct", percent_value(overlay.opacity));
+                let mut p = crate::Descriptor::new("Ptrn");
+                let _ = p.push("Nm  ", Value::Text(tile.name().to_string()));
+                let _ = p.push("Idnt", Value::Text(id.clone()));
+                let _ = d.push("Ptrn", Value::Descriptor(p));
+                let _ = d.push("Angl", angle_value(fill.angle_deg));
+                let _ = d.push("Scl ", percent_value(fill.scale));
+                let _ = d.push("Algn", Value::Bool(fill.link_with_layer));
+                let mut phase = crate::Descriptor::new("Pnt ");
+                let _ = phase.push("Hrzn", Value::Double(f64::from(fill.offset_px[0])));
+                let _ = phase.push("Vrtc", Value::Double(f64::from(fill.offset_px[1])));
+                let _ = d.push("phase", Value::Descriptor(phase));
+                let _ = top.push("patternFill", Value::Descriptor(d));
+                if !out.iter().any(|p| p.id == id) {
+                    out.push(crate::pattern::PsdPattern {
+                        name: tile.name().to_string(),
+                        id,
+                        width: tile.width(),
+                        height: tile.height(),
+                        rgba8: tile.rgba8().to_vec(),
+                    });
+                }
+                wrote = true;
+            }
+            _ => unmapped.push("pattern overlay".into()),
+        }
     }
 
     if !wrote {
@@ -890,5 +957,49 @@ pub(crate) mod tests {
             data: Vec::new(),
         };
         assert!(import_effects(&effects, &ReadOptions::default()).is_none());
+    }
+}
+
+#[cfg(test)]
+mod w9m_pattern_export_tests {
+    use super::*;
+    use layer_model::effects::{PatternFill, PatternOverlayEffect, PatternTile};
+
+    #[test]
+    fn a_pattern_overlay_exports_as_a_pattern_fill_its_library_resolves() {
+        let tile = PatternTile::new("Dots", 1, 2, vec![1, 2, 3, 255, 4, 5, 6, 128]).unwrap();
+        let effects = LayerEffects {
+            pattern_overlay: Some(PatternOverlayEffect {
+                opacity: 0.25,
+                pattern: PatternFill {
+                    tile: Some(tile.clone()),
+                    scale: 1.5,
+                    angle_deg: 30.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // Without a pattern sink the overlay stays named, as before.
+        assert!(export_effects(&effects).is_none());
+        let (data, unmapped, patterns) = export_effects_with_patterns(&effects).unwrap();
+        assert!(unmapped.is_empty(), "{unmapped:?}");
+        assert_eq!(patterns.len(), 1);
+        assert_eq!(patterns[0].id, pattern_id(&tile));
+        let library = crate::pattern::PatternLibrary {
+            patterns,
+            refused: Vec::new(),
+        };
+        let fx = Effects {
+            key: *b"lfx2",
+            data,
+        };
+        let overlay =
+            crate::pattern::pattern_overlay(&fx, &ReadOptions::default(), &library).unwrap();
+        assert!((overlay.opacity - 0.25).abs() < 1e-6);
+        assert!((overlay.pattern.scale - 1.5).abs() < 1e-6);
+        assert!((overlay.pattern.angle_deg - 30.0).abs() < 1e-6);
+        assert_eq!(overlay.pattern.tile.unwrap().rgba8(), tile.rgba8());
     }
 }

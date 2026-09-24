@@ -10,20 +10,23 @@
 //! ```
 //!
 //! The string lives at key `Txt ` in the first descriptor. Everything about how
-//! it is *set* — fonts, runs, kerning, justification — lives in an opaque
-//! `EngineData` blob under `EngineData`, in a private textual format.
+//! it is *set* — fonts, runs, tracking, justification — lives in the
+//! `EngineData` blob under `EngineData`, in the text engine's own
+//! PostScript-like syntax, which [`crate::engine_data`] parses (bounded; it is
+//! untrusted input) and writes.
 //!
-//! # Why this module only reads
+//! # Reading and writing
 //!
-//! [`parse`] extracts the transform and the string. There is deliberately no
-//! "build a `TySh` from a string" counterpart: Photoshop discards a type layer
-//! whose engine data does not describe every character run, so a synthesised
-//! block would produce a file that opens with the text layer *missing* — worse
-//! than not writing one. [`crate::write`] therefore writes back the bytes that
-//! were read, which round-trips a text layer exactly.
+//! [`parse`] extracts the transform and the string; [`engine_text`] reads the
+//! engine data's style runs, paragraph runs and frame. [`crate::write`] writes
+//! back the bytes that were read, which round-trips a type layer exactly.
+//! [`build`] / [`build_styled`] synthesise a block for a layer this build
+//! authored: the engine data they embed describes every character run (a
+//! payload that does not makes Photoshop discard the layer).
 
 use crate::bytes::{Cursor, Sink};
 use crate::descriptor::{Descriptor, Value};
+use crate::engine_data::{self, EngineDataError, EngineText};
 use crate::limits::ReadOptions;
 use crate::model::TextData;
 
@@ -82,67 +85,33 @@ pub fn warp(raw: &[u8], opts: &ReadOptions) -> Option<Descriptor> {
 
 // -------------------------------------------------- card 079: synthesis
 
-/// Escape a string for a PostScript literal inside engine data: backslashes
-/// and parens are quoted, and every byte outside printable ASCII becomes a
-/// `\ooo` octal escape. The engine data is a private textual format, so the
-/// bytes the reader sees are exactly the bytes the writer meant.
-fn ps_literal(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 8);
-    for b in text.as_bytes() {
-        match b {
-            b'\\' => out.push_str("\\\\"),
-            b'(' => out.push_str("\\("),
-            b')' => out.push_str("\\)"),
-            0x20..=0x7e => out.push(*b as char),
-            _ => out.push_str(&format!("\\{:03o}", b)),
+/// The engine data of a `TySh` block, read by [`crate::engine_data::extract`].
+///
+/// `Ok(None)` when the block has no readable text descriptor, no
+/// `EngineData` key, or engine data without an `EngineDict` — nothing to read
+/// is not an error. `Err` when the engine data is there but malformed or past
+/// a cap; the caller reports it and falls back.
+pub fn engine_text(raw: &[u8], opts: &ReadOptions) -> Result<Option<EngineText>, EngineDataError> {
+    let mut cur = Cursor::new(raw);
+    let header = (|| -> Option<()> {
+        cur.u16().ok()?;
+        for _ in 0..6 {
+            cur.f64().ok()?;
         }
+        cur.u16().ok()?;
+        cur.u32().ok()?;
+        Some(())
+    })();
+    if header.is_none() {
+        return Ok(None);
     }
-    out
-}
-
-/// The engine-data payload for the supported subset (card 079): one default
-/// paragraph sheet, one style run spanning the whole string, the font and
-/// size named, black fill. This is the shape Photoshop's own engine data
-/// takes for a simple single-run point-text layer; a reader that re-typesets
-/// the string needs the run array to cover every character, so the run
-/// length is the string's character count.
-fn engine_data(text: &str, font: &str, size_px: f64, transform: [f64; 6]) -> Vec<u8> {
-    let chars = text.chars().count();
-    let mut s = String::with_capacity(2048);
-    let t = format!(
-        "{} {} {} {} {} {}",
-        transform[0], transform[1], transform[2], transform[3], transform[4], transform[5]
-    );
-    s.push_str("/EngineDict\n/Editor\n/Text (");
-    s.push_str(&ps_literal(text));
-    s.push_str(")\n/ParagraphRun\n<<\n/DefaultRunData\n<</ParagraphSheet\n<</DefaultStyleSheet\n<</Font\n/Name (");
-    s.push_str(&ps_literal(font));
-    s.push_str(")\n/Script 0\n/FontType 1\n>\n/FontSize ");
-    s.push_str(&size_px.to_string());
-    s.push_str("\n/FillColor\n<</Type 1\n/Values [ 0 0 0 ]\n>\n>\n/Justification 0\n/FirstLineIndent 0\n/StartIndent 0\n/EndIndent 0\n/SpaceBefore 0\n/SpaceAfter 0\n/LineSpacing ");
-    s.push_str(&size_px.to_string());
-    s.push_str("\n/AutoLeading 1\n/LeadingType 0\n/Tracking 0\n/HorizontalScale 100\n/Direction 2\n/CharacterDirection 0\n/LinkAlignment 2\n>\n>\n/StyleRun\n<</RunLength ");
-    s.push_str(&chars.to_string());
-    s.push_str("\n/RunData\n<</StyleSheet\n<</StyleSheetData\n<</Font\n/Name (");
-    s.push_str(&ps_literal(font));
-    s.push_str(")\n/Script 0\n/FontType 1\n>\n/FontSize ");
-    s.push_str(&size_px.to_string());
-    s.push_str(
-        "\n/FillColor\n<</Type 1\n/Values [ 0 0 0 ]\n>\n>\n>\n>\n>\n>\n/RunArray\n<</RunLength ",
-    );
-    s.push_str(&chars.to_string());
-    s.push_str("\n/RunData\n<</StyleSheet\n<</StyleSheetData\n<</Font\n/Name (");
-    s.push_str(&ps_literal(font));
-    s.push_str(")\n/Script 0\n/FontType 1\n>\n/FontSize ");
-    s.push_str(&size_px.to_string());
-    s.push_str(
-        "\n/FillColor\n<</Type 1\n/Values [ 0 0 0 ]\n>\n>\n>\n>\n>\n>\n>\n/Render\n<</Transform (",
-    );
-    s.push_str(&t);
-    s.push_str(")\n/FontSize ");
-    s.push_str(&size_px.to_string());
-    s.push_str("\n>\n");
-    s.into_bytes()
+    let Ok(desc) = Descriptor::read(&mut cur, opts) else {
+        return Ok(None);
+    };
+    match desc.get("EngineData") {
+        Some(Value::RawData(bytes)) => engine_data::extract(bytes),
+        _ => Ok(None),
+    }
 }
 
 /// Build a complete `TySh` block for the supported text subset (card 079):
@@ -166,6 +135,31 @@ pub fn build(
     font: &str,
     size_px: f64,
 ) -> Vec<u8> {
+    let engine = EngineText {
+        text: text.to_owned(),
+        style_runs: vec![engine_data::StyleRun {
+            length: text.encode_utf16().count(),
+            style: engine_data::CharStyle {
+                font: Some(font.to_owned()),
+                size: Some(size_px),
+                fill: Some([0.0, 0.0, 0.0, 1.0]),
+                ..engine_data::CharStyle::default()
+            },
+        }],
+        ..EngineText::default()
+    };
+    build_styled(&engine, transform, bounds)
+}
+
+/// Build a complete `TySh` block from an [`EngineText`] — every style run,
+/// the paragraph run, the point/box frame — so a styled layer's fonts, sizes
+/// and fills travel per run. [`engine_text`] reads back what this writes.
+pub fn build_styled(
+    engine: &EngineText,
+    transform: [f64; 6],
+    bounds: (i32, i32, i32, i32),
+) -> Vec<u8> {
+    let text = engine.text.as_str();
     let mut s = Sink::new();
     s.u16(1);
     for v in transform {
@@ -183,11 +177,8 @@ pub fn build(
         },
     )
     .unwrap();
-    d.push(
-        "EngineData",
-        Value::RawData(engine_data(text, font, size_px, transform)),
-    )
-    .unwrap();
+    d.push("EngineData", Value::RawData(engine_data::write(engine)))
+        .unwrap();
     d.write(&mut s).unwrap();
     s.u16(1);
     s.u32(16);
@@ -346,11 +337,108 @@ mod build_tests {
         assert!(String::from_utf8_lossy(&parsed.raw).contains("/Name (Montserrat)"));
         assert!(String::from_utf8_lossy(&parsed.raw).contains("/FontSize 24"));
         assert!(String::from_utf8_lossy(&parsed.raw).contains("/RunLength 10"));
-        // A reader that re-typesets needs every character covered: the style
-        // run and the run array agree on the length, and the text is there.
+        // A reader that re-typesets needs every character covered: the run
+        // lengths cover the string plus the engine's trailing ``, and the
+        // engine data's own text is the string.
         let engine = String::from_utf8_lossy(&parsed.raw);
-        assert_eq!(engine.matches("/RunLength 10").count(), 2);
-        assert!(engine.contains("/Text (SOLD TODAY)"));
+        assert_eq!(engine.matches("/RunLengthArray [ 11 ]").count(), 2);
+        let e = engine_text(&raw, &ReadOptions::default())
+            .unwrap()
+            .expect("the engine data reads back");
+        assert_eq!(e.text, "SOLD TODAY");
+        assert_eq!(e.style_runs.len(), 1);
+        assert_eq!(e.style_runs[0].length, 11);
+        assert_eq!(e.style_runs[0].style.font.as_deref(), Some("Montserrat"));
+        assert_eq!(e.style_runs[0].style.size, Some(24.0));
+        assert_eq!(e.style_runs[0].style.fill, Some([0.0, 0.0, 0.0, 1.0]));
+    }
+
+    /// W9-C: a styled layer's runs travel through the block — two fonts, two
+    /// sizes, two fills — and [`engine_text`] reads them back per run.
+    #[test]
+    fn a_styled_block_carries_every_run() {
+        use crate::engine_data::{CharStyle, StyleRun};
+        let engine = EngineText {
+            text: "Red blue".into(),
+            style_runs: vec![
+                StyleRun {
+                    length: 4,
+                    style: CharStyle {
+                        font: Some("Montserrat".into()),
+                        size: Some(30.0),
+                        fill: Some([1.0, 0.0, 0.0, 1.0]),
+                        ..CharStyle::default()
+                    },
+                },
+                StyleRun {
+                    length: 4,
+                    style: CharStyle {
+                        font: Some("DejaVu Serif".into()),
+                        size: Some(12.5),
+                        fill: Some([0.0, 0.0, 1.0, 1.0]),
+                        ..CharStyle::default()
+                    },
+                },
+            ],
+            ..EngineText::default()
+        };
+        let raw = build_styled(&engine, IDENTITY, (0, 0, 10, 10));
+        assert_eq!(
+            parse(&raw, &ReadOptions::default()).text.as_deref(),
+            Some("Red blue")
+        );
+        let back = engine_text(&raw, &ReadOptions::default()).unwrap().unwrap();
+        assert_eq!(back.text, "Red blue");
+        let fonts: Vec<_> = back
+            .style_runs
+            .iter()
+            .map(|r| (r.length, r.style.font.clone(), r.style.size, r.style.fill))
+            .collect();
+        assert_eq!(
+            fonts,
+            vec![
+                (
+                    4,
+                    Some("Montserrat".into()),
+                    Some(30.0),
+                    Some([1.0, 0.0, 0.0, 1.0])
+                ),
+                (
+                    5,
+                    Some("DejaVu Serif".into()),
+                    Some(12.5),
+                    Some([0.0, 0.0, 1.0, 1.0])
+                ),
+            ],
+            "the last run also covers the engine's trailing \r"
+        );
+    }
+
+    /// A block whose engine data is malformed reports an error from
+    /// [`engine_text`] while [`parse`] still returns the string.
+    #[test]
+    fn malformed_engine_data_is_an_error_not_a_panic() {
+        let mut s = Sink::new();
+        s.u16(1);
+        for v in IDENTITY {
+            s.f64(v);
+        }
+        s.u16(50);
+        s.u32(16);
+        let mut d = Descriptor::new("TxLr");
+        d.push("Txt ", Value::from("x")).unwrap();
+        d.push(
+            "EngineData",
+            Value::RawData(b"<< /EngineDict << /Editor (".to_vec()),
+        )
+        .unwrap();
+        d.write(&mut s).unwrap();
+        let raw = s.into_inner();
+        assert_eq!(
+            parse(&raw, &ReadOptions::default()).text.as_deref(),
+            Some("x")
+        );
+        assert!(engine_text(&raw, &ReadOptions::default()).is_err());
     }
 
     /// Non-ASCII survives: the engine data escapes the bytes, the descriptor

@@ -3237,3 +3237,304 @@ fn vertical_type_caret_and_click_follow_the_column() {
         "the click placed the caret before the third cell"
     );
 }
+
+// ------------------------------------------- W9-D: Sample (all layers) --
+
+/// W9-D: `id`'s options as the options bar holds them once its Sample combo
+/// reads `choice` (0 Current Layer, 1 Current & Below, 2 All Layers) — the
+/// choice written into the workspace's options as the combo writes it, then
+/// `Chrome::tool_options` converted at the boundary exactly as `shell.rs`
+/// converts it.
+fn sample_seed(id: ToolId, choice: usize) -> Vec<(String, tools::ToolSetting)> {
+    let mut chrome = Chrome::new();
+    chrome.set_tool_choice(id, tools::tool::SAMPLE_LAYERS_KEY, choice);
+    assert_eq!(
+        chrome
+            .workspace()
+            .options
+            .get(id, tools::tool::SAMPLE_LAYERS_KEY),
+        Some(ui::OptionValue::Choice(choice)),
+        "{id:?}: the options bar holds no Sample choice"
+    );
+    chrome
+        .tool_options(id)
+        .into_iter()
+        .map(|(key, value)| {
+            let setting = match value {
+                ui::OptionValue::Float(v) => tools::ToolSetting::Float(v),
+                ui::OptionValue::Int(v) => tools::ToolSetting::Int(v),
+                ui::OptionValue::Bool(v) => tools::ToolSetting::Bool(v),
+                ui::OptionValue::Choice(v) => tools::ToolSetting::Choice(v),
+                ui::OptionValue::Color(v) => tools::ToolSetting::Color(v),
+            };
+            (key, setting)
+        })
+        .collect()
+}
+
+/// W9-D: a fresh, EMPTY raster layer added above the photo and made active,
+/// the way a Layers-panel click does. Returns (photo layer, empty layer).
+fn empty_layer_above(ed: &mut Editor) -> (layer_model::LayerId, layer_model::LayerId) {
+    let photo = app::the_opened_layer(ed);
+    let empty = ed
+        .active_mut()
+        .unwrap()
+        .add_layer(layer_model::Layer::raster("Retouch"));
+    ed.set_active_layer(empty);
+    (photo, empty)
+}
+
+/// The pixels of one layer alone, RGBA8 over the canvas.
+fn layer_px(ed: &Editor, layer: layer_model::LayerId) -> Vec<u8> {
+    ed.active()
+        .unwrap()
+        .layer_pixels(layer)
+        .expect("layer pixels")
+}
+
+#[test]
+fn clone_stamp_sampling_all_layers_copies_the_photo_into_an_empty_layer() {
+    let id = ToolId::CloneStamp;
+    let (_dir, mut ed) = open(&halves);
+    let (photo, empty) = empty_layer_above(&mut ed);
+    let photo_before = layer_px(&ed, photo);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let src = alt_click(&mut pointer, &mut ed, v(32.0, 64.0));
+    all_reached(id, &src);
+    let seed = sample_seed(id, 2);
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+    let outcomes = seeded_stroke(
+        &mut pointer,
+        &mut ed,
+        &[v(96.0, 60.0), v(96.0, 68.0)],
+        &seed,
+    );
+    all_reached(id, &outcomes);
+    assert_eq!(depth(&ed), d0 + 1, "one stroke, one history entry");
+    let retouch = layer_px(&ed, empty);
+    let cloned = px(&retouch, 96, 64);
+    assert!(
+        near(cloned, RED, 2),
+        "the empty layer did not receive the photo's red from the source: {cloned:?}"
+    );
+    assert_eq!(px(&retouch, 96, 10), [0, 0, 0, 0], "outside the stroke");
+    assert_eq!(
+        layer_px(&ed, photo),
+        photo_before,
+        "the photo layer was written; only the active layer may be"
+    );
+    let after = composite(&mut ed);
+    assert!(near(px(&after, 96, 64), RED, 2), "the composite shows it");
+    undo(&mut ed);
+    assert_eq!(composite(&mut ed), before, "undo restores byte for byte");
+}
+
+#[test]
+fn clone_stamp_sampling_the_current_layer_copies_nothing_from_an_empty_layer() {
+    let id = ToolId::CloneStamp;
+    let (_dir, mut ed) = open(&halves);
+    let (_photo, empty) = empty_layer_above(&mut ed);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    all_reached(id, &alt_click(&mut pointer, &mut ed, v(32.0, 64.0)));
+    let seed = sample_seed(id, 0);
+    let before = composite(&mut ed);
+    let outcomes = seeded_stroke(
+        &mut pointer,
+        &mut ed,
+        &[v(96.0, 60.0), v(96.0, 68.0)],
+        &seed,
+    );
+    all_reached(id, &outcomes);
+    assert!(
+        layer_px(&ed, empty).iter().all(|&b| b == 0),
+        "Current Layer on an empty layer cloned something"
+    );
+    assert_eq!(composite(&mut ed), before, "no pixel moved");
+}
+
+#[test]
+fn clone_stamp_sampling_current_and_below_skips_the_layers_above() {
+    let id = ToolId::CloneStamp;
+    let (_dir, mut ed) = open(&halves);
+    let (_photo, empty) = empty_layer_above(&mut ed);
+    // A white layer ABOVE the retouch layer, opaque only in the 16 x 16
+    // square at the top-left corner (x < 16, y < 16) and clear elsewhere.
+    // The source is alt-clicked at (8, 8), inside that square: the photo
+    // under it is red, the cover over it is white, so Current & Below reads
+    // red and All Layers reads white.
+    let cover = ed
+        .active_mut()
+        .unwrap()
+        .add_layer(layer_model::Layer::raster("Cover"));
+    ed.active_mut().unwrap().paint_canvas(cover, &|x, y| {
+        if x < 16 && y < 16 {
+            WHITE
+        } else {
+            [0; 4]
+        }
+    });
+    ed.set_active_layer(empty);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    // Source on the cover's white square.
+    all_reached(id, &alt_click(&mut pointer, &mut ed, v(8.0, 8.0)));
+    let outcomes = seeded_stroke(
+        &mut pointer,
+        &mut ed,
+        &[v(96.0, 60.0), v(96.0, 68.0)],
+        &sample_seed(id, 1),
+    );
+    all_reached(id, &outcomes);
+    let got = px(&layer_px(&ed, empty), 96, 64);
+    assert!(
+        near(got, RED, 2),
+        "Current & Below read the white layer above it: {got:?}"
+    );
+    // All Layers, same gesture: the white above is sampled this time.
+    let outcomes = seeded_stroke(
+        &mut pointer,
+        &mut ed,
+        &[v(96.0, 60.0), v(96.0, 68.0)],
+        &sample_seed(id, 2),
+    );
+    all_reached(id, &outcomes);
+    let got = px(&layer_px(&ed, empty), 96, 64);
+    assert!(
+        near(got, WHITE, 2),
+        "All Layers missed the layer above: {got:?}"
+    );
+}
+
+#[test]
+fn spot_healing_sampling_all_layers_heals_the_blemish_onto_an_empty_layer() {
+    let id = ToolId::SpotHealing;
+    let (_dir, mut ed) = open(&spot_at(64, 64));
+    let (photo, empty) = empty_layer_above(&mut ed);
+    let photo_before = layer_px(&ed, photo);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+    let outcomes = seeded_stroke(
+        &mut pointer,
+        &mut ed,
+        &[v(60.0, 64.0), v(68.0, 64.0)],
+        &sample_seed(id, 2),
+    );
+    all_reached(id, &outcomes);
+    assert_eq!(depth(&ed), d0 + 1, "one stroke, one history entry");
+    let healed = px(&layer_px(&ed, empty), 64, 64);
+    assert!(
+        healed[3] > 200 && healed[0] > DARK[0] + 60,
+        "the empty layer did not receive the healed surround: {healed:?}"
+    );
+    assert_eq!(
+        layer_px(&ed, photo),
+        photo_before,
+        "the blemish on the photo layer was written"
+    );
+    let after = composite(&mut ed);
+    assert!(
+        px(&after, 64, 64)[0] > DARK[0] + 60,
+        "the composite still shows the blemish: {:?}",
+        px(&after, 64, 64)
+    );
+    assert_eq!(px(&after, 64, 20), GREY, "outside the stroke");
+    undo(&mut ed);
+    assert_eq!(composite(&mut ed), before, "undo restores byte for byte");
+}
+
+#[test]
+fn spot_healing_content_aware_sampling_all_layers_heals_onto_an_empty_layer() {
+    // Type = Content-Aware + Sample = All Layers: the shell runs heavy
+    // finishes on a worker (defer_heavy_commits), but that worker reads the
+    // ACTIVE layer, which is empty here, so the sampled synthesis must run
+    // at release from the composite and lay into the empty layer.
+    let id = ToolId::SpotHealing;
+    let (_dir, mut ed) = open(&spot_at(64, 64));
+    let (photo, empty) = empty_layer_above(&mut ed);
+    let photo_before = layer_px(&ed, photo);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    // `Chrome::tool_options` leaves out options still at their default, so
+    // the non-default Type is pushed here: 1 = Content-Aware.
+    let mut seed = sample_seed(id, 2);
+    seed.retain(|(key, _)| key != "type");
+    seed.push(("type".to_string(), tools::ToolSetting::Choice(1)));
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+    let outcomes = seeded_stroke(
+        &mut pointer,
+        &mut ed,
+        &[v(60.0, 64.0), v(68.0, 64.0)],
+        &seed,
+    );
+    all_reached(id, &outcomes);
+    assert_eq!(depth(&ed), d0 + 1, "one stroke, one history entry");
+    let healed = px(&layer_px(&ed, empty), 64, 64);
+    assert!(
+        near(healed, GREY, 8),
+        "the empty layer did not receive the Content-Aware heal: {healed:?}"
+    );
+    assert_eq!(
+        px(&layer_px(&ed, empty), 64, 20),
+        [0, 0, 0, 0],
+        "outside the stroke"
+    );
+    assert_eq!(
+        layer_px(&ed, photo),
+        photo_before,
+        "the blemish on the photo layer was written"
+    );
+    assert!(
+        near(px(&composite(&mut ed), 64, 64), GREY, 8),
+        "the composite still shows the blemish"
+    );
+    undo(&mut ed);
+    assert_eq!(composite(&mut ed), before, "undo restores byte for byte");
+}
+
+#[test]
+fn every_sampling_retouch_tool_writes_the_composite_onto_an_empty_layer() {
+    // Blur, Sharpen, Smudge and the Healing Brush with Sample = All Layers:
+    // an empty layer above the photo receives pixels under the stroke, and
+    // the photo stays as it was. With Current Layer each leaves it empty.
+    for id in [
+        ToolId::Blur,
+        ToolId::Sharpen,
+        ToolId::Smudge,
+        ToolId::HealingBrush,
+    ] {
+        for (choice, writes) in [(2, true), (0, false)] {
+            let (_dir, mut ed) = open(&halves);
+            let (photo, empty) = empty_layer_above(&mut ed);
+            let photo_before = layer_px(&ed, photo);
+            let mut pointer = ToolPointer::new();
+            select_tool(&mut ed, id);
+            if id == ToolId::HealingBrush {
+                all_reached(id, &alt_click(&mut pointer, &mut ed, v(32.0, 64.0)));
+            }
+            let outcomes = seeded_stroke(
+                &mut pointer,
+                &mut ed,
+                &[v(56.0, 64.0), v(72.0, 64.0)],
+                &sample_seed(id, choice),
+            );
+            all_reached(id, &outcomes);
+            let alpha = px(&layer_px(&ed, empty), 64, 64)[3];
+            assert_eq!(
+                alpha > 0,
+                writes,
+                "{id:?} with Sample choice {choice}: the empty layer's alpha under the stroke is {alpha}"
+            );
+            assert_eq!(
+                layer_px(&ed, photo),
+                photo_before,
+                "{id:?}: the photo was written"
+            );
+        }
+    }
+}

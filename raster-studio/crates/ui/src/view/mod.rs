@@ -75,6 +75,12 @@ pub mod ids {
         egui::Id::new(("raster-layer-mask-thumb", layer))
     }
 
+    /// W9-G: the vector-mask thumbnail of one layer row: clicking it opens
+    /// the mask's rows in the Properties panel.
+    pub fn layer_vector_mask_thumb(layer: layer_model::LayerId) -> egui::Id {
+        egui::Id::new(("raster-layer-vector-mask-thumb", layer))
+    }
+
     /// Card 059: one view-mode row of the mask well's popup, by mode.
     pub fn mask_view_item(mode: crate::MaskViewMode) -> egui::Id {
         egui::Id::new(("raster-mask-view-item", mode as u8))

@@ -65,6 +65,7 @@
 pub mod about;
 pub mod action;
 pub mod adjustment_dialog;
+pub mod blur_gallery;
 pub mod brush_editor;
 pub mod canvas_rotation;
 pub mod canvas_size;
@@ -76,6 +77,7 @@ pub mod controls;
 pub mod defringe;
 pub mod duplicate_layer;
 pub mod export_as;
+pub mod fill_layer;
 pub mod fill_stroke;
 pub mod filter_dialog;
 pub mod filter_gallery;
@@ -96,10 +98,13 @@ pub mod selection_name;
 pub mod sizes;
 pub mod trim;
 pub mod units;
+// W9-K: Layer > Text > Warp Text...
+pub mod warp_text;
 
 pub use about::AboutDialog;
 pub use action::DialogAction;
 pub use adjustment_dialog::{AdjustmentDialog, AdjustmentInvocation};
+pub use blur_gallery::{BlurGalleryDialog, BlurGallerySpec};
 pub use brush_editor::BrushEditorDialog;
 pub use canvas_rotation::ArbitraryRotationDialog;
 pub use canvas_size::{Anchor, CanvasSizeDialog, CanvasSizeSpec, Change, EdgeChange, Side};
@@ -112,6 +117,7 @@ pub use color_picker::{ColorPickerDialog, ColorValue, Eyedropper, RecentColors, 
 pub use color_range::{ColorRangeDialog, ColorRangeSpec, ColorRangeView};
 pub use duplicate_layer::DuplicateLayerDialog;
 pub use export_as::{ExportAsDialog, ExportEntry, ExportJob, PreviewSource};
+pub use fill_layer::FillLayerDialog;
 pub use fill_stroke::{
     FillContents, FillContentsKind, FillDialog, FillSpec, StrokeDialog, StrokeLocation, StrokeSpec,
 };
@@ -140,6 +146,7 @@ pub use selection_name::{
 };
 pub use trim::{TrimBasis, TrimDialog, TrimSpec};
 pub use units::{format_bytes, ResolutionUnit, Unit};
+pub use warp_text::WarpTextDialog;
 
 #[cfg(test)]
 pub(crate) mod tests_support {
@@ -216,6 +223,16 @@ pub(crate) mod tests_support {
                 dialog.set_name("Renamed");
                 dialog
             }),
+            // W9-B: a new Gradient fill layer confirms at its defaults.
+            Box::new(FillLayerDialog::new_layer(
+                layer_model::FillSource::Gradient(layer_model::GradientFill::default()),
+                Vec::new(),
+            )),
+            // W9-K: an unwarped text layer opens on Arc, so Enter warps it.
+            Box::new(WarpTextDialog::new(
+                layer_model::LayerId::new(),
+                layer_model::text::TextLayer::default(),
+            )),
         ];
         for filter in filter_dialog::FILTERS {
             dialogs.push(Box::new(FilterDialog::with_placeholder(filter)));

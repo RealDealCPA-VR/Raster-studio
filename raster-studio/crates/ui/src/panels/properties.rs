@@ -16,6 +16,8 @@
 use editor_core::{Command, Document, LayerPatch, Patch};
 use glam::{Affine2, Vec2};
 use layer_model::{AdjustmentKind, LayerId, LayerKind, LayerMask, MaskError, Rgba, ShapeStroke};
+// W9-F: the shape page's fill type and stroke options.
+use layer_model::{ShapeCap, ShapeFillPaint, ShapeJoin, ShapeStrokeAlign};
 
 use crate::intent::Intent;
 use crate::menu::{AdjustmentId, LayerClass};
@@ -50,6 +52,8 @@ pub enum PropertiesSubject {
     Shape(LayerId),
     /// A smart object: its source, and the Replace / Edit Contents actions.
     SmartObject(LayerId),
+    /// W9-B: a live fill layer: its colour, gradient or pattern, live-editable.
+    Fill(LayerId),
 }
 
 impl PropertiesSubject {
@@ -72,6 +76,7 @@ impl PropertiesSubject {
             LayerKind::Text(_) => PropertiesSubject::Text(id),
             LayerKind::Shape(_) => PropertiesSubject::Shape(id),
             LayerKind::SmartObject(_) => PropertiesSubject::SmartObject(id),
+            LayerKind::Fill(_) => PropertiesSubject::Fill(id),
             _ => PropertiesSubject::Layer(id),
         }
     }
@@ -85,7 +90,8 @@ impl PropertiesSubject {
             | PropertiesSubject::Adjustment { layer: id, .. }
             | PropertiesSubject::Text(id)
             | PropertiesSubject::Shape(id)
-            | PropertiesSubject::SmartObject(id) => Some(*id),
+            | PropertiesSubject::SmartObject(id)
+            | PropertiesSubject::Fill(id) => Some(*id),
         }
     }
 
@@ -99,7 +105,100 @@ impl PropertiesSubject {
             PropertiesSubject::Text(_) => "Text Properties",
             PropertiesSubject::Shape(_) => "Shape Properties",
             PropertiesSubject::SmartObject(_) => "Smart Object",
+            PropertiesSubject::Fill(_) => "Fill Layer",
         }
+    }
+}
+
+/// W9-B: a live fill layer's Properties page — Photopea's re-editable fill.
+///
+/// Every control produces an [`Intent::EditLayerKind`] carrying the whole new
+/// [`FillLayer`](layer_model::FillLayer), so a change is one
+/// [`Command::SetLayerKind`] (one undo step, a drag folded into one by the
+/// shell's gesture key) and the compositor re-evaluates the layer from it.
+/// The full dialog (the gradient editor, the pattern list) is one click away
+/// through [`FillProperties::OPEN_DIALOG`].
+pub struct FillProperties;
+
+impl FillProperties {
+    /// The menu action that reopens the layer's own dialog: Layer ▸ Edit
+    /// Adjustment…, which the dialog host answers for a fill layer.
+    pub const OPEN_DIALOG: crate::menu::MenuAction = crate::menu::MenuAction::EditAdjustmentLayer;
+
+    /// The layer's fill, when it is a fill layer.
+    pub fn fill(doc: &Document, layer: LayerId) -> Option<layer_model::FillLayer> {
+        match &doc.layers.get(layer)?.kind {
+            LayerKind::Fill(f) => Some(f.clone()),
+            _ => None,
+        }
+    }
+
+    /// Replace the layer's fill; `None` when it is not a fill layer or
+    /// nothing changed.
+    pub fn set(doc: &Document, layer: LayerId, fill: layer_model::FillLayer) -> Option<Intent> {
+        let current = Self::fill(doc, layer)?;
+        (current != fill).then(|| Intent::EditLayerKind {
+            layer,
+            kind: Box::new(LayerKind::Fill(fill)),
+        })
+    }
+
+    /// Recolour a Solid Color fill.
+    pub fn set_color(doc: &Document, layer: LayerId, color: Rgba) -> Option<Intent> {
+        if !color.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        let mut fill = Self::fill(doc, layer)?;
+        match &mut fill.source {
+            layer_model::FillSource::Solid { color: c } => *c = color,
+            _ => return None,
+        }
+        Self::set(doc, layer, fill)
+    }
+
+    /// Draw the page; returns what the user changed this frame.
+    pub fn show(ui: &mut egui::Ui, doc: &Document, layer: LayerId) -> Vec<Intent> {
+        let mut out = Vec::new();
+        let Some(fill) = Self::fill(doc, layer) else {
+            return out;
+        };
+        design::section_header(ui, fill.source.kind_name());
+        let mut edited = fill.clone();
+        match &mut edited.source {
+            layer_model::FillSource::Solid { color } => {
+                let mut picked = shape_to_swatch(*color);
+                design::inspector_field(ui, "Color", |ui| {
+                    let response = ui.color_edit_button_srgba(&mut picked);
+                    crate::view::mark(ui, response.rect, ids::fill_color(layer));
+                    if response.changed() {
+                        *color = swatch_to_shape(picked);
+                    }
+                });
+            }
+            layer_model::FillSource::Gradient(g) => {
+                design::slider_row(ui, "Angle", &mut g.angle_deg, -180.0..=180.0);
+                design::slider_row(ui, "Scale", &mut g.scale, 0.1..=1.5);
+                ui.checkbox(&mut g.reverse, "Reverse");
+                ui.checkbox(&mut g.dither, "Dither");
+            }
+            layer_model::FillSource::Pattern(p) => {
+                design::slider_row(ui, "Scale", &mut p.scale, 0.01..=10.0);
+                design::slider_row(ui, "Angle", &mut p.angle_deg, -180.0..=180.0);
+                ui.checkbox(
+                    &mut p.link_with_layer,
+                    crate::strings::tr("ui.layer_style.link.with.layer"),
+                );
+            }
+        }
+        if let Some(intent) = Self::set(doc, layer, edited) {
+            out.push(intent);
+        }
+        let open = design::secondary_button(ui, crate::strings::tr("ui.properties.fill.edit.fill"));
+        crate::view::mark(ui, open.rect, ids::fill_open_dialog(layer));
+        if open.clicked() {
+            out.push(Intent::Action(Self::OPEN_DIALOG));
+        }
+        out
     }
 }
 
@@ -201,6 +300,82 @@ impl MaskProperties {
     }
 }
 
+/// W9-G: editing the vector mask's own numbers — density, feather, invert,
+/// enable — each one undoable `SetLayerProperties` mask patch, refused (no
+/// command) for a value the mask would reject or already holds, exactly as
+/// [`MaskProperties`] does for the pixel mask.
+pub struct VectorMaskProperties;
+
+impl VectorMaskProperties {
+    /// The vector mask on a layer, if it has one.
+    pub fn of(doc: &Document, layer: LayerId) -> Option<&layer_model::VectorMask> {
+        doc.layers.get(layer)?.mask.as_ref()?.vector.as_deref()
+    }
+
+    /// `true` when the layer's mask is ONLY a vector mask: vector kind, a
+    /// path, and no coverage tiles — the compositor then skips the pixel
+    /// half, so the panel must not offer the pixel mask's rows (moving them
+    /// would change nothing on the canvas).
+    pub fn is_vector_only(doc: &Document, layer: LayerId) -> bool {
+        doc.layers
+            .get(layer)
+            .and_then(|l| l.mask.as_ref())
+            .is_some_and(|m| {
+                m.kind == layer_model::MaskKind::Vector
+                    && m.vector.is_some()
+                    && doc
+                        .pixels
+                        .tiles(editor_core::PixelKey::Mask(m.id))
+                        .is_none_or(|t| t.is_empty())
+            })
+    }
+
+    fn edit(
+        doc: &Document,
+        layer: LayerId,
+        f: impl FnOnce(&mut layer_model::VectorMask) -> Result<(), MaskError>,
+    ) -> Option<Command> {
+        let before = doc.layers.get(layer)?.mask.clone()?;
+        let mut mask = before.clone();
+        f(mask.vector.as_deref_mut()?).ok()?;
+        (mask != before).then_some(Command::SetLayerProperties {
+            layer_id: layer,
+            patch: LayerPatch {
+                mask: Patch::Set(mask),
+                ..Default::default()
+            },
+        })
+    }
+
+    pub fn set_density(doc: &Document, layer: LayerId, density: f32) -> Option<Command> {
+        if !(0.0..=1.0).contains(&density) {
+            return None;
+        }
+        Self::edit(doc, layer, |v| v.set_density(density))
+    }
+
+    pub fn set_feather(doc: &Document, layer: LayerId, feather_px: f32) -> Option<Command> {
+        if feather_px.is_nan() || feather_px < 0.0 {
+            return None;
+        }
+        Self::edit(doc, layer, |v| v.set_feather_px(feather_px))
+    }
+
+    pub fn set_inverted(doc: &Document, layer: LayerId, inverted: bool) -> Option<Command> {
+        Self::edit(doc, layer, |v| {
+            v.inverted = inverted;
+            Ok(())
+        })
+    }
+
+    pub fn set_enabled(doc: &Document, layer: LayerId, enabled: bool) -> Option<Command> {
+        Self::edit(doc, layer, |v| {
+            v.enabled = enabled;
+            Ok(())
+        })
+    }
+}
+
 /// Live editing of an adjustment layer's parameters.
 ///
 /// Produces an [`Intent::EditLayerKind`], not a `Command` — see that variant's
@@ -289,6 +464,15 @@ pub const fn has_kind_properties(class: LayerClass) -> bool {
 pub mod ids {
     use layer_model::LayerId;
 
+    /// W9-B: a Solid Color fill layer's colour button on its Properties page.
+    pub fn fill_color(layer: LayerId) -> egui::Id {
+        egui::Id::new(("raster-properties-fill-color", layer))
+    }
+    /// W9-B: the fill page's button that reopens the fill layer's dialog.
+    pub fn fill_open_dialog(layer: LayerId) -> egui::Id {
+        egui::Id::new(("raster-properties-fill-dialog", layer))
+    }
+
     /// The Transform block's disclosure.
     pub fn transform_toggle() -> egui::Id {
         egui::Id::new("raster-properties-transform-toggle")
@@ -328,6 +512,26 @@ pub mod ids {
     /// The shape page's stroke on/off toggle.
     pub fn shape_stroke_enabled(layer: LayerId) -> egui::Id {
         egui::Id::new(("raster-properties-shape-stroke", layer))
+    }
+    /// W9-F: the shape page's fill-type buttons (Colour / Gradient), by index.
+    pub fn shape_fill_type(layer: LayerId, index: usize) -> egui::Id {
+        egui::Id::new(("raster-properties-shape-fill-type", layer, index))
+    }
+    /// W9-F: the shape page's stroke-alignment buttons, by index.
+    pub fn shape_stroke_align(layer: LayerId, index: usize) -> egui::Id {
+        egui::Id::new(("raster-properties-shape-stroke-align", layer, index))
+    }
+    /// W9-F: the shape page's cap buttons, by index.
+    pub fn shape_stroke_cap(layer: LayerId, index: usize) -> egui::Id {
+        egui::Id::new(("raster-properties-shape-stroke-cap", layer, index))
+    }
+    /// W9-F: the shape page's join buttons, by index.
+    pub fn shape_stroke_join(layer: LayerId, index: usize) -> egui::Id {
+        egui::Id::new(("raster-properties-shape-stroke-join", layer, index))
+    }
+    /// W9-F: the shape page's dash-length slider.
+    pub fn shape_stroke_dash(layer: LayerId) -> egui::Id {
+        egui::Id::new(("raster-properties-shape-stroke-dash", layer))
     }
     /// The text page's family field.
     pub fn text_family(layer: LayerId) -> egui::Id {
@@ -941,6 +1145,104 @@ impl ShapeProperties {
             }
         })
     }
+
+    /// W9-F: the shape's fill type as the page's index: 0 colour, 1 gradient,
+    /// 2 pattern. `None` when the layer is not a shape.
+    pub fn fill_type(doc: &Document, layer: LayerId) -> Option<usize> {
+        match &doc.layers.get(layer)?.kind {
+            LayerKind::Shape(s) => Some(match s.fill_paint {
+                ShapeFillPaint::Solid => 0,
+                ShapeFillPaint::Gradient(_) => 1,
+                ShapeFillPaint::Pattern(_) => 2,
+            }),
+            _ => None,
+        }
+    }
+
+    /// W9-F: paint the fill with its colour (0) or with a gradient (1) —
+    /// black to white at 90 degrees until edited, W9-B's gradient model.
+    /// A pattern fill is set by the shape tools' Fill Type, which carries
+    /// the active pattern's pixels; the page does not invent one.
+    pub fn set_fill_type(doc: &Document, layer: LayerId, index: usize) -> Option<Intent> {
+        Self::edit(doc, layer, |s| match index {
+            0 => s.fill_paint = ShapeFillPaint::Solid,
+            1 if !matches!(s.fill_paint, ShapeFillPaint::Gradient(_)) => {
+                s.fill_paint = ShapeFillPaint::Gradient(layer_model::ShapeGradientFill::default());
+                if s.fill.is_none() {
+                    s.fill = layer_model::ShapeLayer::default().fill;
+                }
+            }
+            _ => {}
+        })
+    }
+
+    /// W9-F: where the stroke sits (0 inside, 1 centre, 2 outside).
+    pub fn set_stroke_align(doc: &Document, layer: LayerId, index: usize) -> Option<Intent> {
+        let align = match index {
+            0 => ShapeStrokeAlign::Inside,
+            1 => ShapeStrokeAlign::Center,
+            _ => ShapeStrokeAlign::Outside,
+        };
+        Self::edit(doc, layer, |s| {
+            if let Some(stroke) = s.stroke.as_mut() {
+                stroke.align = align;
+            }
+        })
+    }
+
+    /// W9-F: the stroke's cap (0 butt, 1 round, 2 square).
+    pub fn set_stroke_cap(doc: &Document, layer: LayerId, index: usize) -> Option<Intent> {
+        let cap = match index {
+            0 => ShapeCap::Butt,
+            1 => ShapeCap::Round,
+            _ => ShapeCap::Square,
+        };
+        Self::edit(doc, layer, |s| {
+            if let Some(stroke) = s.stroke.as_mut() {
+                stroke.cap = cap;
+            }
+        })
+    }
+
+    /// W9-F: the stroke's join (0 miter, 1 round, 2 bevel).
+    pub fn set_stroke_join(doc: &Document, layer: LayerId, index: usize) -> Option<Intent> {
+        let join = match index {
+            0 => ShapeJoin::Miter,
+            1 => ShapeJoin::Round,
+            _ => ShapeJoin::Bevel,
+        };
+        Self::edit(doc, layer, |s| {
+            if let Some(stroke) = s.stroke.as_mut() {
+                stroke.join = join;
+            }
+        })
+    }
+
+    /// W9-F: the dash length in stroke widths the stroke's pattern reads
+    /// as — `0` for a solid stroke.
+    pub fn stroke_dash_widths(stroke: &ShapeStroke) -> f32 {
+        match stroke.dash.first() {
+            Some(d) if stroke.width_px > 0.0 => d / stroke.width_px,
+            _ => 0.0,
+        }
+    }
+
+    /// W9-F: set an even dash pattern, `dash` stroke widths on and the same
+    /// off (Photoshop's dash / gap in widths); `0` makes the stroke solid.
+    pub fn set_stroke_dash(doc: &Document, layer: LayerId, dash: f32) -> Option<Intent> {
+        if !dash.is_finite() || dash < 0.0 {
+            return None;
+        }
+        Self::edit(doc, layer, |s| {
+            if let Some(stroke) = s.stroke.as_mut() {
+                stroke.dash = if dash > 0.0 && stroke.width_px > 0.0 {
+                    vec![dash * stroke.width_px; 2]
+                } else {
+                    Vec::new()
+                };
+            }
+        })
+    }
 }
 
 /// A shape colour as egui's picker sees it. Shape paint is straight-alpha in
@@ -1015,6 +1317,187 @@ mod tests {
         let id = doc.layers.push_root(Layer::with_kind("L", kind)).unwrap();
         doc.set_active_layer(Some(id)).unwrap();
         (doc, id)
+    }
+
+    /// W9-F: the Properties shape page draws the fill-type, stroke-align,
+    /// caps, corners and dash controls, and clicking one in a real headless
+    /// frame of the workspace emits the layer edit it names.
+    #[test]
+    fn the_shape_page_draws_and_drives_the_stroke_and_fill_type_controls() {
+        use crate::dock::{LayoutId, PanelId};
+        let (doc, id) = doc_with(LayerKind::Shape(ShapeLayer {
+            stroke: Some(ShapeStroke {
+                width_px: 2.0,
+                ..ShapeStroke::default()
+            }),
+            ..ShapeLayer::from_svg("M0 0 H10 V10 H0 Z")
+        }));
+        let history = editor_core::History::new();
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut ws = crate::Workspace::new();
+        ws.dock.apply_layout(LayoutId::Minimal);
+        ws.dock.set_open(PanelId::Properties, true);
+        let mut time = 0.0;
+        let mut frame = |ws: &mut crate::Workspace, events: Vec<egui::Event>| {
+            time += 1.0;
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 1600.0),
+                )),
+                events,
+                time: Some(time),
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |c| ws.ui(c, &doc, &history));
+            ws.drain_intents()
+        };
+        for _ in 0..3 {
+            frame(&mut ws, Vec::new());
+        }
+        let targets = [
+            (ids::shape_fill_type(id, 1), "fill type: gradient"),
+            (ids::shape_stroke_align(id, 2), "align: outside"),
+            (ids::shape_stroke_cap(id, 1), "caps: round"),
+            (ids::shape_stroke_join(id, 2), "corners: bevel"),
+            (ids::shape_stroke_dash(id), "dash"),
+        ];
+        for (target, what) in targets {
+            assert!(ctx.read_response(target).is_some(), "{what} was not drawn");
+        }
+        // Every label and choice name on the page is the catalogue's text:
+        // the view resolves each through tr(), with no literal of its own.
+        let drawn = {
+            fn texts(shape: &egui::Shape, out: &mut Vec<String>) {
+                match shape {
+                    egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+                    _ => {}
+                }
+            }
+            let out = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1400.0, 1600.0),
+                    )),
+                    time: Some(99.0),
+                    ..Default::default()
+                },
+                |c| ws.ui(c, &doc, &history),
+            );
+            let _ = ws.drain_intents();
+            let mut all = Vec::new();
+            for clipped in &out.shapes {
+                texts(&clipped.shape, &mut all);
+            }
+            all
+        };
+        for key in [
+            "ui.docks.shape.fill.type",
+            "ui.docks.shape.fill.colour",
+            "ui.docks.shape.fill.gradient",
+            "ui.docks.shape.align",
+            "ui.docks.shape.align.inside",
+            "ui.docks.shape.align.centre",
+            "ui.docks.shape.align.outside",
+            "ui.docks.shape.caps",
+            "ui.docks.shape.cap.butt",
+            "ui.docks.shape.cap.square",
+            "ui.docks.shape.corners",
+            "ui.docks.shape.join.miter",
+            "ui.docks.shape.join.bevel",
+            "ui.docks.shape.dash",
+        ] {
+            let text = crate::strings::tr(key);
+            assert!(!text.is_empty(), "{key} is not in the catalogue");
+            assert!(
+                drawn.iter().any(|d| d == text),
+                "{key} ({text:?}) was not drawn; drawn: {drawn:?}"
+            );
+        }
+        let click = |at: egui::Pos2| {
+            vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                },
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ]
+        };
+        let edited = |intents: Vec<Intent>| -> ShapeLayer {
+            let kind = intents
+                .into_iter()
+                .find_map(|i| match i {
+                    Intent::EditLayerKind { layer, kind } if layer == id => Some(kind),
+                    _ => None,
+                })
+                .expect("the click edited the layer");
+            match *kind {
+                LayerKind::Shape(s) => s,
+                other => panic!("{other:?}"),
+            }
+        };
+        let at = ctx
+            .read_response(ids::shape_stroke_align(id, 2))
+            .unwrap()
+            .rect
+            .center();
+        let s = edited(frame(&mut ws, click(at)));
+        assert_eq!(
+            s.stroke.unwrap().align,
+            layer_model::ShapeStrokeAlign::Outside
+        );
+        frame(&mut ws, Vec::new());
+        let at = ctx
+            .read_response(ids::shape_fill_type(id, 1))
+            .unwrap()
+            .rect
+            .center();
+        let s = edited(frame(&mut ws, click(at)));
+        assert!(matches!(s.fill_paint, ShapeFillPaint::Gradient(_)));
+        frame(&mut ws, Vec::new());
+        let at = ctx
+            .read_response(ids::shape_stroke_cap(id, 1))
+            .unwrap()
+            .rect
+            .center();
+        let s = edited(frame(&mut ws, click(at)));
+        assert_eq!(s.stroke.unwrap().cap, ShapeCap::Round);
+    }
+
+    #[test]
+    fn a_dash_in_widths_becomes_a_pixel_pattern_and_zero_is_solid() {
+        let (doc, id) = doc_with(LayerKind::Shape(ShapeLayer {
+            stroke: Some(ShapeStroke {
+                width_px: 3.0,
+                ..ShapeStroke::default()
+            }),
+            ..ShapeLayer::from_svg("M0 0 H10 V10 H0 Z")
+        }));
+        let Some(Intent::EditLayerKind { kind, .. }) =
+            ShapeProperties::set_stroke_dash(&doc, id, 2.0)
+        else {
+            panic!("expected an edit");
+        };
+        let LayerKind::Shape(s) = *kind else { panic!() };
+        let st = s.stroke.unwrap();
+        assert_eq!(st.dash, vec![6.0, 6.0]);
+        assert_eq!(ShapeProperties::stroke_dash_widths(&st), 2.0);
+        assert!(
+            ShapeProperties::set_stroke_dash(&doc, id, 0.0).is_none(),
+            "already solid"
+        );
+        assert!(ShapeProperties::set_stroke_dash(&doc, id, f32::NAN).is_none());
     }
 
     #[test]
@@ -1160,6 +1643,35 @@ mod tests {
         assert!(MaskProperties::set_density(&doc, id, 1.0).is_none());
         assert!(MaskProperties::set_inverted(&doc, id, false).is_none());
         assert!(MaskProperties::set_enabled(&doc, id, true).is_none());
+    }
+
+    #[test]
+    fn vector_mask_density_and_feather_emit_patches_that_apply() {
+        let (mut doc, id) = doc_with(LayerKind::Raster(Default::default()));
+        doc.layers.get_mut(id).unwrap().mask = Some(LayerMask::vector_only(
+            MaskId::new(),
+            layer_model::VectorMask::new("M0 0 L4 0 L0 4 Z"),
+        ));
+        let command = VectorMaskProperties::set_density(&doc, id, 0.5).expect("in range");
+        command.apply(&mut doc).unwrap();
+        assert_eq!(VectorMaskProperties::of(&doc, id).unwrap().density(), 0.5);
+        let command = VectorMaskProperties::set_feather(&doc, id, 3.0).expect("in range");
+        command.apply(&mut doc).unwrap();
+        assert_eq!(
+            VectorMaskProperties::of(&doc, id).unwrap().feather_px(),
+            3.0
+        );
+        assert!(VectorMaskProperties::set_density(&doc, id, 5.0).is_none());
+        assert!(VectorMaskProperties::set_feather(&doc, id, -1.0).is_none());
+        assert!(
+            VectorMaskProperties::set_feather(&doc, id, 3.0).is_none(),
+            "unchanged"
+        );
+        // The pixel half's numbers are untouched.
+        assert_eq!(MaskProperties::of(&doc, id).unwrap().density(), 1.0);
+        // A layer with only a pixel mask has no vector mask to edit.
+        doc.layers.get_mut(id).unwrap().mask = Some(LayerMask::new(MaskId::new()));
+        assert!(VectorMaskProperties::set_density(&doc, id, 0.5).is_none());
     }
 
     #[test]
@@ -1726,5 +2238,177 @@ mod tests {
         // Not a smart object: no page.
         let (raster, rid) = doc_with(LayerKind::Raster(Default::default()));
         assert!(smart_object_source(&raster, rid).is_none());
+    }
+}
+
+/// W9-B: the fill-layer page, drawn by the real workspace in real frames.
+#[cfg(test)]
+mod w9b_fill_page_tests {
+    use super::*;
+    use crate::dock::{LayoutId, PanelId};
+    use crate::menu::MenuAction;
+    use crate::Workspace;
+    use editor_core::History;
+    use layer_model::{FillLayer, FillSource, Layer};
+
+    fn fill_document(source: FillSource) -> (Document, LayerId) {
+        let mut doc = Document::new(64, 48, "fill");
+        let id = doc
+            .layers
+            .push_root(Layer::with_kind(
+                "Color Fill",
+                LayerKind::Fill(FillLayer::new(source)),
+            ))
+            .unwrap();
+        doc.set_active_layer(Some(id)).unwrap();
+        (doc, id)
+    }
+
+    struct Live {
+        ctx: egui::Context,
+        workspace: Workspace,
+        time: f64,
+    }
+
+    impl Live {
+        fn new() -> Self {
+            let ctx = egui::Context::default();
+            design::apply_theme(&ctx, design::Theme::Dark);
+            let mut workspace = Workspace::new();
+            workspace.dock.apply_layout(LayoutId::Minimal);
+            workspace.dock.set_open(PanelId::Properties, true);
+            Self {
+                ctx,
+                workspace,
+                time: 0.0,
+            }
+        }
+
+        fn frame(&mut self, doc: &Document, events: Vec<egui::Event>) -> Vec<Intent> {
+            self.time += 1.0;
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                events,
+                time: Some(self.time),
+                ..Default::default()
+            };
+            let history = History::new();
+            let _ = self.ctx.run(input, |ctx| {
+                self.workspace.ui(ctx, doc, &history);
+            });
+            self.workspace.drain_intents()
+        }
+
+        fn rect(&self, id: egui::Id) -> Option<egui::Rect> {
+            self.ctx.read_response(id).map(|r| r.rect)
+        }
+    }
+
+    fn click(at: egui::Pos2) -> Vec<egui::Event> {
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        vec![egui::Event::PointerMoved(at), button(true), button(false)]
+    }
+
+    /// The fill page is drawn here, outside the `src/view` / `src/dialogs`
+    /// modules the `no_localized_literals` gate scans, so it carries the same
+    /// rule itself: no prose literal (a quoted string with a space that is not
+    /// a catalogue key or a template) in the page's non-test source.
+    #[test]
+    fn the_fill_page_draws_its_prose_through_the_catalogue() {
+        let source = include_str!("properties.rs");
+        let start = source
+            .find("impl FillProperties {")
+            .expect("the fill page's impl");
+        let end = start
+            + source[start..]
+                .find("/// Which [`AdjustmentId`]")
+                .expect("the fill page's impl ends before adjustment_id_of");
+        let page = &source[start..end];
+        let mut prose = Vec::new();
+        let mut rest = page;
+        while let Some(open) = rest.find('"') {
+            let after = &rest[open + 1..];
+            let Some(close) = after.find('"') else { break };
+            let literal = &after[..close];
+            let technical =
+                !literal.contains(' ') || literal.contains('{') || literal.starts_with("ui.");
+            if !technical {
+                prose.push(literal.to_string());
+            }
+            rest = &after[close + 1..];
+        }
+        assert!(
+            prose.is_empty(),
+            "prose literals on the fill page: {prose:?}"
+        );
+        assert_eq!(
+            crate::strings::tr("ui.properties.fill.edit.fill"),
+            "Edit fill"
+        );
+        assert_eq!(
+            crate::strings::tr("ui.layer_style.link.with.layer"),
+            "Link with layer"
+        );
+    }
+
+    #[test]
+    fn a_fill_layer_resolves_to_its_own_properties_page() {
+        let (doc, id) = fill_document(FillSource::default());
+        let subject = PropertiesSubject::resolve(&doc, Some(id), PropertyFocus::Layer);
+        assert_eq!(subject, PropertiesSubject::Fill(id));
+        assert_eq!(subject.layer(), Some(id));
+    }
+
+    #[test]
+    fn the_properties_panel_draws_the_fill_page_and_its_button_reopens_the_dialog() {
+        let (doc, id) = fill_document(FillSource::Solid {
+            color: [1.0, 0.0, 0.0, 1.0],
+        });
+        let mut live = Live::new();
+        for _ in 0..4 {
+            live.frame(&doc, Vec::new());
+        }
+        let colour = live
+            .rect(ids::fill_color(id))
+            .expect("the Solid Color page draws its colour button");
+        assert!(colour.width() > 0.0 && colour.height() > 0.0);
+        let button = live
+            .rect(ids::fill_open_dialog(id))
+            .expect("the page draws its Edit fill button");
+        let intents = live.frame(&doc, click(button.center()));
+        assert!(
+            intents.contains(&Intent::Action(MenuAction::EditAdjustmentLayer)),
+            "clicking Edit fill asks for the fill dialog: {intents:?}"
+        );
+    }
+
+    #[test]
+    fn a_colour_edit_is_one_kind_edit_of_the_whole_fill() {
+        let (doc, id) = fill_document(FillSource::Solid {
+            color: [1.0, 0.0, 0.0, 1.0],
+        });
+        assert_eq!(
+            FillProperties::set_color(&doc, id, [1.0, 0.0, 0.0, 1.0]),
+            None,
+            "an unchanged colour is no edit"
+        );
+        match FillProperties::set_color(&doc, id, [0.0, 0.0, 1.0, 1.0]) {
+            Some(Intent::EditLayerKind { layer, kind }) => {
+                assert_eq!(layer, id);
+                assert_eq!(
+                    *kind,
+                    LayerKind::Fill(FillLayer::solid([0.0, 0.0, 1.0, 1.0]))
+                );
+            }
+            other => panic!("the edit was {other:?}"),
+        }
     }
 }

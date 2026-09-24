@@ -71,6 +71,13 @@ pub fn layer_items(ctx: &MenuContext) -> Vec<MenuItem> {
             MenuAction::Rasterize(crate::menu::RasterizeTarget::Layer),
             MenuAction::MergeDown,
             MenuAction::CreateClippingMask,
+            // W9-A: Photopea's "Select Pixels" — the active layer's
+            // transparency as a new selection.
+            MenuAction::SelectLayerPixels {
+                layer: None,
+                mask: false,
+                op: crate::dialogs::LoadOperation::New,
+            },
         ],
     )
 }

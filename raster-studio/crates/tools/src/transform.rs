@@ -30,7 +30,7 @@
 //! [`editor_core::CommandError::NotInvertible`].
 
 use editor_core::{Command, Selection};
-use filters::{EdgeMode, FilterBuffer};
+use filters::{EdgeMode, FilterBuffer, Interpolation, Sampling};
 use glam::{IVec2, Vec2};
 use layer_model::LayerId;
 use raster::PixelRect;
@@ -38,7 +38,9 @@ use selection::transform_selection;
 
 use crate::error::ToolError;
 use crate::patch::{ColorPatch, CoveragePatch};
-use crate::tool::{PaintTarget, PointerEvent, SessionGeometry, Tool, ToolContext, ToolId};
+use crate::tool::{
+    PaintTarget, PointerEvent, SessionGeometry, Tool, ToolContext, ToolId, ToolSetting,
+};
 
 /// Which kind of edit a handle drag performs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -268,6 +270,13 @@ pub struct TransformState {
     pub pivot: Vec2,
     /// The warp control mesh, once warp mode has been entered.
     pub mesh: Option<WarpMesh>,
+    /// W9-L: the vertical skew (degrees) the options bar last typed. Any
+    /// parallelogram splits into rotation, scale and skew in many ways;
+    /// [`NumericTransform::read`] splits it with this vertical skew, so the
+    /// bar reads back the V Skew the user typed. (Four bytes, deliberately:
+    /// the state rides inside `SessionGeometry`, whose variants must stay
+    /// close in size, and this fits in the struct's existing padding.)
+    pub skew_v: f32,
 }
 
 impl TransformState {
@@ -285,6 +294,7 @@ impl TransformState {
             ],
             pivot: Vec2::new((x0 + x1) * 0.5, (y0 + y1) * 0.5),
             mesh: None,
+            skew_v: 0.0,
         }
     }
 
@@ -718,6 +728,18 @@ pub fn resample(
     state: &TransformState,
     mode: TransformMode,
 ) -> Result<FilterBuffer, ToolError> {
+    resample_with(src, patch_rect, state, mode, Interpolation::Bicubic)
+}
+
+/// W9-L: [`resample`] through a chosen filter — Free Transform's
+/// Interpolation (Nearest / Bilinear / Bicubic).
+pub fn resample_with(
+    src: &FilterBuffer,
+    patch_rect: PixelRect,
+    state: &TransformState,
+    mode: TransformMode,
+    interpolation: Interpolation,
+) -> Result<FilterBuffer, ToolError> {
     let (w, h) = (src.width(), src.height());
     let origin = IVec2::new(patch_rect.x as i32, patch_rect.y as i32);
     let mut out = src.clone();
@@ -734,9 +756,11 @@ pub fn resample(
         }
     }
 
+    // W9-L: the session's Interpolation (bicubic by default).
+    let sampling = Sampling::new(EdgeMode::Clamp, interpolation);
     let sample = |u: f32, v: f32| -> [f32; 4] {
         // `u`, `v` are document coordinates; the buffer is patch-local.
-        src.sample_bicubic(u - origin.x as f32, v - origin.y as f32, EdgeMode::Clamp)
+        src.sample(u - origin.x as f32, v - origin.y as f32, sampling)
     };
 
     match (mode, state.mesh) {
@@ -866,6 +890,360 @@ pub fn quad_affine(src: [Vec2; 4], dst: [Vec2; 4]) -> Option<glam::Affine2> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// W9-L: the numeric options bar and the warp presets
+// ---------------------------------------------------------------------------
+
+/// The option keys of Free Transform's numeric options bar. Declared once
+/// here so the registry, the tool and the options bar cannot disagree.
+pub mod keys {
+    /// Reference point: a 3 x 3 grid index, row-major from the top left.
+    pub const REFERENCE: &str = "reference";
+    /// The reference point's document X / Y.
+    pub const X: &str = "x";
+    pub const Y: &str = "y";
+    /// Width / height as a percentage of the source box.
+    pub const W: &str = "w";
+    pub const H: &str = "h";
+    /// Keep W and H in proportion when one of them is edited.
+    pub const LINK: &str = "link";
+    /// Rotation in degrees, clockwise.
+    pub const ANGLE: &str = "angle";
+    /// Horizontal / vertical skew in degrees.
+    pub const SKEW_H: &str = "skew_h";
+    pub const SKEW_V: &str = "skew_v";
+    /// Nearest / Bilinear / Bicubic.
+    pub const INTERPOLATION: &str = "interpolation";
+    /// The warp preset ([`super::WARP_PRESET_LABELS`]).
+    pub const WARP: &str = "warp";
+    /// The warp preset's Bend, `-100..=100`.
+    pub const BEND: &str = "bend";
+    /// The edit counter: the options bar bumps it with every numeric edit,
+    /// and the tool applies the numeric fields only when it has moved on.
+    pub const NUMERIC_SEQ: &str = "numeric_seq";
+    /// Not an option: the application's "apply what the bar holds now"
+    /// signal. After forwarding the bar's keys to a LIVE session between
+    /// presses, the shell sends `Bool(true)` under this key and the tool
+    /// runs [`super::TransformTool::apply_pending_numeric`] — so a typed
+    /// field or a picked Warp preset reshapes the quad on screen at once.
+    pub const APPLY_NUMERIC: &str = "apply_numeric";
+    /// Every key whose value is geometry, applied together on a
+    /// [`NUMERIC_SEQ`] change.
+    pub const GEOMETRY: &[&str] = &[
+        REFERENCE,
+        X,
+        Y,
+        W,
+        H,
+        ANGLE,
+        SKEW_H,
+        SKEW_V,
+        WARP,
+        BEND,
+        NUMERIC_SEQ,
+    ];
+}
+
+/// The reference-point grid, row-major from the top left, as the registry's
+/// choice labels.
+pub const REFERENCE_LABELS: &[&str] = &[
+    "Top Left",
+    "Top",
+    "Top Right",
+    "Left",
+    "Centre",
+    "Right",
+    "Bottom Left",
+    "Bottom",
+    "Bottom Right",
+];
+
+/// The centre of the reference grid — the default reference point.
+pub const REFERENCE_CENTRE: usize = 4;
+
+/// The Interpolation choice labels, index for index with
+/// [`INTERPOLATIONS`].
+pub const INTERPOLATION_LABELS: &[&str] = &["Nearest Neighbour", "Bilinear", "Bicubic"];
+
+/// The filters an Interpolation choice index names.
+pub const INTERPOLATIONS: [Interpolation; 3] = [
+    Interpolation::Nearest,
+    Interpolation::Bilinear,
+    Interpolation::Bicubic,
+];
+
+/// Where reference point `index` sits in the unit square of the box.
+pub fn reference_uv(index: usize) -> Vec2 {
+    let index = index.min(8);
+    Vec2::new((index % 3) as f32 * 0.5, (index / 3) as f32 * 0.5)
+}
+
+/// The point at unit-square `uv` of a quad (bilinear, so the edge midpoints
+/// and the centre of any quad are where the eye expects them).
+pub fn quad_point(corners: &[Vec2; 4], uv: Vec2) -> Vec2 {
+    let top = corners[0] + (corners[1] - corners[0]) * uv.x;
+    let bottom = corners[3] + (corners[2] - corners[3]) * uv.x;
+    top + (bottom - top) * uv.y
+}
+
+/// W9-L: Free Transform's numeric fields — Photopea's options bar while a
+/// transform is live. The quad they describe is the source box scaled by
+/// `w` / `h` percent, skewed, rotated by `angle` degrees clockwise about its
+/// reference point, with the reference point landing on (`x`, `y`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NumericTransform {
+    /// The reference point, an index into [`REFERENCE_LABELS`].
+    pub reference: usize,
+    pub x: f32,
+    pub y: f32,
+    /// Width, percent of the source box.
+    pub w: f32,
+    /// Height, percent of the source box.
+    pub h: f32,
+    /// Degrees, clockwise.
+    pub angle: f32,
+    /// Degrees.
+    pub skew_h: f32,
+    /// Degrees.
+    pub skew_v: f32,
+}
+
+impl Default for NumericTransform {
+    fn default() -> Self {
+        Self {
+            reference: REFERENCE_CENTRE,
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 100.0,
+            angle: 0.0,
+            skew_h: 0.0,
+            skew_v: 0.0,
+        }
+    }
+}
+
+/// The largest skew the fields accept: 90 degrees is a collapsed box.
+pub const MAX_SKEW_DEG: f32 = 89.0;
+
+impl NumericTransform {
+    /// The linear part: rotate . skew . scale.
+    fn linear(&self) -> glam::Mat2 {
+        let scale = glam::Mat2::from_diagonal(Vec2::new(self.w / 100.0, self.h / 100.0));
+        let skew = glam::Mat2::from_cols(
+            Vec2::new(1.0, self.skew_v.to_radians().tan()),
+            Vec2::new(self.skew_h.to_radians().tan(), 1.0),
+        );
+        glam::Mat2::from_angle(self.angle.to_radians()) * skew * scale
+    }
+
+    /// The document-space affine these fields put `source` through.
+    pub fn affine(&self, source: PixelRect) -> Option<glam::Affine2> {
+        let values = [
+            self.x,
+            self.y,
+            self.w,
+            self.h,
+            self.angle,
+            self.skew_h,
+            self.skew_v,
+        ];
+        if values.iter().any(|v| !v.is_finite())
+            || self.skew_h.abs() > MAX_SKEW_DEG
+            || self.skew_v.abs() > MAX_SKEW_DEG
+        {
+            return None;
+        }
+        let m = self.linear();
+        let det = m.determinant();
+        if !det.is_finite() || det.abs() < 1e-6 {
+            return None;
+        }
+        let uv = reference_uv(self.reference);
+        let anchor = Vec2::new(
+            source.x as f32 + uv.x * source.width as f32,
+            source.y as f32 + uv.y * source.height as f32,
+        );
+        let translation = Vec2::new(self.x, self.y) - m * anchor;
+        Some(glam::Affine2::from_mat2_translation(m, translation))
+    }
+
+    /// The destination quad these fields describe for `source`, or `None`
+    /// when they collapse it (a zero size, a 90 degree skew, a non-finite
+    /// value) — the caller keeps the quad it has.
+    pub fn corners(&self, source: PixelRect) -> Option<[Vec2; 4]> {
+        let a = self.affine(source)?;
+        let (x0, y0) = (source.x as f32, source.y as f32);
+        let (x1, y1) = (source.right() as f32, source.bottom() as f32);
+        Some(
+            [
+                Vec2::new(x0, y0),
+                Vec2::new(x1, y0),
+                Vec2::new(x1, y1),
+                Vec2::new(x0, y1),
+            ]
+            .map(|p| a.transform_point2(p)),
+        )
+    }
+
+    /// What the options bar shows for `state` at `reference`: the quad's
+    /// parallelogram part read back as scale, rotation and horizontal skew,
+    /// split with the vertical skew the bar last typed
+    /// ([`TransformState::skew_v`]), so typed values read back as typed and
+    /// the fields always rebuild the quad they describe.
+    pub fn read(state: &TransformState, reference: usize) -> NumericTransform {
+        let reference = reference.min(8);
+        let mut out = Self::decompose(state);
+        out.reference = reference;
+        let p = quad_point(&state.corners, reference_uv(reference));
+        out.x = p.x;
+        out.y = p.y;
+        out
+    }
+
+    /// Scale, rotation and horizontal skew of the quad's parallelogram part
+    /// (corners 0, 1 and 3), given its vertical skew `state.skew_v`.
+    fn decompose(state: &TransformState) -> NumericTransform {
+        let sw = (state.source.width as f32).max(1e-6);
+        let sh = (state.source.height as f32).max(1e-6);
+        let skew_v = if state.skew_v.is_finite() {
+            state.skew_v.clamp(-MAX_SKEW_DEG, MAX_SKEW_DEG)
+        } else {
+            0.0
+        };
+        let tv = skew_v.to_radians().tan();
+        let c = state.corners;
+        // col0 = R * (sx, sx * tv): the rotation is col0's angle less the
+        // skew's own.
+        let col0 = (c[1] - c[0]) / sw;
+        let col1 = (c[3] - c[0]) / sh;
+        let angle = col0.y.atan2(col0.x) - tv.atan();
+        let sx = col0.length() / (1.0 + tv * tv).sqrt();
+        let q = glam::Mat2::from_angle(-angle) * col1;
+        let sy = q.y;
+        let skew_h = if sy.abs() > 1e-6 {
+            (q.x / sy).atan().to_degrees()
+        } else {
+            0.0
+        };
+        NumericTransform {
+            w: sx * 100.0,
+            h: sy * 100.0,
+            angle: angle.to_degrees(),
+            skew_h,
+            skew_v,
+            ..NumericTransform::default()
+        }
+    }
+}
+
+/// W9-L: Photopea's warp presets, in the registry's order after "None".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarpPreset {
+    Arc,
+    Arch,
+    Bulge,
+    Flag,
+    Wave,
+    Fish,
+    Rise,
+    Fisheye,
+    Inflate,
+    Squeeze,
+    Twist,
+}
+
+/// The Warp choice labels: "None" (the mesh the handles make), then every
+/// [`WarpPreset`] in [`WarpPreset::ALL`] order.
+pub const WARP_PRESET_LABELS: &[&str] = &[
+    "None", "Arc", "Arch", "Bulge", "Flag", "Wave", "Fish", "Rise", "Fisheye", "Inflate",
+    "Squeeze", "Twist",
+];
+
+impl WarpPreset {
+    pub const ALL: [WarpPreset; 11] = [
+        WarpPreset::Arc,
+        WarpPreset::Arch,
+        WarpPreset::Bulge,
+        WarpPreset::Flag,
+        WarpPreset::Wave,
+        WarpPreset::Fish,
+        WarpPreset::Rise,
+        WarpPreset::Fisheye,
+        WarpPreset::Inflate,
+        WarpPreset::Squeeze,
+        WarpPreset::Twist,
+    ];
+
+    /// The preset a Warp choice index names; `None` for index 0 ("None")
+    /// and past the end.
+    pub fn from_choice(index: usize) -> Option<WarpPreset> {
+        index.checked_sub(1).and_then(|i| Self::ALL.get(i).copied())
+    }
+
+    /// Where the control point at unit-square `(u, v)` of a `size` box
+    /// moves, in pixels, for a bend of `b` in `-1..=1`.
+    fn offset(self, u: f32, v: f32, b: f32, size: Vec2) -> Vec2 {
+        use std::f32::consts::{FRAC_PI_2, TAU};
+        // 0 at the two edges, 1 across the middle.
+        let hump = |t: f32| 4.0 * t * (1.0 - t);
+        let d = match self {
+            WarpPreset::Arc => Vec2::new(0.0, -b * hump(u) * (0.5 - 0.25 * v)),
+            WarpPreset::Arch => Vec2::new(0.0, -b * 0.5 * hump(u)),
+            WarpPreset::Bulge => Vec2::new(0.0, -b * 0.5 * hump(u) * (1.0 - 2.0 * v)),
+            WarpPreset::Flag => Vec2::new(0.0, b * 0.25 * (TAU * u).sin()),
+            WarpPreset::Wave => Vec2::new(0.0, b * 0.25 * (TAU * u).sin() * (1.0 - v)),
+            WarpPreset::Fish => Vec2::new(0.0, -b * (1.0 - 2.0 * v) * hump(u) * (1.0 - u)),
+            WarpPreset::Rise => {
+                let smooth = u * u * (3.0 - 2.0 * u);
+                Vec2::new(0.0, b * 0.5 * (1.0 - 2.0 * smooth))
+            }
+            WarpPreset::Fisheye => {
+                let c = Vec2::new(u - 0.5, v - 0.5);
+                let g = (1.0 - c.length_squared() / 0.5).max(0.0);
+                c * (b * g)
+            }
+            WarpPreset::Inflate => Vec2::new(
+                b * 0.25 * (2.0 * u - 1.0) * hump(v),
+                b * 0.25 * (2.0 * v - 1.0) * hump(u),
+            ),
+            WarpPreset::Squeeze => Vec2::new(
+                -b * 0.25 * (2.0 * u - 1.0) * hump(v),
+                b * 0.25 * (2.0 * v - 1.0) * hump(u),
+            ),
+            WarpPreset::Twist => {
+                // Rotate about the centre, most at the centre and not at all
+                // at the corners, in pixel space so the box keeps its aspect.
+                let c = Vec2::new((u - 0.5) * size.x, (v - 0.5) * size.y);
+                let r_max = (size * 0.5).length().max(1e-6);
+                let a = b * FRAC_PI_2 * (1.0 - c.length() / r_max).max(0.0);
+                let turned = glam::Mat2::from_angle(a) * c;
+                return turned - c;
+            }
+        };
+        d * size
+    }
+}
+
+/// W9-L: the control mesh a warp preset gives the box `rect` at `bend`
+/// percent (`-100..=100`). A bend of zero is the identity mesh.
+pub fn warp_preset_mesh(preset: WarpPreset, rect: PixelRect, bend: f32) -> WarpMesh {
+    let b = if bend.is_finite() {
+        bend.clamp(-100.0, 100.0) / 100.0
+    } else {
+        0.0
+    };
+    let size = Vec2::new(rect.width as f32, rect.height as f32);
+    let mut mesh = WarpMesh::identity(rect);
+    for (r, row) in mesh.points.iter_mut().enumerate() {
+        for (c, p) in row.iter_mut().enumerate() {
+            let (u, v) = (c as f32 / 3.0, r as f32 / 3.0);
+            *p += preset.offset(u, v, b, size);
+        }
+    }
+    mesh
+}
+
 /// The free transform tool.
 pub struct TransformTool {
     pub mode: TransformMode,
@@ -890,6 +1268,20 @@ pub struct TransformTool {
     /// the selected pixels (Photopea) instead of moving the whole layer, and
     /// the whole-layer preview lens stays off.
     floating: bool,
+    /// W9-L: the numeric fields as the options bar last sent them, applied
+    /// together by [`TransformTool::apply_pending_numeric`].
+    pub numeric: NumericTransform,
+    /// W9-L: Link — W and H move together.
+    pub link: bool,
+    /// W9-L: the options bar's Interpolation, handed to every session.
+    pub interpolation: Interpolation,
+    /// W9-L: the options bar's Warp choice (0 = None) and its Bend.
+    pub warp: usize,
+    pub bend: f32,
+    /// W9-L: the options bar's edit counter, and the value of it the live
+    /// session has already applied (or began at).
+    numeric_seq: i32,
+    numeric_seen: i32,
 }
 
 impl Default for TransformTool {
@@ -904,6 +1296,13 @@ impl Default for TransformTool {
             grabbed: None,
             last: Vec2::ZERO,
             floating: false,
+            numeric: NumericTransform::default(),
+            link: false,
+            interpolation: Interpolation::Bicubic,
+            warp: 0,
+            bend: 50.0,
+            numeric_seq: 0,
+            numeric_seen: 0,
         }
     }
 }
@@ -923,7 +1322,70 @@ impl TransformTool {
             return Err(ToolError::Degenerate);
         }
         self.state = Some(TransformState::new(source));
+        // W9-L: a new session starts from its own box, never from the
+        // numbers typed into the last one.
+        self.numeric_seen = self.numeric_seq;
         Ok(())
+    }
+
+    /// W9-L: apply the options bar's numeric fields to the live session,
+    /// once per edit: when the edit counter differs from the value this
+    /// session last applied (or began at). Any change counts, not only an
+    /// increase: the options-bar Reset puts the held counter back to 0
+    /// while a live session still holds the last number. The fields are absolute, so
+    /// applying them is idempotent; the counter is what stops a press on
+    /// the canvas from re-applying numbers a handle drag has since moved
+    /// away from. Returns `true` when the quad changed.
+    ///
+    /// Link: when exactly one of W and H differs from the quad's current
+    /// read-back, the other follows in proportion.
+    ///
+    /// A Warp preset (any choice but None) replaces the mesh with the
+    /// preset's, carried through the same affine, and switches the session
+    /// to Warp mode so the commit resamples through it.
+    pub fn apply_pending_numeric(&mut self) -> bool {
+        let seq = self.numeric_seq;
+        let fresh = seq != self.numeric_seen;
+        self.numeric_seen = seq;
+        let Some(state) = self.state.as_mut() else {
+            return false;
+        };
+        if !fresh {
+            return false;
+        }
+        let mut n = self.numeric;
+        n.reference = n.reference.min(8);
+        if self.link {
+            let now = NumericTransform::read(state, n.reference);
+            let w_moved = (n.w - now.w).abs() > 1e-3;
+            let h_moved = (n.h - now.h).abs() > 1e-3;
+            if w_moved && !h_moved && now.w.abs() > 1e-6 {
+                n.h = now.h * n.w / now.w;
+            } else if h_moved && !w_moved && now.h.abs() > 1e-6 {
+                n.w = now.w * n.h / now.h;
+            }
+        }
+        let (Some(corners), Some(affine)) = (n.corners(state.source), n.affine(state.source))
+        else {
+            return false;
+        };
+        if quad_signed_area(corners).abs() < 1e-4 {
+            return false;
+        }
+        state.corners = corners;
+        state.pivot = Vec2::new(n.x, n.y);
+        state.skew_v = n.skew_v;
+        if let Some(preset) = WarpPreset::from_choice(self.warp) {
+            let mut mesh = warp_preset_mesh(preset, state.source, self.bend);
+            for row in mesh.points.iter_mut() {
+                for p in row.iter_mut() {
+                    *p = affine.transform_point2(*p);
+                }
+            }
+            state.mesh = Some(mesh);
+            self.mode = TransformMode::Warp;
+        }
+        true
     }
 
     /// W5-C: start a session from the context alone, before any pointer
@@ -1083,7 +1545,8 @@ impl TransformTool {
             && ctx.selection.bounds().is_some()
             && !selection_covers_all_ink(ctx)
         {
-            let command = float_selection(ctx, &state, self.mode, "Free Transform");
+            let command =
+                float_selection_with(ctx, &state, self.mode, "Free Transform", self.interpolation);
             self.state = None;
             self.grabbed = None;
             self.floating = false;
@@ -1208,7 +1671,7 @@ impl TransformTool {
                 // W7-C: a 16-bit layer is resampled at 16 bits.
                 let mut patch = ColorPatch::load_native(ctx.tiles, key, rect)?;
                 let src = patch.buffer().clone();
-                let out = resample(&src, patch.rect(), &state, self.mode)?;
+                let out = resample_with(&src, patch.rect(), &state, self.mode, self.interpolation)?;
                 patch.replace(out)?;
                 patch.commit(ctx.tiles, key)?
             }
@@ -1220,7 +1683,7 @@ impl TransformTool {
                 // one-byte-per-pixel slot.
                 let mut patch = CoveragePatch::load(ctx.tiles, key, rect)?;
                 let src = patch.to_buffer()?;
-                let out = resample(&src, patch.rect(), &state, self.mode)?;
+                let out = resample_with(&src, patch.rect(), &state, self.mode, self.interpolation)?;
                 patch.replace_from_buffer(&out)?;
                 patch.commit(ctx.tiles, key)?
             }
@@ -1294,6 +1757,7 @@ fn state_in_layer_space(
     let source = PixelRect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32);
     let mut out = TransformState::new(source);
     out.pivot = map(state.pivot);
+    out.skew_v = state.skew_v;
     match state.mesh.filter(|_| mode == TransformMode::Warp) {
         Some(mesh) => {
             let m = to_layer.matrix2;
@@ -1420,6 +1884,18 @@ pub fn float_selection(
     mode: TransformMode,
     label: &str,
 ) -> Result<Command, ToolError> {
+    float_selection_with(ctx, state, mode, label, Interpolation::Bicubic)
+}
+
+/// W9-L: [`float_selection`] resampled through a chosen filter — Free
+/// Transform's Interpolation.
+pub fn float_selection_with(
+    ctx: &mut ToolContext<'_>,
+    state: &TransformState,
+    mode: TransformMode,
+    label: &str,
+    interpolation: Interpolation,
+) -> Result<Command, ToolError> {
     let selection = ctx.selection.clone();
     if selection.bounds().is_none() {
         return Err(ToolError::Degenerate);
@@ -1467,7 +1943,7 @@ pub fn float_selection(
     }
     let mut commands = Vec::new();
     if any {
-        let moved = resample(&lifted, prect, &layer_state, layer_mode)?;
+        let moved = resample_with(&lifted, prect, &layer_state, layer_mode, interpolation)?;
         let mut out = rest;
         for (o, m) in out.pixels_mut().iter_mut().zip(moved.pixels()) {
             let keep = 1.0 - m[3].clamp(0.0, 1.0);
@@ -1509,6 +1985,74 @@ impl Tool for TransformTool {
         }
     }
 
+    /// `mode` (and the historical `target`) go through [`Tool::set_choice`];
+    /// W9-L adds the numeric options bar. Interpolation and Link take effect
+    /// at once; the geometry keys ([`keys::GEOMETRY`]) are held and applied
+    /// together by [`TransformTool::apply_pending_numeric`] — at the next
+    /// press, at the commit, or on [`keys::APPLY_NUMERIC`], which the shell
+    /// sends every frame a session is live between presses.
+    fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        let mismatch = || {
+            Err(ToolError::OptionKindMismatch {
+                key: key.to_owned(),
+            })
+        };
+        let float = |v: f32| crate::error::finite("transform field", v);
+        match (key, setting) {
+            ("mode" | "target", ToolSetting::Choice(i)) => self.set_choice(key, i),
+            (keys::REFERENCE, ToolSetting::Choice(i)) if i < REFERENCE_LABELS.len() => {
+                self.numeric.reference = i
+            }
+            (keys::X, ToolSetting::Float(v)) => self.numeric.x = float(v)?,
+            (keys::Y, ToolSetting::Float(v)) => self.numeric.y = float(v)?,
+            (keys::W, ToolSetting::Float(v)) => self.numeric.w = float(v)?,
+            (keys::H, ToolSetting::Float(v)) => self.numeric.h = float(v)?,
+            (keys::ANGLE, ToolSetting::Float(v)) => self.numeric.angle = float(v)?,
+            (keys::SKEW_H, ToolSetting::Float(v)) => {
+                self.numeric.skew_h = float(v)?.clamp(-MAX_SKEW_DEG, MAX_SKEW_DEG)
+            }
+            (keys::SKEW_V, ToolSetting::Float(v)) => {
+                self.numeric.skew_v = float(v)?.clamp(-MAX_SKEW_DEG, MAX_SKEW_DEG)
+            }
+            (keys::LINK, ToolSetting::Bool(v)) => self.link = v,
+            (keys::INTERPOLATION, ToolSetting::Choice(i)) if i < INTERPOLATIONS.len() => {
+                self.interpolation = INTERPOLATIONS[i];
+            }
+            (keys::WARP, ToolSetting::Choice(i)) if i < WARP_PRESET_LABELS.len() => self.warp = i,
+            (keys::BEND, ToolSetting::Float(v)) => self.bend = float(v)?.clamp(-100.0, 100.0),
+            (keys::NUMERIC_SEQ, ToolSetting::Int(v)) => self.numeric_seq = v,
+            (keys::APPLY_NUMERIC, ToolSetting::Bool(true)) => {
+                self.apply_pending_numeric();
+            }
+            (keys::APPLY_NUMERIC, ToolSetting::Bool(false)) => {}
+            (
+                "mode"
+                | "target"
+                | keys::REFERENCE
+                | keys::X
+                | keys::Y
+                | keys::W
+                | keys::H
+                | keys::ANGLE
+                | keys::SKEW_H
+                | keys::SKEW_V
+                | keys::LINK
+                | keys::INTERPOLATION
+                | keys::WARP
+                | keys::BEND
+                | keys::NUMERIC_SEQ
+                | keys::APPLY_NUMERIC,
+                _,
+            ) => return mismatch(),
+            _ => {
+                return Err(ToolError::UnknownOption {
+                    key: key.to_owned(),
+                })
+            }
+        }
+        Ok(())
+    }
+
     fn on_pointer_down(
         &mut self,
         ctx: &mut ToolContext<'_>,
@@ -1517,6 +2061,9 @@ impl Tool for TransformTool {
         if self.state.is_none() {
             self.begin_from_context(ctx)?;
         }
+        // W9-L: numbers typed since the last press land before the hit test,
+        // so the press grabs the quad the user is looking at.
+        self.apply_pending_numeric();
         let mode = self.mode;
         self.grabbed = self
             .state
@@ -1564,6 +2111,8 @@ impl Tool for TransformTool {
     }
 
     fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
+        // W9-L: Enter commits the numbers the options bar holds.
+        self.apply_pending_numeric();
         TransformTool::commit(self, ctx)
     }
 
@@ -2143,5 +2692,465 @@ mod tests {
             Vec2::new(30.0, 40.0),
             "refusals keep the draft"
         );
+    }
+}
+
+/// W9-L: the numeric options bar, Link, Interpolation and the warp presets,
+/// driven the way the shell drives Free Transform: the registry builds the
+/// tool, the options bar's values arrive through `set_setting` under the
+/// registry's keys, and the live session is read back through
+/// `live_geometry` — what the shell publishes to the canvas and the bar.
+#[cfg(test)]
+mod w9l_tests {
+    use super::*;
+    use crate::registry;
+    use crate::tiles::MemoryTiles;
+    use editor_core::PixelKey;
+
+    const SIDE: u32 = 200;
+
+    fn live(tool: &dyn Tool) -> (TransformState, TransformMode) {
+        match tool.live_geometry() {
+            Some(SessionGeometry::Transform { state, mode, .. }) => (state, mode),
+            other => panic!("no live transform: {other:?}"),
+        }
+    }
+
+    fn near(a: Vec2, b: Vec2) -> bool {
+        (a - b).length() < 1e-2
+    }
+
+    /// The whole set the options bar writes for one edit.
+    fn numeric_settings(n: NumericTransform, seq: i32) -> Vec<(&'static str, ToolSetting)> {
+        vec![
+            (keys::REFERENCE, ToolSetting::Choice(n.reference)),
+            (keys::X, ToolSetting::Float(n.x)),
+            (keys::Y, ToolSetting::Float(n.y)),
+            (keys::W, ToolSetting::Float(n.w)),
+            (keys::H, ToolSetting::Float(n.h)),
+            (keys::ANGLE, ToolSetting::Float(n.angle)),
+            (keys::SKEW_H, ToolSetting::Float(n.skew_h)),
+            (keys::SKEW_V, ToolSetting::Float(n.skew_v)),
+            (keys::NUMERIC_SEQ, ToolSetting::Int(seq)),
+        ]
+    }
+
+    fn send(tool: &mut dyn Tool, settings: &[(&'static str, ToolSetting)]) {
+        for (key, value) in settings {
+            tool.set_setting(key, *value)
+                .unwrap_or_else(|e| panic!("refused {key}: {e}"));
+        }
+    }
+
+    /// A press (and release) well off the quad: it grabs nothing.
+    fn press(tool: &mut dyn Tool, ctx: &mut ToolContext<'_>) {
+        tool.on_pointer_down(ctx, PointerEvent::at(900.0, 900.0))
+            .unwrap();
+        tool.on_pointer_up(ctx, PointerEvent::at(900.0, 900.0))
+            .unwrap();
+    }
+
+    #[test]
+    fn the_registry_declares_every_numeric_key_the_tool_answers() {
+        let info = registry::info(ToolId::FreeTransform).unwrap();
+        for key in keys::GEOMETRY
+            .iter()
+            .chain([keys::LINK, keys::INTERPOLATION].iter())
+        {
+            assert!(
+                info.options.iter().any(|o| o.key == *key),
+                "Free Transform declares no {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_fields_set_the_live_quad_once_per_edit_and_never_a_new_session() {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, SIDE, SIDE));
+        let mut tool = registry::make(ToolId::FreeTransform);
+        press(&mut *tool, &mut ctx);
+        let (state, _) = live(&*tool);
+        assert_eq!(state.corners, state.source_corners(), "a fresh box");
+
+        // Half size, a quarter turn clockwise, centred on (100, 100).
+        let typed = NumericTransform {
+            x: 100.0,
+            y: 100.0,
+            w: 50.0,
+            h: 50.0,
+            angle: 90.0,
+            ..NumericTransform::default()
+        };
+        send(&mut *tool, &numeric_settings(typed, 1));
+        press(&mut *tool, &mut ctx);
+        let (state, _) = live(&*tool);
+        // The source's top-left, (-50, -50) from the centre at half size,
+        // turned a quarter clockwise in a y-down document: (+50, -50).
+        assert!(near(state.corners[0], Vec2::new(150.0, 50.0)), "{state:?}");
+        assert!(near(state.corners[2], Vec2::new(50.0, 150.0)), "{state:?}");
+        // The bar reads back exactly what was typed.
+        let back = NumericTransform::read(&state, REFERENCE_CENTRE);
+        assert!((back.angle - 90.0).abs() < 1e-3 && (back.w - 50.0).abs() < 1e-3);
+
+        // A value held with the SAME counter is not re-applied by a press:
+        // the counter is what says "the user edited".
+        tool.set_setting(keys::X, ToolSetting::Float(0.0)).unwrap();
+        press(&mut *tool, &mut ctx);
+        assert_eq!(live(&*tool).0.corners, state.corners);
+        // The next edit moves the counter, and the whole set lands.
+        send(
+            &mut *tool,
+            &numeric_settings(NumericTransform { x: 0.0, ..typed }, 2),
+        );
+        press(&mut *tool, &mut ctx);
+        let moved = live(&*tool).0;
+        assert!(near(
+            quad_point(&moved.corners, reference_uv(4)),
+            Vec2::new(0.0, 100.0)
+        ));
+
+        // Enter commits the numbers even with no press in between.
+        send(
+            &mut *tool,
+            &numeric_settings(NumericTransform { x: 40.0, ..typed }, 3),
+        );
+        let pending = live(&*tool).0;
+        assert!(
+            near(pending.corners[0], moved.corners[0]),
+            "held until used"
+        );
+        // The commit applies them first (here it then refuses: no layer).
+        assert!(matches!(
+            tool.commit(&mut ctx),
+            Err(ToolError::NoActiveLayer)
+        ));
+        let committed = live(&*tool).0;
+        assert!(near(
+            quad_point(&committed.corners, reference_uv(4)),
+            Vec2::new(40.0, 100.0)
+        ));
+
+        // A new session starts from its own box, not from the last numbers.
+        tool.cancel(&mut ctx);
+        press(&mut *tool, &mut ctx);
+        let fresh = live(&*tool).0;
+        assert_eq!(fresh.corners, fresh.source_corners());
+    }
+
+    #[test]
+    fn link_keeps_w_and_h_in_proportion() {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, SIDE, SIDE));
+        let mut tool = registry::make(ToolId::FreeTransform);
+        press(&mut *tool, &mut ctx);
+        let now = NumericTransform::read(&live(&*tool).0, REFERENCE_CENTRE);
+        tool.set_setting(keys::LINK, ToolSetting::Bool(true))
+            .unwrap();
+        // Only W was edited; H still reads what the quad shows (100).
+        send(
+            &mut *tool,
+            &numeric_settings(NumericTransform { w: 40.0, ..now }, 1),
+        );
+        press(&mut *tool, &mut ctx);
+        let back = NumericTransform::read(&live(&*tool).0, REFERENCE_CENTRE);
+        assert!((back.w - 40.0).abs() < 1e-3, "{back:?}");
+        assert!((back.h - 40.0).abs() < 1e-3, "H followed W: {back:?}");
+        // Unlinked, H stays.
+        tool.set_setting(keys::LINK, ToolSetting::Bool(false))
+            .unwrap();
+        send(
+            &mut *tool,
+            &numeric_settings(NumericTransform { w: 80.0, ..back }, 2),
+        );
+        press(&mut *tool, &mut ctx);
+        let back = NumericTransform::read(&live(&*tool).0, REFERENCE_CENTRE);
+        assert!((back.w - 80.0).abs() < 1e-3 && (back.h - 40.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn an_edit_counter_that_went_back_down_still_applies() {
+        // The options-bar Reset puts the held counter back to 0 while this
+        // session still holds the last number: the next edit arrives with
+        // a LOWER counter and must still land.
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, SIDE, SIDE));
+        let mut tool = registry::make(ToolId::FreeTransform);
+        press(&mut *tool, &mut ctx);
+        let now = NumericTransform::read(&live(&*tool).0, REFERENCE_CENTRE);
+        send(
+            &mut *tool,
+            &numeric_settings(NumericTransform { w: 40.0, ..now }, 5),
+        );
+        tool.set_setting(keys::APPLY_NUMERIC, ToolSetting::Bool(true))
+            .unwrap();
+        let back = NumericTransform::read(&live(&*tool).0, REFERENCE_CENTRE);
+        assert!((back.w - 40.0).abs() < 1e-3, "{back:?}");
+        send(
+            &mut *tool,
+            &numeric_settings(NumericTransform { w: 70.0, ..back }, 1),
+        );
+        tool.set_setting(keys::APPLY_NUMERIC, ToolSetting::Bool(true))
+            .unwrap();
+        let back = NumericTransform::read(&live(&*tool).0, REFERENCE_CENTRE);
+        assert!(
+            (back.w - 70.0).abs() < 1e-3,
+            "the lower counter applied: {back:?}"
+        );
+    }
+
+    #[test]
+    fn the_read_back_is_the_typed_skew_and_rebuilds_any_dragged_parallelogram() {
+        let source = PixelRect::new(0, 0, 100, 50);
+        let typed = NumericTransform {
+            reference: 0,
+            x: 10.0,
+            y: 20.0,
+            w: 150.0,
+            h: 80.0,
+            angle: 30.0,
+            skew_h: 10.0,
+            skew_v: 15.0,
+        };
+        let mut state = TransformState::new(source);
+        state.corners = typed.corners(source).unwrap();
+        state.skew_v = typed.skew_v;
+        let back = NumericTransform::read(&state, 0);
+        assert!((back.skew_v - 15.0).abs() < 1e-3, "{back:?}");
+        assert!(near(Vec2::new(back.x, back.y), Vec2::new(10.0, 20.0)));
+        // At the bottom-right reference, X / Y are that corner.
+        let br = NumericTransform::read(&state, 8);
+        assert!(near(Vec2::new(br.x, br.y), state.corners[2]));
+        // Split with no vertical skew, the read-back still rebuilds the
+        // same quad.
+        state.skew_v = 0.0;
+        let dec = NumericTransform::read(&state, 0);
+        let rebuilt = dec.corners(source).unwrap();
+        for (a, b) in rebuilt.iter().zip(state.corners.iter()) {
+            assert!(near(*a, *b), "{rebuilt:?} vs {:?}", state.corners);
+        }
+        // A collapsed size or a 90 degree skew is refused, not applied.
+        assert!(NumericTransform { w: 0.0, ..typed }
+            .corners(source)
+            .is_none());
+        assert!(NumericTransform {
+            skew_h: 90.0,
+            ..typed
+        }
+        .corners(source)
+        .is_none());
+    }
+
+    #[test]
+    fn every_warp_preset_bends_the_mesh_its_own_way() {
+        let rect = PixelRect::new(0, 0, 120, 60);
+        let identity = WarpMesh::identity(rect);
+        assert_eq!(WARP_PRESET_LABELS.len(), WarpPreset::ALL.len() + 1);
+        let meshes: Vec<WarpMesh> = WarpPreset::ALL
+            .iter()
+            .map(|p| warp_preset_mesh(*p, rect, 50.0))
+            .collect();
+        for (i, (preset, mesh)) in WarpPreset::ALL.iter().zip(&meshes).enumerate() {
+            assert_ne!(*mesh, identity, "{preset:?} does nothing");
+            assert_eq!(
+                warp_preset_mesh(*preset, rect, 0.0),
+                identity,
+                "{preset:?} at bend 0"
+            );
+            assert_ne!(
+                warp_preset_mesh(*preset, rect, -50.0),
+                *mesh,
+                "{preset:?} ignores the bend's sign"
+            );
+            for (other, m) in WarpPreset::ALL.iter().zip(&meshes).skip(i + 1) {
+                assert_ne!(mesh, m, "{preset:?} and {other:?} are the same warp");
+            }
+            assert_eq!(WarpPreset::from_choice(i + 1), Some(*preset));
+            assert_eq!(
+                WARP_PRESET_LABELS[i + 1],
+                format!("{preset:?}"),
+                "label order"
+            );
+        }
+        assert_eq!(WarpPreset::from_choice(0), None);
+    }
+
+    #[test]
+    fn picking_a_warp_preset_warps_the_live_session_and_the_commit_resamples_it() {
+        let mut tiles = MemoryTiles::new();
+        let layer = layer_model::LayerId::new();
+        let key = PixelKey::Layer(layer);
+        // A 64x64 layer, a white band across rows 24..40 on black.
+        let ts = raster::TILE_SIZE as usize;
+        let mut data = vec![0u8; ts * ts * 4];
+        for y in 0..64usize {
+            for x in 0..64usize {
+                let v = if (24..40).contains(&y) { 255 } else { 0 };
+                data[(y * ts + x) * 4..(y * ts + x) * 4 + 4].copy_from_slice(&[v, v, v, 255]);
+            }
+        }
+        tiles.put(key, raster::TileCoord::new(0, 0, 0), data);
+        let before = tiles.pixel(key, 32, 12);
+        let mut tool = registry::make(ToolId::FreeTransform);
+        let commands = {
+            let mut ctx =
+                ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64)).with_layer(layer);
+            press(&mut *tool, &mut ctx);
+            let now = NumericTransform::read(&live(&*tool).0, REFERENCE_CENTRE);
+            let arch = WARP_PRESET_LABELS
+                .iter()
+                .position(|l| *l == "Arch")
+                .unwrap();
+            tool.set_setting(keys::WARP, ToolSetting::Choice(arch))
+                .unwrap();
+            tool.set_setting(keys::BEND, ToolSetting::Float(60.0))
+                .unwrap();
+            send(&mut *tool, &numeric_settings(now, 1));
+            press(&mut *tool, &mut ctx);
+            let (state, mode) = live(&*tool);
+            assert_eq!(
+                mode,
+                TransformMode::Warp,
+                "a preset puts the session on Warp"
+            );
+            assert_eq!(
+                state.mesh,
+                Some(warp_preset_mesh(WarpPreset::Arch, state.source, 60.0))
+            );
+            tool.commit(&mut ctx).unwrap();
+            ctx.drain()
+        };
+        let delta = commands
+            .into_iter()
+            .find_map(|c| match c {
+                Command::PaintTiles { delta, .. } => Some(delta),
+                _ => None,
+            })
+            .expect("a warp commit paints");
+        tiles.apply_delta(key, &delta);
+        // The arch lifts the middle of the band: row 12 at the centre was
+        // black and is now covered by the lifted band.
+        let after = tiles.pixel(key, 32, 12);
+        assert_ne!(after, before, "the arch moved nothing at the centre");
+    }
+
+    /// A distorted commit of an 8 px checker, rotated 10 degrees by the
+    /// numeric Angle, with the Interpolation at `choice`: the distinct grey
+    /// levels among the opaque pixels it leaves.
+    fn rotated_checker_levels(choice: usize) -> usize {
+        let mut tiles = MemoryTiles::new();
+        let layer = layer_model::LayerId::new();
+        let key = PixelKey::Layer(layer);
+        let ts = raster::TILE_SIZE as usize;
+        let mut data = vec![0u8; ts * ts * 4];
+        for y in 0..64usize {
+            for x in 0..64usize {
+                let v = if ((x / 8) + (y / 8)) % 2 == 0 { 255 } else { 0 };
+                data[(y * ts + x) * 4..(y * ts + x) * 4 + 4].copy_from_slice(&[v, v, v, 255]);
+            }
+        }
+        tiles.put(key, raster::TileCoord::new(0, 0, 0), data);
+        let mut tool = registry::make(ToolId::FreeTransform);
+        let distort = TransformMode::ALL
+            .iter()
+            .position(|m| *m == TransformMode::Distort)
+            .unwrap();
+        let commands = {
+            let mut ctx =
+                ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64)).with_layer(layer);
+            tool.set_setting("mode", ToolSetting::Choice(distort))
+                .unwrap();
+            tool.set_setting(keys::INTERPOLATION, ToolSetting::Choice(choice))
+                .unwrap();
+            press(&mut *tool, &mut ctx);
+            let now = NumericTransform::read(&live(&*tool).0, REFERENCE_CENTRE);
+            send(
+                &mut *tool,
+                &numeric_settings(NumericTransform { angle: 10.0, ..now }, 1),
+            );
+            tool.commit(&mut ctx).unwrap();
+            ctx.drain()
+        };
+        for c in commands {
+            if let Command::PaintTiles { delta, .. } = c {
+                tiles.apply_delta(key, &delta);
+            }
+        }
+        let mut levels: Vec<u8> = Vec::new();
+        for y in 16..48 {
+            for x in 16..48 {
+                let p = tiles.pixel(key, x, y);
+                if p[3] == 255 && !levels.contains(&p[0]) {
+                    levels.push(p[0]);
+                }
+            }
+        }
+        levels.len()
+    }
+
+    #[test]
+    fn the_interpolation_choice_reaches_a_resampled_commit() {
+        let at = |label: &str| {
+            INTERPOLATION_LABELS
+                .iter()
+                .position(|l| *l == label)
+                .unwrap()
+        };
+        assert_eq!(rotated_checker_levels(at("Nearest Neighbour")), 2);
+        assert!(rotated_checker_levels(at("Bilinear")) > 2);
+        assert!(rotated_checker_levels(at("Bicubic")) > 2);
+    }
+
+    #[test]
+    fn interpolation_reaches_the_session_and_picks_the_resampling_filter() {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, SIDE, SIDE));
+        let mut tool = registry::make(ToolId::FreeTransform);
+        press(&mut *tool, &mut ctx);
+        let mut concrete = TransformTool::default();
+        assert_eq!(concrete.interpolation, Interpolation::Bicubic);
+        let nearest = INTERPOLATION_LABELS
+            .iter()
+            .position(|l| *l == "Nearest Neighbour")
+            .unwrap();
+        tool.set_setting(keys::INTERPOLATION, ToolSetting::Choice(nearest))
+            .unwrap();
+        concrete
+            .set_setting(keys::INTERPOLATION, ToolSetting::Choice(nearest))
+            .unwrap();
+        assert_eq!(concrete.interpolation, Interpolation::Nearest);
+
+        // A 2x2 checker of 4 px cells, scaled 3x: nearest keeps only the two
+        // source values; bicubic makes new ones along every cell edge.
+        let rect = PixelRect::new(0, 0, 32, 32);
+        let mut src = FilterBuffer::transparent(32, 32).unwrap();
+        for y in 0..8u32 {
+            for x in 0..8u32 {
+                let v = if ((x / 4) + (y / 4)) % 2 == 0 {
+                    1.0
+                } else {
+                    0.0
+                };
+                src.set(x, y, [v, v, v, 1.0]);
+            }
+        }
+        let distinct = |interp: Interpolation| {
+            let mut s = TransformState::new(PixelRect::new(0, 0, 8, 8));
+            s.set_rect(0.0, 0.0, 24.0, 24.0).unwrap();
+            let out = resample_with(&src, rect, &s, TransformMode::Scale, interp).unwrap();
+            let mut seen: Vec<u32> = Vec::new();
+            for y in 0..24u32 {
+                for x in 0..24u32 {
+                    let bits = out.get(x, y)[0].to_bits();
+                    if !seen.contains(&bits) {
+                        seen.push(bits);
+                    }
+                }
+            }
+            seen.len()
+        };
+        assert_eq!(distinct(Interpolation::Nearest), 2);
+        assert!(distinct(Interpolation::Bilinear) > 2);
+        assert!(distinct(Interpolation::Bicubic) > 2);
     }
 }

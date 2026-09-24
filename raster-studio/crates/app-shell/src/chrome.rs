@@ -386,6 +386,9 @@ fn brush_from_options(
         // tool's own and are carried through rather than defaulted.
         min_size_ratio: base.min_size_ratio,
         aliased: base.aliased,
+        // W9-E: the tip and the dynamics are no options-bar control either;
+        // they ride through from the brush the edit started from.
+        ..base
     }
 }
 
@@ -663,6 +666,9 @@ pub struct Chrome {
     workspace: ui::Workspace,
     /// Which tab a drag started on, if one is in flight.
     tab_drag: Option<usize>,
+    /// W9-I: a Layers-panel row released over another document's tab this
+    /// frame, as (layer, tab index), for [`Chrome::copy_layers_across`].
+    layer_tab_drop: Option<(layer_model::LayerId, usize)>,
     /// The status bar's readouts popup is open.
     readouts_open: bool,
     /// How many times a pointer button has gone down since the window opened.
@@ -1389,6 +1395,7 @@ impl Chrome {
             &mut out,
         );
         out.dialog_open = self.dialogs.is_open();
+        self.copy_layers_across(editor);
         // The gradient dialog confirmed: the ramp lands in the workspace's
         // options (the swatch reads them back next frame) and in the editor
         // (the next gradient stroke paints it, through the tool context).
@@ -2611,7 +2618,11 @@ impl Chrome {
             out.set_brush = Some(brush_from_options(
                 &self.workspace.options,
                 tool,
-                editor.brush_for(tool),
+                // W9-E: a Brushes-panel preset's tip and dynamics (no
+                // options-bar keys) ride in on the brush it applies over.
+                self.workspace
+                    .brushes
+                    .take_extras_over(tool, editor.brush_for(tool)),
             ));
         }
         // The other half of the four View items this bridge routes to the
@@ -2779,6 +2790,29 @@ impl Chrome {
         }
     }
 
+    /// W9-I: the two roads a layer takes into another open document — a
+    /// Layers-panel row released on that document's tab, and Duplicate
+    /// Layer…'s Destination naming it — both land here, where the editor is
+    /// in hand, as [`Editor::duplicate_layer_into_document`]: one undo step
+    /// in the target, which becomes the active document. A refusal is the
+    /// status line's.
+    fn copy_layers_across(&mut self, editor: &mut Editor) {
+        let mut copies = Vec::new();
+        if let Some((layer, index)) = self.layer_tab_drop.take() {
+            if let Some(target) = editor.documents().get(index).map(|d| d.id()) {
+                copies.push((layer, target, None));
+            }
+        }
+        if let Some((layer, target, name)) = crate::dialog_host::take_confirmed_duplicate_into() {
+            copies.push((layer, target, Some(name)));
+        }
+        for (layer, target, name) in copies {
+            if let Err(reason) = editor.duplicate_layer_into_document(layer, target, name) {
+                editor.set_status(reason);
+            }
+        }
+    }
+
     /// One Photopea document tab: capped width, truncated title (the dirty
     /// dot rides in `tab_label`), the close control *inside* the tab,
     /// middle-click close, drag to reorder.
@@ -2896,6 +2930,27 @@ impl Chrome {
             }
             if response.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
                 self.tab_drag = None;
+            }
+        }
+        // W9-I: a Layers-panel row dragged over ANOTHER document's tab is a
+        // copy into that document (Photopea's drag-to-tab). The tab shows
+        // the drop cue while the row is over it; the release parks the drop
+        // for `copy_layers_across`, which makes the copy after the dialogs.
+        if let Some(row) =
+            egui::DragAndDrop::payload::<ui::dialogs::duplicate_layer::LayerRowDrag>(ui.ctx())
+        {
+            if !selected && ui.rect_contains_pointer(rect) {
+                ui.painter().rect_stroke(
+                    rect,
+                    rounding,
+                    egui::Stroke::new(
+                        tokens.borders.thick,
+                        design::color32(tokens.palette.color(design::ColorRole::SelectionStroke)),
+                    ),
+                );
+                if ui.input(|i| i.pointer.any_released()) {
+                    self.layer_tab_drop = Some((row.layer, index));
+                }
             }
         }
         // Drawn, not typed. The panel headers' close is `ui::icons`' drawing,
@@ -7052,6 +7107,311 @@ mod tests {
         // The active tab followed its document rather than staying at the
         // index.
         assert_eq!(ed.active_index(), Some(0));
+    }
+
+    // ---- W9-I: a layer into another open document ----------------------
+
+    /// A PNG whose every pixel is `rgba`, so two documents' pixels differ.
+    fn w9i_solid_png(dir: &std::path::Path, name: &str, rgba: [u8; 4]) -> std::path::PathBuf {
+        let path = dir.join(name);
+        let bytes: Vec<u8> = rgba.iter().copied().cycle().take(8 * 8 * 4).collect();
+        std::fs::write(
+            &path,
+            raster::encode(raster::ExportFormat::Png, 8, 8, &bytes).unwrap(),
+        )
+        .unwrap();
+        path
+    }
+
+    /// A layer's pixels as (tile, bytes), read through its own document's
+    /// tile store — so a copy whose hashes never reached the target's store
+    /// reads as missing, not as equal.
+    fn w9i_layer_pixels(
+        doc: &crate::doc::OpenDocument,
+        id: layer_model::LayerId,
+    ) -> Vec<(raster::TileCoord, Vec<u8>)> {
+        doc.document
+            .layer_tiles(id)
+            .map(|m| {
+                m.iter()
+                    .map(|(coord, hash)| {
+                        let bytes = compositor::TileSource::tile(&doc.tiles, hash)
+                            .expect("every tile the layer names is in its document's store");
+                        (coord, bytes.to_vec())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Two documents: `a.png` (index 0, red) and `b.png` (index 1, green,
+    /// active), and the id of `b`'s active layer.
+    fn w9i_two_documents(dir: &std::path::Path) -> (Editor, layer_model::LayerId) {
+        let mut ed = editor(&dir.join("config"));
+        ed.open_path(&w9i_solid_png(dir, "a.png", [200, 10, 10, 255]))
+            .unwrap();
+        ed.open_path(&w9i_solid_png(dir, "b.png", [10, 200, 10, 255]))
+            .unwrap();
+        assert_eq!(ed.active_index(), Some(1));
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        (ed, layer)
+    }
+
+    /// The copy landed in `a` with `b`'s pixels, `b` is untouched, `a` is
+    /// active, and one undo in `a` takes the copy back out.
+    fn w9i_assert_copied_then_undo(
+        ed: &mut Editor,
+        source: layer_model::LayerId,
+        name: &str,
+        a_layers: usize,
+        b_layers: usize,
+        b_pixels: &[(raster::TileCoord, Vec<u8>)],
+    ) {
+        assert_eq!(
+            ed.active_index(),
+            Some(0),
+            "the target document became active"
+        );
+        let a = &ed.documents()[0];
+        assert_eq!(
+            a.document.layers.len(),
+            a_layers + 1,
+            "one layer added to A"
+        );
+        let copy = a.document.active_layer().expect("the copy is active");
+        assert_ne!(copy, source, "the copy has its own id");
+        assert_eq!(a.document.layers.get(copy).unwrap().name, name);
+        assert_eq!(
+            w9i_layer_pixels(a, copy),
+            b_pixels,
+            "identical pixels at the same tiles, filed in A's own store"
+        );
+        assert_eq!(a.document.layers.root().first(), Some(&copy), "on top of A");
+        let b = &ed.documents()[1];
+        assert_eq!(b.document.layers.len(), b_layers, "nothing added to B");
+        assert!(!b.history.can_undo(), "no undo step recorded in B");
+        assert!(ed.documents()[0].history.can_undo());
+        assert!(ed.active_mut().unwrap().undo().unwrap(), "one undo in A");
+        let a = &ed.documents()[0];
+        assert_eq!(a.document.layers.len(), a_layers, "undo removed the copy");
+        assert!(!a.document.layers.contains(copy));
+        assert!(!a.history.can_undo(), "the copy was ONE undo step");
+    }
+
+    #[test]
+    fn dragging_a_layer_row_onto_another_documents_tab_copies_it_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, source) = w9i_two_documents(dir.path());
+        let a_layers = ed.documents()[0].document.layers.len();
+        let b_layers = ed.documents()[1].document.layers.len();
+        let b_pixels = w9i_layer_pixels(&ed.documents()[1], source);
+        assert!(!b_pixels.is_empty());
+        assert_ne!(
+            b_pixels,
+            w9i_layer_pixels(
+                &ed.documents()[0],
+                ed.documents()[0].document.active_layer().unwrap()
+            ),
+            "the fixture's documents differ in pixels"
+        );
+        let name = ed.documents()[1]
+            .document
+            .layers
+            .get(source)
+            .unwrap()
+            .name
+            .clone();
+        let mut window = Window::new(&mut ed);
+        // The real gesture: press on the Layers-panel row, move onto the
+        // other document's tab, release.
+        let out = window.drag(&mut ed, ui::view::ids::layer_row(source), Chrome::tab_id(0));
+        assert_eq!(out.move_document, None, "a layer drag is not a tab reorder");
+        w9i_assert_copied_then_undo(&mut ed, source, &name, a_layers, b_layers, &b_pixels);
+    }
+
+    #[test]
+    fn a_group_copied_into_another_document_brings_its_children() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, base) = w9i_two_documents(dir.path());
+        // In B: a group holding B's pixel layer.
+        let group = layer_model::Layer::group("Folder");
+        let group_id = group.id;
+        ed.apply_command(Command::create_layer(group));
+        ed.apply_command(Command::MoveLayer {
+            layer_id: base,
+            parent: Some(group_id),
+            index: 0,
+        });
+        let b_pixels = w9i_layer_pixels(&ed.documents()[1], base);
+        let a_layers = ed.documents()[0].document.layers.len();
+        let target = ed.documents()[0].id();
+        ed.duplicate_layer_into_document(group_id, target, None)
+            .unwrap();
+        let a = &ed.documents()[0];
+        assert_eq!(
+            a.document.layers.len(),
+            a_layers + 2,
+            "the group and its child"
+        );
+        let copy = a.document.active_layer().unwrap();
+        let layer_model::LayerKind::Group(g) = &a.document.layers.get(copy).unwrap().kind else {
+            panic!("the copy is a group");
+        };
+        assert_eq!(g.children.len(), 1);
+        assert_ne!(g.children[0], base);
+        assert_eq!(w9i_layer_pixels(a, g.children[0]), b_pixels);
+        assert!(ed.active_mut().unwrap().undo().unwrap());
+        assert_eq!(
+            ed.documents()[0].document.layers.len(),
+            a_layers,
+            "one undo step"
+        );
+    }
+
+    #[test]
+    fn duplicate_layer_with_another_destination_copies_into_that_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, source) = w9i_two_documents(dir.path());
+        let a_layers = ed.documents()[0].document.layers.len();
+        let b_layers = ed.documents()[1].document.layers.len();
+        let b_pixels = w9i_layer_pixels(&ed.documents()[1], source);
+        let a_key = ed.documents()[0].id().0;
+        let mut window = Window::new(&mut ed);
+        assert!(window
+            .chrome
+            .dialogs
+            .open_for_menu_action(&ui::menu::MenuAction::DuplicateLayer, &ed));
+        let dialog = window.chrome.dialogs.active_duplicate_dialog_for_test();
+        assert_eq!(
+            dialog.destinations().len(),
+            2,
+            "every open document is listed"
+        );
+        assert!(dialog.set_destination(a_key));
+        dialog.set_name("Twin");
+        window.frame(&mut ed);
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        };
+        let chrome = &mut window.chrome;
+        let mut out = ChromeOutput::default();
+        let _ = window.ctx.run(raw_input(vec![enter]), |ctx| {
+            out = chrome.ui(ctx, &mut ed);
+        });
+        assert!(!window.chrome.dialogs.is_open(), "Enter confirmed");
+        assert!(
+            out.menu.is_empty(),
+            "the in-document Duplicate arm is not also run: {:?}",
+            out.menu
+        );
+        w9i_assert_copied_then_undo(&mut ed, source, "Twin", a_layers, b_layers, &b_pixels);
+    }
+
+    /// Click the centre of the LAST galley painted with exactly `label`: the
+    /// topmost one, since egui paints layers bottom to top — so a document
+    /// title in the open Destination combo wins over the same title on its
+    /// tab. One frame is drawn first so egui knows where the press lands.
+    fn w9i_click_topmost_text(window: &mut Window, ed: &mut Editor, label: &str) {
+        let chrome = &mut window.chrome;
+        let full = window.ctx.run(raw_input(Vec::new()), |ctx| {
+            let _ = chrome.ui(ctx, ed);
+        });
+        let mut painted = Vec::new();
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(t) => out.push((
+                    t.galley.text().to_string(),
+                    egui::Rect::from_min_size(t.pos, t.galley.size()),
+                )),
+                egui::Shape::Vec(inner) => inner.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        full.shapes
+            .iter()
+            .for_each(|c| walk(&c.shape, &mut painted));
+        let pos = painted
+            .iter()
+            .rev()
+            .find(|(text, _)| text == label)
+            .map(|(_, rect)| rect.center())
+            .unwrap_or_else(|| panic!("{label:?} was never painted"));
+        let events = vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            },
+        ];
+        let chrome = &mut window.chrome;
+        let _ = window.ctx.run(raw_input(events), |ctx| {
+            let _ = chrome.ui(ctx, ed);
+        });
+    }
+
+    /// The whole Destination route with no test-only setter: open the combo
+    /// by clicking it, click the other document's entry in its popup, press
+    /// Enter — the copy lands in that document.
+    #[test]
+    fn picking_another_document_in_the_destination_combo_copies_into_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ed, source) = w9i_two_documents(dir.path());
+        let a_layers = ed.documents()[0].document.layers.len();
+        let b_layers = ed.documents()[1].document.layers.len();
+        let b_pixels = w9i_layer_pixels(&ed.documents()[1], source);
+        let a_title = ed.documents()[0].title().to_string();
+        let b_title = ed.documents()[1].title().to_string();
+        let name = format!(
+            "{} copy",
+            ed.documents()[1].document.layers.get(source).unwrap().name
+        );
+        let mut window = Window::new(&mut ed);
+        assert!(window
+            .chrome
+            .dialogs
+            .open_for_menu_action(&ui::menu::MenuAction::DuplicateLayer, &ed));
+        window.settle(&mut ed);
+        // The combo opens on this document (B); a press on it opens the list.
+        w9i_click_topmost_text(&mut window, &mut ed, &b_title);
+        window.frame(&mut ed);
+        // The popup's entry for A, drawn above A's tab.
+        w9i_click_topmost_text(&mut window, &mut ed, &a_title);
+        window.settle(&mut ed);
+        assert!(
+            window.chrome.dialogs.is_open(),
+            "picking a destination does not confirm"
+        );
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        };
+        let chrome = &mut window.chrome;
+        let mut out = ChromeOutput::default();
+        let _ = window.ctx.run(raw_input(vec![enter]), |ctx| {
+            out = chrome.ui(ctx, &mut ed);
+        });
+        assert!(!window.chrome.dialogs.is_open(), "Enter confirmed");
+        assert!(
+            out.menu.is_empty(),
+            "the in-document Duplicate arm is not also run: {:?}",
+            out.menu
+        );
+        w9i_assert_copied_then_undo(&mut ed, source, &name, a_layers, b_layers, &b_pixels);
     }
 
     #[test]

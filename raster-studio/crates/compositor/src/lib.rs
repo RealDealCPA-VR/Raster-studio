@@ -72,14 +72,15 @@
 //!   including why that needs a filter runner the application installs.
 //!   Text and shape layers render too — see [`text`] and [`shape`] for the
 //!   limits of each.
-//! * **A vector layer mask** ([`layer_model::MaskKind::Vector`]) has no
-//!   rasterizer here either. Reading its (non-existent) coverage tiles would
-//!   report zero everywhere and hide the layer completely, so a vector mask
-//!   with no rasterized tiles is **ignored** instead — the layer renders as if
-//!   unmasked, including its density and inversion, which is wrong in the
-//!   direction that keeps the user's content on screen. Tiles stored under the
-//!   mask's id are used whatever the kind says, so a rasterizer filling them in
-//!   needs no change here.
+//! * **A vector mask with unparseable path data** is ignored rather than
+//!   hiding the layer. W9-G: a vector mask ([`layer_model::VectorMask`], on
+//!   [`layer_model::LayerMask::vector`]) IS rasterised — anti-aliased path
+//!   coverage through the layer's (and mask's) pose, feathered, inverted and
+//!   faded by its own density, multiplied with the pixel mask; see
+//!   `vector_mask`. What stays approximate is a legacy
+//!   [`layer_model::MaskKind::Vector`] mask that carries no path and no
+//!   coverage tiles: its pixel half is skipped (the layer renders unmasked),
+//!   which is wrong in the direction that keeps the user's content on screen.
 //! * **Blend mode on an adjustment layer** is ignored; an adjustment is a
 //!   weighted replacement of the backdrop's colour, never an `over`.
 //! * **Mip tiles are read, not built.** Asking for level `n` reads the tiles
@@ -115,6 +116,9 @@ pub mod shape;
 pub mod smart;
 pub mod source;
 pub mod text;
+/// W9-G: vector-mask path coverage, and the path geometry the application
+/// uses to place and convert vector masks.
+pub mod vector_mask;
 /// W8-C: caret and hit-test geometry for vertical type.
 mod vertical_caret;
 
@@ -126,6 +130,8 @@ mod pattern_tests;
 mod testkit;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vector_mask_tests;
 
 pub use adjust::{apply_adjustment, PreparedAdjustment};
 pub use blending::{blend_atop, blend_over, dissolve_noise, BlendContext, BlendSpace};

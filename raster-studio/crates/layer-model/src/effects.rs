@@ -70,6 +70,12 @@ pub struct LayerEffects {
     pub pattern_overlay: Option<PatternOverlayEffect>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stroke: Option<StrokeEffect>,
+    /// W9-H: contours, Blend If and the extra instances of the effects
+    /// Photoshop lets a style repeat. Appended with its own default so a
+    /// document written before it loads unchanged, and skipped on write while
+    /// it is default so an old style still serializes byte-for-byte as before.
+    #[serde(default, skip_serializing_if = "StyleExtras::is_default")]
+    pub extras: StyleExtras,
 }
 
 impl Default for LayerEffects {
@@ -86,6 +92,7 @@ impl Default for LayerEffects {
             gradient_overlay: None,
             pattern_overlay: None,
             stroke: None,
+            extras: StyleExtras::default(),
         }
     }
 }
@@ -117,6 +124,7 @@ impl LayerEffects {
             && self.gradient_overlay.is_none()
             && self.pattern_overlay.is_none()
             && self.stroke.is_none()
+            && self.extras.instance_count() == 0
     }
 
     /// `true` when at least one effect will actually be drawn.
@@ -142,6 +150,57 @@ impl LayerEffects {
         .iter()
         .filter(|b| **b)
         .count()
+            + self.extras.instance_count()
+    }
+
+    /// W9-H: every drop shadow, bottom-most first: the primary slot, then
+    /// the extra instances, each with the contour it is drawn through.
+    pub fn drop_shadows(&self) -> Vec<(&ShadowEffect, &Contour)> {
+        self.drop_shadow
+            .iter()
+            .map(|e| (e, &self.extras.contours.drop_shadow))
+            .chain(
+                self.extras
+                    .drop_shadows
+                    .iter()
+                    .map(|i| (&i.effect, &i.contour)),
+            )
+            .collect()
+    }
+
+    /// W9-H: every inner shadow, bottom-most first.
+    pub fn inner_shadows(&self) -> Vec<(&ShadowEffect, &Contour)> {
+        self.inner_shadow
+            .iter()
+            .map(|e| (e, &self.extras.contours.inner_shadow))
+            .chain(
+                self.extras
+                    .inner_shadows
+                    .iter()
+                    .map(|i| (&i.effect, &i.contour)),
+            )
+            .collect()
+    }
+
+    /// W9-H: every stroke, bottom-most first.
+    pub fn strokes(&self) -> Vec<&StrokeEffect> {
+        self.stroke.iter().chain(&self.extras.strokes).collect()
+    }
+
+    /// W9-H: every colour overlay, bottom-most first.
+    pub fn color_overlays(&self) -> Vec<&ColorOverlayEffect> {
+        self.color_overlay
+            .iter()
+            .chain(&self.extras.color_overlays)
+            .collect()
+    }
+
+    /// W9-H: every gradient overlay, bottom-most first.
+    pub fn gradient_overlays(&self) -> Vec<&GradientOverlayEffect> {
+        self.gradient_overlay
+            .iter()
+            .chain(&self.extras.gradient_overlays)
+            .collect()
     }
 }
 
@@ -854,9 +913,466 @@ impl Default for StrokeEffect {
     }
 }
 
+// ---------------------------------------------------------------------------
+// W9-H: contours, Blend If, extra effect instances
+// ---------------------------------------------------------------------------
+
+/// The named contour shapes of Photoshop's default contour picker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ContourPreset {
+    /// The identity: the falloff as the blur made it.
+    #[default]
+    Linear,
+    /// Rises to the middle of the falloff and back down.
+    Cone,
+    /// A smooth S-shaped response.
+    Gaussian,
+    /// A band in the middle of the falloff (Photoshop's "Ring").
+    Ring,
+    /// Four rounded terraces (Photoshop's "Rounded Steps").
+    RoundedSteps,
+    /// The user's own curve, [`Contour::points`].
+    Custom,
+}
+
+impl ContourPreset {
+    /// Every preset, in the order the picker lists them.
+    pub const ALL: [ContourPreset; 6] = [
+        Self::Linear,
+        Self::Cone,
+        Self::Gaussian,
+        Self::Ring,
+        Self::RoundedSteps,
+        Self::Custom,
+    ];
+}
+
+/// W9-H: a contour, the response curve an effect's falloff is passed
+/// through (input 0 = the far end of the falloff, 1 = full coverage).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Contour {
+    pub preset: ContourPreset,
+    /// The curve's knots, `[input, output]` in `0..=1`. Read only when
+    /// `preset` is [`ContourPreset::Custom`]; fewer than two usable knots
+    /// evaluate as linear.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub points: Vec<[f32; 2]>,
+}
+
+impl Contour {
+    /// A named preset.
+    pub fn preset(preset: ContourPreset) -> Self {
+        Self {
+            preset,
+            points: Vec::new(),
+        }
+    }
+
+    /// `true` for the identity, which a renderer may skip.
+    pub fn is_linear(&self) -> bool {
+        match self.preset {
+            ContourPreset::Linear => true,
+            ContourPreset::Custom => self.custom_knots().len() < 2,
+            _ => false,
+        }
+    }
+
+    fn is_default_linear(&self) -> bool {
+        *self == Contour::default()
+    }
+
+    fn custom_knots(&self) -> Vec<[f32; 2]> {
+        let mut k: Vec<[f32; 2]> = self
+            .points
+            .iter()
+            .filter(|p| p[0].is_finite() && p[1].is_finite())
+            .map(|p| [p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)])
+            .collect();
+        k.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        k
+    }
+
+    /// The contour at `t` (clamped to `0..=1`), in `0..=1`.
+    pub fn eval(&self, t: f32) -> f32 {
+        let t = if t.is_finite() {
+            t.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let v = match self.preset {
+            ContourPreset::Linear => t,
+            ContourPreset::Cone => 1.0 - (2.0 * t - 1.0).abs(),
+            // Smoothstep: a soft shoulder at both ends.
+            ContourPreset::Gaussian => t * t * (3.0 - 2.0 * t),
+            ContourPreset::Ring => {
+                let d = (t - 0.5) / 0.2;
+                (-d * d).exp()
+            }
+            ContourPreset::RoundedSteps => {
+                const STEPS: f32 = 4.0;
+                let x = t * STEPS;
+                let base = x.floor().min(STEPS - 1.0);
+                let f = (x - base).clamp(0.0, 1.0);
+                let s = f * f * (3.0 - 2.0 * f);
+                ((base + s) / STEPS).min(1.0)
+            }
+            ContourPreset::Custom => {
+                let k = self.custom_knots();
+                if k.len() < 2 {
+                    t
+                } else if t <= k[0][0] {
+                    k[0][1]
+                } else if t >= k[k.len() - 1][0] {
+                    k[k.len() - 1][1]
+                } else {
+                    let i = k.iter().position(|p| p[0] > t).unwrap_or(k.len() - 1);
+                    let (a, b) = (k[i - 1], k[i]);
+                    let span = (b[0] - a[0]).max(f32::EPSILON);
+                    a[1] + (b[1] - a[1]) * ((t - a[0]) / span)
+                }
+            }
+        };
+        v.clamp(0.0, 1.0)
+    }
+}
+
+/// W9-H: one Blend If slider: its black and white ends, each split into
+/// two handles (`[lo, hi]`, in `0..=1` of the encoded channel). Between a
+/// pair's handles the layer fades in or out; below the black end or past
+/// the white end it is hidden.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BlendIfRange {
+    pub black: [f32; 2],
+    pub white: [f32; 2],
+}
+
+impl Default for BlendIfRange {
+    fn default() -> Self {
+        Self {
+            black: [0.0, 0.0],
+            white: [1.0, 1.0],
+        }
+    }
+}
+
+impl BlendIfRange {
+    /// `true` when the range lets every value through.
+    pub fn is_full(&self) -> bool {
+        self.black[1] <= 0.0 && self.white[0] >= 1.0
+    }
+
+    /// How much of the layer survives at channel value `v` (`0..=1`).
+    pub fn weight(&self, v: f32) -> f32 {
+        if self.is_full() {
+            return 1.0;
+        }
+        let v = if v.is_finite() {
+            v.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        // In at the black end: hidden below `lo`, fully in from `hi`.
+        let [b0, b1] = self.black;
+        let rise = if v >= b1 {
+            1.0
+        } else if v < b0 {
+            0.0
+        } else {
+            ((v - b0) / (b1 - b0).max(1.0e-6)).clamp(0.0, 1.0)
+        };
+        // Out at the white end: fully in up to `lo`, hidden past `hi`.
+        let [w0, w1] = self.white;
+        let fall = if v <= w0 {
+            1.0
+        } else if v > w1 {
+            0.0
+        } else {
+            (1.0 - (v - w0) / (w1 - w0).max(1.0e-6)).clamp(0.0, 1.0)
+        };
+        rise * fall
+    }
+}
+
+/// W9-H: This Layer and Underlying Layer ranges for one channel.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BlendIfChannel {
+    pub this_layer: BlendIfRange,
+    pub underlying: BlendIfRange,
+}
+
+/// W9-H: the channel a Blend If slider pair reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum BlendIfSource {
+    #[default]
+    Gray,
+    Red,
+    Green,
+    Blue,
+}
+
+impl BlendIfSource {
+    pub const ALL: [BlendIfSource; 4] = [Self::Gray, Self::Red, Self::Green, Self::Blue];
+
+    /// The channel's value for an encoded (document-space) straight colour.
+    pub fn value(self, rgb: [f32; 3]) -> f32 {
+        match self {
+            Self::Gray => 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2],
+            Self::Red => rgb[0],
+            Self::Green => rgb[1],
+            Self::Blue => rgb[2],
+        }
+    }
+}
+
+/// W9-H: Photoshop's Blend If, one slider set per channel. Every set
+/// applies at once: their weights multiply.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BlendIf {
+    pub gray: BlendIfChannel,
+    pub red: BlendIfChannel,
+    pub green: BlendIfChannel,
+    pub blue: BlendIfChannel,
+}
+
+impl BlendIf {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// `true` when no range hides anything.
+    pub fn is_identity(&self) -> bool {
+        BlendIfSource::ALL.iter().all(|s| {
+            let c = self.channel(*s);
+            c.this_layer.is_full() && c.underlying.is_full()
+        })
+    }
+
+    pub fn channel(&self, source: BlendIfSource) -> &BlendIfChannel {
+        match source {
+            BlendIfSource::Gray => &self.gray,
+            BlendIfSource::Red => &self.red,
+            BlendIfSource::Green => &self.green,
+            BlendIfSource::Blue => &self.blue,
+        }
+    }
+
+    pub fn channel_mut(&mut self, source: BlendIfSource) -> &mut BlendIfChannel {
+        match source {
+            BlendIfSource::Gray => &mut self.gray,
+            BlendIfSource::Red => &mut self.red,
+            BlendIfSource::Green => &mut self.green,
+            BlendIfSource::Blue => &mut self.blue,
+        }
+    }
+
+    /// How much of the layer survives where its own encoded colour is
+    /// `this` and the encoded colour beneath it is `under`.
+    pub fn weight(&self, this: [f32; 3], under: [f32; 3]) -> f32 {
+        let mut w = 1.0;
+        for s in BlendIfSource::ALL {
+            let c = self.channel(s);
+            if !c.this_layer.is_full() {
+                w *= c.this_layer.weight(s.value(this));
+            }
+            if !c.underlying.is_full() {
+                w *= c.underlying.weight(s.value(under));
+            }
+        }
+        w
+    }
+}
+
+/// W9-H: the contours of the primary effect slots.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StyleContours {
+    #[serde(skip_serializing_if = "Contour::is_default_linear")]
+    pub drop_shadow: Contour,
+    #[serde(skip_serializing_if = "Contour::is_default_linear")]
+    pub inner_shadow: Contour,
+    #[serde(skip_serializing_if = "Contour::is_default_linear")]
+    pub outer_glow: Contour,
+    #[serde(skip_serializing_if = "Contour::is_default_linear")]
+    pub inner_glow: Contour,
+    /// Bevel and Emboss's gloss contour, applied to its shading.
+    #[serde(skip_serializing_if = "Contour::is_default_linear")]
+    pub bevel: Contour,
+}
+
+impl StyleContours {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// W9-H: an extra shadow instance and the contour it is drawn through.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ShadowInstance {
+    pub effect: ShadowEffect,
+    #[serde(skip_serializing_if = "Contour::is_default_linear")]
+    pub contour: Contour,
+}
+
+/// W9-H: everything a style carries beyond the ten primary slots.
+///
+/// The extra instances of a repeatable effect are drawn **above** the
+/// primary slot of the same kind, in list order (the last one topmost).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StyleExtras {
+    #[serde(skip_serializing_if = "BlendIf::is_default")]
+    pub blend_if: BlendIf,
+    #[serde(skip_serializing_if = "StyleContours::is_default")]
+    pub contours: StyleContours,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub drop_shadows: Vec<ShadowInstance>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub inner_shadows: Vec<ShadowInstance>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub strokes: Vec<StrokeEffect>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub color_overlays: Vec<ColorOverlayEffect>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gradient_overlays: Vec<GradientOverlayEffect>,
+}
+
+impl StyleExtras {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// How many extra effect instances are stored.
+    pub fn instance_count(&self) -> usize {
+        self.drop_shadows.len()
+            + self.inner_shadows.len()
+            + self.strokes.len()
+            + self.color_overlays.len()
+            + self.gradient_overlays.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- W9-H: contours, Blend If, instances ------------------------------
+
+    #[test]
+    fn contour_presets_shape_the_falloff() {
+        let lin = Contour::default();
+        assert!(lin.is_linear());
+        assert_eq!(lin.eval(0.3), 0.3);
+        let cone = Contour::preset(ContourPreset::Cone);
+        assert!(!cone.is_linear());
+        assert_eq!(cone.eval(0.5), 1.0);
+        assert_eq!(cone.eval(1.0), 0.0);
+        let ring = Contour::preset(ContourPreset::Ring);
+        assert!(ring.eval(0.5) > 0.99 && ring.eval(1.0) < 0.01);
+        let steps = Contour::preset(ContourPreset::RoundedSteps);
+        assert!(
+            (steps.eval(0.26) - steps.eval(0.3)).abs() < 0.05,
+            "a terrace"
+        );
+        assert_eq!(steps.eval(1.0), 1.0);
+        let gauss = Contour::preset(ContourPreset::Gaussian);
+        assert!(gauss.eval(0.2) < 0.2 && gauss.eval(0.8) > 0.8);
+        let custom = Contour {
+            preset: ContourPreset::Custom,
+            points: vec![[0.0, 1.0], [1.0, 0.0]],
+        };
+        assert!(
+            (custom.eval(0.25) - 0.75).abs() < 1.0e-6,
+            "an inverted curve"
+        );
+        let broken = Contour {
+            preset: ContourPreset::Custom,
+            points: vec![[f32::NAN, 0.0]],
+        };
+        assert!(broken.is_linear());
+        assert_eq!(broken.eval(0.4), 0.4);
+    }
+
+    #[test]
+    fn blend_if_hides_the_layer_outside_its_ranges() {
+        let mut b = BlendIf::default();
+        assert!(b.is_identity());
+        assert_eq!(b.weight([0.0; 3], [0.0; 3]), 1.0);
+        // Underlying 128..255: hidden over dark, shown over light.
+        b.gray.underlying.black = [128.0 / 255.0, 128.0 / 255.0];
+        assert!(!b.is_identity());
+        assert_eq!(b.weight([1.0; 3], [0.1; 3]), 0.0);
+        assert_eq!(b.weight([1.0; 3], [0.9; 3]), 1.0);
+        // A split handle fades rather than cuts.
+        let r = BlendIfRange {
+            black: [0.2, 0.6],
+            white: [1.0, 1.0],
+        };
+        assert!((r.weight(0.4) - 0.5).abs() < 1.0e-5);
+        assert_eq!(r.weight(1.0), 1.0, "the default white end keeps white");
+        // The white end hides the brightest values of this layer.
+        let mut c = BlendIf::default();
+        c.red.this_layer.white = [0.5, 0.5];
+        assert_eq!(c.weight([0.9, 0.0, 0.0], [0.0; 3]), 0.0);
+        assert_eq!(c.weight([0.4, 0.0, 0.0], [0.0; 3]), 1.0);
+    }
+
+    #[test]
+    fn extras_are_invisible_on_disk_until_used_and_round_trip_when_used() {
+        assert_eq!(
+            serde_json::to_string(&LayerEffects::default()).unwrap(),
+            "{}"
+        );
+        let mut e = LayerEffects {
+            drop_shadow: Some(ShadowEffect::default()),
+            ..Default::default()
+        };
+        let before = serde_json::to_string(&e).unwrap();
+        assert!(!before.contains("extras"), "{before}");
+        e.extras.drop_shadows.push(ShadowInstance {
+            effect: ShadowEffect {
+                distance_px: 20.0,
+                ..Default::default()
+            },
+            contour: Contour::preset(ContourPreset::Ring),
+        });
+        e.extras.strokes.push(StrokeEffect::default());
+        e.extras.contours.outer_glow = Contour::preset(ContourPreset::Cone);
+        e.extras.blend_if.gray.underlying.black = [0.5, 0.5];
+        assert_eq!(e.count(), 3);
+        assert_eq!(e.drop_shadows().len(), 2);
+        assert_eq!(e.strokes().len(), 1);
+        let json = serde_json::to_string(&e).unwrap();
+        let back: LayerEffects = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, e);
+        // A document written before W9-H loads with no extras.
+        let old: LayerEffects = serde_json::from_str(&before).unwrap();
+        assert!(old.extras.is_default());
+        // An extra instance alone still counts as a style.
+        let only_extra = LayerEffects {
+            extras: StyleExtras {
+                strokes: vec![StrokeEffect::default()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!only_extra.is_empty());
+        assert!(only_extra.affects_composite());
+        // Blend If alone is not an effect.
+        let blend_only = LayerEffects {
+            extras: StyleExtras {
+                blend_if: e.extras.blend_if,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(blend_only.is_empty());
+        assert!(!blend_only.is_default());
+    }
 
     #[test]
     fn default_effects_are_empty_and_cost_nothing_on_disk() {
@@ -913,6 +1429,7 @@ mod tests {
             gradient_overlay: Some(GradientOverlayEffect::default()),
             pattern_overlay: Some(PatternOverlayEffect::default()),
             stroke: Some(StrokeEffect::default()),
+            extras: StyleExtras::default(),
         };
         assert_eq!(e.count(), 10);
         assert!(!e.is_empty());
@@ -962,6 +1479,7 @@ mod tests {
                 fill: FillStyle::Pattern(PatternFill::default()),
                 ..Default::default()
             }),
+            extras: StyleExtras::default(),
         };
         let json = serde_json::to_string(&e).unwrap();
         let back: LayerEffects = serde_json::from_str(&json).unwrap();

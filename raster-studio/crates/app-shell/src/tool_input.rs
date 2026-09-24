@@ -147,6 +147,10 @@
 use glam::Vec2;
 
 use compositor::MemoryTileSource;
+
+// W9-D: the composite a retouching stroke's Sample choice reads.
+#[path = "tool_input_sampler.rs"]
+mod sampler;
 // The tests read tile bytes back; the lib reads them through `NarrowedReads`.
 #[cfg(test)]
 use compositor::TileSource;
@@ -2021,6 +2025,7 @@ impl ToolPointer {
         if let Some(previous) = PENDING_TRANSFORM.with(|slot| slot.take()) {
             changed |= self.begin_transform(editor, previous, settings);
         }
+        changed |= self.forward_transform_numeric(editor, settings);
         if editor.tool() != ToolId::FreeTransform {
             // Left Free Transform by any other door: no stale hand-back.
             self.restore_tool = None;
@@ -2031,6 +2036,40 @@ impl ToolPointer {
             self.move_display_seeded = None;
         }
         changed
+    }
+
+    /// W9-L: Free Transform's numeric options bar edits the LIVE session.
+    /// Between presses (no gesture holds the pointer: the caller checked),
+    /// the bar's geometry keys, Link and Interpolation are forwarded to a
+    /// running transform and applied ([`tools::transform::keys::APPLY_NUMERIC`]).
+    /// The tool applies them once per edit (its edit counter), so a typed W
+    /// or a picked Warp preset reshapes the quad on screen in the frame that
+    /// made it, and Enter commits what the fields say, with no canvas press
+    /// in between. Reports whether the published quad changed.
+    fn forward_transform_numeric(
+        &mut self,
+        editor: &Editor,
+        settings: &[(String, tools::ToolSetting)],
+    ) -> bool {
+        use tools::transform::keys;
+        if editor.effective_tool() != ToolId::FreeTransform {
+            return false;
+        }
+        let Some((ToolId::FreeTransform, tool)) = self.current.as_mut() else {
+            return false;
+        };
+        if !tool.is_active() {
+            return false;
+        }
+        let before = tool.live_geometry();
+        for (key, setting) in settings {
+            let key = key.as_str();
+            if keys::GEOMETRY.contains(&key) || key == keys::LINK || key == keys::INTERPOLATION {
+                let _ = tool.set_setting(key, *setting);
+            }
+        }
+        let _ = tool.set_setting(keys::APPLY_NUMERIC, tools::ToolSetting::Bool(true));
+        tool.live_geometry() != before
     }
 
     /// W5-C: the Free Transform half of [`Self::begin_pending_session`].
@@ -2355,6 +2394,37 @@ impl ToolPointer {
                     Some((id, shape.clone()))
                 })
                 .collect();
+            // W9-K: Type on a Path - the current path, then every visible
+            // shape outline where the user sees it (through its transform).
+            let type_path_outlines: Vec<String> = if effective == ToolId::Type {
+                crate::menu_bridge::current_vector_path()
+                    .into_iter()
+                    .chain(
+                        doc.document
+                            .layers
+                            .iter_depth_first()
+                            .into_iter()
+                            .filter_map(|id| {
+                                let layer = doc.document.layers.get(id)?;
+                                let layer_model::LayerKind::Shape(shape) = &layer.kind else {
+                                    return None;
+                                };
+                                if !layer.visible {
+                                    return None;
+                                }
+                                let t = crate::interaction_geometry::document_transform_of(
+                                    &doc.document,
+                                    id,
+                                    0,
+                                )
+                                .ok()?;
+                                compositor::vector_mask::svg_transformed(&shape.path_svg, t)
+                            }),
+                    )
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let view = canvas_camera_of(&doc.camera).to_view_state(&viewport);
 
             // Card 034: the effective edit target's bounds in DOCUMENT space
@@ -2426,11 +2496,32 @@ impl ToolPointer {
                     doc.history_state(row)
                 })
                 .flatten();
+            // W9-D: the press of a Clone Stamp, healing brush, Blur, Sharpen
+            // or Smudge stroke whose Sample is Current & Below or All Layers
+            // lends the stroke the composite it reads (built here, before the
+            // tile store is borrowed mutably; composited lazily, only where
+            // the stroke reads). The stroke keeps it until its release.
+            let composite_sampler = (routed.phase == PointerPhase::Down
+                && target.paint == tools::PaintTarget::Layer
+                && settings.iter().any(|(key, setting)| {
+                    key == tools::tool::SAMPLE_LAYERS_KEY
+                        && matches!(setting, tools::ToolSetting::Choice(i) if *i > 0)
+                }))
+            .then(|| {
+                std::sync::Arc::new(sampler::DocumentCompositeSampler::new(
+                    &doc.document,
+                    &doc.tiles,
+                    target.layer,
+                    sample_to_paint_target_of(&doc.document, target.layer, target.paint),
+                )) as std::sync::Arc<dyn tools::tool::CompositeSampler>
+            });
             let mut access = DocumentTiles::new(&doc.document.pixels, &mut doc.tiles)
                 .at_document_depth(doc.document.meta.bit_depth);
             let mut ctx = ToolContext::new(&mut access, canvas);
             ctx.shape_paths = shape_paths;
+            ctx.type_path_outlines = type_path_outlines;
             ctx.history_source = history_source;
+            ctx.composite_sampler = composite_sampler;
             // W4-G: the document's Colour Sampler points, lent for the sample.
             ctx.samplers = Some(&mut doc.samplers);
             // Card 055: the pinned target routes everything - the layer the

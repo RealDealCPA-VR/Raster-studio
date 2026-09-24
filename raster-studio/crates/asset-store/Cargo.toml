@@ -12,6 +12,10 @@ serde.workspace = true
 serde_json.workspace = true
 blake3.workspace = true
 raster.workspace = true
+# W9-N: the resource-file parsers read Photoshop's descriptors, Unicode and
+# Pascal strings and pattern pixels through the `psd` crate's bounded readers.
+psd.workspace = true
+layer-model.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

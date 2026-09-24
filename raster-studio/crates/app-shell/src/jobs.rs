@@ -99,20 +99,30 @@ pub enum ImportOutcome {
         /// to the flat variant's, and the outcome travels by value.
         parsed: Result<Box<crate::import::PsdImport>, String>,
     },
+    /// W9-J: an animated GIF / APNG / WebP, decoded off-thread into one
+    /// `_a_<name>,<delay ms>` frame layer per frame (Photopea's convention).
+    Animated {
+        path: PathBuf,
+        generation: u64,
+        /// Boxed for the same reason as [`Self::Psd`]'s document.
+        parsed: Result<Box<crate::import::ImportedDocument>, String>,
+    },
 }
 
 impl ImportOutcome {
     /// The job's spawn-time generation.
     pub fn generation(&self) -> u64 {
         match self {
-            Self::Image { generation, .. } | Self::Psd { generation, .. } => *generation,
+            Self::Image { generation, .. }
+            | Self::Psd { generation, .. }
+            | Self::Animated { generation, .. } => *generation,
         }
     }
 
     /// The file the job came from.
     pub fn path(&self) -> &PathBuf {
         match self {
-            Self::Image { path, .. } | Self::Psd { path, .. } => path,
+            Self::Image { path, .. } | Self::Psd { path, .. } | Self::Animated { path, .. } => path,
         }
     }
 
@@ -208,7 +218,34 @@ fn run(path: PathBuf, generation: u64, history_depth: usize) -> ImportOutcome {
             parsed,
         }
     } else {
-        let (decoded, sixteen_bit) = match read_bounded(&path) {
+        let bytes = read_bounded(&path);
+        // W9-J: an animation of two or more frames opens as frame layers. A
+        // file whose animation cannot be read (damaged later frames, or past
+        // `raster::animation`'s frame bounds) still opens the way it always
+        // did — its first frame, through the flat decode below.
+        if let Ok(bytes) = &bytes {
+            match raster::animation::decode_animation_bytes(bytes, raster::ImportLimits::default())
+            {
+                Ok(Some(animation)) => {
+                    let title = crate::import::DecodedImage::title_for(&path);
+                    let parsed =
+                        crate::import::document_from_animation(&animation, &title, history_depth)
+                            .map(Box::new)
+                            .map_err(|e| e.to_string());
+                    return ImportOutcome::Animated {
+                        path,
+                        generation,
+                        parsed,
+                    };
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!(
+                    "{}: animation unreadable, opening the first frame: {e}",
+                    path.display()
+                ),
+            }
+        }
+        let (decoded, sixteen_bit) = match bytes {
             Ok(bytes) => {
                 let decoded =
                     crate::import::DecodedImage::decode_bytes(&bytes).map_err(|e| e.to_string());

@@ -155,9 +155,10 @@ pub use layer_model::BlendMode;
 /// The options-bar key the paint blend mode travels under.
 ///
 /// Not a registry key: the registry schema has no slot for a blend mode, so
-/// the UI adds the control by capability — to exactly the four source-over
-/// stroke tools [`composites_strokes`] names (Brush, Pencil, Clone Stamp,
-/// Pattern Stamp), which are the only tools whose `set_setting` accepts it —
+/// the UI adds the control by capability — to exactly the tools
+/// [`composites_strokes`] names (the four source-over stroke tools Brush,
+/// Pencil, Clone Stamp and Pattern Stamp, and since W9-L the Gradient and the
+/// Paint Bucket), which are the only tools whose `set_setting` accepts it —
 /// and forwards it like any other touched option. The `ui.` prefix is
 /// history — the key is now answered by [`StrokeTool::set_setting`] and must
 /// be forwarded, not filtered.
@@ -174,7 +175,9 @@ pub fn blend_mode_from_choice(index: usize) -> Option<BlendMode> {
 /// over the layer and composites it through a blend mode, and therefore
 /// answers [`BLEND_MODE_KEY`]: the four [`StrokeTool`]s whose op is a
 /// source-over one (`StrokeOp::composites_source`) — Brush, Pencil, Clone
-/// Stamp and Pattern Stamp.
+/// Stamp and Pattern Stamp — and (W9-L) the Gradient and the Paint Bucket,
+/// whose ramp and fill composite through it
+/// (`gradient::render_gradient_with_mode`, `bucket::fill_masked_with_mode`).
 ///
 /// This is the capability the options bar offers the Mode combo by. The
 /// other twelve stroke tools mix toward a computed target (Blur, Sharpen,
@@ -182,8 +185,8 @@ pub fn blend_mode_from_choice(index: usize) -> Option<BlendMode> {
 /// Replacement) or take coverage away (Eraser, Background Eraser) — there
 /// is no source colour of theirs for a mode to act on, and Refine Boundary
 /// never composites at all — so their `set_setting` refuses the key as
-/// unknown and they are not offered the combo. Patch, Red Eye, the two
-/// fills, the gradient and the magic eraser have no dab step either.
+/// unknown and they are not offered the combo. Patch, Red Eye, Pattern Fill
+/// and the magic eraser do not answer it either.
 /// Offering any of them the combo would make a touched Mode a control that
 /// does nothing (or a refusal on every press), which is the defect this
 /// predicate exists to prevent.
@@ -195,7 +198,12 @@ pub fn blend_mode_from_choice(index: usize) -> Option<BlendMode> {
 pub fn composites_strokes(id: ToolId) -> bool {
     matches!(
         id,
-        ToolId::Brush | ToolId::Pencil | ToolId::CloneStamp | ToolId::PatternStamp
+        ToolId::Brush
+            | ToolId::Pencil
+            | ToolId::CloneStamp
+            | ToolId::PatternStamp
+            | ToolId::Gradient
+            | ToolId::PaintBucket
     )
 }
 pub use patch::{ColorPatch, CoveragePatch, TileBox};

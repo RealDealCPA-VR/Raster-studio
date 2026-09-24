@@ -153,6 +153,13 @@ pub struct TextRun {
     pub kerning: Vec<KernAdjustment>,
     /// Top-left of the laid-out block in layer space.
     pub origin: [f32; 2],
+    /// W9-K: Warp Text, applied to the glyph outlines when rasterised.
+    /// Skipped when default, so an unwarped run serialises as before.
+    #[serde(skip_serializing_if = "layer_model::text::TextWarp::is_default")]
+    pub warp: layer_model::text::TextWarp,
+    /// W9-K: Type on a Path - the baseline the glyphs flow along.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<layer_model::text::TextPath>,
 }
 
 impl TextRun {
@@ -292,6 +299,8 @@ impl From<&layer_model::TextLayer> for TextRun {
                 })
                 .collect(),
             origin: [0.0, 0.0],
+            warp: layer.warp,
+            path: layer.path.clone(),
         }
     }
 }
@@ -481,6 +490,8 @@ impl From<&TextRun> for layer_model::TextLayer {
                     amount: k.amount,
                 })
                 .collect(),
+            warp: run.warp,
+            path: run.path.clone(),
         }
     }
 }

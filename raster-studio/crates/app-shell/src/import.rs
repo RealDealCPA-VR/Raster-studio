@@ -355,6 +355,118 @@ pub fn layer_tile_coords(doc: &Document, layer: LayerId) -> Vec<TileCoord> {
         .unwrap_or_default()
 }
 
+// ================================================================== Animation
+//
+// W9-J: Photopea's convention. An animated GIF / APNG / WebP opens as one
+// raster layer per frame, named `_a_<name>,<delay ms>` and stacked in play
+// order from the bottom up; exporting a document that has such layers writes
+// one frame per `_a_` layer, with every other layer as the document has it.
+// `raster::animation` decodes and encodes the frames; this is the layer side.
+
+/// Build a document from a decoded animation: one `_a_Frame <n>,<delay>`
+/// raster layer per frame, frame 1 at the bottom and the only one visible
+/// (the canvas opens showing frame 1; export ignores frame visibility), and
+/// frame 1 active. Like [`document_from_image`], opening is not an edit: the
+/// history is cleared and the document is marked saved.
+pub fn document_from_animation(
+    animation: &raster::animation::DecodedAnimation,
+    title: &str,
+    history_depth: usize,
+) -> Result<ImportedDocument, ImportError> {
+    let (width, height) = (animation.width, animation.height);
+    let mut tiles = MemoryTileSource::new();
+    let mut document = Document::new(width, height, title);
+    document.meta.color_space = animation.color_space.clone();
+    let mut history = History::with_limit(history_depth);
+    let mut first = None;
+    for (index, frame) in animation.frames.iter().enumerate() {
+        let image = DecodedImage {
+            width,
+            height,
+            rgba8: frame.rgba8.clone(),
+            color_space: animation.color_space.clone(),
+            icc_profile: animation.icc_profile.clone(),
+        };
+        let name =
+            raster::animation::frame_layer_name(&format!("Frame {}", index + 1), frame.delay_ms);
+        let (command, layer) = import_command(&image, &name, &mut tiles)?;
+        history.apply(&mut document, command)?;
+        if first.is_none() {
+            first = Some(layer);
+        } else {
+            history.apply(
+                &mut document,
+                Command::SetLayerProperties {
+                    layer_id: layer,
+                    patch: editor_core::LayerPatch {
+                        visible: Some(false),
+                        ..Default::default()
+                    },
+                },
+            )?;
+        }
+    }
+    let Some(layer) = first else {
+        return Err(ImportError::EmptyImage { width, height });
+    };
+    document
+        .set_active_layer(Some(layer))
+        .expect("the layer was just created in this document");
+    document.mark_saved();
+    history.clear();
+    Ok(ImportedDocument {
+        document,
+        history,
+        tiles,
+        layer,
+    })
+}
+
+/// The document's animation frames: its top-level `_a_` layers in play order
+/// (bottom of the stack first), each with the delay its name carries.
+pub fn animation_frame_layers(doc: &Document) -> Vec<(LayerId, u32)> {
+    doc.layers
+        .root()
+        .iter()
+        .rev()
+        .filter_map(|id| {
+            let layer = doc.layers.get(*id)?;
+            raster::animation::parse_frame_layer_name(&layer.name).map(|(_, delay)| (*id, delay))
+        })
+        .collect()
+}
+
+/// Composite one full-canvas frame per `_a_` layer: that frame layer shown,
+/// every other frame layer hidden, every non-frame layer as the document has
+/// it. Empty when the document has no frame layers.
+pub fn composite_animation_frames(
+    doc: &Document,
+    tiles: &MemoryTileSource,
+) -> Result<Vec<raster::animation::AnimationFrame>, ImportError> {
+    let frames = animation_frame_layers(doc);
+    let mut work = doc.clone();
+    let mut out = Vec::with_capacity(frames.len());
+    for (shown, (_, delay_ms)) in frames.iter().enumerate() {
+        for (index, (id, _)) in frames.iter().enumerate() {
+            if let Some(layer) = work.layers.get_mut(*id) {
+                layer.visible = index == shown;
+            }
+        }
+        let canvas = compositor::composite_region(
+            &work,
+            tiles,
+            raster::PixelRect::new(0, 0, work.width(), work.height()),
+            0,
+            compositor::CompositeOptions::default(),
+        )?;
+        out.push(raster::animation::AnimationFrame {
+            rgba8: canvas.to_rgba8(&work.meta.color_space),
+            delay_ms: *delay_ms,
+        });
+    }
+    Ok(out)
+}
+
 // ========================================================================= PSD
 //
 // A `.psd` is a *document*, not a picture. Reading one through
@@ -543,6 +655,21 @@ struct Tally {
     locked_all: Vec<String>,
     pass_through_blend: Vec<String>,
     color_labels: Vec<String>,
+    /// W9-C: (layer, font, substitute) for type layers whose engine data
+    /// names a font this machine does not have.
+    font_substitutions: Vec<(String, String, String)>,
+    /// W9-C: (layer, reason) for type layers whose engine data could not be
+    /// read; they import with the default styling (also in `editable_text`).
+    text_engine_errors: Vec<(String, String)>,
+    /// W9-C: (layer, what) for type layers whose engine data sets styling
+    /// the layer model cannot hold (`psd::engine_data::unmapped_styling`).
+    text_unmapped: Vec<(String, String)>,
+    /// W9-C: (layer, what) for exported type layers whose styling the
+    /// engine-data writer cannot spell (`psd::engine_data::unwritten_styling`).
+    text_unwritten: Vec<(String, String)>,
+    /// W9-B: the patterns the exported pattern fill layers name, for the
+    /// document's `Patt` block (deduplicated by id).
+    fill_patterns: Vec<psd::pattern::PsdPattern>,
 }
 
 /// `“a”, “b” and 3 more` — enough to recognise, short enough for a status bar.
@@ -722,7 +849,220 @@ impl Tally {
                 named(&names)
             ));
         }
+        // W9-C: engine data that could not be read, one sentence per layer
+        // (the reason differs), and missing fonts grouped by font.
+        for (name, reason) in &self.text_engine_errors {
+            notes.push(format!(
+                "the text styling of \u{201c}{name}\u{201d} could not be read ({reason}); \
+                 it was imported with the default font, size and fill"
+            ));
+        }
+        let mut by_what: std::collections::BTreeMap<&str, Vec<String>> = Default::default();
+        for (name, what) in &self.text_unmapped {
+            by_what.entry(what).or_default().push(name.clone());
+        }
+        for (what, names) in by_what {
+            notes.push(format!(
+                "the {what} in the text of {} did not import: a text layer \
+                 holds one value for these, taken from its first run or \
+                 paragraph, and keeps no per-run manual kerning",
+                named(&names)
+            ));
+        }
+        for (name, what) in &self.text_unwritten {
+            notes.push(format!(
+                "the {what} of \u{201c}{name}\u{201d} could not be written to its \
+                 editable text; the layer's raster fallback shows it as it was"
+            ));
+        }
+        let mut by_font: std::collections::BTreeMap<(&str, &str), Vec<String>> = Default::default();
+        for (name, font, substitute) in &self.font_substitutions {
+            let names = by_font.entry((font, substitute)).or_default();
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        for ((font, substitute), names) in by_font {
+            notes.push(format!(
+                "the font \u{201c}{font}\u{201d} used by {} is not installed; \
+                 \u{201c}{substitute}\u{201d} stands in for it until it is",
+                named(&names)
+            ));
+        }
     }
+}
+
+/// W9-C: a type layer mapped from its `TySh` block.
+struct PsdTextImport {
+    layer: TextLayer,
+    /// No engine-data styling applied: the editor's defaults stand in.
+    defaulted: bool,
+    /// Why the engine data could not be read, when it could not.
+    error: Option<String>,
+    /// (font, substitute) for every family the layer names that this machine
+    /// does not have.
+    missing_fonts: Vec<(String, String)>,
+    /// Styling the engine data sets that the layer model cannot hold, in
+    /// words (`psd::engine_data::unmapped_styling`).
+    unmapped: Vec<&'static str>,
+    /// Where the `TySh` transform's origin sits in the layer's own space
+    /// ([`psd_type_anchor`]); the layer transform is the `TySh` one moved
+    /// back by it.
+    anchor: glam::Vec2,
+}
+
+/// W9-C: where a type layer's `TySh` transform origin sits in the text
+/// layer's own space.
+///
+/// Photoshop anchors point text at the first line's baseline — at its left
+/// end, its centre or its right end as the paragraph is aligned. This
+/// editor's text layer has its origin at the top-left of the laid-out block
+/// (point text is aligned within the block's own width). So the anchor is
+/// the first line's baseline, at x = 0, the block's centre or its right edge
+/// — measured by shaping the layer with the shared font library. Box text:
+/// the box's top-left in the `TySh` space is `box_origin` (`BoxBounds`), and
+/// the anchor is its negation. Vertical text and a layer that shapes to no
+/// line keep the origin.
+fn psd_type_anchor(layer: &TextLayer, box_origin: [f64; 2]) -> glam::Vec2 {
+    use layer_model::text::{Alignment, Frame};
+    if matches!(layer.frame, Frame::Box { .. }) {
+        let [x, y] = box_origin;
+        let a = glam::Vec2::new(-(x as f32), -(y as f32));
+        return if a.is_finite() { a } else { glam::Vec2::ZERO };
+    }
+    if layer.paragraph.vertical || layer.text.is_empty() {
+        return glam::Vec2::ZERO;
+    }
+    let run = text_engine::TextRun::from(layer);
+    let shaped = text_engine::with_shared_library(|library| text_engine::shape(library, &run));
+    let Some(first) = shaped.lines.first() else {
+        return glam::Vec2::ZERO;
+    };
+    let left = shaped
+        .lines
+        .iter()
+        .fold(f32::INFINITY, |m, l| m.min(l.x_min));
+    let right = shaped
+        .lines
+        .iter()
+        .fold(f32::NEG_INFINITY, |m, l| m.max(l.x_max));
+    let x = match layer.paragraph.alignment {
+        Alignment::Center => (left + right) / 2.0,
+        Alignment::Right => right,
+        _ => 0.0,
+    };
+    let a = glam::Vec2::new(x, first.baseline_y);
+    if a.is_finite() {
+        a
+    } else {
+        glam::Vec2::ZERO
+    }
+}
+
+/// A family name as the file spells it (often a PostScript family such as
+/// `ArialMT` or `OpenSans`) mapped to an installed family's own spelling
+/// when one matches ignoring case, spaces and punctuation; otherwise kept as
+/// the file spelled it, so the layer renders right once the font is
+/// installed.
+fn resolve_psd_font(guess: &str, installed: &[String]) -> String {
+    let squash = |s: &str| -> String {
+        s.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let g = squash(guess);
+    // Photoshop's PostScript names end in `MT`, `PS` or both (`ArialMT`,
+    // `TimesNewRomanPSMT`, `TimesNewRomanPS` from `TimesNewRomanPS-BoldMT`):
+    // strip `mt`, then `ps` from what is left.
+    let no_mt = g.strip_suffix("mt").unwrap_or(&g);
+    let trimmed = no_mt.strip_suffix("ps").unwrap_or(no_mt);
+    installed
+        .iter()
+        .find(|f| f.eq_ignore_ascii_case(guess))
+        .or_else(|| {
+            installed.iter().find(|f| {
+                let q = squash(f);
+                !q.is_empty() && (q == g || q == no_mt || q == trimmed)
+            })
+        })
+        .cloned()
+        .unwrap_or_else(|| guess.to_owned())
+}
+
+/// Map a type layer's string and engine data onto a text layer (W9-C).
+///
+/// `None` when there is no string at all (neither `Txt ` nor the engine
+/// data's own text): the layer is then pixels. Engine data that parses but
+/// has no style runs, or that is malformed, leaves the editor's defaults in
+/// place (`defaulted`), with the reason kept for the report.
+fn psd_text_layer(
+    txt: Option<&str>,
+    engine: Result<Option<psd::engine_data::EngineText>, psd::engine_data::EngineDataError>,
+) -> Option<PsdTextImport> {
+    let (engine, error) = match engine {
+        Ok(e) => (e, None),
+        Err(e) => (None, Some(e.to_string())),
+    };
+    let text = txt.map(str::to_owned).or_else(|| {
+        engine
+            .as_ref()
+            .map(|e| e.text.clone())
+            .filter(|t| !t.is_empty())
+    })?;
+    let Some(engine) = engine.filter(|e| !e.style_runs.is_empty()) else {
+        let layer = TextLayer {
+            text,
+            font_family: TEXT_DEFAULT_FAMILY.to_string(),
+            size_px: TEXT_DEFAULT_SIZE,
+            ..TextLayer::default()
+        };
+        return Some(PsdTextImport {
+            anchor: psd_type_anchor(&layer, [0.0, 0.0]),
+            layer,
+            defaulted: true,
+            error,
+            missing_fonts: Vec::new(),
+            unmapped: Vec::new(),
+        });
+    };
+    let installed = compositor::font_families();
+    let unmapped = psd::engine_data::unmapped_styling(&engine, &text);
+    let layer = psd::engine_data::to_text_layer(
+        &engine,
+        &text,
+        TEXT_DEFAULT_FAMILY,
+        TEXT_DEFAULT_SIZE,
+        &mut |guess| resolve_psd_font(guess, &installed),
+    );
+    let generic = |f: &str| {
+        f.is_empty()
+            || ["sans-serif", "serif", "monospace", "cursive", "fantasy"]
+                .iter()
+                .any(|g| g.eq_ignore_ascii_case(f))
+    };
+    let mut missing_fonts: Vec<(String, String)> = Vec::new();
+    let families = std::iter::once(layer.font_family.as_str())
+        .chain(layer.spans.iter().filter_map(|s| s.style.family.as_deref()));
+    for family in families {
+        if generic(family)
+            || installed.iter().any(|f| f == family)
+            || missing_fonts.iter().any(|(f, _)| f == family)
+        {
+            continue;
+        }
+        let substitute = compositor::font_substitute_for(family)
+            .unwrap_or_else(|| TEXT_DEFAULT_FAMILY.to_string());
+        missing_fonts.push((family.to_owned(), substitute));
+    }
+    Some(PsdTextImport {
+        anchor: psd_type_anchor(&layer, engine.box_origin),
+        layer,
+        defaulted: false,
+        error,
+        missing_fonts,
+        unmapped,
+    })
 }
 
 /// A half-open rectangle in document pixels.
@@ -1238,7 +1578,10 @@ fn layer_common(
             tally.mask_params.push(source.name.clone());
         }
         layer.set_mask(attached);
-        if mask.real.is_some() {
+        // W9-G: with a `vmsk`/`vsms` path present, the second ("real") mask
+        // IS the pixel mask and the record's is the vector's rendering — both
+        // are imported (see `document_from_psd`), so nothing is dropped.
+        if mask.real.is_some() && !psd_vector_mask::has_path_block(source) {
             tally.second_masks.push(source.name.clone());
         }
     }
@@ -1263,13 +1606,23 @@ pub fn document_from_psd(
     // W8-D: the patterns the file defines, for its pattern overlays and
     // pattern fill layers to resolve against.
     let patterns = psd::pattern::PatternLibrary::read(&file, &psd::ReadOptions::default());
+    // W9-M: the files the document's smart objects place, and the asset each
+    // placed-file id has become (shared by every layer that places it).
+    let linked = psd::placed::LinkedFiles::read(&file, &psd::ReadOptions::default());
+    for refused in &linked.refused {
+        notes.push(format!(
+            "{refused}; smart objects that place it open as pixels"
+        ));
+    }
+    let mut placed_assets = std::collections::HashMap::new();
     for refused in &patterns.refused {
         notes.push(format!("{refused}; layers that use it keep no pattern"));
     }
     for warning in &file.warnings {
         notes.push(format!("the file was read with a repair: {warning}"));
     }
-    if header.depth != psd::Depth::Eight {
+    // W9-M: a 16-bit file opens as a 16-bit document; only 32 bits convert.
+    if header.depth == psd::Depth::ThirtyTwo {
         notes.push(format!(
             "this is a {}-bit-per-channel document; Raster Studio edits 8, so its pixels were \
              converted down",
@@ -1327,6 +1680,9 @@ pub fn document_from_psd(
 
     let mut document = Document::new(width, height, title);
     document.meta.color_space = profile_space;
+    if header.depth == psd::Depth::Sixteen {
+        document.meta.bit_depth = 16;
+    }
     let mut tiles = MemoryTileSource::new();
 
     let mut stack = vec![Frame {
@@ -1344,11 +1700,34 @@ pub fn document_from_psd(
         frame.index += 1;
 
         let before = tally.signature();
+        // W9-C: what the text mapping adds to this layer's report line.
+        let mut text_detail: Option<String> = None;
         let mut layer = layer_common(source, &mut tally, &patterns);
         let mut wants_pixels = false;
-        // W8-D: a pattern fill layer whose pattern the file carries.
-        let pattern_fill = source.adjustment.as_ref().and_then(|adjustment| {
-            psd::pattern::pattern_fill_layer(adjustment, &psd::ReadOptions::default(), &patterns)
+        // W9-M: a vector shape layer or a placed smart object opens live.
+        let live = if source.is_group() {
+            psd_live::Live::None
+        } else {
+            psd_live::live_kind(
+                source,
+                &linked,
+                &patterns,
+                width,
+                height,
+                &mut placed_assets,
+            )
+        };
+        // W9-B: a fill layer (`SoCo`, `GdFl`, or a `PtFl` whose pattern the
+        // file carries) opens as a LIVE fill layer, re-editable, no pixels.
+        let fill_source = source.adjustment.as_ref().and_then(|adjustment| {
+            psd::fill::fill_source(adjustment, &psd::ReadOptions::default()).or_else(|| {
+                psd::pattern::pattern_fill_layer(
+                    adjustment,
+                    &psd::ReadOptions::default(),
+                    &patterns,
+                )
+                .map(layer_model::FillSource::Pattern)
+            })
         });
         match &source.kind {
             psd::LayerKind::Group(group) => {
@@ -1362,6 +1741,22 @@ pub fn document_from_psd(
                     },
                 });
             }
+            psd::LayerKind::Raster if !matches!(live, psd_live::Live::None) => match &live {
+                psd_live::Live::Shape(shape) => layer.kind = LayerKind::Shape(shape.clone()),
+                psd_live::Live::Smart(placed) => {
+                    layer.kind = placed.kind.clone();
+                    layer.transform = placed.transform;
+                }
+                psd_live::Live::SmartFailed(why) => {
+                    wants_pixels = true;
+                    notes.push(format!(
+                        "the smart object “{}” was imported as pixels: {why}",
+                        source.name
+                    ));
+                    text_detail = Some(format!("smart object imported as pixels ({why})"));
+                }
+                psd_live::Live::None => {}
+            },
             psd::LayerKind::Raster => match &source.adjustment {
                 // Invert is the one adjustment whose whole definition is its
                 // name: there are no parameters to decode, so it maps exactly.
@@ -1370,16 +1765,14 @@ pub fn document_from_psd(
                         kind: AdjustmentKind::Invert,
                     });
                 }
-                Some(_) if pattern_fill.is_some() => {
-                    // W8-D: a pattern fill layer is a layer the pattern covers
-                    // whole: its pixels are the pattern tiled across the
-                    // canvas (written below, so it reads right with its style
-                    // hidden) and its pattern — scale, phase, angle, link —
-                    // is the W7-B pattern overlay, editable in Layer Style.
-                    layer.effects.pattern_overlay = Some(layer_model::PatternOverlayEffect {
-                        pattern: pattern_fill.clone().expect("checked by the guard"),
-                        ..layer_model::PatternOverlayEffect::default()
-                    });
+                Some(_) if fill_source.is_some() => {
+                    // W9-B: the fill's parameters — colour, ramp and its
+                    // geometry, or the pattern with its scale, phase, angle
+                    // and link — become the live layer's; the compositor
+                    // evaluates it, so nothing is baked here.
+                    layer.kind = LayerKind::Fill(layer_model::FillLayer::new(
+                        fill_source.clone().expect("checked by the guard"),
+                    ));
                 }
                 Some(adjustment) => {
                     // The payload survives in the `psd` crate's model but this
@@ -1392,30 +1785,60 @@ pub fn document_from_psd(
                     ));
                 }
                 None => {
-                    // A type layer's editable subset: a parseable `Txt ` string
-                    // and a `TySh` transform (any affine). The string and the
-                    // transform import as a real text layer; the font, size and
-                    // fill do not — without the engine data the file does not
-                    // name them, so the editor's new-text defaults stand in and
-                    // the substitution is reported by name. The `TySh` bytes
-                    // themselves stay in the `psd` model and survive a save
-                    // verbatim (`psd::text` writes back what it read).
-                    let parsed = source
-                        .text
-                        .as_ref()
-                        .and_then(|t| t.text.clone().map(|text| (t.transform, text)));
-                    if let Some((transform, text)) = parsed {
+                    // A type layer: the `Txt ` string (or the engine data's
+                    // own text) and the `TySh` transform (any affine) import
+                    // as a real text layer, styled from the engine data
+                    // (W9-C: fonts, sizes, fills per run, tracking, leading,
+                    // faux bold/italic, caps, paragraph alignment/indents,
+                    // point/box frame). A font this machine lacks is kept by
+                    // name and its substitute reported; engine data that is
+                    // absent or unreadable leaves the editor's new-text
+                    // defaults, reported by name (with the reason when it was
+                    // unreadable). The `TySh` bytes themselves stay in the
+                    // `psd` model and survive a save verbatim.
+                    let mapped = source.text.as_ref().and_then(|data| {
+                        let engine =
+                            psd::text::engine_text(&data.raw, &psd::ReadOptions::default());
+                        psd_text_layer(data.text.as_deref(), engine).map(|m| (data.transform, m))
+                    });
+                    if let Some((transform, mapped)) = mapped {
                         let [xx, xy, yx, yy, tx, ty] = transform;
-                        layer.kind = LayerKind::Text(TextLayer {
-                            text,
-                            font_family: TEXT_DEFAULT_FAMILY.to_string(),
-                            size_px: TEXT_DEFAULT_SIZE,
-                            ..TextLayer::default()
-                        });
+                        layer.kind = LayerKind::Text(mapped.layer);
+                        // W9-C: the `TySh` origin is Photoshop's anchor (the
+                        // first baseline, or the box corner); the layer's is
+                        // the block's top-left.
                         layer.transform = glam::Affine2::from_cols_array(&[
                             xx as f32, xy as f32, yx as f32, yy as f32, tx as f32, ty as f32,
-                        ]);
-                        tally.editable_text.push(source.name.clone());
+                        ]) * glam::Affine2::from_translation(-mapped.anchor);
+                        if mapped.defaulted {
+                            tally.editable_text.push(source.name.clone());
+                        }
+                        if let Some(reason) = mapped.error {
+                            text_detail = Some(format!("text styling unreadable ({reason})"));
+                            tally.text_engine_errors.push((source.name.clone(), reason));
+                        }
+                        if !mapped.missing_fonts.is_empty() {
+                            let fonts: Vec<&str> = mapped
+                                .missing_fonts
+                                .iter()
+                                .map(|(f, _)| f.as_str())
+                                .collect();
+                            text_detail = Some(format!("font substituted ({})", fonts.join(", ")));
+                        }
+                        if !mapped.unmapped.is_empty() {
+                            let what = mapped.unmapped.join(", ");
+                            let extra = format!("styling not imported ({what})");
+                            text_detail = Some(match text_detail.take() {
+                                Some(d) => format!("{d}; {extra}"),
+                                None => extra,
+                            });
+                            tally.text_unmapped.push((source.name.clone(), what));
+                        }
+                        for (font, substitute) in mapped.missing_fonts {
+                            tally
+                                .font_substitutions
+                                .push((source.name.clone(), font, substitute));
+                        }
                     } else {
                         // No parseable string: everything editable about this
                         // type layer is locked inside the engine data, so the
@@ -1432,30 +1855,35 @@ pub fn document_from_psd(
         let id = document.layers.insert_at(layer, parent, index)?;
 
         let mut placed = DocRect::EMPTY;
-        if let Some(tile) = pattern_fill.as_ref().and_then(|fill| fill.tile.as_ref()) {
-            // W8-D: the fill layer's pixels: its pattern tiled over the
-            // canvas from the fill's phase, at the pattern's own size.
-            let fill = pattern_fill.as_ref().expect("the tile came from it");
-            let (ox, oy) = (
-                fill.offset_px[0].round() as i64,
-                fill.offset_px[1].round() as i64,
-            );
-            let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
-            for y in 0..i64::from(height) {
-                for x in 0..i64::from(width) {
-                    rgba.extend_from_slice(&tile.pixel(x - ox, y - oy));
+        // W9-M: a smart object's source pixels are its tiles (in source
+        // space, drawn through the transform) and its file is its asset.
+        match &live {
+            psd_live::Live::Smart(p) => {
+                let (w, h) = (p.source.width, p.source.height);
+                let edits =
+                    tile_edits_for_rgba(&p.source.rgba8, psd::Rect::sized(w, h), &mut tiles);
+                if !edits.is_empty() {
+                    let delta = TileDelta::new(edits).map_err(editor_core::CommandError::from)?;
+                    document.pixels.apply(PixelKey::Layer(id), &delta);
                 }
+                document.set_asset_origin(p.asset.clone());
+                placed = DocRect::from_psd(source.bounds);
             }
-            let canvas = psd::Rect::sized(width, height);
-            let edits = tile_edits_for_rgba(&rgba, canvas, &mut tiles);
-            if !edits.is_empty() {
-                let delta = TileDelta::new(edits).map_err(editor_core::CommandError::from)?;
-                document.pixels.apply(PixelKey::Layer(id), &delta);
-            }
-            placed = DocRect::from_psd(canvas);
+            psd_live::Live::Shape(_) => placed = DocRect::from_psd(source.bounds),
+            _ => {}
         }
+        // W9-B: a fill layer owns no pixels — it is evaluated live — so the
+        // W8-D bake of a pattern fill's tiles is gone.
         if wants_pixels {
-            if let Some(rgba) = psd_layer_rgba(source, &header) {
+            // W9-M: a 16-bit layer keeps its 16-bit samples.
+            let deep = psd_live::deep_tile_edits(source, &header, &mut tiles);
+            if let Some(edits) = deep {
+                if !edits.is_empty() {
+                    let delta = TileDelta::new(edits).map_err(editor_core::CommandError::from)?;
+                    document.pixels.apply(PixelKey::Layer(id), &delta);
+                }
+                placed = DocRect::from_psd(source.bounds);
+            } else if let Some(rgba) = psd_layer_rgba(source, &header) {
                 let edits = tile_edits_for_rgba(&rgba, source.bounds, &mut tiles);
                 if !edits.is_empty() {
                     let delta = TileDelta::new(edits).map_err(editor_core::CommandError::from)?;
@@ -1467,7 +1895,48 @@ pub fn document_from_psd(
             }
         }
 
-        if let Some(mask) = &source.mask {
+        // W9-G: a `vmsk`/`vsms` path on a layer that is not a shape layer is
+        // a live vector mask. Photoshop then stores the vector's RENDERING in
+        // the mask record's channel: the pixel mask is the second ("real")
+        // record when there is one, and there is none when the record only
+        // came from rendering the vector — neither rendering becomes pixels.
+        let vector_path = psd_vector_mask::path_from_psd(source, width, height);
+        let real_pixel_mask = source.mask.as_ref().and_then(|m| {
+            let real = m.real.as_ref().filter(|_| vector_path.is_some())?;
+            let mut pm = psd::PsdMask::new(real.bounds, real.data.clone());
+            pm.default_color = real.default_color;
+            pm.relative_to_layer = real.relative_to_layer;
+            pm.disabled = real.disabled;
+            pm.invert = real.invert;
+            Some(pm)
+        });
+        let pixel_mask = match (&vector_path, &source.mask, &real_pixel_mask) {
+            (Some(_), _, Some(real)) => Some(real),
+            (Some(_), Some(m), None) if m.from_render => None,
+            (_, m, _) => m.as_ref(),
+        };
+        if let Some(real) = &real_pixel_mask {
+            if let Some(m) = document.layers.get_mut(id).and_then(|l| l.mask.as_mut()) {
+                m.enabled = !real.disabled;
+                m.inverted = real.invert;
+                m.linked = !real.relative_to_layer;
+            }
+        }
+        if let Some(path) = &vector_path {
+            let v = psd_vector_mask::vector_mask_of(path, source.mask.as_ref());
+            if let Some(l) = document.layers.get_mut(id) {
+                match (&mut l.mask, pixel_mask.is_some()) {
+                    (Some(m), true) => m.vector = Some(Box::new(v)),
+                    _ => {
+                        let mut vm = layer_model::LayerMask::vector_only(MaskId::new(), v);
+                        vm.linked = !path.not_linked;
+                        l.mask = Some(vm);
+                    }
+                }
+            }
+        }
+
+        if let Some(mask) = pixel_mask {
             // Card 076: no canvas clip here either — the mask's own box and
             // the layer's full extent can both reach past the canvas.
             let mask_area = DocRect::from_psd(mask.bounds);
@@ -1502,7 +1971,19 @@ pub fn document_from_psd(
 
         // Card 077: every layer lands in the report, classified by what its
         // import grew in the tally — editable, raster fallback, or unsupported.
-        let (outcome, detail) = tally.classify(&before);
+        let (outcome, mut detail) = tally.classify(&before);
+        if let Some(extra) = text_detail {
+            if !detail.is_empty() {
+                detail.push_str(", ");
+            }
+            detail.push_str(&extra);
+        }
+        // W9-M: a smart object whose source was lost is a raster fallback.
+        let outcome = if matches!(live, psd_live::Live::SmartFailed(_)) {
+            PsdLayerOutcome::RasterFallback
+        } else {
+            outcome
+        };
         notes.layers.push(PsdLayerReport {
             name: source.name.clone(),
             outcome,
@@ -1697,6 +2178,14 @@ fn crop_to_content(rgba: &[u8], rect: DocRect) -> Option<(DocRect, Vec<u8>)> {
     ))
 }
 
+// W9-M: shapes, smart objects, pattern overlays and 16 bits, live.
+#[path = "psd_live.rs"]
+mod psd_live;
+
+// W9-G: `vmsk`/`vsms` as live vector masks, both ways.
+#[path = "psd_vector_mask.rs"]
+mod psd_vector_mask;
+
 /// One level of the document's tree as `.psd` layer records, bottom-to-top.
 fn psd_layers_for(
     document: &Document,
@@ -1705,6 +2194,7 @@ fn psd_layers_for(
     canvas: DocRect,
     depth: usize,
     tally: &mut Tally,
+    extras: &mut psd_live::PsdExportExtras,
 ) -> Result<Vec<psd::PsdLayer>, ImportError> {
     if depth > MAX_PSD_GROUP_DEPTH {
         return Err(ImportError::PsdTooDeep {
@@ -1737,12 +2227,19 @@ fn psd_layers_for(
             // Card 080: the four supported effects are written as real lfx2
             // descriptors — an independent reader can toggle and restyle
             // them. Kinds this writer cannot produce are named, as before.
-            match psd::effects::export_effects(&layer.effects) {
-                Some((data, unmapped)) => {
+            // W9-M: a pattern overlay whose pattern has pixels travels too,
+            // its pattern in the document's `Patt` block.
+            match psd::effects::export_effects_with_patterns(&layer.effects) {
+                Some((data, unmapped, patterns)) => {
                     record.effects = Some(psd::Effects {
                         key: *b"lfx2",
                         data,
                     });
+                    for pattern in patterns {
+                        if !extras.patterns.iter().any(|p| p.id == pattern.id) {
+                            extras.patterns.push(pattern);
+                        }
+                    }
                     for kind in unmapped {
                         tally.unmapped_effects.push((layer.name.clone(), kind));
                     }
@@ -1756,8 +2253,15 @@ fn psd_layers_for(
         let mut render_fallback = false;
         match &layer.kind {
             LayerKind::Group(group) => {
-                let children =
-                    psd_layers_for(document, tiles, &group.children, canvas, depth + 1, tally)?;
+                let children = psd_layers_for(
+                    document,
+                    tiles,
+                    &group.children,
+                    canvas,
+                    depth + 1,
+                    tally,
+                    extras,
+                )?;
                 let pass_through = group.blending == GroupBlending::PassThrough;
                 if pass_through && layer.blend_mode != BlendMode::Normal {
                     tally.pass_through_blend.push(layer.name.clone());
@@ -1784,12 +2288,52 @@ fn psd_layers_for(
                 }
             }
             LayerKind::Raster(_) | LayerKind::Generator(_) => wants_pixels = true,
-            LayerKind::Shape(_) | LayerKind::SmartObject(_) => {
-                // Card 078: these kinds carry editable content a .psd cannot
-                // hold, but they can still LOOK right: the record's channels
-                // get the layer's rendered appearance, with its real
-                // transform, from the one compositor.
-                tally.raster_fallback.push(layer.name.clone());
+            // W9-B: a live fill layer goes out as its SoCo / GdFl / PtFl
+            // fill-layer key, no pixels (a reader evaluates it itself).
+            LayerKind::Fill(fill_layer) => {
+                record.pixel_data_irrelevant = true;
+                // `SoCo` has no alpha: a translucent colour's alpha rides the
+                // record's fill opacity, which composites identically.
+                if let layer_model::FillSource::Solid { color } = &fill_layer.source {
+                    let alpha = layer_model::blend::unit(color[3]);
+                    if alpha < 1.0 {
+                        record.fill_opacity = Some(to_byte(fill * alpha));
+                    }
+                }
+                match psd_fill_record(&fill_layer.source, &mut tally.fill_patterns) {
+                    Some(adjustment) => record.adjustment = Some(adjustment),
+                    None => tally.adjustments.push(layer.name.clone()),
+                }
+            }
+            LayerKind::Shape(shape) => {
+                // W9-M: a shape travels as a real shape layer — path, fill,
+                // stroke — with its rendered appearance in the channels for
+                // readers that ignore vectors. What a .psd shape cannot say
+                // keeps the card-078 raster fallback, named.
+                let (width, height) = (document.width(), document.height());
+                match psd_live::shape_blocks(shape, layer.transform, width, height, extras) {
+                    Some((fill, blocks)) => {
+                        record.adjustment = Some(fill);
+                        record.extra.extend(blocks);
+                        // The path draws the layer; its channels are only
+                        // the rendered preview (and the flag is what tells
+                        // a reader it is a shape, not a fill layer).
+                        record.pixel_data_irrelevant = true;
+                    }
+                    None => tally.raster_fallback.push(layer.name.clone()),
+                }
+                wants_pixels = true;
+                render_fallback = true;
+            }
+            LayerKind::SmartObject(object) => {
+                // W9-M: an embedded, unfiltered smart object travels as a
+                // placed layer (`SoLd`) with its source file in the
+                // document's `lnk2` block; linked or filtered ones keep the
+                // card-078 raster fallback, named.
+                match psd_live::smart_blocks(document, object, layer.transform, extras) {
+                    Some(blocks) => record.extra.extend(blocks),
+                    None => tally.raster_fallback.push(layer.name.clone()),
+                }
                 wants_pixels = true;
                 render_fallback = true;
             }
@@ -1837,7 +2381,17 @@ fn psd_layers_for(
                 // affine in the format's [xx xy yx yy tx ty] spelling (glam
                 // stores the matrix column-major: x_axis, y_axis).
                 if let LayerKind::Text(text) = &layer.kind {
-                    let affine = layer.transform;
+                    // W9-C: Photoshop's origin is the anchor (first
+                    // baseline at the aligned edge), not the block's
+                    // top-left; box text is written with its box at 0, 0.
+                    let affine = layer.transform
+                        * glam::Affine2::from_translation(psd_type_anchor(text, [0.0, 0.0]));
+                    let unwritten = psd::engine_data::unwritten_styling(text);
+                    if !unwritten.is_empty() {
+                        tally
+                            .text_unwritten
+                            .push((layer.name.clone(), unwritten.join(", ")));
+                    }
                     let tf = [
                         f64::from(affine.x_axis.x),
                         f64::from(affine.x_axis.y),
@@ -1850,16 +2404,12 @@ fn psd_layers_for(
                     record.text = Some(psd::TextData {
                         transform: tf,
                         text: Some(text.text.clone()),
-                        raw: psd::text::build(
-                            &text.text,
+                        // W9-C: every style run (family, size, fill, …), the
+                        // paragraph and the frame travel in the engine data.
+                        raw: psd::text::build_styled(
+                            &psd::engine_data::from_text_layer(text),
                             tf,
                             (b.left, b.top, b.right, b.bottom),
-                            if text.font_family.is_empty() {
-                                "RasterStudioSans"
-                            } else {
-                                &text.font_family
-                            },
-                            f64::from(text.size_px),
                         ),
                     });
                 }
@@ -1869,7 +2419,10 @@ fn psd_layers_for(
                         tally.transformed.push(layer.name.clone());
                     }
                     let doc_area = tile_map_rect(map).offset(dx, dy).clip(canvas);
-                    if !doc_area.is_empty() {
+                    if !doc_area.is_empty() && extras.deep {
+                        // W9-M: a 16-bit document writes its stored samples.
+                        psd_live::set_deep_pixels(&mut record, map, tiles, doc_area, dx, dy);
+                    } else if !doc_area.is_empty() {
                         let source = doc_area.offset(-dx, -dy);
                         let rgba = rgba_from_tiles(map, tiles, source);
                         if let Some((bounds, cropped)) = crop_to_content(&rgba, doc_area) {
@@ -1882,7 +2435,9 @@ fn psd_layers_for(
         }
 
         if let Some(mask) = &layer.mask {
-            if mask.kind == MaskKind::Vector {
+            // W9-G: a legacy vector-kind mask with no path is written as its
+            // stored coverage; a live vector mask is written as its path.
+            if mask.kind == MaskKind::Vector && mask.vector.is_none() {
                 tally.vector_masks.push(layer.name.clone());
             }
             if mask.density() != 1.0 || mask.feather_px() != 0.0 {
@@ -1902,6 +2457,58 @@ fn psd_layers_for(
                     written.invert = mask.inverted;
                     written.relative_to_layer = !mask.linked;
                     record.mask = Some(written);
+                }
+            }
+            // W9-G: the vector mask as `vmsk` path records (document
+            // pixels, through the layer's and the mask's pose), and its
+            // density and feather in the mask record's parameter block.
+            if let Some(v) = &mask.vector {
+                let taken = record
+                    .extra
+                    .iter()
+                    .any(|b| &b.key == b"vmsk" || &b.key == b"vsms");
+                let pose = layer.transform * *mask.transform;
+                match psd_vector_mask::vector_path_of(v, pose, !mask.linked) {
+                    Some(path) if !taken => {
+                        record.extra.push(psd::TaggedBlock::new(
+                            *b"vmsk",
+                            path.encode(document.width(), document.height()),
+                        ));
+                        // With a pixel mask too, the first record becomes the
+                        // vector's rendering and the pixel mask the `real`
+                        // one — the convention the import above reads.
+                        if let Some(pixel) = record.mask.take() {
+                            record.mask = Some(psd_vector_mask::with_real_pixel_mask(
+                                v,
+                                pose,
+                                (document.width(), document.height()),
+                                pixel,
+                                extras.deep,
+                            ));
+                        }
+                        let density =
+                            (v.density() != 1.0).then(|| (v.density() * 255.0).round() as u8);
+                        let feather = (v.feather_px() != 0.0).then(|| f64::from(v.feather_px()));
+                        if density.is_some() || feather.is_some() {
+                            // A vector-only mask has no pixel record to ride
+                            // on: an empty one, flagged as rendered from other
+                            // data, carries the pair (and reads back as no
+                            // pixel mask).
+                            let rec = record.mask.get_or_insert_with(|| {
+                                let mut m = psd::PsdMask::new(psd::Rect::default(), Vec::new());
+                                m.default_color = 255;
+                                m.from_render = true;
+                                m
+                            });
+                            rec.vector_density = density;
+                            rec.vector_feather_px = feather;
+                        }
+                    }
+                    // Not writable as a path (unparseable, or the record's
+                    // path block is already a shape's outline): the note is
+                    // true only when stored coverage went out instead.
+                    _ if record.mask.is_some() => tally.vector_masks.push(layer.name.clone()),
+                    _ => {}
                 }
             }
         }
@@ -1940,11 +2547,21 @@ pub fn psd_from_document(
     let mut notes = PsdNotes::default();
     let canvas = DocRect::canvas(width, height);
     let mut file = psd::PsdFile::new(psd::PsdHeader::rgba8(width, height));
-    file.merged = Some(psd::MergedImage::from_rgba8(
-        width,
-        height,
-        composite_rgba8,
-    )?);
+    // W9-M: a 16-bit document is written as a 16-bit file.
+    let mut extras = psd_live::PsdExportExtras {
+        deep: document.meta.bit_depth == 16,
+        ..Default::default()
+    };
+    if extras.deep {
+        file.header.depth = psd::Depth::Sixteen;
+        file.merged = Some(psd_live::merged_sixteen(width, height, composite_rgba8));
+    } else {
+        file.merged = Some(psd::MergedImage::from_rgba8(
+            width,
+            height,
+            composite_rgba8,
+        )?);
+    }
     file.layers = psd_layers_for(
         document,
         tiles,
@@ -1952,9 +2569,47 @@ pub fn psd_from_document(
         canvas,
         0,
         &mut tally,
+        &mut extras,
     )?;
+    if extras.deep {
+        psd_live::widen_to_sixteen(&mut file.layers);
+    }
+    // W9-M: pattern-overlay patterns share the one `Patt` block.
+    for pattern in std::mem::take(&mut extras.patterns) {
+        if !tally.fill_patterns.iter().any(|p| p.id == pattern.id) {
+            tally.fill_patterns.push(pattern);
+        }
+    }
+    extras.finish(&mut file);
+    // W9-B: the pixels every exported pattern fill layer names.
+    if !tally.fill_patterns.is_empty() {
+        file.extra.push(psd::TaggedBlock::new(
+            *b"Patt",
+            psd::pattern::encode_block(&tally.fill_patterns),
+        ));
+    }
     tally.record(&mut notes);
     Ok((psd::write(&file)?, notes))
+}
+
+/// W9-B: a live fill layer's `.psd` fill-layer payload, recording a pattern
+/// fill's pixels in `patterns` for the `Patt` block. `None` for a pattern fill
+/// with no pattern (nothing a reader could evaluate).
+fn psd_fill_record(
+    source: &layer_model::FillSource,
+    patterns: &mut Vec<psd::pattern::PsdPattern>,
+) -> Option<psd::Adjustment> {
+    match source {
+        layer_model::FillSource::Solid { color } => Some(psd::fill::encode_solid_fill(*color)),
+        layer_model::FillSource::Gradient(g) => Some(psd::fill::encode_gradient_fill(g)),
+        layer_model::FillSource::Pattern(p) => {
+            let (adjustment, pattern) = psd::fill::encode_pattern_fill(p)?;
+            if !patterns.iter().any(|known| known.id == pattern.id) {
+                patterns.push(pattern);
+            }
+            Some(adjustment)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3034,8 +3689,10 @@ mod tests {
         assert_eq!(styled.effects.count(), 2);
     }
 
+    /// W9-M: a 16-bit `.psd` opens as a 16-bit document whose layer keeps
+    /// every 16-bit sample (it used to be rounded to 8 bits, with a note).
     #[test]
-    fn a_deep_bit_depth_document_is_converted_and_the_user_is_told() {
+    fn a_sixteen_bit_psd_opens_as_a_sixteen_bit_document_with_every_sample() {
         // A 16-bit document: every sample is two big-endian bytes, so a reader
         // that treats the planes as 8-bit would produce half-width garbage.
         let mut header = psd::PsdHeader::rgba8(4, 2);
@@ -3059,15 +3716,23 @@ mod tests {
 
         let import = document_from_psd(&bytes, "deep.psd", 10).unwrap();
         let doc = &import.imported.document;
+        assert_eq!(doc.meta.bit_depth, 16, "the document stays 16-bit");
         let id = doc.layers.root()[0];
+        let hash = doc
+            .layer_tiles(id)
+            .and_then(|m| m.get(TileCoord::new(0, 0, 0)))
+            .expect("the layer's tile is stored");
+        let tile = compositor::TileSource::tile(&import.imported.tiles, hash).unwrap();
+        let samples = raster::depth::rgba16_samples(tile).expect("a colour tile");
+        let i = (TILE_SIZE as usize + 1) * 4;
         assert_eq!(
-            stored_pixel(doc, &import.imported.tiles, id, 1, 1),
-            [255, 128, 0, 255],
-            "16-bit samples must round, not truncate"
+            samples[i..i + 4],
+            [0xFFFF, 0x8000, 0x0000, 0xFFFF],
+            "0x8000 is not an 8-bit code: it survives only at 16 bits"
         );
         assert!(
-            import.notes.summary().is_some_and(|s| s.contains("16-bit")),
-            "{:?}",
+            import.notes.summary().is_none_or(|s| !s.contains("16-bit")),
+            "nothing was converted down: {:?}",
             import.notes
         );
     }
@@ -3428,6 +4093,7 @@ mod tests {
                     fill: Some([1.0, 0.0, 0.0, 1.0]),
                     fill_rule: layer_model::ShapeFillRule::NonZero,
                     stroke: None,
+                    ..Default::default()
                 }),
             ))
             .unwrap();
@@ -3466,7 +4132,23 @@ mod tests {
         let composite = vec![0u8; 96 * 64 * 4];
         let (bytes, notes) = psd_from_document(&doc, &tiles, &composite).unwrap();
 
-        // The fallback is named, not silent.
+        // W9-M: the shape travels as a real shape layer, so nothing falls
+        // back; its rendered appearance still rides in the channels.
+        assert!(notes.is_empty(), "{notes:?}");
+        let record = psd::read(&bytes).unwrap();
+        let badge = record.layers.iter().find(|l| l.name == "Badge").unwrap();
+        assert!(
+            badge.extra.iter().any(|b| b.key == *b"vmsk"),
+            "the path travels"
+        );
+
+        // A translucent fill has no `.psd` spelling: that shape keeps the
+        // card-078 raster fallback, and says so.
+        let (mut translucent, tiles2, layer) = shape_document();
+        if let LayerKind::Shape(shape) = &mut translucent.layers.get_mut(layer).unwrap().kind {
+            shape.fill = Some([1.0, 0.0, 0.0, 0.5]);
+        }
+        let (_, notes) = psd_from_document(&translucent, &tiles2, &composite).unwrap();
         let told = notes.summary().expect("the fallback must be named");
         assert!(told.contains("Badge"), "{told}");
         assert!(told.contains("raster layer's pixels"), "{told}");
@@ -3810,23 +4492,85 @@ mod w8d_pattern_tests {
             .unwrap_or_else(|| panic!("no layer called {name}"))
     }
 
-    fn stored_pixel(
-        doc: &Document,
-        src: &MemoryTileSource,
-        layer: LayerId,
-        x: u32,
-        y: u32,
-    ) -> [u8; 4] {
-        let Some(map) = doc.layer_tiles(layer) else {
-            return [0; 4];
+    /// W9-B: every live fill kind leaves as its fill-layer key and comes
+    /// back as the same live kind with the same parameters; the pattern's
+    /// pixels travel in the file's `Patt` block.
+    #[test]
+    fn psd_round_trip_keeps_every_fill_layer_live() {
+        let tile = layer_model::PatternTile::new("Checks", 2, 2, checks().rgba8).unwrap();
+        let gradient = layer_model::GradientFill {
+            gradient: layer_model::Gradient {
+                stops: vec![
+                    layer_model::GradientStop {
+                        position: 0.0,
+                        color: [1.0, 0.0, 0.0, 1.0],
+                        midpoint: 0.5,
+                    },
+                    layer_model::GradientStop {
+                        position: 1.0,
+                        color: [0.0, 0.0, 1.0, 1.0],
+                        midpoint: 0.5,
+                    },
+                ],
+                ..layer_model::Gradient::default()
+            },
+            style: layer_model::GradientStyle::Reflected,
+            angle_deg: 45.0,
+            scale: 0.5,
+            reverse: true,
+            dither: false,
+            offset_px: [0.0, 0.0],
         };
-        let coord = TileCoord::new((x / TILE_SIZE) as i32, (y / TILE_SIZE) as i32, 0);
-        let Some(hash) = map.get(coord) else {
-            return [0; 4];
-        };
-        let data = compositor::TileSource::tile(src, hash).expect("the hash resolves");
-        let i = (((y % TILE_SIZE) * TILE_SIZE + (x % TILE_SIZE)) * 4) as usize;
-        [data[i], data[i + 1], data[i + 2], data[i + 3]]
+        let sources = [
+            layer_model::FillSource::Solid {
+                color: [0.0, 1.0, 0.0, 1.0],
+            },
+            layer_model::FillSource::Gradient(gradient),
+            layer_model::FillSource::Pattern(layer_model::PatternFill {
+                tile: Some(tile),
+                scale: 1.0,
+                link_with_layer: false,
+                ..layer_model::PatternFill::default()
+            }),
+        ];
+        let mut document = Document::new(W, H, "fills");
+        for (i, source) in sources.iter().enumerate() {
+            document
+                .layers
+                .push_root(layer_model::Layer::with_kind(
+                    format!("Fill {i}"),
+                    LayerKind::Fill(layer_model::FillLayer::new(source.clone())),
+                ))
+                .unwrap();
+        }
+        let tiles = MemoryTileSource::new();
+        let composite = compositor::composite_region(
+            &document,
+            &tiles,
+            raster::PixelRect::new(0, 0, W, H),
+            0,
+            compositor::CompositeOptions::default(),
+        )
+        .unwrap()
+        .to_rgba8(&document.meta.color_space);
+        let (bytes, notes) = psd_from_document(&document, &tiles, &composite).unwrap();
+        assert!(
+            notes.summary().is_none(),
+            "a fill layer exports without loss: {:?}",
+            notes.summary()
+        );
+
+        let back = document_from_psd(&bytes, "fills.psd", 10).unwrap();
+        let doc = &back.imported.document;
+        for (i, source) in sources.iter().enumerate() {
+            let layer = doc.layers.get(find(doc, &format!("Fill {i}"))).unwrap();
+            match &layer.kind {
+                LayerKind::Fill(live) => {
+                    assert_eq!(&live.source, source, "Fill {i} changed on the way")
+                }
+                other => panic!("Fill {i} came back as {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -3852,28 +4596,50 @@ mod w8d_pattern_tests {
         assert_eq!(tile.rgba8(), want.rgba8.as_slice());
         assert_eq!(tile.name(), "Checks");
 
-        // The fill layer: the pattern tiled over the canvas, and the pattern
-        // itself the layer's overlay.
+        // W9-B: the fill layer opens as a LIVE pattern fill layer — the
+        // file's pattern and placement, no stored pixels — and composites the
+        // pattern tiled over the canvas.
         let fill_id = find(doc, "Pattern Fill 1");
         let fill = doc.layers.get(fill_id).unwrap();
-        let fill_overlay = fill
-            .effects
-            .pattern_overlay
-            .as_ref()
-            .expect("the fill layer's pattern mapped");
+        let LayerKind::Fill(live) = &fill.kind else {
+            panic!("the PtFl layer opened as {:?}", fill.kind);
+        };
+        let layer_model::FillSource::Pattern(pattern) = &live.source else {
+            panic!("the PtFl layer opened as {:?}", live.source);
+        };
         assert_eq!(
-            fill_overlay
-                .pattern
-                .tile
-                .as_ref()
-                .map(|t| t.rgba8().to_vec()),
+            pattern.tile.as_ref().map(|t| t.rgba8().to_vec()),
             Some(want.rgba8.clone())
         );
+        assert!(
+            fill.effects.pattern_overlay.is_none(),
+            "no stand-in overlay"
+        );
         let src = &import.imported.tiles;
+        assert!(
+            doc.layer_tiles(fill_id).is_none_or(|m| m.is_empty()),
+            "a live fill layer stores no pixels"
+        );
+        let rendered = compositor::composite_subtree(
+            doc,
+            src,
+            fill_id,
+            raster::PixelRect::new(0, 0, W, H),
+            0,
+            compositor::CompositeOptions::default(),
+        )
+        .unwrap()
+        .to_rgba8(&doc.meta.color_space);
         for (x, y) in [(0u32, 0u32), (1, 0), (0, 1), (1, 1), (6, 7), (7, 7)] {
             let i = (((y % 2) * 2 + (x % 2)) * 4) as usize;
+            let at = ((y * W + x) * 4) as usize;
             assert_eq!(
-                stored_pixel(doc, src, fill_id, x, y),
+                [
+                    rendered[at],
+                    rendered[at + 1],
+                    rendered[at + 2],
+                    rendered[at + 3]
+                ],
                 [
                     want.rgba8[i],
                     want.rgba8[i + 1],
@@ -3907,5 +4673,487 @@ mod w8d_pattern_tests {
         assert!(!told.contains("PtFl"), "{told}");
         let missing = doc.layers.get(find(doc, "Missing")).unwrap();
         assert!(missing.effects.pattern_overlay.is_none());
+    }
+}
+
+/// W9-C: a type layer's engine data styles the imported text layer — family,
+/// size and fill per run — and a font the machine lacks is reported by name;
+/// malformed engine data is a report line, never a panic.
+#[cfg(test)]
+mod w9c_text_tests {
+    use super::*;
+    use layer_model::text::{Alignment, BaseStyle, Paragraph, StyleOverride, StyleSpan, Weight};
+
+    const MISSING: &str = "W9C Missing Display";
+    const OTHER: &str = "W9C Other Serif";
+
+    fn styled() -> TextLayer {
+        TextLayer {
+            text: "Big sale".into(),
+            font_family: MISSING.into(),
+            size_px: 40.0,
+            style: BaseStyle {
+                fill: [1.0, 0.0, 0.0, 1.0],
+                ..BaseStyle::default()
+            },
+            spans: vec![StyleSpan {
+                start: 4,
+                end: 8,
+                style: StyleOverride {
+                    family: Some(OTHER.into()),
+                    size_px: Some(18.0),
+                    weight: Some(Weight::BOLD),
+                    fill: Some([0.0, 0.0, 1.0, 1.0]),
+                    ..StyleOverride::default()
+                },
+            }],
+            paragraph: Paragraph {
+                alignment: Alignment::Center,
+                ..Paragraph::default()
+            },
+            ..TextLayer::default()
+        }
+    }
+
+    /// A `TySh` block with the given engine data, shaped like Photoshop's.
+    fn tysh(text: &str, engine: &[u8]) -> Vec<u8> {
+        tysh_at(text, engine, [1.0, 0.0, 0.0, 1.0, 5.0, 6.0])
+    }
+
+    /// [`tysh`] with its own transform.
+    fn tysh_at(text: &str, engine: &[u8], transform: [f64; 6]) -> Vec<u8> {
+        let mut s = psd::bytes::Sink::new();
+        s.u16(1);
+        for v in transform {
+            s.f64(v);
+        }
+        s.u16(50);
+        s.u32(16);
+        let mut d = psd::Descriptor::new("TxLr");
+        d.push("Txt ", psd::Value::from(text)).unwrap();
+        d.push("EngineData", psd::Value::RawData(engine.to_vec()))
+            .unwrap();
+        d.write(&mut s).unwrap();
+        s.u16(1);
+        s.u32(16);
+        psd::Descriptor::new("warp").write(&mut s).unwrap();
+        for v in [0, 0, 10, 10] {
+            s.i32(v);
+        }
+        s.into_inner()
+    }
+
+    fn psd_with(name: &str, text: &str, raw: Vec<u8>) -> Vec<u8> {
+        let mut file = psd::PsdFile::new(psd::PsdHeader::rgba8(64, 48));
+        let mut layer = psd::PsdLayer::raster(name, psd::Rect::default());
+        layer.text = Some(psd::TextData {
+            transform: [1.0, 0.0, 0.0, 1.0, 5.0, 6.0],
+            text: Some(text.to_owned()),
+            raw,
+        });
+        file.layers.push(layer);
+        psd::write(&file).unwrap()
+    }
+
+    fn text_layer(import: &PsdImport, name: &str) -> TextLayer {
+        let doc = &import.imported.document;
+        let id = doc
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .find(|id| doc.layers.get(*id).is_some_and(|l| l.name == name))
+            .expect("the layer imported");
+        match &doc.layers.get(id).unwrap().kind {
+            LayerKind::Text(t) => t.clone(),
+            other => panic!("{name} imported as {other:?}, not text"),
+        }
+    }
+
+    fn close(a: [f32; 4], b: [f32; 4]) -> bool {
+        a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5)
+    }
+
+    fn assert_styled_runs(t: &TextLayer) {
+        assert_eq!(t.text, "Big sale");
+        assert_eq!(t.font_family, MISSING, "the file's family, not the default");
+        assert_eq!(t.size_px, 40.0);
+        assert!(
+            close(t.style.fill, [1.0, 0.0, 0.0, 1.0]),
+            "{:?}",
+            t.style.fill
+        );
+        assert_eq!(t.paragraph.alignment, Alignment::Center);
+        assert_eq!(t.spans.len(), 1, "{:?}", t.spans);
+        let span = &t.spans[0];
+        assert_eq!((span.start, span.end), (4, 8));
+        assert_eq!(span.style.family.as_deref(), Some(OTHER));
+        assert_eq!(span.style.size_px, Some(18.0));
+        assert_eq!(span.style.weight, Some(Weight::BOLD));
+        assert!(close(span.style.fill.unwrap(), [0.0, 0.0, 1.0, 1.0]));
+    }
+
+    #[test]
+    fn a_writer_built_type_layer_imports_with_every_runs_family_size_and_fill() {
+        let raw = psd::text::build_styled(
+            &psd::engine_data::from_text_layer(&styled()),
+            [1.0, 0.0, 0.0, 1.0, 5.0, 6.0],
+            (0, 0, 10, 10),
+        );
+        let import = document_from_psd(&psd_with("Promo", "Big sale", raw), "w9c.psd", 10).unwrap();
+        assert_styled_runs(&text_layer(&import, "Promo"));
+
+        // Styled, not defaulted: no default-font note; the missing fonts are
+        // named with their stand-in, and the layer stays editable.
+        let notes = import.notes.notes().join("\n");
+        assert!(!notes.contains("default font, size and fill"), "{notes}");
+        assert!(!notes.contains("did not import"), "all mapped: {notes}");
+        let named_missing = format!(
+            "the font \u{201c}{MISSING}\u{201d} used by \u{201c}Promo\u{201d} is not installed"
+        );
+        assert!(notes.contains(&named_missing), "{notes}");
+        assert!(
+            notes.contains(&format!("\u{201c}{OTHER}\u{201d}")),
+            "{notes}"
+        );
+        let report = &import.notes.layers()[0];
+        assert_eq!(report.outcome, PsdLayerOutcome::Editable, "{report:?}");
+        assert!(report.detail.contains("font substituted"), "{report:?}");
+        assert!(report.detail.contains(MISSING), "{report:?}");
+    }
+
+    /// The whole route: a styled document, exported to `.psd` and imported
+    /// again, brings every run back.
+    #[test]
+    fn a_styled_text_layer_survives_export_and_import() {
+        let mut doc = Document::new(96, 64, "w9c");
+        let tiles = MemoryTileSource::new();
+        doc.layers
+            .push_root(Layer::with_kind("Promo", LayerKind::Text(styled())))
+            .unwrap();
+        let composite = vec![0u8; 96 * 64 * 4];
+        let (bytes, _) = psd_from_document(&doc, &tiles, &composite).unwrap();
+        let import = document_from_psd(&bytes, "again.psd", 10).unwrap();
+        assert_styled_runs(&text_layer(&import, "Promo"));
+    }
+
+    /// Hand-crafted engine data in Photoshop's own spelling: UTF-16 strings
+    /// with the BOM, a FontSet of PostScript names (index 0 the invisible
+    /// font), two style runs over the normal sheet.
+    #[test]
+    fn hand_crafted_photoshop_engine_data_imports_per_run() {
+        let utf16 = |s: &str| -> Vec<u8> {
+            let mut v = vec![b'(', 0xfe, 0xff];
+            for u in s.encode_utf16() {
+                for b in u.to_be_bytes() {
+                    if matches!(b, b'(' | b')' | b'\\') {
+                        v.push(b'\\');
+                    }
+                    v.push(b);
+                }
+            }
+            v.push(b')');
+            v
+        };
+        let mut e: Vec<u8> = b"\n\n<<\n\t/EngineDict\n\t<<\n\t\t/Editor << /Text ".to_vec();
+        e.extend(utf16("SALE now\r"));
+        e.extend_from_slice(
+            b" >>\n\t\t/ParagraphRun << /RunArray [ << /ParagraphSheet << /Properties << /Justification 1 >> >> >> ] /RunLengthArray [ 9 ] >>\n\t\t/StyleRun << /RunArray [\n\t\t\t<< /StyleSheet << /StyleSheetData << /Font 1 /FontSize 36.0 /FillColor << /Type 1 /Values [ 1.0 0.0 1.0 0.0 ] >> >> >> >>\n\t\t\t<< /StyleSheet << /StyleSheetData << /Font 2 /FontSize 14.0 /FauxItalic true >> >> >>\n\t\t] /RunLengthArray [ 5 4 ] >>\n\t>>\n\t/ResourceDict << /FontSet [ << /Name ",
+        );
+        e.extend(utf16("AdobeInvisFont"));
+        e.extend_from_slice(b" >> << /Name ");
+        e.extend(utf16("W9CMissingSans-Bold"));
+        e.extend_from_slice(b" >> << /Name ");
+        e.extend(utf16("W9C-Missing-Mono"));
+        e.extend_from_slice(
+            b" >> ] /StyleSheetSet [ << /StyleSheetData << /Font 0 /FontSize 12.0 /FillColor << /Type 1 /Values [ 1.0 0.0 0.0 0.0 ] >> >> >> ] /TheNormalStyleSheet 0 >>\n>>\n",
+        );
+        let bytes = psd_with("Hand", "SALE now", tysh("SALE now", &e));
+        let import = document_from_psd(&bytes, "h.psd", 10).unwrap();
+        let t = text_layer(&import, "Hand");
+        assert_eq!(t.font_family, "W9CMissingSans", "the PostScript family");
+        assert_eq!(t.style.weight, Weight::BOLD, "the PostScript -Bold");
+        assert_eq!(t.size_px, 36.0);
+        assert!(
+            close(t.style.fill, [0.0, 1.0, 0.0, 1.0]),
+            "{:?}",
+            t.style.fill
+        );
+        assert_eq!(t.paragraph.alignment, Alignment::Right);
+        assert_eq!(t.spans.len(), 1, "{:?}", t.spans);
+        let s = &t.spans[0];
+        assert_eq!((s.start, s.end), (5, 8), "the run over \"now\"");
+        assert_eq!(s.style.family.as_deref(), Some("W9C-Missing-Mono"));
+        assert_eq!(s.style.size_px, Some(14.0));
+        assert_eq!(s.style.slant, Some(layer_model::text::Slant::Italic));
+        assert!(
+            close(s.style.fill.unwrap(), [0.0, 0.0, 0.0, 1.0]),
+            "the normal sheet's black"
+        );
+        let notes = import.notes.notes().join("\n");
+        assert!(notes.contains("W9CMissingSans"), "{notes}");
+        assert!(notes.contains("W9C-Missing-Mono"), "{notes}");
+        assert!(!notes.contains("did not import"), "all mapped: {notes}");
+    }
+
+    /// Per-run leading and caps (held once per layer), manual kerning and a
+    /// second paragraph's alignment are named in the report, not dropped.
+    #[test]
+    fn styling_the_layer_cannot_hold_is_reported() {
+        let mut e: Vec<u8> = b"<< /EngineDict << /Editor << /Text (Ab\rCd\r) >> /ParagraphRun << /RunArray [ << /ParagraphSheet << /Properties << /Justification 0 >> >> >> << /ParagraphSheet << /Properties << /Justification 2 >> >> >> ] /RunLengthArray [ 3 3 ] >> /StyleRun << /RunArray [ << /StyleSheet << /StyleSheetData << /Font 0 /FontSize 20.0 >> >> >> << /StyleSheet << /StyleSheetData << /Font 0 /FontSize 20.0 /AutoLeading false /Leading 40.0 /FontCaps 1 /Kerning 30 >> >> >> ] /RunLengthArray [ 3 3 ] >> >> /ResourceDict << /FontSet [ << /Name (".to_vec();
+        e.extend_from_slice(TEXT_DEFAULT_FAMILY.as_bytes());
+        e.extend_from_slice(b") >> ] >> >>");
+        let bytes = psd_with("Mixed", "Ab\rCd", tysh("Ab\rCd", &e));
+        let import = document_from_psd(&bytes, "m.psd", 10).unwrap();
+        assert_eq!(text_layer(&import, "Mixed").size_px, 20.0);
+        let notes = import.notes.notes().join("\n");
+        assert!(
+            notes.contains(
+                "the leading that changes within the text, caps that change within \
+                 the text, manual kerning, paragraph styles after the first paragraph \
+                 in the text of \u{201c}Mixed\u{201d} did not import"
+            ),
+            "{notes}"
+        );
+        let report = &import.notes.layers()[0];
+        assert!(report.detail.contains("styling not imported"), "{report:?}");
+        assert!(report.detail.contains("manual kerning"), "{report:?}");
+    }
+
+    /// Malformed engine data: the text still imports (default styling), the
+    /// reason is in the report, and no truncation of a real blob panics.
+    #[test]
+    fn malformed_engine_data_is_reported_never_a_panic() {
+        let bad: &[u8] =
+            b"<< /EngineDict << /StyleRun << /RunArray [ << >> ] /RunLengthArray [ -4 ] >> >> >>";
+        let bytes = psd_with("Broken", "Hi", tysh("Hi", bad));
+        let import = document_from_psd(&bytes, "b.psd", 10).unwrap();
+        let t = text_layer(&import, "Broken");
+        assert_eq!(t.text, "Hi");
+        assert_eq!(t.font_family, TEXT_DEFAULT_FAMILY);
+        let notes = import.notes.notes().join("\n");
+        assert!(
+            notes.contains("the text styling of \u{201c}Broken\u{201d} could not be read"),
+            "{notes}"
+        );
+        assert!(notes.contains("run length"), "the reason is named: {notes}");
+        let report = &import.notes.layers()[0];
+        assert!(
+            report.detail.contains("text styling unreadable"),
+            "{report:?}"
+        );
+
+        let good = psd::engine_data::write(&psd::engine_data::from_text_layer(&styled()));
+        for cut in (0..good.len()).step_by(7) {
+            let bytes = psd_with("Cut", "Big sale", tysh("Big sale", &good[..cut]));
+            let import = document_from_psd(&bytes, "c.psd", 10).unwrap();
+            assert_eq!(text_layer(&import, "Cut").text, "Big sale");
+        }
+    }
+
+    /// The fixture face in both libraries the anchor and the render use.
+    fn dejavu() -> &'static str {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let bytes = dejavu::sans::regular().to_vec();
+            compositor::load_font(bytes.clone());
+            text_engine::register_session_font(bytes);
+        });
+        "DejaVu Sans"
+    }
+
+    /// Photoshop-shaped engine data for one run of point (or, with `bounds`,
+    /// box) text in `DejaVuSans` (its PostScript name) at `size`.
+    fn ps_blob(text: &str, justification: i64, size: f64, bounds: Option<[f64; 4]>) -> Vec<u8> {
+        let units = text.encode_utf16().count() + 1;
+        let shape = match bounds {
+            Some([l, t, r, b]) => format!("/ShapeType 1 /BoxBounds [ {l} {t} {r} {b} ]"),
+            None => "/ShapeType 0 /PointBase [ 0.0 0.0 ]".to_string(),
+        };
+        format!(
+            "<< /EngineDict << /Editor << /Text ({text}\r) >> /ParagraphRun << /RunArray [ << /ParagraphSheet << /Properties << /Justification {justification} >> >> >> ] /RunLengthArray [ {units} ] >> /StyleRun << /RunArray [ << /StyleSheet << /StyleSheetData << /Font 0 /FontSize {size:.1} /FillColor << /Type 1 /Values [ 1.0 0.0 0.0 0.0 ] >> >> >> >> ] /RunLengthArray [ {units} ] >> /Rendered << /Shapes << /Children [ << /Cookie << /Photoshop << {shape} >> >> >> ] >> >> >> /ResourceDict << /FontSet [ << /Name (DejaVuSans) >> ] >> >>"
+        )
+        .into_bytes()
+    }
+
+    fn psd_sized(w: u32, h: u32, name: &str, text: &str, raw: Vec<u8>, tf: [f64; 6]) -> Vec<u8> {
+        let mut file = psd::PsdFile::new(psd::PsdHeader::rgba8(w, h));
+        let mut layer = psd::PsdLayer::raster(name, psd::Rect::default());
+        layer.text = Some(psd::TextData {
+            transform: tf,
+            text: Some(text.to_owned()),
+            raw,
+        });
+        file.layers.push(layer);
+        psd::write(&file).unwrap()
+    }
+
+    /// The ink's bounding box, [x0, y0, x1, y1) in document pixels.
+    fn ink_box(import: &PsdImport) -> [usize; 4] {
+        let doc = &import.imported.document;
+        let (w, h) = (doc.width(), doc.height());
+        let canvas = compositor::composite_rect(
+            doc,
+            &import.imported.tiles,
+            raster::PixelRect::new(0, 0, w, h),
+            0,
+            compositor::CompositeOptions::default(),
+        )
+        .unwrap();
+        let rgba = canvas.to_rgba8(&doc.meta.color_space);
+        let (w, h) = (w as usize, h as usize);
+        let mut b = [usize::MAX, usize::MAX, 0, 0];
+        for y in 0..h {
+            for x in 0..w {
+                if rgba[(y * w + x) * 4 + 3] > 127 {
+                    b = [b[0].min(x), b[1].min(y), b[2].max(x + 1), b[3].max(y + 1)];
+                }
+            }
+        }
+        assert!(b[0] < b[2], "the text rendered some ink");
+        b
+    }
+
+    /// Round 3: Photoshop's `TySh` origin is point text's first baseline at
+    /// the aligned edge. Rendered through the real import and compositor, a
+    /// capital-only line anchored at (200, 100) sits on y = 100 and starts,
+    /// centres or ends at x = 200 as it is left, centre or right aligned.
+    #[test]
+    fn photoshop_point_text_sits_on_its_baseline_anchor() {
+        let family = dejavu();
+        for (justification, alignment) in [
+            (0, Alignment::Left),
+            (2, Alignment::Center),
+            (1, Alignment::Right),
+        ] {
+            let raw = tysh_at(
+                "HIH",
+                &ps_blob("HIH", justification, 40.0, None),
+                [1.0, 0.0, 0.0, 1.0, 200.0, 100.0],
+            );
+            let bytes = psd_sized(
+                400,
+                200,
+                "Head",
+                "HIH",
+                raw,
+                [1.0, 0.0, 0.0, 1.0, 200.0, 100.0],
+            );
+            let import = document_from_psd(&bytes, "p.psd", 10).unwrap();
+            let t = text_layer(&import, "Head");
+            assert_eq!(t.font_family, family);
+            assert_eq!(t.paragraph.alignment, alignment);
+            let [x0, _, x1, y1] = ink_box(&import);
+            assert!(
+                (99..=101).contains(&y1),
+                "{alignment:?}: the capitals stand on the baseline at y = 100, ink ends at {y1}"
+            );
+            let (x0, x1) = (x0 as f32, x1 as f32);
+            match alignment {
+                // The H's side bearing: ink starts a few pixels past the pen.
+                Alignment::Left => assert!((200.0..=207.0).contains(&x0), "left ink at {x0}"),
+                Alignment::Center => {
+                    let mid = (x0 + x1) / 2.0;
+                    assert!((mid - 200.0).abs() <= 2.0, "centred ink at {mid}");
+                }
+                _ => assert!((193.0..=200.0).contains(&x1), "right ink ends at {x1}"),
+            }
+        }
+    }
+
+    /// The anchor goes back on export: a Photoshop headline imported and
+    /// written again carries its own `TySh` transform.
+    #[test]
+    fn the_type_anchor_round_trips_through_export() {
+        dejavu();
+        let tf = [1.0, 0.0, 0.0, 1.0, 200.0, 100.0];
+        let raw = tysh_at("HIH", &ps_blob("HIH", 2, 40.0, None), tf);
+        let bytes = psd_sized(400, 200, "Head", "HIH", raw, tf);
+        let import = document_from_psd(&bytes, "p.psd", 10).unwrap();
+        let doc = &import.imported.document;
+        let composite = vec![0u8; 400 * 200 * 4];
+        let (out, _) = psd_from_document(doc, &import.imported.tiles, &composite).unwrap();
+        let file = psd::read(&out).unwrap();
+        let text = file
+            .layers
+            .iter()
+            .find_map(|l| l.text.as_ref())
+            .expect("the type layer was written with its TySh");
+        for (got, want) in text.transform.iter().zip(tf) {
+            assert!((got - want).abs() < 1e-3, "{:?} vs {tf:?}", text.transform);
+        }
+    }
+
+    /// Box text: the `TySh` origin plus `BoxBounds`' top-left is the layer's
+    /// top-left.
+    #[test]
+    fn box_text_is_placed_by_its_box_corner() {
+        dejavu();
+        let tf = [1.0, 0.0, 0.0, 1.0, 50.0, 60.0];
+        let raw = tysh_at(
+            "Boxed",
+            &ps_blob("Boxed", 0, 20.0, Some([10.0, -5.0, 310.0, 115.0])),
+            tf,
+        );
+        let bytes = psd_sized(400, 200, "Box", "Boxed", raw, tf);
+        let import = document_from_psd(&bytes, "b.psd", 10).unwrap();
+        let doc = &import.imported.document;
+        let layer = doc
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter_map(|id| doc.layers.get(id))
+            .find(|l| l.name == "Box")
+            .unwrap();
+        assert_eq!(layer.transform.translation, glam::Vec2::new(60.0, 55.0));
+        assert!(matches!(
+            text_layer(&import, "Box").frame,
+            layer_model::text::Frame::Box { width, .. } if width == 300.0
+        ));
+    }
+
+    /// A weight the engine data's font name cannot spell is named on export.
+    #[test]
+    fn an_unspellable_weight_is_named_on_export() {
+        let mut layer = styled();
+        layer.style.weight = Weight(450);
+        let mut doc = Document::new(96, 64, "w9c");
+        doc.layers
+            .push_root(Layer::with_kind("Odd", LayerKind::Text(layer)))
+            .unwrap();
+        let composite = vec![0u8; 96 * 64 * 4];
+        let (_, notes) = psd_from_document(&doc, &MemoryTileSource::new(), &composite).unwrap();
+        let notes = notes.notes().join(
+            "
+",
+        );
+        assert!(
+            notes.contains("font weight between the named weights (written as the nearest) of \u{201c}Odd\u{201d}"),
+            "{notes}"
+        );
+    }
+
+    #[test]
+    fn postscript_families_resolve_to_the_installed_spelling() {
+        let installed = vec!["Open Sans".to_string(), "Arial".to_string()];
+        assert_eq!(resolve_psd_font("OpenSans", &installed), "Open Sans");
+        assert_eq!(resolve_psd_font("ArialMT", &installed), "Arial");
+        assert_eq!(resolve_psd_font("open sans", &installed), "Open Sans");
+        assert_eq!(resolve_psd_font("Lobster", &installed), "Lobster");
+        // `MT` and `PS` together: Photoshop's names for the regular faces of
+        // two of the commonest Windows fonts.
+        let installed = vec!["Times New Roman".to_string(), "Courier New".to_string()];
+        assert_eq!(
+            resolve_psd_font("TimesNewRomanPSMT", &installed),
+            "Times New Roman"
+        );
+        assert_eq!(
+            resolve_psd_font("CourierNewPSMT", &installed),
+            "Courier New"
+        );
+        assert_eq!(
+            resolve_psd_font("TimesNewRomanPS", &installed),
+            "Times New Roman",
+            "the family of TimesNewRomanPS-BoldMT"
+        );
     }
 }

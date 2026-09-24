@@ -144,10 +144,10 @@ fn write_layer_and_mask(file: &PsdFile, opts: &WriteOptions, sink: &mut Sink) ->
             Depth::Sixteen => b"Lr16",
             _ => b"Lr32",
         };
-        write_block(sink, b"8BIM", key, &body);
+        write_global_block(sink, b"8BIM", key, &body);
     }
     for block in &file.extra {
-        write_block(sink, &block.signature, &block.key, &block.data);
+        write_global_block(sink, &block.signature, &block.key, &block.data);
     }
     sink.end_len_even(lmi);
     Ok(())
@@ -463,7 +463,15 @@ fn write_mask(sink: &mut Sink, mask: Option<&PsdMask>) {
     } else {
         0.0
     };
-    let has_params = mask.density != 255 || feather != 0.0;
+    // W9-G: the vector mask's pair, written only when set and meaningful.
+    let vector_density = mask.vector_density.filter(|d| *d != 255);
+    let vector_feather = mask
+        .vector_feather_px
+        .filter(|f| f.is_finite() && *f != 0.0);
+    let has_params = mask.density != 255
+        || feather != 0.0
+        || vector_density.is_some()
+        || vector_feather.is_some();
     let flags = mask_flags(
         mask.relative_to_layer,
         mask.disabled,
@@ -472,15 +480,23 @@ fn write_mask(sink: &mut Sink, mask: Option<&PsdMask>) {
     ) | if has_params { 0b1_0000 } else { 0 };
     sink.u8(flags);
     if has_params {
-        // The writer emits only the user-mask pair: it never writes a vector
-        // mask (the vector-mask density/feather parameterise the `real`
-        // record this writer does not produce).
-        sink.u8(u8::from(mask.density != 255) | (u8::from(feather != 0.0) << 1));
+        // The user-mask pair, then (W9-G) the vector-mask pair — in the
+        // order the flag bits name them.
+        sink.u8(u8::from(mask.density != 255)
+            | (u8::from(feather != 0.0) << 1)
+            | (u8::from(vector_density.is_some()) << 2)
+            | (u8::from(vector_feather.is_some()) << 3));
         if mask.density != 255 {
             sink.u8(mask.density);
         }
         if feather != 0.0 {
             sink.f64(feather);
+        }
+        if let Some(d) = vector_density {
+            sink.u8(d);
+        }
+        if let Some(f) = vector_feather {
+            sink.f64(f);
         }
     }
     match &mask.real {
@@ -512,6 +528,24 @@ fn mask_flags(relative: bool, disabled: bool, invert: bool, from_render: bool) -
         | (u8::from(disabled) << 1)
         | (u8::from(invert) << 2)
         | (u8::from(from_render) << 3)
+}
+
+/// A document-level tagged block, padded to a four-byte boundary.
+///
+/// W9-M: readers disagree about the padding after a block (see
+/// [`crate::read::read_tagged_blocks`]); psd-tools reads the document-level
+/// ones as padded to four and so walks off the next signature — losing, for
+/// one, the `lnk2` block a smart object's pixels live in — when a block's
+/// length is two past a multiple of four (an `Lr16` section often is). The
+/// padding sits outside the declared length, which every reader tolerates:
+/// this crate's reader resynchronises on the next signature.
+fn write_global_block(sink: &mut Sink, signature: &[u8; 4], key: &[u8; 4], data: &[u8]) {
+    write_block(sink, signature, key, data);
+    // `write_block` already padded an odd length by one byte; make the pad
+    // after the data reach the next multiple of four of its LENGTH (which is
+    // how psd-tools computes it), not of the file offset.
+    let pad = (4 - data.len() % 4) % 4;
+    sink.zeros(pad - data.len() % 2);
 }
 
 fn write_block(sink: &mut Sink, signature: &[u8; 4], key: &[u8; 4], data: &[u8]) {
