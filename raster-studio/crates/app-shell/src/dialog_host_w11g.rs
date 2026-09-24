@@ -343,9 +343,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ed = editor(dir.path());
         let rows = sheet_rows(&ed);
+        // The sheet spells a chord the way the menu bar does on this platform
+        // ("Ctrl+Shift+P" on Windows/Linux, "Shift+Cmd+P" on macOS), so the
+        // expectations are spelled through the same function.
+        let spell = |chord: &str| {
+            let c: crate::keymap::Chord = chord.parse().expect("a chord");
+            crate::keymap::shortcut_of_chord(&c)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| c.to_string())
+        };
         let has = |rows: &[ui::dialogs::ShortcutRow], command: &str, chord: &str| {
-            rows.iter()
-                .any(|r| r.command == command && r.chord == chord)
+            let want = spell(chord);
+            rows.iter().any(|r| r.command == command && r.chord == want)
         };
         assert!(has(&rows, "Search Commands…", "Ctrl+Shift+P"), "{rows:?}");
         assert!(has(&rows, "Keyboard Shortcut Sheet…", "Shift+/"));
@@ -362,7 +371,8 @@ mod tests {
         ed.keymap_mut()
             .bind(free, crate::action::Action::Export)
             .expect("the chord is free");
-        assert!(sheet_rows(&ed).iter().any(|r| r.chord == "Ctrl+Shift+F12"));
+        let f12 = spell("Ctrl+Shift+F12");
+        assert!(sheet_rows(&ed).iter().any(|r| r.chord == f12));
 
         let ctx = egui::Context::default();
         install_theme(&ctx, design::Theme::Dark);
