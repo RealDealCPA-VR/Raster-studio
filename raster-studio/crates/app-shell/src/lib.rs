@@ -90,6 +90,8 @@
 //!   [`shell::withhold_from_egui`]. Text fields are reached with the pointer.
 
 pub mod action;
+/// W8-C: File > Export > Artboards to Files.
+pub mod artboard_export;
 pub mod canvas_extras;
 pub mod chrome;
 pub mod clipboard;

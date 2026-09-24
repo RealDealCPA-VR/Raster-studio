@@ -589,14 +589,10 @@ pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
                             ));
                             return;
                         }
-                        for spec in &specs {
-                            option_control(w, ui, tool, spec);
-                        }
-                        if wants_gradient_stops(info) {
-                            separator(ui);
-                            gradient_control(w, ui, tool);
-                        }
-                        separator(ui);
+                        // Reset sits beside the tool name, where Photopea keeps
+                        // its tool-preset reset: a long options row (the Brush
+                        // with its pressure toggles) scrolls, and a Reset at its
+                        // far end fell off a 1400-pt window.
                         let at_defaults = w.options.is_default(tool);
                         let reset = super::labelled_button(
                             ui,
@@ -616,6 +612,14 @@ pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
                             // its defaults, or it keeps painting with the size
                             // the user just cleared.
                             w.emit(Intent::ResetToolOptions(tool));
+                        }
+                        separator(ui);
+                        for spec in &specs {
+                            option_control(w, ui, tool, spec);
+                        }
+                        if wants_gradient_stops(info) {
+                            separator(ui);
+                            gradient_control(w, ui, tool);
                         }
                     });
                 });

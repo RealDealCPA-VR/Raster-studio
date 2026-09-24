@@ -212,6 +212,45 @@ pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()>
     Ok(())
 }
 
+/// W8-B: File > Export's colour-mode branch, the ONE copy both
+/// [`OpenDocument::export_to`] and the export worker
+/// (`jobs::run_file_export`) call. A CMYK document writes a CMYK JPEG/TIFF
+/// and an Indexed one a palette PNG (8 bits, `color::cmyk`'s documented ink
+/// model, no ICC press profile). Returns `Ok(true)` when it wrote `path`;
+/// `Ok(false)` for every other pairing (an RGB/Grayscale/Lab document, or a
+/// container that cannot carry the ink), which the caller writes as RGB.
+/// `rgba8` — the straight composite — is only asked for when the ink encoder
+/// writes the pairing itself (`ExportInk::encoded_by`: a CMYK JPEG/TIFF or an
+/// Indexed PNG). An Indexed GIF is `Ok(false)` without building it: GIF's own
+/// palette encoder writes it on the RGB road.
+pub(crate) fn write_in_document_ink(
+    path: &Path,
+    format: raster::ExportFormat,
+    color_mode: u8,
+    (width, height): (u32, u32),
+    rgba8: impl FnOnce() -> Result<Vec<u8>, DocumentError>,
+) -> Result<bool, DocumentError> {
+    let ink = raster::export::ExportInk::for_color_mode(color_mode);
+    if !ink.encoded_by(format) {
+        return Ok(false);
+    }
+    let rgba8 = rgba8()?;
+    match raster::export::encode_rgba8_in_ink(format, ink, width, height, &rgba8)? {
+        Some(bytes) => {
+            write_atomically(path, &bytes).map_err(crate::import::ImportError::from)?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+/// W8-B: what File > Export says beside its status about a document in
+/// colour mode `mode`: no file this build writes stores Lab, so a Lab
+/// document goes out as RGB. `None` for every other mode.
+pub(crate) fn export_color_mode_note(mode: u8) -> Option<&'static str> {
+    (mode == editor_core::color_mode::mode::LAB).then_some("a Lab document is written as RGB")
+}
+
 /// A document the user has open.
 pub struct OpenDocument {
     id: DocumentId,
@@ -2114,15 +2153,12 @@ impl OpenDocument {
         // is quantized into the file.
         let rect = self.canvas_rect();
         // W7-D: a CMYK document writes a CMYK JPEG/TIFF and an Indexed one a
-        // palette PNG — the same bytes File > Export's worker writes.
-        let ink = raster::export::ExportInk::for_color_mode(self.document.meta.color_mode);
-        if ink != raster::export::ExportInk::Rgb {
-            let rgba8 = self.composite(rect)?;
-            let (w, h) = (self.document.width(), self.document.height());
-            if let Some(bytes) = raster::export::encode_rgba8_in_ink(format, ink, w, h, &rgba8)? {
-                write_atomically(path, &bytes).map_err(crate::import::ImportError::from)?;
-                return Ok(());
-            }
+        // palette PNG — W8-B: through the one function File > Export's
+        // worker calls too.
+        let size = (self.document.width(), self.document.height());
+        let mode = self.document.meta.color_mode;
+        if write_in_document_ink(path, format, mode, size, || self.composite(rect))? {
+            return Ok(());
         }
         // A tagged document re-tags: the profile it opened with rides back
         // into the file (the codec writes the iCCP chunk for the formats

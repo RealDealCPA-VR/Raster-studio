@@ -45,8 +45,8 @@
 //! into a no-op.
 
 use adjustments::{
-    Adjustment, BuiltinLut, Curve, EncodedRgb, ImageStats, LabStats, Lut3d, PreparedAdjustment,
-    ReplaceColor, ShadowsHighlights, HISTOGRAM_BINS,
+    lab_histograms, Adjustment, BuiltinLut, Curve, EncodedRgb, ImageStats, LabStats, LabTone,
+    Lut3d, PreparedAdjustment, ReplaceColor, ShadowsHighlights, HISTOGRAM_BINS,
 };
 use color::ColorSpace;
 use design::tokens::palette::ColorRole;
@@ -224,6 +224,14 @@ pub struct AdjustmentDialog {
     /// is picked (`0` is None — the layer matched to itself).
     match_sources: Vec<MatchSource>,
     match_choice: usize,
+    /// W8-B: the document is in Lab mode — Levels and Curves list
+    /// Lightness, a and b, and preview (and apply) on those channels.
+    lab: bool,
+    /// W8-B: Levels on a Lab document: which mapping the sliders edit
+    /// (`1` Lightness, `2` a, `3` b).
+    levels_channel: usize,
+    /// W8-B: Levels on a Lab document: the L, a and b histograms.
+    lab_levels_bins: Option<Box<[[u32; HISTOGRAM_BINS]; 3]>>,
 }
 
 impl std::fmt::Debug for AdjustmentDialog {
@@ -314,6 +322,9 @@ impl AdjustmentDialog {
             edit_layer: None,
             match_sources: Vec::new(),
             match_choice: 0,
+            lab: false,
+            levels_channel: 0,
+            lab_levels_bins: None,
         }
     }
 
@@ -323,6 +334,75 @@ impl AdjustmentDialog {
     pub fn set_match_sources(&mut self, sources: Vec<MatchSource>) {
         self.match_sources = sources;
         self.choose_match_source(0);
+    }
+
+    /// W8-B: the document is in Lab mode (`DocumentMeta::color_mode`). Levels
+    /// and Curves then list Photoshop's Lab channels — Lightness, a, b, no
+    /// composite row — and open on Lightness; their histograms are the L, a
+    /// and b ones, and the preview runs the mapping on those channels
+    /// ([`adjustments::LabTone`]), which is what applying it does. Levels
+    /// becomes its per-channel spelling, a plain Levels landing on
+    /// Lightness. Every other adjustment is unchanged.
+    pub fn set_lab_channels(&mut self, lab: bool) {
+        if !matches!(self.id, AdjustmentId::Levels | AdjustmentId::Curves) || self.lab == lab {
+            return;
+        }
+        self.lab = lab;
+        self.curve.set_lab(lab);
+        self.curve.set_channel(0);
+        self.levels_channel = usize::from(lab);
+        let bins = lab.then(|| lab_histograms(self.source.pixels()));
+        match self.id {
+            AdjustmentId::Curves => {
+                let rgb = ImageStats::from_premultiplied_rgba(self.source.pixels(), &self.space);
+                self.curve_histograms = Some(Box::new(match bins {
+                    Some([l, a, b]) => [l, l, a, b],
+                    None => [
+                        *rgb.luma.bins(),
+                        *rgb.channels[0].bins(),
+                        *rgb.channels[1].bins(),
+                        *rgb.channels[2].bins(),
+                    ],
+                }));
+            }
+            _ => self.lab_levels_bins = bins.map(Box::new),
+        }
+        let kind = self.editable(self.kind.clone());
+        self.kind = kind;
+        self.cached_for = None;
+    }
+
+    /// Whether Levels/Curves read a Lab document's channels.
+    pub fn lab_channels(&self) -> bool {
+        self.lab
+    }
+
+    /// Levels on a Lab document: the channel the sliders edit (`1`
+    /// Lightness, `2` a, `3` b).
+    pub fn levels_channel(&self) -> usize {
+        self.levels_channel
+    }
+
+    /// The editable shape of `kind`: [`editable_kind`], and Levels widened to
+    /// `LevelsFull` on a Lab document, its mapping on Lightness.
+    fn editable(&self, kind: AdjustmentKind) -> AdjustmentKind {
+        let kind = editable_kind(self.id, kind);
+        match kind {
+            AdjustmentKind::Levels {
+                black,
+                white,
+                gamma,
+            } if self.lab => {
+                const IDENTITY: [f32; 5] = [0.0, 1.0, 1.0, 0.0, 1.0];
+                AdjustmentKind::LevelsFull {
+                    composite: IDENTITY,
+                    red: [black, white, gamma, 0.0, 1.0],
+                    green: IDENTITY,
+                    blue: IDENTITY,
+                }
+            }
+            other => other,
+        }
     }
 
     /// Match Color: the offered sources.
@@ -449,7 +529,7 @@ impl AdjustmentDialog {
         if adjustment_id_of(&kind) != Some(self.id) {
             return false;
         }
-        let kind = editable_kind(self.id, kind);
+        let kind = self.editable(kind);
         if kind != self.kind {
             self.kind = kind;
             self.cached_for = None;
@@ -461,7 +541,7 @@ impl AdjustmentDialog {
     pub fn reset(&mut self) {
         self.lut_choice = 0;
         self.lut_error = None;
-        let identity = editable_kind(self.id, self.id.identity_kind());
+        let identity = self.editable(self.id.identity_kind());
         if identity != self.kind {
             self.kind = identity;
             self.cached_for = None;
@@ -510,6 +590,13 @@ impl AdjustmentDialog {
     /// down to the proxy, so both preview what applying them would do.
     pub fn preview_buffer(&self) -> FilterBuffer {
         let mut out = self.source.clone();
+        // W8-B: on a Lab document Levels and Curves run on L, a and b.
+        if self.lab {
+            if let Some(tone) = LabTone::from_kind(&self.kind) {
+                tone.apply_premultiplied_rgba(out.pixels_mut());
+                return out;
+            }
+        }
         let adjustment = Adjustment::from(&self.kind);
         if let Adjustment::ShadowsHighlights(sh) = &adjustment {
             let scale = self.proxy_scale.max(1.0);
@@ -813,7 +900,12 @@ impl AdjustmentDialog {
 
     /// The luma histogram, with the black and white points marked on it.
     fn histogram_row(&self, ui: &mut egui::Ui) {
-        let Some(bins) = self.histogram.as_ref() else {
+        // W8-B: a Lab document's Levels draws the chosen channel's histogram.
+        let lab_bins = self
+            .lab_levels_bins
+            .as_deref()
+            .map(|bins| &bins[self.levels_channel.saturating_sub(1).min(2)]);
+        let Some(bins) = lab_bins.or(self.histogram.as_ref()) else {
             return;
         };
         let width = sizes::filter_preview_width();
@@ -847,10 +939,23 @@ impl AdjustmentDialog {
                 fill,
             );
         }
-        if let AdjustmentKind::Levels { black, white, .. } = &self.kind {
+        let points = match &self.kind {
+            AdjustmentKind::Levels { black, white, .. } => Some([*black, *white]),
+            AdjustmentKind::LevelsFull {
+                composite,
+                red,
+                green,
+                blue,
+            } => {
+                let band = [composite, red, green, blue][self.levels_channel.min(3)];
+                Some([band[0], band[1]])
+            }
+            _ => None,
+        };
+        if let Some(points) = points {
             let marker =
                 egui::Stroke::new(t.borders.thick, color32(t.palette.color(ColorRole::Accent)));
-            for point in [black, white] {
+            for point in points {
                 let x = rect.left() + rect.width() * point.clamp(0.0, 1.0);
                 painter.vline(x, rect.y_range(), marker);
             }
@@ -903,6 +1008,40 @@ impl AdjustmentDialog {
                     design::slider_row(ui, tr("ui.adjustment.white"), white, 0.0..=1.0).changed();
                 changed |=
                     design::slider_row(ui, tr("ui.adjustment.gamma"), gamma, 0.1..=10.0).changed();
+            }
+            // W8-B: Levels on a Lab document — Photoshop's channel list
+            // (Lightness, a, b; no composite row, which would cast every
+            // neutral) and the three input sliders of the chosen one.
+            K::LevelsFull {
+                composite: _,
+                red,
+                green,
+                blue,
+            } if self.lab => {
+                design::inspector_field(ui, tr("ui.adjustment.curve.channel"), |ui| {
+                    combo(
+                        ui,
+                        ("adjustment", "levels-channel"),
+                        &mut self.levels_channel,
+                        &curve_widget::LAB_CHANNELS,
+                        curve_widget::lab_channel_label,
+                        |_| None,
+                    );
+                });
+                let band: &mut [f32; 5] = match self.levels_channel {
+                    2 => green,
+                    3 => blue,
+                    _ => red,
+                };
+                changed |=
+                    design::slider_row(ui, tr("ui.adjustment.black"), &mut band[0], 0.0..=1.0)
+                        .changed();
+                changed |=
+                    design::slider_row(ui, tr("ui.adjustment.white"), &mut band[1], 0.0..=1.0)
+                        .changed();
+                changed |=
+                    design::slider_row(ui, tr("ui.adjustment.gamma"), &mut band[2], 0.1..=10.0)
+                        .changed();
             }
             K::CurvesFull {
                 composite,
@@ -1891,6 +2030,211 @@ mod tests {
             3,
             "the red curve did not take the point: {red:?}"
         );
+    }
+
+    fn rect_of(texts: &[(String, egui::Rect)], text: &str) -> Option<egui::Rect> {
+        texts.iter().find(|(t, _)| t == text).map(|(_, r)| *r)
+    }
+
+    /// W8-B: on a Lab document the Curves channel list is Lightness, a, b
+    /// (no RGB, no composite row), picking "a" on the drawn list edits the a
+    /// curve, and the preview runs it on the a channel, not on green.
+    #[test]
+    fn on_a_lab_document_curves_lists_lightness_a_b_and_edits_the_a_curve() {
+        use curve_widget::curve_graph_id;
+        let harness = Harness::new();
+        let mut dialog = AdjustmentDialog::with_placeholder(AdjustmentId::Curves);
+        dialog.set_lab_channels(true);
+        assert!(dialog.lab_channels());
+        let texts = drawn_texts(&harness, &mut dialog);
+        let rgb = tr("ui.adjustment.curve.rgb").to_string();
+        assert!(
+            rect_of(&texts, &rgb).is_none(),
+            "a Lab document still lists RGB"
+        );
+        let lightness = tr("ui.adjustment.lightness").to_string();
+        assert_eq!(dialog.curve_editor().channel(), 1, "opens off Lightness");
+        let combo = rect_of(&texts, &lightness).expect("the channel combo shows Lightness");
+        harness.frame(Harness::click_events(combo.center()), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        let open = drawn_texts(&harness, &mut dialog);
+        assert!(
+            rect_of(&open, "Lab").is_none(),
+            "the list has a composite row"
+        );
+        for row in [lightness.as_str(), "a", "b"] {
+            assert!(
+                rect_of(&open, row).is_some(),
+                "the open list has no {row:?} row"
+            );
+        }
+        assert!(rect_of(&open, tr("ui.adjustment.green")).is_none());
+        let a_row = rect_of(&open, "a").unwrap();
+        harness.frame(Harness::click_events(a_row.center()), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        assert_eq!(dialog.curve_editor().channel(), 2);
+        let graph = harness.settle(curve_graph_id(), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        harness.frame(Harness::click_events(graph_pos(graph, [0.5, 0.9])), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        let AdjustmentKind::CurvesFull { green, .. } = dialog.kind().clone() else {
+            panic!("not CurvesFull");
+        };
+        assert_eq!(
+            green.len(),
+            3,
+            "the a curve did not take the point: {green:?}"
+        );
+        let tone = LabTone::from_kind(dialog.kind()).unwrap();
+        let mut expected = dialog.source().clone();
+        tone.apply_premultiplied_rgba(expected.pixels_mut());
+        let preview = dialog.preview_buffer();
+        assert_eq!(
+            preview.pixels(),
+            expected.pixels(),
+            "the preview is not the Lab run"
+        );
+        let mut as_rgb = dialog.source().clone();
+        PreparedAdjustment::new(&Adjustment::from(dialog.kind()))
+            .apply_premultiplied_rgba(as_rgb.pixels_mut(), &ColorSpace::Srgb);
+        assert_ne!(
+            preview.pixels(),
+            as_rgb.pixels(),
+            "the preview ran on green"
+        );
+    }
+
+    /// W8-B: on a Lab document Levels offers the Lab channel list (it has no
+    /// channel choice elsewhere) — Lightness, a, b, opening on Lightness —
+    /// picking "a" from the drawn list makes it the one the sliders edit, and
+    /// a Lightness mapping previews on L.
+    #[test]
+    fn on_a_lab_document_levels_offers_lightness_a_b_and_previews_on_l() {
+        let harness = Harness::new();
+        let lightness = tr("ui.adjustment.lightness").to_string();
+        let mut rgb_levels = AdjustmentDialog::with_placeholder(AdjustmentId::Levels);
+        let plain = drawn_texts(&harness, &mut rgb_levels);
+        assert!(
+            rect_of(&plain, &lightness).is_none(),
+            "RGB Levels grew a channel list"
+        );
+        assert!(matches!(rgb_levels.kind(), AdjustmentKind::Levels { .. }));
+
+        let mut dialog = AdjustmentDialog::with_placeholder(AdjustmentId::Levels);
+        dialog.set_lab_channels(true);
+        assert!(matches!(dialog.kind(), AdjustmentKind::LevelsFull { .. }));
+        let texts = drawn_texts(&harness, &mut dialog);
+        assert_eq!(dialog.levels_channel(), 1, "opens off Lightness");
+        let combo = rect_of(&texts, &lightness).expect("Levels shows the Lab channel combo");
+        harness.frame(Harness::click_events(combo.center()), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        let open = drawn_texts(&harness, &mut dialog);
+        assert!(
+            rect_of(&open, "Lab").is_none(),
+            "the list has a composite row"
+        );
+        let row = rect_of(&open, "a").expect("the open list has an a row");
+        assert!(rect_of(&open, "b").is_some());
+        harness.frame(Harness::click_events(row.center()), |ctx| {
+            let _ = dialog.show(ctx, None);
+        });
+        assert_eq!(dialog.levels_channel(), 2);
+
+        const ID: [f32; 5] = [0.0, 1.0, 1.0, 0.0, 1.0];
+        let darker_l = AdjustmentKind::LevelsFull {
+            composite: ID,
+            red: [0.0, 1.0, 1.0, 0.0, 0.5],
+            green: ID,
+            blue: ID,
+        };
+        assert!(dialog.set_kind(darker_l.clone()));
+        let mut expected = dialog.source().clone();
+        LabTone::from_kind(&darker_l)
+            .unwrap()
+            .apply_premultiplied_rgba(expected.pixels_mut());
+        let preview = dialog.preview_buffer();
+        assert_eq!(preview.pixels(), expected.pixels());
+        let mut as_rgb = dialog.source().clone();
+        PreparedAdjustment::new(&Adjustment::from(&darker_l))
+            .apply_premultiplied_rgba(as_rgb.pixels_mut(), &ColorSpace::Srgb);
+        assert_ne!(preview.pixels(), as_rgb.pixels(), "the preview ran on red");
+        // Reset keeps the Lab spelling, so the channel list stays.
+        dialog.reset();
+        assert!(matches!(dialog.kind(), AdjustmentKind::LevelsFull { .. }));
+    }
+
+    /// A 16 x 16 mid grey (sRGB 128) the Lab tests preview on.
+    fn mid_grey() -> FilterBuffer {
+        FilterBuffer::from_rgba8(16, 16, &[128, 128, 128, 255].repeat(16 * 16))
+            .expect("a grey buffer")
+    }
+
+    /// Every pixel of `buffer` is a neutral grey (R = G = B).
+    fn assert_neutral(buffer: &FilterBuffer, what: &str) {
+        for px in buffer.pixels() {
+            let spread = px[0].max(px[1]).max(px[2]) - px[0].min(px[1]).min(px[2]);
+            assert!(spread < 0.002, "{what}: a grey took a cast: {px:?}");
+        }
+    }
+
+    /// W8-B: the first move on a Lab document's Levels or Curves — on the
+    /// channel it opens on, made with the pointer — keeps a mid grey
+    /// neutral. A composite row run on a and b as well would take this grey
+    /// to a strong blue-cyan (Levels black point) or warm (Curves lift) cast.
+    #[test]
+    fn on_a_lab_document_the_default_channel_move_keeps_a_mid_grey_neutral() {
+        use curve_widget::curve_graph_id;
+        let harness = Harness::new();
+        let before = mid_grey().pixels()[0][0];
+
+        // Levels: press on the Black slider, left of its numeric field.
+        let mut levels = AdjustmentDialog::new(AdjustmentId::Levels, mid_grey(), ColorSpace::Srgb);
+        levels.set_lab_channels(true);
+        let black = tr("ui.adjustment.black");
+        let field = harness.settle(egui::Id::new(("raster-numeric-field", black)), |ctx| {
+            let _ = levels.show(ctx, None);
+        });
+        let on_slider = pos2(field.left() - sizes::combo_min_width(), field.center().y);
+        harness.frame(Harness::press_events(on_slider), |ctx| {
+            let _ = levels.show(ctx, None);
+        });
+        harness.frame(Harness::click_events(on_slider), |ctx| {
+            let _ = levels.show(ctx, None);
+        });
+        let AdjustmentKind::LevelsFull { composite, red, .. } = levels.kind().clone() else {
+            panic!("not LevelsFull: {:?}", levels.kind());
+        };
+        assert!(
+            red[0] > 0.2,
+            "the Black slider did not move Lightness: {red:?}"
+        );
+        assert_eq!(composite, [0.0, 1.0, 1.0, 0.0, 1.0], "a composite moved");
+        let preview = levels.preview_buffer();
+        assert!(preview.pixels()[0][0] < before - 0.01, "L did not darken");
+        assert_neutral(&preview, "Levels");
+
+        // Curves: click a lift into the graph.
+        let mut curves = AdjustmentDialog::new(AdjustmentId::Curves, mid_grey(), ColorSpace::Srgb);
+        curves.set_lab_channels(true);
+        let graph = harness.settle(curve_graph_id(), |ctx| {
+            let _ = curves.show(ctx, None);
+        });
+        harness.frame(Harness::click_events(graph_pos(graph, [0.5, 0.8])), |ctx| {
+            let _ = curves.show(ctx, None);
+        });
+        let AdjustmentKind::CurvesFull { composite, red, .. } = curves.kind().clone() else {
+            panic!("not CurvesFull: {:?}", curves.kind());
+        };
+        assert_eq!(red.len(), 3, "the lift did not land on Lightness: {red:?}");
+        assert_eq!(composite.len(), 2, "a composite moved: {composite:?}");
+        let preview = curves.preview_buffer();
+        assert!(preview.pixels()[0][0] > before + 0.01, "L did not lift");
+        assert_neutral(&preview, "Curves");
     }
 
     #[test]

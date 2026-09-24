@@ -28,17 +28,30 @@
 //! The dabs are collected while the button is down and simulated in order at
 //! release against one [`ColorPatch`], each dab reading what the previous
 //! ones left, and the patch commits as one [`Command::PaintTiles`] — one
-//! history entry, one Ctrl+Z. There is no live preview of the wet mix while
-//! the button is down (the stroke tools' preview lens is theirs); the pixels
-//! land on release.
+//! history entry, one Ctrl+Z.
+//!
+//! # Live preview (W8-C)
+//!
+//! While the button is down every Move answers [`Tool::live_paint`] the way
+//! the stroke tools do (W4-B): the stroke so far is simulated from the
+//! reservoir the stroke began with, by the very code the release runs, into
+//! a side store, and the tiles it changed go to the shell's preview lens. The
+//! reservoir is put back afterwards, so the release starts from the same
+//! state and commits exactly the pixels the last preview showed. The whole
+//! stroke is re-simulated per answer (a wet brush's every dab depends on all
+//! the dabs before it), so each answer replaces the previous one.
 
-use editor_core::Command;
+use std::collections::HashMap;
+
+use editor_core::{Command, PixelKey};
 use glam::IVec2;
+use raster::{TileCoord, TileHash};
 
 use crate::brush::{BrushSettings, Dab, DabEmitter};
 use crate::error::ToolError;
 use crate::patch::ColorPatch;
-use crate::stroke::StrokeBuffer;
+use crate::stroke::{LivePaint, LiveTile, StrokeBuffer};
+use crate::tiles::TileAccess;
 use crate::tool::{PointerEvent, Tool, ToolContext, ToolId, ToolSetting};
 
 /// How much paint a dab spends at `load = 0`.
@@ -61,6 +74,34 @@ pub struct MixerBrushTool {
     pub clean_after: bool,
     /// The reservoir: premultiplied linear colour and paint amount.
     reservoir: Option<([f32; 4], f32)>,
+    /// W8-C: how many dabs the last live preview simulated.
+    previewed: usize,
+}
+
+/// W8-C: the preview's scratch store — reads fall through to the document,
+/// writes stay here, so a preview never touches the document's tiles.
+struct PreviewStore<'b> {
+    base: &'b dyn TileAccess,
+    stored: HashMap<TileHash, Vec<u8>>,
+}
+
+impl TileAccess for PreviewStore<'_> {
+    fn tile_hash(&self, key: PixelKey, coord: TileCoord) -> Option<TileHash> {
+        self.base.tile_hash(key, coord)
+    }
+
+    fn bytes(&self, hash: TileHash) -> Option<&[u8]> {
+        match self.stored.get(&hash) {
+            Some(bytes) => Some(bytes.as_slice()),
+            None => self.base.bytes(hash),
+        }
+    }
+
+    fn store(&mut self, data: Vec<u8>) -> TileHash {
+        let hash = TileHash::of(&data);
+        self.stored.entry(hash).or_insert(data);
+        hash
+    }
 }
 
 impl Default for MixerBrushTool {
@@ -79,6 +120,7 @@ impl Default for MixerBrushTool {
             load_after: true,
             clean_after: false,
             reservoir: None,
+            previewed: 0,
         }
     }
 }
@@ -178,7 +220,57 @@ impl MixerBrushTool {
         }
     }
 
+    /// W8-C: the stroke so far, simulated from the stroke's starting
+    /// reservoir into a side store — the tiles the release would change, for
+    /// the preview lens. The reservoir is restored, so the release replays
+    /// the identical simulation.
+    fn preview(&mut self, ctx: &mut ToolContext<'_>) -> Result<Option<LivePaint>, ToolError> {
+        let Some(emitter) = &self.emitter else {
+            return Ok(None);
+        };
+        let dabs = emitter.dabs().to_vec();
+        if dabs.is_empty() || dabs.len() == self.previewed {
+            return Ok(None);
+        }
+        let target = ctx.pixel_target()?;
+        let key = ctx.pixel_key()?;
+        let clip = ctx.paint_space_canvas.unwrap_or(ctx.canvas);
+        let Some(rect) = StrokeBuffer::bounds_of(&dabs, clip) else {
+            return Ok(None);
+        };
+        let mut patch = ColorPatch::load(&*ctx.tiles, key, rect)?;
+        let start = self.reservoir;
+        self.simulate(ctx, &dabs, &mut patch);
+        self.reservoir = start;
+        let mut side = PreviewStore {
+            base: &*ctx.tiles,
+            stored: HashMap::new(),
+        };
+        let delta = patch.commit(&mut side, key)?;
+        let tiles = delta
+            .iter()
+            .map(|edit| {
+                let tile = match edit.hash {
+                    None => LiveTile::Cleared,
+                    Some(h) => match side.bytes(h) {
+                        Some(bytes) => LiveTile::Bytes(bytes.to_vec()),
+                        None => LiveTile::Committed,
+                    },
+                };
+                (edit.coord, tile)
+            })
+            .collect();
+        self.previewed = dabs.len();
+        Ok(Some(LivePaint {
+            target,
+            key,
+            replace: true,
+            tiles,
+        }))
+    }
+
     fn finish_stroke(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
+        self.previewed = 0;
         let Some(emitter) = self.emitter.take() else {
             return Ok(());
         };
@@ -216,6 +308,7 @@ impl Tool for MixerBrushTool {
         let to_layer = ctx.sample_to_layer.unwrap_or(glam::Affine2::IDENTITY);
         let pos = to_layer.transform_point2(event.pos);
         self.emitter = Some(DabEmitter::begin(self.settings, pos, event.pressure)?);
+        self.previewed = 0;
         self.begin_reservoir(ctx.foreground);
         Ok(())
     }
@@ -246,10 +339,16 @@ impl Tool for MixerBrushTool {
 
     fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {
         self.emitter = None;
+        self.previewed = 0;
     }
 
     fn is_active(&self) -> bool {
         self.emitter.is_some()
+    }
+
+    /// W8-C: the wet stroke so far, for the shell's preview lens.
+    fn live_paint(&mut self, ctx: &mut ToolContext<'_>) -> Result<Option<LivePaint>, ToolError> {
+        self.preview(ctx)
     }
 
     /// Size, hardness, spacing, flow and opacity travel here, as for every
@@ -401,6 +500,110 @@ mod tests {
         tiles.apply_delta(PixelKey::Layer(layer), delta);
         let px = tiles.pixel(PixelKey::Layer(layer), 100, 32);
         assert!(px[1] > 200, "the loaded green was not laid down: {px:?}");
+    }
+
+    /// Previewing must not change what the stroke paints: the preview runs
+    /// the simulation on a copy of the reservoir and puts it back, so a
+    /// stroke previewed at every Move commits exactly the pixels of the same
+    /// stroke never previewed. (Without the restore each preview drained the
+    /// reservoir and the release started from the drained paint.)
+    #[test]
+    fn previewing_a_stroke_does_not_change_what_it_commits() {
+        let run = |preview: bool| {
+            let mut tiles = MemoryTiles::new();
+            let layer = LayerId::new();
+            halves(&mut tiles, layer);
+            let mut tool = MixerBrushTool {
+                wet: 0.8,
+                load: 0.6,
+                mix: 0.5,
+                ..MixerBrushTool::default()
+            };
+            let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 128, 64))
+                .with_layer(layer)
+                .with_foreground([0.0, 1.0, 0.0, 1.0]);
+            let pts = stroke_points(Vec2::new(40.0, 32.0), Vec2::new(90.0, 32.0), 16);
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(pts[0].x, pts[0].y))
+                .unwrap();
+            for p in &pts[1..] {
+                tool.on_pointer_move(&mut ctx, PointerEvent::at(p.x, p.y))
+                    .unwrap();
+                if preview {
+                    let _ = tool.live_paint(&mut ctx).unwrap();
+                }
+            }
+            let end = pts.last().unwrap();
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(end.x, end.y))
+                .unwrap();
+            let commands = ctx.drain();
+            let Command::PaintTiles { delta, .. } = &commands[0] else {
+                panic!("{commands:?}");
+            };
+            delta
+                .iter()
+                .map(|e| (e.coord, tiles.bytes(e.hash.unwrap()).unwrap().to_vec()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            run(true),
+            run(false),
+            "previewing the stroke changed the pixels it committed"
+        );
+    }
+
+    /// W8-C: every Move previews the stroke so far, the preview writes
+    /// nothing, and the release commits exactly the last previewed tiles.
+    #[test]
+    fn the_live_preview_is_what_the_release_commits_and_writes_nothing() {
+        let mut tiles = MemoryTiles::new();
+        let layer = LayerId::new();
+        halves(&mut tiles, layer);
+        let mut tool = MixerBrushTool {
+            wet: 0.8,
+            ..MixerBrushTool::default()
+        };
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 128, 64))
+            .with_layer(layer)
+            .with_foreground([0.0, 1.0, 0.0, 1.0]);
+        let pts = stroke_points(Vec2::new(40.0, 32.0), Vec2::new(90.0, 32.0), 16);
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(pts[0].x, pts[0].y))
+            .unwrap();
+        let mut last = None;
+        for p in &pts[1..] {
+            tool.on_pointer_move(&mut ctx, PointerEvent::at(p.x, p.y))
+                .unwrap();
+            if let Some(live) = tool.live_paint(&mut ctx).unwrap() {
+                assert!(live.replace, "a wet stroke re-answers whole");
+                assert!(!live.tiles.is_empty());
+                last = Some(live);
+            }
+            assert!(ctx.commands().is_empty(), "a preview emits nothing");
+        }
+        assert!(
+            tool.live_paint(&mut ctx).unwrap().is_none(),
+            "no new dab, no new answer"
+        );
+        let last = last.expect("the drag was previewed");
+        let end = pts.last().unwrap();
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(end.x, end.y))
+            .unwrap();
+        let commands = ctx.drain();
+        let Command::PaintTiles { delta, .. } = &commands[0] else {
+            panic!("{commands:?}");
+        };
+        let committed: Vec<(raster::TileCoord, Vec<u8>)> = delta
+            .iter()
+            .map(|e| (e.coord, tiles.bytes(e.hash.unwrap()).unwrap().to_vec()))
+            .collect();
+        let previewed: Vec<(raster::TileCoord, Vec<u8>)> = last
+            .tiles
+            .into_iter()
+            .map(|(c, t)| match t {
+                LiveTile::Bytes(b) => (c, b),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(committed, previewed, "the release drifted from the preview");
     }
 
     #[test]

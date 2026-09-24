@@ -5336,7 +5336,20 @@ impl Editor {
                     }
                 }
                 self.status = Some(match outcome.route {
-                    ExportRoute::File => format!("Exported {}", outcome.dir.display()),
+                    ExportRoute::File => {
+                        // W8-B: act_export's colour-mode note, kept on the
+                        // completion that replaces its "Exporting" line.
+                        let note = self
+                            .docs
+                            .iter()
+                            .find(|d| d.id() == outcome.id)
+                            .and_then(|d| {
+                                crate::doc::export_color_mode_note(d.document.meta.color_mode)
+                            })
+                            .map(|n| format!(" ({n})"))
+                            .unwrap_or_default();
+                        format!("Exported {}{note}", outcome.dir.display())
+                    }
                     ExportRoute::Layers => format!(
                         "Exported {} layer(s) to {}",
                         paths.len(),
@@ -5444,9 +5457,13 @@ impl Editor {
             tiles: doc.tiles.clone(),
             sixteen_bit: doc.is_sixteen_bit(),
         };
+        // W8-B: a Lab document says, in the status, that it goes out as RGB.
+        let note = crate::doc::export_color_mode_note(doc.document.meta.color_mode)
+            .map(|n| format!(" ({n})"))
+            .unwrap_or_default();
         let rx = crate::jobs::spawn_file_export_with(job, self.spawner);
         self.export_jobs.push(rx);
-        self.status = Some(format!("Exporting {}…", target.display()));
+        self.status = Some(format!("Exporting {}…{note}", target.display()));
         self.touch();
         // Inline spawner: already done. Threads: the frame loop polls.
         self.poll_exports();

@@ -136,6 +136,7 @@ pub mod header;
 pub mod limits;
 pub mod model;
 pub mod packbits;
+pub mod pattern;
 pub mod read;
 pub mod resource;
 pub mod text;

@@ -957,6 +957,18 @@ impl ExportInk {
         }
     }
 
+    /// W8-B: whether the ink encoder ([`encode_rgba8_in_ink`]) writes
+    /// `format` itself in this layout — a CMYK JPEG/TIFF or an Indexed PNG —
+    /// and so needs the document's composite. An Indexed GIF is carried, but
+    /// by GIF's own palette encoder on the RGB road, so it is `false` here.
+    pub fn encoded_by(self, format: ExportFormat) -> bool {
+        match self {
+            ExportInk::Rgb => false,
+            ExportInk::Cmyk => self.carried_by(format),
+            ExportInk::Indexed => format == ExportFormat::Png,
+        }
+    }
+
     /// The layout a document colour mode byte (`DocumentMeta::color_mode`:
     /// 3 = CMYK, 4 = Indexed) asks for.
     pub fn for_color_mode(mode: u8) -> Self {
@@ -1503,14 +1515,10 @@ fn encode_ink_rgba8(
             let cmyk = ink::separate_rgba8(rgba, preset.background);
             ink::encode_cmyk_tiff(width, height, &cmyk)
         }
-        (ExportInk::Indexed, ExportFormat::Png) => {
-            ink::encode_indexed_png(width, height, rgba).ok_or_else(|| {
-                reject(
-                    preset,
-                    "the image has more than 256 colours, so it cannot be a palette PNG; convert it with Image > Mode > Indexed Color first".to_string(),
-                )
-            })?
-        }
+        // Always writes: more than 256 RGBA colours (a soft stroke painted
+        // after the conversion) re-quantises with 1-bit alpha, as
+        // Photoshop's Indexed mode stores it.
+        (ExportInk::Indexed, ExportFormat::Png) => ink::encode_indexed_png(width, height, rgba),
         _ => return Ok(None),
     };
     Ok(Some(bytes))
@@ -1781,6 +1789,33 @@ pub fn sanitize_file_stem(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// W8-B: `ExportInk::encoded_by` is exactly the set of pairings
+    /// `encode_rgba8_in_ink` writes, so a caller that checks it first never
+    /// builds a composite the encoder then hands back.
+    #[test]
+    fn encoded_by_is_exactly_where_the_ink_encoder_writes() {
+        use super::{encode_rgba8_in_ink, ExportFormat, ExportInk};
+        let formats = [
+            ExportFormat::Png,
+            ExportFormat::Jpeg(90),
+            ExportFormat::WebP,
+            ExportFormat::Tiff,
+            ExportFormat::Gif,
+            ExportFormat::Bmp,
+        ];
+        let rgba = [10u8, 200, 30, 255, 250, 20, 90, 128];
+        for ink in [ExportInk::Rgb, ExportInk::Cmyk, ExportInk::Indexed] {
+            for format in formats {
+                let wrote = encode_rgba8_in_ink(format, ink, 2, 1, &rgba)
+                    .unwrap()
+                    .is_some();
+                assert_eq!(ink.encoded_by(format), wrote, "{ink:?} {format:?}");
+            }
+        }
+        assert!(ExportInk::Indexed.carried_by(ExportFormat::Gif));
+        assert!(!ExportInk::Indexed.encoded_by(ExportFormat::Gif));
+    }
+
     use super::*;
     use crate::codec::{
         decode_surface_bytes, encode_with, EncodeOptions, ImportLimits, SurfacePixels,

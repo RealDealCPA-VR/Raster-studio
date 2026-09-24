@@ -2271,6 +2271,11 @@ impl Shell {
     /// The sample's pressure goes through [`Shell::set_pen_pressure`] before
     /// the pointer sample is built, so every stroke sample carries it; once
     /// the contact lifts the pointer returns to full (mouse) pressure.
+    ///
+    /// W8-A: a pen hovering in range is a hover move, routed as a mouse
+    /// hover is; and a pen's position (hovering or in contact) is handed to
+    /// the chrome as the brush ring's position. A finger's is not: a finger
+    /// cannot hover, so its lift must not leave a ring behind.
     fn on_touch(
         &mut self,
         id: u64,
@@ -2283,7 +2288,13 @@ impl Shell {
         let Some(sample) = self.pen.on_touch(id, phase, pos, force) else {
             return;
         };
+        self.chrome.set_pen_hover(sample.pen.then_some(sample.pos));
         self.cursor = sample.pos;
+        if sample.hover {
+            let button = self.held.unwrap_or(PointerButton::Primary);
+            self.on_pointer(PointerPhase::Move, button, over_panel);
+            return;
+        }
         self.set_pen_pressure(sample.pressure);
         self.on_pointer(sample.phase, PointerButton::Primary, over_panel);
         if sample.phase == PointerPhase::Up {
@@ -2346,6 +2357,7 @@ impl Shell {
         self.abandon_gesture();
         self.pen.reset();
         self.set_pen_pressure(1.0);
+        self.chrome.set_pen_hover(None);
     }
 
     /// A winit mouse button, unless it is the OS emulating an active
@@ -2372,6 +2384,8 @@ impl Shell {
         if self.pen.swallow_cursor_move() {
             return;
         }
+        // W8-A: the mouse moved, so the brush ring follows it again.
+        self.chrome.set_pen_hover(None);
         self.cursor = Vec2::new(position.x as f32, position.y as f32);
         // The move belongs to whichever button went down, which winit
         // does not repeat here; with none held it is a hover.

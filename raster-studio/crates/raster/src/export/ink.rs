@@ -13,8 +13,9 @@
 //! * **CMYK TIFF** — baseline, uncompressed, chunky, one strip,
 //!   `PhotometricInterpretation = 5` (separated), `InkSet = 1` (CMYK).
 //! * **PNG-8** — colour type 3 with a `PLTE` (and a `tRNS` when any entry is
-//!   not opaque). Refused when the image has more than 256 distinct RGBA
-//!   colours: an indexed document never does.
+//!   not opaque). Lossless when the image has at most 256 distinct RGBA
+//!   colours; otherwise re-quantised with 1-bit alpha (see
+//!   [`encode_indexed_png`]), so an Indexed document always exports.
 //!
 //! The separation is `color::cmyk` — the documented naive ink model, not an
 //! ICC press profile — so the file, the mode conversion and the soft proof
@@ -364,41 +365,42 @@ fn png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&crc32(&[kind, data]).to_be_bytes());
 }
 
-/// Encode straight RGBA8 as a palette PNG (colour type 3), or `None` when the
-/// image has more than 256 distinct RGBA colours.
+/// Alpha at or above which a pixel is opaque in a re-quantised palette PNG
+/// (Photoshop's Indexed Color keeps 1-bit transparency).
+pub const INDEXED_ALPHA_THRESHOLD: u8 = 128;
+
+/// Encode straight RGBA8 as a palette PNG (colour type 3). Always succeeds:
 ///
-/// The palette is the image's own colours in first-seen order; `tRNS` carries
-/// alpha only when some entry is not opaque.
-pub fn encode_indexed_png(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
-    let mut index: HashMap<[u8; 4], u8> = HashMap::new();
-    let mut palette: Vec<[u8; 4]> = Vec::new();
-    let w = width as usize;
+/// * When the image has at most 256 distinct RGBA colours the palette is
+///   exactly those colours in first-seen order (lossless), with `tRNS`
+///   carrying alpha only when some entry is not opaque.
+/// * Otherwise — typically a soft-edged stroke painted after Image > Mode >
+///   Indexed Color, whose antialiased alpha multiplies the palette — the
+///   image is re-quantised the way Photoshop's Indexed mode stores it:
+///   alpha is thresholded to 1 bit at [`INDEXED_ALPHA_THRESHOLD`] (one fully
+///   transparent entry, index 0), and the opaque colours become the image's
+///   own colours when they fit, or an adaptive (median-cut) palette of the
+///   remaining entries otherwise, each pixel mapped to its nearest entry.
+pub fn encode_indexed_png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+    let (palette, indices) = exact_palette(rgba).unwrap_or_else(|| thresholded_palette(rgba));
+    let w = (width as usize).max(1);
     let mut raw = Vec::with_capacity((w + 1) * height as usize);
-    for (i, px) in rgba.as_chunks::<4>().0.iter().enumerate() {
+    for (i, &at) in indices.iter().enumerate() {
         if i % w == 0 {
             raw.push(0); // filter: none
         }
-        let key = [px[0], px[1], px[2], px[3]];
-        let at = match index.get(&key) {
-            Some(&at) => at,
-            None => {
-                if palette.len() == 256 {
-                    return None;
-                }
-                let at = palette.len() as u8;
-                palette.push(key);
-                index.insert(key, at);
-                at
-            }
-        };
         raw.push(at);
     }
+    let mut palette = palette;
     if palette.is_empty() {
         palette.push([0, 0, 0, 0]);
     }
     let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-    z.write_all(&raw).ok()?;
-    let idat = z.finish().ok()?;
+    // Writing into a `Vec` cannot fail.
+    let idat = z
+        .write_all(&raw)
+        .and_then(|()| z.finish())
+        .unwrap_or_default();
 
     let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
     let mut ihdr = Vec::with_capacity(13);
@@ -408,13 +410,81 @@ pub fn encode_indexed_png(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8
     png_chunk(&mut out, b"IHDR", &ihdr);
     let plte: Vec<u8> = palette.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
     png_chunk(&mut out, b"PLTE", &plte);
-    if palette.iter().any(|p| p[3] != 255) {
-        let trns: Vec<u8> = palette.iter().map(|p| p[3]).collect();
+    if let Some(last) = palette.iter().rposition(|p| p[3] != 255) {
+        // Entries past the end of `tRNS` are opaque.
+        let trns: Vec<u8> = palette[..=last].iter().map(|p| p[3]).collect();
         png_chunk(&mut out, b"tRNS", &trns);
     }
     png_chunk(&mut out, b"IDAT", &idat);
     png_chunk(&mut out, b"IEND", &[]);
-    Some(out)
+    out
+}
+
+/// The image's own RGBA colours as a palette plus one index per pixel, or
+/// `None` when there are more than 256 of them.
+fn exact_palette(rgba: &[u8]) -> Option<(Vec<[u8; 4]>, Vec<u8>)> {
+    let mut index: HashMap<[u8; 4], u8> = HashMap::new();
+    let mut palette: Vec<[u8; 4]> = Vec::new();
+    let mut indices = Vec::with_capacity(rgba.len() / 4);
+    for px in rgba.as_chunks::<4>().0 {
+        let at = match index.get(px) {
+            Some(&at) => at,
+            None => {
+                if palette.len() == 256 {
+                    return None;
+                }
+                let at = palette.len() as u8;
+                palette.push(*px);
+                index.insert(*px, at);
+                at
+            }
+        };
+        indices.push(at);
+    }
+    Some((palette, indices))
+}
+
+/// Photoshop-style re-quantisation: 1-bit alpha, at most 256 entries.
+fn thresholded_palette(rgba: &[u8]) -> (Vec<[u8; 4]>, Vec<u8>) {
+    use color::quantize::{build_palette, nearest, Histogram, PaletteKind, MAX_COLORS};
+    let pixels = rgba.as_chunks::<4>().0;
+    let opaque = |px: &[u8; 4]| px[3] >= INDEXED_ALPHA_THRESHOLD;
+    let transparent = pixels.iter().any(|px| !opaque(px));
+    let mut histogram = Histogram::new();
+    let visible: Vec<u8> = pixels
+        .iter()
+        .filter(|px| opaque(px))
+        .flat_map(|px| [px[0], px[1], px[2], 255])
+        .collect();
+    histogram.add_rgba8(&visible);
+    let slots = MAX_COLORS - u16::from(transparent);
+    let colours: Vec<[u8; 3]> = if histogram.distinct() == 0 {
+        Vec::new()
+    } else {
+        build_palette(&histogram, PaletteKind::Exact, slots)
+            .or_else(|_| build_palette(&histogram, PaletteKind::Adaptive, slots))
+            .unwrap_or_default()
+    };
+    let base = u8::from(transparent);
+    let mut palette: Vec<[u8; 4]> = Vec::with_capacity(colours.len() + 1);
+    if transparent {
+        palette.push([0, 0, 0, 0]);
+    }
+    palette.extend(colours.iter().map(|c| [c[0], c[1], c[2], 255]));
+    let mut cache: HashMap<[u8; 3], u8> = HashMap::new();
+    let indices = pixels
+        .iter()
+        .map(|px| {
+            if !opaque(px) || colours.is_empty() {
+                return 0;
+            }
+            let rgb = [px[0], px[1], px[2]];
+            *cache
+                .entry(rgb)
+                .or_insert_with(|| base + nearest(&colours, rgb.map(i32::from)) as u8)
+        })
+        .collect();
+    (palette, indices)
 }
 
 #[cfg(test)]
@@ -496,7 +566,7 @@ mod tests {
         let rgba = [
             10u8, 20, 30, 255, 200, 100, 0, 255, 10, 20, 30, 255, 0, 0, 0, 0,
         ];
-        let bytes = encode_indexed_png(2, 2, &rgba).expect("4 colours fit");
+        let bytes = encode_indexed_png(2, 2, &rgba);
         // IHDR: bit depth 8, colour type 3.
         assert_eq!(&bytes[12..16], b"IHDR");
         assert_eq!((bytes[24], bytes[25]), (8, 3));
@@ -564,11 +634,74 @@ mod tests {
         assert_eq!(ExportInk::for_color_mode(0), ExportInk::Rgb);
     }
 
+    /// The palette entry count and the `tRNS` length of a palette PNG.
+    fn png_palette(bytes: &[u8]) -> (usize, Option<usize>) {
+        let mut i = 8;
+        let (mut plte, mut trns) = (0, None);
+        while i + 8 <= bytes.len() {
+            let len = u32::from_be_bytes(bytes[i..i + 4].try_into().unwrap()) as usize;
+            match &bytes[i + 4..i + 8] {
+                b"PLTE" => plte = len / 3,
+                b"tRNS" => trns = Some(len),
+                _ => {}
+            }
+            i += 12 + len;
+        }
+        (plte, trns)
+    }
+
     #[test]
-    fn more_than_256_colours_is_not_an_indexed_png() {
+    fn more_than_256_colours_is_requantised_with_one_bit_alpha() {
+        // 300 opaque colours: an adaptive palette of at most 256.
         let rgba: Vec<u8> = (0..300u32)
-            .flat_map(|i| [(i % 256) as u8, (i / 256) as u8, 0, 255])
+            .flat_map(|i| [(i % 256) as u8, (i / 256) as u8 * 200, 0, 255])
             .collect();
-        assert!(encode_indexed_png(300, 1, &rgba).is_none());
+        let bytes = encode_indexed_png(300, 1, &rgba);
+        assert_eq!(bytes[25], 3, "colour type 3");
+        let (entries, trns) = png_palette(&bytes);
+        assert!(entries <= 256, "{entries} entries");
+        assert_eq!(trns, None, "an all-opaque image has no tRNS");
+        let back = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+            .unwrap()
+            .to_rgba8();
+        for (want, got) in rgba.as_chunks::<4>().0.iter().zip(back.pixels()) {
+            for c in 0..3 {
+                assert!(want[c].abs_diff(got.0[c]) <= 16, "{want:?} vs {got:?}");
+            }
+            assert_eq!(got.0[3], 255);
+        }
+    }
+
+    #[test]
+    fn a_soft_alpha_stroke_over_a_palette_still_writes_a_palette_png() {
+        // Four palette colours crossed with every alpha step of an
+        // antialiased edge: 4 x 256 distinct RGBA values.
+        let palette = [
+            [200u8, 30, 30],
+            [30, 200, 30],
+            [30, 30, 200],
+            [250, 250, 250],
+        ];
+        let rgba: Vec<u8> = (0..1024u32)
+            .flat_map(|i| {
+                let p = palette[(i % 4) as usize];
+                [p[0], p[1], p[2], (i / 4) as u8]
+            })
+            .collect();
+        let bytes = encode_indexed_png(64, 16, &rgba);
+        assert_eq!(bytes[25], 3, "colour type 3");
+        let (entries, trns) = png_palette(&bytes);
+        assert_eq!(entries, 5, "the four colours plus one transparent entry");
+        assert_eq!(trns, Some(1), "only the transparent entry is in tRNS");
+        let back = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+            .unwrap()
+            .to_rgba8();
+        for (want, got) in rgba.as_chunks::<4>().0.iter().zip(back.pixels()) {
+            if want[3] >= INDEXED_ALPHA_THRESHOLD {
+                assert_eq!(got.0, [want[0], want[1], want[2], 255]);
+            } else {
+                assert_eq!(got.0[3], 0, "{want:?} -> {got:?}");
+            }
+        }
     }
 }

@@ -402,6 +402,9 @@ impl ToolOptions {
             smoothing: self.float(tool, "smoothing").unwrap_or(d.smoothing),
             size_pressure: self.flag(tool, "size_pressure").unwrap_or(d.size_pressure),
             flow_pressure: self.flag(tool, "flow_pressure").unwrap_or(d.flow_pressure),
+            opacity_pressure: self
+                .flag(tool, "opacity_pressure")
+                .unwrap_or(d.opacity_pressure),
             min_size_ratio: d.min_size_ratio,
             aliased: d.aliased,
         }

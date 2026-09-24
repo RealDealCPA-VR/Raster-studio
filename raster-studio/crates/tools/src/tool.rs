@@ -846,6 +846,23 @@ pub struct ToolContext<'a> {
     /// the Colour Sampler edits them in place. `None` when the shell has no
     /// document to lend them from.
     pub samplers: Option<&'a mut Vec<Vec2>>,
+    /// W8-D: the shell can run a heavy stroke finish off the interaction
+    /// thread. When `true`, a tool whose release would synthesise for longer
+    /// than a frame (the Spot Healing Brush's Content-Aware type) emits
+    /// nothing at release and hands the work over through
+    /// [`Tool::take_deferred_commit`] instead; `false` (the default) keeps
+    /// the release synchronous, emitting its command as every other tool does.
+    pub defer_heavy_commits: bool,
+    /// W8-C: the layers a Perspective Crop commit rectifies, each with its
+    /// document→layer-pixel map, in depth-first order. The shell fills it
+    /// only for the Perspective Crop tool, with every Raster and Generator
+    /// layer in the document (hidden ones included) whose document transform
+    /// inverts; each listed layer is resampled and commits one
+    /// [`Command::PaintTiles`]. Groups, adjustment, text, shape and smart
+    /// object layers are not listed: they are not rectified and keep their
+    /// own geometry. Empty by default (a bare harness), in which case the
+    /// active layer is the one there is.
+    pub rectify_layers: Vec<(LayerId, glam::Affine2)>,
 
     commands: Vec<Command>,
     selection_edits: Vec<SelectionEdit>,
@@ -884,6 +901,8 @@ impl<'a> ToolContext<'a> {
             active_layer_content_bounds: None,
             history_source: None,
             samplers: None,
+            defer_heavy_commits: false,
+            rectify_layers: Vec::new(),
             active_layer_parent_transform: None,
             snap_candidates: Vec::new(),
             snap_threshold_doc: 8.0,
@@ -1121,6 +1140,17 @@ pub enum SessionGeometry {
     /// over the canvas and read into the Info panel's Distance and Angle rows.
     /// Held after release, until the next drag, a click, Escape or Straighten.
     Measure { start: Vec2, end: Vec2 },
+    /// W8-C: a Perspective Crop quad, clockwise from the top-left, in
+    /// document pixels, with the corner being dragged (emphasised). The
+    /// painter draws the outline, a perspective grid and a handle on each
+    /// corner.
+    PerspectiveCrop {
+        quad: [Vec2; 4],
+        active: Option<usize>,
+    },
+    /// W8-C: a Type Mask session over the temporary text layer `layer`: the
+    /// painter lays the quick-mask red over everything outside its glyphs.
+    TypeMask { layer: LayerId },
 }
 
 /// W4-A: the composition guide a published [`SessionGeometry::Crop`] asks
@@ -1370,6 +1400,23 @@ pub trait Tool {
         _ctx: &mut ToolContext<'_>,
     ) -> Result<Option<crate::stroke::LivePaint>, ToolError> {
         Ok(None)
+    }
+
+    /// W8-D: the heavy finish a release handed over instead of emitting,
+    /// when the context asked for it ([`ToolContext::defer_heavy_commits`]).
+    /// Taken once, right after the pointer-up: the shell runs the synthesis
+    /// on a worker and lands [`crate::stroke::DeferredStroke::finish`]'s
+    /// command as the stroke's one history entry. Every tool whose release
+    /// is cheap keeps this default.
+    fn take_deferred_commit(&mut self) -> Option<crate::stroke::DeferredStroke> {
+        None
+    }
+
+    /// W8-C: for a Type Mask tool, how its confirmed glyphs combine with the
+    /// existing selection (the options bar's New / Add / Subtract /
+    /// Intersect); `None` for every other tool.
+    fn type_mask_op(&self) -> Option<BooleanOp> {
+        None
     }
 }
 

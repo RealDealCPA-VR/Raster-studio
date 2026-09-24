@@ -7,9 +7,10 @@
 //! Transparent — the plate's pixels, the background colour over the rect. One
 //! Ctrl+Z takes the whole artboard back.
 //!
-//! Photopea also clips an artboard's contents to it and exports each one on
-//! its own (File > Export Artboards); neither is here — see
-//! [`layer_model::artboard`].
+//! W8-C: the compositor clips an artboard's contents to its rect
+//! (`compositor::composite`, `artboard_clip`), and File > Export > Artboards
+//! to Files (`app_shell::artboard_export`) writes each one as its own image,
+//! as Photopea does.
 
 use editor_core::{Command, PixelKey, PixelTarget};
 use glam::{IVec2, Vec2};

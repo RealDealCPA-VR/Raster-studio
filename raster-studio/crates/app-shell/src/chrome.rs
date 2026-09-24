@@ -320,7 +320,7 @@ fn touches_brush(intent: &ui::Intent) -> bool {
 /// just `size` is not given a hardness slider it never had.
 fn push_brush(w: &mut ui::Workspace, tool: tools::ToolId, brush: &tools::BrushSettings) {
     use ui::OptionValue;
-    let pairs: [(&str, OptionValue); 10] = [
+    let pairs: [(&str, OptionValue); 11] = [
         ("size", OptionValue::Float(brush.size)),
         ("hardness", OptionValue::Float(brush.hardness)),
         ("spacing", OptionValue::Float(brush.spacing)),
@@ -331,6 +331,10 @@ fn push_brush(w: &mut ui::Workspace, tool: tools::ToolId, brush: &tools::BrushSe
         ("smoothing", OptionValue::Float(brush.smoothing)),
         ("size_pressure", OptionValue::Bool(brush.size_pressure)),
         ("flow_pressure", OptionValue::Bool(brush.flow_pressure)),
+        (
+            "opacity_pressure",
+            OptionValue::Bool(brush.opacity_pressure),
+        ),
     ];
     for (key, value) in pairs {
         w.options.set(tool, key, value);
@@ -377,6 +381,7 @@ fn brush_from_options(
         smoothing: float("smoothing", base.smoothing),
         size_pressure: flag("size_pressure", base.size_pressure),
         flow_pressure: flag("flow_pressure", base.flow_pressure),
+        opacity_pressure: flag("opacity_pressure", base.opacity_pressure),
         // Neither is a control any tool's schema declares, so both are the
         // tool's own and are carried through rather than defaulted.
         min_size_ratio: base.min_size_ratio,
@@ -474,6 +479,30 @@ pub fn chord_from_egui(key: egui::Key, mods: egui::Modifiers) -> Option<Chord> {
 const LIVE_ELLIPSE_STEPS: usize = 64;
 /// W4-A: how many chords a live pen curve segment is flattened into.
 const LIVE_CURVE_STEPS: usize = 16;
+/// W8-C: the Perspective Crop grid — lines each way inside the quad.
+const PERSPECTIVE_GRID_LINES: usize = 3;
+/// W8-C: the quick-mask overlay's opacity over unmasked pixels — Photoshop
+/// and Photopea's default Quick Mask opacity, 50%. A data value of the mode,
+/// not a chrome colour: the red itself is the theme's `ChannelRed` token.
+const QUICK_MASK_ALPHA: f32 = 0.5;
+/// W8-C: the longest edge the Type Mask overlay texture is built at; a
+/// larger canvas is sampled down to it (the overlay is a guide, the confirm
+/// reads the glyphs at full resolution).
+const TYPE_MASK_OVERLAY_MAX_PX: u32 = 1024;
+
+/// W8-C: the Type Mask overlay texture, keyed by what it was built from.
+struct TypeMaskOverlay {
+    key: (
+        crate::doc::DocumentId,
+        LayerId,
+        layer_model::TextLayer,
+        raster::PixelRect,
+    ),
+    texture: egui::TextureHandle,
+    /// The overlay's pixels, for the headless tests that read what it shows.
+    #[cfg(test)]
+    image: egui::ColorImage,
+}
 
 /// W5-F: one hash of everything in `doc` that can change a composited pixel
 /// — canvas size and colour space, the layer tree's order, each layer's
@@ -617,6 +646,9 @@ pub struct Chrome {
     /// published by [`Chrome::publish_tool_geometry`] and painted by
     /// `paint_live_tool_geometry`. `None` when no such session is live.
     live_session: Option<tools::SessionGeometry>,
+    /// W8-C: the quick-mask red a Type Mask session shows outside its glyphs,
+    /// rebuilt only when the typed run changes. `None` outside such a session.
+    type_mask_overlay: Option<TypeMaskOverlay>,
     /// W3-A: View ▸ Extras — rulers, guides, grid, layer edges, precise
     /// cursor — painted over the composite. See [`crate::canvas_extras`].
     extras: crate::canvas_extras::CanvasExtras,
@@ -882,6 +914,13 @@ impl Chrome {
     /// W3-A: what the View ▸ Extras pass drew on the last frame.
     pub fn extras_report(&self) -> crate::ExtrasReport {
         self.extras.last_report()
+    }
+
+    /// W8-A: the brush ring's position source. `Some` is a pen's window
+    /// position in physical pixels (hovering in range, or in contact), which
+    /// the ring follows; `None` follows egui's pointer (the mouse).
+    pub fn set_pen_hover(&mut self, at: Option<glam::Vec2>) {
+        self.extras.set_pen_hover(at);
     }
 
     /// Whether a modal dialog is open this frame. The shell suppresses the
@@ -1804,6 +1843,14 @@ impl Chrome {
             .active()
             .map(|d| d.samplers().to_vec())
             .unwrap_or_default();
+        // W8-C: the Type Mask overlay lives exactly as long as its session.
+        let type_mask_layer = match &self.live_session {
+            Some(tools::SessionGeometry::TypeMask { layer }) => Some(*layer),
+            _ => None,
+        };
+        if type_mask_layer.is_none() {
+            self.type_mask_overlay = None;
+        }
         if transform.is_none() && self.live_session.is_none() && samplers.is_empty() {
             return;
         }
@@ -1829,6 +1876,31 @@ impl Chrome {
             };
             paint::transform(&painter, &camera, &viewport, &session, &style);
         }
+        if let Some(layer) = type_mask_layer {
+            self.refresh_type_mask_overlay(ctx, doc, layer);
+            if let Some(overlay) = &self.type_mask_overlay {
+                let rect = overlay.key.3;
+                let (x0, y0) = (rect.x as f32, rect.y as f32);
+                let (x1, y1) = (x0 + rect.width as f32, y0 + rect.height as f32);
+                let mut mesh = egui::Mesh::with_texture(overlay.texture.id());
+                for (p, uv) in [
+                    (glam::Vec2::new(x0, y0), egui::pos2(0.0, 0.0)),
+                    (glam::Vec2::new(x1, y0), egui::pos2(1.0, 0.0)),
+                    (glam::Vec2::new(x1, y1), egui::pos2(1.0, 1.0)),
+                    (glam::Vec2::new(x0, y1), egui::pos2(0.0, 1.0)),
+                ] {
+                    let s = camera.screen_pt_of(&viewport, p);
+                    mesh.vertices.push(egui::epaint::Vertex {
+                        pos: egui::pos2(s.x, s.y),
+                        uv,
+                        color: egui::Color32::WHITE,
+                    });
+                }
+                mesh.add_triangle(0, 1, 2);
+                mesh.add_triangle(0, 2, 3);
+                painter.add(egui::Shape::mesh(mesh));
+            }
+        }
         if let Some(session) = self.live_session.as_ref() {
             let frame = LiveFrame {
                 painter: &painter,
@@ -1849,6 +1921,95 @@ impl Chrome {
             };
             Self::paint_samplers(ctx, &frame, &samplers);
         }
+    }
+
+    /// W8-C: (re)build the Type Mask overlay for `layer` when its text or the
+    /// canvas changed: the layer composited alone (the draft the canvas is
+    /// showing), and the theme's red at [`QUICK_MASK_ALPHA`] everywhere its
+    /// glyph coverage is not — Photoshop's quick-mask view of the selection
+    /// the confirm will make.
+    fn refresh_type_mask_overlay(
+        &mut self,
+        ctx: &egui::Context,
+        doc: &crate::doc::OpenDocument,
+        layer: LayerId,
+    ) {
+        let Some(layer_model::LayerKind::Text(text)) =
+            doc.document.layers.get(layer).map(|l| &l.kind)
+        else {
+            self.type_mask_overlay = None;
+            return;
+        };
+        let rect = doc.canvas_rect();
+        let key = (doc.id(), layer, text.clone(), rect);
+        if self
+            .type_mask_overlay
+            .as_ref()
+            .is_some_and(|o| o.key == key)
+        {
+            return;
+        }
+        let Ok(rgba) = doc.layer_pixels(layer) else {
+            self.type_mask_overlay = None;
+            return;
+        };
+        let (w, h) = (rect.width.max(1), rect.height.max(1));
+        let step = w.max(h).div_ceil(TYPE_MASK_OVERLAY_MAX_PX).max(1);
+        let (ow, oh) = (w.div_ceil(step), h.div_ceil(step));
+        let red = design::current_theme(ctx)
+            .tokens()
+            .palette
+            .color(design::ColorRole::ChannelRed);
+        let mut pixels = Vec::with_capacity((ow * oh) as usize);
+        for oy in 0..oh {
+            for ox in 0..ow {
+                let (x, y) = ((ox * step).min(w - 1), (oy * step).min(h - 1));
+                let a = rgba
+                    .get(((y * w + x) * 4 + 3) as usize)
+                    .copied()
+                    .unwrap_or(0);
+                let alpha = QUICK_MASK_ALPHA * (1.0 - f32::from(a) / 255.0);
+                pixels.push(egui::Color32::from_rgba_unmultiplied(
+                    red.r,
+                    red.g,
+                    red.b,
+                    (alpha * 255.0).round() as u8,
+                ));
+            }
+        }
+        let image = egui::ColorImage {
+            size: [ow as usize, oh as usize],
+            pixels,
+        };
+        #[cfg(test)]
+        let kept = image.clone();
+        match &mut self.type_mask_overlay {
+            Some(overlay) => {
+                overlay.texture.set(image, egui::TextureOptions::NEAREST);
+                overlay.key = key;
+                #[cfg(test)]
+                {
+                    overlay.image = kept;
+                }
+            }
+            None => {
+                let texture =
+                    ctx.load_texture("type-mask-overlay", image, egui::TextureOptions::NEAREST);
+                self.type_mask_overlay = Some(TypeMaskOverlay {
+                    key,
+                    texture,
+                    #[cfg(test)]
+                    image: kept,
+                });
+            }
+        }
+    }
+
+    /// W8-C: the Type Mask overlay's pixels as last built — what a headless
+    /// test reads to prove the red sits outside the glyphs.
+    #[cfg(test)]
+    pub(crate) fn type_mask_overlay_image(&self) -> Option<&egui::ColorImage> {
+        self.type_mask_overlay.as_ref().map(|o| &o.image)
     }
 
     /// W4-G: each Colour Sampler point as a numbered crosshair.
@@ -2052,6 +2213,52 @@ impl Chrome {
                     );
                 }
             }
+            // W8-C: the Perspective Crop quad — its outline, a perspective
+            // grid through it and a handle square on each corner, the one
+            // being dragged filled with the selected-handle colour.
+            tools::SessionGeometry::PerspectiveCrop { quad, active } => {
+                let corners: Vec<glam::Vec2> = quad.iter().copied().map(to_screen).collect();
+                if !corners.iter().all(|c| c.is_finite()) {
+                    return;
+                }
+                let mut outline: Vec<egui::Pos2> = corners.iter().map(|c| pos(*c)).collect();
+                outline.push(outline[0]);
+                painter.add(egui::Shape::line(
+                    outline,
+                    style.hairline(style.crop_outline),
+                ));
+                // Lines between matching points of opposite edges, in
+                // document space so they follow the quad's perspective.
+                let grid = style.hairline(style.crop_guide);
+                let lerp = |a: glam::Vec2, b: glam::Vec2, t: f32| a + (b - a) * t;
+                let n = PERSPECTIVE_GRID_LINES + 1;
+                for k in 1..n {
+                    let t = k as f32 / n as f32;
+                    for (a0, a1, b0, b1) in [
+                        (quad[0], quad[1], quad[3], quad[2]),
+                        (quad[0], quad[3], quad[1], quad[2]),
+                    ] {
+                        let (p, q) = (to_screen(lerp(a0, a1, t)), to_screen(lerp(b0, b1, t)));
+                        painter.line_segment([pos(p), pos(q)], grid);
+                    }
+                }
+                let half = layout.handle_pt * 0.5;
+                for (i, c) in corners.iter().enumerate() {
+                    let square =
+                        egui::Rect::from_center_size(pos(*c), egui::vec2(half * 2.0, half * 2.0));
+                    let fill = if *active == Some(i) {
+                        style.handle_selected
+                    } else {
+                        style.handle_fill
+                    };
+                    let rounding = egui::Rounding::same(style.handle_radius_pt);
+                    painter.rect_filled(square, rounding, fill);
+                    painter.rect_stroke(square, rounding, style.hairline(style.handle_stroke));
+                }
+            }
+            // W8-C: painted by `paint_live_tool_geometry`, which holds the
+            // document the overlay is built from.
+            tools::SessionGeometry::TypeMask { .. } => {}
             // W4-G: the Ruler's line, with a cross at each end.
             tools::SessionGeometry::Measure { start, end } => {
                 let (a, b) = (to_screen(*start), to_screen(*end));
@@ -5000,6 +5207,106 @@ mod tests {
                 "{choice:?} released"
             );
         }
+    }
+
+    /// W8-C: a Perspective Crop quad is painted through the chrome's real
+    /// painter with a handle square on each corner and a 3 x 3 grid inside;
+    /// dragging a corner moves its handle, drawn as the selected one.
+    #[test]
+    fn a_perspective_crop_quad_is_painted_with_corner_handles_and_a_grid() {
+        let mut rig = LiveRig::new(tools::ToolId::PerspectiveCrop);
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let style = ui::canvas::CanvasStyle::from_context(&ctx);
+        let layout = ui::canvas::HandleLayout::default();
+        let handle = |shapes: &[egui::Shape], at: egui::Pos2, fill: egui::Color32| {
+            flat(shapes).iter().any(|s| match s {
+                egui::Shape::Rect(r) => {
+                    near(r.rect.center(), at)
+                        && (r.rect.width() - layout.handle_pt).abs() < 0.5
+                        && r.fill == fill
+                }
+                _ => false,
+            })
+        };
+        rig.down(1.0, 1.0);
+        rig.drag(7.0, 7.0);
+        rig.up(7.0, 7.0);
+        let held = rig.frame();
+        for (x, y) in [(1.0, 1.0), (7.0, 1.0), (7.0, 7.0), (1.0, 7.0)] {
+            assert!(
+                handle(&held, live_screen(x, y), style.handle_fill),
+                "no handle on corner ({x}, {y}): {held:?}"
+            );
+        }
+        let inside = egui::Rect::from_two_pos(live_screen(1.0, 1.0), live_screen(7.0, 7.0));
+        assert_eq!(
+            segments_in(&flat(&held), style.crop_guide, inside).len(),
+            6,
+            "three grid lines each way"
+        );
+        // Grab the top-right corner and pull it in: its handle follows and
+        // is the emphasised one while it is held.
+        rig.down(7.0, 1.0);
+        rig.drag(6.0, 2.0);
+        let dragging = rig.frame();
+        assert!(
+            handle(&dragging, live_screen(6.0, 2.0), style.handle_selected),
+            "the dragged corner's handle: {dragging:?}"
+        );
+        assert!(!handle(&dragging, live_screen(7.0, 1.0), style.handle_fill));
+        rig.up(6.0, 2.0);
+        rig.escape();
+        let gone = rig.frame();
+        assert!(!handle(&gone, live_screen(1.0, 1.0), style.handle_fill));
+    }
+
+    /// W8-C: while a Type Mask run is typed the quick-mask red covers the
+    /// canvas everywhere but the glyphs — a textured quad over the document,
+    /// built from the draft the canvas shows — and it goes with the session.
+    #[test]
+    fn a_type_mask_session_shows_the_quick_mask_red_outside_its_glyphs() {
+        compositor::load_font(dejavu::sans::regular().to_vec());
+        let mut rig = LiveRig::new(tools::ToolId::HorizontalTypeMask);
+        let textured = |shapes: &[egui::Shape]| {
+            flat(shapes).iter().any(|s| match s {
+                egui::Shape::Mesh(m) => {
+                    m.texture_id != egui::TextureId::default()
+                        && m.vertices
+                            .iter()
+                            .any(|v| near(v.pos, live_screen(0.0, 0.0)))
+                        && m.vertices
+                            .iter()
+                            .any(|v| near(v.pos, live_screen(8.0, 8.0)))
+                }
+                _ => false,
+            })
+        };
+        rig.down(1.0, 1.0);
+        rig.up(1.0, 1.0);
+        rig.pointer
+            .text_edit(&mut rig.ed, tools::TextEdit::Insert("WW"));
+        let typing = rig.frame();
+        assert!(textured(&typing), "no overlay over the canvas: {typing:?}");
+        let image = rig.chrome.type_mask_overlay_image().expect("an overlay");
+        assert_eq!(image.size, [8, 8], "one texel per canvas pixel");
+        let alphas: Vec<u8> = image.pixels.iter().map(|p| p.a()).collect();
+        let (lo, hi) = (*alphas.iter().min().unwrap(), *alphas.iter().max().unwrap());
+        assert!(hi >= 120, "the red shows outside the glyphs: {alphas:?}");
+        assert!(lo < hi / 2, "the glyphs are cut out of the red: {alphas:?}");
+        // Above-left of the click is outside every glyph: full quick-mask red.
+        assert!(alphas[0] >= 120, "{alphas:?}");
+        // The theme's ChannelRed (premultiplied by egui): red-dominant.
+        let p = image.pixels[0];
+        let (r, g, b) = (p.r() as i32, p.g() as i32, p.b() as i32);
+        assert!(
+            r > g + 60 && (g - b).abs() <= 2,
+            "the overlay is not the channel red: {p:?}"
+        );
+        rig.pointer.text_edit(&mut rig.ed, tools::TextEdit::Confirm);
+        let done = rig.frame();
+        assert!(!textured(&done), "the overlay outlived its session");
+        assert!(rig.chrome.type_mask_overlay_image().is_none());
     }
 
     /// W4-D round 2: in Straighten mode the line is painted while it is

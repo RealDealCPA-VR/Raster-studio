@@ -115,7 +115,11 @@ pub mod shape;
 pub mod smart;
 pub mod source;
 pub mod text;
+/// W8-C: caret and hit-test geometry for vertical type.
+mod vertical_caret;
 
+#[cfg(test)]
+mod artboard_tests;
 #[cfg(test)]
 mod pattern_tests;
 #[cfg(test)]

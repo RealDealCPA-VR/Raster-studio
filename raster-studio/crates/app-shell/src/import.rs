@@ -1159,7 +1159,11 @@ struct Frame<'a> {
 }
 
 /// The properties every PSD layer record carries, whatever kind it is.
-fn layer_common(source: &psd::PsdLayer, tally: &mut Tally) -> Layer {
+fn layer_common(
+    source: &psd::PsdLayer,
+    tally: &mut Tally,
+    patterns: &psd::pattern::PatternLibrary,
+) -> Layer {
     let mut layer = Layer::raster(&source.name);
     layer.visible = source.visible;
     layer.opacity = f32::from(source.opacity) / 255.0;
@@ -1186,9 +1190,19 @@ fn layer_common(source: &psd::PsdLayer, tally: &mut Tally) -> Layer {
         // verbatim `lfx2` bytes stay in the psd model either way — retention,
         // not rendering.
         match psd::import_effects(effects, &psd::ReadOptions::default()) {
-            Some(imported) => {
+            Some(mut imported) => {
                 if !imported.effects.is_default() {
-                    layer.effects = imported.effects;
+                    layer.effects = imported.effects.clone();
+                }
+                // W8-D: a pattern overlay whose pattern the file carries maps
+                // onto the W7-B effect, pixels included, and leaves the
+                // report; one naming a pattern the file lacks stays named.
+                if let Some(overlay) =
+                    psd::pattern::pattern_overlay(effects, &psd::ReadOptions::default(), patterns)
+                {
+                    layer.effects.enabled = imported.effects.enabled;
+                    layer.effects.pattern_overlay = Some(overlay);
+                    imported.unmapped.retain(|kind| kind != "pattern overlay");
                 }
                 if !imported.unmapped.is_empty() {
                     tally
@@ -1246,6 +1260,12 @@ pub fn document_from_psd(
 
     let mut notes = PsdNotes::default();
     let mut tally = Tally::default();
+    // W8-D: the patterns the file defines, for its pattern overlays and
+    // pattern fill layers to resolve against.
+    let patterns = psd::pattern::PatternLibrary::read(&file, &psd::ReadOptions::default());
+    for refused in &patterns.refused {
+        notes.push(format!("{refused}; layers that use it keep no pattern"));
+    }
     for warning in &file.warnings {
         notes.push(format!("the file was read with a repair: {warning}"));
     }
@@ -1324,8 +1344,12 @@ pub fn document_from_psd(
         frame.index += 1;
 
         let before = tally.signature();
-        let mut layer = layer_common(source, &mut tally);
+        let mut layer = layer_common(source, &mut tally, &patterns);
         let mut wants_pixels = false;
+        // W8-D: a pattern fill layer whose pattern the file carries.
+        let pattern_fill = source.adjustment.as_ref().and_then(|adjustment| {
+            psd::pattern::pattern_fill_layer(adjustment, &psd::ReadOptions::default(), &patterns)
+        });
         match &source.kind {
             psd::LayerKind::Group(group) => {
                 layer.kind = LayerKind::Group(GroupLayer {
@@ -1344,6 +1368,17 @@ pub fn document_from_psd(
                 Some(adjustment) if adjustment.key == *b"nvrt" => {
                     layer.kind = LayerKind::Adjustment(layer_model::AdjustmentLayer {
                         kind: AdjustmentKind::Invert,
+                    });
+                }
+                Some(_) if pattern_fill.is_some() => {
+                    // W8-D: a pattern fill layer is a layer the pattern covers
+                    // whole: its pixels are the pattern tiled across the
+                    // canvas (written below, so it reads right with its style
+                    // hidden) and its pattern — scale, phase, angle, link —
+                    // is the W7-B pattern overlay, editable in Layer Style.
+                    layer.effects.pattern_overlay = Some(layer_model::PatternOverlayEffect {
+                        pattern: pattern_fill.clone().expect("checked by the guard"),
+                        ..layer_model::PatternOverlayEffect::default()
                     });
                 }
                 Some(adjustment) => {
@@ -1397,6 +1432,28 @@ pub fn document_from_psd(
         let id = document.layers.insert_at(layer, parent, index)?;
 
         let mut placed = DocRect::EMPTY;
+        if let Some(tile) = pattern_fill.as_ref().and_then(|fill| fill.tile.as_ref()) {
+            // W8-D: the fill layer's pixels: its pattern tiled over the
+            // canvas from the fill's phase, at the pattern's own size.
+            let fill = pattern_fill.as_ref().expect("the tile came from it");
+            let (ox, oy) = (
+                fill.offset_px[0].round() as i64,
+                fill.offset_px[1].round() as i64,
+            );
+            let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+            for y in 0..i64::from(height) {
+                for x in 0..i64::from(width) {
+                    rgba.extend_from_slice(&tile.pixel(x - ox, y - oy));
+                }
+            }
+            let canvas = psd::Rect::sized(width, height);
+            let edits = tile_edits_for_rgba(&rgba, canvas, &mut tiles);
+            if !edits.is_empty() {
+                let delta = TileDelta::new(edits).map_err(editor_core::CommandError::from)?;
+                document.pixels.apply(PixelKey::Layer(id), &delta);
+            }
+            placed = DocRect::from_psd(canvas);
+        }
         if wants_pixels {
             if let Some(rgba) = psd_layer_rgba(source, &header) {
                 let edits = tile_edits_for_rgba(&rgba, source.bounds, &mut tiles);
@@ -3620,5 +3677,235 @@ mod tests {
         // ...and the channels hold exactly the shape's ink, no shadow reach.
         let (x0, y0, x1, y1) = decoded_ink_bounds(&file, "Badge").unwrap();
         assert_eq!((x0, y0, x1, y1), (20, 18, 43, 33));
+    }
+}
+
+/// W8-D: a `.psd` whose pattern overlay and pattern fill layer name a pattern
+/// its `Patt` block carries opens with both mapped onto the W7-B pattern
+/// effect, and the fidelity report stops listing them; one naming a pattern
+/// the file lacks is still named.
+#[cfg(test)]
+mod w8d_pattern_tests {
+    use super::*;
+
+    const W: u32 = 8;
+    const H: u32 = 8;
+
+    fn checks() -> psd::pattern::PsdPattern {
+        psd::pattern::PsdPattern {
+            name: "Checks".to_string(),
+            id: "pat-1".to_string(),
+            width: 2,
+            height: 2,
+            rgba8: vec![
+                255, 0, 0, 255, 0, 255, 0, 255, //
+                0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+        }
+    }
+
+    fn unit(unit: &str, value: f64) -> psd::Value {
+        psd::Value::UnitFloat {
+            unit: unit.as_bytes().try_into().unwrap(),
+            value,
+        }
+    }
+
+    fn ptrn(name: &str, id: &str) -> psd::Value {
+        let mut p = psd::Descriptor::new("Ptrn");
+        p.push("Nm  ", psd::Value::Text(name.into())).unwrap();
+        p.push("Idnt", psd::Value::Text(id.into())).unwrap();
+        psd::Value::Descriptor(p)
+    }
+
+    fn phase(x: f64, y: f64) -> psd::Value {
+        let mut p = psd::Descriptor::new("Pnt ");
+        p.push("Hrzn", psd::Value::Double(x)).unwrap();
+        p.push("Vrtc", psd::Value::Double(y)).unwrap();
+        psd::Value::Descriptor(p)
+    }
+
+    /// An `lfx2` block holding one pattern overlay naming `name`/`id`.
+    fn overlay_lfx2(name: &str, id: &str) -> Vec<u8> {
+        let mut s = psd::bytes::Sink::new();
+        s.u32(0);
+        s.u32(16);
+        let mut top = psd::Descriptor::new("Lfx2");
+        top.push("masterFXSwitch", psd::Value::Bool(true)).unwrap();
+        let mut fill = psd::Descriptor::new("patternFill");
+        fill.push("enab", psd::Value::Bool(true)).unwrap();
+        fill.push(
+            "Md  ",
+            psd::Value::Enumerated {
+                type_id: "BlnM".into(),
+                value: "Nrml".into(),
+            },
+        )
+        .unwrap();
+        fill.push("Opct", unit("#Prc", 60.0)).unwrap();
+        fill.push("Ptrn", ptrn(name, id)).unwrap();
+        fill.push("Scl ", unit("#Prc", 200.0)).unwrap();
+        fill.push("Algn", psd::Value::Bool(true)).unwrap();
+        fill.push("phase", phase(1.0, 0.0)).unwrap();
+        top.push("patternFill", psd::Value::Descriptor(fill))
+            .unwrap();
+        top.write(&mut s).unwrap();
+        s.into_inner()
+    }
+
+    /// A `PtFl` fill layer payload naming the Checks pattern.
+    fn pattern_fill_payload() -> Vec<u8> {
+        let mut s = psd::bytes::Sink::new();
+        s.u32(16);
+        let mut d = psd::Descriptor::new("null");
+        d.push("Ptrn", ptrn("Checks", "pat-1")).unwrap();
+        d.push("Scl ", unit("#Prc", 100.0)).unwrap();
+        d.push("phase", phase(0.0, 0.0)).unwrap();
+        d.write(&mut s).unwrap();
+        s.into_inner()
+    }
+
+    fn crafted_psd() -> Vec<u8> {
+        let mut file = psd::PsdFile::new(psd::PsdHeader::rgba8(W, H));
+        let canvas = psd::Rect::sized(W, H);
+        file.extra.push(psd::TaggedBlock::new(
+            *b"Patt",
+            psd::pattern::encode_block(&[checks()]),
+        ));
+
+        let mut styled = psd::PsdLayer::raster("Styled", canvas);
+        styled
+            .set_rgba8(&[128u8, 128, 128, 255].repeat((W * H) as usize))
+            .unwrap();
+        styled.effects = Some(psd::Effects {
+            key: *b"lfx2",
+            data: overlay_lfx2("Checks", "pat-1"),
+        });
+
+        let mut missing = psd::PsdLayer::raster("Missing", canvas);
+        missing
+            .set_rgba8(&[128u8, 128, 128, 255].repeat((W * H) as usize))
+            .unwrap();
+        missing.effects = Some(psd::Effects {
+            key: *b"lfx2",
+            data: overlay_lfx2("Nope", "no-such-id"),
+        });
+
+        let mut fill = psd::PsdLayer::raster("Pattern Fill 1", psd::Rect::default());
+        fill.adjustment = Some(psd::Adjustment {
+            key: *b"PtFl",
+            data: pattern_fill_payload(),
+        });
+        fill.pixel_data_irrelevant = true;
+
+        file.layers = vec![styled, missing, fill];
+        psd::write(&file).expect("the fixture must be writable")
+    }
+
+    fn find(doc: &Document, name: &str) -> LayerId {
+        doc.layers
+            .iter_depth_first()
+            .into_iter()
+            .find(|id| doc.layers.get(*id).is_some_and(|l| l.name == name))
+            .unwrap_or_else(|| panic!("no layer called {name}"))
+    }
+
+    fn stored_pixel(
+        doc: &Document,
+        src: &MemoryTileSource,
+        layer: LayerId,
+        x: u32,
+        y: u32,
+    ) -> [u8; 4] {
+        let Some(map) = doc.layer_tiles(layer) else {
+            return [0; 4];
+        };
+        let coord = TileCoord::new((x / TILE_SIZE) as i32, (y / TILE_SIZE) as i32, 0);
+        let Some(hash) = map.get(coord) else {
+            return [0; 4];
+        };
+        let data = compositor::TileSource::tile(src, hash).expect("the hash resolves");
+        let i = (((y % TILE_SIZE) * TILE_SIZE + (x % TILE_SIZE)) * 4) as usize;
+        [data[i], data[i + 1], data[i + 2], data[i + 3]]
+    }
+
+    #[test]
+    fn psd_pattern_overlays_and_pattern_fill_layers_map_onto_the_pattern_effect() {
+        let import = document_from_psd(&crafted_psd(), "patterns.psd", 10).unwrap();
+        let doc = &import.imported.document;
+        let want = checks();
+
+        // The overlay: the W7-B effect, carrying the file's own pixels and
+        // the overlay's placement.
+        let styled = doc.layers.get(find(doc, "Styled")).unwrap();
+        let overlay = styled
+            .effects
+            .pattern_overlay
+            .as_ref()
+            .expect("the pattern overlay mapped");
+        assert!((overlay.opacity - 0.6).abs() < 1e-6, "{}", overlay.opacity);
+        assert!((overlay.pattern.scale - 2.0).abs() < 1e-6);
+        assert_eq!(overlay.pattern.offset_px, [1.0, 0.0]);
+        assert!(overlay.pattern.link_with_layer);
+        let tile = overlay.pattern.tile.as_ref().expect("the pattern's pixels");
+        assert_eq!((tile.width(), tile.height()), (2, 2));
+        assert_eq!(tile.rgba8(), want.rgba8.as_slice());
+        assert_eq!(tile.name(), "Checks");
+
+        // The fill layer: the pattern tiled over the canvas, and the pattern
+        // itself the layer's overlay.
+        let fill_id = find(doc, "Pattern Fill 1");
+        let fill = doc.layers.get(fill_id).unwrap();
+        let fill_overlay = fill
+            .effects
+            .pattern_overlay
+            .as_ref()
+            .expect("the fill layer's pattern mapped");
+        assert_eq!(
+            fill_overlay
+                .pattern
+                .tile
+                .as_ref()
+                .map(|t| t.rgba8().to_vec()),
+            Some(want.rgba8.clone())
+        );
+        let src = &import.imported.tiles;
+        for (x, y) in [(0u32, 0u32), (1, 0), (0, 1), (1, 1), (6, 7), (7, 7)] {
+            let i = (((y % 2) * 2 + (x % 2)) * 4) as usize;
+            assert_eq!(
+                stored_pixel(doc, src, fill_id, x, y),
+                [
+                    want.rgba8[i],
+                    want.rgba8[i + 1],
+                    want.rgba8[i + 2],
+                    want.rgba8[i + 3]
+                ],
+                "fill pixel ({x}, {y})"
+            );
+        }
+
+        // The report: the two mapped layers are editable and unnamed; the
+        // overlay whose pattern the file lacks is still named.
+        for layer in import.notes.layers() {
+            match layer.name.as_str() {
+                "Styled" | "Pattern Fill 1" => {
+                    assert_eq!(layer.outcome, PsdLayerOutcome::Editable, "{layer:?}");
+                    assert!(layer.detail.is_empty(), "{layer:?}");
+                }
+                "Missing" => assert!(layer.detail.contains("pattern overlay"), "{layer:?}"),
+                other => panic!("unexpected layer {other}"),
+            }
+        }
+        let told = import
+            .notes
+            .summary()
+            .expect("the Missing overlay is lossy");
+        assert!(told.contains("Missing"), "{told}");
+        assert!(told.contains("pattern overlay"), "{told}");
+        assert!(!told.contains("Styled"), "{told}");
+        assert!(!told.contains("Pattern Fill 1"), "{told}");
+        assert!(!told.contains("PtFl"), "{told}");
+        let missing = doc.layers.get(find(doc, "Missing")).unwrap();
+        assert!(missing.effects.pattern_overlay.is_none());
     }
 }

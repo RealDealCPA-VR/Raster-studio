@@ -118,6 +118,37 @@ pub(crate) fn set_color_mode(
     Ok(format!("Changed colour mode to {}", target.label()))
 }
 
+/// W8-B: Image > Adjustments > Levels / Curves on a Lab document run on its
+/// L, a and b channels ([`adjustments::LabTone`]): the dialog lists
+/// Lightness, a and b there, opening on Lightness
+/// (`AdjustmentDialog::set_lab_channels`), so the stored red/green/blue
+/// fields it confirms mean L/a/b, and a stored composite acts on L only. `None`
+/// when the document is not in Lab mode or `kind` is neither Levels nor
+/// Curves: the caller then applies it in RGB as before.
+pub(crate) fn run_lab_tone(
+    editor: &mut Editor,
+    kind: &layer_model::AdjustmentKind,
+    label: &str,
+) -> Option<Result<String, String>> {
+    if editor.active()?.document.meta.color_mode != mode::LAB {
+        return None;
+    }
+    let tone = adjustments::LabTone::from_kind(kind)?;
+    if tone.is_identity() {
+        return Some(Err(format!(
+            "{label} is at its identity setting, so applying it would change \
+             nothing; move a control in its dialog first"
+        )));
+    }
+    Some(
+        super::edit_active_pixels(editor, label, |buffer, _| {
+            tone.apply_premultiplied_rgba(buffer.pixels_mut());
+            Ok(())
+        })
+        .map(|()| format!("{label} applied on the Lab channels")),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{context, perform, resolve_intent};
@@ -187,6 +218,174 @@ mod tests {
 
     fn history_len(ed: &Editor) -> usize {
         ed.active().unwrap().history.journal().count()
+    }
+
+    /// W8-B: open an Image > Adjustments dialog through the real host,
+    /// let `edit` set its parameters, press Enter, and perform the pick the
+    /// confirmation put in the frame's output — the road a user's Ctrl+L /
+    /// Ctrl+M takes.
+    fn confirm_adjustment_through_the_host(
+        ed: &mut Editor,
+        id: ui::menu::AdjustmentId,
+        edit: impl FnOnce(&mut ui::dialogs::AdjustmentDialog),
+    ) -> Result<String, String> {
+        let mut host = crate::dialog_host::DialogHost::default();
+        assert!(host.open_for_menu_action(&MenuAction::ApplyAdjustment(id), ed));
+        edit(host.active_adjustment_dialog_for_test());
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let input = |events: Vec<egui::Event>| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(input(Vec::new()), |ctx| host.ui(ctx, None, &mut out));
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        };
+        let _ = ctx.run(input(vec![enter]), |ctx| host.ui(ctx, None, &mut out));
+        assert!(!host.is_open(), "Enter did not confirm the dialog");
+        assert_eq!(out.menu, vec![MenuAction::ApplyAdjustment(id)]);
+        perform(out.menu[0], ed)
+    }
+
+    fn lab_of(px: &[u8]) -> [f32; 3] {
+        color::model::rgb_to_lab([px[0], px[1], px[2]].map(|c| f32::from(c) / 255.0))
+    }
+
+    /// W8-B: on a Lab document, Image > Adjustments > Levels opens listing the
+    /// Lab channels, and a Lightness mapping confirmed in it darkens L and
+    /// keeps every colour's a and b — the mid grey stays neutral, which the
+    /// same numbers run on RGB's red channel would not do.
+    #[test]
+    fn levels_on_a_lab_document_runs_on_lightness_through_the_dialog_and_menu() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = fixture(dir.path());
+        perform(MenuAction::SetColorMode(ColorMode::Lab), &mut ed).unwrap();
+        let before = composite(&mut ed);
+        let steps = history_len(&ed);
+        const ID: [f32; 5] = [0.0, 1.0, 1.0, 0.0, 1.0];
+        let status =
+            confirm_adjustment_through_the_host(&mut ed, ui::menu::AdjustmentId::Levels, |d| {
+                assert!(
+                    d.lab_channels(),
+                    "the Levels dialog does not know it is Lab"
+                );
+                assert_eq!(d.levels_channel(), 1, "Levels opens off Lightness");
+                assert!(d.set_kind(layer_model::AdjustmentKind::LevelsFull {
+                    composite: ID,
+                    red: [0.0, 1.0, 1.0, 0.0, 0.5],
+                    green: ID,
+                    blue: ID,
+                }));
+            })
+            .unwrap();
+        assert!(status.contains("Lab"), "{status}");
+        assert_eq!(history_len(&ed), steps + 1, "one undo step");
+        let after = composite(&mut ed);
+        // (48, 0): the mid grey. Neutral before and after, and darker.
+        let at = 48 * 4;
+        let (g0, g1) = (&before[at..at + 4], &after[at..at + 4]);
+        assert!(
+            g1[0] == g1[1] && g1[1] == g1[2],
+            "the grey took a cast: {g1:?}"
+        );
+        assert!(
+            g1[0] < g0[0] - 30,
+            "the grey did not darken: {g0:?} -> {g1:?}"
+        );
+        let (l0, l1) = (lab_of(g0), lab_of(g1));
+        assert!((l1[0] - l0[0] * 0.5).abs() < 1.5, "L {l0:?} -> {l1:?}");
+        // (8, 4): a saturated green darkens and keeps its hue. (Its chroma
+        // is at the sRGB gamut edge, so a darker L clips some of it on the way
+        // back to RGB; the a/b direction is what Lightness must not turn.)
+        let at = (8 + 4 * 64) * 4;
+        let (c0, c1) = (lab_of(&before[at..at + 4]), lab_of(&after[at..at + 4]));
+        assert!(c1[0] < c0[0] - 10.0, "L {c0:?} -> {c1:?}");
+        let hue = |c: [f32; 3]| c[2].atan2(c[1]).to_degrees();
+        assert!((hue(c1) - hue(c0)).abs() < 5.0, "hue {c0:?} -> {c1:?}");
+    }
+
+    /// W8-B: a composite Levels confirmed on a Lab document through the menu
+    /// (the shape a plain Levels, a preset or an older file stores) acts on
+    /// Lightness only: the mid grey darkens and stays neutral. Run on a and
+    /// b too, a black point of 0.2 casts it blue-cyan.
+    #[test]
+    fn a_composite_levels_on_a_lab_document_keeps_the_grey_neutral() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = fixture(dir.path());
+        perform(MenuAction::SetColorMode(ColorMode::Lab), &mut ed).unwrap();
+        let before = composite(&mut ed);
+        const ID: [f32; 5] = [0.0, 1.0, 1.0, 0.0, 1.0];
+        confirm_adjustment_through_the_host(&mut ed, ui::menu::AdjustmentId::Levels, |d| {
+            assert!(d.set_kind(layer_model::AdjustmentKind::LevelsFull {
+                composite: [0.2, 1.0, 1.0, 0.0, 1.0],
+                red: ID,
+                green: ID,
+                blue: ID,
+            }));
+        })
+        .unwrap();
+        let after = composite(&mut ed);
+        let at = 48 * 4;
+        let (g0, g1) = (&before[at..at + 4], &after[at..at + 4]);
+        let spread = g1[..3].iter().max().unwrap() - g1[..3].iter().min().unwrap();
+        assert!(spread <= 1, "the grey took a cast: {g0:?} -> {g1:?}");
+        assert!(
+            g1[0] < g0[0] - 10,
+            "the grey did not darken: {g0:?} -> {g1:?}"
+        );
+    }
+
+    /// W8-B: Curves on a Lab document: raising the a curve through the dialog
+    /// pushes the grey towards magenta (a > 0) at the same lightness. On an
+    /// RGB document the same stored curve is green's and turns it green.
+    #[test]
+    fn curves_on_a_lab_document_moves_the_a_channel_and_rgb_documents_keep_green() {
+        let curves = layer_model::AdjustmentKind::CurvesFull {
+            composite: vec![[0.0, 0.0], [1.0, 1.0]],
+            red: vec![[0.0, 0.0], [1.0, 1.0]],
+            green: vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]],
+            blue: vec![[0.0, 0.0], [1.0, 1.0]],
+        };
+        let at = 48 * 4;
+        let run = |lab: bool| {
+            let dir = tempfile::tempdir().unwrap();
+            let mut ed = fixture(dir.path());
+            if lab {
+                perform(MenuAction::SetColorMode(ColorMode::Lab), &mut ed).unwrap();
+            }
+            let before = composite(&mut ed);
+            let kind = curves.clone();
+            confirm_adjustment_through_the_host(&mut ed, ui::menu::AdjustmentId::Curves, |d| {
+                assert_eq!(d.lab_channels(), lab);
+                assert_eq!(d.curve_editor().channel(), usize::from(lab));
+                assert!(d.set_kind(kind));
+            })
+            .unwrap();
+            let after = composite(&mut ed);
+            (lab_of(&before[at..at + 4]), after[at..at + 4].to_vec())
+        };
+        let (grey, lab_after) = run(true);
+        let moved = lab_of(&lab_after);
+        assert!(moved[1] > 10.0, "a did not move: {grey:?} -> {moved:?}");
+        assert!(
+            (moved[0] - grey[0]).abs() < 3.0,
+            "L moved: {grey:?} -> {moved:?}"
+        );
+        let (_, rgb_after) = run(false);
+        assert!(
+            rgb_after[1] > rgb_after[0] && rgb_after[1] > rgb_after[2],
+            "on RGB the curve is green's: {rgb_after:?}"
+        );
     }
 
     #[test]
@@ -443,5 +642,225 @@ mod tests {
         assert_eq!(png_layout(&png), (8, 3), "Indexed writes a palette PNG-8");
         let jpeg = std::fs::read(indexed_dir.join("i.jpg")).unwrap();
         assert_eq!(jpeg_components(&jpeg).0, 3, "an Indexed JPEG is RGB");
+    }
+
+    /// W8-B: a 64x64 document, an opaque gradient on the left half and fully
+    /// transparent on the right, its camera at 100% centred (screen
+    /// `(200, 150)` is document `(32, 32)`), answering File > Export with
+    /// `export_to`.
+    fn half_transparent(dir: &std::path::Path, export_to: std::path::PathBuf) -> Editor {
+        let (w, h) = (64u32, 64u32);
+        let mut rgba = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                if x < 32 {
+                    rgba.extend_from_slice(&[(x * 8) as u8, (y * 4) as u8, 90, 255]);
+                } else {
+                    rgba.extend_from_slice(&[0, 0, 0, 0]);
+                }
+            }
+        }
+        let path = dir.join("half.png");
+        std::fs::write(
+            &path,
+            raster::encode(raster::ExportFormat::Png, w, h, &rgba).unwrap(),
+        )
+        .unwrap();
+        let mut ed = Editor::with_state(
+            AppPaths::rooted(dir.join("config")),
+            Preferences::default(),
+            RecentFiles::new(),
+            Box::new(ScriptedDialogs::new().exporting_to(export_to)),
+        );
+        ed.open_path(&path).unwrap();
+        let doc = ed.active_mut().unwrap();
+        doc.set_viewport(glam::Vec2::new(400.0, 300.0));
+        doc.camera.zoom = 1.0;
+        doc.camera.center = glam::Vec2::new(32.0, 32.0);
+        ed
+    }
+
+    /// A real Brush drag through the pointer route, in document points.
+    fn brush_stroke(ed: &mut Editor, points: &[(f32, f32)]) {
+        use ui::canvas::{PointerInput, PointerPhase};
+        ed.set_tool(tools::ToolId::Brush);
+        ed.set_foreground([0.9, 0.1, 0.1, 1.0]);
+        let screen = |x: f32, y: f32| glam::Vec2::new(200.0 + x - 32.0, 150.0 + y - 32.0);
+        let mut pointer = crate::tool_input::ToolPointer::new();
+        for (i, &(x, y)) in points.iter().enumerate() {
+            let phase = if i == 0 {
+                PointerPhase::Down
+            } else {
+                PointerPhase::Move
+            };
+            pointer.handle(ed, PointerInput::at(phase, screen(x, y)), false, &[]);
+        }
+        let (x, y) = *points.last().unwrap();
+        pointer.handle(
+            ed,
+            PointerInput::at(PointerPhase::Up, screen(x, y)),
+            false,
+            &[],
+        );
+    }
+
+    fn distinct_rgba(rgba: &[u8]) -> usize {
+        rgba.as_chunks::<4>().0.iter().collect::<HashSet<_>>().len()
+    }
+
+    #[test]
+    fn file_export_of_an_indexed_document_after_a_soft_stroke_writes_a_palette_png() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("indexed.png");
+        let mut ed = half_transparent(dir.path(), out.clone());
+        perform(MenuAction::SetColorMode(ColorMode::Indexed), &mut ed).unwrap();
+        assert_eq!(ed.active().unwrap().document.meta.color_mode, 4);
+        let converted = composite(&mut ed);
+        // The palette: at most 256 visible colours (plus transparency, which
+        // alone takes a 256-colour palette to 257 RGBA values).
+        let visible: Vec<u8> = converted
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[3] > 0)
+            .flatten()
+            .copied()
+            .collect();
+        assert!(distinct(&visible) <= 256);
+        // A soft brush across both halves: antialiased alpha over the
+        // transparent half, blended colours over the palette half.
+        brush_stroke(
+            &mut ed,
+            &[
+                (4.0, 20.0),
+                (20.0, 26.0),
+                (36.0, 32.0),
+                (52.0, 38.0),
+                (60.0, 44.0),
+            ],
+        );
+        let painted = composite(&mut ed);
+        let soft = painted
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[3] > 0 && p[3] < 255)
+            .count();
+        assert!(soft > 0, "the stroke left soft alpha");
+        assert!(
+            distinct_rgba(&painted) > 256,
+            "precondition: the stroke took the image past 256 RGBA colours ({})",
+            distinct_rgba(&painted)
+        );
+        ed.dispatch(crate::action::Action::Export).unwrap();
+        let bytes = std::fs::read(&out).unwrap_or_else(|e| {
+            panic!(
+                "File > Export wrote nothing ({e}); status {:?}",
+                ed.status()
+            )
+        });
+        assert_eq!(png_layout(&bytes), (8, 3), "a palette PNG-8");
+        let decoded = raster::decode_path(&out).unwrap();
+        for (want, got) in painted
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(decoded.rgba8.as_chunks::<4>().0)
+        {
+            // 1-bit transparency, Photoshop's Indexed.
+            let opaque = want[3] >= raster::export::ink::INDEXED_ALPHA_THRESHOLD;
+            assert_eq!(got[3], if opaque { 255 } else { 0 }, "{want:?} -> {got:?}");
+        }
+    }
+
+    #[test]
+    fn file_export_of_a_lab_document_says_in_the_status_that_it_writes_rgb() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("lab.tif");
+        let mut ed = fixture_with(dir.path(), ScriptedDialogs::new().exporting_to(out.clone()));
+        ed.dispatch(crate::action::Action::Export).unwrap();
+        let rgb_status = ed.status().unwrap_or_default().to_string();
+        assert!(rgb_status.starts_with("Exported"), "{rgb_status}");
+        assert!(!rgb_status.contains("Lab"), "an RGB document: {rgb_status}");
+
+        let mut ed = fixture_with(dir.path(), ScriptedDialogs::new().exporting_to(out.clone()));
+        perform(MenuAction::SetColorMode(ColorMode::Lab), &mut ed).unwrap();
+        ed.dispatch(crate::action::Action::Export).unwrap();
+        let status = ed.status().unwrap_or_default().to_string();
+        assert!(status.starts_with("Exported"), "{status}");
+        assert!(
+            status.contains("a Lab document is written as RGB"),
+            "File > Export of a Lab document names the RGB it wrote: {status}"
+        );
+        let decoded = raster::decode_path(&out).unwrap();
+        assert_eq!(decoded.rgba8.len(), 64 * 32 * 4, "an RGB TIFF was written");
+    }
+
+    /// W8-B: `OpenDocument::export_to` and File > Export's worker share one
+    /// colour-mode branch: its CMYK and Indexed arms, through both routes,
+    /// write the same bytes.
+    #[test]
+    fn the_shared_ink_branch_writes_cmyk_and_indexed_for_both_export_routes() {
+        let dir = tempfile::tempdir().unwrap();
+        let cases = [
+            (ColorMode::Cmyk, "c.jpg"),
+            (ColorMode::Cmyk, "c.tif"),
+            (ColorMode::Indexed, "i.png"),
+        ];
+        for (mode, name) in cases {
+            let worker_out = dir.path().join(format!("worker-{name}"));
+            let mut ed = fixture_with(
+                dir.path(),
+                ScriptedDialogs::new().exporting_to(worker_out.clone()),
+            );
+            perform(MenuAction::SetColorMode(mode), &mut ed).unwrap();
+            ed.dispatch(crate::action::Action::Export).unwrap();
+            let doc_out = dir.path().join(format!("doc-{name}"));
+            ed.active_mut().unwrap().export_to(&doc_out).unwrap();
+            let worker = std::fs::read(&worker_out).unwrap();
+            let direct = std::fs::read(&doc_out).unwrap();
+            assert_eq!(worker, direct, "{mode:?} {name}: the two routes differ");
+            match name {
+                "c.jpg" => assert_eq!(jpeg_components(&direct), (4, true)),
+                "c.tif" => assert_eq!(&direct[..4], b"II*\0"),
+                _ => assert_eq!(png_layout(&direct), (8, 3)),
+            }
+            // And the shared function itself: written, or passed back for
+            // an RGB file.
+            let doc = ed.active_mut().unwrap();
+            let size = (doc.document.width(), doc.document.height());
+            let rect = PixelRect::new(0, 0, size.0, size.1);
+            let color_mode = doc.document.meta.color_mode;
+            let shared = dir.path().join(format!("shared-{name}"));
+            let format = crate::doc::export_format_for(&shared).unwrap();
+            assert!(
+                crate::doc::write_in_document_ink(&shared, format, color_mode, size, || doc
+                    .composite(rect))
+                .unwrap()
+            );
+            assert_eq!(std::fs::read(&shared).unwrap(), direct);
+            let webp = dir.path().join("rgb.webp");
+            assert!(!crate::doc::write_in_document_ink(
+                &webp,
+                raster::ExportFormat::WebP,
+                color_mode,
+                size,
+                || panic!("no composite for a container that cannot carry the ink")
+            )
+            .unwrap());
+            assert!(!webp.exists());
+            // An Indexed GIF is carried by GIF's own palette encoder, so the
+            // shared branch does not build a composite it would hand back.
+            let gif = dir.path().join("indexed.gif");
+            assert!(!crate::doc::write_in_document_ink(
+                &gif,
+                raster::ExportFormat::Gif,
+                color_mode,
+                size,
+                || panic!("no composite for a GIF, which the RGB road palettises")
+            )
+            .unwrap());
+            assert!(!gif.exists());
+        }
     }
 }

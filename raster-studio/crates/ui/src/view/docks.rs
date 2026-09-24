@@ -495,7 +495,8 @@ fn body_of(
         PanelId::History => history_body(w, ui, history),
         PanelId::Adjustments => adjustments_body(w, ui),
         PanelId::Properties => properties_body(w, ui, doc, history),
-        PanelId::Color => color_body(w, ui),
+        // W8-B: the Color panel reads in the document's colour mode.
+        PanelId::Color => color_body(w, ui, has_document(doc).then_some(doc.meta.color_mode)),
         PanelId::Swatches => swatches_body(w, ui),
         PanelId::Brushes => brushes_body(w, ui, fill_bottom),
         PanelId::Character => character_body(w, ui, doc),
@@ -2759,7 +2760,8 @@ fn adjustment_properties(
 // Colour and swatches
 // ---------------------------------------------------------------------------
 
-fn color_body(w: &mut Workspace, ui: &mut Ui) {
+fn color_body(w: &mut Workspace, ui: &mut Ui, doc_mode: Option<u8>) {
+    w.color.follow_document_mode(doc_mode);
     // The layout test for P1.19 asserts the numeric fields sit inside this
     // panel; the rect is recorded under a stable id for it.
     ui.ctx().memory_mut(|m| {
@@ -2777,7 +2779,7 @@ fn color_body(w: &mut Workspace, ui: &mut Ui) {
         .unwrap_or(0);
     let labels: Vec<&str> = ColorNotation::ALL.iter().map(|n| n.label()).collect();
     if design::segmented_control(ui, "raster-color-notation", &mut index, &labels) {
-        w.color.notation = ColorNotation::ALL[index];
+        w.color.choose_notation(ColorNotation::ALL[index]);
     }
     ui.add_space(Space::XSmall.pt());
 
@@ -2854,6 +2856,15 @@ fn color_body(w: &mut Workspace, ui: &mut Ui) {
                 changed |= design::slider_row(ui, label, &mut ink[i], 0.0..=100.0).changed();
             }
             if changed && w.color.set_cmyk_percent(ink) {
+                emit_color(w);
+            }
+        }
+        // W8-B: a Grayscale document's K slider, percent black.
+        ColorNotation::Gray => {
+            let mut k = f32::from(w.color.gray_percent());
+            if design::slider_row(ui, "K", &mut k, 0.0..=100.0).changed()
+                && w.color.set_gray_percent(k)
+            {
                 emit_color(w);
             }
         }
@@ -5404,7 +5415,7 @@ mod tests {
         w.color
             .set_well(ColorWell::Foreground, [1.0, 0.0, 0.0, 1.0]);
         w.color.notation = ColorNotation::Hsb;
-        let mut body = |w: &mut Workspace, ui: &mut Ui| color_body(w, ui);
+        let mut body = |w: &mut Workspace, ui: &mut Ui| color_body(w, ui, None);
         let _ = frame_of(&ctx, &mut w, screen(), &mut body);
         let out = frame_of(&ctx, &mut w, screen(), &mut body);
         let value_in = |label: &str| -> String {
@@ -5438,7 +5449,7 @@ mod tests {
         w.color
             .set_well(ColorWell::Foreground, [1.0, 0.0, 0.0, 1.0]);
         w.color.notation = ColorNotation::Cmyk;
-        let mut body = |w: &mut Workspace, ui: &mut Ui| color_body(w, ui);
+        let mut body = |w: &mut Workspace, ui: &mut Ui| color_body(w, ui, None);
         let _ = frame_of(&ctx, &mut w, screen(), &mut body);
         let out = frame_of(&ctx, &mut w, screen(), &mut body);
         let text_in = |out: &egui::FullOutput, rect: egui::Rect| -> Option<String> {
@@ -5491,6 +5502,64 @@ mod tests {
         assert!(ctx
             .read_response(crate::dock::ids::info_value("Lab"))
             .is_none());
+    }
+
+    /// W8-B: the Color panel follows the document's colour mode, through the
+    /// dock's own dispatcher: a Lab, CMYK or Grayscale document draws L/a/b,
+    /// C/M/Y/K or K fields; the user can still switch, and the switch stands
+    /// while the mode does; an RGB document gives back the user's notation.
+    #[test]
+    fn the_color_panel_reads_in_the_documents_mode_and_the_user_can_switch() {
+        use editor_core::color_mode::mode;
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let history = History::default();
+        let mut w = Workspace::new();
+        w.color.notation = ColorNotation::Rgb;
+        let fields = |ctx: &egui::Context| -> Vec<&'static str> {
+            ["H", "R", "L", "a", "C", "Y", "K"]
+                .into_iter()
+                .filter(|l| {
+                    ctx.read_response(egui::Id::new(("raster-numeric-field", *l)))
+                        .is_some()
+                })
+                .collect()
+        };
+        let draw = |w: &mut Workspace, color_mode: u8| -> Vec<&'static str> {
+            let mut doc = Document::new(64, 64, "mode");
+            doc.meta.color_mode = color_mode;
+            let mut body = |w: &mut Workspace, ui: &mut Ui| {
+                body_of(w, ui, &doc, &history, PanelId::Color, None)
+            };
+            let _ = frame_of(&ctx, w, screen(), &mut body);
+            let _ = frame_of(&ctx, w, screen(), &mut body);
+            fields(&ctx)
+        };
+        assert_eq!(
+            draw(&mut w, mode::RGB),
+            vec!["R"],
+            "RGB keeps the user's pick"
+        );
+        assert_eq!(draw(&mut w, mode::LAB), vec!["L", "a"]);
+        assert_eq!(w.color.notation, ColorNotation::Lab);
+        assert_eq!(draw(&mut w, mode::CMYK), vec!["C", "Y", "K"]);
+        w.color
+            .set_well(ColorWell::Foreground, [0.25, 0.25, 0.25, 1.0]);
+        assert_eq!(draw(&mut w, mode::GRAYSCALE), vec!["K"]);
+        assert_eq!(w.color.notation, ColorNotation::Gray);
+        // 25% grey is 75% black.
+        assert_eq!(w.color.gray_percent(), 75);
+        // Back to RGB: the user's own notation returns.
+        assert_eq!(draw(&mut w, mode::RGB), vec!["R"]);
+        // The user can switch away in a Lab document, and it stands.
+        assert_eq!(draw(&mut w, mode::LAB), vec!["L", "a"]);
+        w.color.choose_notation(ColorNotation::Hsb);
+        assert_eq!(
+            draw(&mut w, mode::LAB),
+            vec!["H"],
+            "the user's switch stands"
+        );
+        assert_eq!(draw(&mut w, mode::INDEXED), vec!["H"]);
     }
 
     /// W5-E: with no document open the History panel lists nothing — no

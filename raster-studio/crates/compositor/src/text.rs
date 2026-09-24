@@ -346,6 +346,10 @@ pub fn text_hit_index(run: &text_engine::TextRun, x: f32, y: f32) -> Option<usiz
     if !inside {
         return None;
     }
+    // W8-C: a vertical run's stops go down its columns.
+    if run.paragraph.vertical {
+        return Some(crate::vertical_caret::hit_test(&shaped, x, y));
+    }
     Some(shaped.hit_test(x, y))
 }
 
@@ -354,6 +358,10 @@ pub fn text_hit_index(run: &text_engine::TextRun, x: f32, y: f32) -> Option<usiz
 pub fn text_caret_rect(run: &text_engine::TextRun, index: usize) -> text_engine::Rect {
     let mut e = engine();
     let shaped = text_engine::shape(&mut e.library, run);
+    // W8-C: in vertical type the caret is a bar across the column.
+    if run.paragraph.vertical {
+        return crate::vertical_caret::caret_rect(&shaped, index);
+    }
     shaped.caret_rect(index)
 }
 
@@ -366,6 +374,10 @@ pub fn text_selection_rects(
 ) -> Vec<text_engine::Rect> {
     let mut e = engine();
     let shaped = text_engine::shape(&mut e.library, run);
+    // W8-C: one rect per column in vertical type.
+    if run.paragraph.vertical {
+        return crate::vertical_caret::selection_rects(&shaped, start, end);
+    }
     shaped.selection_rects(start, end)
 }
 

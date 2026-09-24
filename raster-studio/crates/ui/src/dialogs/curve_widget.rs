@@ -4,7 +4,8 @@
 //! inputs — no graph, no channel choice, nothing to read the curve against.
 //! This is Photopea's editor in the shape the rest of the dialogs use:
 //!
-//! * a channel dropdown (RGB, Red, Green, Blue) choosing which of
+//! * a channel dropdown (RGB, Red, Green, Blue — or, W8-B, Lightness, a, b
+//!   on a Lab document, Photoshop's Lab list, no composite) choosing which of
 //!   [`layer_model::AdjustmentKind::CurvesFull`]'s four curves is edited;
 //! * the histogram of that channel behind the graph (luma for RGB), so a point
 //!   is placed against the tones it moves;
@@ -49,6 +50,9 @@ const SAMPLES: usize = 96;
 pub struct CurveEditor {
     channel: usize,
     dragging: Option<usize>,
+    /// W8-B: the document is in Lab mode, so the channels listed are
+    /// Lightness, a and b (the red, green and blue slots).
+    lab: bool,
 }
 
 impl CurveEditor {
@@ -57,15 +61,30 @@ impl CurveEditor {
         self.channel
     }
 
-    /// Show `channel` (clamped to the four there are).
+    /// Show `channel` (clamped to the four there are; on a Lab document,
+    /// which has no composite row, to Lightness, a or b).
     pub fn set_channel(&mut self, channel: usize) {
-        self.channel = channel.min(3);
+        let lowest = usize::from(self.lab);
+        self.channel = channel.clamp(lowest, 3);
         self.dragging = None;
     }
 
     /// Whether a point is held.
     pub fn is_dragging(&self) -> bool {
         self.dragging.is_some()
+    }
+
+    /// W8-B: list the channels as a Lab document's (Lightness, a, b), and
+    /// show the first of them: Lightness on a Lab document, the composite
+    /// otherwise.
+    pub fn set_lab(&mut self, lab: bool) {
+        self.lab = lab;
+        self.set_channel(0);
+    }
+
+    /// Whether the channels are a Lab document's.
+    pub fn is_lab(&self) -> bool {
+        self.lab
     }
 }
 
@@ -81,6 +100,22 @@ pub fn channel_label(channel: usize) -> String {
         _ => "ui.adjustment.curve.rgb",
     })
     .to_string()
+}
+
+/// W8-B: the channels a Lab document lists — Lightness, a and b in the
+/// red, green and blue slots. Photoshop's Lab Levels and Curves have no
+/// composite row: one run on a and b too would cast every neutral.
+pub const LAB_CHANNELS: [usize; 3] = [1, 2, 3];
+
+/// W8-B: the label a channel is listed under on a Lab document: Lightness,
+/// a and b (Photoshop's channel names; a and b are the CIELAB axis names and
+/// are not translated).
+pub fn lab_channel_label(channel: usize) -> String {
+    match channel {
+        2 => "a".to_string(),
+        3 => "b".to_string(),
+        _ => tr("ui.adjustment.lightness").to_string(),
+    }
 }
 
 /// A clean, sorted point list: the identity when `points` cannot make a
@@ -105,12 +140,21 @@ pub fn show(
 ) -> bool {
     design::inspector_field(ui, tr("ui.adjustment.curve.channel"), |ui| {
         let mut channel = editor.channel;
+        let lab = editor.lab;
+        let label = |c: usize| {
+            if lab {
+                lab_channel_label(c)
+            } else {
+                channel_label(c)
+            }
+        };
+        let options: &[usize] = if lab { &LAB_CHANNELS } else { &CHANNELS };
         if combo(
             ui,
             ("adjustment", "curve-channel"),
             &mut channel,
-            &CHANNELS,
-            channel_label,
+            options,
+            label,
             |_| None,
         ) {
             editor.set_channel(channel);
@@ -301,7 +345,13 @@ fn paint(
         ),
     );
     let curve = Curve::new(points).unwrap_or_else(|_| Curve::identity());
-    let colour = color32(t.palette.color(channel_role(editor.channel)));
+    // W8-B: Lab's channels have no hue of their own to draw in.
+    let role = if editor.lab {
+        ColorRole::TextPrimary
+    } else {
+        channel_role(editor.channel)
+    };
+    let colour = color32(t.palette.color(role));
     let line: Vec<egui::Pos2> = (0..=SAMPLES)
         .map(|k| {
             let x = k as f32 / SAMPLES as f32;
@@ -365,6 +415,7 @@ mod tests {
     fn the_channel_is_clamped_and_drops_the_held_point() {
         let mut editor = CurveEditor {
             channel: 0,
+            lab: false,
             dragging: Some(1),
         };
         editor.set_channel(9);

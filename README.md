@@ -167,7 +167,7 @@ matrix, each with its reason there:
 
 | Missing | Why |
 | --- | --- |
-| ICC-accurate CMYK, spot colours, Lab files, L/a/b in Levels/Curves | Since W7-D: Image ▸ Mode ▸ Lab / CMYK / Indexed convert (one undo step each; CMYK on a documented naive ink model, not an ICC press profile; Indexed through its own dialog); File ▸ Export and Export As write a CMYK document as CMYK JPEG/TIFF and an Indexed one as a palette PNG (GIF keeps its colours); Export As says when a format writes the document as RGB instead (always, for Lab); Info adds a Lab or CMYK row for a document in that mode and the Color panel has a CMYK notation beside Lab; View ▸ Proof Colors and Gamut Warning are enabled and change the canvas. Still missing: a press profile and spot colours, any Lab file (Lab goes out as RGB, and the dialog says so), L/a/b channels in Levels/Curves, and Indexed flattening (semi-transparent layers can still blend colours outside the palette). |
+| ICC-accurate CMYK, spot colours, Lab files, L/a/b in Levels/Curves | Since W7-D: Image ▸ Mode ▸ Lab / CMYK / Indexed convert (one undo step each; CMYK on a documented naive ink model, not an ICC press profile; Indexed through its own dialog); File ▸ Export and Export As write a CMYK document as CMYK JPEG/TIFF and an Indexed one as a palette PNG (GIF keeps its colours) — since W8-B the palette PNG always writes: an image past 256 RGBA colours (a soft stroke painted after the conversion) is re-quantised with 1-bit alpha, as Photoshop's Indexed stores it; Export As says when a format writes the document as RGB instead (always, for Lab), and since W8-B File ▸ Export says so in the status line; Info adds a Lab or CMYK row for a document in that mode, and since W8-B the Color panel switches to Lab / CMYK / Gray (K%) notation when the document is in that mode (the user can still pick another); since W8-B Image ▸ Adjustments ▸ Levels and Curves on a Lab document list Lightness / a / b (no composite row; they open on Lightness, so a first move keeps greys neutral) and preview and apply on those channels; View ▸ Proof Colors and Gamut Warning are enabled and change the canvas. Still missing: a press profile and spot colours, any Lab file (Lab goes out as RGB, and both export routes say so), L/a/b channels on Levels/Curves *adjustment layers* (a Levels/Curves adjustment layer in a Lab document still renders on RGB), and Indexed flattening (semi-transparent layers can still blend colours outside the palette). |
 | Select Subject, Object Selection | No segmentation model ships. |
 | Vanishing Point | Perspective-plane tooling. (Liquify and Puppet Warp now exist: Filter ▸ Liquify… and Edit ▸ Puppet Warp, each applied as one undo step; their gaps are in the parity matrix.) |
 | Lighting Effects | Needs on-canvas light handles the parameter dialog cannot express. |
@@ -187,12 +187,16 @@ pure-Rust lossy encoder has passed evaluation yet, see the parity matrix).
 - **The W7-F tools have named limits.** Perspective Crop, Vertical Type, the two
   Type Masks, Mixer Brush, Artboard, Curvature Pen and Freeform Pen are palette
   tools now. Each is one undo step except Vertical Type, which is two like the
-  Type tool (the click's empty layer, then the confirmed run). Perspective Crop
-  rectifies the active raster layer only; vertical type is upright glyphs in
-  columns (no rotated Latin, no vertical punctuation forms, horizontal caret
-  geometry); the Mixer Brush has no live preview while
-  painting; artboards do not clip their contents and File > Export Artboards does
-  not exist. The parity matrix has the details.
+  Type tool (the click's empty layer, then the confirmed run). W8-C closed the
+  follow-ups: Perspective Crop draws corner handles and a grid and rectifies
+  every pixel layer (text, shape and smart-object layers and layer masks are
+  cropped, not warped); vertical type's caret and click hit-test follow the
+  column, though it is still upright glyphs (no rotated Latin, no vertical
+  punctuation forms); the Mixer Brush previews while it is dragged; the Type
+  Masks show the quick-mask red outside the glyphs while typing and combine by
+  the options bar's New / Add / Subtract / Intersect; artboards clip their
+  contents and File > Export > Artboards to Files writes one image each. The
+  parity matrix has the details.
 - **Stylus pressure is verified with synthetic events only.** winit's `Touch`
   events (Windows `WM_POINTER` pens and fingers) now drive the same pointer
   route as the mouse, with the force as the stroke's pressure
@@ -201,8 +205,22 @@ pure-Rust lossy encoder has passed evaluation yet, see the parity matrix).
   mid-contact drops the contact and its pressure, since winit on Windows
   never reports a cancelled contact. Tests drive synthetic
   events; no physical pen has been tried. The options bar has Size from
-  Pressure and Flow from Pressure; there is no separate Opacity from Pressure
-  toggle, and pen tilt, rotation, hover and the eraser end are not read.
+  Pressure, Flow from Pressure and Opacity from Pressure (each dab's alpha
+  times the pressure). winit reports a pen's zero pressure as "no force", so
+  a contact id that has reported a force or hovered is treated as a pen and
+  its forceless samples as zero pressure; an id never seen either way (a
+  finger) paints at full pressure. This is keyed on the contact id, not a
+  device type: Windows reuses contact ids and pens and fingers share one
+  id pool, so a finger that gets an id a pen used earlier paints at zero
+  pressure until that id ages out of the remembered pen ids. Contacts still
+  down when focus is lost have their moves dropped, rather than read as a
+  hovering pen, until their lift is reported or they touch down again; a
+  pen whose lift was lost (winit on Windows reports no cancelled contact)
+  therefore does not move the pointer or the brush ring while hovering
+  until its next touch-down. Otherwise a hovering pen moves the pointer and
+  the brush ring; the ring stays where the pen left range until the mouse
+  moves. Pen tilt, rotation and the eraser end are not read, and the
+  Brushes panel's presets do not carry the Opacity from Pressure switch.
 - **Tab does not move keyboard focus.** Tab toggles the panels (Photopea's
   Hide/Show Panels) and is withheld from egui; controls are reached with the
   pointer. AccessKit is wired, but no screen-reader walk has been done on a
@@ -219,12 +237,18 @@ pure-Rust lossy encoder has passed evaluation yet, see the parity matrix).
   rounded to 8 bits (the pixels they leave alone keep their 16-bit codes).
   Opening a 16-bit PNG or TIFF decodes it to 8-bit tiles, and PSD export is
   8-bit.
-- **Pattern effects do not cross PSD.** A Pattern Overlay (and a pattern-filled
-  glow or stroke) renders, and is saved inside the `.rstudio` document with its
-  pixels, but PSD import does not read Photoshop's pattern data (the fidelity
-  report lists "pattern overlay" as unmapped) and PSD export writes no pattern
-  effects. The Layer Style dialog picks the overlay's pattern, but has no
-  control yet that sets a glow's or stroke's fill to a pattern.
+- **Pattern effects cross PSD one way only.** A Pattern Overlay (and a
+  pattern-filled glow or stroke) renders, and is saved inside the `.rstudio`
+  document with its pixels. PSD import reads the file's patterns (the
+  `Patt`/`Pat2`/`Pat3` blocks) when they are 8-bit RGB or greyscale, raw or
+  RLE; a pattern in any other image mode (indexed, CMYK, Lab ...), at any
+  other depth (16- or 32-bit) or with ZIP compression is refused and noted in
+  the import report. It maps a pattern overlay and a Pattern fill layer onto
+  the Pattern Overlay effect (a fill layer's pixels are its pattern tiled over
+  the canvas at scale 1); an overlay or fill naming a refused pattern, or one
+  the file does not carry, is still listed as unmapped. PSD export writes no pattern effects. The Layer
+  Style dialog picks the overlay's pattern, but has no control yet that sets a
+  glow's or stroke's fill to a pattern.
 - **Channels** cannot isolate alpha or a mask, and have no per-channel
   histogram.
 - **Localisation** covers the view and dialog code only; menu labels,
@@ -233,9 +257,14 @@ pure-Rust lossy encoder has passed evaluation yet, see the parity matrix).
   checked with an independent reader but not yet reopened in Photoshop or
   Photopea, and editable text export is blocked.
 - **Print** writes a PDF; there is no OS printer-spooler dialog.
-- **Content-aware:** Fill and Content-Aware Scale run on a job worker, but
-  the Spot Healing Brush's Content-Aware type still synthesises on the UI
-  thread at release; the fill refuses a context window over 2 M pixels, and
+- **Content-aware:** Fill, Content-Aware Scale and the Spot Healing Brush's
+  Content-Aware type run on a job worker (the heal lands as one undo step
+  when it finishes; a heal released while another content-aware job runs
+  waits in a queue and heals the pixels as they are when its turn comes; Esc,
+  or the window losing focus, drops every running or queued heal; a heal is
+  dropped if its document is no longer the active one when it finishes; a
+  Fill or Scale is refused while any content-aware job runs); there is no
+  percentage progress, only a running timer on the status line; the fill refuses a context window over 2 M pixels, and
   Content-Aware Scale has fixed steps, no interactive handles and no
   protect-skin option.
 - **Packaging:** no runtime window icon, no macOS `.icns`, no notarisation,

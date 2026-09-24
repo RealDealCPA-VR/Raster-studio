@@ -470,14 +470,11 @@ fn run_file_export(
     // W7-D: a CMYK document writes a CMYK JPEG/TIFF and an Indexed one a
     // palette PNG (8 bits, `color::cmyk`'s documented ink model, no ICC
     // press profile); every other pairing falls through to the RGB file.
-    let ink = raster::export::ExportInk::for_color_mode(doc.meta.color_mode);
-    if ink != raster::export::ExportInk::Rgb {
-        let rgba8 = canvas.to_rgba8(&doc.meta.color_space);
-        if let Some(bytes) = raster::export::encode_rgba8_in_ink(format, ink, w, h, &rgba8)? {
-            crate::doc::write_atomically(&job.target, &bytes)
-                .map_err(crate::import::ImportError::from)?;
-            return Ok(None);
-        }
+    // W8-B: the one colour-mode branch `OpenDocument::export_to` calls too.
+    if crate::doc::write_in_document_ink(&job.target, format, doc.meta.color_mode, (w, h), || {
+        Ok(canvas.to_rgba8(&doc.meta.color_space))
+    })? {
+        return Ok(None);
     }
     // A tagged document re-tags: the profile it opened with rides back into
     // the file (the codec writes the iCCP chunk for the formats that carry

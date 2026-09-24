@@ -182,6 +182,7 @@ const BRUSH_OPTS: &[OptionSpec] = &[
     // as two empty squares whenever the Brush or the Eraser was selected.
     b("size_pressure", "Size from Pressure", true),
     b("flow_pressure", "Flow from Pressure", false),
+    b("opacity_pressure", "Opacity from Pressure", false),
 ];
 
 const SELECTION_OPTS: &[OptionSpec] = &[
@@ -223,9 +224,13 @@ const TONE_OPTS: &[OptionSpec] = &[
 
 const SHAPE_OPTS: &[OptionSpec] = shape_opts!();
 
-/// The Type tools' options - shared by all four (W7-F): the vertical and
-/// mask variants take the same face, size and default style.
-const TYPE_OPTS: &[OptionSpec] = &[
+/// W8-C: the Type tools' options (face, size and default style), with
+/// `$extra` in front — every Type tool shares this list, and the two Type
+/// Mask tools add the selection Mode their confirm combines with
+/// ([`TYPE_MASK_OPTS`]).
+macro_rules! type_opts {
+    ($($extra:expr),* $(,)?) => { &[
+    $($extra,)*
     f("size_px", "Size", 4.0, 512.0, 24.0),
     // The three CSS generic families, which `text_engine` resolves to
     // installed fonts (W1-B2). The installed family list cannot be
@@ -264,7 +269,21 @@ const TYPE_OPTS: &[OptionSpec] = &[
     f("first_line_indent", "First line", -200.0, 1000.0, 0.0),
     f("space_before", "Space before", 0.0, 1000.0, 0.0),
     f("space_after", "Space after", 0.0, 1000.0, 0.0),
-];
+] };
+}
+
+/// The Horizontal and Vertical Type tools' options (W7-F): the same face,
+/// size and default style, with no selection Mode.
+const TYPE_OPTS: &[OptionSpec] = type_opts!();
+
+/// W8-C: a Type Mask confirm combines its glyphs with the selection by this
+/// Mode, the one every selection tool offers.
+const TYPE_MASK_OPTS: &[OptionSpec] = type_opts!(c(
+    "mode",
+    "Mode",
+    &["New", "Add", "Subtract", "Intersect"],
+    0
+));
 
 /// Everything the UI needs to know about one tool.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -329,6 +348,7 @@ pub const BRUSH_OPTION_KEYS: &[&str] = &[
     "smoothing",
     "size_pressure",
     "flow_pressure",
+    "opacity_pressure",
 ];
 
 const TOOLS: &[ToolInfo] = &[
@@ -1000,7 +1020,7 @@ const TOOLS: &[ToolInfo] = &[
         "type-mask-vertical",
         Cursor::Crosshair,
         Some('t'),
-        TYPE_OPTS,
+        TYPE_MASK_OPTS,
     ),
     t(
         ToolId::HorizontalTypeMask,
@@ -1010,7 +1030,7 @@ const TOOLS: &[ToolInfo] = &[
         "type-mask",
         Cursor::Crosshair,
         Some('t'),
-        TYPE_OPTS,
+        TYPE_MASK_OPTS,
     ),
     t(
         ToolId::PathSelect,

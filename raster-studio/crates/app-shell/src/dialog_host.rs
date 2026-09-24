@@ -1620,6 +1620,10 @@ fn adjustment_dialog(editor: &crate::Editor, id: AdjustmentId) -> Option<ActiveD
     let source = crate::menu_bridge::filter_source(editor)?;
     let space = editor.active()?.document.meta.color_space.clone();
     let mut dialog = AdjustmentDialog::new(id, source, space);
+    // W8-B: a Lab document's Levels/Curves list and run on L, a and b.
+    dialog.set_lab_channels(
+        editor.active()?.document.meta.color_mode == editor_core::color_mode::mode::LAB,
+    );
     // W7-G: Match Color's Source list — every open document and layer.
     if id == AdjustmentId::MatchColor {
         dialog.set_match_sources(match_color_sources(editor));

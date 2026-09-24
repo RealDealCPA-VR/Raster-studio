@@ -1392,6 +1392,8 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::ExportLayers => editor.export_layers(),
         // W4-H: one file per committed Slice-tool region.
         MenuAction::ExportSlices => crate::slices_export::export_slices(editor),
+        // W8-C: one file per artboard.
+        MenuAction::ExportArtboards => crate::artboard_export::export_artboards(editor),
         MenuAction::PlaceEmbedded => editor.place_from_dialog(false),
         MenuAction::PlaceLinked => editor.place_from_dialog(true),
         MenuAction::Print => editor.print_pdf(),
@@ -1435,11 +1437,11 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::ApplyAdjustment(id) => {
             let kind = crate::dialog_host::take_confirmed_adjustment(id)
                 .unwrap_or_else(|| id.identity_kind());
-            run_adjustment_kind(
-                editor,
-                &adjustments::Adjustment::from(&kind),
-                &format!("Apply {}", id.label()),
-            )
+            let label = format!("Apply {}", id.label());
+            // W8-B: Levels and Curves on a Lab document run on L, a and b.
+            color_mode::run_lab_tone(editor, &kind, &label).unwrap_or_else(|| {
+                run_adjustment_kind(editor, &adjustments::Adjustment::from(&kind), &label)
+            })
         }
         MenuAction::AutoTone => run_auto(editor, adjustments::AutoKind::Tone, "Auto Tone"),
         MenuAction::AutoContrast => {
@@ -8404,6 +8406,8 @@ mod tests {
                 // `purging_histories_asks_first_then_drops_every_step` pins
                 // the real sequence.
                 || action == MenuAction::ExportSlices
+                // W8-C: and Export Artboards with no artboard drawn.
+                || action == MenuAction::ExportArtboards
                 || matches!(action, MenuAction::Purge(_))
             {
                 match perform(action, &mut ed) {
@@ -8538,6 +8542,8 @@ mod tests {
             MenuAction::AlignLayers(ui::menu::AlignEdge::Bottom),
             // W4-H: no slices have been drawn in this fixture.
             MenuAction::ExportSlices,
+            // W8-C: nor any artboard.
+            MenuAction::ExportArtboards,
         ];
 
         let mut broken = Vec::new();

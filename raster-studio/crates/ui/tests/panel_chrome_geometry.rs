@@ -538,9 +538,12 @@ fn the_layers_group_takes_the_leftover_height_and_no_column_ends_in_dead_space()
         (grew - 180.0).abs() <= 2.0,
         "the Layers group grew {grew}pt for a 180pt taller window: {layers_heights:?}"
     );
-    assert_eq!(
-        fixed_heights[0], fixed_heights[1],
-        "a fixed group changed height"
+    // Layout arithmetic in f32 leaves sub-pixel noise (102.000015 vs 102.0);
+    // a fixed group must not change by anything a user could see.
+    let (a, b) = (fixed_heights[0], fixed_heights[1]);
+    assert!(
+        (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01,
+        "a fixed group changed height: {a:?} vs {b:?}"
     );
 }
 

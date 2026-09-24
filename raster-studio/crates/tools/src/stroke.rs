@@ -1651,6 +1651,9 @@ pub struct StrokeTool {
     /// the Proximity Match answer; only the release runs the synthesis, and
     /// what it commits is the synthesis, not that preview.
     pub spot_content_aware: bool,
+    /// W8-D: the Content-Aware release handed over rather than synthesised
+    /// here, waiting for [`Tool::take_deferred_commit`].
+    deferred: Option<DeferredStroke>,
 }
 
 /// W7-I: the Spot Healing Brush's Type option key (a Choice: 0 Proximity
@@ -1677,33 +1680,92 @@ pub fn apply_content_aware_spot(
     opacity: f32,
     selection: &Selection,
 ) -> Result<(), ToolError> {
-    let mut px = Vec::with_capacity(context.width as usize * context.height as usize);
-    let mut covered = Vec::with_capacity(px.capacity());
-    for y in context.y..context.bottom() {
-        for x in context.x..context.right() {
-            let p = IVec2::new(x as i32, y as i32);
-            px.push(patch.get(p));
-            covered.push(buf.get(p));
+    let Some(synthesis) = SpotSynthesis::gather(patch, buf, context)? else {
+        return Ok(());
+    };
+    let target = synthesis.run()?;
+    lay_in_content_aware_spot(patch, buf, context, opacity, selection, &target)
+}
+
+/// W8-D: the pure, thread-safe half of a Content-Aware spot heal — the
+/// stroke's context as it was at release (the source snapshot), the hole
+/// the brushed pixels make in it and the dab coverage. [`SpotSynthesis::run`]
+/// is the PatchMatch synthesis, the part too heavy for the interaction
+/// thread; it reads nothing but this snapshot, so a worker can run it while
+/// the frames keep going, and the same snapshot gives the same bytes on any
+/// thread (the seed is fixed).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpotSynthesis {
+    plane: FilterBuffer,
+    hole: Vec<bool>,
+    covered: Vec<f32>,
+}
+
+impl SpotSynthesis {
+    /// Snapshot `context` of `patch` and the stroke's coverage over it;
+    /// `None` when the stroke covers nothing there.
+    fn gather(
+        patch: &ColorPatch,
+        buf: &StrokeBuffer,
+        context: PixelRect,
+    ) -> Result<Option<Self>, ToolError> {
+        let mut px = Vec::with_capacity(context.width as usize * context.height as usize);
+        let mut covered = Vec::with_capacity(px.capacity());
+        for y in context.y..context.bottom() {
+            for x in context.x..context.right() {
+                let p = IVec2::new(x as i32, y as i32);
+                px.push(patch.get(p));
+                covered.push(buf.get(p));
+            }
+        }
+        let hole: Vec<bool> = covered.iter().map(|c| *c > 0.0).collect();
+        if !hole.iter().any(|&h| h) {
+            return Ok(None);
+        }
+        let plane = FilterBuffer::from_pixels(context.width, context.height, px)?;
+        Ok(Some(Self {
+            plane,
+            hole,
+            covered,
+        }))
+    }
+
+    /// The synthesis: the context with its hole filled by PatchMatch
+    /// ([`filters::content_aware_fill`], fixed seed), or — where there is no
+    /// intact patch to copy from — the Proximity Match estimate.
+    pub fn run(&self) -> Result<FilterBuffer, ToolError> {
+        match filters::content_aware_fill(
+            &self.plane,
+            &self.hole,
+            filters::FillOptions {
+                seed: SPOT_CONTENT_AWARE_SEED,
+                margin: None,
+            },
+        ) {
+            Ok(filled) => Ok(filled),
+            Err(filters::ContentAwareError::NoSource) => {
+                low_frequency_outside(&self.plane, &self.covered, 6.0)
+            }
+            Err(filters::ContentAwareError::Filter(e)) => Err(ToolError::Filter(e)),
+            Err(_) => Err(ToolError::Degenerate),
         }
     }
-    let hole: Vec<bool> = covered.iter().map(|c| *c > 0.0).collect();
-    if !hole.iter().any(|&h| h) {
-        return Ok(());
+}
+
+/// Lay a synthesised context (`target`, the size of `context`) into `patch`
+/// exactly as the other retouching ops mix toward their target: by the dab's
+/// coverage, the stroke's opacity and the selection.
+fn lay_in_content_aware_spot(
+    patch: &mut ColorPatch,
+    buf: &StrokeBuffer,
+    context: PixelRect,
+    opacity: f32,
+    selection: &Selection,
+    target: &FilterBuffer,
+) -> Result<(), ToolError> {
+    if target.width() != context.width || target.height() != context.height {
+        return Err(ToolError::Degenerate);
     }
-    let plane = FilterBuffer::from_pixels(context.width, context.height, px)?;
-    let target = match filters::content_aware_fill(
-        &plane,
-        &hole,
-        filters::FillOptions {
-            seed: SPOT_CONTENT_AWARE_SEED,
-            margin: None,
-        },
-    ) {
-        Ok(filled) => filled,
-        Err(filters::ContentAwareError::NoSource) => low_frequency_outside(&plane, &covered, 6.0)?,
-        Err(filters::ContentAwareError::Filter(e)) => return Err(ToolError::Filter(e)),
-        Err(_) => return Err(ToolError::Degenerate),
-    };
     let rect = buf.rect();
     let opacity = opacity.clamp(0.0, 1.0);
     let cw = context.width as i64;
@@ -1737,6 +1799,101 @@ pub fn apply_content_aware_spot(
     Ok(())
 }
 
+/// W8-D: a Content-Aware spot heal whose release was handed to the shell
+/// ([`ToolContext::defer_heavy_commits`]) instead of synthesised on the
+/// interaction thread. It carries everything the finish needs: the pixel
+/// target, the stroke's coverage, opacity and selection, and the
+/// [`SpotSynthesis`] snapshot a worker runs. [`DeferredStroke::finish`]
+/// lands the result as ONE [`Command::PaintTiles`] — the very command the
+/// synchronous release emits — or reports that the pixels it was computed
+/// from have changed since.
+#[derive(Debug, Clone)]
+pub struct DeferredStroke {
+    target: PixelTarget,
+    key: PixelKey,
+    context: PixelRect,
+    buf: StrokeBuffer,
+    opacity: f32,
+    selection: Selection,
+    synthesis: SpotSynthesis,
+}
+
+/// W8-D: what [`DeferredStroke::finish`] did with a synthesis.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeferredFinish {
+    /// The stroke's one history entry, ready to apply.
+    Landed(Command),
+    /// The synthesis changed no stored byte.
+    Unchanged,
+    /// The pixels under the stroke's context are no longer the ones the
+    /// synthesis read (an undo, another edit): nothing was written.
+    Stale,
+}
+
+impl DeferredStroke {
+    /// The snapshot a worker synthesises from.
+    pub fn synthesis(&self) -> &SpotSynthesis {
+        &self.synthesis
+    }
+
+    /// Where the finish writes.
+    pub fn target(&self) -> PixelTarget {
+        self.target
+    }
+
+    /// The pixel store key the finish reads and writes.
+    pub fn key(&self) -> PixelKey {
+        self.key
+    }
+
+    /// W8-D round 2: re-take the synthesis snapshot from the target's
+    /// CURRENT pixels, keeping the stroke (coverage, context, opacity,
+    /// selection). A heal released while another content-aware job ran
+    /// waits in the shell's queue; when its turn comes the pixels may have
+    /// changed (the heal before it landed), so it synthesises from what is
+    /// there then — exactly what a synchronous release made after the
+    /// earlier heal would read.
+    pub fn refresh(&mut self, access: &dyn TileAccess) -> Result<(), ToolError> {
+        let patch = ColorPatch::load(access, self.key, self.context)?;
+        self.synthesis =
+            SpotSynthesis::gather(&patch, &self.buf, self.context)?.ok_or(ToolError::Degenerate)?;
+        Ok(())
+    }
+
+    /// Lay `synthesized` (what [`SpotSynthesis::run`] returned for this
+    /// stroke's snapshot) into the target's current pixels and hand back the
+    /// command that commits it — unless those pixels are no longer the ones
+    /// the snapshot holds, in which case nothing is written.
+    pub fn finish(
+        &self,
+        access: &mut dyn TileAccess,
+        synthesized: &FilterBuffer,
+    ) -> Result<DeferredFinish, ToolError> {
+        let mut patch = ColorPatch::load(access, self.key, self.context)?;
+        if SpotSynthesis::gather(&patch, &self.buf, self.context)?.as_ref() != Some(&self.synthesis)
+        {
+            return Ok(DeferredFinish::Stale);
+        }
+        lay_in_content_aware_spot(
+            &mut patch,
+            &self.buf,
+            self.context,
+            self.opacity,
+            &self.selection,
+            synthesized,
+        )?;
+        let delta = patch.commit(access, self.key)?;
+        Ok(if delta.is_empty() {
+            DeferredFinish::Unchanged
+        } else {
+            DeferredFinish::Landed(Command::PaintTiles {
+                target: self.target,
+                delta,
+            })
+        })
+    }
+}
+
 impl StrokeTool {
     pub fn new(id: ToolId, settings: BrushSettings, op: StrokeOp) -> Self {
         Self {
@@ -1752,6 +1909,7 @@ impl StrokeTool {
             previewed: 0,
             smudge: None,
             spot_content_aware: false,
+            deferred: None,
         }
     }
 
@@ -1781,6 +1939,44 @@ impl StrokeTool {
         patch.commit(access, key)
     }
 
+    /// W8-D: the deferred release of a Content-Aware spot heal: the same
+    /// bounds, context and coverage [`StrokeTool::render_content_aware_spot`]
+    /// works from, snapshotted for a worker instead of synthesised here.
+    /// `None` when the stroke covers no pixel of the canvas.
+    fn defer_content_aware_spot(
+        &self,
+        access: &dyn TileAccess,
+        target: PixelTarget,
+        key: PixelKey,
+        dabs: &[Dab],
+        clip: PixelRect,
+        selection: &Selection,
+    ) -> Result<Option<DeferredStroke>, ToolError> {
+        let Some(rect) = StrokeBuffer::bounds_of(dabs, clip) else {
+            return Ok(None);
+        };
+        let extent = rect.width.max(rect.height);
+        let margin = i64::from(extent.clamp(
+            filters::content_aware::MIN_CONTEXT_MARGIN,
+            filters::content_aware::MAX_CONTEXT_MARGIN,
+        )) + filters::patchmatch::PATCH_SIZE as i64;
+        let context = intersect(grow(rect, margin), clip).unwrap_or(rect);
+        let buf = StrokeBuffer::rasterize(dabs, rect)?;
+        let patch = ColorPatch::load(access, key, context)?;
+        let Some(synthesis) = SpotSynthesis::gather(&patch, &buf, context)? else {
+            return Ok(None);
+        };
+        Ok(Some(DeferredStroke {
+            target,
+            key,
+            context,
+            buf,
+            opacity: self.settings.opacity,
+            selection: selection.clone(),
+            synthesis,
+        }))
+    }
+
     /// The dabs stamped so far, for a live preview overlay.
     pub fn dabs(&self) -> &[Dab] {
         self.emitter.as_ref().map(|e| e.dabs()).unwrap_or(&[])
@@ -1802,6 +1998,7 @@ impl StrokeTool {
     /// Turn the finished stroke into one command.
     fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
         self.previewed = 0;
+        self.deferred = None;
         let smudge = self.smudge.take();
         let Some(emitter) = self.emitter.take() else {
             return Ok(());
@@ -1820,6 +2017,19 @@ impl StrokeTool {
             (ctx.paint_target, &self.op, self.spot_content_aware)
         {
             // W7-I: the Content-Aware type synthesises on release.
+            if ctx.defer_heavy_commits {
+                // W8-D: ... or, when the shell runs heavy finishes on a
+                // worker, hands the snapshot over and emits nothing here.
+                self.deferred = self.defer_content_aware_spot(
+                    &*ctx.tiles,
+                    target,
+                    key,
+                    dabs,
+                    clip,
+                    &ctx.selection,
+                )?;
+                return Ok(());
+            }
             self.render_content_aware_spot(&mut *ctx.tiles, key, dabs, clip, &ctx.selection)?
         } else if let (PaintTarget::Layer, StrokeOp::Smudge { strength }) =
             (ctx.paint_target, &self.op)
@@ -2468,6 +2678,12 @@ impl Tool for StrokeTool {
         self.emitter = None;
         self.previewed = 0;
         self.smudge = None;
+        self.deferred = None;
+    }
+
+    /// W8-D: the Content-Aware release handed over at pointer-up.
+    fn take_deferred_commit(&mut self) -> Option<DeferredStroke> {
+        self.deferred.take()
     }
 
     fn is_active(&self) -> bool {
@@ -2569,6 +2785,7 @@ impl Tool for StrokeTool {
                 ("smoothing", ToolSetting::Float(v)) => brush.smoothing = v,
                 ("size_pressure", ToolSetting::Bool(v)) => brush.size_pressure = v,
                 ("flow_pressure", ToolSetting::Bool(v)) => brush.flow_pressure = v,
+                ("opacity_pressure", ToolSetting::Bool(v)) => brush.opacity_pressure = v,
                 _ => return mismatch(),
             }
             // Validated the way `DabEmitter::begin` would validate it: a
@@ -3392,6 +3609,130 @@ mod live_tests {
             px_good * 100 < total * 50,
             "proximity match rebuilt the stripes too ({px_good}/{total}): the test cannot tell the types apart"
         );
+    }
+
+    /// W8-D: when the context asks for heavy finishes to be deferred, the
+    /// Content-Aware release emits nothing and hands over a job; its
+    /// synthesis, run on another thread, lands through
+    /// [`DeferredStroke::finish`] exactly the bytes the synchronous release
+    /// commits (the seed is fixed), and a job whose pixels changed while it
+    /// ran is Stale and writes nothing.
+    #[test]
+    fn a_deferred_content_aware_spot_heal_lands_the_synchronous_bytes() {
+        let layer = LayerId::new();
+        let key = PixelKey::Layer(layer);
+        let ts = TILE_SIZE as usize;
+        let canvas = PixelRect::new(0, 0, TILE_SIZE, TILE_SIZE);
+        let striped = || {
+            let mut data = vec![0u8; Tile::byte_len(PixelFormat::Rgba8)];
+            for y in 0..ts {
+                for x in 0..ts {
+                    let v = if x % 8 < 4 { 0u8 } else { 255u8 };
+                    let px = if (96..106).contains(&x) && (96..146).contains(&y) {
+                        [255, 0, 0, 255]
+                    } else {
+                        [v, v, v, 255]
+                    };
+                    data[(y * ts + x) * 4..(y * ts + x) * 4 + 4].copy_from_slice(&px);
+                }
+            }
+            let mut tiles = MemoryTiles::new();
+            tiles.put(key, TileCoord::new(0, 0, 0), data);
+            tiles
+        };
+        let release = |tiles: &mut MemoryTiles, defer: bool| {
+            let mut tool = StrokeTool::new(
+                ToolId::SpotHealing,
+                BrushSettings {
+                    size: 24.0,
+                    hardness: 1.0,
+                    spacing: 0.1,
+                    ..BrushSettings::default()
+                },
+                StrokeOp::SpotHealing,
+            );
+            tool.set_setting(SPOT_HEAL_TYPE_KEY, ToolSetting::Choice(1))
+                .unwrap();
+            let mut ctx = ToolContext::new(tiles, canvas).with_layer(layer);
+            ctx.defer_heavy_commits = defer;
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(101.0, 96.0))
+                .unwrap();
+            tool.on_pointer_move(&mut ctx, PointerEvent::at(101.0, 145.0))
+                .unwrap();
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(101.0, 145.0))
+                .unwrap();
+            let commands = ctx.drain();
+            drop(ctx);
+            (commands, tool.take_deferred_commit())
+        };
+        let painted = |tiles: &MemoryTiles, command: &Command| -> Vec<u8> {
+            let Command::PaintTiles { delta, .. } = command else {
+                panic!("not a paint: {command:?}");
+            };
+            let edit = delta
+                .iter()
+                .find(|e| e.coord == TileCoord::new(0, 0, 0))
+                .expect("the stroke's tile");
+            tiles
+                .bytes(edit.hash.expect("painted"))
+                .expect("committed blob")
+                .to_vec()
+        };
+
+        let mut sync_tiles = striped();
+        let (sync_commands, none) = release(&mut sync_tiles, false);
+        assert!(none.is_none(), "a synchronous release deferred its work");
+        assert_eq!(sync_commands.len(), 1, "{sync_commands:?}");
+        let sync_bytes = painted(&sync_tiles, &sync_commands[0]);
+
+        let mut tiles = striped();
+        let (commands, deferred) = release(&mut tiles, true);
+        assert!(
+            commands.is_empty(),
+            "the deferred release emitted {commands:?}"
+        );
+        let deferred = deferred.expect("the release handed its synthesis over");
+        assert_eq!(deferred.target(), PixelTarget::Layer(layer));
+        let snapshot = deferred.synthesis().clone();
+        let synthesized = std::thread::spawn(move || snapshot.run())
+            .join()
+            .expect("the worker ran")
+            .expect("the synthesis ran");
+        let DeferredFinish::Landed(command) = deferred.finish(&mut tiles, &synthesized).unwrap()
+        else {
+            panic!("the deferred finish did not land");
+        };
+        assert_eq!(
+            painted(&tiles, &command),
+            sync_bytes,
+            "the deferred heal is not the synchronous heal"
+        );
+
+        // Pixels changed under the job: nothing lands.
+        let mut changed = striped();
+        let (_, deferred) = release(&mut changed, true);
+        let deferred = deferred.expect("handed over");
+        changed.put_pixel(key, 100, 90, [9, 9, 9, 255]);
+        let synthesized = deferred.synthesis().run().unwrap();
+        assert_eq!(
+            deferred.finish(&mut changed, &synthesized).unwrap(),
+            DeferredFinish::Stale
+        );
+
+        // W8-D round 2: a queued heal re-snapshots the pixels as they are
+        // when its turn comes, and then lands.
+        let mut deferred = deferred;
+        let before = deferred.synthesis().clone();
+        deferred.refresh(&changed).unwrap();
+        assert!(
+            deferred.synthesis() != &before,
+            "the refresh kept the old pixels"
+        );
+        let synthesized = deferred.synthesis().run().unwrap();
+        assert!(matches!(
+            deferred.finish(&mut changed, &synthesized).unwrap(),
+            DeferredFinish::Landed(_)
+        ));
     }
 
     #[test]

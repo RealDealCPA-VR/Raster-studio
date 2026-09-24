@@ -132,7 +132,10 @@ pub fn import_effects(effects: &Effects, opts: &ReadOptions) -> Option<ImportedE
             "ebbl" => out.unmapped.push("bevel and emboss".into()),
             "ChFX" => out.unmapped.push("satin".into()),
             "GrFl" | "Grdf" => out.unmapped.push("gradient overlay".into()),
-            "PtFl" | "PttR" => out.unmapped.push("pattern overlay".into()),
+            // W8-D: `patternFill` is the key Photoshop writes; a caller
+            // resolves it against the file's patterns with
+            // [`crate::pattern::pattern_overlay`].
+            "patternFill" | "PtFl" | "PttR" => out.unmapped.push("pattern overlay".into()),
             // The two block-level keys above, and anything unrecognised.
             "Scl " | "masterFXSwitch" => {}
             other => out
@@ -147,7 +150,7 @@ pub fn import_effects(effects: &Effects, opts: &ReadOptions) -> Option<ImportedE
 ///
 /// Photoshop writes the short four-character codes; some exporters spell the
 /// remaining modes out in words, so both spellings are accepted.
-fn blend_from_blnm(value: &str) -> Option<BlendMode> {
+pub(crate) fn blend_from_blnm(value: &str) -> Option<BlendMode> {
     let mode = match value {
         "Nrml" | "normal" => BlendMode::Normal,
         "Dslv" | "dissolve" => BlendMode::Dissolve,

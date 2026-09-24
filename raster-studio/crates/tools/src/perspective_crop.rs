@@ -9,25 +9,34 @@
 //! else starts a fresh quad. Nothing is emitted until [`Tool::commit`]
 //! (Enter), exactly like [`crate::edit::CropTool`].
 //!
+//! W8-C: the quad is published as [`SessionGeometry::PerspectiveCrop`], which
+//! the shell draws as the outline, a 3 x 3 perspective grid and a handle
+//! square on each corner (the dragged one emphasised) — the handles the
+//! corner drags grab.
+//!
 //! # What Enter does
 //!
 //! The quad is mapped onto an upright rectangle through a projective map
-//! ([`crate::transform::Homography`]) and the active layer's pixels are
-//! resampled through it, so what was a trapezoid in the photo is square in
-//! the result; then the canvas becomes that rectangle. The output size is the
+//! ([`crate::transform::Homography`]) and **every pixel layer** the shell
+//! lists in [`ToolContext::rectify_layers`] — hidden ones included, as
+//! Photoshop's crop takes every layer — is resampled through it, each in its
+//! own layer space, so what was a trapezoid in the photo is square in the
+//! result; then the canvas becomes that rectangle. The output size is the
 //! quad's average edge lengths (the `width` / `height` options override
 //! either, `0` meaning "from the quad"). All of it is ONE
-//! [`Command::Transaction`] — the rectified pixels
-//! ([`Command::PaintTiles`]), the new canvas size
-//! ([`Command::SetCanvasSize`]) and one translation per root layer
-//! ([`Command::TransformLayer`]) — so a perspective crop is one Ctrl+Z.
+//! [`Command::Transaction`] — one [`Command::PaintTiles`] per rectified
+//! layer, the new canvas size ([`Command::SetCanvasSize`]) and one
+//! translation per root layer ([`Command::TransformLayer`]) — so a
+//! perspective crop is one Ctrl+Z.
 //!
 //! # Limits, named
 //!
-//! * Only the **active raster layer** is rectified; the other layers are
-//!   cropped (moved under the new canvas) but not warped. A text, shape or
-//!   smart-object layer is refused with [`ToolError::NonAffineParametric`]
-//!   rather than silently rasterised.
+//! * A text, shape or smart-object layer keeps its editable geometry: it is
+//!   cropped (moved under the new canvas) but not warped — the shell does
+//!   not list it for rectification. A layer's mask is not warped either.
+//! * With no list (a bare harness) the active layer is the one rectified,
+//!   and a parametric active layer is refused with
+//!   [`ToolError::NonAffineParametric`] rather than silently rasterised.
 //! * The resample is bicubic in linear premultiplied light, the same sampler
 //!   Free Transform's perspective mode uses.
 
@@ -127,11 +136,13 @@ impl PerspectiveCropTool {
         CORNER_GRAB_PX / zoom
     }
 
-    /// Rectify the active layer into `rect` (document pixels) through the
-    /// map `rect -> quad`, returning the tile delta.
+    /// Rectify `layer` into `rect` (document pixels) through the map
+    /// `rect -> quad`, returning the tile delta. `to_layer` is the layer's
+    /// document→layer-pixel map.
     fn rectify(
         ctx: &mut ToolContext<'_>,
         layer: layer_model::LayerId,
+        to_layer: Affine2,
         quad: [Vec2; 4],
         rect: PixelRect,
     ) -> Result<editor_core::TileDelta, ToolError> {
@@ -146,7 +157,6 @@ impl PerspectiveCropTool {
         let map = Homography::from_quads(local, quad).ok_or_else(ToolError::not_invertible)?;
         // Document -> layer pixels (card 040): a moved or scaled layer is
         // rectified where it displays.
-        let to_layer = ctx.sample_to_layer.unwrap_or(Affine2::IDENTITY);
         let to_doc = to_layer.inverse();
         if !to_doc.is_finite() {
             return Err(ToolError::not_invertible());
@@ -284,22 +294,32 @@ impl Tool for PerspectiveCropTool {
     /// Enter: rectify and crop, as one transaction.
     fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
         let quad = self.quad.ok_or(ToolError::Degenerate)?;
-        let layer = ctx.active_layer.ok_or(ToolError::NoActiveLayer)?;
-        if ctx.active_layer_parametric {
-            return Err(ToolError::NonAffineParametric);
-        }
+        // W8-C: every pixel layer the shell lists; a bare harness lists none
+        // and the active layer is the one there is.
+        let targets: Vec<(layer_model::LayerId, Affine2)> = if ctx.rectify_layers.is_empty() {
+            let layer = ctx.active_layer.ok_or(ToolError::NoActiveLayer)?;
+            if ctx.active_layer_parametric {
+                return Err(ToolError::NonAffineParametric);
+            }
+            vec![(layer, ctx.sample_to_layer.unwrap_or(Affine2::IDENTITY))]
+        } else {
+            ctx.rectify_layers.clone()
+        };
+        let fallback = targets[0].0;
         let size = self.output_size(quad).ok_or(ToolError::Degenerate)?;
         let lo = quad
             .iter()
             .fold(Vec2::splat(f32::INFINITY), |a, p| a.min(*p));
         let rect = PixelRect::new(lo.x.round() as i64, lo.y.round() as i64, size.x, size.y);
-        let delta = Self::rectify(ctx, layer, quad, rect)?;
         let mut commands = Vec::new();
-        if !delta.is_empty() {
-            commands.push(Command::PaintTiles {
-                target: PixelTarget::Layer(layer),
-                delta,
-            });
+        for (layer, to_layer) in targets {
+            let delta = Self::rectify(ctx, layer, to_layer, quad, rect)?;
+            if !delta.is_empty() {
+                commands.push(Command::PaintTiles {
+                    target: PixelTarget::Layer(layer),
+                    delta,
+                });
+            }
         }
         commands.push(Command::SetCanvasSize { size });
         let to_new = Affine2::from_translation(-Vec2::new(rect.x as f32, rect.y as f32));
@@ -314,7 +334,7 @@ impl Tool for PerspectiveCropTool {
             if roots.is_empty() {
                 // A context with no ancestry map (a bare harness): the active
                 // layer is the one layer there is to move.
-                roots.push(layer);
+                roots.push(fallback);
             }
             for id in roots {
                 commands.push(Command::TransformLayer {
@@ -340,13 +360,15 @@ impl Tool for PerspectiveCropTool {
         self.quad.is_some() || self.drag.is_some()
     }
 
-    /// The quad, drawn closed — the same outline the lasso overlay paints.
+    /// W8-C: the quad with its corner handles and grid, the dragged corner
+    /// emphasised.
     fn live_geometry(&self) -> Option<SessionGeometry> {
         let quad = self.quad?;
-        Some(SessionGeometry::Lasso {
-            points: quad.to_vec(),
-            closed: true,
-        })
+        let active = match self.drag {
+            Some(Drag::Corner(i)) => Some(i),
+            _ => None,
+        };
+        Some(SessionGeometry::PerspectiveCrop { quad, active })
     }
 
     fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
@@ -415,6 +437,26 @@ mod tests {
         assert_eq!(q[1], Vec2::new(44.0, 12.0));
         assert_eq!(q[0], Vec2::new(10.0, 10.0), "only the grabbed corner moved");
         assert!(ctx.commands().is_empty(), "nothing emits before Enter");
+        // W8-C: the quad is published with its handles; a held corner is
+        // the emphasised one.
+        assert_eq!(
+            tool.live_geometry(),
+            Some(SessionGeometry::PerspectiveCrop {
+                quad: q,
+                active: None
+            })
+        );
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(49.0, 40.0))
+            .unwrap();
+        assert!(matches!(
+            tool.live_geometry(),
+            Some(SessionGeometry::PerspectiveCrop {
+                active: Some(2),
+                ..
+            })
+        ));
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(50.0, 40.0))
+            .unwrap();
         tool.cancel(&mut ctx);
         assert!(tool.quad().is_none() && !tool.is_active());
     }
@@ -463,6 +505,63 @@ mod tests {
                 px[0] > 230 && px[1] < 25,
                 "({x},{y}) is not red after rectification: {px:?}"
             );
+        }
+    }
+
+    /// W8-C: with the shell's list, EVERY listed layer is rectified in one
+    /// transaction, each through its own document→layer map.
+    #[test]
+    fn commit_rectifies_every_listed_layer_through_its_own_map() {
+        let mut tiles = MemoryTiles::new();
+        let (a, b) = (LayerId::new(), LayerId::new());
+        fixture(&mut tiles, a);
+        // `b` is the same picture stored 8 px to the left: its layer is
+        // moved 8 px right, so it displays where `a` does.
+        for y in 0..64 {
+            for x in 0..64 {
+                let px = tiles.pixel(PixelKey::Layer(a), x, y);
+                tiles.put_pixel(PixelKey::Layer(b), x - 8, y, px);
+            }
+        }
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64)).with_layer(a);
+        ctx.layer_parents = vec![(a, None), (b, None)];
+        ctx.rectify_layers = vec![
+            (a, Affine2::IDENTITY),
+            (b, Affine2::from_translation(Vec2::new(-8.0, 0.0))),
+        ];
+        let mut tool = PerspectiveCropTool::default();
+        tool.set_quad([
+            Vec2::new(20.0, 16.0),
+            Vec2::new(44.0, 16.0),
+            Vec2::new(48.0, 48.0),
+            Vec2::new(16.0, 48.0),
+        ])
+        .unwrap();
+        tool.commit(&mut ctx).unwrap();
+        let commands = ctx.drain();
+        let Command::Transaction { commands, .. } = &commands[0] else {
+            panic!("{commands:?}");
+        };
+        let painted: Vec<_> = commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::PaintTiles {
+                    target: PixelTarget::Layer(l),
+                    delta,
+                } => Some((*l, delta.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(painted.len(), 2, "both layers were rectified");
+        for (layer, delta) in painted {
+            tiles.apply_delta(PixelKey::Layer(layer), &delta);
+        }
+        // Both show red edge to edge where they display.
+        for (x, y) in [(17, 17), (42, 17), (17, 46), (42, 46)] {
+            let pa = tiles.pixel(PixelKey::Layer(a), x, y);
+            let pb = tiles.pixel(PixelKey::Layer(b), x - 8, y);
+            assert!(pa[0] > 230 && pa[1] < 25, "a ({x},{y}): {pa:?}");
+            assert!(pb[0] > 230 && pb[1] < 25, "b ({x},{y}): {pb:?}");
         }
     }
 

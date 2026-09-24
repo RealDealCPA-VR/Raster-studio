@@ -1004,6 +1004,14 @@ impl ToolPointer {
         self.current.as_ref().map(|(id, _)| *id)
     }
 
+    /// W8-C: the live Type Mask tool's selection Mode — `None` unless the
+    /// live tool is one of the two Type Mask tools.
+    fn type_mask_op(&self) -> Option<selection::BooleanOp> {
+        self.current
+            .as_ref()
+            .and_then(|(_, tool)| tool.type_mask_op())
+    }
+
     /// The document the running gesture belongs to, while one is running.
     pub fn aimed_at(&self) -> Option<DocumentId> {
         self.aimed_at
@@ -1123,6 +1131,9 @@ impl ToolPointer {
     /// nothing, which is why the context it is given is never drained.
     pub fn cancel(&mut self, editor: &mut Editor) -> bool {
         let had = self.router.is_gesture_active() || self.is_tool_active();
+        // W8-D: Escape also calls off a released stroke whose heavy finish
+        // is still synthesising on the worker; nothing of it lands.
+        let had = crate::menu_bridge::content_aware_job::cancel_deferred_strokes(editor) || had;
         // W5-C: Escape ends a Ctrl+T session the way Enter does, handing the
         // palette back to the tool it was invoked from; a parked request
         // that never began goes with it, and nothing stale is left for a
@@ -1361,6 +1372,24 @@ impl ToolPointer {
         ctx.ramp = ramp;
         ctx.pattern = pattern;
         ctx.layer_stack = layer_stack;
+        // W8-C: a Perspective Crop rectifies every pixel layer (hidden ones
+        // too, as Photoshop's crop takes every layer), each through its own
+        // document→layer map; the parametric kinds keep their geometry.
+        if tool.id() == ToolId::PerspectiveCrop {
+            ctx.rectify_layers = doc
+                .document
+                .layers
+                .iter_depth_first()
+                .into_iter()
+                .filter(|id| {
+                    doc.document
+                        .layers
+                        .get(*id)
+                        .is_some_and(|l| !l.kind.parametric())
+                })
+                .filter_map(|id| Some((id, sample_to_layer_of(&doc.document, Some(id))?)))
+                .collect();
+        }
         let result = action(tool.as_mut(), &mut ctx);
         let drained = (result, ctx.drain(), ctx.drain_requests());
         drop(ctx);
@@ -1504,7 +1533,8 @@ impl ToolPointer {
         // document **outside history** — the canvas renders every keystroke,
         // undo stays clean until the session confirms.
         // W7-F: a Type Mask session's confirm becomes a selection.
-        let type_mask = self.live_tool().is_some_and(tools::text::is_type_mask);
+        // W8-C: with the options bar's Mode it combines by.
+        let type_mask = self.type_mask_op();
         for request in requests {
             out.steps += Self::perform_text_request(editor, request, type_mask);
         }
@@ -1650,7 +1680,7 @@ impl ToolPointer {
     fn perform_text_request(
         editor: &mut Editor,
         request: tools::ToolRequest,
-        type_mask: bool,
+        type_mask: Option<selection::BooleanOp>,
     ) -> usize {
         match request {
             tools::ToolRequest::TextDraft { layer, kind } => {
@@ -1672,13 +1702,13 @@ impl ToolPointer {
     /// for the two Type Mask tools, [`Self::perform_type_mask_confirm`].
     fn perform_text_confirm_for(
         editor: &mut Editor,
-        type_mask: bool,
+        type_mask: Option<selection::BooleanOp>,
         layer: layer_model::LayerId,
         original: Box<layer_model::LayerKind>,
         draft: Box<layer_model::LayerKind>,
     ) -> usize {
-        if type_mask {
-            Self::perform_type_mask_confirm(editor, layer, *draft)
+        if let Some(op) = type_mask {
+            Self::perform_type_mask_confirm(editor, layer, *draft, op)
         } else {
             Self::perform_text_confirm(editor, layer, original, draft)
         }
@@ -1693,10 +1723,16 @@ impl ToolPointer {
     /// (so the session leaves exactly one entry, the `SetSelection`, and one
     /// Ctrl+Z restores the old selection), otherwise it is deleted through
     /// history. Reports the history depth the confirm moved.
+    ///
+    /// W8-C: the glyphs combine with the selection already there by `op`,
+    /// the options bar's Mode — New replaces it, Add / Subtract / Intersect
+    /// fold the glyphs in through the same combine every selection tool uses
+    /// ([`tools::SelectionEdit::apply`]).
     fn perform_type_mask_confirm(
         editor: &mut Editor,
         layer: layer_model::LayerId,
         draft: layer_model::LayerKind,
+        op: selection::BooleanOp,
     ) -> usize {
         let before = editor.active().map(|d| d.history_depth()).unwrap_or(0);
         let Some(doc) = editor.active_mut() else {
@@ -1740,10 +1776,22 @@ impl ToolPointer {
             return depth(editor).saturating_sub(before);
         }
         let origin = glam::IVec2::new(rect.x as i32, rect.y as i32);
-        match editor_core::SelectionMask::new(origin, rect.width, rect.height, coverage) {
-            Ok(mask) => editor.apply_command(Command::SetSelection {
-                selection: editor_core::Selection::Mask(mask),
-            }),
+        let glyphs =
+            match editor_core::SelectionMask::new(origin, rect.width, rect.height, coverage) {
+                Ok(mask) => editor_core::Selection::Mask(mask),
+                Err(e) => {
+                    editor.set_status(e.to_string());
+                    return depth(editor).saturating_sub(before);
+                }
+            };
+        let base = editor
+            .active()
+            .map(|d| d.document.selection.clone())
+            .unwrap_or(editor_core::Selection::None);
+        let canvas =
+            selection::Rect::from_xywh(rect.x as i32, rect.y as i32, rect.width, rect.height);
+        match tools::SelectionEdit::new(glyphs, op).apply(canvas, &base) {
+            Ok(selection) => editor.apply_command(Command::SetSelection { selection }),
             Err(e) => editor.set_status(e.to_string()),
         }
         depth(editor).saturating_sub(before)
@@ -1821,7 +1869,8 @@ impl ToolPointer {
         }
         out.had_pending = true;
         // W7-F: a Type Mask session's confirm becomes a selection.
-        let type_mask = self.live_tool().is_some_and(tools::text::is_type_mask);
+        // W8-C: with the options bar's Mode it combines by.
+        let type_mask = self.type_mask_op();
         let (result, commands, requests) = self.off_pointer(editor, |tool, ctx| tool.commit(ctx));
         // W5-C: a committed Free Transform hands the palette back to the
         // tool Ctrl+T was pressed from (Photopea); a refused one stays put.
@@ -2254,7 +2303,7 @@ impl ToolPointer {
 
         // W4-B: the live stroke preview a Move sample produced, if any.
         let mut live_paint: Option<tools::stroke::LivePaint> = None;
-        let (result, commands, selection_edits, requests, picked, canvas_rect) = {
+        let (result, commands, selection_edits, requests, picked, canvas_rect, deferred) = {
             let doc = editor.active_mut().expect("checked above");
             let canvas = doc.canvas_rect();
             let active_layer = doc.document.active_layer();
@@ -2463,14 +2512,20 @@ impl ToolPointer {
             ctx.pattern = pattern;
             ctx.view = view;
             ctx.layer_stack = layer_stack;
+            // W8-D: a heavy stroke finish (the Spot Healing Brush's
+            // Content-Aware type) is handed over at release, not run here.
+            ctx.defer_heavy_commits = true;
 
             // Card 026: a fresh Type press-release may ENTER an existing text
             // layer instead of creating one. The shell resolves the hit — it
             // owns the shaping stack: the top-most unlocked text layer whose
             // transformed ink contains the click, and the caret the shaped
             // hit test chose.
+            // W8-C: the Vertical Type tool enters a layer the same way; the
+            // hit test follows the layer's own (vertical or horizontal)
+            // layout. The Type Mask tools always start a new mask.
             if routed.phase == PointerPhase::Up
-                && tool.id() == ToolId::Type
+                && matches!(tool.id(), ToolId::Type | ToolId::VerticalType)
                 && !tool.is_text_editing()
             {
                 ctx.text_hit = Self::text_hit_under(&doc.document, routed.event.pos);
@@ -2494,6 +2549,12 @@ impl ToolPointer {
             // `ctx.view` is deliberately not read back: navigation belongs to
             // the router, which drove the camera before the tool ever saw this
             // sample, and the tools routed here are not the navigation ones.
+            // W8-D: the release's heavy finish, if it handed one over.
+            let deferred = if routed.phase == PointerPhase::Up {
+                tool.take_deferred_commit()
+            } else {
+                None
+            };
             let out = (
                 result,
                 ctx.drain(),
@@ -2501,6 +2562,7 @@ impl ToolPointer {
                 ctx.drain_requests(),
                 ctx.picked(),
                 ctx.canvas_rect(),
+                deferred,
             );
             // `ctx` holds the only mutable borrow of the document's tiles, and
             // the document is needed again the moment this block ends.
@@ -2577,6 +2639,18 @@ impl ToolPointer {
         for command in commands {
             editor.apply_command(command);
         }
+        // W8-D: a deferred stroke finish runs on the content-aware job worker
+        // and lands as ONE history entry when it completes (with the inline
+        // spawner, before this returns, so it is counted below).
+        if let Some(deferred) = deferred {
+            match crate::menu_bridge::content_aware_job::start_deferred_stroke(editor, deferred) {
+                Ok(message) => editor.set_status(message),
+                Err(message) => {
+                    out.failed = Some(message.clone());
+                    editor.set_status(message);
+                }
+            }
+        }
         let after = editor.active().map(|d| d.history_depth()).unwrap_or(0);
         out.steps = after.saturating_sub(before);
 
@@ -2598,7 +2672,8 @@ impl ToolPointer {
         }
 
         // W7-F: a Type Mask session's confirm becomes a selection.
-        let type_mask = self.live_tool().is_some_and(tools::text::is_type_mask);
+        // W8-C: with the options bar's Mode it combines by.
+        let type_mask = self.type_mask_op();
         if !requests.is_empty() {
             // Crop and slice publish only from `Tool::commit`, which is
             // [`ToolPointer::commit`]'s path, not this one — a request that

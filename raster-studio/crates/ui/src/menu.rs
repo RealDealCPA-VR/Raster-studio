@@ -1373,6 +1373,10 @@ pub enum MenuAction {
     /// File ▸ Export ▸ Slices…: one file per Slice-tool region, written with
     /// the last confirmed Export As settings.
     ExportSlices,
+    /// W8-C: File ▸ Export ▸ Artboards to Files…: one file per artboard, its
+    /// own contents over its rect, written with the last confirmed Export As
+    /// settings.
+    ExportArtboards,
     PlaceEmbedded,
     PlaceLinked,
     FileInfo,
@@ -1945,6 +1949,7 @@ impl MenuAction {
         out.extend([
             MenuAction::ExportLayers,
             MenuAction::ExportSlices,
+            MenuAction::ExportArtboards,
             MenuAction::PlaceEmbedded,
             MenuAction::PlaceLinked,
             MenuAction::FileInfo,
@@ -2152,6 +2157,7 @@ impl MenuAction {
             MenuAction::Export(f) => format!("{}…", f.extension().to_uppercase()),
             MenuAction::ExportLayers => "Export Layers…".into(),
             MenuAction::ExportSlices => "Slices…".into(),
+            MenuAction::ExportArtboards => "Artboards to Files…".into(),
             MenuAction::PlaceEmbedded => "Place Embedded…".into(),
             MenuAction::PlaceLinked => "Place Linked…".into(),
             MenuAction::FileInfo => "File Info…".into(),
@@ -2427,6 +2433,7 @@ impl MenuAction {
             | MenuAction::SaveAs
             | MenuAction::ExportLayers
             | MenuAction::ExportSlices
+            | MenuAction::ExportArtboards
             | MenuAction::PlaceEmbedded
             | MenuAction::PlaceLinked
             | MenuAction::FileInfo
@@ -3112,7 +3119,13 @@ fn file_menu(recent_files: usize) -> Menu {
                     .collect(),
             ),
             item(MenuAction::ExportLayers),
-            Entry::submenu("Export", vec![item(MenuAction::ExportSlices)]),
+            Entry::submenu(
+                "Export",
+                vec![
+                    item(MenuAction::ExportSlices),
+                    item(MenuAction::ExportArtboards),
+                ],
+            ),
             Entry::Separator,
             item(MenuAction::PlaceEmbedded),
             item(MenuAction::PlaceLinked),

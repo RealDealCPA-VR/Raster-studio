@@ -52,6 +52,12 @@ pub struct BrushSettings {
     pub size_pressure: bool,
     /// Stylus pressure scales dab flow.
     pub flow_pressure: bool,
+    /// Stylus pressure scales each dab's alpha (Opacity from Pressure): a dab
+    /// stamped at pressure `p` lays `p` times the alpha it would lay at full
+    /// pressure. Off by default, and absent from older saved brushes, which
+    /// therefore load with it off.
+    #[serde(default)]
+    pub opacity_pressure: bool,
     /// Dab size at zero pressure, as a fraction of `size`.
     pub min_size_ratio: f32,
     /// Skip anti-aliasing: every pixel is fully in or fully out (the pencil).
@@ -71,6 +77,7 @@ impl Default for BrushSettings {
             smoothing: 0.0,
             size_pressure: true,
             flow_pressure: false,
+            opacity_pressure: false,
             min_size_ratio: 0.1,
             aliased: false,
         }
@@ -142,6 +149,18 @@ impl BrushSettings {
             self.flow * p
         } else {
             self.flow
+        }
+    }
+
+    /// The alpha one dab lays down at this pressure: its [`Self::flow_at`],
+    /// further scaled by the pressure itself when `opacity_pressure` is on.
+    /// This is the value the stamp path writes into [`Dab::flow`].
+    pub fn dab_alpha_at(&self, pressure: f32) -> f32 {
+        let flow = self.flow_at(pressure);
+        if self.opacity_pressure {
+            flow * pressure.clamp(0.0, 1.0)
+        } else {
+            flow
         }
     }
 }
@@ -316,7 +335,7 @@ impl DabEmitter {
             hardness: self.settings.hardness,
             angle: self.settings.angle,
             roundness: self.settings.roundness,
-            flow: self.settings.flow_at(pressure),
+            flow: self.settings.dab_alpha_at(pressure),
             aliased: self.settings.aliased,
         });
     }
@@ -445,6 +464,33 @@ mod tests {
         };
         assert!((flow.flow_at(0.0) - 0.0).abs() < 1e-6);
         assert!((flow.flow_at(1.0) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn opacity_pressure_scales_the_stamped_dab_alpha() {
+        let settings = BrushSettings {
+            size: 20.0,
+            size_pressure: false,
+            flow: 0.8,
+            ..Default::default()
+        };
+        assert!(!settings.opacity_pressure, "off by default");
+        let alpha =
+            |s: BrushSettings, p: f32| DabEmitter::begin(s, Vec2::ZERO, p).unwrap().dabs()[0].flow;
+        // Off: pressure does not touch the alpha.
+        assert!((alpha(settings, 0.25) - 0.8).abs() < 1e-6);
+        let on = BrushSettings {
+            opacity_pressure: true,
+            ..settings
+        };
+        assert!((alpha(on, 1.0) - 0.8).abs() < 1e-6);
+        assert!((alpha(on, 0.25) - 0.2).abs() < 1e-6);
+        assert_eq!(alpha(on, 0.0), 0.0);
+        // A brush saved before the field existed loads with it off.
+        let mut json = serde_json::to_value(settings).unwrap();
+        json.as_object_mut().unwrap().remove("opacity_pressure");
+        let back: BrushSettings = serde_json::from_value(json).unwrap();
+        assert!(!back.opacity_pressure);
     }
 
     #[test]

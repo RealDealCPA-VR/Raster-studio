@@ -578,6 +578,10 @@ pub fn is_type_mask(id: ToolId) -> bool {
 pub struct TypeTool {
     /// W7-F: horizontal or vertical, layer or mask.
     pub mode: TypeMode,
+    /// W8-C: how a Type Mask confirm combines its glyphs with the existing
+    /// selection — the options bar's Mode (New / Add / Subtract /
+    /// Intersect). Ignored by the two layer-making modes.
+    pub selection_mode: selection::BooleanOp,
     pub font_family: String,
     pub size_px: f32,
     /// W3-J: the default character style the next created layer starts with.
@@ -594,6 +598,7 @@ impl Default for TypeTool {
     fn default() -> Self {
         Self {
             mode: TypeMode::Horizontal,
+            selection_mode: selection::BooleanOp::Replace,
             font_family: DEFAULT_FONT_FAMILY.to_string(),
             size_px: DEFAULT_SIZE_PX,
             style: layer_model::text::BaseStyle::default(),
@@ -997,6 +1002,19 @@ impl Tool for TypeTool {
                 self.font_family = family.to_owned();
                 Ok(())
             }
+            // W8-C: the Type Mask tools' selection Mode.
+            ("mode", ToolSetting::Choice(index)) if self.mode.is_mask() => {
+                self.selection_mode = crate::select::SELECTION_MODES
+                    .get(index)
+                    .copied()
+                    .ok_or_else(|| ToolError::OptionKindMismatch {
+                        key: key.to_owned(),
+                    })?;
+                Ok(())
+            }
+            ("mode", _) if self.mode.is_mask() => Err(ToolError::OptionKindMismatch {
+                key: key.to_owned(),
+            }),
             ("size_px", _) | ("font_family", _) => Err(ToolError::OptionKindMismatch {
                 key: key.to_owned(),
             }),
@@ -1010,6 +1028,22 @@ impl Tool for TypeTool {
 
     fn is_text_editing(&self) -> bool {
         self.session.is_some()
+    }
+
+    /// W8-C: a Type Mask tool's confirm combines by the options bar's Mode.
+    fn type_mask_op(&self) -> Option<selection::BooleanOp> {
+        self.mode.is_mask().then_some(self.selection_mode)
+    }
+
+    /// W8-C: a Type Mask session publishes its temporary layer, over which
+    /// the shell lays the quick-mask red outside the glyphs.
+    fn live_geometry(&self) -> Option<crate::tool::SessionGeometry> {
+        let session = self.session.as_ref()?;
+        self.mode
+            .is_mask()
+            .then_some(crate::tool::SessionGeometry::TypeMask {
+                layer: session.layer,
+            })
     }
 
     fn text_session_layer(&self) -> Option<LayerId> {

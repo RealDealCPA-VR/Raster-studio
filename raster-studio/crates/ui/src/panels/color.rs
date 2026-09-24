@@ -30,6 +30,9 @@ pub enum ColorNotation {
     /// W7-D: cyan, magenta, yellow and black in percent, through
     /// `color::cmyk`'s documented ink model (no ICC press profile).
     Cmyk,
+    /// W8-B: Photoshop's Grayscale slider — K, the percent of black, of the
+    /// colour's Rec.601 luma (the weights Image > Mode > Grayscale uses).
+    Gray,
 }
 
 impl ColorNotation {
@@ -39,7 +42,21 @@ impl ColorNotation {
         ColorNotation::Hex,
         ColorNotation::Lab,
         ColorNotation::Cmyk,
+        ColorNotation::Gray,
     ];
+
+    /// W8-B: the notation a document colour mode (`DocumentMeta::color_mode`)
+    /// reads in by default — Lab, CMYK and Grayscale documents in their own
+    /// terms; `None` for RGB and Indexed, which keep the user's choice.
+    pub const fn for_color_mode(mode: u8) -> Option<ColorNotation> {
+        use editor_core::color_mode::mode;
+        match mode {
+            mode::GRAYSCALE => Some(ColorNotation::Gray),
+            mode::LAB => Some(ColorNotation::Lab),
+            mode::CMYK => Some(ColorNotation::Cmyk),
+            _ => None,
+        }
+    }
 
     pub const fn label(self) -> &'static str {
         match self {
@@ -48,6 +65,7 @@ impl ColorNotation {
             ColorNotation::Hex => "Hex",
             ColorNotation::Lab => "Lab",
             ColorNotation::Cmyk => "CMYK",
+            ColorNotation::Gray => "Gray",
         }
     }
 }
@@ -94,6 +112,13 @@ pub struct ColorState {
     /// `true` while the eyedropper is armed and the next canvas click samples
     /// a colour instead of painting.
     pub eyedropper_armed: bool,
+    /// W8-B: the document colour mode [`ColorState::follow_document_mode`]
+    /// last saw (`None`: no document yet).
+    followed_mode: Option<u8>,
+    /// W8-B: the user's own notation, kept while a Lab/CMYK/Grayscale
+    /// document has the panel reading in its mode, and given back when the
+    /// panel next reads an RGB or Indexed one.
+    chosen_notation: Option<ColorNotation>,
 }
 
 impl Default for ColorState {
@@ -105,6 +130,8 @@ impl Default for ColorState {
             notation: ColorNotation::default(),
             hue_sat: (0.0, 0.0),
             eyedropper_armed: false,
+            followed_mode: None,
+            chosen_notation: None,
         }
     }
 }
@@ -112,6 +139,55 @@ impl Default for ColorState {
 impl ColorState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// W8-B: the panel follows the active document's colour mode. When the
+    /// mode changes (a document opens, the tab changes, Image > Mode runs), a
+    /// Lab, CMYK or Grayscale document switches the panel to that notation,
+    /// and an RGB or Indexed one gives back the notation the user had. Only
+    /// a *change* of mode switches: within one mode the user's pick stands.
+    pub fn follow_document_mode(&mut self, mode: Option<u8>) {
+        if self.followed_mode == mode {
+            return;
+        }
+        self.followed_mode = mode;
+        match mode.and_then(ColorNotation::for_color_mode) {
+            Some(notation) => {
+                if self.chosen_notation.is_none() {
+                    self.chosen_notation = Some(self.notation);
+                }
+                self.notation = notation;
+            }
+            None => {
+                if let Some(chosen) = self.chosen_notation.take() {
+                    self.notation = chosen;
+                }
+            }
+        }
+    }
+
+    /// W8-B: the user picks a notation (the panel's segmented control). It
+    /// is theirs: a later RGB document does not undo it.
+    pub fn choose_notation(&mut self, notation: ColorNotation) {
+        self.notation = notation;
+        self.chosen_notation = None;
+    }
+
+    /// W8-B: the current colour as Photoshop's Grayscale K — whole percent
+    /// of black, `100 - ` its Rec.601 luma in percent.
+    pub fn gray_percent(&self) -> u8 {
+        let [r, g, b] = self.rgb8().map(f32::from);
+        let luma = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0;
+        (100.0 - luma * 100.0).round().clamp(0.0, 100.0) as u8
+    }
+
+    /// W8-B: set the current colour to the neutral grey of K percent black.
+    pub fn set_gray_percent(&mut self, k: f32) -> bool {
+        if !k.is_finite() {
+            return false;
+        }
+        let v = ((1.0 - k.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
+        self.set_rgb8([v, v, v])
     }
 
     pub fn foreground(&self) -> [f32; 4] {

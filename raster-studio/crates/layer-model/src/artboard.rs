@@ -12,12 +12,14 @@
 //! The field is appended to `RasterLayer` and omitted while `None`, so a
 //! document from before artboards opens unchanged.
 //!
-//! # What is not modelled
+//! # Clipping and export (W8-C)
 //!
-//! Photopea clips an artboard's contents to its rect and exports each one as
-//! its own image (File > Export Artboards). Neither exists here: the group
-//! does not clip its children, and no export route enumerates artboards —
-//! [`artboards`] is the query such a route would start from.
+//! As in Photopea, an artboard's contents are clipped to its rect: the
+//! compositor clips the artboard group's children to the plate's rect (see
+//! `compositor::composite`), so nothing drawn inside the group shows outside
+//! it. File > Export > Artboards to Files enumerates the artboards through
+//! [`artboards`] and writes one image per artboard
+//! (`app_shell::artboard_export`).
 
 use serde::{Deserialize, Serialize};
 

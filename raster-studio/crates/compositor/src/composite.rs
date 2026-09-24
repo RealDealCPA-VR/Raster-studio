@@ -577,7 +577,17 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
                 let cov = self.mask_coverage(layer, rect)?;
                 let w = layer.effective_opacity() * layer.effective_fill_opacity();
                 let src = buf.pixels().to_vec();
+                // W8-C: an artboard's children land inside its rect only.
+                let board = self.artboard_clip(layer.id);
+                let width = backdrop.width().max(1) as usize;
                 for (i, d) in backdrop.pixels_mut().iter_mut().enumerate() {
+                    if let Some(b) = board {
+                        let x = rect.x + (i % width) as i64;
+                        let y = rect.y + (i / width) as i64;
+                        if x < b.x || y < b.y || x >= b.right() || y >= b.bottom() {
+                            continue;
+                        }
+                    }
                     let k = w * cov.as_ref().map_or(1.0, |c| c[i]);
                     if k <= 0.0 {
                         continue;
@@ -730,6 +740,25 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             }
         }
         Ok(())
+    }
+
+    /// W8-C: the rect an artboard group clips its children to, in the
+    /// group's own space at this level — `None` for a group that is not an
+    /// artboard ([`layer_model::artboard::artboard_of`]). The artboard's rect
+    /// is read in the space its children composite into, so moving the
+    /// artboard group moves its clip with it; at level `L` it is scaled by
+    /// `2^-L` and rounded outwards, as every layer's pixels are.
+    pub(crate) fn artboard_clip(&self, group: LayerId) -> Option<PixelRect> {
+        let (_, board) = layer_model::artboard::artboard_of(&self.doc.layers, group)?;
+        if !board.is_valid() {
+            return None;
+        }
+        let s = 2f64.powi(-(self.level as i32));
+        let x0 = (board.x as f64 * s).floor() as i64;
+        let y0 = (board.y as f64 * s).floor() as i64;
+        let x1 = ((board.x + i64::from(board.width)) as f64 * s).ceil() as i64;
+        let y1 = ((board.y + i64::from(board.height)) as f64 * s).ceil() as i64;
+        (x1 > x0 && y1 > y0).then(|| PixelRect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
     }
 
     fn is_pass_through(&self, layer: &Layer, group: &GroupLayer) -> bool {
@@ -918,7 +947,13 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
     fn render_content(&self, layer: &Layer, rect: PixelRect) -> Result<Canvas, CompositeError> {
         let mut c = Canvas::transparent(rect)?;
         match &layer.kind {
-            LayerKind::Group(g) => self.composite_ids(&g.children, rect, &mut c)?,
+            LayerKind::Group(g) => {
+                self.composite_ids(&g.children, rect, &mut c)?;
+                // W8-C: an artboard shows its children inside its rect only.
+                if let Some(board) = self.artboard_clip(layer.id) {
+                    clear_outside(&mut c, board);
+                }
+            }
             LayerKind::Raster(_) | LayerKind::Generator(_) => self.fill_layer(layer.id, &mut c),
             // W7-E: a smart object with an active filter stack is its source
             // run through the stack over its whole extent (see `smart`);
@@ -2054,7 +2089,14 @@ fn hash_layer_props(layer: &Layer, adjustment: Option<u64>, h: &mut DefaultHashe
         hash_effects(&layer.effects, h);
     }
     match &layer.kind {
-        LayerKind::Raster(_) => 0u8.hash(h),
+        LayerKind::Raster(r) => {
+            0u8.hash(h);
+            // W8-C: an artboard plate's rect is its group's clip, so a
+            // changed rect must re-key the group's cached tiles.
+            if let Some(a) = &r.artboard {
+                (a.x, a.y, a.width, a.height).hash(h);
+            }
+        }
         LayerKind::Group(g) => {
             1u8.hash(h);
             g.blending.hash(h);
@@ -2584,6 +2626,19 @@ fn hash_adjustment(kind: &layer_model::AdjustmentKind, h: &mut DefaultHasher) {
                 hash_f32(*v, h);
             }
             neutralize.hash(h);
+        }
+    }
+}
+
+/// W8-C: make every pixel of `c` outside `keep` transparent.
+fn clear_outside(c: &mut Canvas, keep: PixelRect) {
+    let rect = c.rect();
+    let width = rect.width.max(1) as usize;
+    for (i, px) in c.pixels_mut().iter_mut().enumerate() {
+        let x = rect.x + (i % width) as i64;
+        let y = rect.y + (i / width) as i64;
+        if x < keep.x || y < keep.y || x >= keep.right() || y >= keep.bottom() {
+            *px = [0.0; 4];
         }
     }
 }

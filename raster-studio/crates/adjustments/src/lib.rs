@@ -142,6 +142,7 @@ pub mod curve;
 pub mod error;
 pub mod extended;
 pub mod hdr;
+pub mod lab_tone;
 pub mod match_color;
 pub mod prepared;
 pub mod space;
@@ -159,6 +160,7 @@ pub use extended::{
     MAX_SHADOWS_HIGHLIGHTS_RADIUS, MIN_LUT_SIZE,
 };
 pub use hdr::HdrToning;
+pub use lab_tone::{lab_histograms, LabTone};
 pub use match_color::{LabStats, MatchColor};
 pub use prepared::{apply, apply_adjustment, Adjustment, PreparedAdjustment};
 pub use space::{EncodedRgb, LinearRgb, WorkingSpace};

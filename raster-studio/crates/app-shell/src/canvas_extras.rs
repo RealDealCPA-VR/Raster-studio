@@ -145,6 +145,11 @@ pub struct CanvasExtras {
     /// whole layer — far too slow to redo every frame on a large image — and
     /// only change when the layer does.
     edge_cache: Option<(EdgeKey, Option<raster::PixelRect>)>,
+    /// W8-A: where a pen hovering in range (or in contact) is, in window
+    /// physical pixels, as the shell's pen route last saw it. The brush ring
+    /// follows it; `None` (the mouse moved, the contact was a finger, focus
+    /// was lost) hands the ring back to egui's pointer.
+    pen_hover: Option<Vec2>,
 }
 
 /// What [`CanvasExtras::edge_cache`] is valid for.
@@ -183,6 +188,12 @@ impl CanvasExtras {
     /// What the last call to [`CanvasExtras::paint`] drew.
     pub fn last_report(&self) -> ExtrasReport {
         self.last
+    }
+
+    /// W8-A: the pen's window position (physical pixels) for the brush ring,
+    /// or `None` to follow egui's pointer. See [`Self::pen_hover`].
+    pub fn set_pen_hover(&mut self, at: Option<Vec2>) {
+        self.pen_hover = at.filter(|p| p.is_finite());
     }
 
     /// Whether a guide is being dragged right now. While it is, the chrome
@@ -396,7 +407,12 @@ impl CanvasExtras {
         } else {
             [egui::Rect::NOTHING; 2]
         };
-        let on_canvas = pointer.filter(|p| {
+        // W8-A: a pen's own position when the shell's pen route has one, so
+        // the ring follows a hovering pen whether or not egui-winit's
+        // touch-to-mouse emulation moved egui's pointer to it (it does for a
+        // hover `Moved`, and drops the pointer at every lift).
+        let ring_pointer = self.pen_hover.map(|p| p / ppp).or(pointer);
+        let on_canvas = ring_pointer.filter(|p| {
             let at = to_pos2(*p);
             !over_chrome
                 && !modal_open

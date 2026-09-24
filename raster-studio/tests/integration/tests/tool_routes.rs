@@ -2866,3 +2866,374 @@ fn freeform_pen_drag_is_fitted_into_one_short_curved_shape_layer() {
     undo(&mut ed);
     assert_eq!(depth(&ed), d0);
 }
+
+// ------------------------------------------------------ W8-C follow-ups --
+
+/// A `W × H` shell editor over `fixture` whose folder picker answers `out`
+/// — what File > Export > Artboards to Files writes into.
+fn open_exporting_to(
+    fixture: &dyn Fn(u32, u32) -> [u8; 4],
+    out: &std::path::Path,
+) -> (tempfile::TempDir, Editor) {
+    use app_shell::{dialogs::ScriptedDialogs, prefs::AppPaths, recent::RecentFiles};
+    let dir = tempfile::tempdir().expect("a tempdir");
+    let canvas = dir.path().join("canvas.png");
+    let white = vec![255u8; (W * H * 4) as usize];
+    std::fs::write(
+        &canvas,
+        raster::encode(raster::ExportFormat::Png, W, H, &white).unwrap(),
+    )
+    .unwrap();
+    let mut ed = Editor::with_state(
+        AppPaths::rooted(dir.path().join("config")),
+        app_shell::prefs::Preferences::default(),
+        RecentFiles::new(),
+        Box::new(ScriptedDialogs::new().exporting_folder(out)),
+    );
+    ed.open_path(&canvas).expect("the canvas opens");
+    app::center_camera(ed.active_mut().unwrap());
+    let layer = app::the_opened_layer(&ed);
+    ed.active_mut().unwrap().paint_canvas(layer, fixture);
+    (dir, ed)
+}
+
+/// W8-C: an artboard clips what is inside it to its rect in the composite,
+/// and File > Export > Artboards to Files writes one image per artboard,
+/// each its own rect with its own contents.
+#[test]
+fn artboards_clip_their_children_and_export_one_file_each() {
+    let id = ToolId::Artboard;
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("boards");
+    let (_dir, mut ed) = open_exporting_to(&halves, &out);
+    let photo = app::the_opened_layer(&ed);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    all_reached(
+        id,
+        &drag(&mut pointer, &mut ed, &[v(20.0, 20.0), v(60.0, 70.0)]),
+    );
+    all_reached(
+        id,
+        &drag(&mut pointer, &mut ed, &[v(70.0, 20.0), v(110.0, 60.0)]),
+    );
+    let boards = layer_model::artboard::artboards(&ed.active().unwrap().document.layers);
+    assert_eq!(boards.len(), 2, "two artboards");
+    // Put the red|blue photo inside the first artboard, above its plate.
+    let first = boards
+        .iter()
+        .find(|(_, b)| b.x == 20)
+        .map(|(g, _)| *g)
+        .unwrap();
+    ed.apply_command(editor_core::Command::MoveLayer {
+        layer_id: photo,
+        parent: Some(first),
+        index: 0,
+    });
+    let after = composite(&mut ed);
+    assert_eq!(px(&after, 30, 40), RED, "inside the artboard: its child");
+    assert_eq!(
+        px(&after, 10, 10)[3],
+        0,
+        "outside the artboard its child is clipped away"
+    );
+    assert_eq!(px(&after, 100, 100)[3], 0, "clipped below it too");
+    assert_eq!(px(&after, 90, 40), WHITE, "the second artboard's plate");
+
+    let said = menu_bridge::perform(ui::menu::MenuAction::ExportArtboards, &mut ed)
+        .expect("the export runs");
+    assert!(said.contains("2 artboard"), "{said}");
+    let mut files: Vec<_> = std::fs::read_dir(&out)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    files.sort();
+    assert_eq!(files.len(), 2, "one file per artboard: {files:?}");
+    let decoded: Vec<_> = files
+        .iter()
+        .map(|f| raster::decode_path(f).expect("an artboard file decodes"))
+        .collect();
+    let sizes: Vec<_> = decoded.iter().map(|d| (d.width, d.height)).collect();
+    assert!(
+        sizes.contains(&(40, 50)) && sizes.contains(&(40, 40)),
+        "{sizes:?}"
+    );
+    let photo_board = decoded.iter().find(|d| d.height == 50).unwrap();
+    assert_eq!(
+        &photo_board.rgba8[..4],
+        &RED,
+        "the first board holds the photo"
+    );
+    let plain = decoded.iter().find(|d| d.height == 40).unwrap();
+    assert_eq!(
+        &plain.rgba8[..4],
+        &WHITE,
+        "the second board is only its plate"
+    );
+}
+
+/// An artboard exports only its own branch: a visible layer that sits
+/// outside every artboard (here the opened photo, left at the root under the
+/// board, lifted above it) must not show through the exported file, which is the artboard's
+/// plate alone - as Photopea exports artboards.
+#[test]
+fn an_exported_artboard_leaves_out_layers_outside_every_artboard() {
+    let id = ToolId::Artboard;
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("boards");
+    let (_dir, mut ed) = open_exporting_to(&halves, &out);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    all_reached(
+        id,
+        &drag(&mut pointer, &mut ed, &[v(20.0, 20.0), v(60.0, 70.0)]),
+    );
+    // Lift the photo to the TOP of the root, above the board, so an opaque
+    // plate cannot hide it: only the export's isolation keeps it out.
+    let photo = app::the_opened_layer(&ed);
+    // Index 0 is the top of a layer list in this model.
+    ed.apply_command(editor_core::Command::MoveLayer {
+        layer_id: photo,
+        parent: None,
+        index: 0,
+    });
+    let over = composite(&mut ed);
+    assert_eq!(
+        px(&over, 30, 40),
+        RED,
+        "the photo is above the board on the canvas"
+    );
+    let said = menu_bridge::perform(ui::menu::MenuAction::ExportArtboards, &mut ed)
+        .expect("the export runs");
+    assert!(said.contains("1 artboard"), "{said}");
+    let files: Vec<_> = std::fs::read_dir(&out)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 1, "{files:?}");
+    let decoded = raster::decode_path(&files[0]).expect("the artboard file decodes");
+    assert!(
+        decoded.rgba8.as_chunks::<4>().0.iter().all(|p| *p == WHITE),
+        "a layer outside the artboard leaked into its export"
+    );
+}
+
+/// W8-C: Enter rectifies EVERY pixel layer, not just the active one — the
+/// opaque copy on top is warped too, so the composite shows the wall
+/// rectified although the active layer is the one underneath.
+#[test]
+fn perspective_crop_rectifies_every_layer_not_only_the_active_one() {
+    let id = ToolId::PerspectiveCrop;
+    let (_dir, mut ed) = open(&wall);
+    let bottom = app::the_opened_layer(&ed);
+    let copy = layer_model::Layer::raster("Copy");
+    let copy_id = copy.id;
+    ed.apply_command(editor_core::Command::create_layer(copy));
+    ed.active_mut().unwrap().paint_canvas(copy_id, &wall);
+    ed.set_active_layer(bottom);
+    assert_eq!(
+        ed.active().unwrap().document.active_layer(),
+        Some(bottom),
+        "the active layer is the one underneath"
+    );
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let d0 = depth(&ed);
+    all_reached(
+        id,
+        &drag(&mut pointer, &mut ed, &[v(28.0, 20.0), v(100.0, 100.0)]),
+    );
+    all_reached(
+        id,
+        &drag(&mut pointer, &mut ed, &[v(28.0, 20.0), v(56.0, 20.0)]),
+    );
+    all_reached(
+        id,
+        &drag(&mut pointer, &mut ed, &[v(100.0, 20.0), v(72.0, 20.0)]),
+    );
+    let commit = pointer.commit(&mut ed);
+    assert_eq!(commit.failed, None, "{commit:?}");
+    assert_eq!(depth(&ed), d0 + 1, "still ONE history entry");
+    let (w, h, out) = composite_sized(&mut ed);
+    let blue_in_row = |y: u32| {
+        (0..w)
+            .filter(|x| {
+                let p = px_in(&out, w, *x, y);
+                p[2] > 200 && p[0] < 60
+            })
+            .count()
+    };
+    let (top, bottom_row) = (blue_in_row(1), blue_in_row(h - 2));
+    assert!(
+        top > bottom_row * 3 && bottom_row > 0,
+        "the top layer was not rectified: {top} blue px on top, {bottom_row} at the bottom"
+    );
+}
+
+/// W8-C: the Mixer Brush previews its wet stroke while it is dragged, through
+/// the same preview lens as every stroke tool, and the release commits
+/// exactly what the last preview showed.
+#[test]
+fn mixer_brush_previews_the_wet_stroke_while_it_is_dragged() {
+    use ui::canvas::PointerPhase;
+    let id = ToolId::MixerBrush;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+    let (a, b) = (v(30.0, 64.0), v(100.0, 64.0));
+    let pts: Vec<Vec2> = (0..=14).map(|i| a + (b - a) * (i as f32 / 14.0)).collect();
+    let down = app::shell_pointer(&mut pointer, &mut ed, PointerPhase::Down, pts[0]);
+    all_reached(id, &[down]);
+    let mut previewed = 0;
+    for p in &pts[1..] {
+        let o = app::shell_pointer(&mut pointer, &mut ed, PointerPhase::Move, *p);
+        previewed += o.preview_tiles;
+        all_reached(id, &[o]);
+    }
+    assert!(previewed > 0, "no Move sample previewed a tile");
+    assert!(ed.active().unwrap().has_paint_preview(), "the lens is up");
+    assert_eq!(depth(&ed), d0, "a preview writes no history");
+    let mid = composite(&mut ed);
+    let p = px(&mid, 72, 64);
+    assert!(
+        p[0] > 30 && p[2] > 30,
+        "mid-drag the canvas already shows red carried into the blue: {p:?}"
+    );
+    assert_ne!(mid, before, "the stroke is visible before release");
+    let last = *pts.last().unwrap();
+    let up = app::shell_pointer(&mut pointer, &mut ed, PointerPhase::Up, last);
+    all_reached(id, &[up]);
+    assert!(
+        !ed.active().unwrap().has_paint_preview(),
+        "the lens is down"
+    );
+    assert_eq!(depth(&ed), d0 + 1);
+    assert_eq!(
+        composite(&mut ed),
+        mid,
+        "the release committed exactly the previewed pixels"
+    );
+}
+
+/// W8-C: the Type Mask tools' options-bar Mode reaches the confirm — Add
+/// keeps the selection there and adds the glyphs, Subtract cuts the glyphs
+/// out of it.
+#[test]
+fn the_type_mask_mode_adds_to_and_subtracts_from_the_selection() {
+    load_fixture_font();
+    let id = ToolId::HorizontalTypeMask;
+    for (mode, name) in [(1usize, "Add"), (2, "Subtract")] {
+        let (_dir, mut ed) = open(&halves);
+        // A full-canvas selection to subtract from, or a small square in the
+        // far corner to add to.
+        let coverage: Vec<u8> = (0..H)
+            .flat_map(|y| {
+                (0..W).map(move |x| {
+                    if mode == 2 || (x >= 110 && y >= 110) {
+                        255
+                    } else {
+                        0
+                    }
+                })
+            })
+            .collect();
+        app::set_selection(
+            &mut ed,
+            Selection::Mask(editor_core::SelectionMask::new(IVec2::ZERO, W, H, coverage).unwrap()),
+        );
+        let mut pointer = ToolPointer::new();
+        select_tool(&mut ed, id);
+        let seed = [("mode".to_string(), tools::ToolSetting::Choice(mode))];
+        all_reached(
+            id,
+            &seeded_stroke(&mut pointer, &mut ed, &[v(20.0, 20.0)], &seed),
+        );
+        assert!(pointer.is_text_editing(), "{name}: the run is open");
+        pointer.text_edit(&mut ed, tools::TextEdit::Insert("WMW"));
+        let out = pointer.text_edit(&mut ed, tools::TextEdit::Confirm);
+        assert_eq!(out.failed, None, "{name}");
+        // The glyph pixels: somewhere in the run's box the coverage is full
+        // (Add) or gone (Subtract).
+        let glyph_cov: Vec<f32> = (20..80)
+            .flat_map(|y| (20..100).map(move |x| (x, y)))
+            .map(|(x, y)| cov(&ed, x, y))
+            .collect();
+        assert!(
+            cov(&ed, 120, 120) > 0.99,
+            "{name}: the old selection is kept"
+        );
+        if mode == 1 {
+            assert!(
+                glyph_cov.iter().any(|c| *c > 0.99),
+                "Add: the glyphs joined the selection"
+            );
+            assert!(cov(&ed, 5, 120) < 0.01, "Add: nothing else was selected");
+        } else {
+            assert!(
+                glyph_cov.iter().any(|c| *c < 0.01),
+                "Subtract: the glyphs were cut out"
+            );
+            assert!(cov(&ed, 5, 120) > 0.99, "Subtract: the rest stays selected");
+        }
+    }
+}
+
+/// W8-C: vertical type's caret and click hit-test follow the column — a
+/// click with the Vertical Type tool on the third cell of an existing
+/// vertical run enters it with the caret before that cell, and the caret
+/// drawn is a bar ACROSS the column.
+#[test]
+fn vertical_type_caret_and_click_follow_the_column() {
+    load_fixture_font();
+    let id = ToolId::VerticalType;
+    let (_dir, mut ed) = open(&white);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    all_reached(id, &click(&mut pointer, &mut ed, v(64.0, 8.0)));
+    pointer.text_edit(&mut ed, tools::TextEdit::Insert("ABCD"));
+    pointer.text_edit(&mut ed, tools::TextEdit::Confirm);
+    assert!(!pointer.is_text_editing());
+    let texts = |ed: &Editor| {
+        let doc = &ed.active().unwrap().document;
+        doc.layers
+            .iter_depth_first()
+            .into_iter()
+            .filter_map(|id| match &doc.layers.get(id)?.kind {
+                layer_model::LayerKind::Text(t) => Some(t.text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(texts(&ed), vec!["ABCD".to_string()]);
+    // The third cell starts two em cells (the 24 px default) below the top.
+    all_reached(
+        id,
+        &click(&mut pointer, &mut ed, v(64.0, 8.0 + 2.0 * 24.0 + 3.0)),
+    );
+    assert!(pointer.is_text_editing(), "the click entered the run");
+    let caret: Vec<_> = pointer
+        .text_overlay_geometry(&ed)
+        .into_iter()
+        .filter(|s| {
+            s.kind == app_shell::tool_input::TextOverlayKind::Caret && (s.b - s.a).length() > 0.5
+        })
+        .collect();
+    assert!(!caret.is_empty(), "a caret is drawn");
+    assert!(
+        caret.iter().all(|s| (s.a.y - s.b.y).abs() < 0.01),
+        "the vertical caret is a bar across the column: {caret:?}"
+    );
+    assert!(
+        caret[0].a.y > 8.0 + 24.0,
+        "the caret sits down the column: {caret:?}"
+    );
+    pointer.text_edit(&mut ed, tools::TextEdit::Insert("X"));
+    pointer.text_edit(&mut ed, tools::TextEdit::Confirm);
+    assert_eq!(
+        texts(&ed),
+        vec!["ABXCD".to_string()],
+        "the click placed the caret before the third cell"
+    );
+}
