@@ -150,7 +150,8 @@ impl ContentAwareMoveTool {
             (x >= 0 && y >= 0 && (x as usize) < cw && (y as usize) < ch)
                 .then(|| y as usize * cw + x as usize)
         };
-        let point = |i: usize| IVec2::new((x0 + (i % cw) as i64) as i32, (y0 + (i / cw) as i64) as i32);
+        let point =
+            |i: usize| IVec2::new((x0 + (i % cw) as i64) as i32, (y0 + (i / cw) as i64) as i32);
         let original: Vec<[f32; 4]> = (0..cw * ch).map(|i| patch.get(point(i))).collect();
         let cov: Vec<f32> = (0..cw * ch)
             .map(|i| region.coverage_at(point(i)).clamp(0.0, 1.0))
@@ -389,7 +390,8 @@ mod tests {
     fn run(mode: CamMode) -> (MemoryTiles, LayerId, Vec<Command>) {
         let (mut tiles, layer) = fixture();
         let commands = {
-            let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, N, N)).with_layer(layer);
+            let mut ctx =
+                ToolContext::new(&mut tiles, PixelRect::new(0, 0, N, N)).with_layer(layer);
             ctx.selection = Selection::Rect {
                 min: IVec2::new(8, 8),
                 max: IVec2::new(20, 20),
@@ -398,13 +400,19 @@ mod tests {
                 mode,
                 ..ContentAwareMoveTool::default()
             };
-            tool.on_pointer_down(&mut ctx, PointerEvent::at(14.0, 14.0)).unwrap();
-            tool.on_pointer_move(&mut ctx, PointerEvent::at(30.0, 30.0)).unwrap();
-            tool.on_pointer_up(&mut ctx, PointerEvent::at(44.0, 34.0)).unwrap();
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(14.0, 14.0))
+                .unwrap();
+            tool.on_pointer_move(&mut ctx, PointerEvent::at(30.0, 30.0))
+                .unwrap();
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(44.0, 34.0))
+                .unwrap();
             ctx.drain()
         };
         // What the history would install: the transaction's tile delta.
-        if let Some(Command::Transaction { commands: inner, .. }) = commands.first() {
+        if let Some(Command::Transaction {
+            commands: inner, ..
+        }) = commands.first()
+        {
             if let Some(Command::PaintTiles { delta, .. }) = inner.first() {
                 tiles.apply_delta(PixelKey::Layer(layer), delta);
             }
@@ -416,7 +424,10 @@ mod tests {
     fn move_fills_the_source_and_lands_the_patch_as_one_transaction() {
         let (mut tiles, layer, commands) = run(CamMode::Move);
         assert_eq!(commands.len(), 1, "one command: {commands:?}");
-        let Command::Transaction { commands: inner, .. } = &commands[0] else {
+        let Command::Transaction {
+            commands: inner, ..
+        } = &commands[0]
+        else {
             panic!("not a transaction: {:?}", commands[0]);
         };
         assert!(matches!(inner[0], Command::PaintTiles { .. }));
@@ -448,15 +459,18 @@ mod tests {
         let (mut tiles, layer) = fixture();
         let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, N, N)).with_layer(layer);
         let mut tool = ContentAwareMoveTool::default();
-        tool.on_pointer_down(&mut ctx, PointerEvent::at(5.0, 5.0)).unwrap();
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(5.0, 5.0))
+            .unwrap();
         for p in [(25.0, 5.0), (25.0, 25.0), (5.0, 25.0)] {
-            tool.on_pointer_move(&mut ctx, PointerEvent::at(p.0, p.1)).unwrap();
+            tool.on_pointer_move(&mut ctx, PointerEvent::at(p.0, p.1))
+                .unwrap();
         }
         assert!(matches!(
             tool.live_geometry(),
             Some(crate::tool::SessionGeometry::Lasso { .. })
         ));
-        tool.on_pointer_up(&mut ctx, PointerEvent::at(5.0, 5.0)).unwrap();
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(5.0, 5.0))
+            .unwrap();
         assert!(ctx.commands().is_empty());
         assert_eq!(ctx.selection_edits().len(), 1);
         assert!(!tool.is_active());
@@ -467,7 +481,8 @@ mod tests {
         let mut tool = ContentAwareMoveTool::default();
         tool.set_setting(MODE_KEY, ToolSetting::Choice(1)).unwrap();
         assert_eq!(tool.mode, CamMode::Extend);
-        tool.set_setting(ADAPTATION_KEY, ToolSetting::Float(99.0)).unwrap();
+        tool.set_setting(ADAPTATION_KEY, ToolSetting::Float(99.0))
+            .unwrap();
         assert_eq!(tool.adaptation, MAX_ADAPTATION);
         assert!(tool.set_setting(MODE_KEY, ToolSetting::Float(1.0)).is_err());
         assert!(tool.set_setting("nope", ToolSetting::Bool(true)).is_err());

@@ -2262,6 +2262,12 @@ fn every_palette_tool_has_a_real_route_test_or_an_owner() {
         Artboard,
         CurvaturePen,
         FreeformPen,
+        // W10-A
+        ContentAwareMove,
+        SliceSelect,
+        Spiral,
+        // W10-B
+        Note,
     ];
     // Real-route tests in `thumbnail_workflow.rs` / `thumbnail_reproducers.rs`.
     let elsewhere = [Move, Brush, Eraser, FreeTransform];
@@ -3537,4 +3543,990 @@ fn every_sampling_retouch_tool_writes_the_composite_onto_an_empty_layer() {
             );
         }
     }
+}
+
+// ------------------------------------------------------------ W10-A tools --
+
+/// White with a dark 12 x 12 block over 20..32 on both axes.
+fn dark_block(x: u32, y: u32) -> [u8; 4] {
+    if (20..32).contains(&x) && (20..32).contains(&y) {
+        DARK
+    } else {
+        WHITE
+    }
+}
+
+/// The pixels of `buf` inside the half-open box that are not white.
+fn ink_in(buf: &[u8], x0: u32, y0: u32, x1: u32, y1: u32) -> usize {
+    let mut n = 0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            if px(buf, x, y) != WHITE {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// The layer ids of the active document, depth-first.
+fn layer_ids(ed: &Editor) -> Vec<layer_model::LayerId> {
+    ed.active().unwrap().document.layers.iter_depth_first()
+}
+
+/// The shape layer a shape gesture just made (the one not in `before`).
+fn newest_shape(ed: &Editor, before: &[layer_model::LayerId]) -> layer_model::LayerId {
+    let doc = &ed.active().unwrap().document;
+    layer_ids(ed)
+        .into_iter()
+        .find(|id| {
+            !before.contains(id)
+                && doc
+                    .layers
+                    .get(*id)
+                    .is_some_and(|l| matches!(l.kind, layer_model::LayerKind::Shape(_)))
+        })
+        .expect("the gesture made a shape layer")
+}
+
+#[test]
+fn content_aware_move_moves_the_selected_block_and_fills_where_it_was() {
+    let id = ToolId::ContentAwareMove;
+    let (_dir, mut ed) = open(&dark_block);
+    let mut pointer = ToolPointer::new();
+    marquee(&mut pointer, &mut ed, 16.0, 16.0, 36.0, 36.0);
+    let sel_before = selection(&ed);
+    // Move mode (the default): drag from inside the selection by (60, 50).
+    let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| {
+        drag(p, ed, &[v(26.0, 26.0), v(56.0, 50.0), v(86.0, 76.0)])
+    });
+    assert!(
+        near(px(&run.after, 86, 76), DARK, 8),
+        "the block did not land at the destination: {:?}",
+        px(&run.after, 86, 76)
+    );
+    let hole = px(&run.after, 26, 26);
+    assert!(
+        linear_luminance(hole) > 0.8,
+        "the source was not filled from the white around it: {hole:?}"
+    );
+    // Nothing far from the source and the destination changed.
+    assert_eq!(px(&run.after, 120, 10), WHITE);
+    assert_eq!(px(&run.after, 5, 120), WHITE);
+    // The selection followed the patch, in the same history step.
+    assert_eq!(cov(&ed, 80, 70), 1.0, "the selection did not move");
+    assert_eq!(cov(&ed, 20, 20), 0.0, "the selection stayed behind");
+    undo_restores(&mut ed, id, &run);
+    assert_eq!(
+        selection(&ed),
+        sel_before,
+        "undo did not restore the selection"
+    );
+
+    // Extend mode: the copy lands and the source stays.
+    let (_dir, mut ed) = open(&dark_block);
+    let mut pointer = ToolPointer::new();
+    marquee(&mut pointer, &mut ed, 16.0, 16.0, 36.0, 36.0);
+    select_tool(&mut ed, id);
+    let d0 = depth(&ed);
+    let seed = vec![(
+        tools::content_aware_move::MODE_KEY.to_string(),
+        tools::ToolSetting::Choice(1),
+    )];
+    let outcomes = seeded_stroke(
+        &mut pointer,
+        &mut ed,
+        &[v(26.0, 26.0), v(86.0, 76.0)],
+        &seed,
+    );
+    all_reached(id, &outcomes);
+    assert_eq!(depth(&ed), d0 + 1, "Extend is one history entry too");
+    let after = composite(&mut ed);
+    assert!(near(px(&after, 86, 76), DARK, 8), "the copy did not land");
+    assert_eq!(px(&after, 26, 26), DARK, "Extend kept the source");
+}
+
+#[test]
+fn slice_select_moves_then_deletes_the_committed_slice_without_a_history_entry() {
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    // A slice committed through the Slice tool's own route.
+    select_tool(&mut ed, ToolId::Slice);
+    all_reached(
+        ToolId::Slice,
+        &drag(&mut pointer, &mut ed, &[v(10.0, 10.0), v(50.0, 40.0)]),
+    );
+    let commit = pointer.commit(&mut ed);
+    assert_eq!(commit.slices.len(), 1, "{commit:?}");
+    let first = commit.slices[0].rect;
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+
+    let id = ToolId::SliceSelect;
+    select_tool(&mut ed, id);
+    // A body drag moves the committed slice by (30, 20).
+    let centre = v(
+        first.x as f32 + first.width as f32 / 2.0,
+        first.y as f32 + first.height as f32 / 2.0,
+    );
+    let outcomes = drag(
+        &mut pointer,
+        &mut ed,
+        &[centre, centre + v(15.0, 10.0), centre + v(30.0, 20.0)],
+    );
+    all_reached(id, &outcomes);
+    let published: Vec<_> = outcomes.iter().filter_map(|o| o.slices.clone()).collect();
+    assert_eq!(published.len(), 1, "one edited set: {outcomes:?}");
+    assert_eq!(published[0].len(), 1, "{published:?}");
+    let moved = published[0][0].rect;
+    assert_eq!(
+        moved,
+        raster::PixelRect::new(first.x + 30, first.y + 20, first.width, first.height),
+        "the slice did not move with the drag"
+    );
+    // The overlay shows the set as the document now holds it.
+    let Some((_, tools::SessionGeometry::SliceSelect { rects, .. })) = pointer.live_geometry()
+    else {
+        panic!("Slice Select shows no slices");
+    };
+    assert_eq!(rects.len(), 1);
+    assert_eq!(rects[0][0], v(moved.x as f32, moved.y as f32));
+
+    // Alt+click on the slice where it now is deletes it: the next press was
+    // built over the set the move committed, not the old one.
+    let outcomes = alt_click(
+        &mut pointer,
+        &mut ed,
+        v(moved.x as f32 + 5.0, moved.y as f32 + 5.0),
+    );
+    all_reached(id, &outcomes);
+    assert_eq!(
+        outcomes.last().unwrap().slices,
+        Some(Vec::new()),
+        "Alt+click did not publish the emptied set"
+    );
+    assert!(
+        pointer.live_geometry().is_none(),
+        "the deleted slice is still drawn"
+    );
+    // A press where the slice first was finds nothing either.
+    click(&mut pointer, &mut ed, centre);
+    assert!(
+        pointer.live_geometry().is_none(),
+        "the old slice came back: the store did not keep the edits"
+    );
+
+    assert_eq!(depth(&ed), d0, "a slice set is not a document edit");
+    assert_eq!(composite(&mut ed), before, "Slice Select touched pixels");
+}
+
+/// W10-A: with the Slice Select tool, Delete (the key's real route: the
+/// keymap, the bridge's pick, then `menu_bridge::perform`) removes the slice
+/// the last press picked instead of clearing pixels; the other slices keep
+/// their names through the edit, so File > Export > Slices writes them under
+/// their own numbers, and a slice given a name in its options is exported
+/// under that name.
+#[test]
+fn slice_select_delete_key_removes_the_picked_slice_and_names_survive_to_the_export() {
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("slices");
+    let (_dir, mut ed) = open_exporting_to(&halves, &out);
+    let mut pointer = ToolPointer::new();
+    // Three slices through the Slice tool's route, committed with Enter.
+    select_tool(&mut ed, ToolId::Slice);
+    let boxes = [
+        (v(4.0, 4.0), v(24.0, 24.0)),
+        (v(40.0, 4.0), v(60.0, 24.0)),
+        (v(80.0, 4.0), v(100.0, 24.0)),
+    ];
+    for (from, to) in boxes {
+        all_reached(ToolId::Slice, &drag(&mut pointer, &mut ed, &[from, to]));
+    }
+    let commit = pointer.commit(&mut ed);
+    assert_eq!(commit.slices.len(), 3, "{commit:?}");
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+
+    // Picking the tool shows the committed set at once — the shell's
+    // pending-session step, which runs after every menu pick and on every
+    // pointer sample — each slice labelled by its name, none picked yet.
+    select_tool(&mut ed, ToolId::SliceSelect);
+    pointer.begin_pending_session(&mut ed, &[]);
+    assert_eq!(
+        slice_overlay(&mut pointer),
+        (3, vec!["01".to_string(), "02".into(), "03".into()], None)
+    );
+
+    // Pick the middle slice with a plain click: the overlay marks it, and
+    // the chrome draws it with the thick selected outline.
+    all_reached(
+        ToolId::SliceSelect,
+        &click(&mut pointer, &mut ed, v(50.0, 14.0)),
+    );
+    assert_eq!(
+        slice_overlay(&mut pointer),
+        (3, vec!["01".to_string(), "02".into(), "03".into()], Some(1))
+    );
+    let (texts, picked_outlines) = painted_slice_overlay(&mut pointer, &mut ed);
+    for label in ["01", "02", "03"] {
+        assert!(
+            texts.iter().any(|t| t == label),
+            "{label} not drawn: {texts:?}"
+        );
+    }
+    assert_eq!(picked_outlines, 1, "the picked slice is not drawn picked");
+
+    // Press Delete.
+    let chord = app_shell::Chord::plain(app_shell::Key::Delete);
+    let Some(app_shell::keymap::Resolved::Menu(action)) = ed.keymap().resolve_any(&chord) else {
+        panic!("Delete does not resolve to a menu action");
+    };
+    let pick = menu_bridge::pick(&ui::Intent::Action(action), &ed)
+        .unwrap_or_else(|| panic!("{action:?} did not route"));
+    let mut frame = ChromeOutput::default();
+    menu_bridge::record(pick, &mut frame);
+    assert_eq!(frame.menu, vec![action], "{frame:?}");
+    let said = menu_bridge::perform(action, &mut ed).expect("Delete performs");
+    assert!(said.contains("slice_02"), "{said}");
+    assert_eq!(depth(&ed), d0, "deleting a slice is not a document edit");
+    assert_eq!(composite(&mut ed), before, "Delete cleared pixels");
+    // The shell's step after the menu pick (no press in between): the
+    // overlay is the store's — the middle slice gone, the survivors keeping
+    // their own labels, nothing picked — and that is what the chrome draws.
+    pointer.begin_pending_session(&mut ed, &[]);
+    let Some((_, tools::SessionGeometry::SliceSelect { rects, .. })) = pointer.live_geometry()
+    else {
+        panic!("Slice Select shows no slices");
+    };
+    assert_eq!(
+        rects,
+        vec![[v(4.0, 4.0), v(24.0, 24.0)], [v(80.0, 4.0), v(100.0, 24.0)]],
+        "the deleted slice is still drawn"
+    );
+    assert_eq!(
+        slice_overlay(&mut pointer),
+        (2, vec!["01".to_string(), "03".into()], None),
+        "the survivor was relabelled by position, or the deleted slice is still picked"
+    );
+    let (texts, picked_outlines) = painted_slice_overlay(&mut pointer, &mut ed);
+    assert!(
+        texts.iter().any(|t| t == "03") && !texts.iter().any(|t| t == "02"),
+        "the canvas labels the survivors by position: {texts:?}"
+    );
+    assert_eq!(picked_outlines, 0, "a deleted slice is still drawn picked");
+    // A press on nothing picks nothing: Delete falls back to Edit > Clear.
+    click(&mut pointer, &mut ed, v(50.0, 14.0));
+    let cleared = menu_bridge::perform(action, &mut ed);
+    assert!(
+        !cleared.as_deref().unwrap_or("").contains("Deleted slice"),
+        "a miss still deleted a slice: {cleared:?}"
+    );
+    // ... and File > Export > Slice Options... has nothing to open over.
+    let options = ui::menu::MenuAction::SliceOptions;
+    let mut host = app_shell::dialog_host::DialogHost::default();
+    assert!(!host.open_for_menu_action(&options, &ed));
+    let refused = menu_bridge::perform(options, &mut ed).unwrap_err();
+    assert!(refused.contains("Slice Select"), "{refused}");
+
+    // Move the last slice: it keeps its name (slice_03), it is not renumbered.
+    let outcomes = drag(
+        &mut pointer,
+        &mut ed,
+        &[v(90.0, 14.0), v(90.0, 34.0), v(90.0, 54.0)],
+    );
+    all_reached(ToolId::SliceSelect, &outcomes);
+    let published: Vec<_> = outcomes.iter().filter_map(|o| o.slices.clone()).collect();
+    assert_eq!(published.len(), 1, "one edited set: {outcomes:?}");
+    let names: Vec<&str> = published[0].iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["slice_01", "slice_03"],
+        "the slices were renumbered"
+    );
+    assert_eq!(published[0][1].rect, raster::PixelRect::new(80, 44, 20, 20));
+
+    // Slice Options on the first slice through its menu row: pick the slice,
+    // click File > Export > Slice Options... (the row resolves, and the
+    // chrome's route hands it to the dialog host), type a name, a URL and an
+    // alt text into the dialog, press Enter; the confirmation rides the
+    // frame's menu picks to the bridge, as every parked dialog's does.
+    click(&mut pointer, &mut ed, v(14.0, 14.0));
+    let ws = ui::Workspace::new();
+    let menu = menu_bridge::context(&mut ed, &ws);
+    let intent = menu_bridge::resolve_intent(options, &menu, &ed)
+        .unwrap_or_else(|why| panic!("Slice Options is disabled: {why}"));
+    assert_eq!(intent, ui::Intent::Action(options));
+    assert!(
+        host.open_for_menu_action(&options, &ed),
+        "Slice Options did not open over the picked slice"
+    );
+    let typed = type_into_slice_options(
+        &mut host,
+        &["hero", "https://example.com/hero?a=1&b=2", "The \"hero\""],
+    );
+    assert!(!host.is_open(), "Enter did not close Slice Options");
+    assert_eq!(typed.menu, vec![options], "{typed:?}");
+    let said = menu_bridge::perform(options, &mut ed).expect("the options apply");
+    assert!(said.contains("hero"), "{said}");
+    // The overlay follows the rename in the same frame.
+    pointer.begin_pending_session(&mut ed, &[]);
+    assert_eq!(
+        slice_overlay(&mut pointer),
+        (2, vec!["hero".to_string(), "03".into()], Some(0))
+    );
+    // The store refuses a name another slice has (the dialog blocks it too).
+    assert!(
+        app_shell::slices_export::set_slice_options(
+            &mut ed,
+            1,
+            tools::slice_select::SliceOptions::named("hero"),
+        )
+        .is_err(),
+        "two slices took one name"
+    );
+
+    ui::dialogs::export_as::forget_last_confirmed_entry();
+    let said =
+        menu_bridge::perform(ui::menu::MenuAction::ExportSlices, &mut ed).expect("the export");
+    assert!(said.contains("Exported 2 slice(s)"), "{said}");
+    assert!(said.contains("canvas.html"), "{said}");
+    let mut names: Vec<String> = std::fs::read_dir(&out)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["canvas.html", "canvas_03.png", "hero.png"]);
+    let moved = raster::decode_path(&out.join("canvas_03.png")).unwrap();
+    assert_eq!((moved.width, moved.height), (20, 20));
+    // The URL and the alt text are written: the page links the hero slice's
+    // image and gives it its alt text, escaped; the other slice has neither.
+    let page = std::fs::read_to_string(out.join("canvas.html")).unwrap();
+    assert!(
+        page.contains(
+            "<a href=\"https://example.com/hero?a=1&amp;b=2\"><img src=\"hero.png\" \
+             alt=\"The &quot;hero&quot;\" width=\"20\" height=\"20\" \
+             style=\"position:absolute;left:4px;top:4px\"></a>"
+        ),
+        "{page}"
+    );
+    assert!(
+        page.contains("  <img src=\"canvas_03.png\" alt=\"\""),
+        "{page}"
+    );
+}
+
+/// W10-A: the Slice Select overlay as published: how many slices, their
+/// labels, and which one (by place in the drawn list) is picked.
+fn slice_overlay(pointer: &mut ToolPointer) -> (usize, Vec<String>, Option<usize>) {
+    match pointer.live_geometry() {
+        Some((
+            _,
+            tools::SessionGeometry::SliceSelect {
+                rects,
+                labels,
+                picked,
+            },
+        )) => (rects.len(), labels, picked),
+        other => panic!("Slice Select shows no slice set: {other:?}"),
+    }
+}
+
+/// W10-A: publish the live overlay through the production publisher and draw
+/// real chrome frames; the texts painted, and how many rectangles carry the
+/// thick selected-handle outline the painter gives the picked slice.
+fn painted_slice_overlay(pointer: &mut ToolPointer, ed: &mut Editor) -> (Vec<String>, usize) {
+    let ctx = egui::Context::default();
+    app_shell::chrome::install_theme(&ctx, design::Theme::Dark);
+    let style = ui::canvas::CanvasStyle::from_context(&ctx);
+    let picked = style.thick(style.handle_selected);
+    let mut chrome = Chrome::new();
+    let geometry = pointer.live_geometry();
+    chrome.publish_tool_geometry(geometry, ed.active().map(|d| d.id()));
+    let mut shapes = Vec::new();
+    for _ in 0..2 {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..Default::default()
+        };
+        let output = ctx.run(input, |ctx| {
+            chrome.ui(ctx, ed);
+        });
+        shapes = output.shapes.into_iter().map(|c| c.shape).collect();
+    }
+    fn flat(shapes: Vec<egui::Shape>, out: &mut Vec<egui::Shape>) {
+        for s in shapes {
+            match s {
+                egui::Shape::Vec(inner) => flat(inner, out),
+                other => out.push(other),
+            }
+        }
+    }
+    let mut all = Vec::new();
+    flat(shapes, &mut all);
+    let texts = all
+        .iter()
+        .filter_map(|s| match s {
+            egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    let outlines = all
+        .iter()
+        .filter(|s| matches!(s, egui::Shape::Rect(r) if r.stroke == picked))
+        .count();
+    (texts, outlines)
+}
+
+/// W10-A: drive the open Slice Options dialog with real keyboard input: the
+/// name field has focus when it opens, so Ctrl+A and the first text replace
+/// the name; Tab moves to the URL and then the alt text, each typed in turn;
+/// Enter confirms. Returns what the frames put in the chrome output.
+fn type_into_slice_options(
+    host: &mut app_shell::dialog_host::DialogHost,
+    fields: &[&str; 3],
+) -> ChromeOutput {
+    let ctx = egui::Context::default();
+    app_shell::chrome::install_theme(&ctx, design::Theme::Dark);
+    let mut out = ChromeOutput::default();
+    let key = |key: egui::Key, modifiers: egui::Modifiers| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    };
+    let mut run = |events: Vec<egui::Event>, modifiers: egui::Modifiers| {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            events,
+            modifiers,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| host.ui(ctx, None, &mut out));
+    };
+    let none = egui::Modifiers::default();
+    for _ in 0..2 {
+        run(Vec::new(), none);
+    }
+    run(
+        vec![key(egui::Key::A, egui::Modifiers::COMMAND)],
+        egui::Modifiers::COMMAND,
+    );
+    run(vec![egui::Event::Text(fields[0].into())], none);
+    for field in &fields[1..] {
+        run(vec![key(egui::Key::Tab, none)], none);
+        run(vec![egui::Event::Text((*field).into())], none);
+    }
+    run(vec![key(egui::Key::Enter, none)], none);
+    out
+}
+
+#[test]
+fn spiral_drag_draws_one_shape_layer_whose_arms_wind_the_chosen_turns() {
+    let id = ToolId::Spiral;
+    let (_dir, mut ed) = open(&white);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let draw = |pointer: &mut ToolPointer, ed: &mut Editor, clockwise: bool| {
+        let seed = vec![
+            ("turns".to_string(), tools::ToolSetting::Float(3.0)),
+            ("inner_radius".to_string(), tools::ToolSetting::Float(0.1)),
+            (
+                "direction".to_string(),
+                tools::ToolSetting::Choice(if clockwise { 0 } else { 1 }),
+            ),
+        ];
+        let before_layers = layer_ids(ed);
+        let d0 = depth(ed);
+        let outcomes = seeded_stroke(
+            pointer,
+            ed,
+            &[v(24.0, 24.0), v(64.0, 64.0), v(104.0, 104.0)],
+            &seed,
+        );
+        all_reached(id, &outcomes);
+        assert_eq!(depth(ed), d0 + 1, "one spiral drag is one history entry");
+        newest_shape(ed, &before_layers)
+    };
+    let cw_layer = draw(&mut pointer, &mut ed, true);
+    let cw = composite(&mut ed);
+    // Ink only inside the drag box.
+    assert_eq!(ink_in(&cw, 0, 0, W, H), ink_in(&cw, 23, 23, 105, 105));
+    // Walk right from the centre along y = 64: three turns cross the ray
+    // three times, so the ink/no-ink state flips about six times.
+    let mut flips = 0;
+    let mut last = false;
+    for x in 64..W {
+        let inked = px(&cw, x, 64) != WHITE;
+        if inked != last {
+            flips += 1;
+            last = inked;
+        }
+    }
+    assert!(
+        (5..=7).contains(&flips),
+        "three turns should cross the ray about six times, got {flips}"
+    );
+    // Undo removes the layer; the other Direction draws the mirror image.
+    undo(&mut ed);
+    assert!(!layer_ids(&ed).contains(&cw_layer));
+    draw(&mut pointer, &mut ed, false);
+    let ccw = composite(&mut ed);
+    assert!(ccw != cw, "Counter-clockwise drew the same pixels");
+    let (a, b) = (
+        ink_in(&cw, 0, 0, W, H) as f64,
+        ink_in(&ccw, 0, 0, W, H) as f64,
+    );
+    assert!(
+        (a - b).abs() / a < 0.05,
+        "mirror images differ in area: {a} vs {b}"
+    );
+}
+
+/// The number of built-in custom shapes: the live Shape list starts with
+/// them (Heart first, Crescent last) and lists defined ones after.
+fn builtin_custom_shapes() -> usize {
+    let (heart, _) = tools::registry::custom_shape_at(0);
+    assert_eq!(heart, "Heart");
+    tools::registry::custom_shape_choices()
+        .iter()
+        .position(|c| *c == "Crescent")
+        .expect("the built-in library ends with the Crescent")
+        + 1
+}
+
+#[test]
+fn define_custom_shape_adds_the_active_shape_to_the_custom_shape_picker_and_the_presets() {
+    let (_dir, mut ed) = open(&white);
+    let mut pointer = ToolPointer::new();
+    let workspace = ui::Workspace::new();
+    let action = ui::menu::MenuAction::DefineCustomShape;
+    // A pixel layer and no path: the menu row is greyed.
+    assert!(
+        app::menu_intent(&workspace, &ed, action).is_none(),
+        "Define Custom Shape was enabled with nothing to define"
+    );
+    // A spiral shape layer, drawn through its tool and made active.
+    select_tool(&mut ed, ToolId::Spiral);
+    let before_layers = layer_ids(&ed);
+    all_reached(
+        ToolId::Spiral,
+        &drag(&mut pointer, &mut ed, &[v(10.0, 10.0), v(60.0, 60.0)]),
+    );
+    let spiral = newest_shape(&ed, &before_layers);
+    ed.set_active_layer(spiral);
+    let spiral_px = composite(&mut ed);
+    let spiral_ink = ink_in(&spiral_px, 0, 0, W, H);
+    let spiral_box = ink_box(&spiral_px);
+    assert!(spiral_ink > 100, "the spiral drew {spiral_ink} pixels");
+    // The Edit menu row is live and performs.
+    assert!(app::menu_intent(&workspace, &ed, action).is_some());
+    let d0 = depth(&ed);
+    let said = menu_bridge::perform(action, &mut ed).expect("Define Custom Shape performs");
+    assert_eq!(depth(&ed), d0, "defining a shape is not a document edit");
+    let name = ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .get(spiral)
+        .unwrap()
+        .name
+        .clone();
+    assert!(said.contains(&name), "{said}");
+    // Listed in the Custom Shape tool's Shape picker...
+    let index = tools::registry::custom_shape_choices()
+        .iter()
+        .position(|c| *c == name)
+        .expect("the defined shape is in the Shape list");
+    assert!(index >= builtin_custom_shapes());
+    // ...kept in the presets, and written to the presets file.
+    assert!(ed.presets().shapes().iter().any(|s| s.name == name));
+    let file = std::fs::read_to_string(ed.paths().presets_file()).expect("presets written");
+    assert!(file.contains(&name), "the presets file does not hold it");
+
+    // Drawn with the Custom Shape tool, it is the spiral again, fitted into
+    // the new box: the same ink, in the new place only.
+    undo(&mut ed);
+    assert!(!layer_ids(&ed).contains(&spiral), "undo removed the spiral");
+    assert_eq!(ink_in(&composite(&mut ed), 0, 0, W, H), 0);
+    select_tool(&mut ed, ToolId::CustomShape);
+    let seed = vec![("preset".to_string(), tools::ToolSetting::Choice(index))];
+    let outcomes = seeded_stroke(
+        &mut pointer,
+        &mut ed,
+        &[v(70.0, 70.0), v(120.0, 120.0)],
+        &seed,
+    );
+    all_reached(ToolId::CustomShape, &outcomes);
+    let drawn = composite(&mut ed);
+    let inside = ink_in(&drawn, 69, 69, 121, 121);
+    assert_eq!(ink_in(&drawn, 0, 0, W, H), inside, "ink outside the box");
+    // A custom shape is fitted by its own bounds, so the spiral's outline
+    // (which does not reach every side of its drag box) now fills the 50 x
+    // 50 box: the same ink, scaled by the ratio of the two boxes.
+    let (x0, y0, x1, y1) = ink_box(&drawn);
+    assert!(
+        x1 - x0 >= 48 && y1 - y0 >= 48,
+        "the shape does not fill its box: {:?}",
+        (x0, y0, x1, y1)
+    );
+    let (sx0, sy0, sx1, sy1) = spiral_box;
+    let scale = f64::from((x1 - x0) * (y1 - y0)) / f64::from((sx1 - sx0) * (sy1 - sy0));
+    let expected = spiral_ink as f64 * scale;
+    assert!(
+        (inside as f64 - expected).abs() / expected < 0.1,
+        "the custom shape is not the spiral: {inside} vs {expected:.0} pixels"
+    );
+}
+
+#[test]
+fn link_layers_makes_an_independent_group_per_click_and_a_move_takes_its_group_only() {
+    let (_dir, mut ed) = open(&white);
+    let mut pointer = ToolPointer::new();
+    let add = |ed: &mut Editor, name: &str| {
+        let doc = ed.active_mut().unwrap();
+        let id = doc.add_layer(layer_model::Layer::raster(name));
+        doc.fill_layer(id, BLUE);
+        id
+    };
+    let [a, b, c, d, e, f] = ["A", "B", "C", "D", "E", "F"].map(|n| add(&mut ed, n));
+    let at = |ed: &Editor, id| {
+        ed.active()
+            .unwrap()
+            .document
+            .layers
+            .get(id)
+            .unwrap()
+            .transform
+            .translation
+    };
+    let group = |ed: &Editor, id| {
+        ed.active()
+            .unwrap()
+            .document
+            .layers
+            .get(id)
+            .unwrap()
+            .link_group
+    };
+    let link = |ed: &mut Editor, ids: [layer_model::LayerId; 2]| {
+        ed.set_layer_selection(ids.to_vec(), Some(ids[0]));
+        let d0 = depth(ed);
+        menu_bridge::perform(ui::menu::MenuAction::LinkLayers, ed).expect("Link Layers performs");
+        assert_eq!(depth(ed), d0 + 1, "one click is one history entry");
+    };
+    link(&mut ed, [a, b]);
+    link(&mut ed, [c, d]);
+    assert!(group(&ed, a).is_some() && group(&ed, a) == group(&ed, b));
+    assert!(group(&ed, c).is_some() && group(&ed, c) == group(&ed, d));
+    assert_ne!(
+        group(&ed, a),
+        group(&ed, c),
+        "the second click joined the first group"
+    );
+    // An old document's single chain: E and F carry only the legacy flag.
+    for id in [e, f] {
+        ed.active_mut().unwrap().set_props(
+            id,
+            editor_core::LayerPatch {
+                linked: Some(true),
+                ..editor_core::LayerPatch::default()
+            },
+        );
+    }
+
+    let move_layer = |pointer: &mut ToolPointer, ed: &mut Editor, id| {
+        ed.set_layer_selection(vec![id], Some(id));
+        select_tool(ed, ToolId::Move);
+        let outcomes = drag(pointer, ed, &[v(64.0, 64.0), v(74.0, 64.0), v(84.0, 64.0)]);
+        all_reached(ToolId::Move, &outcomes);
+    };
+    let moved = Vec2::new(20.0, 0.0);
+    // Move A: B comes along; C, D, E and F stay.
+    move_layer(&mut pointer, &mut ed, a);
+    assert_eq!(at(&ed, a), moved);
+    assert_eq!(at(&ed, b), moved, "A's group partner did not move");
+    for id in [c, d, e, f] {
+        assert_eq!(at(&ed, id), Vec2::ZERO, "another group moved");
+    }
+    // Move D: only its own group.
+    move_layer(&mut pointer, &mut ed, d);
+    assert_eq!(at(&ed, c), moved);
+    assert_eq!(at(&ed, a), moved, "group one moved again");
+    assert_eq!(at(&ed, e), Vec2::ZERO);
+    // Move E: the legacy chain moves as one group (E and F), nothing else.
+    move_layer(&mut pointer, &mut ed, e);
+    assert_eq!(at(&ed, f), moved, "the old single chain is one group");
+    assert_eq!(at(&ed, a), moved);
+    assert_eq!(at(&ed, c), moved);
+
+    // Link Layers on a selection that is exactly one group unlinks it.
+    link(&mut ed, [a, b]);
+    assert_eq!(group(&ed, a), None);
+    assert!(!ed.active().unwrap().document.layers.get(a).unwrap().linked);
+    move_layer(&mut pointer, &mut ed, a);
+    assert_eq!(at(&ed, a), moved * 2.0);
+    assert_eq!(at(&ed, b), moved, "an unlinked layer followed");
+    // The unlink undoes in one step.
+    undo(&mut ed); // the last move
+    undo(&mut ed); // the unlink
+    assert!(group(&ed, a).is_some(), "undo did not restore the group");
+    assert_eq!(group(&ed, a), group(&ed, b));
+}
+
+/// One chrome frame on `ctx` with `events` and `modifiers` held, its output
+/// applied to the editor the way `shell.rs` `apply_chrome` applies it: the
+/// layer selection first, then the document commands in order.
+fn applied_chrome_frame(
+    ctx: &egui::Context,
+    chrome: &mut Chrome,
+    ed: &mut Editor,
+    events: Vec<egui::Event>,
+    modifiers: egui::Modifiers,
+) {
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1400.0, 2000.0),
+        )),
+        events,
+        modifiers,
+        ..Default::default()
+    };
+    let mut out = ChromeOutput::default();
+    let _ = ctx.run(input, |ctx| {
+        out = chrome.ui(ctx, ed);
+    });
+    if let Some((layers, active)) = out.select_layers {
+        ed.set_layer_selection(layers, active);
+    } else if let Some(id) = out.select_layer {
+        ed.set_active_layer(id);
+    }
+    for command in out.commands {
+        ed.apply_command(command);
+    }
+}
+
+/// Press and release the primary button over the widget `id` as the last
+/// frame drew it, `modifiers` held (Ctrl adds a Layers row to the panel's
+/// selection), each frame applied by [`applied_chrome_frame`].
+fn applied_chrome_click(
+    ctx: &egui::Context,
+    chrome: &mut Chrome,
+    ed: &mut Editor,
+    id: egui::Id,
+    modifiers: egui::Modifiers,
+) {
+    // Settle first: the rows re-lay out after the last click's edit lands.
+    for _ in 0..2 {
+        applied_chrome_frame(ctx, chrome, ed, Vec::new(), egui::Modifiers::default());
+    }
+    let pos = ctx
+        .read_response(id)
+        .unwrap_or_else(|| panic!("{id:?} was never drawn"))
+        .rect
+        .center();
+    let button = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers,
+    };
+    applied_chrome_frame(
+        ctx,
+        chrome,
+        ed,
+        vec![egui::Event::PointerMoved(pos), button(true)],
+        modifiers,
+    );
+    applied_chrome_frame(ctx, chrome, ed, vec![button(false)], modifiers);
+    applied_chrome_frame(ctx, chrome, ed, Vec::new(), egui::Modifiers::default());
+}
+
+/// W10-A, the Layers panel's own link button (the footer's first button),
+/// driven through real chrome frames: every click links the rows selected in
+/// the panel into a group of their own, a Move drag takes its own group only,
+/// and the same button unlinks, also a group Layer > Link Layers made.
+#[test]
+fn the_layers_panel_link_button_makes_a_group_per_click_and_unlinks_what_it_shows() {
+    let (_dir, mut ed) = open(&white);
+    let mut pointer = ToolPointer::new();
+    let add = |ed: &mut Editor, name: &str| {
+        let doc = ed.active_mut().unwrap();
+        let id = doc.add_layer(layer_model::Layer::raster(name));
+        doc.fill_layer(id, BLUE);
+        id
+    };
+    let [a, b, c, d, e, f] = ["A", "B", "C", "D", "E", "F"].map(|n| add(&mut ed, n));
+    let layer = |ed: &Editor, id| {
+        ed.active()
+            .unwrap()
+            .document
+            .layers
+            .get(id)
+            .unwrap()
+            .clone()
+    };
+    let at = |ed: &Editor, id| layer(ed, id).transform.translation;
+
+    let ctx = egui::Context::default();
+    app_shell::chrome::install_theme(&ctx, design::Theme::Dark);
+    let mut chrome = Chrome::new();
+    for _ in 0..3 {
+        applied_chrome_frame(
+            &ctx,
+            &mut chrome,
+            &mut ed,
+            Vec::new(),
+            egui::Modifiers::default(),
+        );
+    }
+    let plain = egui::Modifiers::default();
+    let ctrl = egui::Modifiers::COMMAND;
+    let row = ui::view::ids::layer_row;
+    let link_button = ui::view::ids::layer_link();
+    // Select two rows in the panel (a click, then a Ctrl+click) and press
+    // the link button.
+    let mut link_in_panel = |ed: &mut Editor, pair: [layer_model::LayerId; 2]| {
+        applied_chrome_click(&ctx, &mut chrome, ed, row(pair[0]), plain);
+        applied_chrome_click(&ctx, &mut chrome, ed, row(pair[1]), ctrl);
+        applied_chrome_click(&ctx, &mut chrome, ed, link_button, plain);
+    };
+
+    link_in_panel(&mut ed, [a, b]);
+    link_in_panel(&mut ed, [c, d]);
+    for id in [a, b, c, d] {
+        assert!(layer(&ed, id).linked, "the panel did not link {id:?}");
+    }
+    let g1 = layer(&ed, a).link_group;
+    let g2 = layer(&ed, c).link_group;
+    assert!(g1.is_some(), "the panel's link left no group id");
+    assert_eq!(layer(&ed, b).link_group, g1, "one click, two groups");
+    assert_eq!(layer(&ed, d).link_group, g2, "one click, two groups");
+    assert_ne!(g1, g2, "the second panel click joined the first group");
+
+    let move_layer = |pointer: &mut ToolPointer, ed: &mut Editor, id| {
+        ed.set_layer_selection(vec![id], Some(id));
+        select_tool(ed, ToolId::Move);
+        let outcomes = drag(pointer, ed, &[v(64.0, 64.0), v(74.0, 64.0), v(84.0, 64.0)]);
+        all_reached(ToolId::Move, &outcomes);
+    };
+    let moved = Vec2::new(20.0, 0.0);
+    move_layer(&mut pointer, &mut ed, a);
+    assert_eq!(
+        at(&ed, b),
+        moved,
+        "A's panel-made group did not move with it"
+    );
+    for id in [c, d, e, f] {
+        assert_eq!(at(&ed, id), Vec2::ZERO, "the other panel group moved");
+    }
+    move_layer(&mut pointer, &mut ed, d);
+    assert_eq!(at(&ed, c), moved);
+    assert_eq!(at(&ed, a), moved, "group one moved with group two");
+
+    // The panel's button unlinks what it shows linked: A and B.
+    link_in_panel(&mut ed, [a, b]);
+    assert!(!layer(&ed, a).linked && !layer(&ed, b).linked);
+    move_layer(&mut pointer, &mut ed, a);
+    assert_eq!(at(&ed, a), moved * 2.0);
+    assert_eq!(at(&ed, b), moved, "B (badge unlinked) still moved with A");
+
+    // A group Layer > Link Layers made, unlinked from the panel.
+    ed.set_layer_selection(vec![e, f], Some(e));
+    menu_bridge::perform(ui::menu::MenuAction::LinkLayers, &mut ed).expect("Link Layers performs");
+    assert!(layer(&ed, e).linked && layer(&ed, e).link_group.is_some());
+    link_in_panel(&mut ed, [e, f]);
+    assert!(!layer(&ed, e).linked, "the panel did not unlink E");
+    move_layer(&mut pointer, &mut ed, e);
+    assert_eq!(at(&ed, e), moved);
+    assert_eq!(
+        at(&ed, f),
+        Vec2::ZERO,
+        "F (badge unlinked) still moved with E: the menu's group outlived the panel's unlink"
+    );
+}
+
+/// The half-open bounding box of the non-white pixels of `buf`.
+fn ink_box(buf: &[u8]) -> (u32, u32, u32, u32) {
+    let (mut x0, mut y0, mut x1, mut y1) = (W, H, 0, 0);
+    for y in 0..H {
+        for x in 0..W {
+            if px(buf, x, y) != WHITE {
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x + 1);
+                y1 = y1.max(y + 1);
+            }
+        }
+    }
+    (x0, y0, x1, y1)
+}
+
+#[test]
+fn define_custom_shape_takes_the_paths_panels_current_path_over_a_pixel_layer() {
+    let (_dir, mut ed) = open(&white);
+    let mut ws = ui::Workspace::new();
+    let action = ui::menu::MenuAction::DefineCustomShape;
+    // A pixel layer and no path: the row is off, with its reason.
+    let ctx = menu_bridge::context(&mut ed, &ws);
+    let off = menu_bridge::resolve(action, &ctx, &ed).expect_err("the row is off");
+    assert!(off.contains("shape layer or a path"), "{off}");
+    // The pen's Work Path is current (the Star outline stands in for a
+    // drawn path): the row is on and performs.
+    let (_, star) = tools::registry::custom_shape_at(1);
+    ws.paths.work_path = Some(star);
+    ws.paths.work_selected = true;
+    let ctx = menu_bridge::context(&mut ed, &ws);
+    let picked = menu_bridge::resolve(action, &ctx, &ed).expect("the row is on");
+    let menu_bridge::Pick::Menu(a) = picked else {
+        panic!("not a menu operation: {picked:?}");
+    };
+    let before = tools::registry::custom_shape_choices().len();
+    let said = menu_bridge::perform(a, &mut ed).expect("Define Custom Shape performs");
+    assert!(said.contains("Custom Shape"), "{said}");
+    let list = tools::registry::custom_shape_choices();
+    assert!(list.len() > before, "nothing joined the Shape list");
+    assert!(
+        list.iter()
+            .skip(builtin_custom_shapes())
+            .any(|c| c.starts_with("Custom Shape") && said.contains(c)),
+        "the defined shape is not listed: {said} / {list:?}"
+    );
+}
+
+/// W10-B: the Note tool, from the palette pick through the shell's pointer
+/// route: a click on the canvas pins a note there (a document record, one
+/// undo step, no pixel touched), a click in the pasteboard pins nothing, and
+/// undo takes the note away.
+#[test]
+fn note_click_pins_a_note_on_the_document_in_one_undo_step() {
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    let id = ToolId::Note;
+    select_tool(&mut ed, id);
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+
+    let outcomes = click(&mut pointer, &mut ed, v(30.5, 20.25));
+    all_reached(id, &outcomes);
+    let notes = ed.active().unwrap().document.extras.notes.clone();
+    assert_eq!(notes.len(), 1, "{outcomes:?}");
+    assert_eq!((notes[0].x, notes[0].y), (30.5, 20.25));
+    assert_eq!(notes[0].text, ui::panels::notes::NEW_NOTE_TEXT);
+    assert_eq!(depth(&ed), d0 + 1, "the pin is one history entry");
+    assert_eq!(composite(&mut ed), before, "a note is not pixels");
+
+    click(&mut pointer, &mut ed, v(-40.0, 20.0));
+    assert_eq!(ed.active().unwrap().document.extras.notes.len(), 1);
+
+    undo(&mut ed);
+    assert!(ed.active().unwrap().document.extras.notes.is_empty());
 }

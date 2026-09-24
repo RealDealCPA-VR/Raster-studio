@@ -1007,6 +1007,10 @@ pub struct ExportPreset {
     /// W7-D: the sample layout the document's colour mode asks for. See
     /// [`ExportInk`].
     pub ink: ExportInk,
+    /// W10-E: the XMP packet (File Info) and EXIF block written into the
+    /// finished file where its container carries them - see
+    /// [`crate::metadata::embed_all`]. Empty by default: nothing is added.
+    pub embedded: crate::metadata::EmbeddedMetadata,
 }
 
 impl Default for ExportPreset {
@@ -1022,6 +1026,7 @@ impl Default for ExportPreset {
             color_space: ColorSpace::Srgb,
             color_handling: ColorHandling::Convert,
             ink: ExportInk::Rgb,
+            embedded: crate::metadata::EmbeddedMetadata::default(),
         }
     }
 }
@@ -1558,6 +1563,7 @@ fn encode_scaled(
             &p.options,
         )?,
     };
+    let bytes = embed_preset_metadata(preset, bytes)?;
     Ok(ExportedFile {
         name: preset.file_name(),
         format: preset.format,
@@ -1576,7 +1582,22 @@ fn write_scaled(
     let p = prepare(scaled, preset, metadata)?;
     // The name is sanitised, so this join cannot leave `dir`.
     let path = dir.join(preset.file_name());
-    if let Some(bytes) = encode_ink(&p, preset)? {
+    // W10-E: metadata is spliced into the finished bytes, so a preset that
+    // carries some is encoded in memory and written through the same atomic
+    // rename the ink route uses.
+    let ink = encode_ink(&p, preset)?;
+    let ink = match ink {
+        None if !preset.embedded.is_empty() => Some(encode_with(
+            preset.format,
+            p.width,
+            p.height,
+            p.pixels.as_pixels(),
+            &p.options,
+        )?),
+        other => other,
+    };
+    if let Some(bytes) = ink {
+        let bytes = embed_preset_metadata(preset, bytes)?;
         // Written beside the target and renamed over it, like the codec's
         // own atomic write: a failure never leaves half a file at `path`.
         let temp = dir.join(format!(".{}.partial", preset.file_name()));
@@ -1596,6 +1617,21 @@ fn write_scaled(
         &p.options,
     )?;
     Ok(path)
+}
+
+/// W10-E: splice `preset.embedded` into an encoded file. A refusal (a
+/// packet too large for a JPEG segment) is an export error naming the
+/// preset, never a silently metadata-less file.
+fn embed_preset_metadata(preset: &ExportPreset, bytes: Vec<u8>) -> Result<Vec<u8>, ExportError> {
+    if preset.embedded.is_empty() {
+        return Ok(bytes);
+    }
+    crate::metadata::embed_all(preset.format, bytes, &preset.embedded).map_err(|e| {
+        ExportError::Preset {
+            name: preset.name.clone(),
+            reason: e.to_string(),
+        }
+    })
 }
 
 /// Run one preset over a linear premultiplied image.

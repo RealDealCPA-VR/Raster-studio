@@ -159,6 +159,8 @@ impl StepKind {
             // W10-B: a comp, note or style record edit changes the document
             // without changing any one layer.
             Command::SetDocumentExtras { .. } => StepKind::LayerChanged,
+            // W10-B: storing an alpha channel edits a saved selection.
+            Command::SetSavedSelection { .. } => StepKind::LayerChanged,
         }
     }
 }

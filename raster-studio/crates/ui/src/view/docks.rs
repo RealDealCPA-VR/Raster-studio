@@ -509,6 +509,23 @@ fn body_of(
         PanelId::Actions => actions_body(w, ui),
         // W10-I: the frame-animation timeline.
         PanelId::Animation => crate::panels::animation::animation_body(w, ui, doc),
+        // W10-B: the document-record panels and the tool presets.
+        PanelId::LayerComps => crate::panels::layer_comps::layer_comps_body(w, ui, doc),
+        PanelId::ToolPresets => crate::panels::tool_presets::tool_presets_body(w, ui),
+        PanelId::Glyphs => crate::panels::glyphs::glyphs_body(w, ui, doc),
+        PanelId::Notes => crate::panels::notes::notes_body(w, ui, doc),
+        PanelId::CharacterStyles => crate::panels::text_styles::styles_body(
+            w,
+            ui,
+            doc,
+            crate::panels::text_styles::StyleKind::Character,
+        ),
+        PanelId::ParagraphStyles => crate::panels::text_styles::styles_body(
+            w,
+            ui,
+            doc,
+            crate::panels::text_styles::StyleKind::Paragraph,
+        ),
     }
 }
 
@@ -914,7 +931,18 @@ pub(crate) fn smart_filter_part_id(layer: LayerId, index: usize, part: &str) -> 
 /// W10-I: the id of one blend-mode choice in a smart filter's Blending
 /// Options row, so a headless test can pick it by name.
 pub(crate) fn smart_filter_mode_id(layer: LayerId, index: usize, mode: BlendMode) -> egui::Id {
-    egui::Id::new(("raster-smart-filter-mode", layer, index, mode.shader_index()))
+    egui::Id::new((
+        "raster-smart-filter-mode",
+        layer,
+        index,
+        mode.shader_index(),
+    ))
+}
+
+/// W10-I: the id of one part of a smart object's filter-mask row — `"well"`
+/// (the thumbnail), `"add"`, `"enable"` or `"delete"`.
+pub(crate) fn smart_filter_mask_id(layer: LayerId, part: &str) -> egui::Id {
+    egui::Id::new(("raster-smart-filter-mask", layer, part))
 }
 
 /// W7-E: the "Smart Filters" block under a smart object's row — a header,
@@ -929,7 +957,15 @@ pub(crate) fn smart_filter_mode_id(layer: LayerId, index: usize, mode: BlendMode
 /// that row's place in the stack ([`compositor::smart::move_filter`]) — and
 /// its blending-options button (part `"blend"`) opens a row under it with
 /// the filter's own blend mode and opacity, Photopea's per-filter Blending
-/// Options.
+/// Options (the opacity slider rides `Intent::EditLayerKind`, so one drag of
+/// it is one undo step).
+///
+/// W10-I: the header row is the filters' shared mask row, as in Photopea:
+/// the filter mask's thumbnail well at its left — a click aims painting at
+/// the mask, the well framed while it is the target — with its enable and
+/// delete buttons at the right; an object without a filter mask shows an
+/// Add Filter Mask button there instead. Each raises the Layer ▸ Smart
+/// Filter row of the same name, after selecting this object.
 fn smart_filter_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document, row: &LayerRow) {
     let Some(layer_model::LayerKind::SmartObject(so)) = doc.layers.get(row.id).map(|l| &l.kind)
     else {
@@ -959,12 +995,67 @@ fn smart_filter_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document, row: &Layer
     let pointer = ui.input(|i| i.pointer.interact_pos());
     let released = ui.input(|i| i.pointer.any_released());
     let mut drop_on: Option<usize> = None;
+    let smart_filter_action = |w: &mut Workspace, op: crate::menu::SmartFilterOp| {
+        w.emit(Intent::SelectLayers {
+            layers: vec![row.id],
+            active: Some(row.id),
+        });
+        w.emit(Intent::Action(crate::menu::MenuAction::SmartFilter(op)));
+    };
     ui.allocate_ui_with_layout(
         Vec2::new(ui.available_width(), height),
         Layout::left_to_right(Align::Center),
         |ui| {
             ui.add_space(indent);
+            match &so.filter_mask {
+                Some(mask) => {
+                    let side = height - Space::XSmall.pt();
+                    let size = Vec2::new(side * 4.0 / 3.0, side);
+                    if filter_mask_well(ui, w, row.id, mask, size).clicked() {
+                        smart_filter_action(w, crate::menu::SmartFilterOp::EditMask);
+                    }
+                }
+                None => {
+                    if icon_action_id(
+                        ui,
+                        "mask",
+                        crate::strings::tr("ui.docks.smart.mask.add"),
+                        ActionState::Idle,
+                        Some(smart_filter_mask_id(row.id, "add")),
+                    )
+                    .clicked()
+                    {
+                        smart_filter_action(w, crate::menu::SmartFilterOp::AddMask);
+                    }
+                }
+            }
             ui.label(hint(ui, crate::strings::tr("ui.docks.smart.filters")));
+            if let Some(mask) = &so.filter_mask {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if icon_action_id(
+                        ui,
+                        "trash",
+                        crate::strings::tr("ui.docks.smart.mask.delete"),
+                        ActionState::Idle,
+                        Some(smart_filter_mask_id(row.id, "delete")),
+                    )
+                    .clicked()
+                    {
+                        smart_filter_action(w, crate::menu::SmartFilterOp::DeleteMask);
+                    }
+                    if icon_toggle_id(
+                        ui,
+                        "eye",
+                        mask.enabled,
+                        crate::strings::tr("ui.docks.smart.mask.enable"),
+                        Some(smart_filter_mask_id(row.id, "enable")),
+                    )
+                    .clicked()
+                    {
+                        smart_filter_action(w, crate::menu::SmartFilterOp::ToggleMask);
+                    }
+                });
+            }
         },
     );
     for index in (0..so.filters.len()).rev() {
@@ -1078,6 +1169,77 @@ fn smart_filter_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document, row: &Layer
     }
 }
 
+/// How strongly a switched-off filter mask's thumbnail is drawn — a
+/// fraction of full strength, not a colour.
+const DIMMED_FILTER_MASK: f32 = 0.4;
+
+/// W10-I: the filter mask's thumbnail well: the application's coverage
+/// thumbnail ([`Workspace::filter_mask_thumbs`]) or, without one, the mask
+/// glyph; dimmed while the mask is switched off, and framed in the
+/// selection colour while it is where painting lands
+/// ([`Workspace::filter_mask_target`]).
+fn filter_mask_well(
+    ui: &mut Ui,
+    w: &Workspace,
+    layer: LayerId,
+    mask: &layer_model::LayerMask,
+    size: Vec2,
+) -> egui::Response {
+    let t = current_tokens(ui);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let response = ui.interact(rect, smart_filter_mask_id(layer, "well"), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            true,
+            crate::strings::tr("ui.docks.smart.mask.thumbnail"),
+        )
+    });
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let radius = Radius::Small.resolve(&t.radii, size.y);
+    super::checkerboard(ui.painter(), rect, Space::XSmall.pt());
+    match w.filter_mask_thumbs.get(&layer) {
+        Some((_, tex)) => {
+            let tint = if mask.enabled {
+                crate::dialogs::controls::UNTINTED
+            } else {
+                crate::dialogs::controls::UNTINTED.gamma_multiply(DIMMED_FILTER_MASK)
+            };
+            ui.painter().image(
+                tex.id(),
+                rect,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+                tint,
+            );
+        }
+        None => {
+            let side = rect.height() * 0.7;
+            let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(side));
+            let role = if mask.enabled {
+                TextRole::Secondary
+            } else {
+                TextRole::Tertiary
+            };
+            super::paint_icon(ui, icon_rect, "mask", role);
+        }
+    }
+    let stroke = if w.filter_mask_target == Some(layer) {
+        egui::Stroke::new(
+            t.borders.thick,
+            color32(t.palette.color(ColorRole::SelectionStroke)),
+        )
+    } else {
+        egui::Stroke::new(
+            t.borders.hairline,
+            color32(t.palette.color(ColorRole::ControlStroke)),
+        )
+    };
+    ui.painter().rect_stroke(rect, rounding(radius), stroke);
+    response.on_hover_text(crate::strings::tr("ui.docks.smart.mask.thumbnail"))
+}
+
 /// W10-I: one smart filter's Blending Options, as a row under the filter:
 /// its blend mode and its opacity, each change one stack command. The
 /// compositor lands the filtered result through exactly these two
@@ -1129,7 +1291,10 @@ fn smart_filter_blend_row(
                 stack[index].blend_mode = picked;
                 emit_stack(w, stack);
             }
-            ui.label(hint(ui, "Opacity"));
+            ui.label(hint(
+                ui,
+                crate::strings::tr("ui.layer_style.blending.opacity"),
+            ));
             let slider = ui.add(
                 egui::Slider::new(&mut opacity, 0.0..=100.0)
                     .max_decimals(0)
@@ -1140,10 +1305,22 @@ fn smart_filter_blend_row(
                 slider.rect,
                 smart_filter_part_id(layer, index, "opacity"),
             );
-            if slider.changed() {
-                let mut stack = so.filters.clone();
-                stack[index].opacity = (opacity / 100.0).clamp(0.0, 1.0);
-                emit_stack(w, stack);
+            // A drag emits on every frame the pointer moves, so the opacity
+            // travels as an `Intent::EditLayerKind`: the application folds
+            // every frame of one drag into one undo step (the Properties
+            // sliders' route), where a plain `SetLayerKind` would push one
+            // step per frame. A frame whose value only re-reads the stored
+            // one (the slider reports a change as the button is released
+            // over it) emits nothing: an edit on the release frame carries no
+            // gesture and would land as a step of its own.
+            let value = (opacity / 100.0).clamp(0.0, 1.0);
+            if slider.changed() && (value - filter.effective_opacity()).abs() > 1e-4 {
+                let mut next = so.clone();
+                next.filters[index].opacity = value;
+                w.emit(Intent::EditLayerKind {
+                    layer,
+                    kind: Box::new(layer_model::LayerKind::SmartObject(next)),
+                });
             }
         },
     );
@@ -2366,6 +2543,10 @@ fn properties_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &His
         PropertiesSubject::Layer(id) => {
             layer_properties(w, ui, doc, id);
             transform_block(w, ui, doc, id);
+            // W10-J: the artboard page (the active artboard, then the list).
+            for intent in crate::panels::properties::ArtboardProperties::show(ui, doc, id) {
+                w.emit(intent);
+            }
         }
         PropertiesSubject::Mask(id) => mask_properties(w, ui, doc, id),
         PropertiesSubject::Adjustment { layer, id } => {
@@ -4836,8 +5017,29 @@ fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Histo
     }
     if let Some(kind) = select {
         if w.channels.selected != kind {
+            let was_mask = matches!(w.channels.selected, ChannelKind::Mask { .. });
             w.channels.selected = kind;
             w.emit(Intent::SelectChannel(kind));
+            // W10-B: selecting a mask channel shows it alone, in grayscale,
+            // and aims painting at it — Photopea's channel isolation — by
+            // making its layer active and its mask the edit target. Leaving
+            // it for a colour channel puts the composite and the content
+            // target back.
+            match kind {
+                ChannelKind::Mask { layer, .. } => {
+                    w.emit(Intent::SelectLayers {
+                        layers: vec![layer],
+                        active: Some(layer),
+                    });
+                    w.emit(Intent::SetEditTarget { mask: true });
+                    w.mask_view = crate::MaskViewMode::Grayscale;
+                }
+                _ if was_mask => {
+                    w.emit(Intent::SetEditTarget { mask: false });
+                    w.mask_view = crate::MaskViewMode::Composite;
+                }
+                _ => {}
+            }
         }
     }
 
@@ -4855,13 +5057,25 @@ fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Histo
 /// that row as the new selection directly. The row never promises an action
 /// no route performs.
 fn saved_selection_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
+    // W10-B: the alpha channel open for editing, if any.
+    let editing = doc.extras.alpha_edit.map(|a| a.index);
+    let mut toggle: Option<usize> = None;
     for (index, (name, _)) in doc.saved_selections.iter().enumerate() {
-        let response = row_layout(ui, |ui| {
+        let row = row_layout(ui, |ui| {
             let t = current_tokens(ui);
             let height = t.metrics.list_row_height - Space::XSmall.pt();
-            // The eye column's width, left empty: an alpha row has no
-            // visibility of its own in this build.
-            ui.add_space(height);
+            // W10-B: the eye shows this alpha channel alone, in grayscale,
+            // and opens it for painting; a second click stores it back.
+            let eye = icon_toggle_id(
+                ui,
+                "eye",
+                editing == Some(index),
+                crate::strings::tr("ui.docks.channels.alpha.edit"),
+                Some(crate::panels::channels::alpha_eye_id(index)),
+            );
+            if eye.clicked() {
+                toggle = Some(index);
+            }
             let size = Vec2::new(height * 4.0 / 3.0, height);
             let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
             if ui.is_rect_visible(rect) {
@@ -4872,9 +5086,12 @@ fn saved_selection_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             }
             ui.add_space(Space::XSmall.pt());
             ui.label(body(ui, name.clone()));
-        })
-        .response
-        .rect;
+            eye.rect.max.x
+        });
+        // The row's click (Load Selection) starts right of the eye, so the
+        // eye keeps its own click.
+        let mut response = row.response.rect;
+        response.min.x = row.inner.max(response.min.x);
         let response = ui
             .interact(response, saved_selection_row_id(index), Sense::click())
             .on_hover_text(crate::strings::tr("ui.docks.channels.saved.hint"));
@@ -4885,6 +5102,22 @@ fn saved_selection_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             let direct = ui.input(|i| i.modifiers.command);
             w.pending_selection_load = Some(crate::SelectionLoadRequest { index, direct });
             w.emit(Intent::Action(crate::menu::MenuAction::LoadSelection));
+        }
+    }
+    // W10-B: the eye opens the channel (or closes the open one). The view
+    // half is this panel's own state — the canvas shows the active layer's
+    // mask alone, which is where the channel is being painted — and the
+    // document half is the application's: the action builds the scratch
+    // layer from the saved coverage, or stores the painted coverage back.
+    if let Some(index) = toggle {
+        if editing == Some(index) {
+            w.mask_view = crate::MaskViewMode::Composite;
+            w.emit(Intent::Action(crate::menu::MenuAction::CloseAlphaChannel));
+        } else {
+            w.mask_view = crate::MaskViewMode::Grayscale;
+            w.emit(Intent::Action(crate::menu::MenuAction::EditAlphaChannel(
+                index,
+            )));
         }
     }
 }
@@ -6717,6 +6950,7 @@ mod tests {
                     asset: layer_model::AssetId::new(),
                     linked: false,
                     filters: stack.clone(),
+                    filter_mask: None,
                 }),
             ))
             .unwrap();
@@ -6825,5 +7059,216 @@ mod tests {
                 index: 0
             })
         );
+    }
+
+    /// W10-I: a smart object whose stack holds `filters`, alone in a
+    /// document, with the headless Layers panel drawn twice.
+    fn w10i_smart_panel(
+        filters: Vec<layer_model::SmartFilter>,
+    ) -> (egui::Context, Workspace, Document, LayerId) {
+        let mut doc = Document::new(64, 64, "Smart");
+        let id = doc
+            .layers
+            .push_root(layer_model::Layer::with_kind(
+                "Smart",
+                layer_model::LayerKind::SmartObject(layer_model::SmartObjectLayer {
+                    asset: layer_model::AssetId::new(),
+                    linked: false,
+                    filters,
+                    filter_mask: None,
+                }),
+            ))
+            .unwrap();
+        (egui::Context::default(), Workspace::new(), doc, id)
+    }
+
+    /// W10-I: the one stack a smart-filter control emitted.
+    fn w10i_stack(id: LayerId, intents: Vec<Intent>) -> Vec<layer_model::SmartFilter> {
+        match intents.as_slice() {
+            [Intent::Document(Command::SetLayerKind { layer_id, kind })] => {
+                assert_eq!(*layer_id, id);
+                match kind.as_ref() {
+                    layer_model::LayerKind::SmartObject(so) => so.filters.clone(),
+                    other => panic!("not a smart object: {other:?}"),
+                }
+            }
+            other => panic!("expected one SetLayerKind, got {other:?}"),
+        }
+    }
+
+    /// W10-I: dragging a smart filter's name onto another filter's row moves
+    /// it to that place in the stack, one command; a drop back on its own
+    /// row emits nothing.
+    #[test]
+    fn dragging_a_smart_filter_onto_another_reorders_the_stack() {
+        use layer_model::SmartFilter;
+        use std::collections::BTreeMap;
+        let stack = vec![
+            SmartFilter::new("GaussianBlur", BTreeMap::new()),
+            SmartFilter::new("Median", BTreeMap::new()),
+            SmartFilter::new("Invert", BTreeMap::new()),
+        ];
+        let (ctx, mut w, doc, id) = w10i_smart_panel(stack.clone());
+        let mut body = |w: &mut Workspace, ui: &mut Ui| layers_body(w, ui, &doc, None);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let _ = w.drain_intents();
+        let name = |i: usize| {
+            ctx.read_response(smart_filter_part_id(id, i, "name"))
+                .unwrap_or_else(|| panic!("filter {i}'s name was not drawn"))
+                .rect
+        };
+        let mut drag = |w: &mut Workspace, from: egui::Pos2, to: egui::Pos2| -> Vec<Intent> {
+            let mut intents = Vec::new();
+            let press = |pressed, pos| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let mut steps = vec![vec![egui::Event::PointerMoved(from), press(true, from)]];
+            for k in 1..=4 {
+                let t = k as f32 / 4.0;
+                steps.push(vec![egui::Event::PointerMoved(from + (to - from) * t)]);
+            }
+            steps.push(vec![press(false, to)]);
+            steps.push(Vec::new());
+            for events in steps {
+                let mut input = screen();
+                input.events = events;
+                let _ = frame_of(&ctx, w, input, &mut body);
+                intents.extend(w.drain_intents());
+            }
+            intents
+        };
+        // Invert (index 2, the top row) dropped on Gaussian Blur's row
+        // (index 0, the bottom): it becomes the first filter applied.
+        let from = name(2).center();
+        let to = name(0).center();
+        let moved = w10i_stack(id, drag(&mut w, from, to));
+        let keys: Vec<&str> = moved.iter().map(|f| f.filter.as_str()).collect();
+        assert_eq!(keys, vec!["Invert", "GaussianBlur", "Median"]);
+        assert_eq!(
+            Some(moved),
+            compositor::smart::move_filter(&stack, 2, 0),
+            "the panel and the engine agree"
+        );
+        // A drag that ends on the row it started from is no move.
+        let from = name(1).center();
+        let intents = drag(&mut w, from, from + egui::vec2(12.0, 0.0));
+        assert!(
+            !intents.iter().any(|i| matches!(i, Intent::Document(_))),
+            "{intents:?}"
+        );
+    }
+
+    /// W10-I: a smart filter's blending-options button opens a row under it
+    /// with the filter's own blend mode and opacity; picking a mode, or
+    /// sliding the opacity, is one stack command carrying just that change.
+    #[test]
+    fn a_smart_filters_blending_options_set_its_mode_and_opacity() {
+        use layer_model::{BlendMode, SmartFilter};
+        use std::collections::BTreeMap;
+        let stack = vec![
+            SmartFilter::new("GaussianBlur", BTreeMap::new()),
+            SmartFilter::new("Median", BTreeMap::new()),
+        ];
+        let (ctx, mut w, doc, id) = w10i_smart_panel(stack.clone());
+        let mut body = |w: &mut Workspace, ui: &mut Ui| layers_body(w, ui, &doc, None);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let _ = w.drain_intents();
+        assert!(
+            ctx.read_response(smart_filter_part_id(id, 0, "mode"))
+                .is_none(),
+            "the row is closed until asked for"
+        );
+        click_id(
+            &ctx,
+            &mut w,
+            smart_filter_part_id(id, 0, "blend"),
+            &mut body,
+        );
+        assert!(
+            w.drain_intents().is_empty(),
+            "opening the row is view state"
+        );
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let part = |p: &str| {
+            ctx.read_response(smart_filter_part_id(id, 0, p))
+                .unwrap_or_else(|| panic!("{p} was not drawn"))
+                .rect
+        };
+        let own_row = part("name");
+        assert!(
+            part("mode").top() >= own_row.bottom(),
+            "the row is under its filter"
+        );
+        assert!(part("mode").right() <= part("opacity").left());
+
+        // The mode: open the combo, pick Multiply.
+        let combo = part("mode").center();
+        let press = |pressed, pos| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(combo), press(true, combo)],
+            vec![press(false, combo)],
+            Vec::new(),
+        ] {
+            let mut input = screen();
+            input.events = events;
+            let _ = frame_of(&ctx, &mut w, input, &mut body);
+        }
+        let _ = w.drain_intents();
+        click_id(
+            &ctx,
+            &mut w,
+            smart_filter_mode_id(id, 0, BlendMode::Multiply),
+            &mut body,
+        );
+        let mut want = stack.clone();
+        want[0].blend_mode = BlendMode::Multiply;
+        assert_eq!(w10i_stack(id, w.drain_intents()), want);
+
+        // The opacity: a press near the slider's left end. (This fixture's
+        // document never takes the command, so the slider keeps re-setting
+        // while the button is held; the press frame's command is the one.)
+        let _ = frame_of(&ctx, &mut w, screen(), &mut body);
+        let slider = part("opacity");
+        let at = egui::pos2(slider.left() + 2.0, slider.center().y);
+        let mut input = screen();
+        input.events = vec![egui::Event::PointerMoved(at), press(true, at)];
+        let _ = frame_of(&ctx, &mut w, input, &mut body);
+        // A slider's value travels as an `EditLayerKind`, which the
+        // application folds per drag (one undo step, not one per frame).
+        let got = match w.drain_intents().as_slice() {
+            [Intent::EditLayerKind { layer, kind }] => {
+                assert_eq!(*layer, id);
+                match kind.as_ref() {
+                    layer_model::LayerKind::SmartObject(so) => so.filters.clone(),
+                    other => panic!("not a smart object: {other:?}"),
+                }
+            }
+            other => panic!("expected one EditLayerKind, got {other:?}"),
+        };
+        let mut input = screen();
+        input.events = vec![press(false, at)];
+        let _ = frame_of(&ctx, &mut w, input, &mut body);
+        let _ = w.drain_intents();
+        assert!(
+            got[0].opacity < 0.2,
+            "the slide lowered the opacity: {:?}",
+            got[0]
+        );
+        assert_eq!(
+            got[0].blend_mode,
+            BlendMode::Normal,
+            "only the opacity changed"
+        );
+        assert_eq!(got[1], stack[1]);
     }
 }

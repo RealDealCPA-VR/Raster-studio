@@ -43,6 +43,9 @@ pub enum EditTargetKind {
     Content,
     /// The active layer's raster mask coverage.
     Mask,
+    /// W10-I: the active smart object's shared smart-filter mask
+    /// ([`layer_model::SmartObjectLayer::filter_mask`]).
+    FilterMask,
 }
 
 impl EditTargetKind {
@@ -75,9 +78,21 @@ impl EditTarget {
         let layer_ref = document.layers.get(layer)?;
         let kind = match kind {
             EditTargetKind::Mask if layer_ref.mask.is_none() => EditTargetKind::Content,
+            EditTargetKind::FilterMask if filter_mask_of(layer_ref).is_none() => {
+                EditTargetKind::Content
+            }
             other => other,
         };
         Some(Self { layer, kind })
+    }
+}
+
+/// W10-I: the filter mask a layer carries — a smart object's shared
+/// smart-filter mask — or `None`.
+pub fn filter_mask_of(layer: &layer_model::Layer) -> Option<&layer_model::LayerMask> {
+    match &layer.kind {
+        layer_model::LayerKind::SmartObject(so) => so.filter_mask.as_ref(),
+        _ => None,
     }
 }
 

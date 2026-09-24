@@ -1358,6 +1358,17 @@ impl Shell {
         if let Some(layer) = output.enter_text_layer {
             self.pointer.enter_text_session(&mut self.editor, layer);
         }
+        // W10-B: a Glyphs panel pick goes to the live session's caret, or to
+        // the end of the layer's text when nobody is typing.
+        for (layer, text) in &output.insert_glyphs {
+            let said = crate::menu_bridge::glyph_insert::insert_glyph(
+                &mut self.pointer,
+                &mut self.editor,
+                *layer,
+                text,
+            );
+            self.editor.set_status(said.unwrap_or_else(|e| e));
+        }
         if let Some(kind) = output.edit_target {
             self.editor.set_edit_target_kind(kind);
         }
@@ -1504,6 +1515,19 @@ impl Shell {
                         // W4-F: a transparent background has no tiles to
                         // carry the depth, so the spec's depth is recorded.
                         doc.set_initial_bit_depth(spec.bit_depth);
+                        // W10-J: the Artboard box makes the canvas an
+                        // artboard of the chosen background.
+                        if spec.artboard {
+                            let background = spec.background.fill().unwrap_or([0.0; 4]);
+                            if let Err(e) =
+                                crate::menu_bridge::artboard_doc::make_canvas_an_artboard(
+                                    &mut self.editor,
+                                    background,
+                                )
+                            {
+                                self.editor.set_status(e);
+                            }
+                        }
                     }
                 }
                 DialogAction::Export(job) => {
@@ -2760,12 +2784,20 @@ mod w5c_tests;
 mod w9l_tests;
 
 #[cfg(test)]
+#[path = "shell_w10j_tests.rs"]
+mod w10j_tests;
+
+#[cfg(test)]
 #[path = "shell_pen_tests.rs"]
 mod pen_tests;
 
 #[cfg(test)]
 #[path = "shell_w7i_tests.rs"]
 mod w7i_tests;
+
+#[cfg(test)]
+#[path = "shell_w10k_tests.rs"]
+mod w10k_tests;
 
 #[cfg(test)]
 mod tests {
@@ -4218,6 +4250,7 @@ mod tests {
                 color_space: color::ColorSpace::Srgb,
                 bit_depth: raster::BitDepth::Sixteen,
                 background,
+                artboard: false,
             };
             shell.apply_chrome(ChromeOutput {
                 dialog: Some(ui::dialogs::DialogAction::NewDocument(Box::new(spec))),
@@ -4267,6 +4300,7 @@ mod tests {
             color_space: color::ColorSpace::Srgb,
             bit_depth: raster::BitDepth::Eight,
             background: ui::dialogs::BackgroundContents::Transparent,
+            artboard: false,
         };
         shell.apply_chrome(ChromeOutput {
             dialog: Some(ui::dialogs::DialogAction::NewDocument(Box::new(spec))),
@@ -6051,6 +6085,7 @@ mod tests {
             color_space: color::ColorSpace::Srgb,
             bit_depth: raster::BitDepth::Eight,
             background: ui::dialogs::BackgroundContents::Transparent,
+            artboard: false,
         };
         shell.apply_chrome(ChromeOutput {
             dialog: Some(ui::dialogs::DialogAction::NewDocument(Box::new(spec))),
@@ -6089,6 +6124,7 @@ mod tests {
             color_space: color::ColorSpace::Srgb,
             bit_depth: raster::BitDepth::Eight,
             background: ui::dialogs::BackgroundContents::White,
+            artboard: false,
         };
         shell.apply_chrome(ChromeOutput {
             dialog: Some(ui::dialogs::DialogAction::NewDocument(Box::new(spec))),
@@ -6106,6 +6142,71 @@ mod tests {
                 .all(|p| *p == [255, 255, 255, 255]),
             "the white background did not composite as white"
         );
+    }
+
+    /// W10-B: the Glyphs panel's pick, performed by the shell: into the live
+    /// session's draft at the caret (not the committed text the draft would
+    /// overwrite), confirmed with the run as one step; with no session, onto
+    /// the end of the layer's text as its own step.
+    #[test]
+    fn a_glyph_pick_lands_at_the_live_sessions_caret_through_the_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shell = shell_with_one_image(dir.path());
+        let layer = layer_model::Layer::with_kind(
+            "Glyph",
+            layer_model::LayerKind::Text(layer_model::TextLayer {
+                text: "ab".to_string(),
+                font_family: "DejaVu Sans".to_string(),
+                size_px: 32.0,
+                ..layer_model::TextLayer::default()
+            }),
+        );
+        let id = layer.id;
+        shell
+            .editor
+            .apply_command(editor_core::Command::create_layer(layer));
+        let text_of = |shell: &Shell| match &shell
+            .editor
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .get(id)
+            .unwrap()
+            .kind
+        {
+            layer_model::LayerKind::Text(t) => t.text.clone(),
+            _ => unreachable!(),
+        };
+        shell.pointer.enter_text_session(&mut shell.editor, id);
+        assert!(shell.pointer.is_text_editing());
+        shell.pointer.text_edit(
+            &mut shell.editor,
+            tools::TextEdit::CaretStep {
+                back: true,
+                extend: false,
+            },
+        );
+        let depth = shell.editor.active().unwrap().history_depth();
+        let pick = |text: &str| ChromeOutput {
+            insert_glyphs: vec![(id, text.to_string())],
+            ..Default::default()
+        };
+        shell.apply_chrome(pick("\u{2014}"));
+        assert_eq!(text_of(&shell), "a\u{2014}b", "at the caret, in the draft");
+        assert!(shell.pointer.is_text_editing(), "the session goes on");
+        assert_eq!(shell.editor.active().unwrap().history_depth(), depth);
+        let out = shell
+            .pointer
+            .text_edit(&mut shell.editor, tools::TextEdit::Confirm);
+        assert_eq!(out.steps, 1, "{out:?}");
+        assert_eq!(text_of(&shell), "a\u{2014}b", "the confirm kept the glyph");
+
+        // No session: appended to the committed text, one undo step.
+        shell.apply_chrome(pick("!"));
+        assert_eq!(text_of(&shell), "a\u{2014}b!");
+        shell.editor.dispatch(crate::Action::Undo).unwrap();
+        assert_eq!(text_of(&shell), "a\u{2014}b");
     }
 
     #[test]

@@ -66,11 +66,15 @@ pub fn canvas_items(ctx: &MenuContext) -> Vec<MenuItem> {
 /// the layer-style clipboard, and the merge family.
 ///
 /// Clipping shows the one row that applies: Release on a clipped layer,
-/// Create on any other, as Photopea does. This build keeps no colour label
-/// on a layer, so there is no colour row.
+/// Create on any other, as Photopea does; the mask row says which way it
+/// flips (Disable on an enabled mask, Enable otherwise). Two rows are
+/// relabelled for a menu that has no submenu to name them: the Layer ▸
+/// Rasterize ▸ Layer row reads "Rasterize Layer". This build keeps no colour
+/// label on a layer, so there is no colour row.
 pub fn layer_items(ctx: &MenuContext) -> Vec<MenuItem> {
     let clipped = ctx.active.is_some_and(|l| l.is_clipping);
-    items(
+    let mask_on = ctx.active.is_some_and(|l| l.has_mask && l.mask_enabled);
+    let mut rows = items(
         ctx,
         &[
             MenuAction::BlendingOptions,
@@ -99,8 +103,31 @@ pub fn layer_items(ctx: &MenuContext) -> Vec<MenuItem> {
             MenuAction::MergeVisible,
             MenuAction::FlattenImage,
         ],
-    )
+    );
+    for row in &mut rows {
+        match row.action {
+            MenuAction::Rasterize(crate::menu::RasterizeTarget::Layer) => {
+                row.label = LAYER_ROW_RASTERIZE.to_string();
+            }
+            MenuAction::Mask(crate::menu::MaskOp::Toggle) => {
+                row.label = if mask_on {
+                    LAYER_ROW_DISABLE_MASK
+                } else {
+                    LAYER_ROW_ENABLE_MASK
+                }
+                .to_string();
+            }
+            _ => {}
+        }
+    }
+    rows
 }
+
+/// The layer-row menu's own wording for the rows whose menu-bar label leans
+/// on a submenu's name.
+const LAYER_ROW_RASTERIZE: &str = "Rasterize Layer";
+const LAYER_ROW_DISABLE_MASK: &str = "Disable Layer Mask";
+const LAYER_ROW_ENABLE_MASK: &str = "Enable Layer Mask";
 
 /// The document-tab menu: the close family from the File menu.
 pub fn tab_items(ctx: &MenuContext) -> Vec<MenuItem> {

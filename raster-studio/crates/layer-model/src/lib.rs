@@ -41,6 +41,8 @@ pub mod effects;
 pub mod fill;
 pub mod ids;
 pub mod layer;
+// W10-A: independent link groups (Layer ▸ Link Layers).
+pub mod link_groups;
 pub mod mask;
 pub mod smart_filter;
 pub mod text;
@@ -68,6 +70,8 @@ pub use layer::{ShapeFill, ShapeFillPaint, ShapeGradientFill, ShapeStrokeAlign};
 pub use mask::{LayerMask, MaskError, MaskKind, VectorMask};
 pub use smart_filter::{stack_is_active, SmartFilter, SmartParam};
 pub use tree::{ClippingGroup, DetachedSubtree, LayerTree, TreeError};
+// W10-A: the group an old document's single link chain maps to.
+pub use link_groups::LEGACY_LINK_GROUP;
 // W10-B: the document-level records of the Layer Comps, Notes and style panels.
 pub use doc_extras::{
     AlphaEdit, CharacterStyle, CompLayerState, DocumentExtras, LayerComp, Note, ParagraphStyle,

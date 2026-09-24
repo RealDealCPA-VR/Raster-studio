@@ -127,10 +127,7 @@ impl PerspectiveWarpDialog {
     /// Layout: add the rectangle `a`-`b` (document points) as a quad.
     /// Refused (returns `None`) in Warp mode or when it has no area.
     pub fn add_quad(&mut self, a: [f32; 2], b: [f32; 2]) -> Option<usize> {
-        if self.mode != WarpMode::Layout
-            || (a[0] - b[0]).abs() < 2.0
-            || (a[1] - b[1]).abs() < 2.0
-        {
+        if self.mode != WarpMode::Layout || (a[0] - b[0]).abs() < 2.0 || (a[1] - b[1]).abs() < 2.0 {
             return None;
         }
         let clamp = |p: [f32; 2]| {
@@ -308,7 +305,12 @@ impl PerspectiveWarpDialog {
         let pick = (handle * 2.0) / per_px;
 
         if response.drag_started() {
-            if let Some(pos) = response.interact_pointer_pos() {
+            // Where the button went down, not where the pointer is once the
+            // drag threshold was crossed: a quad starts at the press.
+            let origin = ui
+                .input(|i| i.pointer.press_origin())
+                .or_else(|| response.interact_pointer_pos());
+            if let Some(pos) = origin {
                 let p = to_doc(pos);
                 self.drag = match self.corner_near(p, pick) {
                     Some((quad, corner)) => Some(Drag::Corner { quad, corner }),
@@ -409,7 +411,10 @@ mod tests {
         let mut dialog = PerspectiveWarpDialog::new(&src);
         let q = dialog.add_quad([8.0, 8.0], [40.0, 48.0]).unwrap();
         dialog.set_mode(WarpMode::Warp);
-        assert!(dialog.add_quad([0.0, 0.0], [9.0, 9.0]).is_none(), "no drawing in Warp");
+        assert!(
+            dialog.add_quad([0.0, 0.0], [9.0, 9.0]).is_none(),
+            "no drawing in Warp"
+        );
         dialog.move_corner(q, 1, [46.0, 4.0]);
         let quad = dialog.quads()[q];
         assert_eq!(quad.source[1], [40.0, 8.0]);
@@ -420,7 +425,11 @@ mod tests {
         };
         assert_eq!(spec.image_size, (64, 64));
         assert_ne!(spec.apply(&src), src);
-        assert_eq!(dialog.preview(), spec.apply(&src), "the preview is the full warp");
+        assert_eq!(
+            dialog.preview(),
+            spec.apply(&src),
+            "the preview is the full warp"
+        );
         dialog.reset();
         assert!(dialog.quads().is_empty());
     }
@@ -452,9 +461,16 @@ mod tests {
             pressed,
             modifiers: egui::Modifiers::default(),
         };
-        let drag = |ctx: &egui::Context, d: &mut PerspectiveWarpDialog, from: (f32, f32), to: (f32, f32)| {
+        let drag = |ctx: &egui::Context,
+                    d: &mut PerspectiveWarpDialog,
+                    from: (f32, f32),
+                    to: (f32, f32)| {
             let p0 = at(from.0, from.1);
-            run(ctx, d, vec![egui::Event::PointerMoved(p0), button(p0, true)]);
+            run(
+                ctx,
+                d,
+                vec![egui::Event::PointerMoved(p0), button(p0, true)],
+            );
             for step in 1..=6 {
                 let k = step as f32 / 6.0;
                 let p = at(from.0 + (to.0 - from.0) * k, from.1 + (to.1 - from.1) * k);
@@ -468,11 +484,19 @@ mod tests {
         drag(&ctx, &mut dialog, (10.0, 10.0), (50.0, 44.0));
         assert_eq!(dialog.quads().len(), 1, "one drag, one quad");
         let q = dialog.quads()[0];
-        assert!((q.source[0][0] - 10.0).abs() < 1.5 && (q.source[2][1] - 44.0).abs() < 1.5);
+        assert!(
+            (q.source[0][0] - 10.0).abs() < 1.5 && (q.source[2][1] - 44.0).abs() < 1.5,
+            "the quad spans the drag: {q:?}"
+        );
         // Warp: dragging the top-right corner moves only its target.
         dialog.set_mode(WarpMode::Warp);
         let corner = q.target[1];
-        drag(&ctx, &mut dialog, (corner[0], corner[1]), (corner[0] + 8.0, corner[1] - 6.0));
+        drag(
+            &ctx,
+            &mut dialog,
+            (corner[0], corner[1]),
+            (corner[0] + 8.0, corner[1] - 6.0),
+        );
         let moved = dialog.quads()[0];
         assert_eq!(moved.source, q.source, "the drawn quad is where it was");
         assert!(

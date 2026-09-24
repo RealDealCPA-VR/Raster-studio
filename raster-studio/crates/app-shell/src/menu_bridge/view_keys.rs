@@ -218,7 +218,11 @@ mod tests {
         let (zero_five, _) = opacity_for_key(Some((0, t0)), 5, quick);
         assert_eq!(zero_five, 5, "0 then 5 is 5%");
         let slow = t0 + SECOND_DIGIT_WINDOW + Duration::from_millis(50);
-        assert_eq!(opacity_for_key(pending, 7, slow).0, 70, "a slow key stands alone");
+        assert_eq!(
+            opacity_for_key(pending, 7, slow).0,
+            70,
+            "a slow key stands alone"
+        );
     }
 
     #[test]
@@ -227,7 +231,11 @@ mod tests {
         assert_eq!(stepped_hardness(0.75, true), 1.0);
         assert_eq!(stepped_hardness(1.0, true), 1.0);
         assert_eq!(stepped_hardness(0.0, false), 0.0);
-        assert_eq!(stepped_hardness(0.3, true), 0.5, "0.3 snaps to 0.25 then steps");
+        assert_eq!(
+            stepped_hardness(0.3, true),
+            0.5,
+            "0.3 snaps to 0.25 then steps"
+        );
     }
 
     #[test]
@@ -245,5 +253,188 @@ mod tests {
             .collect();
         assert_eq!(v, vec![10.0, 30.0, 50.0]);
         assert_eq!(h, vec![20.0, 50.0, 80.0]);
+    }
+
+    // ---- the real routes: keymap -> menu action -> `perform` -------------
+
+    fn opened(dir: &std::path::Path) -> Editor {
+        let p = dir.join("a.png");
+        std::fs::write(
+            &p,
+            raster::encode(raster::ExportFormat::Png, 96, 64, &[200u8; 96 * 64 * 4]).unwrap(),
+        )
+        .unwrap();
+        let mut editor = Editor::with_state(
+            crate::prefs::AppPaths::rooted(dir.join("config")),
+            crate::prefs::Preferences::default(),
+            crate::recent::RecentFiles::new(),
+            Box::new(crate::dialogs::ScriptedDialogs::new()),
+        );
+        editor.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+        editor.open_path(&p).unwrap();
+        editor
+    }
+
+    /// The menu action a chord reaches through the default keymap.
+    fn chord_action(chord: crate::keymap::Chord) -> ui::menu::MenuAction {
+        match crate::keymap::Keymap::default().resolve_any(&chord) {
+            Some(crate::keymap::Resolved::Menu(action)) => action,
+            other => panic!("{chord} resolves to {other:?}"),
+        }
+    }
+
+    fn digit(c: char) -> crate::keymap::Chord {
+        crate::keymap::Chord::plain(crate::keymap::Key::character(c))
+    }
+
+    #[test]
+    fn number_keys_set_the_painting_tools_opacity_and_two_quick_ones_are_exact() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        ed.set_tool(tools::ToolId::Brush);
+        let five = chord_action(digit('5'));
+        assert_eq!(five, ui::menu::MenuAction::ToolOpacity(5));
+        assert_eq!(super::super::perform(five, &mut ed).unwrap(), "Opacity 50%");
+        assert!((ed.brush().opacity - 0.5).abs() < 1e-6);
+        // A second 5 at once: 55%, exactly.
+        super::super::perform(chord_action(digit('5')), &mut ed).unwrap();
+        assert!(
+            (ed.brush().opacity - 0.55).abs() < 1e-6,
+            "{}",
+            ed.brush().opacity
+        );
+        // A slow key stands alone; 0 is 100%.
+        let later = Instant::now() + SECOND_DIGIT_WINDOW * 2;
+        tool_opacity_at(&mut ed, 0, later).unwrap();
+        assert!((ed.brush().opacity - 1.0).abs() < 1e-6);
+        // The Move tool has no opacity: refused with the reason.
+        ed.set_tool(tools::ToolId::Move);
+        let refused = super::super::perform(chord_action(digit('3')), &mut ed).unwrap_err();
+        assert!(refused.contains("no opacity"), "{refused}");
+    }
+
+    #[test]
+    fn shift_brackets_step_the_brush_hardness_by_a_quarter() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        ed.set_tool(tools::ToolId::Brush);
+        let mut brush = *ed.brush();
+        brush.hardness = 1.0;
+        ed.set_brush(brush);
+        let size = brush.size;
+        let shift = |c: char| crate::keymap::Chord {
+            ctrl_or_cmd: false,
+            alt: false,
+            shift: true,
+            key: crate::keymap::Key::character(c),
+        };
+        let softer = chord_action(shift('['));
+        assert_eq!(softer, ui::menu::MenuAction::BrushHardness(false));
+        super::super::perform(softer, &mut ed).unwrap();
+        assert!((ed.brush().hardness - 0.75).abs() < 1e-6);
+        super::super::perform(softer, &mut ed).unwrap();
+        assert!((ed.brush().hardness - 0.5).abs() < 1e-6);
+        super::super::perform(chord_action(shift(']')), &mut ed).unwrap();
+        assert!((ed.brush().hardness - 0.75).abs() < 1e-6);
+        assert_eq!(ed.brush().size, size, "the size is untouched");
+    }
+
+    #[test]
+    fn new_guides_from_shape_places_six_guides_as_one_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let shape = layer_model::Layer::with_kind(
+            "Box",
+            layer_model::LayerKind::Shape(layer_model::ShapeLayer::from_svg(
+                "M10 20 H50 V60 H10 Z",
+            )),
+        );
+        let id = shape.id;
+        ed.apply_command(Command::create_layer(shape));
+        ed.active_mut()
+            .unwrap()
+            .document
+            .set_active_layer(Some(id))
+            .unwrap();
+        let before = ed.active().unwrap().document.guides.list.len();
+        let depth = ed.active().unwrap().history.undo_depth();
+        super::super::perform(ui::menu::MenuAction::NewGuidesFromShape, &mut ed).unwrap();
+        let doc = ed.active().unwrap();
+        assert_eq!(doc.history.undo_depth(), depth + 1, "one undo step");
+        let guides = &doc.document.guides.list[before..];
+        assert_eq!(guides.len(), 6);
+        let near = |axis, v: f32| {
+            guides
+                .iter()
+                .any(|g| g.axis == axis && (g.doc - v).abs() <= 1.0)
+        };
+        for v in [10.0, 30.0, 50.0] {
+            assert!(
+                near(GuideAxis::Vertical, v),
+                "a vertical guide at {v}: {guides:?}"
+            );
+        }
+        for v in [20.0, 40.0, 60.0] {
+            assert!(
+                near(GuideAxis::Horizontal, v),
+                "a horizontal guide at {v}: {guides:?}"
+            );
+        }
+        assert!(ed.active_mut().unwrap().undo().unwrap());
+        assert_eq!(ed.active().unwrap().document.guides.list.len(), before);
+    }
+
+    #[test]
+    fn alt_ctrl_t_duplicates_the_layer_and_opens_free_transform_on_the_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        ed.set_tool(tools::ToolId::Brush);
+        let original = ed.active().unwrap().document.active_layer().unwrap();
+        let count = ed
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .iter_depth_first()
+            .len();
+        let chord = crate::keymap::Chord::ctrl_alt(crate::keymap::Key::character('t'));
+        let action = chord_action(chord);
+        assert_eq!(action, ui::menu::MenuAction::DuplicateFreeTransform);
+        super::super::perform(action, &mut ed).unwrap();
+        let doc = ed.active().unwrap();
+        assert_eq!(doc.document.layers.iter_depth_first().len(), count + 1);
+        let active = doc.document.active_layer().unwrap();
+        assert_ne!(active, original, "the copy is the layer being transformed");
+        assert_eq!(ed.tool(), tools::ToolId::FreeTransform);
+    }
+
+    #[test]
+    fn new_guide_layout_opens_from_the_view_menu_and_lands_as_one_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let mut host = crate::dialog_host::DialogHost::default();
+        assert!(host.open_for_menu_action(&ui::menu::MenuAction::NewGuideLayout, &ed));
+        let crate::dialog_host::ActiveDialog::NewGuideLayout(dialog) = host.active_for_test()
+        else {
+            panic!("View > New Guide Layout did not open its dialog");
+        };
+        let mut spec = dialog.spec();
+        spec.columns.count = 2;
+        spec.columns.gutter = 16.0;
+        dialog.set_spec(spec);
+        let confirmed = ui::dialogs::Dialog::confirm(&**dialog);
+        let Some(ui::dialogs::DialogAction::Command(command)) = confirmed else {
+            panic!("the layout confirms to a command");
+        };
+        let depth = ed.active().unwrap().history.undo_depth();
+        ed.apply_command(*command);
+        let doc = ed.active().unwrap();
+        assert_eq!(doc.history.undo_depth(), depth + 1);
+        let xs: Vec<f32> = doc.document.guides.list.iter().map(|g| g.doc).collect();
+        assert_eq!(
+            xs,
+            vec![0.0, 40.0, 56.0, 96.0],
+            "two 40 px columns, a 16 px gutter"
+        );
     }
 }

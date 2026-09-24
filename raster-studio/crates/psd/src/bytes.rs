@@ -41,6 +41,10 @@ pub struct Cursor<'a> {
     pos: usize,
     /// Absolute offset of `data[0]` within the whole file.
     base: usize,
+    /// W10-F: `true` while reading a `.psb` (version 2), whose section and
+    /// channel lengths are 64-bit and whose RLE row counts are 32-bit.
+    /// Inherited by every [`Cursor::sub`].
+    large: bool,
 }
 
 impl<'a> Cursor<'a> {
@@ -49,6 +53,38 @@ impl<'a> Cursor<'a> {
             data,
             pos: 0,
             base: 0,
+            large: false,
+        }
+    }
+
+    /// W10-F: this cursor, reading `.psb` field widths when `large`.
+    pub fn with_large(mut self, large: bool) -> Self {
+        self.large = large;
+        self
+    }
+
+    /// W10-F: whether this cursor reads `.psb` field widths.
+    pub fn is_large(&self) -> bool {
+        self.large
+    }
+
+    /// W10-F: a section or channel length: 32-bit in a `.psd`, 64-bit in a
+    /// `.psb`. A 64-bit length that does not fit a `usize` is refused rather
+    /// than truncated; one that fits is still bounded by the cursor's own
+    /// bytes when it is used.
+    pub fn length(&mut self) -> PsdResult<usize> {
+        if self.large {
+            let at = self.offset();
+            let b = self.take(8)?;
+            let mut a = [0u8; 8];
+            a.copy_from_slice(b);
+            usize::try_from(u64::from_be_bytes(a)).map_err(|_| PsdError::Truncated {
+                needed: usize::MAX,
+                available: self.remaining(),
+                at,
+            })
+        } else {
+            Ok(self.u32()? as usize)
         }
     }
 
@@ -105,6 +141,7 @@ impl<'a> Cursor<'a> {
             data: slice,
             pos: 0,
             base,
+            large: self.large,
         })
     }
 

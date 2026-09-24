@@ -1693,6 +1693,7 @@ fn a_smart_objects_filter_stack_round_trips_through_the_package() {
                 asset: layer_model::AssetId::new(),
                 linked: false,
                 filters: vec![blur, noise],
+                filter_mask: None,
             }),
         ))
         .unwrap();

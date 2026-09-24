@@ -138,6 +138,7 @@ mod tests {
             asset: AssetId::new(),
             linked: false,
             filters: vec![blur(3.5)],
+            filter_mask: None,
         };
         so.filters[0].blend_mode = BlendMode::Multiply;
         so.filters[0].opacity = 0.4;
@@ -152,12 +153,31 @@ mod tests {
             asset: so.asset,
             linked: true,
             filters: Vec::new(),
+            filter_mask: None,
         };
         let json = serde_json::to_string(&bare).unwrap();
         assert!(!json.contains("filters"), "{json}");
+        assert!(!json.contains("filter_mask"), "{json}");
         let old = format!(r#"{{"asset":"{}","linked":true}}"#, so.asset.0);
         let back: SmartObjectLayer = serde_json::from_str(&old).unwrap();
         assert_eq!(back, bare);
+
+        // W10-I: the filters' shared mask round-trips with its flags.
+        let mut mask = crate::LayerMask::new(crate::MaskId::new());
+        mask.inverted = true;
+        mask.enabled = false;
+        let masked = SmartObjectLayer {
+            filter_mask: Some(mask),
+            ..so
+        };
+        let json = serde_json::to_string(&masked).unwrap();
+        let back: SmartObjectLayer = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, masked);
+        assert_eq!(
+            back.active_filter_mask(),
+            None,
+            "a disabled mask is not active"
+        );
     }
 
     #[test]

@@ -124,6 +124,48 @@ pub fn apply_stack(source: &Canvas, stack: &[SmartFilter], runner: SmartFilterRu
     Canvas::from_pixels(rect, current).unwrap_or_else(|_| source.clone())
 }
 
+/// W10-I: [`apply_stack`] seen through the smart filters' shared mask:
+/// `coverage` (one value per pixel of `source`, row-major, already resolved
+/// through the mask's invert and density) weighs the filtered result against
+/// the unfiltered source — 1 shows the filters, 0 the bare source, as
+/// Photopea's filter mask does. `None` is no mask: the stack's result as is.
+/// A coverage of the wrong length is ignored rather than misapplied.
+pub fn apply_stack_masked(
+    source: &Canvas,
+    stack: &[SmartFilter],
+    runner: SmartFilterRunner,
+    coverage: Option<&[f32]>,
+) -> Canvas {
+    let filtered = apply_stack(source, stack, runner);
+    let Some(coverage) = coverage.filter(|c| c.len() == source.pixels().len()) else {
+        return filtered;
+    };
+    let mixed: Vec<[f32; 4]> = source
+        .pixels()
+        .iter()
+        .zip(filtered.pixels())
+        .zip(coverage)
+        .map(|((&src, &fx), &k)| lerp4(src, fx, k.clamp(0.0, 1.0)))
+        .collect();
+    Canvas::from_pixels(source.rect(), mixed).unwrap_or(filtered)
+}
+
+/// W10-I: everything about a filter mask besides its stored tiles that can
+/// change a pixel — whether there is one, and its switch, invert and
+/// density — into `h`, for the filtered extent's cache key.
+pub fn hash_filter_mask<H: Hasher>(mask: Option<&layer_model::LayerMask>, h: &mut H) {
+    match mask {
+        None => 0u8.hash(h),
+        Some(m) => {
+            1u8.hash(h);
+            m.id.0.as_bytes().hash(h);
+            m.enabled.hash(h);
+            m.inverted.hash(h);
+            m.density().to_bits().hash(h);
+        }
+    }
+}
+
 /// One filtered pixel `fx` put back over the pixel it was made from, `below`,
 /// in `mode`. Both premultiplied.
 ///
@@ -472,6 +514,7 @@ mod composite_tests {
                 asset: AssetId::new(),
                 linked: false,
                 filters: Vec::new(),
+                filter_mask: None,
             }),
         ));
         t.paint_tile(id, TileCoord::new(0, 0, 0), [0, 0, 0, 255]);
@@ -624,5 +667,84 @@ mod composite_tests {
             Some(2),
             "reordering never touches the source tiles"
         );
+    }
+
+    fn set_filter_mask(t: &mut TestDoc, id: LayerId, mask: Option<layer_model::LayerMask>) {
+        match &mut t.doc.layers.get_mut(id).unwrap().kind {
+            LayerKind::SmartObject(so) => so.filter_mask = mask,
+            _ => unreachable!(),
+        }
+    }
+
+    /// W10-I: the smart filters' shared mask weighs the filtered result
+    /// against the bare source, pixel by pixel: where it is white the Invert
+    /// shows, where it is black the object's own (black) source does. Its
+    /// switch and its invert are honoured, and the caching tile compositor
+    /// sees a repaint of the mask by key alone.
+    #[test]
+    fn the_filter_mask_limits_the_smart_filters_to_where_it_is_white() {
+        test_runner::install();
+        let (mut t, id) = edge_doc();
+        set_stack(
+            &mut t,
+            id,
+            vec![SmartFilter::new("Invert", BTreeMap::new())],
+        );
+        assert!(
+            (left_tile(&t).get(10, 200)[0] - 1.0).abs() < 1e-5,
+            "no mask: the Invert shows everywhere"
+        );
+        // Top half of the left tile white, bottom half black; the right tile
+        // white.
+        let mask_id = layer_model::MaskId::new();
+        t.paint_mask_with(mask_id, TileCoord::new(0, 0, 0), |_, y| {
+            if y < 128 {
+                255
+            } else {
+                0
+            }
+        });
+        t.paint_mask_tile(mask_id, TileCoord::new(1, 0, 0), 255);
+        let mut mask = layer_model::LayerMask::new(mask_id);
+        set_filter_mask(&mut t, id, Some(mask.clone()));
+        let masked = left_tile(&t);
+        assert!(
+            (masked.get(10, 50)[0] - 1.0).abs() < 1e-5,
+            "white mask: filtered"
+        );
+        assert!(masked.get(10, 200)[0] < 1e-5, "black mask: the bare source");
+        assert!((masked.get(10, 200)[3] - 1.0).abs() < 1e-6);
+
+        // Inverted, the halves swap.
+        mask.inverted = true;
+        set_filter_mask(&mut t, id, Some(mask.clone()));
+        let inverted = left_tile(&t);
+        assert!(inverted.get(10, 50)[0] < 1e-5);
+        assert!((inverted.get(10, 200)[0] - 1.0).abs() < 1e-5);
+
+        // Switched off, the mask is ignored.
+        mask.inverted = false;
+        mask.enabled = false;
+        set_filter_mask(&mut t, id, Some(mask.clone()));
+        assert!((left_tile(&t).get(10, 200)[0] - 1.0).abs() < 1e-5);
+
+        // The caching compositor: repainting the mask reaches the cache.
+        mask.enabled = true;
+        set_filter_mask(&mut t, id, Some(mask));
+        let region = PixelRect::new(0, 0, 512, 256);
+        let mut tc = TileCompositor::new();
+        let before = tc
+            .composite_region(&t.doc, &t.src, region, 0, CompositeOptions::default())
+            .unwrap();
+        assert!(before.get(10, 200)[0] < 1e-5);
+        t.paint_mask_tile(mask_id, TileCoord::new(0, 0, 0), 255);
+        let after = tc
+            .composite_region(&t.doc, &t.src, region, 0, CompositeOptions::default())
+            .unwrap();
+        let cold = TileCompositor::new()
+            .composite_region(&t.doc, &t.src, region, 0, CompositeOptions::default())
+            .unwrap();
+        assert_eq!(after, cold, "a mask repaint served a stale tile");
+        assert!((after.get(10, 200)[0] - 1.0).abs() < 1e-5);
     }
 }

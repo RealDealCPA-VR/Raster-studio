@@ -120,9 +120,7 @@ impl BitmapMethod {
     pub fn is_valid(self) -> bool {
         match self {
             BitmapMethod::Halftone(h) => {
-                h.cell.is_finite()
-                    && (MIN_CELL..=MAX_CELL).contains(&h.cell)
-                    && h.angle.is_finite()
+                h.cell.is_finite() && (MIN_CELL..=MAX_CELL).contains(&h.cell) && h.angle.is_finite()
             }
             _ => true,
         }
@@ -178,40 +176,70 @@ pub fn to_bitmap(gray: &[u8], width: usize, height: usize, method: BitmapMethod)
                     let v = (-x * sin + y * cos) / screen.cell;
                     let (fu, fv) = (u - u.floor() - 0.5, v - v.floor() - 0.5);
                     let darkness = 1.0 - f32::from(g) / 255.0;
-                    bw(spot_rank(screen.shape, fu, fv) >= darkness)
+                    bw(spot_rank(screen.shape, fu, fv, 0.5 / screen.cell) >= darkness)
                 })
                 .collect()
         }
     }
 }
 
-/// The fraction of a cell inked before the point at `(fu, fv)` (each in
-/// `-0.5..0.5`, the cell centre at the origin) is: a point is inked when
-/// this is below the pixel's darkness, so a flat tone inks about that
-/// fraction of every cell.
-fn spot_rank(shape: HalftoneShape, fu: f32, fv: f32) -> f32 {
-    match shape {
-        // Area of the disc through the point, then its complement's mirror
-        // past the inscribed circle (the dots join at 50%-ish and the white
-        // shrinks to the corners).
+/// The fraction of a cell inked before the pixel at `(fu, fv)` (each in
+/// `-0.5..0.5`, the cell centre at the origin) is, in `0..1`: a pixel is
+/// inked when this is below its darkness, so a flat tone inks about that
+/// fraction of every cell. `h` is half a pixel in cell units.
+///
+/// The dot grows outwards by the shape's distance measure; the area inside
+/// that distance ([`spot_area`]) is the rank. A pixel spans a band of
+/// distances (half a pixel either side), and the pixels of one band would
+/// tie and posterise a small cell into a few rings, so the band is spread by
+/// the pixel's angle around the centre (a whirl order): every pixel of a
+/// cell gets its own rank and a cell of `n` pixels holds `n + 1` tones.
+fn spot_rank(shape: HalftoneShape, fu: f32, fv: f32, h: f32) -> f32 {
+    let (d, spread, turn) = match shape {
+        HalftoneShape::Round => ((fu * fu + fv * fv).sqrt(), h, fv.atan2(fu)),
+        HalftoneShape::Square => (fu.abs().max(fv.abs()), h, fv.atan2(fu)),
+        HalftoneShape::Diamond => (fu.abs() + fv.abs(), 2.0 * h, fv.atan2(fu)),
+        // A line screen grows across the line; along it, the tie-break is
+        // the position on the line.
+        HalftoneShape::Line => (fv.abs(), h, (fu + 0.5) * std::f32::consts::TAU),
+    };
+    let turn = if shape == HalftoneShape::Line {
+        turn / std::f32::consts::TAU
+    } else {
+        (turn + std::f32::consts::PI) / std::f32::consts::TAU
+    };
+    let near = spot_area(shape, (d - spread).max(0.0));
+    let far = spot_area(shape, d + spread);
+    (near + (far - near) * turn.clamp(0.0, 1.0)).clamp(0.0, 0.999_99)
+}
+
+/// The fraction of a unit cell within distance `d` of its centre, by the
+/// shape's distance measure.
+fn spot_area(shape: HalftoneShape, d: f32) -> f32 {
+    let a = match shape {
+        // A disc, clipped by the cell's four edges past the inscribed circle.
         HalftoneShape::Round => {
-            let r2 = fu * fu + fv * fv;
-            (std::f32::consts::PI * r2).min(1.0)
-        }
-        HalftoneShape::Square => {
-            let r = fu.abs().max(fv.abs());
-            (4.0 * r * r).min(1.0)
-        }
-        HalftoneShape::Diamond => {
-            let r = fu.abs() + fv.abs();
-            if r <= 0.5 {
-                2.0 * r * r
+            let disc = std::f32::consts::PI * d * d;
+            if d <= 0.5 {
+                disc
+            } else if d >= std::f32::consts::FRAC_1_SQRT_2 {
+                1.0
             } else {
-                1.0 - 2.0 * (1.0 - r) * (1.0 - r)
+                let segment = d * d * (0.5 / d).acos() - 0.5 * (d * d - 0.25).sqrt();
+                disc - 4.0 * segment
             }
         }
-        HalftoneShape::Line => (2.0 * fv.abs()).min(1.0),
-    }
+        HalftoneShape::Square => 4.0 * d * d,
+        HalftoneShape::Diamond => {
+            if d <= 0.5 {
+                2.0 * d * d
+            } else {
+                1.0 - 2.0 * (1.0 - d).max(0.0).powi(2)
+            }
+        }
+        HalftoneShape::Line => 2.0 * d,
+    };
+    a.clamp(0.0, 1.0)
 }
 
 /// Floyd-Steinberg in serpentine order.
@@ -337,6 +365,28 @@ mod tests {
             ..Halftone::default()
         })
         .is_valid());
+    }
+
+    #[test]
+    fn black_stays_black_and_white_stays_white_under_every_method() {
+        for method in BitmapMethod::ALL {
+            for shape in HalftoneShape::ALL {
+                let method = match method {
+                    BitmapMethod::Halftone(h) => BitmapMethod::Halftone(Halftone { shape, ..h }),
+                    m => m,
+                };
+                let black = to_bitmap(&[0; 40 * 40], 40, 40, method);
+                let white = to_bitmap(&[255; 40 * 40], 40, 40, method);
+                assert!(
+                    black.iter().all(|&v| v == 0),
+                    "{method:?}: black leaked white"
+                );
+                assert!(
+                    white.iter().all(|&v| v == 255),
+                    "{method:?}: white leaked ink"
+                );
+            }
+        }
     }
 
     #[test]

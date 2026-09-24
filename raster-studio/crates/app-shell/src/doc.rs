@@ -159,6 +159,13 @@ pub fn export_format_for(path: &Path) -> Option<raster::ExportFormat> {
         "gif" => raster::ExportFormat::Gif,
         "bmp" | "dib" => raster::ExportFormat::Bmp,
         "tga" => raster::ExportFormat::Tga,
+        // W10-F: Netpbm, DDS (uncompressed BGRA; BC3 is an Export As
+        // choice) and AVIF at quality 80.
+        "ppm" => raster::ExportFormat::Ppm,
+        "pgm" => raster::ExportFormat::Pgm,
+        "pbm" => raster::ExportFormat::Pbm,
+        "dds" => raster::ExportFormat::Dds,
+        "avif" => raster::ExportFormat::Avif(80),
         _ => return None,
     })
 }
@@ -514,6 +521,13 @@ impl OpenDocument {
     ) -> Result<Self, DocumentError> {
         if crate::import::looks_like_psd(path) {
             return OpenDocument::open_psd(id, path, history_depth);
+        }
+        // W10-F: a GIMP `.xcf` opens layered, as File > Open's job opens it.
+        if crate::import::looks_like_xcf(path) {
+            let bytes = crate::import::read_xcf_bytes(path)?;
+            let title = DecodedImage::title_for(path);
+            let import = crate::import::document_from_xcf(&bytes, &title, history_depth)?;
+            return Ok(OpenDocument::open_psd_import(id, path, import));
         }
         let image = DecodedImage::decode_path(path)?;
         let sixteen_bit = {
@@ -2143,6 +2157,11 @@ impl OpenDocument {
             self.export_psd_to(path)?;
             return Ok(());
         }
+        // W10-F: an SVG keeps shape layers as paths and text as text.
+        if exports_as_svg(path) {
+            self.export_svg_to(path)?;
+            return Ok(());
+        }
         let format = export_format_for(path).ok_or_else(|| {
             DocumentError::UnknownExportFormat(
                 path.extension()
@@ -2161,6 +2180,18 @@ impl OpenDocument {
         let size = (self.document.width(), self.document.height());
         let mode = self.document.meta.color_mode;
         if write_in_document_ink(path, format, mode, size, || self.composite(rect))? {
+            return Ok(());
+        }
+        // W10-H: a 32 Bits/Channel document writes a 32-bit float TIFF.
+        if crate::depth32::write_float_tiff(path, format, &self.document, || {
+            Ok(compositor::composite_region(
+                &self.document,
+                &self.tiles,
+                rect,
+                0,
+                compositor::CompositeOptions::default(),
+            )?)
+        })? {
             return Ok(());
         }
         // A tagged document re-tags: the profile it opened with rides back
@@ -2229,6 +2260,14 @@ impl OpenDocument {
             if layer.mask_id().is_some() {
                 targets.push(editor_core::PixelTarget::Mask(id));
             }
+            // W10-I: a smart object's filter mask is resampled like a mask.
+            let filter_mask = match &layer.kind {
+                layer_model::LayerKind::SmartObject(so) => so.filter_mask.as_ref().map(|m| m.id),
+                _ => None,
+            };
+            if filter_mask.is_some() {
+                targets.push(editor_core::PixelTarget::FilterMask(id));
+            }
             for target in targets {
                 let key = match target {
                     editor_core::PixelTarget::Layer(id) => editor_core::PixelKey::Layer(id),
@@ -2238,12 +2277,26 @@ impl OpenDocument {
                             None => continue,
                         }
                     }
+                    editor_core::PixelTarget::FilterMask(_) => match filter_mask {
+                        Some(mask) => editor_core::PixelKey::Mask(mask),
+                        None => continue,
+                    },
                 };
                 let Some(map) = self.document.pixels.tiles(key) else {
                     continue;
                 };
                 let mut edits: Vec<editor_core::TileEdit> = Vec::new();
                 match key {
+                    // W10-H: a 32-bit document resamples at f32, unclipped.
+                    editor_core::PixelKey::Layer(layer) if self.document.meta.bit_depth == 32 => {
+                        edits = crate::depth32::resample_layer_f32_edits(
+                            &self.document,
+                            &mut self.tiles,
+                            layer,
+                            (dw, dh),
+                            filter,
+                        )?;
+                    }
                     // W7-C: a 16-bit document resamples at 16 bits.
                     editor_core::PixelKey::Layer(_) if self.document.meta.bit_depth == 16 => {
                         edits = depth::resample_layer16_edits(
@@ -2498,8 +2551,16 @@ impl OpenDocument {
                                 .iter()
                                 .flat_map(|c| raster::depth::widen_sample(*c).to_ne_bytes())
                                 .collect();
+                            // W10-H: an f32 tile (a 32-bit document) takes
+                            // the colour as f32, at its 16-byte stride.
+                            let float: Vec<u8> = color
+                                .iter()
+                                .flat_map(|c| (f32::from(*c) / 255.0).to_ne_bytes())
+                                .collect();
                             let px: &[u8] = if data.len() == raster::depth::RGBA16_TILE_BYTES {
                                 &wide
+                            } else if raster::depth32::is_rgbaf32_tile(&data) {
+                                &float
                             } else {
                                 &color
                             };
@@ -3233,6 +3294,17 @@ impl LayerThumbCache {
 #[cfg(test)]
 #[path = "doc_pattern_tests.rs"]
 mod pattern_tests;
+
+// W10-F: SVG export that writes shape layers as paths and text as text.
+#[path = "doc_svg_export.rs"]
+mod svg_export;
+pub use svg_export::{exports_as_svg, vector_svg, write_vector_svg, SvgExport};
+
+// W10-F: the new file formats, opened and exported through the product's
+// own routes.
+#[cfg(test)]
+#[path = "doc_formats_w10f_tests.rs"]
+mod formats_w10f_tests;
 
 #[cfg(test)]
 mod tests {

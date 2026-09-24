@@ -62,7 +62,10 @@ pub enum BlendError {
 }
 
 /// Blend `layers` (bottom first) by `method`.
-pub fn auto_blend(layers: &[FilterBuffer], method: BlendMethod) -> Result<FilterBuffer, BlendError> {
+pub fn auto_blend(
+    layers: &[FilterBuffer],
+    method: BlendMethod,
+) -> Result<FilterBuffer, BlendError> {
     match method {
         BlendMethod::Panorama => panorama(layers),
         BlendMethod::StackImages => focus_stack(layers),
@@ -130,8 +133,8 @@ pub fn focus_stack(layers: &[FilterBuffer]) -> Result<FilterBuffer, BlendError> 
             let mut lap = vec![0.0f32; w * h];
             for y in 0..h as i64 {
                 for x in 0..w as i64 {
-                    let v = at(x - 1, y) + at(x + 1, y) + at(x, y - 1) + at(x, y + 1)
-                        - 4.0 * at(x, y);
+                    let v =
+                        at(x - 1, y) + at(x + 1, y) + at(x, y - 1) + at(x, y + 1) - 4.0 * at(x, y);
                     lap[y as usize * w + x as usize] = v * v;
                 }
             }
@@ -288,12 +291,7 @@ pub fn panorama(layers: &[FilterBuffer]) -> Result<FilterBuffer, BlendError> {
                     }
                 }
             }
-            let feathered = box_blur(
-                &box_blur(&take_b, w, h, SEAM_FEATHER),
-                w,
-                h,
-                SEAM_FEATHER,
-            );
+            let feathered = box_blur(&box_blur(&take_b, w, h, SEAM_FEATHER), w, h, SEAM_FEATHER);
             for i in 0..w * h {
                 if has_a[i] && has_b[i] {
                     take_b[i] = feathered[i];
@@ -439,7 +437,10 @@ mod tests {
     #[test]
     fn fewer_than_two_layers_is_refused() {
         let one = detail(8, 8);
-        assert_eq!(focus_stack(&[one.clone()]), Err(BlendError::TooFewLayers));
+        assert_eq!(
+            focus_stack(std::slice::from_ref(&one)),
+            Err(BlendError::TooFewLayers)
+        );
         let other = detail(9, 8);
         assert_eq!(panorama(&[one, other]), Err(BlendError::SizeMismatch));
     }

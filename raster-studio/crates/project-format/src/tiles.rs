@@ -106,11 +106,11 @@ pub const COMPRESSED_TILE_EXT: &str = "tilez";
 /// size in the store (`raster::depth::widen_rgba8_tile`), and the cap used to
 /// be the RGBA8 size, half of it: every save of a 16-bit document was refused
 /// with [`ProjectError::PackageFileTooLarge`] and the only copy of the work
-/// was the one in memory. An RGBA8 tile is half this and a mask tile an
-/// eighth. A [`raster::PixelFormat::RgbaF32`] tile is twice this; whoever
-/// brings those through [`TileBytes`] raises this one number and both sides
-/// (write and read) move with it.
-pub const MAX_TILE_BYTES: u64 = raster::Tile::byte_len(raster::PixelFormat::Rgba16) as u64;
+/// was the one in memory. W10-H: Image > Mode > 32 Bits/Channel puts
+/// [`raster::PixelFormat::RgbaF32`] tiles (sixteen bytes a pixel) in the
+/// store, so the cap is now that size — the same defect for a 32-bit
+/// document otherwise. An RGBA16 tile is half this, an RGBA8 one a quarter.
+pub const MAX_TILE_BYTES: u64 = raster::Tile::byte_len(raster::PixelFormat::RgbaF32) as u64;
 
 /// Most distinct tiles one package may reference.
 pub const MAX_PACKAGE_TILES: u64 = 1 << 20;
@@ -996,6 +996,23 @@ mod tests {
     }
 
     #[test]
+    fn a_32_bit_tile_saves_and_reopens_byte_for_byte() {
+        // W10-H: a 32 Bits/Channel document's `f32` tile is twice an RGBA16
+        // one; a cap at the RGBA16 size refused every save of it.
+        let dir = tempfile::tempdir().unwrap();
+        let float = raster::depth32::widen_to_rgbaf32_tile(&solid_tile([10, 20, 30, 255])).unwrap();
+        assert_eq!(float.len(), raster::depth32::RGBAF32_TILE_BYTES);
+        let hash = TileHash::of(&float);
+        let doc = doc_with_tile(hash);
+        let mut source = compositor::MemoryTileSource::new();
+        source.insert_bytes(float.clone());
+        write(dir.path(), &doc, &source).expect("a 32-bit tile saves");
+        let mut store = AssetStore::new();
+        assert_eq!(read_tiles(dir.path(), &doc, &mut store).unwrap(), 1);
+        assert_eq!(&*store.get(BlobHash(hash.0)).unwrap(), float.as_slice());
+    }
+
+    #[test]
     fn a_16_bit_tile_saves_and_reopens_byte_for_byte() {
         // W5-B (P0): Image > Mode > 16 Bits puts `Rgba16` tiles — twice the
         // RGBA8 size — in the store, and the cap was the RGBA8 size: every
@@ -1045,7 +1062,8 @@ mod tests {
         );
 
         // And exactly at the cap it still round-trips.
-        let ok = raster::widen_rgba8_tile(&solid_tile([1, 2, 3, 255])).unwrap();
+        // W10-H: the largest tile is a 32-bit (`f32`) one.
+        let ok = raster::depth32::widen_to_rgbaf32_tile(&solid_tile([1, 2, 3, 255])).unwrap();
         assert_eq!(ok.len() as u64, MAX_TILE_BYTES);
         let doc = doc_with_tile(TileHash::of(&ok));
         let mut source = compositor::MemoryTileSource::new();

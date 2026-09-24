@@ -131,6 +131,8 @@ pub mod path_select;
 pub mod pen;
 pub mod pencil;
 pub mod perspective_crop;
+// W10-B.
+pub mod note;
 pub mod registry;
 pub mod select;
 pub mod shape;

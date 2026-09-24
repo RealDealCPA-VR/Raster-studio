@@ -142,7 +142,19 @@ impl PreviewSource {
     ///
     /// An SVG shows the raster it embeds; an ICO shows its largest entry,
     /// which is the one an icon viewer opens.
+    ///
+    /// W10-F: a format this build writes but cannot read back (AVIF) has no
+    /// preview: the encode still runs, so [`PreviewSource::encoded_len`]
+    /// can size it, and this returns `Unsupported`, which the dialog shows as
+    /// "could not be previewed" rather than passing the source off as the
+    /// compressed result.
     pub fn render(&self, format: ExportFormat) -> Result<RenderedPreview, CodecError> {
+        if !format.reads_back() {
+            return Err(CodecError::Unsupported(format!(
+                "{} cannot be read back to preview",
+                format.extension()
+            )));
+        }
         self.encodes.set(self.encodes.get() + 1);
         let bytes = encode(format, self.width, self.height, &self.rgba)?;
         let decoded = match format {
@@ -165,6 +177,16 @@ impl PreviewSource {
             rgba: decoded.rgba8,
             bytes: bytes.len() as u64,
         })
+    }
+}
+
+impl PreviewSource {
+    /// W10-F: the proxy's encoded length in `format`, without decoding it:
+    /// the size estimate for a format [`PreviewSource::render`] cannot
+    /// preview.
+    pub fn encoded_len(&self, format: ExportFormat) -> Result<u64, CodecError> {
+        self.encodes.set(self.encodes.get() + 1);
+        Ok(encode(format, self.width, self.height, &self.rgba)?.len() as u64)
     }
 }
 
@@ -316,6 +338,10 @@ pub struct ExportAsDialog {
     /// through [`Self::set_animation_frames`]. `None` (the host has not said)
     /// and `Some(0)` both mean the Animated option is not offered on any row.
     animation_frames: Option<usize>,
+    /// W10-E: the File Info XMP packet and the source file's EXIF the host
+    /// offered ([`Self::set_metadata`]), and whether the job embeds them.
+    metadata: raster::metadata::EmbeddedMetadata,
+    embed_metadata: bool,
 }
 
 impl std::fmt::Debug for ExportAsDialog {
@@ -364,7 +390,27 @@ impl ExportAsDialog {
             measured: RefCell::new(Vec::new()),
             color_mode: 0,
             animation_frames: None,
+            metadata: raster::metadata::EmbeddedMetadata::default(),
+            embed_metadata: true,
         }
+    }
+
+    /// W10-E: the metadata this document can carry into its files: File
+    /// Info's XMP packet and, when the document was opened from a file that
+    /// had one, that file's EXIF block. Embedded while
+    /// [`Self::embeds_metadata`] (on by default).
+    pub fn set_metadata(&mut self, metadata: raster::metadata::EmbeddedMetadata) {
+        self.metadata = metadata;
+    }
+
+    /// W10-E: whether the job writes [`Self::set_metadata`]'s metadata.
+    pub fn embeds_metadata(&self) -> bool {
+        self.embed_metadata
+    }
+
+    /// W10-E: turn metadata embedding on or off (the Metadata checkbox).
+    pub fn set_embed_metadata(&mut self, on: bool) {
+        self.embed_metadata = on;
     }
 
     /// W9-J: the number of `_a_` frame layers in the document. With `0` the
@@ -511,6 +557,8 @@ impl ExportAsDialog {
         if let Some(entry) = self.entry_mut(self.selected) {
             entry.preset.format = match format {
                 ExportFormat::Jpeg(_) => ExportFormat::Jpeg(quality.unwrap_or(90)),
+                // W10-F: AVIF has a quality too; it carries over likewise.
+                ExportFormat::Avif(_) => ExportFormat::Avif(quality.unwrap_or(80)),
                 other => other,
             };
             if !entry.preset.format.supports_16_bit() {
@@ -519,10 +567,12 @@ impl ExportAsDialog {
         }
     }
 
-    /// The selected row's JPEG quality, or `None` for a format without one.
+    /// The selected row's JPEG (W10-F: or AVIF) quality, or `None` for a
+    /// format without one. WebP has none: the only pure-Rust WebP encoder in
+    /// the tree writes lossless VP8L (see `raster::ExportFormat::WebP`).
     pub fn quality(&self) -> Option<u8> {
         match self.format() {
-            ExportFormat::Jpeg(q) => Some(q),
+            ExportFormat::Jpeg(q) | ExportFormat::Avif(q) => Some(q),
             _ => None,
         }
     }
@@ -539,6 +589,10 @@ impl ExportAsDialog {
         match self.entry_mut(index) {
             Some(entry) if matches!(entry.preset.format, ExportFormat::Jpeg(_)) => {
                 entry.preset.format = ExportFormat::Jpeg(quality);
+                true
+            }
+            Some(entry) if matches!(entry.preset.format, ExportFormat::Avif(_)) => {
+                entry.preset.format = ExportFormat::Avif(quality);
                 true
             }
             _ => false,
@@ -590,7 +644,11 @@ impl ExportAsDialog {
         // A format the codec refuses is cached as a failure too. Retrying a
         // failing encode every frame is the same waste as repeating a
         // successful one, and it is the case a slow machine can least afford.
-        let bytes = self.proxy.render(format).ok().map(|p| p.bytes);
+        let bytes = if format.reads_back() {
+            self.proxy.render(format).ok().map(|p| p.bytes)
+        } else {
+            self.proxy.encoded_len(format).ok()
+        };
         self.measured.borrow_mut().push((format, bytes));
         bytes
     }
@@ -631,9 +689,25 @@ impl ExportAsDialog {
 
     /// The job the dialog currently describes.
     pub fn job(&self) -> ExportJob {
+        // W10-E: every row carries the metadata when embedding is on; the
+        // writer puts in what each container holds (`raster::metadata`).
+        let embedded = if self.embed_metadata {
+            self.metadata.clone()
+        } else {
+            raster::metadata::EmbeddedMetadata::default()
+        };
         ExportJob {
             base_name: self.base_name.clone(),
-            entries: self.entries.iter().filter(|e| e.enabled).cloned().collect(),
+            entries: self
+                .entries
+                .iter()
+                .filter(|e| e.enabled)
+                .cloned()
+                .map(|mut e| {
+                    e.preset.embedded = embedded.clone();
+                    e
+                })
+                .collect(),
         }
     }
 
@@ -850,14 +924,11 @@ impl ExportAsDialog {
         };
         design::inspector_field(ui, "Format", |ui| {
             let mut format = entry.preset.format;
-            if combo(
-                ui,
-                "ex-format",
-                &mut format,
-                &ExportFormat::ALL[..],
-                format_name,
-                |_| None,
-            ) {
+            // W10-F: every writable format, AVIF (write-only) included.
+            let formats = ExportFormat::writable();
+            if combo(ui, "ex-format", &mut format, &formats, format_name, |_| {
+                None
+            }) {
                 self.set_format(format);
             }
         });
@@ -891,10 +962,19 @@ impl ExportAsDialog {
                         numeric(ui, &mut value, 1.0..=100.0, 0, "")
                     })
                     .inner
-                    .on_disabled_hover_text(format!(
-                        "{} is lossless — it has no quality setting",
-                        format_name(entry.preset.format)
-                    ));
+                    .on_disabled_hover_text(
+                        if lossless(entry.preset.format) {
+                            format!(
+                                "{} is lossless — it has no quality setting",
+                                format_name(entry.preset.format)
+                            )
+                        } else {
+                            format!(
+                                "{} has no quality setting",
+                                format_name(entry.preset.format)
+                            )
+                        },
+                    );
                 });
             }
         }
@@ -984,16 +1064,35 @@ impl ExportAsDialog {
                 ),
             );
         }
-        ui.add_enabled_ui(false, |ui| {
-            let mut exif = false;
-            checkbox_row(
-                ui,
-                crate::strings::tr("ui.export_as.embed.exif.and.xmp"),
-                &mut exif,
-            )
-        })
-        .inner
-        .on_disabled_hover_text(crate::strings::tr("ui.export_as.exif.not.implemented"));
+        // W10-E: File Info's XMP (PNG, JPEG, TIFF) and the source's EXIF
+        // (JPEG), written by `raster::metadata` into the finished file.
+        let mut embed = self.embed_metadata;
+        let has_metadata = !self.metadata.is_empty();
+        let response = ui
+            .add_enabled_ui(has_metadata, |ui| {
+                checkbox_row(
+                    ui,
+                    crate::strings::tr("ui.export_as.embed.exif.and.xmp"),
+                    &mut embed,
+                )
+            })
+            .inner;
+        if has_metadata {
+            if response.changed() {
+                self.embed_metadata = embed;
+            }
+            let format = entry.preset.format;
+            let key = if !raster::metadata::carries_xmp(format) {
+                "ui.export_as.metadata.none"
+            } else if matches!(format, ExportFormat::Jpeg(_)) {
+                "ui.export_as.metadata.xmp.exif"
+            } else {
+                "ui.export_as.metadata.xmp"
+            };
+            caption(ui, crate::strings::tr(key));
+        } else {
+            response.on_disabled_hover_text(crate::strings::tr("ui.export_as.metadata.empty"));
+        }
 
         if let Some((w, h)) = self.target_size(index) {
             caption(
@@ -1020,7 +1119,33 @@ pub fn format_name(format: ExportFormat) -> String {
         ExportFormat::Tga => "TGA".to_string(),
         ExportFormat::Ico => "ICO".to_string(),
         ExportFormat::Svg => "SVG".to_string(),
+        // W10-F.
+        ExportFormat::Ppm => "PPM".to_string(),
+        ExportFormat::Pgm => "PGM".to_string(),
+        ExportFormat::Pbm => "PBM".to_string(),
+        ExportFormat::Dds => "DDS".to_string(),
+        ExportFormat::DdsBc3 => "DDS/BC3".to_string(),
+        ExportFormat::Avif(_) => "AVIF".to_string(),
+        // A format the codec gains later reads as its extension until it is
+        // given a name here.
+        #[allow(unreachable_patterns)]
+        other => other.extension().to_uppercase(),
     }
+}
+
+/// W10-F: whether `format` stores the pixels it is given exactly (for an
+/// opaque 8-bit image). PGM / PBM reduce colour and BC3 compresses by
+/// blocks, so neither is "lossless" though neither has a quality.
+fn lossless(format: ExportFormat) -> bool {
+    !matches!(
+        format,
+        ExportFormat::Jpeg(_)
+            | ExportFormat::Avif(_)
+            | ExportFormat::Pgm
+            | ExportFormat::Pbm
+            | ExportFormat::DdsBc3
+            | ExportFormat::Gif
+    )
 }
 
 impl Dialog for ExportAsDialog {
@@ -1042,6 +1167,178 @@ impl Dialog for ExportAsDialog {
 
     fn blocked_reason(&self) -> Option<String> {
         self.job().validation_error()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// W10-E: File ▸ Export ▸ PDF…
+// ---------------------------------------------------------------------------
+
+/// The page a PDF export lays the image on.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum PdfPageSize {
+    /// A page exactly the image's size at the chosen pixels per inch.
+    Image,
+    /// ISO A4, the image fitted and centred.
+    A4,
+    /// US Letter, the image fitted and centred.
+    Letter,
+}
+
+impl PdfPageSize {
+    pub const ALL: [PdfPageSize; 3] = [PdfPageSize::Image, PdfPageSize::A4, PdfPageSize::Letter];
+
+    pub fn label(self) -> String {
+        match self {
+            PdfPageSize::Image => crate::strings::tr("ui.export_pdf.page.image").to_string(),
+            PdfPageSize::A4 => "A4".to_string(),
+            PdfPageSize::Letter => crate::strings::tr("ui.export_pdf.page.letter").to_string(),
+        }
+    }
+}
+
+/// A confirmed PDF export: the page, and the resolution the Image page uses.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct PdfExportSpec {
+    pub page: PdfPageSize,
+    /// Pixels per inch for [`PdfPageSize::Image`], `1..=2400`.
+    pub ppi: f64,
+    /// Turn A4 / Letter sideways.
+    pub landscape: bool,
+}
+
+impl Default for PdfExportSpec {
+    fn default() -> Self {
+        Self {
+            page: PdfPageSize::Image,
+            ppi: 72.0,
+            landscape: false,
+        }
+    }
+}
+
+impl PdfExportSpec {
+    /// The page, in points, for a `width` x `height` image.
+    pub fn page_for(&self, width: u32, height: u32) -> raster::pdf::PdfPage {
+        let paper = match self.page {
+            PdfPageSize::Image => return raster::pdf::PdfPage::at_ppi(width, height, self.ppi),
+            PdfPageSize::A4 => raster::pdf::PdfPage::A4,
+            PdfPageSize::Letter => raster::pdf::PdfPage::LETTER,
+        };
+        if self.landscape {
+            raster::pdf::PdfPage {
+                width_pt: paper.height_pt,
+                height_pt: paper.width_pt,
+            }
+        } else {
+            paper
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.ppi.is_finite() && (1.0..=2400.0).contains(&self.ppi)
+    }
+}
+
+/// File ▸ Export ▸ PDF…: a raster PDF of the composite on a chosen page.
+#[derive(Clone, Debug)]
+pub struct ExportPdfDialog {
+    spec: PdfExportSpec,
+    document: (u32, u32),
+}
+
+impl ExportPdfDialog {
+    /// Over a `width` x `height` document.
+    pub fn new(width: u32, height: u32) -> Self {
+        Self {
+            spec: PdfExportSpec::default(),
+            document: (width.max(1), height.max(1)),
+        }
+    }
+
+    pub fn spec(&self) -> PdfExportSpec {
+        self.spec
+    }
+
+    pub fn set_spec(&mut self, spec: PdfExportSpec) {
+        self.spec = spec;
+    }
+
+    pub fn blocked_reason(&self) -> Option<&'static str> {
+        (!self.spec.is_valid()).then(|| crate::strings::tr("ui.export_pdf.ppi.range"))
+    }
+
+    pub fn confirm(&self) -> Option<PdfExportSpec> {
+        self.spec.is_valid().then_some(self.spec)
+    }
+
+    /// Escape and Enter, without drawing — Escape wins over Enter.
+    pub fn resolve(&self, keys: DialogKeys) -> DialogOutcome<PdfExportSpec> {
+        if keys.cancel {
+            return DialogOutcome::Cancelled;
+        }
+        if keys.confirm {
+            if let Some(spec) = self.confirm() {
+                return DialogOutcome::Confirmed(spec);
+            }
+        }
+        DialogOutcome::Open
+    }
+
+    /// Draw one frame and fold the keyboard and the action row into one
+    /// outcome.
+    pub fn show(&mut self, ctx: &Context) -> DialogOutcome<PdfExportSpec> {
+        let mut outcome = self.resolve(DialogKeys::read(ctx));
+        let drawn = modal(
+            ctx,
+            "w10e-export-pdf",
+            crate::strings::tr("ui.export_pdf.title"),
+            None,
+            DialogWidth::Narrow,
+            |ui| self.body(ui),
+        );
+        if let Some(Some(button)) = drawn {
+            outcome = match button {
+                DialogButton::Cancel => DialogOutcome::Cancelled,
+                DialogButton::Confirm => self
+                    .confirm()
+                    .map_or(DialogOutcome::Open, DialogOutcome::Confirmed),
+                DialogButton::Extra(_) => DialogOutcome::Open,
+            };
+        }
+        outcome
+    }
+
+    fn body(&mut self, ui: &mut egui::Ui) -> Option<DialogButton> {
+        use crate::strings::tr;
+        caption(ui, tr("ui.export_pdf.subtitle"));
+        design::inspector_field(ui, tr("ui.export_pdf.page"), |ui| {
+            combo(
+                ui,
+                "w10e-export-pdf-page",
+                &mut self.spec.page,
+                &PdfPageSize::ALL,
+                PdfPageSize::label,
+                |_| None,
+            );
+        });
+        if self.spec.page == PdfPageSize::Image {
+            design::inspector_field(ui, tr("ui.export_pdf.resolution"), |ui| {
+                numeric(ui, &mut self.spec.ppi, 1.0..=2400.0, 0, "ppi");
+            });
+        } else {
+            checkbox_row(ui, tr("ui.export_pdf.landscape"), &mut self.spec.landscape);
+        }
+        let page = self.spec.page_for(self.document.0, self.document.1);
+        caption(
+            ui,
+            format!(
+                "{:.1} x {:.1} in",
+                page.width_pt / 72.0,
+                page.height_pt / 72.0
+            ),
+        );
+        action_row(ui, tr("ui.export_pdf.export"), self.blocked_reason(), &[])
     }
 }
 
@@ -1434,9 +1731,60 @@ mod tests {
         assert!(!dialog.job().entries[0].animated);
     }
 
+    /// W10-F: the format list the dialog draws offers every new format, and
+    /// AVIF carries a live quality that reaches the row's preset; its size is
+    /// estimated from a real encode while its preview says it cannot be
+    /// shown.
+    #[test]
+    fn the_new_formats_are_offered_and_avif_has_a_quality() {
+        let mut d = dialog();
+        for (format, name) in [
+            (ExportFormat::Ppm, "PPM"),
+            (ExportFormat::Pgm, "PGM"),
+            (ExportFormat::Pbm, "PBM"),
+            (ExportFormat::Dds, "DDS"),
+            (ExportFormat::DdsBc3, "DDS/BC3"),
+            (ExportFormat::Avif(80), "AVIF"),
+        ] {
+            assert!(ExportFormat::writable().contains(&format), "{name}");
+            d.set_format(format);
+            let texts = drawn_texts(&mut d);
+            assert!(
+                texts.iter().any(|t| t == name),
+                "{name} not drawn: {texts:?}"
+            );
+            assert!(
+                d.measure_proxy(0).is_some_and(|b| b > 0),
+                "{name} has no size"
+            );
+        }
+        d.set_format(ExportFormat::Avif(80));
+        assert_eq!(d.quality(), Some(80));
+        assert!(d.set_quality(35));
+        assert_eq!(d.job().entries[0].preset.format, ExportFormat::Avif(35));
+        assert!(
+            d.proxy.render(ExportFormat::Avif(35)).is_err(),
+            "no fake preview"
+        );
+        let texts = drawn_texts(&mut d);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == crate::strings::tr("ui.export_as.this.format.could.not.be.previewed")),
+            "{texts:?}"
+        );
+        // Lower quality, smaller file: the estimate is a real encode.
+        let small = d.proxy.encoded_len(ExportFormat::Avif(10)).unwrap();
+        let large = d.proxy.encoded_len(ExportFormat::Avif(95)).unwrap();
+        assert!(small < large, "{small} vs {large}");
+        // WebP keeps no quality: its encoder is lossless only.
+        d.set_format(ExportFormat::WebP);
+        assert_eq!(d.quality(), None);
+    }
+
     #[test]
     fn it_draws_every_format_in_both_appearances() {
-        for format in ExportFormat::ALL {
+        for format in ExportFormat::writable() {
             frame_both_themes(|ctx| {
                 let mut dialog = dialog();
                 dialog.set_format(format);
@@ -1526,5 +1874,58 @@ mod tests {
                 after - before
             );
         }
+    }
+
+    /// W10-E: the metadata the host offers rides every enabled row's preset
+    /// while embedding is on, and none of them when it is off.
+    #[test]
+    fn the_job_carries_the_offered_metadata_while_embedding_is_on() {
+        let mut dialog = ExportAsDialog::new(20, 10, "Meta", PreviewSource::placeholder(8, 8));
+        assert!(dialog.job().entries[0].preset.embedded.is_empty());
+        let meta = raster::metadata::EmbeddedMetadata {
+            xmp: Some("<x/>".into()),
+            exif: Some(vec![1, 2, 3]),
+        };
+        dialog.set_metadata(meta.clone());
+        dialog.add_entry();
+        assert!(dialog.embeds_metadata(), "on by default");
+        for entry in dialog.job().entries {
+            assert_eq!(entry.preset.embedded, meta);
+        }
+        dialog.set_embed_metadata(false);
+        assert!(dialog
+            .job()
+            .entries
+            .iter()
+            .all(|e| e.preset.embedded.is_empty()));
+    }
+
+    /// W10-E: the PDF page follows the chosen size — the image at its ppi,
+    /// or A4 / Letter, sideways when asked — and a silly ppi blocks.
+    #[test]
+    fn the_pdf_dialog_picks_its_page_and_blocks_a_bad_resolution() {
+        let mut dialog = ExportPdfDialog::new(300, 150);
+        let spec = match dialog.resolve(DialogKeys::CONFIRM) {
+            DialogOutcome::Confirmed(spec) => spec,
+            other => panic!("Enter did not confirm: {other:?}"),
+        };
+        let page = spec.page_for(300, 150);
+        assert_eq!((page.width_pt, page.height_pt), (300.0, 150.0), "72 ppi");
+        dialog.set_spec(PdfExportSpec {
+            page: PdfPageSize::A4,
+            landscape: true,
+            ..PdfExportSpec::default()
+        });
+        let a4 = dialog.spec().page_for(300, 150);
+        assert!(a4.width_pt > a4.height_pt, "landscape A4");
+        dialog.set_spec(PdfExportSpec {
+            ppi: 0.0,
+            ..PdfExportSpec::default()
+        });
+        assert!(dialog.blocked_reason().is_some());
+        super::super::chrome::test_support::frame_both_themes(|ctx| {
+            let mut dialog = ExportPdfDialog::new(300, 150);
+            assert!(dialog.show(ctx).is_open());
+        });
     }
 }

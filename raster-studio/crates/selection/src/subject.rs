@@ -848,6 +848,91 @@ mod tests {
         assert!(score >= 0.9, "IoU {score}");
     }
 
+    /// The boundary is re-cut per PIXEL, not per working cell: with a coarse
+    /// grid (8 px cells) an upsampled cut is uniform inside every cell and
+    /// misses the disc's rim by up to half a cell all the way round. The
+    /// refined mask must split cells along the rim and sit within a pixel or
+    /// so of the true edge.
+    #[test]
+    fn the_boundary_is_recut_at_full_resolution_not_upsampled() {
+        let (w, h) = (240u32, 200u32);
+        let (img, truth) = disc_image(w, h, 118.0, 98.0, 60.0);
+        let opts = SubjectOptions {
+            working_side: 30,
+            ..SubjectOptions::default()
+        };
+        let grid = build_grid(&img.view(), opts.working_side).unwrap();
+        let f = grid.factor as u32;
+        assert_eq!(f, 8, "an 8 px working cell");
+        let m = selected(select_subject(&img.view(), &opts, &mut |_| {}).unwrap());
+        let sel = editor_core::Selection::Mask(m);
+        let on = |x: u32, y: u32| sel.coverage_at(IVec2::new(x as i32, y as i32)) >= 0.5;
+        // Cells the mask splits: impossible for an upsampled cut.
+        let mut split = 0u32;
+        for cy in 0..h.div_ceil(f) {
+            for cx in 0..w.div_ceil(f) {
+                let first = on(cx * f, cy * f);
+                let mixed = (cy * f..((cy + 1) * f).min(h))
+                    .any(|y| (cx * f..((cx + 1) * f).min(w)).any(|x| on(x, y) != first));
+                split += u32::from(mixed);
+            }
+        }
+        let wrong = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .filter(|&(x, y)| on(x, y) != truth[(y * w + x) as usize])
+            .count();
+        let perimeter = (2.0 * std::f64::consts::PI * 60.0) as usize;
+        assert!(
+            split >= 20,
+            "only {split} working cells were re-cut per pixel"
+        );
+        assert!(
+            wrong <= perimeter,
+            "{wrong} pixels are on the wrong side of a rim {perimeter} px long"
+        );
+    }
+
+    /// The seeds alone are NOT the answer: they leave the disc's rim
+    /// undecided (seed IoU under 0.9), and it is the GrabCut graph cut that
+    /// labels that band. Every undecided pixel must end on the right side, so
+    /// a cut that labelled the whole band foreground (or background) fails.
+    #[test]
+    fn the_graph_cut_decides_the_band_the_seeds_leave_open() {
+        let (w, h) = (160u32, 120u32);
+        let (img, truth) = disc_image(w, h, 84.0, 58.0, 34.0);
+        let view = img.view();
+        let grid = build_grid(&view, SubjectOptions::default().working_side).unwrap();
+        assert_eq!(grid.factor, 1, "the whole image is the working grid here");
+        let s = saliency(&grid).unwrap().expect("the disc stands out");
+        let tri = subject_trimap(&s, grid.w, grid.h).unwrap().expect("seeds");
+        let (mut inter, mut uni, mut open) = (0u32, 0u32, 0u32);
+        for (l, &t) in tri.iter().zip(&truth) {
+            inter += u32::from(l.is_foreground() && t);
+            uni += u32::from(l.is_foreground() || t);
+            open += u32::from(matches!(
+                l,
+                Label::ProbablyBackground | Label::ProbablyForeground
+            ));
+        }
+        let seed_iou = f64::from(inter) / f64::from(uni);
+        assert!(seed_iou < 0.9, "the seeds alone already score {seed_iou}");
+        assert!(open > 500, "only {open} pixels were left to the cut");
+        let m = selected(select_subject(&view, &SubjectOptions::default(), &mut |_| {}).unwrap());
+        let sel = editor_core::Selection::Mask(m);
+        let mut wrong = 0u32;
+        for (i, (l, &t)) in tri.iter().zip(&truth).enumerate() {
+            let p = IVec2::new((i as u32 % w) as i32, (i as u32 / w) as i32);
+            let a = sel.coverage_at(p) >= 0.5;
+            if matches!(l, Label::ProbablyBackground | Label::ProbablyForeground) && a != t {
+                wrong += 1;
+            }
+        }
+        assert!(
+            wrong * 100 <= open,
+            "{wrong} of the {open} undecided pixels ended on the wrong side"
+        );
+    }
+
     #[test]
     fn a_flat_image_selects_nothing_and_says_so() {
         let img = ImageBuffer::from_rgba8(IVec2::ZERO, 64, 48, [90, 140, 200, 255].repeat(64 * 48))

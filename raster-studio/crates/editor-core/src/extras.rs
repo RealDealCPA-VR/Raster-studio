@@ -296,7 +296,9 @@ pub fn redefine_character_style(doc: &Document, style: CharacterStyle) -> Option
         .position(|s| s.id == style.id)?;
     let layers = doc.extras.layers_with_character(style.id);
     let mut commands = restyle(doc, &layers, |k| style.applied(k));
-    commands.push(edit_extras(doc, |x| x.character_styles[index] = style.clone()));
+    commands.push(edit_extras(doc, |x| {
+        x.character_styles[index] = style.clone()
+    }));
     Some(Command::Transaction {
         label: "Redefine Character Style".into(),
         commands,
@@ -306,7 +308,11 @@ pub fn redefine_character_style(doc: &Document, style: CharacterStyle) -> Option
 /// Delete character style `id`. Layers that wore it keep their run and lose
 /// the link.
 pub fn delete_character_style(doc: &Document, id: u64) -> Option<Command> {
-    let index = doc.extras.character_styles.iter().position(|s| s.id == id)?;
+    let index = doc
+        .extras
+        .character_styles
+        .iter()
+        .position(|s| s.id == id)?;
     let wearers = doc.extras.layers_with_character(id);
     Some(edit_extras(doc, |x| {
         x.character_styles.remove(index);
@@ -361,7 +367,9 @@ pub fn redefine_paragraph_style(doc: &Document, style: ParagraphStyle) -> Option
         .position(|s| s.id == style.id)?;
     let layers = doc.extras.layers_with_paragraph(style.id);
     let mut commands = restyle(doc, &layers, |k| style.applied(k));
-    commands.push(edit_extras(doc, |x| x.paragraph_styles[index] = style.clone()));
+    commands.push(edit_extras(doc, |x| {
+        x.paragraph_styles[index] = style.clone()
+    }));
     Some(Command::Transaction {
         label: "Redefine Paragraph Style".into(),
         commands,
@@ -371,7 +379,11 @@ pub fn redefine_paragraph_style(doc: &Document, style: ParagraphStyle) -> Option
 /// Delete paragraph style `id`. Layers that wore it keep their settings and
 /// lose the link.
 pub fn delete_paragraph_style(doc: &Document, id: u64) -> Option<Command> {
-    let index = doc.extras.paragraph_styles.iter().position(|s| s.id == id)?;
+    let index = doc
+        .extras
+        .paragraph_styles
+        .iter()
+        .position(|s| s.id == id)?;
     let wearers = doc.extras.layers_with_paragraph(id);
     Some(edit_extras(doc, |x| {
         x.paragraph_styles.remove(index);
@@ -493,7 +505,11 @@ mod tests {
         }
         assert_ne!(para(&doc, other).alignment, Alignment::Center, "not linked");
         history.undo(&mut doc).unwrap();
-        assert_ne!(para(&doc, one).alignment, Alignment::Center, "one undo step");
+        assert_ne!(
+            para(&doc, one).alignment,
+            Alignment::Center,
+            "one undo step"
+        );
         assert_ne!(para(&doc, two).alignment, Alignment::Center);
     }
 

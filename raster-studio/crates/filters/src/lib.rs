@@ -74,10 +74,9 @@ pub mod camera_raw;
 pub mod content_aware;
 pub mod defringe;
 pub mod displace;
-// W10-D: Filter Gallery sets and Vanishing Point.
-pub mod gallery_sets;
-pub mod vanishing_point;
 pub mod distort;
+// W10-D: Filter Gallery sets.
+pub mod gallery_sets;
 pub mod hsb;
 pub mod lens_correction;
 pub mod lighting;
@@ -97,6 +96,8 @@ pub mod smart_blur;
 pub mod stylize;
 pub mod stylize_extra;
 pub mod support;
+// W10-D: Vanishing Point.
+pub mod vanishing_point;
 
 pub use buffer::{FilterBuffer, FilterError};
 pub use support::{EdgeMode, Interpolation, Sampling};
@@ -106,7 +107,7 @@ pub use blur::{
     RadialBlurKind,
 };
 pub use content_aware::{content_aware_fill, content_aware_scale, ContentAwareError, FillOptions};
-pub use displace::{displace, DisplaceEdges, DisplaceFit};
+pub use displace::{displace, encoded_map, DisplaceEdges, DisplaceFit};
 pub use distort::{
     pinch, polar_coordinates, ripple, shear, spherize, twirl, wave, zigzag, PolarMode, Wave,
     WaveKind, ZigZag, ZigZagKind,

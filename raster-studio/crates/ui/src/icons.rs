@@ -874,6 +874,82 @@ const PEN_CURVATURE: &[Prim] = &[
     Prim::Dot([0.48, 0.90], 0.04),
 ];
 
+/// W10-A: Content-Aware Move - the lifted box, an arrow, and the landed box.
+const CONTENT_AWARE_MOVE: &[Prim] = &[
+    Prim::Poly(
+        &[[0.10, 0.10], [0.42, 0.10], [0.42, 0.42], [0.10, 0.42]],
+        true,
+    ),
+    Prim::Fill(&[[0.58, 0.58], [0.90, 0.58], [0.90, 0.90], [0.58, 0.90]]),
+    Prim::Line([0.36, 0.36], [0.66, 0.66]),
+    Prim::Poly(&[[0.50, 0.66], [0.66, 0.66], [0.66, 0.50]], false),
+];
+
+/// W10-B: the Note tool - a sheet with a folded corner and two lines of
+/// writing.
+const NOTE: &[Prim] = &[
+    Prim::Poly(
+        &[
+            [0.18, 0.12],
+            [0.64, 0.12],
+            [0.82, 0.30],
+            [0.82, 0.88],
+            [0.18, 0.88],
+        ],
+        true,
+    ),
+    Prim::Poly(&[[0.64, 0.12], [0.64, 0.30], [0.82, 0.30]], false),
+    Prim::Line([0.30, 0.50], [0.70, 0.50]),
+    Prim::Line([0.30, 0.68], [0.62, 0.68]),
+];
+
+/// W10-A: Slice Select - a slice grid with a pointer over it.
+const SLICE_SELECT: &[Prim] = &[
+    Prim::Poly(
+        &[[0.08, 0.14], [0.70, 0.14], [0.70, 0.62], [0.08, 0.62]],
+        true,
+    ),
+    Prim::Line([0.40, 0.14], [0.40, 0.62]),
+    Prim::Poly(
+        &[
+            [0.52, 0.44],
+            [0.52, 0.94],
+            [0.64, 0.82],
+            [0.74, 0.96],
+            [0.82, 0.90],
+            [0.72, 0.78],
+            [0.88, 0.76],
+        ],
+        true,
+    ),
+];
+
+/// W10-A: the Spiral shape - an arm winding outward.
+const SHAPE_SPIRAL: &[Prim] = &[Prim::Poly(
+    &[
+        [0.50, 0.50],
+        [0.56, 0.44],
+        [0.62, 0.52],
+        [0.56, 0.62],
+        [0.42, 0.62],
+        [0.34, 0.50],
+        [0.40, 0.34],
+        [0.56, 0.28],
+        [0.72, 0.36],
+        [0.78, 0.54],
+        [0.70, 0.72],
+        [0.50, 0.80],
+        [0.30, 0.74],
+        [0.18, 0.56],
+        [0.20, 0.34],
+        [0.34, 0.18],
+        [0.54, 0.12],
+        [0.76, 0.18],
+        [0.90, 0.34],
+    ],
+    false,
+)];
+
 /// The drawing for a registry icon key.
 ///
 /// Total over `tools::registry` — see the module note and the gate that keeps
@@ -946,6 +1022,12 @@ pub fn icon_for(key: &str) -> Icon {
         "artboard" => ARTBOARD,
         "pen-freeform" => PEN_FREEFORM,
         "pen-curvature" => PEN_CURVATURE,
+        // W10-A
+        "content-aware-move" => CONTENT_AWARE_MOVE,
+        "slice-select" => SLICE_SELECT,
+        "shape-spiral" => SHAPE_SPIRAL,
+        // W10-B
+        "note" => NOTE,
         _ => return Icon::UNKNOWN,
     })
 }

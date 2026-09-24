@@ -16,6 +16,14 @@
 //!   (`color::quantize`, the dialog's source/count/dither), then every tile
 //!   is mapped onto it. Diffusion runs per 256-px tile.
 //!
+//! * **Bitmap** (W10-H, from Grayscale only) — the visible composite over
+//!   white becomes ONE opaque layer of pure black and white
+//!   (`color::bitmap`: 50% threshold, pattern / diffusion dither or a
+//!   halftone screen); every old layer goes, one undo step.
+//! * **Duotone** (W10-H, from Grayscale only) — every visible grey is
+//!   printed through one to four inks, each through its own curve
+//!   (`color::duotone`), baked into the tiles; the layers stay.
+//!
 //! A 16-bit document converts at 8 bits and its apply boundary widens the
 //! result back, the same road the Grayscale conversion took before W7-D.
 
@@ -27,13 +35,22 @@ use raster::TILE_SIZE;
 
 use crate::editor::Editor;
 
+/// W10-H: the Bitmap and Duotone dialogs' confirmed answers (their defaults
+/// when the pick came from anywhere else).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ModeOptions {
+    pub bitmap: Option<color::bitmap::BitmapMethod>,
+    pub duotone: Option<color::duotone::DuotoneSpec>,
+}
+
 /// Convert the active document into `target`. `indexed` is the Indexed Color
-/// dialog's confirmed spec (the defaults when the pick came from anywhere
-/// else).
-pub(crate) fn set_color_mode(
+/// dialog's confirmed spec and `options` the Bitmap / Duotone dialogs' (the
+/// defaults when the pick came from anywhere else).
+pub(crate) fn set_color_mode_with(
     editor: &mut Editor,
     target: ui::menu::ColorMode,
     indexed: Option<ui::dialogs::IndexedSpec>,
+    options: ModeOptions,
 ) -> Result<String, String> {
     let to = target as u8;
     let label = format!("Change Colour Mode to {}", target.label());
@@ -44,6 +61,18 @@ pub(crate) fn set_color_mode(
         return Err("The document is already in that colour mode".into());
     }
     let tile_bytes = (TILE_SIZE as usize) * (TILE_SIZE as usize) * 4;
+
+    // W10-H: Bitmap and Duotone are reached from Grayscale only.
+    if !editor_core::color_mode::conversion_allowed(doc.document.meta.color_mode, to) {
+        return Err(format!(
+            "{} is reached from Grayscale: convert to Grayscale first",
+            target.label().trim_end_matches('…')
+        ));
+    }
+    if to == mode::BITMAP {
+        return bitmap_flattened(editor, options.bitmap.unwrap_or_default(), label);
+    }
+    let duotone = (to == mode::DUOTONE).then(|| options.duotone.unwrap_or_default().lut());
 
     // W10-H: Indexed Color flattens a document of more than one layer, as
     // Photoshop does, so no blending between layers can composite a colour
@@ -108,6 +137,14 @@ pub(crate) fn set_color_mode(
                 let (palette, dither) = palette.as_ref()?;
                 quantize::remap_rgba8(&mut bytes, TILE_SIZE as usize, palette, *dither);
             }
+            // W10-H: each grey printed through the inks.
+            mode::DUOTONE => {
+                let lut = duotone.as_ref()?;
+                for px in bytes.as_chunks_mut::<4>().0 {
+                    let ink = lut[usize::from(luma8([px[0], px[1], px[2]]))];
+                    px[..3].copy_from_slice(&ink);
+                }
+            }
             _ => return None,
         }
         Some(tiles.insert_bytes(bytes))
@@ -123,6 +160,87 @@ pub(crate) fn set_color_mode(
         return Err(format!("Could not convert to {}", target.label()));
     }
     Ok(format!("Changed colour mode to {}", target.label()))
+}
+
+/// Rec.601 luma of an 8-bit colour, as the Grayscale conversion takes it.
+fn luma8(rgb: [u8; 3]) -> u8 {
+    (0.299 * f32::from(rgb[0]) + 0.587 * f32::from(rgb[1]) + 0.114 * f32::from(rgb[2]))
+        .round()
+        .clamp(0.0, 255.0) as u8
+}
+
+/// W10-H: Image > Mode > Bitmap. The visible composite, over white (a
+/// bitmap has no transparency), becomes one grey plane; `method` reduces it
+/// to pure black and white across the whole canvas (so a diffusion's error
+/// and a screen's cells cross tile edges without a seam); the result is ONE
+/// opaque "Background" layer, every old layer is deleted and the mode flag
+/// set — one Transaction, so one undo gives the layers and the mode back.
+fn bitmap_flattened(
+    editor: &mut Editor,
+    method: color::bitmap::BitmapMethod,
+    label: String,
+) -> Result<String, String> {
+    let doc = editor.active_mut().ok_or("No document is open")?;
+    let (w, h) = (doc.document.width(), doc.document.height());
+    let canvas = compositor::composite_region(
+        &doc.document,
+        &doc.tiles,
+        doc.canvas_rect(),
+        0,
+        compositor::CompositeOptions::default(),
+    )
+    .map_err(|e| e.to_string())?
+    .to_rgba8(&doc.document.meta.color_space);
+    let gray: Vec<u8> = canvas
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|p| {
+            let a = f32::from(p[3]) / 255.0;
+            let g = f32::from(luma8([p[0], p[1], p[2]]));
+            (g * a + 255.0 * (1.0 - a)).round().clamp(0.0, 255.0) as u8
+        })
+        .collect();
+    let bw = color::bitmap::to_bitmap(&gray, w as usize, h as usize, method);
+    let rgba: Vec<u8> = bw.iter().flat_map(|&v| [v, v, v, 255]).collect();
+    let grid = raster::TileGrid::from_rgba8(w, h, &rgba).map_err(|e| e.to_string())?;
+    let layer = layer_model::Layer::raster("Background");
+    let new_id = layer.id;
+    let old: Vec<layer_model::LayerId> = doc.document.layers.iter_depth_first();
+    let mut commands = vec![
+        editor_core::Command::SetMetaColorMode {
+            from: doc.document.meta.color_mode,
+            to: mode::BITMAP,
+        },
+        editor_core::Command::create_layer(layer),
+    ];
+    let edits: Vec<_> = grid
+        .iter()
+        .map(|(coord, tile)| {
+            editor_core::pixels::TileEdit::set(coord, doc.tiles.insert_bytes(tile.data().to_vec()))
+        })
+        .collect();
+    commands.push(
+        editor_core::Command::paint_tiles(editor_core::PixelTarget::Layer(new_id), edits)
+            .map_err(|e| e.to_string())?,
+    );
+    for id in old.iter().rev() {
+        commands.push(editor_core::Command::DeleteLayer { layer_id: *id });
+    }
+    let layers = old.len();
+    let revision = editor.revision();
+    editor.apply_command(editor_core::Command::Transaction { label, commands });
+    let applied = editor
+        .active()
+        .is_some_and(|d| d.document.meta.color_mode == mode::BITMAP);
+    if !applied || editor.revision() == revision {
+        return Err("Could not convert to Bitmap".into());
+    }
+    Ok(if layers > 1 {
+        format!("Changed colour mode to Bitmap; its {layers} layers were flattened into one")
+    } else {
+        "Changed colour mode to Bitmap".to_string()
+    })
 }
 
 /// W10-H: Image > Mode > Indexed Color on a document of several layers: the
@@ -600,7 +718,10 @@ mod tests {
         let edits: Vec<_> = grid
             .iter()
             .map(|(coord, tile)| {
-                editor_core::pixels::TileEdit::set(coord, doc.tiles.insert_bytes(tile.data().to_vec()))
+                editor_core::pixels::TileEdit::set(
+                    coord,
+                    doc.tiles.insert_bytes(tile.data().to_vec()),
+                )
             })
             .collect();
         let command = editor_core::Command::Transaction {
@@ -624,7 +745,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ed = fixture(dir.path());
         add_wash_layer(&mut ed, [200, 30, 90, 128]);
-        assert_eq!(ed.active().unwrap().document.layers.iter_depth_first().len(), 2);
+        assert_eq!(
+            ed.active()
+                .unwrap()
+                .document
+                .layers
+                .iter_depth_first()
+                .len(),
+            2
+        );
         let before = composite(&mut ed);
         let steps = history_len(&ed);
         let status = set_color_mode_for_test(
@@ -651,7 +780,7 @@ mod tests {
     }
 
     fn set_color_mode_for_test(ed: &mut Editor, spec: ui::dialogs::IndexedSpec) -> String {
-        super::set_color_mode(ed, ColorMode::Indexed, Some(spec)).unwrap()
+        super::set_color_mode_with(ed, ColorMode::Indexed, Some(spec), Default::default()).unwrap()
     }
 
     /// The SOF0 component count of a baseline JPEG and whether it carries
@@ -847,50 +976,256 @@ mod tests {
         );
     }
 
-    /// W10-H: a brush stroke at 1% flow on a 16-bit layer is blended and
-    /// written at 16 bits through the real pointer route. The layer was
-    /// widened from 8 bits, so every stored code is a multiple of 257; a
-    /// dab rounded through 8 bits would leave only such codes (and at 1%
-    /// flow would mostly not move a pixel at all), while a 16-bit dab lands
-    /// between them.
-    #[test]
-    fn a_one_percent_flow_brush_on_a_sixteen_bit_layer_writes_sixteen_bit_codes() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut ed = half_transparent(dir.path(), dir.path().join("unused.png"));
-        perform(
-            MenuAction::SetBitDepth(ui::menu::ChannelDepth::Sixteen),
-            &mut ed,
-        )
-        .unwrap();
-        let layer = ed.active().unwrap().document.active_layer().unwrap();
-        let before = ed.active().unwrap().layer_rgba16(layer);
-        assert!(
-            before.iter().all(|c| c % 257 == 0),
-            "precondition: a widened 8-bit layer"
+    /// A real drag of whatever tool is active, through the pointer route,
+    /// in document points (the camera of [`half_transparent`]).
+    fn drag(ed: &mut Editor, points: &[(f32, f32)]) {
+        use ui::canvas::{PointerInput, PointerPhase};
+        let screen = |x: f32, y: f32| glam::Vec2::new(200.0 + x - 32.0, 150.0 + y - 32.0);
+        let mut pointer = crate::tool_input::ToolPointer::new();
+        for (i, &(x, y)) in points.iter().enumerate() {
+            let phase = if i == 0 {
+                PointerPhase::Down
+            } else {
+                PointerPhase::Move
+            };
+            pointer.handle(ed, PointerInput::at(phase, screen(x, y)), false, &[]);
+        }
+        let (x, y) = *points.last().unwrap();
+        pointer.handle(
+            ed,
+            PointerInput::at(PointerPhase::Up, screen(x, y)),
+            false,
+            &[],
         );
-        let mut brush = ed.brush().clone();
-        brush.flow = 0.01;
-        brush.opacity = 1.0;
-        brush.size = 12.0;
-        brush.hardness = 1.0;
-        ed.set_brush(brush);
-        brush_stroke(&mut ed, &[(6.0, 10.0), (14.0, 10.0), (22.0, 10.0)]);
+    }
+
+    /// W10-H: a Brush, Pencil or Eraser stroke at 1% flow on a 16-bit layer
+    /// is blended and written at 16 bits through the real pointer route.
+    /// The layer was widened from 8 bits, so every stored code is a multiple
+    /// of 257; a dab rounded through 8 bits would leave only such codes (and
+    /// at 1% flow would mostly not move a pixel at all), while a 16-bit dab
+    /// lands between them.
+    #[test]
+    fn one_percent_flow_strokes_on_a_sixteen_bit_layer_write_sixteen_bit_codes() {
+        for tool in [
+            tools::ToolId::Brush,
+            tools::ToolId::Pencil,
+            tools::ToolId::Eraser,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut ed = half_transparent(dir.path(), dir.path().join("unused.png"));
+            perform(
+                MenuAction::SetBitDepth(ui::menu::ChannelDepth::Sixteen),
+                &mut ed,
+            )
+            .unwrap();
+            let layer = ed.active().unwrap().document.active_layer().unwrap();
+            let before = ed.active().unwrap().layer_rgba16(layer);
+            assert!(
+                before.iter().all(|c| c % 257 == 0),
+                "precondition: a widened 8-bit layer"
+            );
+            ed.set_tool(tool);
+            ed.set_foreground([0.9, 0.1, 0.1, 1.0]);
+            let mut brush = *ed.brush();
+            brush.flow = 0.01;
+            brush.opacity = 1.0;
+            brush.size = 12.0;
+            brush.hardness = 1.0;
+            ed.set_brush(brush);
+            drag(&mut ed, &[(6.0, 10.0), (14.0, 10.0), (22.0, 10.0)]);
+            let doc = ed.active().unwrap();
+            assert_eq!(doc.document.meta.bit_depth, 16);
+            let after = doc.layer_rgba16(layer);
+            let changed: Vec<usize> = (0..before.len() / 4)
+                .filter(|&i| before[i * 4..i * 4 + 4] != after[i * 4..i * 4 + 4])
+                .collect();
+            assert!(
+                changed.len() > 50,
+                "{tool:?}: the stroke moved {} pixels",
+                changed.len()
+            );
+            let between = changed
+                .iter()
+                .filter(|&&i| after[i * 4..i * 4 + 4].iter().any(|c| c % 257 != 0))
+                .count();
+            assert!(
+                between * 10 >= changed.len() * 9,
+                "{tool:?}: only {between} of {} painted pixels hold a code between two 8-bit ones",
+                changed.len()
+            );
+        }
+    }
+
+    /// Open `action`'s dialog through the chrome's real menu click, let
+    /// `edit` set it, press Enter, and perform the pick the confirmation put
+    /// in the frame's output.
+    fn confirm_image_gap(
+        ed: &mut Editor,
+        action: MenuAction,
+        edit: impl FnOnce(&mut super::super::image_dialogs::ImageDialog),
+    ) -> Result<String, String> {
+        let mut chrome = crate::chrome::Chrome::new();
+        let menu = context(ed, chrome.workspace());
+        let intent = resolve_intent(action, &menu, ed)?;
+        let mut out = ChromeOutput::default();
+        chrome.menu_click(intent, ed, &mut out);
+        assert!(chrome.dialog_open(), "{action:?} opened its dialog");
+        assert!(out.menu.is_empty(), "nothing ran before the answer");
+        edit(chrome.dialogs_for_test().active_image_gap_for_test());
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let input = |events| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(input(Vec::new()), |ctx| {
+            chrome.dialogs_for_test().ui(ctx, None, &mut out)
+        });
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        };
+        let _ = ctx.run(input(vec![enter]), |ctx| {
+            chrome.dialogs_for_test().ui(ctx, None, &mut out)
+        });
+        assert!(!chrome.dialog_open(), "Enter did not confirm the dialog");
+        assert_eq!(out.menu, vec![action]);
+        perform(action, ed)
+    }
+
+    /// W10-H: Bitmap is greyed (with a reason) on an RGB document and
+    /// refused by the arm; from Grayscale its dialog's method flattens the
+    /// two layers into ONE opaque layer of pure black and white, one undo
+    /// step, and undo gives the layers and the mode back.
+    #[test]
+    fn bitmap_is_reached_from_grayscale_and_leaves_one_black_and_white_layer() {
+        use super::super::image_dialogs::ImageDialog;
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = fixture(dir.path());
+        let chrome = crate::chrome::Chrome::new();
+        let menu = context(&mut ed, chrome.workspace());
+        let bitmap = MenuAction::SetColorMode(ColorMode::Bitmap);
+        let why = resolve_intent(bitmap, &menu, &ed).unwrap_err();
+        assert!(why.contains("Grayscale"), "{why}");
+        assert!(perform(bitmap, &mut ed).is_err());
+        add_wash_layer(&mut ed, [200, 30, 90, 128]);
+        perform(MenuAction::SetColorMode(ColorMode::Grayscale), &mut ed).unwrap();
+        let steps = history_len(&ed);
+        let status = confirm_image_gap(&mut ed, bitmap, |d| match d {
+            ImageDialog::Bitmap(d) => d.set_method(color::bitmap::BitmapMethod::Halftone(
+                color::bitmap::Halftone::default(),
+            )),
+            other => panic!("{other:?}"),
+        })
+        .unwrap();
+        assert!(status.contains("flattened"), "{status}");
+        assert_eq!(history_len(&ed), steps + 1, "one undo step");
         let doc = ed.active().unwrap();
-        assert_eq!(doc.document.meta.bit_depth, 16);
-        let after = doc.layer_rgba16(layer);
-        let changed: Vec<usize> = (0..before.len() / 4)
-            .filter(|&i| before[i * 4..i * 4 + 4] != after[i * 4..i * 4 + 4])
-            .collect();
-        assert!(changed.len() > 50, "the stroke moved {} pixels", changed.len());
-        let between = changed
+        assert_eq!(doc.document.meta.color_mode, 5);
+        assert_eq!(doc.document.layers.iter_depth_first().len(), 1);
+        let after = composite(&mut ed);
+        for px in after.as_chunks::<4>().0 {
+            assert!(
+                matches!(px, [0, 0, 0, 255] | [255, 255, 255, 255]),
+                "{px:?} is not pure black or white"
+            );
+        }
+        let whites = after
+            .as_chunks::<4>()
+            .0
             .iter()
-            .filter(|&&i| after[i * 4..i * 4 + 3].iter().any(|c| c % 257 != 0))
+            .filter(|p| p[0] == 255)
             .count();
         assert!(
-            between * 10 >= changed.len() * 9,
-            "only {between} of {} painted pixels hold a code between two 8-bit ones",
-            changed.len()
+            whites > 0 && whites < after.len() / 4,
+            "a screen, not a fill"
         );
+        ed.active_mut().unwrap().undo().unwrap();
+        let doc = ed.active().unwrap();
+        assert_eq!(doc.document.meta.color_mode, 1);
+        assert_eq!(doc.document.layers.iter_depth_first().len(), 2);
+    }
+
+    /// W10-H: Duotone from Grayscale prints every grey through the dialog's
+    /// inks (here one red ink): the layers stay, every pixel is the ink
+    /// model's colour for its old grey, one undo step.
+    #[test]
+    fn duotone_prints_every_grey_through_the_dialogs_inks() {
+        use super::super::image_dialogs::ImageDialog;
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = fixture(dir.path());
+        perform(MenuAction::SetColorMode(ColorMode::Grayscale), &mut ed).unwrap();
+        let grey = composite(&mut ed);
+        let mut spec = color::duotone::DuotoneSpec::of_type(color::duotone::DuotoneType::Monotone);
+        spec.inks[0].color = [200, 20, 20];
+        let chosen = spec.clone();
+        let steps = history_len(&ed);
+        confirm_image_gap(
+            &mut ed,
+            MenuAction::SetColorMode(ColorMode::Duotone),
+            |d| match d {
+                ImageDialog::Duotone(d) => d.set_spec(chosen),
+                other => panic!("{other:?}"),
+            },
+        )
+        .unwrap();
+        assert_eq!(history_len(&ed), steps + 1);
+        assert_eq!(ed.active().unwrap().document.meta.color_mode, 6);
+        let after = composite(&mut ed);
+        for (g, p) in grey.as_chunks::<4>().0.iter().zip(after.as_chunks::<4>().0) {
+            assert_eq!([p[0], p[1], p[2]], spec.render(g[0]), "grey {}", g[0]);
+        }
+        ed.active_mut().unwrap().undo().unwrap();
+        assert_eq!(composite(&mut ed), grey);
+    }
+
+    /// W10-H: Image > Apply Image and Calculations open their dialogs from
+    /// the menu and the confirmed spec runs: Apply Image of the document's
+    /// own inverted grey in Normal changes the layer as one undo step, and
+    /// Calculations into a new channel adds a saved "Alpha" selection.
+    #[test]
+    fn apply_image_and_calculations_run_from_their_dialogs() {
+        use super::super::image_dialogs::ImageDialog;
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = fixture(dir.path());
+        let before = composite(&mut ed);
+        let steps = history_len(&ed);
+        confirm_image_gap(&mut ed, MenuAction::ApplyImage, |d| match d {
+            ImageDialog::ApplyImage(d) => {
+                let mut spec = d.spec();
+                spec.source.channel = ui::dialogs::SourceChannel::Gray;
+                spec.source.invert = true;
+                spec.blend = layer_model::BlendMode::Normal;
+                d.set_spec(spec);
+            }
+            other => panic!("{other:?}"),
+        })
+        .unwrap();
+        assert_eq!(history_len(&ed), steps + 1);
+        let after = composite(&mut ed);
+        let grey_at = 40 * 4;
+        assert_eq!(&before[grey_at..grey_at + 3], &[128, 128, 128]);
+        assert_eq!(
+            &after[grey_at..grey_at + 3],
+            &[127, 127, 127],
+            "inverted grey"
+        );
+        confirm_image_gap(&mut ed, MenuAction::Calculations, |d| match d {
+            ImageDialog::Calculations(_) => {}
+            other => panic!("{other:?}"),
+        })
+        .unwrap();
+        let saved = &ed.active().unwrap().document.saved_selections;
+        assert_eq!(saved.len(), 1);
+        assert!(saved[0].0.starts_with("Alpha"), "{}", saved[0].0);
     }
 
     fn distinct_rgba(rgba: &[u8]) -> usize {

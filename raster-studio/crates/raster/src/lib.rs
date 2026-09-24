@@ -21,6 +21,8 @@
 pub mod animation;
 pub mod codec;
 pub mod depth;
+// W10-H: Image > Mode > 32 Bits/Channel (`f32` layer tiles, TIFF-float export).
+pub mod depth32;
 pub mod export;
 pub mod format;
 pub mod grid;

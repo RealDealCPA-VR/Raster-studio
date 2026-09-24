@@ -46,6 +46,19 @@ pub enum PanelId {
     Histogram,
     /// W10-I: the frame-animation timeline — the document's `_a_` layers.
     Animation,
+    /// W10-B: named snapshots of every layer's visibility, position and
+    /// appearance, saved in the document.
+    LayerComps,
+    /// W10-B: saved tools with their options.
+    ToolPresets,
+    /// W10-B: the active font's characters, inserted with a click.
+    Glyphs,
+    /// W10-B: text notes pinned to the document.
+    Notes,
+    /// W10-B: named character styles for text layers.
+    CharacterStyles,
+    /// W10-B: named paragraph styles for text layers.
+    ParagraphStyles,
 }
 
 impl PanelId {
@@ -71,6 +84,13 @@ impl PanelId {
         PanelId::Histogram,
         // W10-I: appended after Histogram for the same by-position reason.
         PanelId::Animation,
+        // W10-B: appended after Animation for the same by-position reason.
+        PanelId::LayerComps,
+        PanelId::ToolPresets,
+        PanelId::Glyphs,
+        PanelId::Notes,
+        PanelId::CharacterStyles,
+        PanelId::ParagraphStyles,
     ];
 
     /// Panel title, as shown on its header and in the Window menu.
@@ -92,6 +112,12 @@ impl PanelId {
             PanelId::Actions => "Actions",
             PanelId::Histogram => "Histogram",
             PanelId::Animation => "Animation",
+            PanelId::LayerComps => "Layer Comps",
+            PanelId::ToolPresets => "Tool Presets",
+            PanelId::Glyphs => "Glyphs",
+            PanelId::Notes => "Notes",
+            PanelId::CharacterStyles => "Character Styles",
+            PanelId::ParagraphStyles => "Paragraph Styles",
         }
     }
 
@@ -114,6 +140,12 @@ impl PanelId {
             PanelId::Actions => "actions",
             PanelId::Histogram => "histogram",
             PanelId::Animation => "animation",
+            PanelId::LayerComps => "layer-comps",
+            PanelId::ToolPresets => "tool-presets",
+            PanelId::Glyphs => "glyphs",
+            PanelId::Notes => "notes",
+            PanelId::CharacterStyles => "character-styles",
+            PanelId::ParagraphStyles => "paragraph-styles",
         }
     }
 }

@@ -18,8 +18,11 @@
 //! # Where the in-flight job lives
 //!
 //! In a thread-local queue owned by this module, drained by [`poll`], which
-//! [`super::context`] calls every frame (the menu context is rebuilt on every
-//! frame the chrome draws). [`pending`] reports whether one is in flight.
+//! `Editor::poll_jobs` calls (the shell's `pump_jobs`, run from
+//! `about_to_wait` even on an idle window) and [`super::context`] calls on
+//! every frame the chrome draws. [`pending`] reports whether one is in
+//! flight, and `Editor::jobs_pending` includes it, so the event loop keeps
+//! waking at the job poll rate while Select Subject runs.
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -133,9 +136,9 @@ pub(crate) fn start(editor: &mut Editor) -> Result<String, String> {
             JOBS.with(|jobs| jobs.borrow_mut().push(job));
             Ok(status)
         }
-        Err(TryRecvError::Disconnected) => {
-            Err(format!("{NAME} failed: the worker stopped without reporting"))
-        }
+        Err(TryRecvError::Disconnected) => Err(format!(
+            "{NAME} failed: the worker stopped without reporting"
+        )),
     }
 }
 
@@ -148,7 +151,7 @@ fn running_status(job: &Pending) -> String {
 }
 
 /// Land every finished Select Subject; say how far a running one has got.
-/// Called once a frame from [`super::context`].
+/// Called from `Editor::poll_jobs` and once a frame from [`super::context`].
 pub(crate) fn poll(editor: &mut Editor) {
     if !pending() {
         return;
@@ -193,9 +196,7 @@ fn finish(editor: &mut Editor, job: Pending, outcome: Outcome) -> Result<String,
     match found {
         selection::SubjectOutcome::NothingFound(why) => Err(why.to_string()),
         selection::SubjectOutcome::Selected(mask) => {
-            super::set_selection(editor, |_, _, _| {
-                Ok(editor_core::Selection::Mask(mask))
-            })?;
+            super::set_selection(editor, |_, _, _| Ok(editor_core::Selection::Mask(mask)))?;
             Ok("Selected the subject".to_string())
         }
     }
@@ -322,7 +323,10 @@ mod tests {
         let mut editor = editor_with_image(dir.path(), false);
         editor.set_spawner(crate::jobs::spawn_thread);
         let message = super::super::perform(MenuAction::SelectSubject, &mut editor).unwrap();
-        assert!(message.starts_with("Select Subject is running"), "{message}");
+        assert!(
+            message.starts_with("Select Subject is running"),
+            "{message}"
+        );
         assert_eq!(selection(&editor), editor_core::Selection::None);
         assert!(pending());
         let refused = super::super::perform(MenuAction::SelectSubject, &mut editor).unwrap_err();

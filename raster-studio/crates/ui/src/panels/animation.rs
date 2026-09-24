@@ -14,7 +14,10 @@
 //! Every edit is an ordinary document command, so each is one undo step and
 //! the frames stay plain layers the Layers panel shows too:
 //!
-//! * the delay field renames the layer ([`set_delay`]);
+//! * the delay field renames the layer ([`set_delay`]) — once per drag, on
+//!   the release, so one drag of the field is one undo step; a typed value
+//!   lands once, when the field is confirmed (Enter or focus leaves it), not
+//!   on every keystroke;
 //! * Add Frame creates an empty `_a_` layer on top — the new last frame
 //!   ([`add_frame`]);
 //! * Duplicate Frame copies the current frame's layer, pixels included (the
@@ -35,9 +38,8 @@
 //!
 //! # Strings
 //!
-//! The panel's words are the constants below. They are English only: the
-//! localization catalogue (`crate::strings`) belongs to another part of this
-//! wave, and moving these into it is a key-per-constant follow-up.
+//! Every word the panel shows resolves through the localization catalogue
+//! ([`crate::strings::tr`]), under the `ui.animation.*` keys.
 
 use design::{color32, current_tokens, egui_theme::rounding, ColorRole, Radius, Space, TextRole};
 use editor_core::{Command, Document, LayerPatch, PixelTarget, TileEdit};
@@ -60,16 +62,20 @@ pub const MAX_DELAY_MS: u32 = 60_000;
 /// one — a fraction of full opacity, not a colour.
 const ONION_STRENGTH: f32 = 0.35;
 
-const PLAY: &str = "Play";
-const STOP: &str = "Stop";
-const ONION: &str = "Onion skin";
-const ADD: &str = "Add frame";
-const DUPLICATE: &str = "Duplicate frame";
-const DELETE: &str = "Delete frame";
-const NO_DOCUMENT: &str = "Open a document to animate it.";
-const NO_FRAMES: &str =
-    "No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.";
-const MS: &str = " ms";
+/// The catalogue keys of the panel's words (see [`crate::strings`]).
+const PLAY: &str = "ui.animation.play";
+const STOP: &str = "ui.animation.stop";
+const ONION: &str = "ui.animation.onion";
+const ADD: &str = "ui.animation.add";
+const DUPLICATE: &str = "ui.animation.duplicate";
+const DELETE: &str = "ui.animation.delete";
+const NO_DOCUMENT: &str = "ui.animation.no_document";
+const NO_FRAMES: &str = "ui.animation.no_frames";
+const MS: &str = "ui.animation.ms";
+
+fn tr(key: &str) -> &'static str {
+    crate::strings::tr(key)
+}
 
 /// One frame of the document's animation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -242,7 +248,7 @@ pub fn duplicate_frame(doc: &Document, layer: LayerId) -> Option<Command> {
         index,
     });
     Some(Command::Transaction {
-        label: DUPLICATE.to_string(),
+        label: tr(DUPLICATE).to_string(),
         commands,
     })
 }
@@ -271,7 +277,10 @@ pub fn show_frame(doc: &Document, layer: LayerId) -> Option<Command> {
         })
         .collect();
     (!commands.is_empty()).then(|| Command::Transaction {
-        label: format!("Show {}", doc.layers.get(layer).map(|l| l.name.as_str()).unwrap_or("")),
+        label: format!(
+            "Show {}",
+            doc.layers.get(layer).map(|l| l.name.as_str()).unwrap_or("")
+        ),
         commands,
     })
 }
@@ -309,7 +318,7 @@ pub mod ids {
 /// Draw the panel.
 pub(crate) fn animation_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     if doc.width() == 0 || doc.height() == 0 {
-        empty_state(ui, NO_DOCUMENT);
+        empty_state(ui, tr(NO_DOCUMENT));
         return;
     }
     let frames = frames(doc);
@@ -321,14 +330,14 @@ pub(crate) fn animation_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     // Transport: Play / Stop and the onion skin on the left, the frame
     // buttons on the right.
     ui.horizontal(|ui| {
-        let label = if state.playing { STOP } else { PLAY };
+        let label = tr(if state.playing { STOP } else { PLAY });
         let play = ui.add_enabled(frames.len() > 1, egui::Button::new(body(ui, label)));
         crate::view::mark(ui, play.rect, ids::play());
         if play.clicked() {
             state.playing = !state.playing;
             state.shown_at = now;
         }
-        let onion = ui.checkbox(&mut state.onion, body(ui, ONION));
+        let onion = ui.checkbox(&mut state.onion, body(ui, tr(ONION)));
         crate::view::mark(ui, onion.rect, ids::onion());
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let has_frame = if current.is_some() {
@@ -336,14 +345,20 @@ pub(crate) fn animation_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             } else {
                 ActionState::Disabled
             };
-            if icon_action_id(ui, "trash", DELETE, has_frame, Some(ids::delete())).clicked() {
+            if icon_action_id(ui, "trash", tr(DELETE), has_frame, Some(ids::delete())).clicked() {
                 if let Some(c) = current.and_then(|id| delete_frame(doc, id)) {
                     w.emit(Intent::Document(c));
                 }
                 state.playing = false;
             }
-            if icon_action_id(ui, "layer-raster", DUPLICATE, has_frame, Some(ids::duplicate()))
-                .clicked()
+            if icon_action_id(
+                ui,
+                "layer-raster",
+                tr(DUPLICATE),
+                has_frame,
+                Some(ids::duplicate()),
+            )
+            .clicked()
             {
                 if let Some(c) = current.and_then(|id| duplicate_frame(doc, id)) {
                     w.emit(Intent::Document(c));
@@ -351,7 +366,7 @@ pub(crate) fn animation_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
                 state.current += 1;
                 state.playing = false;
             }
-            if icon_action_id(ui, "plus", ADD, ActionState::Idle, Some(ids::add())).clicked() {
+            if icon_action_id(ui, "plus", tr(ADD), ActionState::Idle, Some(ids::add())).clicked() {
                 w.emit(Intent::Document(add_frame(doc)));
                 state.current = frames.len();
                 state.playing = false;
@@ -397,7 +412,7 @@ pub(crate) fn animation_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     ui.add_space(Space::XSmall.pt());
 
     if frames.is_empty() {
-        ui.label(hint(ui, NO_FRAMES));
+        ui.label(hint(ui, tr(NO_FRAMES)));
         store_playback(ui.ctx(), state);
         return;
     }
@@ -463,18 +478,37 @@ pub(crate) fn animation_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
                             TextRole::Secondary,
                             design::TypeRole::Caption,
                         ));
-                        let mut delay = frame.delay_ms;
+                        // While the field is dragged its value is held here,
+                        // not written: the rename lands once, on the release,
+                        // so one drag is one undo step. A typed value is
+                        // held by the text edit until Enter / focus loss
+                        // (`update_while_editing(false)`), so typing a
+                        // multi-digit delay is one rename, not one per key.
+                        let pending_key =
+                            egui::Id::new(("raster-animation-delay-drag", frame.layer));
+                        let pending: Option<u32> = ui.data(|d| d.get_temp(pending_key));
+                        let mut delay = pending.unwrap_or(frame.delay_ms);
                         let field = ui.add_sized(
                             Vec2::new(cell.x, t.metrics.control_height),
                             egui::DragValue::new(&mut delay)
                                 .range(MIN_DELAY_MS..=MAX_DELAY_MS)
-                                .suffix(MS),
+                                .update_while_editing(false)
+                                .suffix(tr(MS)),
                         );
                         crate::view::mark(ui, field.rect, ids::delay(index));
-                        if field.changed() {
-                            if let Some(c) = set_delay(doc, frame.layer, delay) {
-                                w.emit(Intent::Document(c));
+                        let commit = if field.drag_stopped() {
+                            ui.data_mut(|d| d.remove::<u32>(pending_key));
+                            Some(delay)
+                        } else if field.dragged() {
+                            if field.changed() {
+                                ui.data_mut(|d| d.insert_temp(pending_key, delay));
                             }
+                            None
+                        } else {
+                            field.changed().then_some(delay)
+                        };
+                        if let Some(c) = commit.and_then(|v| set_delay(doc, frame.layer, v)) {
+                            w.emit(Intent::Document(c));
                         }
                     });
                 }
@@ -493,4 +527,468 @@ fn fitted(rect: egui::Rect, w: u32, h: u32) -> egui::Rect {
     let (w, h) = (w.max(1) as f32, h.max(1) as f32);
     let scale = (rect.width() / w).min(rect.height() / h);
     egui::Rect::from_center_size(rect.center(), Vec2::new(w * scale, h * scale))
+}
+
+#[cfg(test)]
+mod tests {
+    //! The panel driven the way a user drives it: the whole [`Workspace`]
+    //! draws its dock with only the Animation panel open (the panel's real
+    //! route, `docks::body_of`), clicks land by the controls' ids, and the
+    //! emitted commands are applied to the document as the shell applies
+    //! them.
+
+    use super::*;
+    use crate::dock::{LayoutId, PanelId};
+    use editor_core::History;
+
+    struct Live {
+        ctx: egui::Context,
+        w: Workspace,
+        doc: Document,
+        history: History,
+        time: f64,
+    }
+
+    impl Live {
+        fn new(doc: Document) -> Self {
+            let ctx = egui::Context::default();
+            design::apply_theme(&ctx, design::Theme::Dark);
+            let mut w = Workspace::new();
+            w.dock.apply_layout(LayoutId::Minimal);
+            w.dock.set_open(PanelId::Animation, true);
+            let mut live = Self {
+                ctx,
+                w,
+                doc,
+                history: History::new(),
+                time: 0.0,
+            };
+            live.thumbs();
+            for _ in 0..3 {
+                live.frame(Vec::new());
+            }
+            live
+        }
+
+        /// A distinct one-pixel texture per layer, standing in for the
+        /// thumbnails the shell uploads, so a painted image names its frame.
+        fn thumbs(&mut self) {
+            for id in self.doc.layers.iter_depth_first() {
+                if !self.w.layer_thumbs.contains_key(&id) {
+                    let tex = self.ctx.load_texture(
+                        format!("thumb-{id:?}"),
+                        egui::ColorImage::new([1, 1], egui::Color32::WHITE),
+                        egui::TextureOptions::NEAREST,
+                    );
+                    self.w.layer_thumbs.insert(id, tex);
+                }
+            }
+        }
+
+        fn frame(&mut self, events: Vec<egui::Event>) -> (Vec<Intent>, egui::FullOutput) {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                time: Some(self.time),
+                events,
+                ..Default::default()
+            };
+            let (w, doc, history) = (&mut self.w, &self.doc, &self.history);
+            let out = self.ctx.run(input, |ctx| w.ui(ctx, doc, history));
+            (self.w.drain_intents(), out)
+        }
+
+        fn rect(&self, id: egui::Id) -> egui::Rect {
+            self.ctx
+                .read_response(id)
+                .unwrap_or_else(|| panic!("{id:?} was not drawn"))
+                .rect
+        }
+
+        fn click(&mut self, id: egui::Id) -> Vec<Intent> {
+            let at = self.rect(id).center();
+            let button = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let (mut intents, _) = self.frame(vec![egui::Event::PointerMoved(at), button(true)]);
+            intents.extend(self.frame(vec![button(false)]).0);
+            intents
+        }
+
+        /// Apply every document command in `intents` through the history, as
+        /// the shell does, so each is one undo step.
+        fn apply(&mut self, intents: &[Intent]) -> usize {
+            let mut applied = 0;
+            for intent in intents {
+                if let Intent::Document(c) = intent {
+                    self.history
+                        .apply(&mut self.doc, c.clone())
+                        .expect("the command applies");
+                    applied += 1;
+                }
+            }
+            self.thumbs();
+            for _ in 0..2 {
+                self.frame(Vec::new());
+            }
+            applied
+        }
+
+        /// The textures painted inside the preview well, in paint order,
+        /// with the tint each was painted with.
+        fn preview_images(&mut self) -> Vec<(egui::TextureId, egui::Color32)> {
+            let well = self.rect(ids::preview());
+            let (_, out) = self.frame(Vec::new());
+            let mut found = Vec::new();
+            for clipped in &out.shapes {
+                collect_images(&clipped.shape, well, &mut found);
+            }
+            found
+        }
+    }
+
+    fn collect_images(
+        shape: &egui::Shape,
+        well: egui::Rect,
+        out: &mut Vec<(egui::TextureId, egui::Color32)>,
+    ) {
+        match shape {
+            egui::Shape::Vec(shapes) => {
+                for s in shapes {
+                    collect_images(s, well, out);
+                }
+            }
+            egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
+                let inside = mesh
+                    .vertices
+                    .iter()
+                    .all(|v| well.expand(1.0).contains(v.pos));
+                if inside && !mesh.vertices.is_empty() {
+                    out.push((mesh.texture_id, mesh.vertices[0].color));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Three frames, 100 / 200 / 300 ms, pushed bottom first.
+    fn three_frames() -> (Document, [LayerId; 3]) {
+        let mut doc = Document::new(64, 48, "anim");
+        let mut ids = [LayerId::new(); 3];
+        for (i, delay) in [100u32, 200, 300].into_iter().enumerate() {
+            let name = frame_layer_name(&format!("Frame {}", i + 1), delay);
+            ids[i] = doc.layers.push_root(Layer::raster(name)).unwrap();
+        }
+        (doc, ids)
+    }
+
+    #[test]
+    fn frames_are_the_top_level_a_layers_bottom_first_with_their_delays() {
+        let (mut doc, ids) = three_frames();
+        doc.layers.push_root(Layer::raster("Not a frame")).unwrap();
+        let got = frames(&doc);
+        assert_eq!(
+            got.iter()
+                .map(|f| (f.layer, f.delay_ms))
+                .collect::<Vec<_>>(),
+            vec![(ids[0], 100), (ids[1], 200), (ids[2], 300)]
+        );
+        assert_eq!(got[0].label, "Frame 1");
+    }
+
+    /// The Window-menu panel draws one thumbnail cell per frame in play
+    /// order, each with its delay field under it; clicking a cell selects
+    /// that frame's layer and shows it alone among the frames, one command,
+    /// and the preview well draws that frame.
+    #[test]
+    fn the_strip_draws_each_frame_and_a_click_shows_that_frame_alone() {
+        let (doc, ids) = three_frames();
+        let mut live = Live::new(doc);
+        let cells: Vec<egui::Rect> = (0..3).map(|i| live.rect(ids::frame(i))).collect();
+        assert!(cells[0].right() <= cells[1].left() && cells[1].right() <= cells[2].left());
+        for (i, cell) in cells.iter().enumerate() {
+            let delay = live.rect(ids::delay(i));
+            assert!(delay.top() >= cell.bottom(), "delay {i} is under its cell");
+        }
+        let intents = live.click(ids::frame(1));
+        assert!(
+            intents.contains(&Intent::SelectLayers {
+                layers: vec![ids[1]],
+                active: Some(ids[1]),
+            }),
+            "{intents:?}"
+        );
+        assert_eq!(live.apply(&intents), 1, "one show command: {intents:?}");
+        let visible: Vec<bool> = ids
+            .iter()
+            .map(|id| live.doc.layers.get(*id).unwrap().visible)
+            .collect();
+        assert_eq!(visible, vec![false, true, false]);
+        assert_eq!(playback(&live.ctx).current, 1);
+        let want = live.w.layer_thumbs[&ids[1]].id();
+        let images = live.preview_images();
+        assert_eq!(images.last().map(|i| i.0), Some(want), "{images:?}");
+    }
+
+    /// Add, Duplicate and Delete each emit one command that, applied, makes
+    /// the frame list what the button says.
+    #[test]
+    fn add_duplicate_and_delete_frame_edit_the_frame_layers() {
+        let (doc, ids) = three_frames();
+        let mut live = Live::new(doc);
+
+        let intents = live.click(ids::add());
+        assert_eq!(live.apply(&intents), 1, "{intents:?}");
+        let after_add = frames(&live.doc);
+        assert_eq!(after_add.len(), 4);
+        assert_eq!(after_add[3].label, "Frame 4");
+        assert_eq!(
+            after_add[3].delay_ms, 300,
+            "the delay of the frame before it"
+        );
+
+        // Pick frame 1 (index 0), then duplicate it: the copy comes right
+        // after it in play order, with its delay.
+        let intents = live.click(ids::frame(0));
+        live.apply(&intents);
+        let intents = live.click(ids::duplicate());
+        assert_eq!(live.apply(&intents), 1, "{intents:?}");
+        let after_dup = frames(&live.doc);
+        assert_eq!(after_dup.len(), 5);
+        assert_eq!(after_dup[0].layer, ids[0]);
+        assert_eq!(after_dup[1].delay_ms, 100, "the copy keeps the delay");
+        assert_ne!(after_dup[1].layer, ids[0]);
+        assert_eq!(
+            playback(&live.ctx).current,
+            1,
+            "the copy is the current frame"
+        );
+
+        let doomed = frames(&live.doc)[playback(&live.ctx).current].layer;
+        let intents = live.click(ids::delete());
+        let deletes = intents
+            .iter()
+            .filter(|i| {
+                matches!(i, Intent::Document(Command::DeleteLayer { layer_id }) if *layer_id == doomed)
+            })
+            .count();
+        assert_eq!(deletes, 1, "{intents:?}");
+        live.apply(&intents);
+        assert_eq!(frames(&live.doc).len(), 4);
+        assert!(!live.doc.layers.contains(doomed));
+    }
+
+    /// Dragging a frame's delay field renames its layer to the new delay:
+    /// the `_a_<label>,<ms>` form Export As reads. Every frame's commands are
+    /// applied as they come, through the history, the way the shell applies
+    /// them — and the whole drag is ONE undo step, which one undo takes back.
+    #[test]
+    fn dragging_a_delay_field_renames_the_frame_to_the_new_delay() {
+        let (doc, ids) = three_frames();
+        let mut live = Live::new(doc);
+        let field = live.rect(ids::delay(0)).center();
+        let button = |pressed, pos| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let intents = live
+            .frame(vec![egui::Event::PointerMoved(field), button(true, field)])
+            .0;
+        live.apply(&intents);
+        let mut shown = Vec::new();
+        for step in 1..=6 {
+            let at = field + egui::vec2(10.0 * step as f32, 0.0);
+            let intents = live.frame(vec![egui::Event::PointerMoved(at)]).0;
+            live.apply(&intents);
+            // What the field shows mid-drag: its painted value.
+            let (_, out) = live.frame(Vec::new());
+            let rect = live.rect(ids::delay(0));
+            shown.extend(painted_texts_in(&out, rect));
+        }
+        assert_eq!(
+            live.history.undo_depth(),
+            0,
+            "nothing lands while the field is dragged"
+        );
+        shown.dedup();
+        assert!(
+            shown.len() >= 3,
+            "the field showed the value moving mid-drag: {shown:?}"
+        );
+        let end = field + egui::vec2(60.0, 0.0);
+        let intents = live.frame(vec![button(false, end)]).0;
+        assert_eq!(live.apply(&intents), 1, "the release lands the rename");
+        assert_eq!(live.history.undo_depth(), 1, "one drag, one undo step");
+        let frame = frames(&live.doc)[0].clone();
+        assert_eq!(frame.layer, ids[0]);
+        assert!(
+            frame.delay_ms > 100,
+            "the drag right raised the delay: {frame:?}"
+        );
+        assert_eq!(
+            live.doc.layers.get(ids[0]).unwrap().name,
+            frame_layer_name("Frame 1", frame.delay_ms)
+        );
+        // One undo takes the whole drag back.
+        live.history.undo(&mut live.doc).unwrap();
+        assert_eq!(frames(&live.doc)[0].delay_ms, 100);
+        // The model refuses a delay below GIF's floor.
+        let c = set_delay(&live.doc, ids[0], 0).expect("a change");
+        c.apply(&mut live.doc).unwrap();
+        assert_eq!(frames(&live.doc)[0].delay_ms, MIN_DELAY_MS);
+    }
+
+    /// Typing a delay is ONE edit: click the field (which opens its text
+    /// edit), select all, type `2`, `5`, `0` one key per frame, press Enter.
+    /// Nothing lands while the keys go in (no rename to a clamped `2` or to
+    /// `25`), and Enter lands exactly one rename to 250 ms, one undo step.
+    #[test]
+    fn typing_a_multi_digit_delay_is_one_rename_and_one_undo_step() {
+        let (doc, ids) = three_frames();
+        let mut live = Live::new(doc);
+        let intents = live.click(ids::delay(0));
+        assert_eq!(live.apply(&intents), 0, "a click only opens the text edit");
+        let key = |key, modifiers| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        let intents = live
+            .frame(vec![key(egui::Key::A, egui::Modifiers::COMMAND)])
+            .0;
+        live.apply(&intents);
+        let mut names = Vec::new();
+        for ch in ["2", "5", "0"] {
+            let intents = live.frame(vec![egui::Event::Text(ch.into())]).0;
+            assert_eq!(live.apply(&intents), 0, "the key {ch} lands nothing");
+            names.push(live.doc.layers.get(ids[0]).unwrap().name.clone());
+        }
+        assert_eq!(live.history.undo_depth(), 0, "nothing lands mid-typing");
+        assert!(
+            names.iter().all(|n| *n == frame_layer_name("Frame 1", 100)),
+            "no intermediate rename while typing: {names:?}"
+        );
+        let intents = live
+            .frame(vec![key(egui::Key::Enter, egui::Modifiers::NONE)])
+            .0;
+        let mut applied = live.apply(&intents);
+        for _ in 0..2 {
+            let intents = live.frame(Vec::new()).0;
+            applied += live.apply(&intents);
+        }
+        assert_eq!(applied, 1, "Enter lands the typed delay once");
+        assert_eq!(
+            live.history.undo_depth(),
+            1,
+            "one typed edit, one undo step"
+        );
+        assert_eq!(frames(&live.doc)[0].delay_ms, 250);
+        assert_eq!(
+            live.doc.layers.get(ids[0]).unwrap().name,
+            frame_layer_name("Frame 1", 250)
+        );
+        live.history.undo(&mut live.doc).unwrap();
+        assert_eq!(frames(&live.doc)[0].delay_ms, 100);
+    }
+
+    /// The painted strings whose top-left lies inside `rect`.
+    fn painted_texts_in(out: &egui::FullOutput, rect: egui::Rect) -> Vec<String> {
+        out.shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(t) if rect.expand(1.0).contains(t.pos) => {
+                    Some(t.galley.text().to_string())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The panel's words come from the localization catalogue: the painted
+    /// transport and empty-state strings are exactly the `ui.animation.*`
+    /// rows.
+    #[test]
+    fn the_panels_words_are_the_catalogues() {
+        let (doc, _) = three_frames();
+        let mut live = Live::new(doc);
+        let (_, out) = live.frame(Vec::new());
+        let texts = painted_texts_in(&out, egui::Rect::EVERYTHING);
+        for key in [PLAY, ONION] {
+            let word = crate::strings::tr(key);
+            assert!(!word.is_empty(), "{key} has no catalogue row");
+            assert!(
+                texts.iter().any(|t| t == word),
+                "{word:?} not drawn: {texts:?}"
+            );
+        }
+        assert!(
+            texts.iter().any(|t| t.ends_with(crate::strings::tr(MS))),
+            "the delay suffix is the catalogue's: {texts:?}"
+        );
+        let mut empty = Live::new(Document::new(64, 48, "empty"));
+        let (_, out) = empty.frame(Vec::new());
+        let texts = painted_texts_in(&out, egui::Rect::EVERYTHING);
+        let hint = crate::strings::tr(NO_FRAMES);
+        assert!(!hint.is_empty());
+        assert!(texts.iter().any(|t| t == hint), "{texts:?}");
+    }
+
+    /// Play steps the preview through the frames at their own delays and
+    /// Stop holds it; neither touches the document. The onion skin draws the
+    /// previous frame faintly under the current one.
+    #[test]
+    fn play_steps_the_preview_at_each_frames_delay_and_onion_skin_shows_the_previous() {
+        let (doc, ids) = three_frames();
+        let mut live = Live::new(doc);
+        let intents = live.click(ids::play());
+        assert!(
+            !intents.iter().any(|i| matches!(i, Intent::Document(_))),
+            "playback is view state: {intents:?}"
+        );
+        assert!(playback(&live.ctx).playing);
+        let started = live.time;
+        let mut seen = Vec::new();
+        for ms in [50, 150, 320, 650] {
+            live.time = started + f64::from(ms) / 1000.0;
+            let (intents, _) = live.frame(Vec::new());
+            assert!(!intents.iter().any(|i| matches!(i, Intent::Document(_))));
+            seen.push(playback(&live.ctx).current);
+        }
+        // 0-100 ms frame 1, 100-300 frame 2, 300-600 frame 3, then it loops.
+        assert_eq!(seen, vec![0, 1, 2, 0]);
+        let showing = live.w.layer_thumbs[&ids[0]].id();
+        assert_eq!(live.preview_images().last().map(|i| i.0), Some(showing));
+
+        // Stop holds the frame.
+        live.click(ids::play());
+        assert!(!playback(&live.ctx).playing);
+        let held = playback(&live.ctx).current;
+        live.time += 5.0;
+        live.frame(Vec::new());
+        assert_eq!(playback(&live.ctx).current, held);
+
+        // Onion skin: the frame before the current one, painted first and
+        // fainter, under the current one.
+        live.click(ids::onion());
+        assert!(playback(&live.ctx).onion);
+        let current = playback(&live.ctx).current;
+        let before = (current + 2) % 3;
+        let images = live.preview_images();
+        assert_eq!(images.len(), 2, "{images:?}");
+        assert_eq!(images[0].0, live.w.layer_thumbs[&ids[before]].id());
+        assert_eq!(images[1].0, live.w.layer_thumbs[&ids[current]].id());
+        assert!(
+            images[0].1.a() < images[1].1.a(),
+            "the onion frame is fainter: {images:?}"
+        );
+    }
 }

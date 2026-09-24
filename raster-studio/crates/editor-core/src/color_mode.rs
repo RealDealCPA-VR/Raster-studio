@@ -31,17 +31,38 @@ pub mod mode {
     pub const LAB: u8 = 2;
     pub const CMYK: u8 = 3;
     pub const INDEXED: u8 = 4;
+    /// W10-H: black and white only (from Grayscale; one flattened layer
+    /// whose every pixel is `0` or `255`, opaque — 1-bit semantics in 8-bit
+    /// tiles).
+    pub const BITMAP: u8 = 5;
+    /// W10-H: a grayscale image printed through one to four inks, baked
+    /// into the tiles at conversion (`color::duotone`).
+    pub const DUOTONE: u8 = 6;
 }
 
 /// Whether `mode` is a colour mode this build knows.
 pub const fn is_known_color_mode(mode: u8) -> bool {
-    mode <= mode::INDEXED
+    mode <= mode::DUOTONE
 }
 
 /// Whether converting INTO `mode` rewrites pixels (as opposed to only the
 /// flag). RGB and Lab do not: both keep every 8-bit sRGB colour.
 pub const fn constrains_pixels(mode: u8) -> bool {
-    matches!(mode, mode::GRAYSCALE | mode::CMYK | mode::INDEXED)
+    matches!(
+        mode,
+        mode::GRAYSCALE | mode::CMYK | mode::INDEXED | mode::BITMAP | mode::DUOTONE
+    )
+}
+
+/// W10-H: whether a document in `from` can be converted into `to` directly.
+/// Photoshop's rule: Bitmap and Duotone are reached from Grayscale only
+/// (and a Bitmap or Duotone document leaves to Grayscale or RGB). Every
+/// other pair is allowed.
+pub const fn conversion_allowed(from: u8, to: u8) -> bool {
+    match to {
+        mode::BITMAP | mode::DUOTONE => from == mode::GRAYSCALE,
+        _ => true,
+    }
 }
 
 /// Build the one-step conversion of `doc` into colour mode `to`.
@@ -157,6 +178,28 @@ mod tests {
             convert_color_mode(&doc, mode::RGB, "?", |_, _, _| None),
             Err(CommandError::ColorModeUnchanged(mode::RGB))
         ));
+    }
+
+    /// W10-H: Bitmap and Duotone are known modes that rewrite pixels, and
+    /// only a Grayscale document converts into them.
+    #[test]
+    fn bitmap_and_duotone_are_known_pixel_modes_reached_from_grayscale() {
+        for m in [mode::BITMAP, mode::DUOTONE] {
+            assert!(is_known_color_mode(m));
+            assert!(constrains_pixels(m));
+            assert!(conversion_allowed(mode::GRAYSCALE, m));
+            assert!(!conversion_allowed(mode::RGB, m));
+            assert!(conversion_allowed(m, mode::RGB));
+        }
+        assert!(!is_known_color_mode(mode::DUOTONE + 1));
+        let mut doc = Document::new(4, 4, "j");
+        Command::SetMetaColorMode {
+            from: 0,
+            to: mode::DUOTONE,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(doc.meta.color_mode, mode::DUOTONE);
     }
 
     #[test]

@@ -2182,6 +2182,11 @@ fn crop_to_content(rgba: &[u8], rect: DocRect) -> Option<(DocRect, Vec<u8>)> {
 #[path = "psd_live.rs"]
 mod psd_live;
 
+// W10-F: a GIMP `.xcf` opens as a layered document with an import report.
+#[path = "import_xcf.rs"]
+mod xcf_import;
+pub use xcf_import::{document_from_xcf, looks_like_xcf, read_xcf_bytes};
+
 // W9-G: `vmsk`/`vsms` as live vector masks, both ways.
 #[path = "psd_vector_mask.rs"]
 mod psd_vector_mask;
@@ -4193,6 +4198,7 @@ mod tests {
                     asset,
                     linked: false,
                     filters: Vec::new(),
+                    filter_mask: None,
                 }),
             ))
             .unwrap();

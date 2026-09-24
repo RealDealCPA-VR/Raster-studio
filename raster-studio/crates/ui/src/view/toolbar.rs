@@ -852,6 +852,11 @@ fn transform_row(w: &mut Workspace, ui: &mut Ui, specs: &[OptionSpec]) {
     if let Some(s) = spec(keys::INTERPOLATION) {
         option_control(w, ui, tool, &s);
     }
+    // W10-J: Content-Aware Scale's Amount; `shown_schema` keeps it only
+    // while the Mode is Content-Aware (`TransformMode::option_shown`).
+    if let Some(s) = spec(keys::CA_AMOUNT) {
+        option_control(w, ui, tool, &s);
+    }
     separator(ui);
     let warp_before = w.options.get(tool, keys::WARP);
     let bend_before = w.options.get(tool, keys::BEND);

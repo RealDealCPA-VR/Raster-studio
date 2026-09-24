@@ -84,7 +84,13 @@ pub struct GalleryParam {
     pub default: f32,
 }
 
-const fn p(key: &'static str, label: &'static str, min: f32, max: f32, default: f32) -> GalleryParam {
+const fn p(
+    key: &'static str,
+    label: &'static str,
+    min: f32,
+    max: f32,
+    default: f32,
+) -> GalleryParam {
     GalleryParam {
         key,
         label,
@@ -356,7 +362,7 @@ impl GalleryEffect {
             return src.clone();
         }
         let v = Values::resolve(self, values);
-        let seed = 0x5A11_E27 ^ (self as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let seed = 0x05A1_1E27 ^ (self as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
         let img = Img::from_buffer(src);
         let out = match self {
             GalleryEffect::ColoredPencil => colored_pencil(src, &img, &v),
@@ -544,7 +550,11 @@ impl Img {
         Img {
             w,
             h,
-            px: b.pixels().iter().map(|p| color::unpremultiply(*p)).collect(),
+            px: b
+                .pixels()
+                .iter()
+                .map(|p| color::unpremultiply(*p))
+                .collect(),
         }
     }
 
@@ -1006,7 +1016,7 @@ fn watercolor(src: &FilterBuffer, v: &Values, seed: u64) -> Img {
 // ---------------------------------------------------------------------------
 
 /// Accented Edges: the Sobel edges of the luminance (smoothed by Smoothness
-/// * 0.3, widened by Edge Width / 2) pull the colour toward a grey of Edge
+/// times 0.3, widened by Edge Width / 2) pull the colour toward a grey of Edge
 /// Brightness / 50 — bright chalky edges at high values, ink at low ones.
 fn accented_edges(img: &Img, v: &Values) -> Img {
     let width = v.get(0) / 2.0;
@@ -1014,7 +1024,11 @@ fn accented_edges(img: &Img, v: &Values) -> Img {
     let l = img.luma().blur(v.get(2) * 0.3);
     img.map(|x, y, c| {
         let t = (l.edge(x, y) * width * 4.0).clamp(0.0, 1.0);
-        [mix(c[0], target, t), mix(c[1], target, t), mix(c[2], target, t)]
+        [
+            mix(c[0], target, t),
+            mix(c[1], target, t),
+            mix(c[2], target, t),
+        ]
     })
 }
 
@@ -1435,10 +1449,7 @@ fn mosaic_tiles(img: &Img, v: &Values) -> Img {
         if lx < grout || ly < grout {
             return [grout_grey; 3];
         }
-        let c = img.at(
-            i64::from(x - lx + size / 2),
-            i64::from(y - ly + size / 2),
-        );
+        let c = img.at(i64::from(x - lx + size / 2), i64::from(y - ly + size / 2));
         let bevel = if lx == grout || ly == grout {
             1.15
         } else if lx == size - 1 || ly == size - 1 {
@@ -1590,7 +1601,10 @@ mod tests {
             assert_ne!(a.pixels(), src.pixels(), "{e:?} changed nothing");
             assert_eq!(a.pixels(), b.pixels(), "{e:?} is not deterministic");
             // Alpha is handed through.
-            assert!(a.pixels().iter().all(|p| (p[3] - 1.0).abs() < 1e-6), "{e:?}");
+            assert!(
+                a.pixels().iter().all(|p| (p[3] - 1.0).abs() < 1e-6),
+                "{e:?}"
+            );
         }
     }
 
@@ -1629,9 +1643,7 @@ mod tests {
         let stack = GalleryStack {
             layers: vec![a.clone(), b.clone()],
         };
-        let by_hand = b
-            .effect
-            .apply(&a.effect.apply(&src, &a.values), &b.values);
+        let by_hand = b.effect.apply(&a.effect.apply(&src, &a.values), &b.values);
         assert_eq!(stack.apply(&src), by_hand);
         let reversed = GalleryStack {
             layers: vec![b.clone(), a.clone()],

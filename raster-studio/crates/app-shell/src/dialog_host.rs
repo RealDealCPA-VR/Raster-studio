@@ -123,6 +123,66 @@ thread_local! {
     /// [`ui::menu::MenuAction::BlurGallery`] pick of the same kind.
     static CONFIRMED_BLUR_GALLERY: RefCell<Option<ui::dialogs::BlurGallerySpec>> =
         const { RefCell::new(None) };
+    /// W10-D: the effect list the Filter Gallery confirmed, waiting for the
+    /// [`ui::menu::MenuAction::FilterGallery`] pick.
+    static CONFIRMED_FILTER_GALLERY: RefCell<Option<ui::dialogs::FilterGallerySpec>> =
+        const { RefCell::new(None) };
+    /// W10-D: the map-driven Displace the Displace dialog confirmed, waiting
+    /// for the `Filter(Displace)` pick.
+    static CONFIRMED_DISPLACE_MAP: RefCell<Option<ui::dialogs::DisplaceMapSpec>> =
+        const { RefCell::new(None) };
+    /// W10-D: the Vanishing Point session confirmed, waiting for the
+    /// [`ui::menu::MenuAction::VanishingPoint`] pick.
+    static CONFIRMED_VANISHING_POINT: RefCell<Option<ui::dialogs::VanishingPointSpec>> =
+        const { RefCell::new(None) };
+}
+
+/// W10-D: the Filter Gallery effect list confirmed since the last take.
+/// Consumed on read, so a confirmation is applied exactly once.
+pub(crate) fn take_confirmed_filter_gallery() -> Option<ui::dialogs::FilterGallerySpec> {
+    CONFIRMED_FILTER_GALLERY.with(|slot| slot.borrow_mut().take())
+}
+
+/// W10-D: the Displace-with-a-map confirmed since the last take. Consumed on
+/// read.
+pub(crate) fn take_confirmed_displace_map() -> Option<ui::dialogs::DisplaceMapSpec> {
+    CONFIRMED_DISPLACE_MAP.with(|slot| slot.borrow_mut().take())
+}
+
+/// W10-D: the Vanishing Point session confirmed since the last take.
+/// Consumed on read.
+pub(crate) fn take_confirmed_vanishing_point() -> Option<ui::dialogs::VanishingPointSpec> {
+    CONFIRMED_VANISHING_POINT.with(|slot| slot.borrow_mut().take())
+}
+
+/// W10-D: the image file Displace's Load... button reads as its map. Tests
+/// set [`PICKED_DISPLACE_MAP_FOR_TEST`] to stand in for the person at the
+/// file dialog; with nothing set a test answers "cancelled".
+fn pick_displace_map_file() -> Option<std::path::PathBuf> {
+    #[cfg(test)]
+    {
+        PICKED_DISPLACE_MAP_FOR_TEST.with(|p| p.borrow_mut().take())
+    }
+    #[cfg(not(test))]
+    {
+        rfd::FileDialog::new()
+            .add_filter(
+                "Image",
+                &[
+                    "png", "jpg", "jpeg", "psd", "tif", "tiff", "bmp", "gif", "webp", "tga",
+                ],
+            )
+            .set_title("Displacement map")
+            .pick_file()
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The file [`pick_displace_map_file`] answers once, in place of the
+    /// dialog.
+    pub(crate) static PICKED_DISPLACE_MAP_FOR_TEST: RefCell<Option<std::path::PathBuf>> =
+        const { RefCell::new(None) };
 }
 
 /// W9-O: the blur a Blur Gallery dialog confirmed, if one did since the last
@@ -343,6 +403,30 @@ pub enum ActiveDialog {
     WarpText(Box<ui::dialogs::WarpTextDialog>),
     /// W10-J: View > New Guide Layout... Confirms to a `SetGuides` command.
     NewGuideLayout(Box<ui::dialogs::NewGuideLayoutDialog>),
+    /// W10-D: Filter > Distort > Displace... over a pixel layer, with an
+    /// external map. Its confirmation is parked for the `Filter(Displace)`
+    /// arm.
+    DisplaceMap(Box<ui::dialogs::DisplaceMapDialog>),
+    /// W10-D: Filter > Vanishing Point... Its confirmed session is parked for
+    /// the `VanishingPoint` arm.
+    VanishingPoint(Box<ui::dialogs::VanishingPointDialog>),
+    /// W10-G: Edit > Preset Manager / Fade / Auto-Align Layers / Auto-Blend
+    /// Layers / Perspective Warp. Each confirmation is parked by
+    /// `crate::edit_gaps` for its own menu arm.
+    EditGap(Box<crate::edit_gaps::GapDialog>),
+    /// W10-H: Image > Mode > Bitmap / Duotone, Image > Apply Image /
+    /// Calculations. Each confirmation is parked by
+    /// `crate::menu_bridge::image_dialogs` for its own menu arm.
+    ImageGap(Box<crate::menu_bridge::image_dialogs::ImageDialog>),
+    /// W10-E: File > Automate > Batch / Convert Formats, File > Export >
+    /// Color Lookup Tables / PDF, File > File Info, Image > Variables,
+    /// Image > Vectorize Bitmap. Each confirmation is parked by
+    /// `crate::file_extras` for its own menu arm.
+    FileExtras(Box<crate::file_extras::FileExtrasDialog>),
+    /// W10-A: File > Export > Slice Options... over the slice the Slice
+    /// Select tool picked. Its confirmation is parked by
+    /// `crate::slices_export` for the `SliceOptions` arm.
+    SliceOptions(Box<ui::dialogs::SliceOptionsDialog>),
 }
 
 impl ActiveDialog {
@@ -369,7 +453,6 @@ impl ActiveDialog {
             Self::Preferences(dialog) => dialog.show(ctx),
             Self::Filter(dialog) => dialog.show(ctx, sampler),
             Self::Rotation(dialog) => dialog.show(ctx),
-            Self::FilterGallery(dialog) => dialog.show(ctx),
             Self::Fill(dialog) => dialog.show(ctx, sampler),
             Self::Stroke(dialog) => dialog.show(ctx),
             Self::RefineMask(dialog) => dialog.show(ctx),
@@ -397,7 +480,20 @@ impl ActiveDialog {
             | Self::LoadSelection(_)
             | Self::Liquify(_)
             | Self::BlurGallery(_)
-            | Self::PuppetWarp(_) => DialogOutcome::Open,
+            | Self::PuppetWarp(_)
+            // W10-D: the gallery (a list or a filter), Displace's map and
+            // Vanishing Point confirm to specs, not `DialogAction`s.
+            | Self::FilterGallery(_)
+            | Self::DisplaceMap(_)
+            | Self::VanishingPoint(_)
+            // W10-G: driven by `crate::edit_gaps::GapDialog::drive`.
+            | Self::EditGap(_)
+            // W10-H: driven by `image_dialogs::ImageDialog::drive`.
+            | Self::ImageGap(_)
+            // W10-E: driven by `crate::file_extras::drive`.
+            | Self::FileExtras(_)
+            // W10-A: parks a `SliceOptionsSpec`.
+            | Self::SliceOptions(_) => DialogOutcome::Open,
         }
     }
 
@@ -420,6 +516,13 @@ impl ActiveDialog {
                 | Self::Liquify(_)
                 | Self::BlurGallery(_)
                 | Self::PuppetWarp(_)
+                | Self::FilterGallery(_)
+                | Self::DisplaceMap(_)
+                | Self::VanishingPoint(_)
+                | Self::EditGap(_)
+                | Self::ImageGap(_)
+                | Self::FileExtras(_)
+                | Self::SliceOptions(_)
         )
     }
 }
@@ -608,6 +711,29 @@ impl DialogHost {
                 }
                 None => false,
             },
+            // W10-D: Filter > Vanishing Point... over the active pixel layer.
+            ui::menu::MenuAction::VanishingPoint => match vanishing_point_dialog(editor) {
+                Some(dialog) => {
+                    self.open(dialog);
+                    true
+                }
+                None => false,
+            },
+            // W10-D: Filter > Distort > Displace... over a pixel layer asks for
+            // an external map (an open document or a file). Over a smart
+            // object it keeps the generic dialog below, whose parameters a
+            // smart-filter entry can store.
+            ui::menu::MenuAction::Filter(ui::menu::FilterId::Displace)
+                if displace_map_available(editor) =>
+            {
+                match displace_map_dialog(editor) {
+                    Some(dialog) => {
+                        self.open(dialog);
+                        true
+                    }
+                    None => false,
+                }
+            }
             // Filter ▸ <filter>… opens the real parameter dialog. A filter
             // with no schema (none today — the catalogue is checked against
             // the menu in both directions) falls through to the bridge.
@@ -775,6 +901,52 @@ impl DialogHost {
                 }
                 None => false,
             },
+            // W10-G: the Edit gaps open over the editor's state, or not at
+            // all (the menu row says why; `perform` repeats it).
+            // W10-H: Bitmap / Duotone (from Grayscale), Apply Image,
+            // Calculations; `None` falls through to the arm, which says why.
+            action if crate::menu_bridge::image_dialogs::owns(*action) => {
+                match crate::menu_bridge::image_dialogs::open(*action, editor) {
+                    Some(dialog) => {
+                        self.open(ActiveDialog::ImageGap(Box::new(dialog)));
+                        true
+                    }
+                    None => false,
+                }
+            }
+            action if crate::edit_gaps::owns(*action) => {
+                match crate::edit_gaps::open(*action, editor) {
+                    Some(dialog) => {
+                        self.open(ActiveDialog::EditGap(Box::new(dialog)));
+                        true
+                    }
+                    None => false,
+                }
+            }
+            // W10-A: Slice Options over the picked slice; `None` (no
+            // document, no picked slice) falls through to the arm, which
+            // says why.
+            ui::menu::MenuAction::SliceOptions => {
+                match crate::slices_export::slice_options_dialog(editor) {
+                    Some(dialog) => {
+                        self.open(ActiveDialog::SliceOptions(Box::new(dialog)));
+                        true
+                    }
+                    None => false,
+                }
+            }
+            // W10-E: Batch / Convert Formats, Export Color Lookup / PDF,
+            // File Info (the XMP editor), Variables, Vectorize Bitmap; `None`
+            // falls through to the arm, which says why.
+            action if crate::file_extras::opens_dialog(action) => {
+                match crate::file_extras::dialog_for(action, editor) {
+                    Some(dialog) => {
+                        self.open(ActiveDialog::FileExtras(Box::new(dialog)));
+                        true
+                    }
+                    None => false,
+                }
+            }
             // W10-J: View > New Guide Layout... over the same set.
             ui::menu::MenuAction::NewGuideLayout => match editor.active() {
                 Some(open) => {
@@ -953,6 +1125,37 @@ impl DialogHost {
             .expect("no dialog is open for a test to drive")
     }
 
+    /// W10-D: the open Filter Gallery, for host-path tests.
+    #[cfg(test)]
+    pub(crate) fn active_filter_gallery_for_test(
+        &mut self,
+    ) -> &mut ui::dialogs::FilterGalleryDialog {
+        match self.active_for_test() {
+            ActiveDialog::FilterGallery(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the Filter Gallery"),
+        }
+    }
+
+    /// W10-D: the open Displace (external map) dialog, for host-path tests.
+    #[cfg(test)]
+    pub(crate) fn active_displace_map_for_test(&mut self) -> &mut ui::dialogs::DisplaceMapDialog {
+        match self.active_for_test() {
+            ActiveDialog::DisplaceMap(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not the Displace dialog"),
+        }
+    }
+
+    /// W10-D: the open Vanishing Point dialog, for host-path tests.
+    #[cfg(test)]
+    pub(crate) fn active_vanishing_point_for_test(
+        &mut self,
+    ) -> &mut ui::dialogs::VanishingPointDialog {
+        match self.active_for_test() {
+            ActiveDialog::VanishingPoint(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not Vanishing Point"),
+        }
+    }
+
     /// The open Fill dialog, for tests that drive its contents.
     #[cfg(test)]
     pub(crate) fn active_fill_dialog_for_test(&mut self) -> &mut ui::dialogs::FillDialog {
@@ -992,6 +1195,39 @@ impl DialogHost {
         match self.active_for_test() {
             ActiveDialog::BlurGallery(dialog) => dialog,
             other => panic!("the active dialog is {other:?}, not the Blur Gallery dialog"),
+        }
+    }
+
+    /// W10-H: the open Bitmap / Duotone / Apply Image / Calculations
+    /// dialog, for host-path tests.
+    #[cfg(test)]
+    pub(crate) fn active_image_gap_for_test(
+        &mut self,
+    ) -> &mut crate::menu_bridge::image_dialogs::ImageDialog {
+        match self.active_for_test() {
+            ActiveDialog::ImageGap(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not an Image-gap dialog"),
+        }
+    }
+
+    /// W10-E: the open File-menu automation / export dialog, for host-path
+    /// tests.
+    #[cfg(test)]
+    pub(crate) fn active_file_extras_for_test(
+        &mut self,
+    ) -> &mut crate::file_extras::FileExtrasDialog {
+        match self.active_for_test() {
+            ActiveDialog::FileExtras(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not a W10-E dialog"),
+        }
+    }
+
+    /// W10-G: the open Edit-gap dialog, for host-path tests.
+    #[cfg(test)]
+    pub(crate) fn active_edit_gap_for_test(&mut self) -> &mut crate::edit_gaps::GapDialog {
+        match self.active_for_test() {
+            ActiveDialog::EditGap(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not an Edit-gap dialog"),
         }
     }
 
@@ -1365,6 +1601,19 @@ impl DialogHost {
             }
             return;
         }
+        // W10-A: Slice Options parks its answer for the `SliceOptions` arm.
+        if let ActiveDialog::SliceOptions(dialog) = active {
+            match dialog.show(ctx) {
+                DialogOutcome::Open => {}
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(spec) => {
+                    crate::slices_export::park_slice_options(spec);
+                    out.menu.push(ui::menu::MenuAction::SliceOptions);
+                    self.active = None;
+                }
+            }
+            return;
+        }
         if let ActiveDialog::SaveSelection(dialog) = active {
             match dialog.show(ctx) {
                 DialogOutcome::Open => {}
@@ -1427,6 +1676,90 @@ impl DialogHost {
                     out.menu.push(ui::menu::MenuAction::PuppetWarp);
                     self.active = None;
                 }
+            }
+            return;
+        }
+        // W10-D: the Filter Gallery confirms either one catalogue filter
+        // (the menu item's own `RunFilter`, folded like any other) or the
+        // effect list, parked for the `FilterGallery` arm, which applies the
+        // whole list as one undo step.
+        if let ActiveDialog::FilterGallery(dialog) = active {
+            match dialog.show(ctx) {
+                DialogOutcome::Open => {}
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(ui::dialogs::GalleryOutcome::Filter(action)) => {
+                    self.active = None;
+                    fold(action, out);
+                }
+                DialogOutcome::Confirmed(ui::dialogs::GalleryOutcome::Stack(spec)) => {
+                    CONFIRMED_FILTER_GALLERY.with(|slot| *slot.borrow_mut() = Some(spec));
+                    out.menu.push(ui::menu::MenuAction::FilterGallery);
+                    self.active = None;
+                }
+            }
+            return;
+        }
+        // W10-D: Displace with an external map. Load... asks for a file here;
+        // the confirmed spec is parked for the `Filter(Displace)` arm.
+        if let ActiveDialog::DisplaceMap(dialog) = active {
+            match dialog.show(ctx) {
+                DialogOutcome::Open => {
+                    if dialog.take_file_request() {
+                        if let Some(path) = pick_displace_map_file() {
+                            let name = path
+                                .file_name()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .unwrap_or_default();
+                            match raster::decode_path(&path) {
+                                Ok(image) => {
+                                    dialog.load_map(&name, image.width, image.height, &image.rgba8);
+                                }
+                                Err(e) => dialog.set_map_error(format!("{name}: {e}")),
+                            }
+                        }
+                    }
+                }
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(spec) => {
+                    CONFIRMED_DISPLACE_MAP.with(|slot| *slot.borrow_mut() = Some(spec));
+                    out.menu
+                        .push(ui::menu::MenuAction::Filter(ui::menu::FilterId::Displace));
+                    self.active = None;
+                }
+            }
+            return;
+        }
+        // W10-D: Vanishing Point takes Liquify's road.
+        if let ActiveDialog::VanishingPoint(dialog) = active {
+            match dialog.show(ctx) {
+                DialogOutcome::Open => {}
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(spec) => {
+                    CONFIRMED_VANISHING_POINT.with(|slot| *slot.borrow_mut() = Some(spec));
+                    out.menu.push(ui::menu::MenuAction::VanishingPoint);
+                    self.active = None;
+                }
+            }
+            return;
+        }
+        // W10-G: the Edit gaps park their own confirmations.
+        if let ActiveDialog::EditGap(dialog) = active {
+            if dialog.drive(ctx, out) {
+                self.active = None;
+            }
+            return;
+        }
+        // W10-H: so do Bitmap, Duotone, Apply Image and Calculations.
+        if let ActiveDialog::ImageGap(dialog) = active {
+            if dialog.drive(ctx, out) {
+                self.active = None;
+            }
+            return;
+        }
+        // W10-E: and the File-menu automation / export dialogs.
+        if let ActiveDialog::FileExtras(dialog) = active {
+            if crate::file_extras::drive(dialog, ctx, out) {
+                self.active = None;
             }
             return;
         }
@@ -2068,6 +2401,63 @@ fn filter_gallery_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
     )))
 }
 
+/// W10-D: whether Displace opens its external-map dialog: over a pixel
+/// layer (a smart object keeps the generic dialog and its smart filter).
+fn displace_map_available(editor: &crate::Editor) -> bool {
+    crate::menu_bridge::warp_source(editor).is_some()
+}
+
+/// W10-D: every open document, flattened, as a displacement map — the other
+/// documents first (Photoshop's map is a second image), the active one last.
+fn displace_map_sources(editor: &crate::Editor) -> Vec<ui::dialogs::DisplaceMapSource> {
+    let active = editor.active_index();
+    let mut order: Vec<usize> = (0..editor.documents().len())
+        .filter(|i| Some(*i) != active)
+        .collect();
+    order.extend(active);
+    order
+        .into_iter()
+        .filter_map(|i| {
+            let open = &editor.documents()[i];
+            let canvas = compositor::composite_region(
+                &open.document,
+                &open.tiles,
+                open.canvas_rect(),
+                0,
+                compositor::CompositeOptions::default(),
+            )
+            .ok()?;
+            let rgba = canvas.to_rgba8(&open.document.meta.color_space);
+            ui::dialogs::DisplaceMapSource::from_rgba8(
+                open.title(),
+                open.document.width(),
+                open.document.height(),
+                &rgba,
+            )
+        })
+        .collect()
+}
+
+/// W10-D: the Displace dialog over the active pixel layer.
+fn displace_map_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
+    crate::menu_bridge::disarm_smart_filter_edit();
+    let source = crate::menu_bridge::warp_source(editor)?;
+    let dialog = ui::dialogs::DisplaceMapDialog::new(&source, displace_map_sources(editor))?;
+    Some(ActiveDialog::DisplaceMap(Box::new(dialog)))
+}
+
+/// W10-D: the Vanishing Point dialog over the active pixel layer, with the
+/// in-process clipboard (Edit > Copy) as what Paste lays into the plane.
+fn vanishing_point_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
+    let source = crate::menu_bridge::warp_source(editor)?;
+    let paste = editor
+        .clipboard()
+        .and_then(|c| filters::FilterBuffer::from_rgba8(c.width, c.height, &c.rgba8).ok());
+    Some(ActiveDialog::VanishingPoint(Box::new(
+        ui::dialogs::VanishingPointDialog::new(&source, paste),
+    )))
+}
+
 /// A [`CanvasSizeDialog`] over the active document's size.
 fn canvas_size_dialog(editor: &crate::Editor) -> Option<ActiveDialog> {
     let open = editor.active()?;
@@ -2100,6 +2490,9 @@ fn export_as_dialog(editor: &crate::Editor, format: raster::ExportFormat) -> Opt
     // W9-J: the Animated option is offered only when the document has `_a_`
     // frame layers, and its caption names how many.
     dialog.set_animation_frames(crate::import::animation_frame_layers(&open.document).len());
+    // W10-E: File Info's XMP and the source's EXIF, embedded while the
+    // dialog's Metadata box stays ticked.
+    dialog.set_metadata(crate::file_extras::export_metadata(open));
     Some(ActiveDialog::ExportAs(Box::new(dialog)))
 }
 
@@ -2152,7 +2545,9 @@ mod tests {
         );
         host.close();
         assert!(
-            !host.open_for_menu_action(&ui::menu::MenuAction::FileInfo, &ed),
+            // W10-E: File Info now opens its XMP dialog; Print is a row
+            // with no dialog.
+            !host.open_for_menu_action(&ui::menu::MenuAction::Print, &ed),
             "an action with no dialog yet is left to the bridge"
         );
         assert!(host.open_for_menu_action(&ui::menu::MenuAction::NewDocument, &ed));

@@ -216,7 +216,9 @@ pub(crate) fn start_deferred_stroke(
 /// The layer a deferred stroke writes (its pixels or its mask).
 fn target_layer(deferred: &tools::stroke::DeferredStroke) -> LayerId {
     match deferred.target() {
-        editor_core::PixelTarget::Layer(id) | editor_core::PixelTarget::Mask(id) => id,
+        editor_core::PixelTarget::Layer(id)
+        | editor_core::PixelTarget::Mask(id)
+        | editor_core::PixelTarget::FilterMask(id) => id,
     }
 }
 

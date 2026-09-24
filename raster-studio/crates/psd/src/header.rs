@@ -19,8 +19,10 @@ use crate::limits::{check_limit, ReadOptions};
 /// The four-byte magic every `.psd` starts with.
 pub const SIGNATURE: [u8; 4] = *b"8BPS";
 
-/// Version 1 is `.psd`. Version 2 is `.psb`, whose section lengths are 64-bit;
-/// this build refuses it by name rather than misreading it.
+/// Version 1 is `.psd`. Version 2 is `.psb`, whose section lengths are 64-bit.
+/// [`PsdHeader::read`] refuses version 2 by name rather than misreading it;
+/// W10-F: [`PsdHeader::read_any`] accepts both and says which it read, and
+/// [`crate::read::read_with`] reads a `.psb` through it.
 pub const VERSION_PSD: u16 = 1;
 pub const VERSION_PSB: u16 = 2;
 
@@ -158,27 +160,42 @@ impl PsdHeader {
         u64::from(self.width) * u64::from(self.height)
     }
 
+    /// Read a version-1 (`.psd`) header; a `.psb` is refused by name.
     pub fn read(cur: &mut Cursor<'_>, opts: &ReadOptions) -> PsdResult<Self> {
+        let start = cur.clone();
+        match Self::read_any(cur, opts)? {
+            (header, false) => Ok(header),
+            (_, true) => {
+                *cur = start;
+                Err(PsdError::UnsupportedVersion(VERSION_PSB))
+            }
+        }
+    }
+
+    /// W10-F: read a `.psd` or a `.psb` header, returning `true` for a
+    /// `.psb`. A `.psb` canvas is bounded by
+    /// [`ReadOptions::max_psb_dimension`] instead of
+    /// [`ReadOptions::max_dimension`].
+    pub fn read_any(cur: &mut Cursor<'_>, opts: &ReadOptions) -> PsdResult<(Self, bool)> {
         cur.expect_tag(&SIGNATURE, "8BPS")?;
         let version = cur.u16()?;
-        if version != VERSION_PSD {
-            return Err(PsdError::UnsupportedVersion(version));
-        }
+        let psb = match version {
+            VERSION_PSD => false,
+            VERSION_PSB => true,
+            other => return Err(PsdError::UnsupportedVersion(other)),
+        };
+        let max_dimension = if psb {
+            opts.max_psb_dimension
+        } else {
+            opts.max_dimension
+        };
         cur.skip(6)?; // reserved, must be zero; tolerated if not
         let channels = cur.u16()?;
         check_limit("header channel count", u64::from(channels), 56)?;
         let height = cur.u32()?;
         let width = cur.u32()?;
-        check_limit(
-            "canvas height",
-            u64::from(height),
-            u64::from(opts.max_dimension),
-        )?;
-        check_limit(
-            "canvas width",
-            u64::from(width),
-            u64::from(opts.max_dimension),
-        )?;
+        check_limit("canvas height", u64::from(height), u64::from(max_dimension))?;
+        check_limit("canvas width", u64::from(width), u64::from(max_dimension))?;
         // Bounded from below as well as from above. `check_limit` only refuses
         // an absurdly *large* canvas; a 0 x N one parsed cleanly all the way
         // through and then made `write` refuse the document with an
@@ -198,13 +215,16 @@ impl PsdHeader {
                 min,
             });
         }
-        Ok(PsdHeader {
-            channels,
-            width,
-            height,
-            depth,
-            color_mode,
-        })
+        Ok((
+            PsdHeader {
+                channels,
+                width,
+                height,
+                depth,
+                color_mode,
+            },
+            psb,
+        ))
     }
 
     pub fn write(&self, sink: &mut Sink) {

@@ -62,6 +62,11 @@ use crate::prefs::{Preferences, ThemeChoice};
 // W7-D: Image > Mode conversions (RGB, Grayscale, Lab, CMYK, Indexed).
 mod color_mode;
 
+// W10-H: Image > Apply Image and Calculations, and the Bitmap / Duotone /
+// Apply Image / Calculations dialogs as one host dialog kind.
+pub(crate) mod apply_image;
+pub mod image_dialogs;
+
 // W7-I: Content-Aware Fill and Content-Aware Scale, run on a worker.
 pub(crate) mod content_aware_job;
 
@@ -74,6 +79,24 @@ pub mod asl_import;
 
 // W10-J: New Guides from Shape, Alt+Ctrl+T, Shift+[ / ] and the number keys.
 pub(crate) mod view_keys;
+// W10-J: File > New's Artboard option.
+pub(crate) mod artboard_doc;
+
+// W10-B: the Channels panel's alpha rows — a saved selection edited as a
+// channel.
+pub(crate) mod alpha_channel;
+// W10-B: the Glyphs panel's pick, into the live typing session or the
+// committed text.
+pub(crate) mod glyph_insert;
+#[cfg(test)]
+mod w10b_panel_tests;
+
+// W10-I: Hide / Show Layers, Matting, and the Smart Object rows.
+pub(crate) mod layer_extras;
+
+// W10-A: Edit > Define Custom Shape, and Layer > Link Layers' link groups.
+pub(crate) mod custom_shape;
+pub(crate) mod link_groups;
 
 /// Shown on an item the shared menu model allows but this build cannot perform.
 ///
@@ -188,6 +211,9 @@ pub enum Pick {
     /// W4-G: confirm the live tool's held gesture (the Ruler's Straighten
     /// Layer button); the shell treats it exactly as Enter.
     ConfirmTool,
+    /// W10-B: the Glyphs panel's pick for a text layer; the shell inserts it
+    /// ([`glyph_insert::insert_glyph`]).
+    InsertGlyph(LayerId, String),
 }
 
 /// The nine menus, exactly as the `ui` crate publishes them.
@@ -211,6 +237,8 @@ pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
     install_smart_filter_runner();
     // W10-K: and so a finished Select Subject lands on the next frame.
     subject_job::poll(editor);
+    // W10-E: and a running Batch / Convert Formats reports its progress.
+    crate::automate::poll(editor);
     let recent_files = editor
         .recent()
         .entries()
@@ -282,6 +310,8 @@ pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
         // is turned and uprights it.
         context.view_rotated = open.camera.is_rotated();
     }
+    // W10-G: Edit > Fade names the step it would fade, or greys out.
+    context.fade_step = crate::fade::fadeable(editor);
     context
 }
 
@@ -300,7 +330,10 @@ pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
 /// — go unanswered for a whole wave.
 pub fn pick(intent: &Intent, editor: &Editor) -> Option<Pick> {
     match intent {
-        Intent::Document(command) => Some(Pick::Command(command.clone())),
+        // W10-A: the Layers panel's link button makes a group of its own.
+        Intent::Document(command) => Some(Pick::Command(
+            link_groups::panel_link(command, editor).unwrap_or_else(|| command.clone()),
+        )),
         Intent::Action(action) => shell_action(*action, editor),
         Intent::SetTheme(theme) => {
             let mut prefs = editor.preferences().clone();
@@ -328,6 +361,7 @@ pub fn pick(intent: &Intent, editor: &Editor) -> Option<Pick> {
             crate::edit_target::EditTargetKind::from_focus(*mask),
         )),
         Intent::EnterTextLayer { layer } => Some(Pick::EnterTextLayer(*layer)),
+        Intent::InsertGlyph { layer, text } => Some(Pick::InsertGlyph(*layer, text.clone())),
         Intent::HistoryJump(jump) => {
             // The panel counts *steps* from where the document stands; the
             // editor walks to an absolute depth. Converting here keeps the one
@@ -444,6 +478,11 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
         // Transform Selection is the gizmo wearing its Selection target: the
         // drag resamples the selection mask and commits as one undoable step.
         MenuAction::TransformSelection => Some(("target", 1)),
+        // W10-J: Edit > Content-Aware Scale > With Handles is the gizmo in
+        // its Content-Aware mode.
+        MenuAction::ContentAwareScaleFree => {
+            Some(("mode", tools::transform::TransformMode::CONTENT_AWARE_INDEX))
+        }
         _ => None,
     } {
         return Some(Pick::ToolChoice(tools::ToolId::FreeTransform, key, index));
@@ -565,8 +604,11 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
             // before this table is ever consulted. The text stays so the
             // unrouted-message path still has a specific sentence to show
             // (what the metadata window holds today, and what it does not).
-            "File Info shows the metadata editor_core stores — a title and a \
-             size; it has no XMP fields to edit yet"
+            // W10-E: File Info edits the XMP fields, kept beside the
+            // document for the session rather than in it.
+            "File Info edits the document's XMP description (title, author, \
+             description, keywords, copyright) for this session; a .rstudio \
+             save does not keep it"
         }
 
         // ---- Edit ----------------------------------------------------------
@@ -663,6 +705,7 @@ pub fn record(pick: Pick, out: &mut ChromeOutput) {
         Pick::OpenGradientEditor => out.gradient_editor = true,
         Pick::OpenBrushEditor => out.brush_editor = true,
         Pick::ConfirmTool => out.confirm_tool = true,
+        Pick::InsertGlyph(layer, text) => out.insert_glyphs.push((layer, text)),
     }
 }
 
@@ -1414,13 +1457,25 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
 
     let outcome = match action {
         // ---- File ----------------------------------------------------------
-        MenuAction::FileInfo => {
-            editor.toggle_file_info();
-            Ok("File Info…".to_string())
+        // W10-E: a confirmed File Info dialog parks its XMP fields for this
+        // arm; with nothing parked (the chord) the facts window toggles.
+        MenuAction::FileInfo => match crate::file_extras::take_confirmed_file_info() {
+            Some(fields) => crate::file_extras::set_file_info(editor, fields),
+            None => {
+                editor.toggle_file_info();
+                Ok("File Info…".to_string())
+            }
+        },
+        // W10-E: Batch / Convert Formats, Export Color Lookup / PDF,
+        // Variables, Vectorize Bitmap.
+        action if crate::file_extras::performs(action) => {
+            crate::file_extras::perform(action, editor)
         }
         MenuAction::ExportLayers => editor.export_layers(),
         // W4-H: one file per committed Slice-tool region.
         MenuAction::ExportSlices => crate::slices_export::export_slices(editor),
+        // W10-A: the Slice Options dialog's parked answer.
+        MenuAction::SliceOptions => crate::slices_export::perform_slice_options(editor),
         // W8-C: one file per artboard.
         MenuAction::ExportArtboards => crate::artboard_export::export_artboards(editor),
         MenuAction::PlaceEmbedded => editor.place_from_dialog(false),
@@ -1442,6 +1497,8 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::DefineStylePreset => editor.define_style_preset(),
         MenuAction::ApplyStylePreset => editor.apply_latest_style_preset(),
         MenuAction::DefineBrush => editor.define_brush_preset(),
+        // W10-A.
+        MenuAction::DefineCustomShape => custom_shape::define_custom_shape(editor),
         MenuAction::Rasterize(ui::menu::RasterizeTarget::AllLayers) => editor.flatten_all_layers(),
         MenuAction::NewFillLayer(ui::menu::FillLayerKind::SolidColor) => {
             editor.new_solid_fill_layer()
@@ -1458,8 +1515,25 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::EditSmartObjectContents => editor.edit_smart_object_contents(),
         MenuAction::ReplaceContents => editor.replace_from_dialog(),
         MenuAction::CommitSmartObjectContents => editor.commit_smart_object_contents(),
+        // W10-I: the rest of the Smart Object submenu, Matting, Hide / Show
+        // Layers (`layer_extras`).
+        MenuAction::SmartObject(op) => layer_extras::smart_object(editor, op),
+        MenuAction::Matting(op) => layer_extras::matting(editor, op),
+        MenuAction::SmartFilter(op) => layer_extras::smart_filter(editor, op),
+        MenuAction::HideLayers => layer_extras::set_layers_visible(editor, false),
+        MenuAction::ShowLayers => layer_extras::set_layers_visible(editor, true),
+        // W10-A: each click makes an independent link group.
+        MenuAction::LinkLayers => link_groups::link_layers(editor),
         // ---- Filter --------------------------------------------------------
         MenuAction::ConvertForSmartFilters => convert_for_smart_filters(editor),
+        // W10-D: a Displace the external-map dialog confirmed runs that map;
+        // with nothing parked the row runs at its defaults like any filter.
+        MenuAction::Filter(ui::menu::FilterId::Displace) => {
+            match crate::dialog_host::take_confirmed_displace_map() {
+                Some(spec) => displace_map_with(editor, &spec),
+                None => run_filter(editor, ui::menu::FilterId::Displace),
+            }
+        }
         MenuAction::Filter(id) => run_filter(editor, id),
 
         // ---- Image ▸ Adjustments -------------------------------------------
@@ -1587,7 +1661,10 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         }
 
         // ---- Edit ----------------------------------------------------------
-        MenuAction::ClearPixels => clear_selection(editor),
+        // W10-A: with the Slice Select tool and a picked slice, the key
+        // deletes the slice rather than clearing pixels.
+        MenuAction::ClearPixels => crate::slices_export::delete_picked_slice(editor)
+            .unwrap_or_else(|| clear_selection(editor)),
         MenuAction::FillDialog => fill_selection(editor),
         MenuAction::StrokeDialog => stroke_selection(editor),
         MenuAction::ContentAwareScale(step) => content_aware_scale_layer(editor, step),
@@ -1635,6 +1712,9 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         }
         MenuAction::Reselect => reselect(editor),
         MenuAction::ToggleQuickMask => editor.toggle_quick_mask(),
+        // W10-B: the Channels panel's alpha rows.
+        MenuAction::EditAlphaChannel(index) => alpha_channel::open_alpha_channel(editor, index),
+        MenuAction::CloseAlphaChannel => alpha_channel::close_alpha_channel(editor),
         // W7-D: all five modes convert, each as one undo step
         // (`color_mode.rs`). Indexed carries the Indexed Color dialog's
         // parked spec; a pick with nothing parked converts at its defaults.
@@ -1644,7 +1724,37 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
             } else {
                 None
             };
-            color_mode::set_color_mode(editor, mode, indexed)
+            // W10-H: Bitmap and Duotone carry their dialogs' parked answers
+            // (the defaults when nothing is parked).
+            let options = color_mode::ModeOptions {
+                bitmap: (mode == ui::menu::ColorMode::Bitmap)
+                    .then(image_dialogs::take_confirmed_bitmap)
+                    .flatten(),
+                duotone: (mode == ui::menu::ColorMode::Duotone)
+                    .then(image_dialogs::take_confirmed_duotone)
+                    .flatten(),
+            };
+            color_mode::set_color_mode_with(editor, mode, indexed, options)
+        }
+        // W10-H: Image > Apply Image / Calculations, with the dialog's
+        // parked spec, or the dialog's opening spec when nothing is parked.
+        MenuAction::ApplyImage => {
+            let spec = match image_dialogs::take_confirmed_apply_image() {
+                Some(spec) => spec,
+                None => ui::dialogs::ApplyImageDialog::new(apply_image::source_documents(editor))
+                    .confirm()
+                    .ok_or("No document is open")?,
+            };
+            apply_image::apply_image(editor, spec)
+        }
+        MenuAction::Calculations => {
+            let spec = match image_dialogs::take_confirmed_calculations() {
+                Some(spec) => spec,
+                None => ui::dialogs::CalculationsDialog::new(apply_image::source_documents(editor))
+                    .confirm()
+                    .ok_or("No document is open")?,
+            };
+            apply_image::calculations(editor, spec)
         }
         // W4-F: Image > Mode > 8/16 Bits/Channel. Every raster tile is
         // widened (8 -> 16, lossless) or rounded (16 -> 8) in ONE undoable
@@ -1656,6 +1766,10 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         // that was already an exact 8-bit code comes back unchanged, and a
         // smooth 16-bit gradient does not band.
         MenuAction::SetBitDepth(depth) => {
+            // W10-H: 32 Bits/Channel at either end (`crate::depth32`).
+            if let Some(done) = crate::depth32::perform_set_bit_depth(editor, depth) {
+                return done;
+            }
             let command = editor
                 .active_mut()
                 .ok_or("No document is open")?
@@ -1684,11 +1798,29 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
             Some(spec) => puppet_warp_with(editor, &spec),
             None => Err(dialog_refused(action, editor)),
         },
+        // W10-G: Preset Manager, Fade, Auto-Align / Auto-Blend, Perspective
+        // Warp: each applies its parked dialog answer (`crate::edit_gaps`).
+        MenuAction::PresetManager
+        | MenuAction::Fade
+        | MenuAction::AutoAlignLayers
+        | MenuAction::AutoBlendLayers
+        | MenuAction::PerspectiveWarp => crate::edit_gaps::perform(action, editor),
         // W9-O: Filter > Blur Gallery > <kind>... confirmed; the blur is the
         // dialog's (parked by `DialogHost::ui`).
         MenuAction::BlurGallery(kind) => match crate::dialog_host::take_confirmed_blur_gallery() {
             Some(spec) if spec.kind() == kind => blur_gallery_with(editor, &spec),
             _ => Err(dialog_refused(action, editor)),
+        },
+        // W10-D: the Filter Gallery's effect list and Filter > Vanishing
+        // Point confirmed (parked by `DialogHost::ui`); each lands as one undo
+        // step.
+        MenuAction::FilterGallery => match crate::dialog_host::take_confirmed_filter_gallery() {
+            Some(spec) => filter_gallery_with(editor, &spec),
+            None => Err(dialog_refused(action, editor)),
+        },
+        MenuAction::VanishingPoint => match crate::dialog_host::take_confirmed_vanishing_point() {
+            Some(spec) => vanishing_point_with(editor, &spec),
+            None => Err(dialog_refused(action, editor)),
         },
 
         // ---- Layer ---------------------------------------------------------
@@ -1740,7 +1872,6 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         | MenuAction::RotateCanvas(CR::Arbitrary)
         | MenuAction::LayerStyle(_)
         | MenuAction::BlendingOptions
-        | MenuAction::FilterGallery
         | MenuAction::RefineMask
         | MenuAction::RemoveColorFringe
         | MenuAction::RenameLayer
@@ -1886,7 +2017,7 @@ fn dialog_refused(action: MenuAction, editor: &Editor) -> String {
                 Err(reason) => reason,
             }
         }
-        MenuAction::FilterGallery | MenuAction::BlurGallery(_) => {
+        MenuAction::FilterGallery | MenuAction::BlurGallery(_) | MenuAction::VanishingPoint => {
             return match pixel_layer(editor) {
                 Ok(_) => format!("{}: its dialog could not open", action.label()),
                 Err(reason) => reason,
@@ -1938,7 +2069,7 @@ fn pixel_layer(editor: &Editor) -> Result<LayerId, String> {
 
 /// Read the active pixel layer, run `op` over a linear premultiplied buffer,
 /// mask the result by the selection and apply it as one undoable step.
-fn edit_active_pixels(
+pub(crate) fn edit_active_pixels(
     editor: &mut Editor,
     label: &str,
     op: impl FnOnce(&mut filters::FilterBuffer, &color::ColorSpace) -> Result<(), String>,
@@ -1963,6 +2094,13 @@ fn edit_active_pixels(
             buffer.dimensions()
         )
     };
+    // W10-H: a 32-bit document's layer is read, filtered and written as f32.
+    if editor
+        .active()
+        .is_some_and(|d| d.document.meta.bit_depth == 32)
+    {
+        return crate::depth32::edit_active_pixels_f32(editor, layer, (w, h), label, op);
+    }
     // W7-C: a 16-bit document's layer is read, filtered and written at 16
     // bits (the buffer itself is f32); only an 8-bit one takes the RGBA8 road.
     let command = if deep {
@@ -1982,6 +2120,8 @@ fn edit_active_pixels(
             return Err(format!("{label} changed nothing"));
         }
         let doc = editor.active_mut().ok_or("No document is open")?;
+        // W10-G: Edit > Fade can fade this step.
+        crate::fade::remember(doc.id(), layer, label, &before, &after);
         doc.layer_rgba16_command(layer, &after, label)?
     } else {
         let before = pixels::read_layer(editor.active().ok_or("No document is open")?, layer);
@@ -1997,6 +2137,8 @@ fn edit_active_pixels(
             return Err(format!("{label} changed nothing"));
         }
         let doc = editor.active_mut().ok_or("No document is open")?;
+        // W10-G: Edit > Fade can fade this step.
+        crate::fade::remember(doc.id(), layer, label, &before, &after);
         pixels::write_layer(doc, layer, &after, label)?
     };
     editor.apply_command(command);
@@ -2078,6 +2220,75 @@ pub(crate) fn blur_gallery_with(
     }
     if spec.is_identity() {
         return Err(format!("{name} would change nothing: raise its blur first"));
+    }
+    edit_active_pixels(editor, &name, |buffer, _| {
+        *buffer = spec.apply(buffer);
+        Ok(())
+    })?;
+    Ok(format!("{name} applied"))
+}
+
+/// W10-D: apply the Filter Gallery's confirmed effect list to the active
+/// layer at full resolution, folded by the selection, as one undoable step.
+pub(crate) fn filter_gallery_with(
+    editor: &mut Editor,
+    spec: &ui::dialogs::FilterGallerySpec,
+) -> Result<String, String> {
+    let name = action_name(MenuAction::FilterGallery);
+    let size = canvas_of(editor)?;
+    if spec.image_size != size {
+        return Err(format!(
+            "The document changed size since {name} opened; open it again"
+        ));
+    }
+    if spec.is_identity() {
+        return Err(format!("{name} would change nothing: show an effect first"));
+    }
+    edit_active_pixels(editor, &name, |buffer, _| {
+        *buffer = spec.apply(buffer);
+        Ok(())
+    })?;
+    Ok(format!("{name} applied"))
+}
+
+/// W10-D: apply a Displace the external-map dialog confirmed to the active
+/// layer at full resolution, folded by the selection, as one undoable step.
+pub(crate) fn displace_map_with(
+    editor: &mut Editor,
+    spec: &ui::dialogs::DisplaceMapSpec,
+) -> Result<String, String> {
+    let name = action_name(MenuAction::Filter(ui::menu::FilterId::Displace));
+    let size = canvas_of(editor)?;
+    if spec.image_size != size {
+        return Err(format!(
+            "The document changed size since {name} opened; open it again"
+        ));
+    }
+    if spec.is_identity() {
+        return Err(format!("{name} would move nothing: raise a scale first"));
+    }
+    edit_active_pixels(editor, &name, |buffer, _| {
+        *buffer = spec.apply(buffer);
+        Ok(())
+    })?;
+    Ok(format!("{name} applied"))
+}
+
+/// W10-D: apply a confirmed Vanishing Point session to the active layer at
+/// full resolution, folded by the selection, as one undoable step.
+pub(crate) fn vanishing_point_with(
+    editor: &mut Editor,
+    spec: &ui::dialogs::VanishingPointSpec,
+) -> Result<String, String> {
+    let name = action_name(MenuAction::VanishingPoint);
+    let size = canvas_of(editor)?;
+    if spec.image_size != size {
+        return Err(format!(
+            "The document changed size since {name} opened; open it again"
+        ));
+    }
+    if spec.is_identity() {
+        return Err(format!("{name} would change nothing: clone or paste first"));
     }
     edit_active_pixels(editor, &name, |buffer, _| {
         *buffer = spec.apply(buffer);
@@ -2633,13 +2844,21 @@ fn remap_active_layer(
     let (w, h) = canvas_of(editor)?;
     let command = {
         let doc = editor.active_mut().ok_or("No document is open")?;
-        // W7-C: a 16-bit layer moves its 16-bit samples, not an 8-bit copy.
-        if doc.is_sixteen_bit() {
+        // W10-H: a 32-bit layer moves its f32 samples, HDR included.
+        if doc.document.meta.bit_depth == 32 {
+            let before = crate::depth32::layer_rgbaf32(doc, layer);
+            let after = remap(&before, w, h, &map);
+            if after == before {
+                return Err(format!("{label} changed nothing"));
+            }
+            crate::depth32::layer_rgbaf32_command(doc, layer, &after, label)?
+        } else if doc.is_sixteen_bit() {
             let before = doc.layer_rgba16(layer);
             let after = remap(&before, w, h, &map);
             if after == before {
                 return Err(format!("{label} changed nothing"));
             }
+            crate::fade::remember(doc.id(), layer, label, &before, &after);
             doc.layer_rgba16_command(layer, &after, label)?
         } else {
             let before = pixels::read_layer(doc, layer);
@@ -2647,6 +2866,8 @@ fn remap_active_layer(
             if after == before {
                 return Err(format!("{label} changed nothing"));
             }
+            // W10-G: Edit > Fade can fade this step.
+            crate::fade::remember(doc.id(), layer, label, &before, &after);
             pixels::write_layer(doc, layer, &after, label)?
         }
     };
@@ -2675,6 +2896,17 @@ fn remap_all_layers(
         }
         let mut commands = Vec::new();
         for id in ids {
+            // W10-H: a 32-bit layer moves its f32 samples, HDR included.
+            if doc.document.meta.bit_depth == 32 {
+                let before = crate::depth32::layer_rgbaf32(doc, id);
+                let after = remap(&before, w, h, &map);
+                if after != before {
+                    commands.push(crate::depth32::layer_rgbaf32_command(
+                        doc, id, &after, label,
+                    )?);
+                }
+                continue;
+            }
             // W7-C: at the document's own depth, as `remap_active_layer`.
             if doc.is_sixteen_bit() {
                 let before = doc.layer_rgba16(id);
@@ -2732,8 +2964,16 @@ fn clear_selection(editor: &mut Editor) -> Result<String, String> {
     let command = {
         let doc = editor.active_mut().ok_or("No document is open")?;
         let selection = doc.document.selection.clone();
-        // W7-C: a partly selected 16-bit pixel keeps its 16-bit remainder.
-        if doc.is_sixteen_bit() {
+        // W10-H: a partly selected 32-bit pixel keeps its f32 remainder.
+        if doc.document.meta.bit_depth == 32 {
+            let before = crate::depth32::layer_rgbaf32(doc, layer);
+            let mut after = vec![0f32; before.len()];
+            pixels::mask_by_selection(&before, &mut after, &selection, w, h);
+            if after == before {
+                return Err("There is nothing to clear here".to_string());
+            }
+            crate::depth32::layer_rgbaf32_command(doc, layer, &after, "Clear")?
+        } else if doc.is_sixteen_bit() {
             let before = doc.layer_rgba16(layer);
             let mut after = vec![0u16; before.len()];
             pixels::mask_by_selection(&before, &mut after, &selection, w, h);
@@ -2994,13 +3234,21 @@ pub(crate) fn fill_selection_painting(
     let command = {
         let doc = editor.active_mut().ok_or("No document is open")?;
         let selection = doc.document.selection.clone();
-        // W7-C: a 16-bit layer is filled at 16 bits.
-        if doc.is_sixteen_bit() {
+        // W10-H: a 32-bit layer is filled at f32; unfilled pixels keep HDR.
+        if doc.document.meta.bit_depth == 32 {
+            let before = crate::depth32::layer_rgbaf32(doc, layer);
+            let after = fill_pixels(&before, &selection, spec, source, w, h);
+            if after == before {
+                return Err("The fill would change nothing".to_string());
+            }
+            crate::depth32::layer_rgbaf32_command(doc, layer, &after, "Fill")?
+        } else if doc.is_sixteen_bit() {
             let before = doc.layer_rgba16(layer);
             let after = fill_pixels(&before, &selection, spec, source, w, h);
             if after == before {
                 return Err("The fill would change nothing".to_string());
             }
+            crate::fade::remember(doc.id(), layer, "Fill", &before, &after);
             doc.layer_rgba16_command(layer, &after, "Fill")?
         } else {
             let before = pixels::read_layer(doc, layer);
@@ -3008,6 +3256,8 @@ pub(crate) fn fill_selection_painting(
             if after == before {
                 return Err("The fill would change nothing".to_string());
             }
+            // W10-G: Edit > Fade can fade this step.
+            crate::fade::remember(doc.id(), layer, "Fill", &before, &after);
             pixels::write_layer(doc, layer, &after, "Fill")?
         }
     };
@@ -3133,6 +3383,8 @@ pub(crate) fn stroke_selection_with(
         if after == before {
             return Err("The stroke would change nothing".to_string());
         }
+        // W10-G: Edit > Fade can fade this step.
+        crate::fade::remember(doc.id(), layer, "Stroke", &before, &after);
         pixels::write_layer(doc, layer, &after, "Stroke")?
     };
     editor.apply_command(command);
@@ -8056,6 +8308,192 @@ mod tests {
         assert_eq!(pixels::read_layer(ed.active().unwrap(), layer), before);
     }
 
+    /// W10-D: Filter > Filter Gallery with a stacked effect list, opened from
+    /// its menu row through the real host and confirmed with Enter, rides the
+    /// parked-spec road to the `FilterGallery` arm and lands as ONE history
+    /// entry holding exactly the stack's pixels; undo restores the bytes.
+    #[test]
+    fn w10d_the_gallery_effect_list_lands_as_one_undo_step() {
+        use filters::gallery_sets::{GalleryEffect, GallerySet};
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let before = pixels::read_layer(ed.active().unwrap(), layer);
+        let depth = ed.active().unwrap().history.undo_depth();
+        let live = context(&mut ed, &Workspace::new());
+        assert!(matches!(
+            resolve(MenuAction::FilterGallery, &live, &ed),
+            Ok(Pick::Menu(MenuAction::FilterGallery))
+        ));
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut host = crate::dialog_host::DialogHost::default();
+        assert!(host.open_for_menu_action(&MenuAction::FilterGallery, &ed));
+        let gallery = host.active_filter_gallery_for_test();
+        gallery.set_tab(ui::dialogs::GalleryTab::Set(GallerySet::Artistic));
+        gallery.pick_effect(GalleryEffect::Cutout);
+        gallery.new_layer();
+        gallery.pick_effect(GalleryEffect::Craquelure);
+        let stack = gallery.stack().clone();
+        assert_eq!(stack.layers.len(), 2);
+        let _ = w7h_frame(&mut host, &ctx, &[]);
+        let out = w7h_frame(&mut host, &ctx, &[egui::Key::Enter]);
+        assert!(!host.is_open(), "Enter closed the gallery");
+        assert_eq!(out.menu, vec![MenuAction::FilterGallery]);
+        let message = perform(MenuAction::FilterGallery, &mut ed).unwrap();
+        assert!(message.contains("Filter Gallery"), "{message}");
+        assert_eq!(
+            ed.active().unwrap().history.undo_depth(),
+            depth + 1,
+            "the whole list is one history entry"
+        );
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        let expected = stack
+            .apply(&filters::FilterBuffer::from_rgba8(48, 32, &before).unwrap())
+            .to_rgba8();
+        assert_eq!(after, expected, "the layer holds exactly the stacked list");
+        assert!(perform(MenuAction::FilterGallery, &mut ed).is_err());
+        ed.active_mut().unwrap().undo().unwrap();
+        assert_eq!(pixels::read_layer(ed.active().unwrap(), layer), before);
+    }
+
+    /// W10-D: Filter > Distort > Displace over a pixel layer opens the
+    /// external-map dialog; its map comes from another open document or from
+    /// a file (Load...), and Enter lands ONE history entry that shifts the
+    /// pixels by the map: 255 red is +scale in x, 0 red is -scale.
+    #[test]
+    fn w10d_displace_reads_an_open_document_or_a_file_as_its_map() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        let map_png = |name: &str, red: u8| {
+            let rgba: Vec<u8> = (0..48 * 32).flat_map(|_| [red, 128, 128, 255]).collect();
+            let path = dir.path().join(name);
+            std::fs::write(
+                &path,
+                raster::encode(raster::ExportFormat::Png, 48, 32, &rgba).unwrap(),
+            )
+            .unwrap();
+            path
+        };
+        // A second open document is the map; the probe stays the target.
+        ed.open_path(&map_png("right.png", 255)).unwrap();
+        ed.activate(0).unwrap();
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let before = pixels::read_layer(ed.active().unwrap(), layer);
+        let depth = ed.active().unwrap().history.undo_depth();
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut host = crate::dialog_host::DialogHost::default();
+        let displace = MenuAction::Filter(ui::menu::FilterId::Displace);
+        assert!(host.open_for_menu_action(&displace, &ed));
+        let dialog = host.active_displace_map_for_test();
+        assert_eq!(dialog.maps().len(), 2, "both open documents are offered");
+        assert_eq!(dialog.maps()[dialog.chosen()].name, "right.png");
+        dialog.set_scale(4.0, 0.0);
+        let _ = w7h_frame(&mut host, &ctx, &[]);
+        let out = w7h_frame(&mut host, &ctx, &[egui::Key::Enter]);
+        assert_eq!(out.menu, vec![displace]);
+        perform(displace, &mut ed).unwrap();
+        assert_eq!(ed.active().unwrap().history.undo_depth(), depth + 1);
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        let px =
+            |buf: &[u8], x: usize, y: usize| buf[(y * 48 + x) * 4..(y * 48 + x) * 4 + 4].to_vec();
+        assert_eq!(px(&after, 10, 5), px(&before, 14, 5), "shifted +4 px in x");
+        ed.active_mut().unwrap().undo().unwrap();
+        assert_eq!(pixels::read_layer(ed.active().unwrap(), layer), before);
+
+        // A file loaded with Load... joins the list, is chosen, and drives the
+        // shift the other way.
+        assert!(host.open_for_menu_action(&displace, &ed));
+        crate::dialog_host::PICKED_DISPLACE_MAP_FOR_TEST
+            .with(|p| *p.borrow_mut() = Some(map_png("left.png", 0)));
+        host.active_displace_map_for_test().request_map_file();
+        let _ = w7h_frame(&mut host, &ctx, &[]);
+        let dialog = host.active_displace_map_for_test();
+        assert_eq!(dialog.maps().len(), 3, "the file joined the list");
+        assert_eq!(dialog.maps()[dialog.chosen()].name, "left.png");
+        dialog.set_scale(4.0, 0.0);
+        let out = w7h_frame(&mut host, &ctx, &[egui::Key::Enter]);
+        assert_eq!(out.menu, vec![displace]);
+        perform(displace, &mut ed).unwrap();
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        assert_eq!(px(&after, 14, 5), px(&before, 10, 5), "shifted -4 px in x");
+        // With nothing parked the row still runs at its defaults.
+        assert!(perform(displace, &mut ed).is_ok());
+    }
+
+    /// W10-D: Filter > Vanishing Point opens over the layer with the
+    /// clipboard to paste; a paste into a perspective plane confirmed with
+    /// Enter lands ONE history entry, and the pasted rectangle's corners sit
+    /// where the plane's homography puts them.
+    #[test]
+    fn w10d_vanishing_point_pastes_through_the_planes_homography_as_one_undo_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = opened(dir.path());
+        ed.set_clipboard(crate::editor::Clipboard {
+            width: 8,
+            height: 8,
+            rgba8: [255u8, 0, 0, 255].repeat(64),
+            origin: (0, 0),
+        });
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let before = pixels::read_layer(ed.active().unwrap(), layer);
+        let depth = ed.active().unwrap().history.undo_depth();
+        let live = context(&mut ed, &Workspace::new());
+        assert!(matches!(
+            resolve(MenuAction::VanishingPoint, &live, &ed),
+            Ok(Pick::Menu(MenuAction::VanishingPoint))
+        ));
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut host = crate::dialog_host::DialogHost::default();
+        assert!(host.open_for_menu_action(&MenuAction::VanishingPoint, &ed));
+        let vp = host.active_vanishing_point_for_test();
+        assert!(vp.has_paste(), "the clipboard is what Paste lays down");
+        for (i, p) in [[16.0, 4.0], [32.0, 4.0], [46.0, 30.0], [2.0, 30.0]]
+            .into_iter()
+            .enumerate()
+        {
+            vp.set_corner(i, p);
+        }
+        vp.set_mode(ui::dialogs::VanishingMode::Paste);
+        let plane = vp.plane();
+        assert!(vp.paste_at(plane.to_image([0.5, 0.5]).unwrap()));
+        let filters::vanishing_point::VanishingOp::Paste { rect, .. } = vp.ops()[0].clone() else {
+            panic!("not a paste");
+        };
+        let _ = w7h_frame(&mut host, &ctx, &[]);
+        let out = w7h_frame(&mut host, &ctx, &[egui::Key::Enter]);
+        assert_eq!(out.menu, vec![MenuAction::VanishingPoint]);
+        let message = perform(MenuAction::VanishingPoint, &mut ed).unwrap();
+        assert!(message.contains("Vanishing Point"), "{message}");
+        assert_eq!(ed.active().unwrap().history.undo_depth(), depth + 1);
+        let after = pixels::read_layer(ed.active().unwrap(), layer);
+        let red = |x: f32, y: f32| {
+            let i = (y as usize * 48 + x as usize) * 4;
+            after[i..i + 4].to_vec()
+        };
+        let inset = 0.03;
+        for uv in [
+            [rect[0] + inset, rect[1] + inset],
+            [rect[2] - inset, rect[1] + inset],
+            [rect[2] - inset, rect[3] - inset],
+            [rect[0] + inset, rect[3] - inset],
+        ] {
+            let p = plane.to_image(uv).unwrap();
+            assert_eq!(
+                red(p[0], p[1]),
+                vec![255, 0, 0, 255],
+                "corner {uv:?} at {p:?}"
+            );
+        }
+        // Off the plane: untouched.
+        assert_eq!(after[..4], before[..4]);
+        assert!(perform(MenuAction::VanishingPoint, &mut ed).is_err());
+        ed.active_mut().unwrap().undo().unwrap();
+        assert_eq!(pixels::read_layer(ed.active().unwrap(), layer), before);
+    }
+
     /// W7-H: Edit > Puppet Warp is a live row that opens over the layer's
     /// ink; confirming with the pins unmoved changes nothing and writes no
     /// history; dragging one pin and pressing Enter lands ONE history entry
@@ -9524,8 +9962,21 @@ mod tests {
                 // `purging_histories_asks_first_then_drops_every_step` pins
                 // the real sequence.
                 || action == MenuAction::ExportSlices
+                // W10-A: and Slice Options with no slice picked (it says to
+                // pick one); `slices_export::tests::the_slice_options_row_*`
+                // pins the dialog route.
+                || action == MenuAction::SliceOptions
                 // W8-C: and Export Artboards with no artboard drawn.
                 || action == MenuAction::ExportArtboards
+                // W10-I: Matting refuses loudly on these opaque layers (no
+                // edge pixel for a matte to be in);
+                // `layer_extras::tests::remove_black_and_white_matte_take_the_matte_back_out`
+                // pins the real un-matting.
+                || matches!(action, MenuAction::Matting(_))
+                // W10-E: Batch / Convert / Variables refuse loudly with no
+                // dialog confirmation; the two exports cancel at the
+                // scripted folder picker (loud).
+                || crate::file_extras::is_loud_without_a_dialog(action)
                 || matches!(action, MenuAction::Purge(_))
             {
                 match perform(action, &mut ed) {
@@ -9660,8 +10111,14 @@ mod tests {
             MenuAction::AlignLayers(ui::menu::AlignEdge::Bottom),
             // W4-H: no slices have been drawn in this fixture.
             MenuAction::ExportSlices,
+            // W10-A: so none is picked for Slice Options either.
+            MenuAction::SliceOptions,
             // W8-C: nor any artboard.
             MenuAction::ExportArtboards,
+            // W10-I: both fixture layers are opaque, so there is no edge
+            // pixel for a matte to be in.
+            MenuAction::Matting(ui::menu::MattingOp::RemoveBlackMatte),
+            MenuAction::Matting(ui::menu::MattingOp::RemoveWhiteMatte),
         ];
 
         let mut broken = Vec::new();
@@ -9776,8 +10233,13 @@ mod tests {
             );
             // W10-C: Camera Raw, Lens Correction, Lighting Effects, HSB/HSL.
             asked.extend(
-                [F::CameraRaw, F::LensCorrection, F::LightingEffects, F::HsbHsl]
-                    .map(MenuAction::Filter),
+                [
+                    F::CameraRaw,
+                    F::LensCorrection,
+                    F::LightingEffects,
+                    F::HsbHsl,
+                ]
+                .map(MenuAction::Filter),
             );
         }
         // W7-E: Convert for Smart Filters is live over a pixel layer, and
@@ -12164,7 +12626,11 @@ mod tests {
                 let filters = stack(&ed, so);
                 assert_eq!(filters.len(), 1, "{id:?} did not join the stack");
                 assert_eq!(filters[0].filter, format!("{id:?}"));
-                assert_ne!(composite(&mut ed), before, "{id:?}: the smart filter renders nothing");
+                assert_ne!(
+                    composite(&mut ed),
+                    before,
+                    "{id:?}: the smart filter renders nothing"
+                );
                 assert_eq!(
                     ed.active().unwrap().document.layer_tiles(so).cloned(),
                     source,

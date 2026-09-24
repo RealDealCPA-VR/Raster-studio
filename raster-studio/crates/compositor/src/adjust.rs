@@ -740,14 +740,23 @@ mod tests {
             [c[0], c[1], c[2]]
         };
         let rgb = px(&t.doc, &mut tc);
-        assert!(rgb[1] > rgb[0] && rgb[1] > rgb[2], "RGB: green's curve {rgb:?}");
+        assert!(
+            rgb[1] > rgb[0] && rgb[1] > rgb[2],
+            "RGB: green's curve {rgb:?}"
+        );
         let mut lab_doc = t.doc.clone();
         lab_doc.meta.color_mode = editor_core::color_mode::mode::LAB;
         let lab = px(&lab_doc, &mut tc);
         let lab_of = |p: [u8; 3]| color::model::rgb_to_lab(p.map(|c| f32::from(c) / 255.0));
         let (grey, moved) = (lab_of([128, 128, 128]), lab_of(lab));
-        assert!(moved[1] > 10.0, "a did not move: {grey:?} -> {moved:?} ({lab:?})");
-        assert!((moved[0] - grey[0]).abs() < 3.0, "L moved: {grey:?} -> {moved:?}");
+        assert!(
+            moved[1] > 10.0,
+            "a did not move: {grey:?} -> {moved:?} ({lab:?})"
+        );
+        assert!(
+            (moved[0] - grey[0]).abs() < 3.0,
+            "L moved: {grey:?} -> {moved:?}"
+        );
         assert!(lab[0] > lab[1], "a Lab +a is magenta, not green: {lab:?}");
     }
 }

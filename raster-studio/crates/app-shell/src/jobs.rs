@@ -203,6 +203,22 @@ fn failed_outcome(path: PathBuf, generation: u64, reason: String) -> ImportOutco
 /// The worker's body: read, and decode what decodes — a flat image's pixels,
 /// a `.psd`'s whole layer tree.
 fn run(path: PathBuf, generation: u64, history_depth: usize) -> ImportOutcome {
+    // W10-F: a GIMP `.xcf` opens layered, its report on the PSD road's notes.
+    if crate::import::looks_like_xcf(&path) {
+        let parsed = read_bounded(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| {
+                let title = crate::import::DecodedImage::title_for(&path);
+                crate::import::document_from_xcf(&bytes, &title, history_depth)
+                    .map(Box::new)
+                    .map_err(|e| e.to_string())
+            });
+        return ImportOutcome::Psd {
+            path,
+            generation,
+            parsed,
+        };
+    }
     if crate::import::looks_like_psd(&path) {
         let parsed = read_bounded(&path)
             .map_err(|e| e.to_string())
@@ -478,6 +494,12 @@ fn run_file_export(
     job: &FileExportJob,
 ) -> Result<Option<crate::import::PsdNotes>, crate::doc::DocumentError> {
     let doc = &job.document;
+    // W10-F: an SVG keeps shape layers as `<path>` and text as `<text>`,
+    // through the same writer `OpenDocument::export_to` calls.
+    if crate::doc::exports_as_svg(&job.target) {
+        crate::doc::write_vector_svg(doc, &job.tiles, &job.target)?;
+        return Ok(None);
+    }
     let (w, h) = (doc.width(), doc.height());
     let rect = raster::PixelRect::new(0, 0, w, h);
     let canvas = compositor::composite_region(
@@ -511,6 +533,10 @@ fn run_file_export(
     if crate::doc::write_in_document_ink(&job.target, format, doc.meta.color_mode, (w, h), || {
         Ok(canvas.to_rgba8(&doc.meta.color_space))
     })? {
+        return Ok(None);
+    }
+    // W10-H: a 32 Bits/Channel document writes a 32-bit float TIFF.
+    if crate::depth32::write_float_tiff(&job.target, format, doc, || Ok(canvas.clone()))? {
         return Ok(None);
     }
     // A tagged document re-tags: the profile it opened with rides back into
@@ -681,9 +707,16 @@ fn run_export(job: &ExportJob) -> Result<Vec<PathBuf>, crate::doc::DocumentError
         icc_profile: None,
         icc_profile_space: None,
     };
-    Ok(raster::export::export_batch_to_dir(
-        &job.dir, &image, &presets, &metadata,
-    )?)
+    let written = raster::export::export_batch_to_dir(&job.dir, &image, &presets, &metadata)?;
+    // W10-F: an SVG row at 100% is rewritten with shape layers as `<path>`
+    // and text as `<text>` (`doc::write_vector_svg`); a scaled SVG row keeps
+    // the codec's embedded-image SVG at its scaled size.
+    for (preset, path) in presets.iter().zip(&written) {
+        if preset.format == raster::ExportFormat::Svg && preset.scale == 1.0 {
+            crate::doc::write_vector_svg(doc, &job.tiles, path)?;
+        }
+    }
+    Ok(written)
 }
 
 #[cfg(test)]

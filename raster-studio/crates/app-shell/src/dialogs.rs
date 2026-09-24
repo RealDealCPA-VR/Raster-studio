@@ -22,9 +22,19 @@ pub enum CloseChoice {
 }
 
 /// File filters, shared by the native dialog and the tests' assertions.
+///
+/// W10-F: Netpbm (`ppm`/`pgm`/`pbm`/`pnm`), DDS, GIMP XCF (opened as a
+/// layered document, `import::document_from_xcf`) and JPEG XL join the list. AVIF and HEIC are *not*
+/// offered: neither has a reader (`raster::codec::formats` says why), and a
+/// filter must not advertise what File > Open cannot open.
 pub const IMAGE_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "webp", "tif", "tiff", "gif", "bmp", "ico", "tga", "svg",
+    "png", "jpg", "jpeg", "webp", "tif", "tiff", "gif", "bmp", "ico", "tga", "svg", "ppm", "pgm",
+    "pbm", "pnm", "dds", "xcf", "jxl",
 ];
+/// W10-F: extension of Photoshop's large-document format, opened through the
+/// same layered road as a `.psd` (both start `8BPS`; the `psd` crate reads
+/// version 2).
+pub const PSB_EXTENSION: &str = "psb";
 /// W9-N: Photoshop / Photopea resource files File > Open feeds into their
 /// libraries (patterns, gradients, custom shapes, swatches, a profile) — see
 /// `asset_store::resources`. `.atn` is listed so choosing one says why it
@@ -47,6 +57,7 @@ pub fn open_file_filters() -> Vec<(&'static str, Vec<&'static str>)> {
     let mut everything = project.clone();
     everything.extend_from_slice(IMAGE_EXTENSIONS);
     everything.push(PSD_EXTENSION);
+    everything.push(PSB_EXTENSION);
     // W9-E: a Photoshop brush file opens into the Brushes panel.
     everything.push(ABR_EXTENSION);
     // W9-N: resource files feed their libraries.
@@ -57,6 +68,7 @@ pub fn open_file_filters() -> Vec<(&'static str, Vec<&'static str>)> {
     everything.push(ASL_EXTENSION);
     let mut images = IMAGE_EXTENSIONS.to_vec();
     images.push(PSD_EXTENSION);
+    images.push(PSB_EXTENSION);
     vec![
         ("Raster Studio projects and images", everything),
         ("Raster Studio project", project),
@@ -159,6 +171,14 @@ impl ExportPickerRequest {
             ("GIF", &["gif"]),
             ("BMP", &["bmp"]),
             ("TGA", &["tga"]),
+            // W10-F: the formats `export_format_for` maps by extension.
+            ("PPM", &["ppm"]),
+            ("PGM", &["pgm"]),
+            ("PBM", &["pbm"]),
+            ("DDS", &["dds"]),
+            ("AVIF", &["avif"]),
+            // Shape layers as paths, text as text (`doc::write_vector_svg`).
+            ("SVG", &["svg"]),
         ]);
         if !psd {
             filters.push(("Photoshop", &[PSD_EXTENSION]));
@@ -676,6 +696,36 @@ mod tests {
             assert!(crate::editor::Editor::is_resource_path(&path), ".{ext}");
         }
         assert!(default_filter.contains(&"svg"), "SVG is not offered");
+        // W10-F: the new readers are offered, and so is `.psb`, which opens
+        // through the layered PSD road; AVIF and HEIC, which have no reader,
+        // are not.
+        for ext in ["ppm", "pgm", "pbm", "dds", "xcf", "jxl", "psb"] {
+            assert!(default_filter.contains(&ext), ".{ext} is not offered");
+            assert!(
+                open_file_filters()[2].1.contains(&ext),
+                ".{ext} not in Images"
+            );
+        }
+        for ext in ["avif", "heic"] {
+            assert!(
+                !default_filter.contains(&ext),
+                ".{ext} is offered but cannot open"
+            );
+        }
+        // Every export picker filter names a format the exporter writes by
+        // that extension.
+        let request = ExportPickerRequest::next(Path::new("/work/photo.png"));
+        for (label, extensions) in &request.filters {
+            for ext in *extensions {
+                let path = PathBuf::from(format!("/out/x.{ext}"));
+                assert!(
+                    crate::doc::export_format_for(&path).is_some()
+                        || crate::doc::exports_as_psd(&path)
+                        || crate::doc::exports_as_svg(&path),
+                    "{label}: .{ext} has no writer"
+                );
+            }
+        }
         // ...and it does not offer the project extension, which it could never
         // return: `pick_open_project` is that question.
         assert!(

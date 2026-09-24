@@ -50,8 +50,11 @@ pub enum PsdError {
     },
 
     /// Version 2 is PSB, the large-document variant, whose section lengths are
-    /// 64-bit. This build reads and writes version 1 only.
-    #[error("unsupported .psd version {0} (this build handles version 1; version 2 is PSB)")]
+    /// 64-bit. W10-F: [`crate::read::read_with`] reads both; this error is
+    /// what an unknown version gets, and what [`crate::header::PsdHeader::read`]
+    /// (the version-1-only header reader) returns for a PSB. Only version 1 is
+    /// written.
+    #[error("unsupported .psd version {0} (this build reads versions 1 and 2 (PSB) and writes version 1)")]
     UnsupportedVersion(u16),
 
     #[error("unsupported colour mode {name} ({code}); this build handles Greyscale and RGB")]

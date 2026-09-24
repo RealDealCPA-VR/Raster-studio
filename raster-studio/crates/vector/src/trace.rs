@@ -157,7 +157,7 @@ const NONE: u16 = u16::MAX;
 pub fn posterize(rgba: &[u8], colors: usize) -> (Vec<[u8; 3]>, Vec<u16>) {
     use std::collections::HashMap;
     let mut counts: HashMap<[u8; 3], u64> = HashMap::new();
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         if px[3] >= 128 {
             *counts.entry([px[0], px[1], px[2]]).or_insert(0) += 1;
         }
@@ -186,7 +186,9 @@ pub fn posterize(rgba: &[u8], colors: usize) -> (Vec<[u8; 3]>, Vec<u16>) {
         nearest.insert(*c, best);
     }
     let index = rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|px| {
             if px[3] >= 128 {
                 nearest[&[px[0], px[1], px[2]]]
@@ -258,7 +260,11 @@ fn median_cut(colors: Vec<([u8; 3], u64)>, target: usize) -> Vec<[u8; 3]> {
 /// counter-clockwise, and the nonzero rule fills exactly the mask.
 pub fn trace_mask(mask: &[bool], w: usize, h: usize) -> Vec<Vec<(i64, i64)>> {
     let inside = |x: i64, y: i64| {
-        x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && mask[y as usize * w + x as usize]
+        x >= 0
+            && y >= 0
+            && (x as usize) < w
+            && (y as usize) < h
+            && mask[y as usize * w + x as usize]
     };
     // Directed unit edges keyed by their start vertex; at most two leave a
     // vertex (a saddle, where two diagonal pixels touch).
@@ -368,8 +374,8 @@ fn fit_contour(corners: &[(i64, i64)], options: &TraceOptions, path: &mut Path) 
     // The point sequence: each edge's midpoint, with sharp corners kept.
     // Entry k of `seq` is (point, is_corner).
     let mut seq: Vec<(Point, bool)> = Vec::with_capacity(2 * n);
-    for i in 0..n {
-        if sharp[i] {
+    for (i, &is_sharp) in sharp.iter().enumerate() {
+        if is_sharp {
             seq.push((p(i), true));
         }
         seq.push((p(i).lerp(p(i + 1), 0.5), false));
@@ -547,7 +553,11 @@ fn max_error(d: &[Point], b: &Bezier, u: &[f64]) -> (f64, usize) {
 }
 
 fn reparameterize(d: &[Point], u: &[f64], b: &Bezier) -> Vec<f64> {
-    let d1 = [(b[1] - b[0]) * 3.0, (b[2] - b[1]) * 3.0, (b[3] - b[2]) * 3.0];
+    let d1 = [
+        (b[1] - b[0]) * 3.0,
+        (b[2] - b[1]) * 3.0,
+        (b[3] - b[2]) * 3.0,
+    ];
     let d2 = [(d1[1] - d1[0]) * 2.0, (d1[2] - d1[1]) * 2.0];
     d.iter()
         .zip(u)
@@ -630,7 +640,10 @@ mod tests {
                 painted[..] != rgba[i * 4..i * 4 + 4]
             })
             .count();
-        assert!(wrong * 100 < (w * h) as usize * 4, "{wrong} pixels mispainted");
+        assert!(
+            wrong * 100 < (w * h) as usize * 4,
+            "{wrong} pixels mispainted"
+        );
         // The disc is fitted with curves, not a staircase of lines.
         assert!(layers[1]
             .path
@@ -679,7 +692,10 @@ mod tests {
                 .sum::<i64>()
         };
         assert_eq!(area(&contours[0]).signum(), -area(&contours[1]).signum());
-        assert_eq!(area(&contours[0]).abs() + area(&contours[1]).abs(), 2 * (25 + 1));
+        assert_eq!(
+            area(&contours[0]).abs() + area(&contours[1]).abs(),
+            2 * (25 + 1)
+        );
     }
 
     #[test]

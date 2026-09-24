@@ -98,6 +98,14 @@ pub fn narrow_rgba16_tile(bytes: &[u8], dither: bool) -> Option<Vec<u8>> {
 /// This is what the tile readers that only need coverage (tight ink bounds,
 /// hit testing) use, so an RGBA16 tile is never mis-strided as RGBA8.
 pub fn tile_alpha16(bytes: &[u8], index: usize) -> Option<u16> {
+    // W10-H: a 32-bit (`f32`) tile is read at its own 16-byte stride.
+    if crate::depth32::is_rgbaf32_tile(bytes) {
+        let at = index.checked_mul(16)?.checked_add(12)?;
+        let q = bytes.get(at..at + 4)?;
+        return Some(crate::depth32::f32_to_code16(f32::from_ne_bytes([
+            q[0], q[1], q[2], q[3],
+        ])));
+    }
     if bytes.len() == RGBA16_TILE_BYTES {
         let at = index.checked_mul(8)?.checked_add(6)?;
         let pair = bytes.get(at..at + 2)?;
@@ -116,6 +124,10 @@ pub fn tile_alpha16(bytes: &[u8], index: usize) -> Option<u16> {
 /// (no dither: a read must be deterministic, so the apply boundary's
 /// [`widen_rgba8_over`] can recognise the pixels an edit left unchanged).
 pub fn rgba8_view(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    // W10-H: a 32-bit (`f32`) tile is clipped and rounded the same way.
+    if let Some(narrowed) = crate::depth32::narrow_rgbaf32_tile(bytes, 8, false) {
+        return std::borrow::Cow::Owned(narrowed);
+    }
     match narrow_rgba16_tile(bytes, false) {
         Some(narrowed) => std::borrow::Cow::Owned(narrowed),
         None => std::borrow::Cow::Borrowed(bytes),
@@ -216,6 +228,8 @@ pub fn rgba16_samples(bytes: &[u8]) -> Option<Vec<u16>> {
     match bytes.len() {
         RGBA16_TILE_BYTES => Some(crate::tile_bytes_to_rgba16(bytes)),
         RGBA8_TILE_BYTES => Some(bytes.iter().map(|c| widen_sample(*c)).collect()),
+        // W10-H: a 32-bit tile, clipped into 0..=1 and rounded.
+        crate::depth32::RGBAF32_TILE_BYTES => crate::depth32::rgbaf32_tile_to_rgba16(bytes),
         _ => None,
     }
 }

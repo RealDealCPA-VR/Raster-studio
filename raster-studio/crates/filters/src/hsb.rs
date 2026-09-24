@@ -182,7 +182,10 @@ mod tests {
     fn rgb_to_hsb_and_back_round_trips() {
         let src = sample_image();
         let hsb = hsb_hsl(&src, ChannelModel::Rgb, ChannelModel::Hsb);
-        assert!(max_diff(&hsb, &src) > 0.1, "the forward pass changes the image");
+        assert!(
+            max_diff(&hsb, &src) > 0.1,
+            "the forward pass changes the image"
+        );
         let back = hsb_hsl(&hsb, ChannelModel::Hsb, ChannelModel::Rgb);
         let d = max_diff(&back, &src);
         assert!(d < 1.0 / 255.0, "RGB -> HSB -> RGB drifted by {d}");

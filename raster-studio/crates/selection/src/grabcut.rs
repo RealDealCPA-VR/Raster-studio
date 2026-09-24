@@ -255,8 +255,8 @@ impl Gmm {
         -(p.max(1.0e-30)).ln()
     }
 
-    /// Fit a mixture to `samples` from scratch (split, then five rounds of
-    /// assign / re-learn).
+    /// Fit a mixture to `samples` from scratch: an Orchard-Bouman split, then
+    /// two rounds of assign / re-learn (each GrabCut round refits again).
     pub fn fit(samples: &[[f64; 3]]) -> Result<Gmm, SelectionOpError> {
         let mut assign = Self::initial_assignment(samples)?;
         let mut gmm = Self::learn(samples, &assign);

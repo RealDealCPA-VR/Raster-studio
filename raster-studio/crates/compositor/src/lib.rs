@@ -132,6 +132,8 @@ mod testkit;
 mod tests;
 #[cfg(test)]
 mod vector_mask_tests;
+#[cfg(test)]
+mod w10h_float_tests;
 
 pub use adjust::{apply_adjustment, PreparedAdjustment};
 pub use blending::{blend_atop, blend_over, dissolve_noise, BlendContext, BlendSpace};

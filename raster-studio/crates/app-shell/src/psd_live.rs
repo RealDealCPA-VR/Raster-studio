@@ -485,6 +485,7 @@ fn smart_from_psd(
             asset,
             linked: false,
             filters: Vec::new(),
+            filter_mask: None,
         }),
         transform,
         asset: AssetRecord {
@@ -1158,6 +1159,7 @@ mod tests {
                     asset,
                     linked: false,
                     filters: Vec::new(),
+                    filter_mask: None,
                 }),
             ))
             .unwrap();

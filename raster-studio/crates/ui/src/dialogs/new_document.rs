@@ -16,7 +16,7 @@ use super::chrome::{
 };
 use super::color_edit::ColorEdit;
 use super::color_picker::ScreenSampler;
-use super::controls::{combo, numeric, readout, swatch};
+use super::controls::{checkbox_row, combo, numeric, readout, swatch};
 use super::units::{format_bytes, ResolutionUnit, Unit, DEFAULT_PPI, MAX_PPI};
 use super::{ids, sizes};
 
@@ -240,6 +240,9 @@ pub struct NewDocumentSpec {
     pub color_space: ColorSpace,
     pub bit_depth: BitDepth,
     pub background: BackgroundContents,
+    /// W10-J: the Artboard box — the canvas becomes an artboard ("Artboard
+    /// 1") whose background is [`NewDocumentSpec::background`].
+    pub artboard: bool,
 }
 
 impl NewDocumentSpec {
@@ -285,6 +288,8 @@ pub struct NewDocumentDialog {
     bit_depth: BitDepth,
     background: BackgroundContents,
     custom_background: [f32; 4],
+    /// W10-J: the Artboard box.
+    artboard: bool,
     /// Index into [`PRESETS`], dropped as soon as a field is edited by hand.
     preset: Option<usize>,
     /// The nested colour picker, when the Custom swatch is clicked.
@@ -305,6 +310,7 @@ impl Default for NewDocumentDialog {
             bit_depth: BitDepth::Eight,
             background: BackgroundContents::White,
             custom_background: [1.0, 1.0, 1.0, 1.0],
+            artboard: false,
             preset: None,
             color_edit: ColorEdit::new(),
         };
@@ -462,7 +468,13 @@ impl NewDocumentDialog {
             color_space: self.color_space.clone(),
             bit_depth: self.bit_depth,
             background: self.background(),
+            artboard: self.artboard,
         }
+    }
+
+    /// W10-J: tick or untick the Artboard box, as a click on it does.
+    pub fn set_artboard(&mut self, on: bool) {
+        self.artboard = on;
     }
 
     /// Draw the dialog for one frame.
@@ -712,10 +724,24 @@ impl NewDocumentDialog {
         if open_picker {
             self.color_edit.open((), self.custom_background);
         }
+        // W10-J: Photoshop's Artboards box: the canvas becomes an artboard
+        // with the background above as its colour. The box's widget id is
+        // parked under [`artboard_box_key`] so a test clicks the real rectangle.
+        let artboard = design::inspector_field(ui, "Artboard", |ui| {
+            checkbox_row(ui, "", &mut self.artboard)
+        });
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(artboard_box_key(), artboard.inner.id));
         if let Some(reason) = self.color_mode.unavailable() {
             caption(ui, reason);
         }
     }
+}
+
+/// W10-J: where [`NewDocumentDialog`] parks its Artboard box's widget id
+/// (egui temp data), for a test to find the drawn checkbox.
+pub fn artboard_box_key() -> egui::Id {
+    egui::Id::new(("new-document", "artboard-box"))
 }
 
 /// A typed length resolved to whole pixels.
@@ -1067,5 +1093,35 @@ mod tests {
             dialog.show(ctx, None);
         });
         assert!(!h.was_drawn(ids::custom_background("new-document")));
+    }
+
+    /// W10-J: the Artboard box is drawn, off by default, and a click on the
+    /// drawn checkbox ticks it; the confirmed spec carries it to the shell.
+    #[test]
+    fn clicking_the_artboard_box_makes_the_confirmed_spec_an_artboard() {
+        let h = Harness::new();
+        let mut dialog = NewDocumentDialog::default();
+        assert!(!dialog.spec().artboard, "off by default");
+        h.frame(Vec::new(), |ctx| {
+            dialog.show(ctx, None);
+        });
+        let id = h
+            .ctx
+            .data(|d| d.get_temp::<egui::Id>(artboard_box_key()))
+            .expect("the Artboard box was drawn");
+        h.click_widget(id, |ctx| {
+            dialog.show(ctx, None);
+        });
+        assert!(dialog.spec().artboard, "the click ticked the box");
+        match super::super::chrome::resolve(&dialog, super::super::chrome::DialogKeys::CONFIRM) {
+            DialogOutcome::Confirmed(DialogAction::NewDocument(spec)) => {
+                assert!(spec.artboard, "the confirmed spec lost the box");
+            }
+            other => panic!("the dialog did not confirm: {other:?}"),
+        }
+        h.click_widget(id, |ctx| {
+            dialog.show(ctx, None);
+        });
+        assert!(!dialog.spec().artboard, "a second click unticks it");
     }
 }

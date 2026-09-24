@@ -545,6 +545,95 @@ pub mod ids {
     pub fn edit_contents() -> egui::Id {
         egui::Id::new("raster-properties-edit-contents")
     }
+
+    /// W10-J: row `index` of the Properties artboard page's artboard list.
+    pub fn artboard_row(index: usize) -> egui::Id {
+        egui::Id::new(("raster-properties-artboard-row", index))
+    }
+
+    /// W10-J: the active artboard's size / position / background block.
+    pub fn artboard_block() -> egui::Id {
+        egui::Id::new("raster-properties-artboard-block")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// W10-J: the artboard page
+// ---------------------------------------------------------------------------
+
+/// W10-J: the Properties panel's artboard page, drawn under the layer block
+/// whenever the document has artboards: the active artboard's position,
+/// size and background (the artboard the active layer is, or sits in), then
+/// every artboard in panel order — a click selects that artboard's group.
+pub struct ArtboardProperties;
+
+impl ArtboardProperties {
+    /// The artboard `layer` belongs to: the layer itself when it is an
+    /// artboard group, else its nearest artboard ancestor (the background
+    /// plate and everything drawn inside the artboard included).
+    pub fn active(doc: &Document, layer: LayerId) -> Option<(LayerId, layer_model::Artboard)> {
+        let mut at = Some(layer);
+        while let Some(id) = at {
+            if let Some((_, board)) = layer_model::artboard::artboard_of(&doc.layers, id) {
+                return Some((id, board));
+            }
+            at = doc.layers.parent_of(id);
+        }
+        None
+    }
+
+    /// Every artboard of the document, as `(group, artboard)`, in panel
+    /// order.
+    pub fn list(doc: &Document) -> Vec<(LayerId, layer_model::Artboard)> {
+        layer_model::artboard::artboards(&doc.layers)
+    }
+
+    /// Draw the page; the intents are the list's selection clicks. Nothing
+    /// is drawn for a document with no artboard.
+    pub fn show(ui: &mut egui::Ui, doc: &Document, layer: LayerId) -> Vec<Intent> {
+        let mut out = Vec::new();
+        let boards = Self::list(doc);
+        if boards.is_empty() {
+            return out;
+        }
+        if let Some((_, board)) = Self::active(doc, layer) {
+            design::section_header(ui, "Artboard");
+            let block = ui.vertical(|ui| {
+                for (label, value) in [
+                    ("X", board.x.to_string()),
+                    ("Y", board.y.to_string()),
+                    ("W", board.width.to_string()),
+                    ("H", board.height.to_string()),
+                ] {
+                    design::inspector_field(ui, label, |ui| {
+                        ui.label(format!("{value} px"));
+                    });
+                }
+                design::inspector_field(ui, "Background", |ui| {
+                    let mut swatch = shape_to_swatch(board.background);
+                    ui.add_enabled_ui(false, |ui| ui.color_edit_button_srgba(&mut swatch));
+                });
+            });
+            crate::view::mark(ui, block.response.rect, ids::artboard_block());
+        }
+        design::section_header(ui, "Artboards");
+        for (index, (group, board)) in boards.iter().enumerate() {
+            let name = doc.layers.get(*group).map_or("", |l| l.name.as_str());
+            let selected = doc.active_layer() == Some(*group);
+            let row = ui.selectable_label(
+                selected,
+                format!("{name}  {}x{}", board.width, board.height),
+            );
+            crate::view::mark(ui, row.rect, ids::artboard_row(index));
+            if row.clicked() && !selected {
+                out.push(Intent::SelectLayers {
+                    layers: vec![*group],
+                    active: Some(*group),
+                });
+            }
+        }
+        out
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1803,6 +1892,7 @@ mod tests {
             asset: layer_model::AssetId::new(),
             linked: false,
             filters: Vec::new(),
+            filter_mask: None,
         }));
         let s = PropertiesSubject::resolve(&doc, Some(id), PropertyFocus::Layer);
         assert_eq!(s, PropertiesSubject::SmartObject(id));
@@ -2203,6 +2293,7 @@ mod tests {
             asset,
             linked: false,
             filters: Vec::new(),
+            filter_mask: None,
         }));
         // No asset row yet: the page still resolves, with an empty name.
         assert_eq!(
@@ -2409,6 +2500,158 @@ mod w9b_fill_page_tests {
                 );
             }
             other => panic!("the edit was {other:?}"),
+        }
+    }
+}
+
+/// W10-J: the artboard page through a real headless frame of the workspace.
+#[cfg(test)]
+mod w10j_tests {
+    use super::*;
+    use crate::dock::{LayoutId, PanelId};
+    use crate::Workspace;
+    use editor_core::History;
+    use layer_model::{Artboard, Layer, RasterLayer};
+
+    /// Two artboards (each a group over its background plate) and a plain
+    /// layer inside the first.
+    fn two_boards() -> (Document, [LayerId; 2], LayerId) {
+        let mut doc = Document::new(400, 300, "boards");
+        let mut groups = Vec::new();
+        for (i, (x, w)) in [(0i64, 120u32), (200, 80)].into_iter().enumerate() {
+            let group = doc
+                .layers
+                .push_root(Layer::group(format!("Artboard {}", i + 1)))
+                .unwrap();
+            let plate = Layer::with_kind(
+                "Artboard Background",
+                LayerKind::Raster(RasterLayer {
+                    artboard: Some(Artboard {
+                        x,
+                        y: 10,
+                        width: w,
+                        height: 90,
+                        background: [1.0, 1.0, 1.0, 1.0],
+                    }),
+                    ..RasterLayer::default()
+                }),
+            );
+            doc.layers.insert_at(plate, Some(group), 0).unwrap();
+            groups.push(group);
+        }
+        let inner = doc
+            .layers
+            .insert_at(Layer::raster("Inside"), Some(groups[0]), 0)
+            .unwrap();
+        doc.set_active_layer(Some(inner)).unwrap();
+        (doc, [groups[0], groups[1]], inner)
+    }
+
+    fn frame(ctx: &egui::Context, w: &mut Workspace, doc: &Document, events: Vec<egui::Event>) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let history = History::new();
+        let _ = ctx.run(input, |ctx| w.ui(ctx, doc, &history));
+    }
+
+    #[test]
+    fn a_layer_inside_an_artboard_finds_it_and_the_list_has_every_board() {
+        let (doc, [a, b], inner) = two_boards();
+        let (group, board) = ArtboardProperties::active(&doc, inner).unwrap();
+        assert_eq!(group, a);
+        assert_eq!(
+            (board.x, board.y, board.width, board.height),
+            (0, 10, 120, 90)
+        );
+        assert_eq!(ArtboardProperties::active(&doc, b).unwrap().0, b);
+        let list: Vec<LayerId> = ArtboardProperties::list(&doc)
+            .into_iter()
+            .map(|(g, _)| g)
+            .collect();
+        assert_eq!(list.len(), 2);
+        assert!(list.contains(&a) && list.contains(&b));
+        let plain = Document::new(10, 10, "plain");
+        assert!(ArtboardProperties::list(&plain).is_empty());
+    }
+
+    #[test]
+    fn the_properties_panel_draws_the_artboard_page_and_a_row_selects_its_board() {
+        let (doc, [_, b], _) = two_boards();
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut w = Workspace::new();
+        w.dock.apply_layout(LayoutId::Minimal);
+        w.dock.set_open(PanelId::Properties, true);
+        for _ in 0..4 {
+            frame(&ctx, &mut w, &doc, Vec::new());
+        }
+        let _ = w.drain_intents();
+        let block = ctx
+            .read_response(ids::artboard_block())
+            .expect("the active artboard's block is drawn")
+            .rect;
+        assert!(block.width() > 0.0 && block.height() > 0.0);
+        let rows: Vec<egui::Rect> = (0..2)
+            .map(|i| {
+                ctx.read_response(ids::artboard_row(i))
+                    .unwrap_or_else(|| panic!("artboard row {i} is drawn"))
+                    .rect
+            })
+            .collect();
+        let index = ArtboardProperties::list(&doc)
+            .iter()
+            .position(|(g, _)| *g == b)
+            .unwrap();
+        let at = rows[index].center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        frame(
+            &ctx,
+            &mut w,
+            &doc,
+            vec![egui::Event::PointerMoved(at), button(true), button(false)],
+        );
+        let intents = w.drain_intents();
+        assert!(
+            intents.contains(&Intent::SelectLayers {
+                layers: vec![b],
+                active: Some(b),
+            }),
+            "the row selects its artboard: {intents:?}"
+        );
+    }
+
+    /// The page carries the `no_localized_literals` rule itself (it is not
+    /// under `src/view`): no prose literal in its non-test source.
+    #[test]
+    fn the_artboard_page_has_no_prose_literals() {
+        let source = include_str!("properties.rs");
+        let start = source.find("pub struct ArtboardProperties;").unwrap();
+        let end = start
+            + source[start..]
+                .find("// W3-J: the Transform block")
+                .unwrap();
+        let page = &source[start..end];
+        let mut rest = page;
+        while let Some(open) = rest.find('"') {
+            let after = &rest[open + 1..];
+            let Some(close) = after.find('"') else { break };
+            let literal = &after[..close];
+            assert!(
+                !literal.contains(' ') || literal.contains('{') || literal.starts_with("ui."),
+                "prose literal on the artboard page: {literal:?}"
+            );
+            rest = &after[close + 1..];
         }
     }
 }

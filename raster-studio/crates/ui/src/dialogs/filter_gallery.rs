@@ -280,7 +280,8 @@ impl FilterGalleryDialog {
         }
     }
 
-    /// Where effect tiles were drawn last frame.
+    /// Where each effect's thumbnail tile was drawn last frame, clipped to
+    /// the visible part of the folder's scroll area.
     pub fn effect_rect(&self, effect: GalleryEffect) -> Option<egui::Rect> {
         self.effect_rects
             .iter()
@@ -379,6 +380,9 @@ impl FilterGalleryDialog {
                 egui::ScrollArea::vertical()
                     .id_salt("filter-gallery-folder")
                     .max_height(sizes::list_max_height())
+                    // The row beside it starts one line tall; without a
+                    // floor the folder would open clipped to that line.
+                    .min_scrolled_height(sizes::list_max_height())
                     .show(ui, |ui| self.folder(ctx, ui));
             });
             ui.vertical(|ui| {
@@ -417,8 +421,7 @@ impl FilterGalleryDialog {
                                     .fit_to_exact_size(sizes::style_preview() * 0.5)
                                     .sense(egui::Sense::click()),
                             );
-                            let row =
-                                design::list_row(ui, spec.name(), empty && selected == index);
+                            let row = design::list_row(ui, spec.name(), empty && selected == index);
                             image.clicked() || row.clicked()
                         })
                         .inner;
@@ -439,7 +442,8 @@ impl FilterGalleryDialog {
                                 .sense(egui::Sense::click()),
                         );
                         let row = design::list_row(ui, effect.name(), current == Some(effect));
-                        (image.clicked() || row.clicked(), image.rect.union(row.rect))
+                        let drawn = image.rect.intersect(ui.clip_rect());
+                        (image.clicked() || row.clicked(), drawn)
                     });
                     let (clicked, rect) = response.inner;
                     self.effect_rects.push((effect, rect));
@@ -470,10 +474,10 @@ impl FilterGalleryDialog {
             let side = sizes::filter_preview_width();
             let (w, h) = self.crop.dimensions();
             let k = side / w.max(h).max(1) as f32;
-            ui.add(egui::Image::new(texture).fit_to_exact_size(egui::Vec2::new(
-                w as f32 * k,
-                h as f32 * k,
-            )));
+            ui.add(
+                egui::Image::new(texture)
+                    .fit_to_exact_size(egui::Vec2::new(w as f32 * k, h as f32 * k)),
+            );
         }
     }
 
@@ -562,7 +566,11 @@ impl FilterGalleryDialog {
     }
 
     /// A set effect's thumbnail at its defaults, rendered once and cached.
-    fn effect_thumbnail_for(&mut self, ctx: &Context, effect: GalleryEffect) -> egui::TextureHandle {
+    fn effect_thumbnail_for(
+        &mut self,
+        ctx: &Context,
+        effect: GalleryEffect,
+    ) -> egui::TextureHandle {
         if let Some(texture) = self.effect_thumbnails.get(&effect) {
             return texture.clone();
         }
@@ -575,7 +583,8 @@ impl FilterGalleryDialog {
 
 fn upload(ctx: &Context, name: String, buffer: &FilterBuffer) -> egui::TextureHandle {
     let (w, h) = buffer.dimensions();
-    let image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &buffer.to_rgba8());
+    let image =
+        egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &buffer.to_rgba8());
     ctx.load_texture(name, image, egui::TextureOptions::NEAREST)
 }
 
@@ -815,11 +824,12 @@ mod tests {
             let _ = ctx.run(input, |ctx| out = gallery.show(ctx));
             out
         };
-        run(&mut gallery, Vec::new());
-        run(&mut gallery, Vec::new());
+        for _ in 0..4 {
+            run(&mut gallery, Vec::new());
+        }
         let rect = gallery
-            .effect_rect(GalleryEffect::StainedGlass)
-            .expect("the Texture folder drew Stained Glass");
+            .effect_rect(GalleryEffect::MosaicTiles)
+            .expect("the Texture folder drew Mosaic Tiles");
         let at = rect.center();
         let button = |pressed| egui::Event::PointerButton {
             pos: at,
@@ -834,7 +844,7 @@ mod tests {
         run(&mut gallery, vec![button(false)]);
         assert_eq!(
             gallery.stack().layers.first().map(|l| l.effect),
-            Some(GalleryEffect::StainedGlass),
+            Some(GalleryEffect::MosaicTiles),
             "the click reached the tile"
         );
     }

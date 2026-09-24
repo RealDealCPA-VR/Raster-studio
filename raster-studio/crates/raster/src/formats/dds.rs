@@ -222,7 +222,10 @@ pub fn decode(bytes: &[u8], limits: ImportLimits) -> Result<DecodedSurface, Code
     if (body.len() as u64) < needed {
         return Err(malformed(
             NAME,
-            format!("the surface needs {needed} bytes, the file holds {}", body.len()),
+            format!(
+                "the surface needs {needed} bytes, the file holds {}",
+                body.len()
+            ),
         ));
     }
     let (w, ht) = (h.width as usize, h.height as usize);
@@ -231,7 +234,10 @@ pub fn decode(bytes: &[u8], limits: ImportLimits) -> Result<DecodedSurface, Code
         Layout::Block { bc, premultiplied } => {
             let block_bytes = if bc == 1 { 8 } else { 16 };
             let bw = w.div_ceil(4);
-            for (i, block) in body[..needed as usize].chunks_exact(block_bytes).enumerate() {
+            for (i, block) in body[..needed as usize]
+                .chunks_exact(block_bytes)
+                .enumerate()
+            {
                 let texels = match bc {
                     1 => decode_bc1(block),
                     2 => decode_bc2(block),
@@ -247,11 +253,12 @@ pub fn decode(bytes: &[u8], limits: ImportLimits) -> Result<DecodedSurface, Code
                 }
             }
             if premultiplied {
-                for px in out.chunks_exact_mut(4) {
+                for px in out.as_chunks_mut::<4>().0 {
                     let a = u32::from(px[3]);
-                    if a > 0 {
-                        for c in &mut px[..3] {
-                            *c = ((u32::from(*c) * 255 + a / 2) / a).min(255) as u8;
+                    for c in &mut px[..3] {
+                        // A fully transparent texel keeps its colour.
+                        if let Some(v) = (u32::from(*c) * 255 + a / 2).checked_div(a) {
+                            *c = v.min(255) as u8;
                         }
                     }
                 }
@@ -306,7 +313,11 @@ fn expand565(c: u16) -> [u8; 3] {
     let r = ((c >> 11) & 31) as u8;
     let g = ((c >> 5) & 63) as u8;
     let b = (c & 31) as u8;
-    [(r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2)]
+    [
+        (r << 3) | (r >> 2),
+        (g << 2) | (g >> 4),
+        (b << 3) | (b >> 2),
+    ]
 }
 
 /// The palette of a BC1-style colour block. `four` forces the four-colour
@@ -438,7 +449,7 @@ pub fn encode(encoding: DdsEncoding, width: u32, height: u32, rgba: &[u8]) -> Ve
     debug_assert_eq!(out.len(), HEADER_END);
     match encoding {
         DdsEncoding::Uncompressed => {
-            for px in rgba.chunks_exact(4) {
+            for px in rgba.as_chunks::<4>().0 {
                 out.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
             }
         }
@@ -601,13 +612,49 @@ mod tests {
         assert_eq!(file.len(), HEADER_END + 4 * 16);
         assert_eq!(&file[84..88], b"DXT5");
         let back = rgba8(decode(&file, ImportLimits::default()).unwrap());
-        let worst = px
-            .iter()
-            .zip(&back)
-            .map(|(a, b)| (i32::from(*a) - i32::from(*b)).abs())
-            .max()
-            .unwrap();
-        assert!(worst <= 24, "BC3 error {worst} is larger than block compression explains");
+        let err = |a: &[u8], b: &[u8], channels: std::ops::Range<usize>| -> (i32, i32) {
+            let d: Vec<i32> = a
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(b.as_chunks::<4>().0)
+                .flat_map(|(p, q)| {
+                    channels
+                        .clone()
+                        .map(move |c| (i32::from(p[c]) - i32::from(q[c])).abs())
+                })
+                .collect();
+            (
+                *d.iter().max().unwrap(),
+                d.iter().sum::<i32>() / d.len() as i32,
+            )
+        };
+        // Alpha: eight levels spanning each block's own range, so a ramp
+        // lands within a fourteenth of that range.
+        let (alpha_worst, _) = err(&px, &back, 3..4);
+        assert!(alpha_worst <= 12, "BC3 alpha error {alpha_worst}");
+        // Colour: this image varies red and green independently inside a
+        // block, which no line through colour space fits, so only the mean
+        // is bounded here...
+        let (_, colour_mean) = err(&px, &back, 0..3);
+        assert!(colour_mean <= 20, "BC3 mean colour error {colour_mean}");
+        // ...while colours that do lie on a line (a grey ramp) come back
+        // within 5:6:5 quantisation and the 1/3 interpolation steps.
+        let grey: Vec<u8> = (0..w * h)
+            .flat_map(|i| {
+                let v = ((i % w) * 36) as u8;
+                [v, v, v, 255]
+            })
+            .collect();
+        let back = rgba8(
+            decode(
+                &encode(DdsEncoding::Bc3, w, h, &grey),
+                ImportLimits::default(),
+            )
+            .unwrap(),
+        );
+        let (grey_worst, _) = err(&grey, &back, 0..3);
+        assert!(grey_worst <= 20, "BC3 grey-ramp error {grey_worst}");
         // A flat block survives exactly (up to 565 quantisation of the colour).
         let flat = [[40u8, 80, 120, 128]; 16];
         let block = encode_bc3_block(&flat);
@@ -625,7 +672,7 @@ mod tests {
         let mut block = Vec::new();
         block.extend_from_slice(&blue.to_le_bytes()); // c0 = blue (smaller)
         block.extend_from_slice(&red.to_le_bytes()); // c1 = red
-        // texel 0 -> index 0, texel 1 -> 1, texel 2 -> 2 (mid), texel 3 -> 3.
+                                                     // texel 0 -> index 0, texel 1 -> 1, texel 2 -> 2 (mid), texel 3 -> 3.
         block.extend_from_slice(&(0b11_10_01_00u32).to_le_bytes());
         let t = decode_bc1(&block);
         assert_eq!(t[0], [0, 0, 255, 255]);
@@ -663,7 +710,10 @@ mod tests {
         file[100..104].copy_from_slice(&0x001fu32.to_le_bytes());
         file[104..108].copy_from_slice(&0u32.to_le_bytes());
         file.extend_from_slice(&0xf800u16.to_le_bytes());
-        assert_eq!(rgba8(decode(&file, ImportLimits::default()).unwrap()), [255, 0, 0, 255]);
+        assert_eq!(
+            rgba8(decode(&file, ImportLimits::default()).unwrap()),
+            [255, 0, 0, 255]
+        );
 
         // 8-bit luminance.
         let mut lum = file[..HEADER_END].to_vec();
@@ -671,7 +721,10 @@ mod tests {
         lum[88..92].copy_from_slice(&8u32.to_le_bytes());
         lum[92..96].copy_from_slice(&0xffu32.to_le_bytes());
         lum.push(77);
-        assert_eq!(rgba8(decode(&lum, ImportLimits::default()).unwrap()), [77, 77, 77, 255]);
+        assert_eq!(
+            rgba8(decode(&lum, ImportLimits::default()).unwrap()),
+            [77, 77, 77, 255]
+        );
 
         // DX10 R8G8B8A8_UNORM.
         let mut dx10 = file[..HEADER_END].to_vec();
@@ -680,7 +733,10 @@ mod tests {
         dx10.extend_from_slice(&28u32.to_le_bytes());
         dx10.extend_from_slice(&[0u8; 16]);
         dx10.extend_from_slice(&[1, 2, 3, 4]);
-        assert_eq!(rgba8(decode(&dx10, ImportLimits::default()).unwrap()), [1, 2, 3, 4]);
+        assert_eq!(
+            rgba8(decode(&dx10, ImportLimits::default()).unwrap()),
+            [1, 2, 3, 4]
+        );
 
         // An unsupported DXGI format is refused by name.
         let mut bc7 = dx10.clone();

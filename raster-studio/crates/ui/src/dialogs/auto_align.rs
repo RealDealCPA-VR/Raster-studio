@@ -5,13 +5,14 @@
 //!
 //! * **Auto-Align** — the projection: *Auto* estimates translation, rotation
 //!   and scale by feature matching; *Reposition* estimates translation only,
-//!   by phase correlation ([`filters::align`] documents both). The first
-//!   selected layer is the reference and stays put; every other one gets a
-//!   layer transform that lays it over the reference.
+//!   by phase correlation ([`filters::align`] documents both). The
+//!   bottom-most selected layer (in stack order) is the reference and stays
+//!   put; every other one gets a layer transform that lays it over the
+//!   reference, all in one undo step.
 //! * **Auto-Blend** — the method: *Panorama* stitches overlapping layers
 //!   along seams where they agree; *Stack* keeps the sharpest layer at every
 //!   pixel ([`filters::blend_layers`]). The result lands as one new layer
-//!   above the selection.
+//!   at the top of the stack, one undo step; the source layers are kept.
 //!
 //! The confirmations are parked for their menu arms, the way Trim's is.
 

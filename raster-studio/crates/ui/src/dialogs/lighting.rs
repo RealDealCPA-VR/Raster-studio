@@ -118,7 +118,10 @@ mod tests {
         });
         // The handle starts at the schema's centre.
         let start = handle_position(rect, dialog.params());
-        assert!((start - rect.center()).length() < 1.0, "{start:?} vs {rect:?}");
+        assert!(
+            (start - rect.center()).length() < 1.0,
+            "{start:?} vs {rect:?}"
+        );
 
         let to = rect.min + egui::vec2(rect.width() * 0.2, rect.height() * 0.8);
         for events in drag_events(rect.center(), to) {

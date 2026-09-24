@@ -434,10 +434,10 @@ impl NarrowedReads {
                 continue;
             };
             for (_, hash) in map.iter() {
-                if bytes
-                    .tile(hash)
-                    .is_some_and(|b| b.len() == raster::depth::RGBA16_TILE_BYTES)
-                {
+                if bytes.tile(hash).is_some_and(|b| {
+                    b.len() == raster::depth::RGBA16_TILE_BYTES
+                        || raster::depth32::is_rgbaf32_tile(b)
+                }) {
                     cells.insert(hash, std::cell::OnceCell::new());
                 }
             }
@@ -456,7 +456,8 @@ impl NarrowedReads {
         match self.cells.get(&hash) {
             Some(cell) => {
                 let narrowed = cell.get_or_init(|| {
-                    raster::narrow_rgba16_tile(stored, false).unwrap_or_else(|| stored.to_vec())
+                    // W10-H: an f32 tile narrows the same way.
+                    raster::rgba8_view(stored).into_owned()
                 });
                 Some(narrowed.as_slice())
             }
@@ -479,6 +480,10 @@ pub(super) fn fit_to_document_depth(
     tiles: &mut MemoryTileSource,
     command: Command,
 ) -> Command {
+    // W10-H: a 32-bit document lands 8/16-bit output as f32.
+    if document.meta.bit_depth == 32 {
+        return crate::depth32::fit_to_f32_document(document, tiles, command);
+    }
     if document.meta.bit_depth != 16 {
         return command;
     }

@@ -48,6 +48,72 @@ impl DisplaceEdges {
     }
 }
 
+impl DisplaceFit {
+    /// Both choices, in Photoshop's order.
+    pub const ALL: [DisplaceFit; 2] = [DisplaceFit::Stretch, DisplaceFit::Tile];
+
+    /// The choice as Photoshop's Displace dialog names it.
+    pub const fn label(self) -> &'static str {
+        match self {
+            DisplaceFit::Stretch => "Stretch to Fit",
+            DisplaceFit::Tile => "Tile",
+        }
+    }
+}
+
+impl DisplaceEdges {
+    /// Both choices, in Photoshop's order.
+    pub const ALL: [DisplaceEdges; 2] =
+        [DisplaceEdges::WrapAround, DisplaceEdges::RepeatEdgePixels];
+
+    /// The choice as Photoshop's Displace dialog names it.
+    pub const fn label(self) -> &'static str {
+        match self {
+            DisplaceEdges::WrapAround => "Wrap Around",
+            DisplaceEdges::RepeatEdgePixels => "Repeat Edge Pixels",
+        }
+    }
+}
+
+/// An external displacement map — another image, an open document or a file
+/// — as the buffer [`displace`] reads.
+///
+/// Photoshop reads a displacement map's *stored* 8-bit values, not light:
+/// 128 is no shift, 0 the full negative scale and 255 the full positive
+/// scale. So the bytes are mapped linearly onto `[0, 1]` with 128 landing on
+/// exactly one half (0..=128 onto 0..=0.5, 128..=255 onto 0.5..=1), bypassing
+/// the sRGB decode [`FilterBuffer::from_rgba8`] would apply — a mid-grey map
+/// is then the identity bit for bit. A map is a flat picture, so partial
+/// transparency is flattened over neutral grey: a transparent map pixel
+/// shifts nothing.
+///
+/// `rgba8` is straight RGBA8, row-major. `None` for an empty image or a
+/// buffer of the wrong length.
+pub fn encoded_map(width: u32, height: u32, rgba8: &[u8]) -> Option<FilterBuffer> {
+    let n = (width as usize).checked_mul(height as usize)?;
+    if n == 0 || rgba8.len() != n.checked_mul(4)? {
+        return None;
+    }
+    let level = |v: u8| -> f32 {
+        if v >= 128 {
+            0.5 + 0.5 * f32::from(v - 128) / 127.0
+        } else {
+            0.5 * f32::from(v) / 128.0
+        }
+    };
+    let px = rgba8
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|p| {
+            let a = f32::from(p[3]) / 255.0;
+            let flat = |v: u8| 0.5 + (level(v) - 0.5) * a;
+            [flat(p[0]), flat(p[1]), flat(p[2]), 1.0]
+        })
+        .collect();
+    FilterBuffer::from_pixels(width, height, px).ok()
+}
+
 /// Displace `src` by `map`.
 ///
 /// * `scale_x`, `scale_y` — the shift, in pixels, that a fully white map
@@ -204,6 +270,33 @@ mod tests {
         // column.
         assert_eq!(wrap.get(14, 2), src.get(2, 2));
         assert_eq!(repeat.get(14, 2), src.get(15, 2));
+    }
+
+    #[test]
+    fn an_encoded_map_reads_stored_bytes_with_128_as_no_shift() {
+        let src = ramp(12, 10);
+        let bytes = |r: u8, g: u8, a: u8| -> Vec<u8> {
+            (0..12 * 10).flat_map(|_| [r, g, 128, a]).collect()
+        };
+        let nearest = Sampling::new(EdgeMode::Clamp, Interpolation::Nearest);
+        // A zero displacement map (every byte 128) is the identity, bit for
+        // bit even through bilinear sampling (any sub-pixel shift would blend).
+        let zero = encoded_map(12, 10, &bytes(128, 128, 255)).unwrap();
+        let bilinear = Sampling::new(EdgeMode::Clamp, Interpolation::Bilinear);
+        let out = displace(&src, &zero, 50.0, 50.0, DisplaceFit::Stretch, bilinear);
+        assert_eq!(out.pixels(), src.pixels());
+        // So is a fully transparent map, whatever its colour.
+        let clear = encoded_map(12, 10, &bytes(255, 0, 0)).unwrap();
+        let out = displace(&src, &clear, 50.0, 50.0, DisplaceFit::Stretch, nearest);
+        assert_eq!(out.pixels(), src.pixels());
+        // A known map shifts pixels by the scale: 255 red is +scale in x, 0
+        // green is -scale in y.
+        let known = encoded_map(12, 10, &bytes(255, 0, 255)).unwrap();
+        let out = displace(&src, &known, 3.0, 2.0, DisplaceFit::Stretch, nearest);
+        assert_eq!(out.get(4, 5), src.get(7, 3));
+        // The wrong length or an empty image is refused.
+        assert!(encoded_map(12, 10, &[0; 7]).is_none());
+        assert!(encoded_map(0, 10, &[]).is_none());
     }
 
     #[test]

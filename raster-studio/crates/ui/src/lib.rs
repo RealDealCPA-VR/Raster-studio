@@ -104,6 +104,9 @@ pub struct Workspace {
     pub brushes: panels::brushes::BrushesState,
     pub channels: panels::channels::ChannelsState,
     pub paths: panels::channels::PathsState,
+    /// W10-B: the Tool Presets panel's list — the user's, not the
+    /// document's, so it lives here beside the brush presets.
+    pub tool_presets: panels::tool_presets::ToolPresetsState,
     /// Card 059: how the ACTIVE layer's mask is presented on the canvas —
     /// the composite as usual, the mask plane alone in grayscale, or the
     /// composite with the concealed area tinted. Panel-owned state like
@@ -163,6 +166,15 @@ pub struct Workspace {
     /// [`Workspace::layer_thumbs`]. The mask well draws this when present and
     /// falls back to the mask glyph (headless draws, layers without a mask).
     pub mask_thumbs: std::collections::HashMap<layer_model::LayerId, egui::TextureHandle>,
+    /// W10-I: fitted grayscale thumbnails of each smart object's shared
+    /// smart-filter mask, keyed by layer id, with the fingerprint each was
+    /// built from — built by the application. The filter-mask well draws it
+    /// when present and falls back to the mask glyph otherwise.
+    pub filter_mask_thumbs:
+        std::collections::HashMap<layer_model::LayerId, (u64, egui::TextureHandle)>,
+    /// W10-I: the smart object whose filter mask pixel edits aim at (the
+    /// application's validated edit target), for the well's target border.
+    pub filter_mask_target: Option<layer_model::LayerId>,
     /// W2-D: a bounded downsample of the active document's *composite*,
     /// uploaded by the application through [`Workspace::set_composite_preview`].
     /// The Navigator draws it under its view box and the Channels panel tints
@@ -275,6 +287,7 @@ impl Workspace {
             brushes: panels::brushes::BrushesState::new(),
             channels: panels::channels::ChannelsState::new(),
             paths: panels::channels::PathsState::new(),
+            tool_presets: panels::tool_presets::ToolPresetsState::new(),
             mask_view: MaskViewMode::Composite,
             info: panels::navigator::InfoState::default(),
             property_focus: panels::properties::PropertyFocus::default(),
@@ -293,6 +306,8 @@ impl Workspace {
             canvas: canvas::CanvasHost::default(),
             layer_thumbs: std::collections::HashMap::new(),
             mask_thumbs: std::collections::HashMap::new(),
+            filter_mask_thumbs: std::collections::HashMap::new(),
+            filter_mask_target: None,
             navigator_texture: None,
             histogram: panels::histogram::HistogramState::new(),
             canvas_events: Vec::new(),
@@ -572,8 +587,7 @@ impl Workspace {
             MenuAction::SnapToAll | MenuAction::SnapToNone => {
                 let flags_before = self.view_flags;
                 for flag in ViewFlag::SNAP_TO {
-                    self.view_flags
-                        .set(*flag, action == MenuAction::SnapToAll);
+                    self.view_flags.set(*flag, action == MenuAction::SnapToAll);
                 }
                 return self.view_flags != flags_before;
             }
@@ -647,15 +661,16 @@ impl Workspace {
         }
         let view = &mut self.canvas.view;
         view.rulers_visible = self.view_flags.get(ViewFlag::Rulers);
-        view.guides.visible = self.view_flags.get(ViewFlag::Guides);
-        view.grid.visible = self.view_flags.get(ViewFlag::Grid);
-        view.grid.pixel_grid = self.view_flags.get(ViewFlag::PixelGrid);
+        view.guides.visible = self.view_flags.shows(ViewFlag::Guides);
+        view.grid.visible = self.view_flags.shows(ViewFlag::Grid);
+        view.grid.pixel_grid = self.view_flags.shows(ViewFlag::PixelGrid);
         view.snap.enabled = self.view_flags.get(ViewFlag::Snap);
         // Smart guides *are* the layer-alignment snap: the lines only appear
         // because a layer edge or centre caught, so the two are one setting.
         view.snap.to_layers = self.view_flags.get(ViewFlag::SmartGuides);
-        view.selection_edges_visible = self.view_flags.get(ViewFlag::SelectionEdges);
-        view.layer_edges_visible = self.view_flags.get(ViewFlag::LayerEdges);
+        // W10-J: `shows`: View > Extras off hides these while each keeps its tick.
+        view.selection_edges_visible = self.view_flags.shows(ViewFlag::SelectionEdges);
+        view.layer_edges_visible = self.view_flags.shows(ViewFlag::LayerEdges);
         view.precise_cursor = self.view_flags.get(ViewFlag::PreciseCursor);
         view.camera.flip_x = self.view_flags.get(ViewFlag::FlipHorizontal);
         view.camera.flip_y = self.view_flags.get(ViewFlag::FlipVertical);

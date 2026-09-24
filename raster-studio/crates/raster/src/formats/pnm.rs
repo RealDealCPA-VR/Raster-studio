@@ -17,8 +17,8 @@
 //! so a 20-byte file declaring 60 000 x 60 000 costs nothing.
 
 use super::{check_decode, info, malformed, rgba8_surface};
-use crate::codec::{CodecError, DecodedSurface, ImageInfo, ImportFormat, ImportLimits};
 use crate::codec::SurfacePixels;
+use crate::codec::{CodecError, DecodedSurface, ImageInfo, ImportFormat, ImportLimits};
 
 const NAME: &str = "PNM";
 
@@ -181,7 +181,10 @@ pub fn decode(bytes: &[u8], limits: ImportLimits) -> Result<DecodedSurface, Code
     if (body.len() as u64) < needed {
         return Err(malformed(
             NAME,
-            format!("the pixel data holds {} of at least {needed} bytes", body.len()),
+            format!(
+                "the pixel data holds {} of at least {needed} bytes",
+                body.len()
+            ),
         ));
     }
 
@@ -190,7 +193,10 @@ pub fn decode(bytes: &[u8], limits: ImportLimits) -> Result<DecodedSurface, Code
         sixteen,
         maxval: h.maxval,
         width: w,
-        tokens: Tokens { bytes: body, pos: 0 },
+        tokens: Tokens {
+            bytes: body,
+            pos: 0,
+        },
         index: 0,
     };
     let full: u32 = if sixteen { 65_535 } else { 255 };
@@ -259,7 +265,9 @@ impl Samples<'_> {
             2 | 3 => self.tokens.number("a sample", 65_535)?,
             4 => {
                 let (x, y) = (i % self.width, i / self.width);
-                let byte = *body.get(y * self.width.div_ceil(8) + x / 8).ok_or_else(short)?;
+                let byte = *body
+                    .get(y * self.width.div_ceil(8) + x / 8)
+                    .ok_or_else(short)?;
                 u32::from(byte & (0x80 >> (x % 8)) == 0)
             }
             _ if self.sixteen => {
@@ -275,8 +283,7 @@ impl Samples<'_> {
 
 /// Rec. 601 luma of encoded RGB, rounded.
 fn luma(px: &[u8]) -> u8 {
-    ((299 * u32::from(px[0]) + 587 * u32::from(px[1]) + 114 * u32::from(px[2]) + 500) / 1000)
-        as u8
+    ((299 * u32::from(px[0]) + 587 * u32::from(px[1]) + 114 * u32::from(px[2]) + 500) / 1000) as u8
 }
 
 /// Encode straight RGBA8 as a binary Netpbm file. Alpha is dropped (the
@@ -287,7 +294,7 @@ pub fn encode(kind: PnmKind, width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
         PnmKind::Ppm => {
             let mut out = format!("P6\n{width} {height}\n255\n").into_bytes();
             out.reserve(w * h * 3);
-            for px in rgba.chunks_exact(4) {
+            for px in rgba.as_chunks::<4>().0 {
                 out.extend_from_slice(&px[..3]);
             }
             out
@@ -295,7 +302,7 @@ pub fn encode(kind: PnmKind, width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
         PnmKind::Pgm => {
             let mut out = format!("P5\n{width} {height}\n255\n").into_bytes();
             out.reserve(w * h);
-            out.extend(rgba.chunks_exact(4).map(luma));
+            out.extend(rgba.as_chunks::<4>().0.iter().map(|px| luma(px)));
             out
         }
         PnmKind::Pbm => {
@@ -352,8 +359,11 @@ mod tests {
     #[test]
     fn pgm_round_trips_grey_exactly() {
         let (w, h) = (4u32, 2u32);
-        let px: Vec<u8> = (0..8u8).flat_map(|i| [i * 30, i * 30, i * 30, 255]).collect();
-        let back = rgba8(decode(&encode(PnmKind::Pgm, w, h, &px), ImportLimits::default()).unwrap());
+        let px: Vec<u8> = (0..8u8)
+            .flat_map(|i| [i * 30, i * 30, i * 30, 255])
+            .collect();
+        let back =
+            rgba8(decode(&encode(PnmKind::Pgm, w, h, &px), ImportLimits::default()).unwrap());
         assert_eq!(back, px);
     }
 
@@ -362,7 +372,13 @@ mod tests {
         // Width 10: rows are padded to two bytes each.
         let (w, h) = (10u32, 2u32);
         let px: Vec<u8> = (0..20u32)
-            .flat_map(|i| if i % 3 == 0 { [0, 0, 0, 255] } else { [255, 255, 255, 255] })
+            .flat_map(|i| {
+                if i % 3 == 0 {
+                    [0, 0, 0, 255]
+                } else {
+                    [255, 255, 255, 255]
+                }
+            })
             .collect();
         let file = encode(PnmKind::Pbm, w, h, &px);
         assert_eq!(file.len(), b"P4\n10 2\n".len() + 4);
@@ -392,11 +408,17 @@ mod tests {
         let mut file = b"P5\n2 1\n65535\n".to_vec();
         file.extend_from_slice(&[0x12, 0x34, 0xff, 0xff]);
         let s = decode(&file, ImportLimits::default()).unwrap();
-        assert_eq!(probe(&file, ImportLimits::default()).unwrap().pixel_format, crate::format::PixelFormat::Rgba16);
+        assert_eq!(
+            probe(&file, ImportLimits::default()).unwrap().pixel_format,
+            crate::format::PixelFormat::Rgba16
+        );
         let SurfacePixels::Rgba16(v) = s.pixels else {
             panic!("expected 16-bit")
         };
-        assert_eq!(v, vec![0x1234, 0x1234, 0x1234, 65535, 65535, 65535, 65535, 65535]);
+        assert_eq!(
+            v,
+            vec![0x1234, 0x1234, 0x1234, 65535, 65535, 65535, 65535, 65535]
+        );
     }
 
     #[test]
@@ -410,14 +432,14 @@ mod tests {
     fn malformed_files_error_and_never_panic() {
         let cases: [&[u8]; 9] = [
             b"P6\n",
-            b"P6\n2 2\n255\n\x01\x02",   // body short
-            b"P6\n0 2\n255\n",           // empty dimension
+            b"P6\n2 2\n255\n\x01\x02",       // body short
+            b"P6\n0 2\n255\n",               // empty dimension
             b"P5\n2 2\n0\n\x00\x00\x00\x00", // maxval 0
-            b"P5\n2 2\n70000\n",         // maxval too big
-            b"P2\n2 1\n255\n1 x\n",      // not a number
-            b"P1\n2 1\n1 7\n",           // not a bit
-            b"P6\n99999999999 2\n255\n",  // overflowing width
-            b"P6\n60000 60000\n255\n",    // over the pixel limit, tiny file
+            b"P5\n2 2\n70000\n",             // maxval too big
+            b"P2\n2 1\n255\n1 x\n",          // not a number
+            b"P1\n2 1\n1 7\n",               // not a bit
+            b"P6\n99999999999 2\n255\n",     // overflowing width
+            b"P6\n60000 60000\n255\n",       // over the pixel limit, tiny file
         ];
         for bytes in cases {
             assert!(decode(bytes, ImportLimits::default()).is_err(), "{bytes:?}");

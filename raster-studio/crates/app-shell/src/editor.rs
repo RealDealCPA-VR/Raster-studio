@@ -1104,6 +1104,7 @@ impl Editor {
                     asset,
                     linked: false,
                     filters: Vec::new(),
+                    filter_mask: None,
                 },
             ));
             if let Some(active) = doc.document.active_layer() {
@@ -1936,6 +1937,7 @@ impl Editor {
                     asset,
                     linked,
                     filters: Vec::new(),
+                    filter_mask: None,
                 },
             ));
             // Insert ABOVE the active layer: same parent, its index. A
@@ -2423,6 +2425,94 @@ impl Editor {
         self.replace_smart_object_contents(&path)
     }
 
+    /// W10-I: the active smart object's asset origin — refused, with the
+    /// reason, when the active layer is not a smart object or its asset row
+    /// is missing.
+    fn active_smart_object_origin(&self) -> Result<(LayerId, layer_model::AssetOrigin), String> {
+        let open = self
+            .active()
+            .ok_or_else(|| "No document is open".to_string())?;
+        let active = open
+            .document
+            .active_layer()
+            .ok_or_else(|| "Select a smart object layer first".to_string())?;
+        let asset = match open.document.layers.get(active).map(|l| &l.kind) {
+            Some(LayerKind::SmartObject(so)) => so.asset,
+            Some(other) => {
+                let class = editor_core::command::layer_class_name(other);
+                return Err(format!("The active layer is a {class}, not a smart object"));
+            }
+            None => return Err("Select a smart object layer first".to_string()),
+        };
+        let origin =
+            open.document.asset_origin(asset).cloned().ok_or_else(|| {
+                "The smart object's asset is missing from the document".to_string()
+            })?;
+        Ok((active, origin))
+    }
+
+    /// W10-I: Layer ▸ Smart Object ▸ Export Contents…: write the active smart
+    /// object's source to a file the user picks — the embedded bytes exactly
+    /// as they were placed (a PNG stays that PNG, a PSD that PSD), or, for a
+    /// linked object, a copy of the linked file. The suggested name carries
+    /// the extension the bytes' own signature names.
+    pub fn export_smart_object_contents(&mut self) -> Result<String, String> {
+        let (_, origin) = self.active_smart_object_origin()?;
+        let (name, bytes) = match origin {
+            layer_model::AssetOrigin::Embedded { name, bytes } => (name, bytes),
+            layer_model::AssetOrigin::Linked { path } => {
+                let bytes = std::fs::read(&path).map_err(|e| {
+                    format!("The linked file {} cannot be read: {e}", path.display())
+                })?;
+                let name = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "Contents".to_string());
+                (name, bytes)
+            }
+        };
+        let stem = std::path::Path::new(&name)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Contents".to_string());
+        let suggested = self
+            .paths
+            .root()
+            .join(format!("{stem}.{}", source_extension(&bytes)));
+        let Some(target) = self.dialogs.pick_save_path(&suggested) else {
+            return Err("Export Contents was cancelled".to_string());
+        };
+        std::fs::write(&target, &bytes).map_err(|e| e.to_string())?;
+        let status = format!(
+            "Exported the smart object's contents to {}",
+            target.display()
+        );
+        self.status = Some(status.clone());
+        Ok(status)
+    }
+
+    /// W10-I: Layer ▸ Smart Object ▸ Relink to File…: point a LINKED smart
+    /// object at another file. The object stays linked (the asset row now
+    /// names the new path) and its pixels are re-read from it as one undoable
+    /// step — the Replace Contents machinery, which keeps a linked origin
+    /// linked. An embedded object has no link to repoint, and says so.
+    pub fn relink_smart_object(&mut self) -> Result<String, String> {
+        let (_, origin) = self.active_smart_object_origin()?;
+        // The menu greys the row over an embedded object with this same
+        // reason; the check here keeps any other caller honest.
+        if !matches!(origin, layer_model::AssetOrigin::Linked { .. }) {
+            return Err(ui::menu::RELINK_EMBEDDED.to_string());
+        }
+        let Some(path) = self.dialogs.pick_replace_file() else {
+            return Err("Relink was cancelled".to_string());
+        };
+        self.replace_smart_object_contents(&path)?;
+        let status = format!("Relinked to {}", path.display());
+        self.status = Some(status.clone());
+        Ok(status)
+    }
+
     pub fn convert_to_smart_object(&mut self) -> Result<String, String> {
         let Some(open) = self.active() else {
             return Err("No document is open".to_string());
@@ -2473,6 +2563,7 @@ impl Editor {
                     asset: new_id_asset,
                     linked: false,
                     filters: Vec::new(),
+                    filter_mask: None,
                 }),
             );
             let new_id = layer.id;
@@ -2711,8 +2802,17 @@ impl Editor {
             return Err("The layer is already in that document".to_string());
         }
         let source = &self.docs[source_index];
-        if source.is_sixteen_bit() && !self.docs[target_index].is_sixteen_bit() {
-            return Err("A 16-bit layer cannot be copied into an 8-bit document".to_string());
+        // W10-H: a deeper layer never lands in a shallower document; a
+        // shallower one is widened at the target's apply boundary.
+        let (from, to) = (
+            source.document.meta.bit_depth,
+            self.docs[target_index].document.meta.bit_depth,
+        );
+        if from > to {
+            let article = if to == 8 { "an" } else { "a" };
+            return Err(format!(
+                "A {from}-bit layer cannot be copied into {article} {to}-bit document"
+            ));
         }
         let subtree = source.document.layers.subtree_ids(layer);
         if subtree.is_empty() {
@@ -3798,6 +3898,19 @@ impl Editor {
         )
     }
 
+    /// W10-I: the filter mask pixel edits aim at, when the validated edit
+    /// target is the active smart object's shared smart-filter mask — the
+    /// mask id the tools read coverage from and paint into (through
+    /// `PixelTarget::FilterMask`). `None` for any other target.
+    pub fn edit_target_filter_mask(&self) -> Option<layer_model::MaskId> {
+        let target = self.edit_target()?;
+        if target.kind != crate::edit_target::EditTargetKind::FilterMask {
+            return None;
+        }
+        let layer = self.active()?.document.layers.get(target.layer)?;
+        crate::edit_target::filter_mask_of(layer).map(|m| m.id)
+    }
+
     /// Aim the active document's edits at its content or mask coverage. A
     /// preference, not a pixel edit: nothing here (and nothing in selection)
     /// may mark the document dirty.
@@ -3815,6 +3928,7 @@ impl Editor {
             return;
         }
         let doc_id = doc.id();
+        let was = self.edit_targets.kind_of(doc_id);
         self.edit_targets.set_kind(doc_id, kind);
         // The CURRENT wells for this document (per-doc entry, or the global
         // wells a fresh document inherits).
@@ -3824,8 +3938,13 @@ impl Editor {
             .copied()
             .unwrap_or((self.foreground, self.background));
         match kind {
-            crate::edit_target::EditTargetKind::Mask => {
-                self.content_color_backups.insert(doc_id, current);
+            // W10-I: a filter mask is painted like a layer mask. Moving
+            // between the two keeps the content colours already stashed.
+            crate::edit_target::EditTargetKind::Mask
+            | crate::edit_target::EditTargetKind::FilterMask => {
+                if was == crate::edit_target::EditTargetKind::Content {
+                    self.content_color_backups.insert(doc_id, current);
+                }
                 self.doc_colors
                     .insert(doc_id, (MASK_EDIT_FOREGROUND, MASK_EDIT_BACKGROUND));
             }
@@ -4649,6 +4768,8 @@ impl Editor {
             || self.saves_pending()
             || !self.export_jobs.is_empty()
             || !self.content_aware_jobs.is_empty()
+            // W10-K: Select Subject's worker (so an idle window still wakes).
+            || crate::menu_bridge::subject_job::pending()
     }
 
     /// Apply every finished job of every kind. Once a frame.
@@ -4657,6 +4778,7 @@ impl Editor {
         self.poll_saves();
         self.poll_exports();
         crate::menu_bridge::content_aware_job::poll(self);
+        crate::menu_bridge::subject_job::poll(self);
     }
 
     /// W2-G: apply every save that has finished, and refresh the status line
@@ -5694,7 +5816,13 @@ impl Editor {
         // status bar. A fully supported file has nothing to say and shows
         // nothing.
         if let Some(report) = notes.report(Some(path)) {
-            self.dialogs.report_notice("PSD import report", &report);
+            // W10-F: an `.xcf` reports on the same road, under its own name.
+            let title = if crate::import::looks_like_xcf(path) {
+                "XCF import report"
+            } else {
+                "PSD import report"
+            };
+            self.dialogs.report_notice(title, &report);
         }
         self.touch();
     }
@@ -5923,7 +6051,10 @@ impl Editor {
                     ));
                 }
             }
-        } else if crate::doc::export_format_for(&target).is_none() {
+        } else if crate::doc::export_format_for(&target).is_none()
+            // W10-F: `.svg` is written by `doc::write_vector_svg`.
+            && !crate::doc::exports_as_svg(&target)
+        {
             return Err(ActionError::failed(
                 action,
                 DocumentError::UnknownExportFormat(
@@ -6194,6 +6325,33 @@ impl Editor {
             Some(action) => self.dispatch(action).map(Some),
             None => Ok(None),
         }
+    }
+}
+
+/// W10-I: the file extension a smart object's source bytes' own signature
+/// names — what Export Contents suggests, so the written file opens as what
+/// it is. An unknown signature is `bin`.
+pub(crate) fn source_extension(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "png"
+    } else if bytes.starts_with(b"8BPS") {
+        if bytes.get(4..6) == Some(&[0, 2]) {
+            "psb"
+        } else {
+            "psd"
+        }
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "jpg"
+    } else if bytes.starts_with(b"GIF8") {
+        "gif"
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        "webp"
+    } else if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
+        "tif"
+    } else if bytes.starts_with(b"BM") {
+        "bmp"
+    } else {
+        "bin"
     }
 }
 

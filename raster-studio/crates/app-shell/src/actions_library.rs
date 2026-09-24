@@ -44,14 +44,16 @@ const ACTIONS_FILE_VERSION: u32 = 1;
 /// not larger than this without being a file nobody meant to load.
 pub const MAX_ACTIONS_FILE_BYTES: u64 = 256 << 20;
 
-/// W5-B: a loaded step's tile must be one this application stores — an RGBA8
-/// or RGBA16 layer tile, or an 8-bit mask tile — filed under its own hash.
+/// W5-B: a loaded step's tile must be one this application stores — an RGBA8,
+/// RGBA16 or (W10-H) RGBA f32 layer tile, or an 8-bit mask tile — filed under its own hash.
 /// A file that says otherwise is refused whole: replaying it would put bytes
 /// in the store no compositor path reads correctly.
 fn check_tiles(action: &NamedAction) -> io::Result<()> {
     let sizes = [
         raster::Tile::byte_len(raster::PixelFormat::Rgba8),
         raster::Tile::byte_len(raster::PixelFormat::Rgba16),
+        // W10-H: a 32 Bits/Channel document's `f32` layer tile.
+        raster::Tile::byte_len(raster::PixelFormat::RgbaF32),
         editor_core::MASK_TILE_BYTES,
     ];
     for edit in &action.edits {
@@ -227,6 +229,9 @@ impl Editor {
         // resource file join the panels after the saved list was restored;
         // the next frame's sync writes them to the preferences file.
         self.drain_panel_imports(w);
+        // W10-G: the Preset Manager's swatches and tool presets, which live
+        // on these panels (see `crate::edit_gaps::sync_workspace_presets`).
+        crate::edit_gaps::sync_workspace_presets(w);
     }
 }
 

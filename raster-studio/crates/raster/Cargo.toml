@@ -21,13 +21,11 @@ blake3.workspace = true
 image = { workspace = true, features = ["gif", "bmp", "ico", "tga", "avif"] }
 # W10-F: `avif` above is the AVIF *encoder* only: `image` wires it to `ravif`
 # (BSD-3-Clause) over `rav1e` (BSD-2-Clause), both pure Rust, and `image`
-# itself turns off ravif's `asm` feature (nasm). AVIF *decoding* is ours
-# (`codec/formats/avif.rs`): `avif-parse` (MPL-2.0, pure Rust) reads the
-# ISOBMFF container and `rav1d` (BSD-2-Clause, the pure-Rust port of dav1d,
-# default features off so no assembly is built) decodes the AV1 payload.
-avif-parse = "2.1"
-rav1d = { version = "1.1", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
-# W10-F: JPEG XL decoding, pure Rust (MIT OR Apache-2.0).
+# itself turns off ravif's `asm` feature (nasm). There is no AVIF *decoder*:
+# `rav1d` was tried and aborts the process on a damaged file (see
+# `src/formats/avif.rs`), and `image`'s `avif-native` binds libdav1d (C).
+# W10-F: JPEG XL decoding, pure Rust (MIT OR Apache-2.0); default features
+# off, so no rayon thread pool and no C colour engine (lcms2).
 jxl-oxide = { version = "0.12", default-features = false }
 color.workspace = true
 # Reinterpreting `&[u16]` as `&[u8]` for 16-bit encoders, without a copy.

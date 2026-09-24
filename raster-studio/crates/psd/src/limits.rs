@@ -21,6 +21,10 @@ pub struct ReadOptions {
     /// Largest canvas or layer edge, in pixels. Photoshop's own PSD ceiling is
     /// 30 000.
     pub max_dimension: u32,
+    /// W10-F: the same ceiling for a `.psb` (version 2), which exists to
+    /// describe larger canvases; Photoshop's own PSB ceiling is 300 000. The
+    /// decoded-bytes budget still bounds what such a file may allocate.
+    pub max_psb_dimension: u32,
     /// Largest number of layer records the file may declare.
     pub max_layers: usize,
     /// Largest number of channels one layer record may declare.
@@ -51,6 +55,7 @@ impl Default for ReadOptions {
     fn default() -> Self {
         ReadOptions {
             max_dimension: 30_000,
+            max_psb_dimension: 300_000,
             max_layers: 8_192,
             max_channels_per_layer: 64,
             max_group_depth: 64,

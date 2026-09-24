@@ -789,8 +789,10 @@ impl PurgeTarget {
 /// W7-I: a step offered under Edit ▸ Content-Aware Scale — the active layer
 /// retargeted by seam carving (`filters::content_aware_scale`) to a fixed
 /// fraction of the canvas along one axis, centred, so the low-detail areas
-/// give way and the high-contrast content keeps its size. Fixed steps stand
-/// in for Photoshop's interactive handles, which this build does not draw.
+/// give way and the high-contrast content keeps its size. W10-J: these are
+/// quick presets; the interactive box with handles and an Amount is
+/// [`MenuAction::ContentAwareScaleFree`] (Free Transform's Content-Aware
+/// mode).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum ContentAwareScaleStep {
     Width80,
@@ -962,6 +964,10 @@ pub enum ColorMode {
     Lab,
     Cmyk,
     Indexed,
+    /// W10-H: black and white only, from Grayscale.
+    Bitmap,
+    /// W10-H: one to four inks over a grayscale image, from Grayscale.
+    Duotone,
 }
 
 impl ColorMode {
@@ -971,6 +977,8 @@ impl ColorMode {
         ColorMode::Lab,
         ColorMode::Cmyk,
         ColorMode::Indexed,
+        ColorMode::Bitmap,
+        ColorMode::Duotone,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -980,6 +988,48 @@ impl ColorMode {
             ColorMode::Lab => "Lab Color",
             ColorMode::Cmyk => "CMYK Color",
             ColorMode::Indexed => "Indexed Color…",
+            ColorMode::Bitmap => "Bitmap…",
+            ColorMode::Duotone => "Duotone…",
+        }
+    }
+
+    /// W10-H: why a document in `current` cannot convert into `self`
+    /// directly, or `None` when it can. Photoshop's rule: Bitmap and
+    /// Duotone are reached from Grayscale only
+    /// (`editor_core::color_mode::conversion_allowed`).
+    pub const fn conversion_reason(self, current: ColorMode) -> Option<&'static str> {
+        match (self, current) {
+            (ColorMode::Bitmap | ColorMode::Duotone, ColorMode::Grayscale)
+            | (ColorMode::Bitmap, ColorMode::Bitmap)
+            | (ColorMode::Duotone, ColorMode::Duotone) => None,
+            (ColorMode::Bitmap, _) => {
+                Some("Bitmap is reached from Grayscale: convert to Grayscale first")
+            }
+            (ColorMode::Duotone, _) => {
+                Some("Duotone is reached from Grayscale: convert to Grayscale first")
+            }
+            _ => None,
+        }
+    }
+
+    /// W10-H: why a 32 Bits/Channel document cannot convert into `self`:
+    /// its colour-mode conversions are 8-bit, so every mode change but the
+    /// row already checked waits for a 16 or 8 Bits/Channel document.
+    pub const fn depth_reason(
+        self,
+        current: ColorMode,
+        depth: ChannelDepth,
+    ) -> Option<&'static str> {
+        match depth {
+            ChannelDepth::ThirtyTwo
+                if !matches!(
+                    (self, current),
+                    (ColorMode::Rgb, ColorMode::Rgb) | (ColorMode::Grayscale, ColorMode::Grayscale)
+                ) =>
+            {
+                Some("Convert to 16 or 8 Bits/Channel before changing the colour mode")
+            }
+            _ => None,
         }
     }
 
@@ -1005,7 +1055,9 @@ impl ColorMode {
             | ColorMode::Grayscale
             | ColorMode::Lab
             | ColorMode::Cmyk
-            | ColorMode::Indexed => None,
+            | ColorMode::Indexed
+            | ColorMode::Bitmap
+            | ColorMode::Duotone => None,
         }
     }
 
@@ -1017,6 +1069,8 @@ impl ColorMode {
             2 => ColorMode::Lab,
             3 => ColorMode::Cmyk,
             4 => ColorMode::Indexed,
+            5 => ColorMode::Bitmap,
+            6 => ColorMode::Duotone,
             _ => ColorMode::Rgb,
         }
     }
@@ -1028,25 +1082,32 @@ pub enum ChannelDepth {
     #[default]
     Eight,
     Sixteen,
+    /// W10-H: 32 bits per channel, `f32` layer tiles (`raster::depth32`).
+    ThirtyTwo,
 }
 
 impl ChannelDepth {
-    pub const ALL: &'static [ChannelDepth] = &[ChannelDepth::Eight, ChannelDepth::Sixteen];
+    pub const ALL: &'static [ChannelDepth] = &[
+        ChannelDepth::Eight,
+        ChannelDepth::Sixteen,
+        ChannelDepth::ThirtyTwo,
+    ];
 
     pub const fn label(self) -> &'static str {
         match self {
             ChannelDepth::Eight => "8 Bits/Channel",
             ChannelDepth::Sixteen => "16 Bits/Channel",
+            ChannelDepth::ThirtyTwo => "32 Bits/Channel",
         }
     }
 
     /// The document metadata's `bit_depth` as a menu depth: 16 is Sixteen,
-    /// anything else Eight.
+    /// 32 is ThirtyTwo, anything else Eight.
     pub const fn of_bits(bits: u8) -> Self {
-        if bits == 16 {
-            ChannelDepth::Sixteen
-        } else {
-            ChannelDepth::Eight
+        match bits {
+            16 => ChannelDepth::Sixteen,
+            32 => ChannelDepth::ThirtyTwo,
+            _ => ChannelDepth::Eight,
         }
     }
 
@@ -1055,6 +1116,19 @@ impl ChannelDepth {
         match self {
             ChannelDepth::Eight => 8,
             ChannelDepth::Sixteen => 16,
+            ChannelDepth::ThirtyTwo => 32,
+        }
+    }
+
+    /// W10-H: why a document in colour mode `mode` cannot go to this depth.
+    /// As in Photoshop, 32 Bits/Channel is for RGB and Grayscale documents.
+    pub const fn mode_reason(self, mode: ColorMode) -> Option<&'static str> {
+        match (self, mode) {
+            (ChannelDepth::ThirtyTwo, ColorMode::Rgb | ColorMode::Grayscale) => None,
+            (ChannelDepth::ThirtyTwo, _) => {
+                Some("32 Bits/Channel is for RGB and Grayscale documents")
+            }
+            _ => None,
         }
     }
 
@@ -1068,11 +1142,11 @@ impl ChannelDepth {
     pub const fn conversion_reason(self, current: ChannelDepth) -> Option<&'static str> {
         match (current, self) {
             (ChannelDepth::Eight, ChannelDepth::Eight)
-            | (ChannelDepth::Sixteen, ChannelDepth::Sixteen) => {
+            | (ChannelDepth::Sixteen, ChannelDepth::Sixteen)
+            | (ChannelDepth::ThirtyTwo, ChannelDepth::ThirtyTwo) => {
                 Some("The document is already at that depth")
             }
-            (ChannelDepth::Eight, ChannelDepth::Sixteen)
-            | (ChannelDepth::Sixteen, ChannelDepth::Eight) => None,
+            _ => None,
         }
     }
 }
@@ -1260,6 +1334,46 @@ impl SmartObjectOp {
     }
 }
 
+/// W10-I: a Layer ▸ Smart Filter row — the smart filters' shared mask
+/// (Photopea's filter mask). The Layers panel's filter-mask row raises the
+/// same actions.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub enum SmartFilterOp {
+    /// Give the active smart object's filters a mask, white (every filter
+    /// shows everywhere), and aim painting at it.
+    AddMask,
+    /// Aim painting at the filter mask (the row's thumbnail click).
+    EditMask,
+    /// Switch the filter mask off (the filters show everywhere) or back on.
+    ToggleMask,
+    /// Remove the filter mask.
+    DeleteMask,
+}
+
+impl SmartFilterOp {
+    pub const ALL: &'static [SmartFilterOp] = &[
+        SmartFilterOp::AddMask,
+        SmartFilterOp::EditMask,
+        SmartFilterOp::ToggleMask,
+        SmartFilterOp::DeleteMask,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            SmartFilterOp::AddMask => "Add Filter Mask",
+            SmartFilterOp::EditMask => "Edit Filter Mask",
+            SmartFilterOp::ToggleMask => "Disable / Enable Filter Mask",
+            SmartFilterOp::DeleteMask => "Delete Filter Mask",
+        }
+    }
+}
+
+/// W10-I: why a Layer ▸ Smart Filter row is greyed.
+pub const NO_SMART_FILTERS: &str =
+    "The smart object has no smart filters: a filter mask masks its smart filters";
+pub const FILTER_MASK_EXISTS: &str = "The smart filters already have a filter mask";
+pub const NO_FILTER_MASK: &str = "The smart filters have no filter mask";
+
 /// W10-I: a Layer ▸ Matting row — undo a matte the layer's edge pixels were
 /// composited against.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
@@ -1269,7 +1383,8 @@ pub enum MattingOp {
 }
 
 impl MattingOp {
-    pub const ALL: &'static [MattingOp] = &[MattingOp::RemoveBlackMatte, MattingOp::RemoveWhiteMatte];
+    pub const ALL: &'static [MattingOp] =
+        &[MattingOp::RemoveBlackMatte, MattingOp::RemoveWhiteMatte];
 
     pub const fn label(self) -> &'static str {
         match self {
@@ -1614,6 +1729,11 @@ pub enum MenuAction {
     ContentAwareScale(ContentAwareScaleStep),
     DefinePattern,
     DefineBrush,
+    /// W10-A: Edit ▸ Define Custom Shape: the active shape layer's outline
+    /// (else the Paths panel's current path) joins the Custom Shape library,
+    /// persisted in the shape presets and listed in the Custom Shape tool's
+    /// Shape picker.
+    DefineCustomShape,
     KeyboardShortcuts,
     Preferences,
 
@@ -1811,6 +1931,10 @@ pub enum MenuAction {
     /// 10%..90%, `0` to 100%; two digits typed quickly are an exact value.
     /// Carries the digit. No menu row.
     ToolOpacity(u8),
+    /// Edit > Content-Aware Scale > With Handles (Alt+Shift+Ctrl+C): the
+    /// Free Transform box in its Content-Aware mode — drag the handles, set
+    /// the Amount, Enter commits one seam-carved step.
+    ContentAwareScaleFree,
 
     // ---- Window --------------------------------------------------------
     ApplyLayout(LayoutId),
@@ -1839,6 +1963,8 @@ pub enum MenuAction {
     /// Layer ▸ Link Layers: chain the selected layers (or unchain them when
     /// every one already is), one undo step.
     LinkLayers,
+    /// Layer ▸ Smart Filter ▸ the filter-mask rows.
+    SmartFilter(SmartFilterOp),
 
     // ---- W10-D: Filter > Vanishing Point ------------------------------------
     /// Filter ▸ Vanishing Point… (W10-D): define a perspective plane by its
@@ -1846,6 +1972,73 @@ pub enum MenuAction {
     /// perspective-correct scaling; the confirmed edit lands on the active
     /// layer as one undo step.
     VanishingPoint,
+
+    // ---- W10-H: Image > Apply Image / Calculations -------------------------
+    /// Image ▸ Apply Image…: blend a source document/layer/channel into the
+    /// active layer (mode, opacity, invert, mask), one undo step.
+    ApplyImage,
+    /// Image ▸ Calculations…: blend two sources' channels into a new channel
+    /// (a saved selection), the selection, or a new document.
+    Calculations,
+
+    // ---- W10-G: the Edit gaps ---------------------------------------------
+    /// Edit ▸ Preset Manager…: every stored brush, gradient, pattern, style
+    /// and custom shape in one window — rename, delete, reorder, and import
+    /// or export the whole library as JSON.
+    PresetManager,
+    /// Edit ▸ Fade…: opacity and blend mode for the last filter, adjustment,
+    /// fill or stroke against the pixels it replaced, as one step replacing
+    /// that one. Greyed, with the reason, when the last step is not one.
+    Fade,
+    /// Edit ▸ Auto-Align Layers…: lay every selected layer over the first by
+    /// an estimated similarity (feature matching) or translation (phase
+    /// correlation), as layer transforms in one undo step.
+    AutoAlignLayers,
+    /// Edit ▸ Auto-Blend Layers…: stitch (Panorama) or focus-stack (Stack)
+    /// the selected layers into one new layer, one undo step.
+    AutoBlendLayers,
+    /// Edit ▸ Perspective Warp: draw quads over planes of the layer, drag
+    /// their corners; one homography per quad, one undo step.
+    PerspectiveWarp,
+
+    // ---- W10-B: the Channels panel's alpha rows ------------------------------
+    /// Open saved selection `index` as an editable alpha channel: its
+    /// coverage becomes a hidden scratch layer's mask, targeted for painting
+    /// and shown alone in grayscale. Emitted by the Channels panel's alpha
+    /// row, and by no menu at all.
+    EditAlphaChannel(usize),
+    /// Close the alpha channel being edited, writing the painted coverage
+    /// back into its saved selection. Emitted by the Channels panel.
+    CloseAlphaChannel,
+
+    // ---- W10-E: File automation, Variables, LUT / PDF export, Vectorize -----
+    /// File ▸ Automate ▸ Batch…: play a recorded Action over every image in
+    /// a folder and save each result to another folder, on the job worker.
+    AutomateBatch,
+    /// File ▸ Automate ▸ Convert Formats…: re-save every image in a folder
+    /// in another format / quality / size, on the job worker.
+    ConvertFormats,
+    /// File ▸ Export ▸ Color Lookup Tables…: the visible adjustment-layer
+    /// stack sampled on an identity lattice, written as a `.cube`.
+    ExportColorLookup,
+    /// File ▸ Export ▸ PDF…: the composite on a chosen page, as a raster PDF.
+    ExportPdf,
+    /// Image ▸ Variables ▸ Define…: bind text / visibility variables to
+    /// layers.
+    DefineVariables,
+    /// Image ▸ Variables ▸ Data Sets…: import a CSV, preview a set, export
+    /// one file per set.
+    DataSets,
+    /// Image ▸ Vectorize Bitmap…: the active layer's colours traced into
+    /// shape layers, one undo step.
+    VectorizeBitmap,
+
+    // ---- W10-A ---------------------------------------------------------------
+    /// File ▸ Export ▸ Slice Options…: the name, URL and alt text of the slice
+    /// the Slice Select tool picked; the name is the file File ▸ Export ▸
+    /// Slices writes it as, the URL and alt text go into the HTML page that
+    /// export writes beside the images.
+    SliceOptions,
 }
 
 /// The outcome of asking whether an item can be used right now.
@@ -2060,7 +2253,43 @@ pub struct MenuContext {
     /// none" and Lock Guides can both tick and flip the document-level lock
     /// without losing the guides themselves.
     pub guides: Guides,
+    /// W10-G: the history label of the step Edit ▸ Fade would fade — the
+    /// last step, when it was a filter, adjustment, fill or stroke on a pixel
+    /// layer and nothing has happened since. `None` greys Fade out with
+    /// [`FADE_NOTHING`]. Filled by the application, which keeps the pixels.
+    pub fade_step: Option<String>,
+    /// W10-B: a saved selection is open in the Channels panel as an editable
+    /// alpha channel ([`layer_model::DocumentExtras::alpha_edit`]), so Close
+    /// Alpha Channel has something to close.
+    pub alpha_editing: bool,
+    /// W10-I: the active layer is a smart object whose source is a LINKED
+    /// file — the only kind Layer ▸ Smart Object ▸ Relink to File acts on.
+    pub smart_object_linked: bool,
+    /// W10-I: how many smart filters the active smart object carries, and
+    /// its filter mask's switch (`None`: no filter mask) — what the Layer ▸
+    /// Smart Filter rows are gated on.
+    pub smart_filters: usize,
+    pub filter_mask: Option<bool>,
 }
+
+/// W10-I: the active layer's smart object, if it is one.
+fn active_smart_object(doc: &Document) -> Option<&layer_model::SmartObjectLayer> {
+    match &doc.layers.get(doc.active_layer()?)?.kind {
+        layer_model::LayerKind::SmartObject(so) => Some(so),
+        _ => None,
+    }
+}
+
+/// W10-I: why Relink to File is greyed over an embedded smart object.
+pub const RELINK_EMBEDDED: &str =
+    "The smart object is embedded, not linked: use Replace Contents to swap its source";
+
+/// W10-B: why Close Alpha Channel is greyed.
+pub const NO_ALPHA_CHANNEL_OPEN: &str = "No alpha channel is open for editing";
+
+/// W10-G: why Edit ▸ Fade is greyed.
+pub const FADE_NOTHING: &str =
+    "Fade applies to the last filter, adjustment, fill or stroke, and the last step was not one";
 
 impl Default for MenuContext {
     /// The state before a document is open: almost everything is disabled, and
@@ -2094,6 +2323,11 @@ impl Default for MenuContext {
             dock: DockState::default(),
             theme: design::Theme::default(),
             guides: Guides::default(),
+            fade_step: None,
+            alpha_editing: false,
+            smart_object_linked: false,
+            smart_filters: 0,
+            filter_mask: None,
         }
     }
 }
@@ -2138,6 +2372,21 @@ impl MenuContext {
             // 4 Indexed).
             color_mode: ColorMode::from_meta(doc.meta.color_mode),
             bit_depth: ChannelDepth::of_bits(doc.meta.bit_depth),
+            alpha_editing: doc.extras.alpha_edit.is_some(),
+            smart_object_linked: doc
+                .active_layer()
+                .and_then(|id| doc.layers.get(id))
+                .is_some_and(|l| match &l.kind {
+                    layer_model::LayerKind::SmartObject(so) => matches!(
+                        doc.asset_origin(so.asset),
+                        Some(layer_model::AssetOrigin::Linked { .. })
+                    ),
+                    _ => false,
+                }),
+            smart_filters: active_smart_object(doc).map_or(0, |so| so.filters.len()),
+            filter_mask: active_smart_object(doc)
+                .and_then(|so| so.filter_mask.as_ref())
+                .map(|m| m.enabled),
             ..Self::default()
         }
     }
@@ -2242,6 +2491,7 @@ impl MenuAction {
         out.extend([
             MenuAction::ExportLayers,
             MenuAction::ExportSlices,
+            MenuAction::SliceOptions,
             MenuAction::ExportArtboards,
             MenuAction::PlaceEmbedded,
             MenuAction::PlaceLinked,
@@ -2277,6 +2527,7 @@ impl MenuAction {
         out.extend([
             MenuAction::DefinePattern,
             MenuAction::DefineBrush,
+            MenuAction::DefineCustomShape,
             MenuAction::KeyboardShortcuts,
             MenuAction::Preferences,
         ]);
@@ -2298,6 +2549,9 @@ impl MenuAction {
             MenuAction::AutoTone,
             MenuAction::AutoContrast,
             MenuAction::AutoColor,
+            // W10-H: Image ▸ Apply Image / Calculations.
+            MenuAction::ApplyImage,
+            MenuAction::Calculations,
             MenuAction::ImageSize,
             MenuAction::CanvasSize,
         ]);
@@ -2449,6 +2703,7 @@ impl MenuAction {
             MenuAction::BrushHardness(true),
         ]);
         out.extend((0..=9u8).map(MenuAction::ToolOpacity));
+        out.push(MenuAction::ContentAwareScaleFree);
         // ---- Window ----
         out.extend(LayoutId::ALL.iter().copied().map(MenuAction::ApplyLayout));
         out.extend(PanelId::ALL.iter().copied().map(MenuAction::TogglePanel));
@@ -2474,6 +2729,35 @@ impl MenuAction {
             MenuAction::ShowLayers,
             MenuAction::LinkLayers,
         ]);
+        out.extend(
+            SmartFilterOp::ALL
+                .iter()
+                .copied()
+                .map(MenuAction::SmartFilter),
+        );
+        // ---- W10-G: the Edit gaps ----
+        out.extend([
+            MenuAction::PresetManager,
+            MenuAction::Fade,
+            MenuAction::AutoAlignLayers,
+            MenuAction::AutoBlendLayers,
+            MenuAction::PerspectiveWarp,
+        ]);
+        // ---- W10-B: emitted by the Channels panel's alpha rows only ----
+        out.extend([
+            MenuAction::EditAlphaChannel(0),
+            MenuAction::CloseAlphaChannel,
+        ]);
+        // ---- W10-E: File automation / export, Image > Variables, Vectorize ----
+        out.extend([
+            MenuAction::AutomateBatch,
+            MenuAction::ConvertFormats,
+            MenuAction::ExportColorLookup,
+            MenuAction::ExportPdf,
+            MenuAction::DefineVariables,
+            MenuAction::DataSets,
+            MenuAction::VectorizeBitmap,
+        ]);
         out
     }
 
@@ -2492,7 +2776,16 @@ impl MenuAction {
             MenuAction::Export(f) => format!("{}…", f.extension().to_uppercase()),
             MenuAction::ExportLayers => "Export Layers…".into(),
             MenuAction::ExportSlices => "Slices…".into(),
+            MenuAction::SliceOptions => "Slice Options…".into(),
             MenuAction::ExportArtboards => "Artboards to Files…".into(),
+            // W10-E.
+            MenuAction::AutomateBatch => "Batch…".into(),
+            MenuAction::ConvertFormats => "Convert Formats…".into(),
+            MenuAction::ExportColorLookup => "Color Lookup Tables…".into(),
+            MenuAction::ExportPdf => "PDF…".into(),
+            MenuAction::DefineVariables => "Define…".into(),
+            MenuAction::DataSets => "Data Sets…".into(),
+            MenuAction::VectorizeBitmap => "Vectorize Bitmap…".into(),
             MenuAction::PlaceEmbedded => "Place Embedded…".into(),
             MenuAction::PlaceLinked => "Place Linked…".into(),
             MenuAction::FileInfo => "File Info…".into(),
@@ -2519,6 +2812,7 @@ impl MenuAction {
             MenuAction::ContentAwareScale(step) => step.label().into(),
             MenuAction::DefinePattern => "Define Pattern…".into(),
             MenuAction::DefineBrush => "Define Brush Preset…".into(),
+            MenuAction::DefineCustomShape => "Define Custom Shape…".into(),
             MenuAction::KeyboardShortcuts => "Keyboard Shortcuts…".into(),
             MenuAction::Preferences => "Preferences…".into(),
 
@@ -2531,6 +2825,8 @@ impl MenuAction {
             MenuAction::AutoTone => "Auto Tone".into(),
             MenuAction::AutoContrast => "Auto Contrast".into(),
             MenuAction::AutoColor => "Auto Color".into(),
+            MenuAction::ApplyImage => "Apply Image…".into(),
+            MenuAction::Calculations => "Calculations…".into(),
             MenuAction::ImageSize => "Image Size…".into(),
             MenuAction::CanvasSize => "Canvas Size…".into(),
             MenuAction::RotateCanvas(r) => r.label().into(),
@@ -2605,6 +2901,12 @@ impl MenuAction {
             MenuAction::VanishingPoint => "Vanishing Point…".into(),
             MenuAction::BlurGallery(kind) => kind.label().into(),
             MenuAction::PuppetWarp => "Puppet Warp".into(),
+            // W10-G: the Edit gaps.
+            MenuAction::PresetManager => "Preset Manager…".into(),
+            MenuAction::Fade => "Fade…".into(),
+            MenuAction::AutoAlignLayers => "Auto-Align Layers…".into(),
+            MenuAction::AutoBlendLayers => "Auto-Blend Layers…".into(),
+            MenuAction::PerspectiveWarp => "Perspective Warp".into(),
             MenuAction::ConvertForSmartFilters => "Convert for Smart Filters".into(),
             MenuAction::RefineMask => "Refine Mask…".into(),
             MenuAction::RemoveColorFringe => "Remove Color Fringe…".into(),
@@ -2631,6 +2933,7 @@ impl MenuAction {
             MenuAction::ToolOpacity(digit) => {
                 format!("Opacity {}%", opacity_of_digit(digit))
             }
+            MenuAction::ContentAwareScaleFree => "With Handles".into(),
 
             MenuAction::ApplyLayout(l) => l.title().into(),
             MenuAction::TogglePanel(p) => p.title().into(),
@@ -2641,12 +2944,16 @@ impl MenuAction {
             MenuAction::ExportDiagnostics => "Export Diagnostics…".into(),
             MenuAction::ReportIssue => "Report an Issue".into(),
             MenuAction::About => "About Raster Studio".into(),
+            // W10-B
+            MenuAction::EditAlphaChannel(_) => "Edit Alpha Channel".into(),
+            MenuAction::CloseAlphaChannel => "Close Alpha Channel".into(),
             // W10-I
             MenuAction::SmartObject(op) => op.label().into(),
             MenuAction::Matting(op) => op.label().into(),
             MenuAction::HideLayers => "Hide Layers".into(),
             MenuAction::ShowLayers => "Show Layers".into(),
             MenuAction::LinkLayers => "Link Layers".into(),
+            MenuAction::SmartFilter(op) => op.label().into(),
         }
     }
 
@@ -2668,6 +2975,16 @@ impl MenuAction {
             },
             MenuAction::Redo => match ctx.redo_label.as_deref() {
                 Some(step) => format!("Redo {step}"),
+                None => self.label(),
+            },
+            // W10-G: Edit > Fade names the step it fades ("Fade Apply
+            // Invert..."), as the dialog's title does.
+            MenuAction::Fade => match ctx.fade_step.as_deref() {
+                Some(step) => {
+                    let fade = self.label();
+                    let word = fade.trim_end_matches('…');
+                    format!("{word} {step}{}", &fade[word.len()..])
+                }
                 None => self.label(),
             },
             _ => self.label(),
@@ -2759,6 +3076,8 @@ impl MenuAction {
             MenuAction::ToolOpacity(digit) if digit <= 9 => {
                 Shortcut::bare(Key::character(char::from(b'0' + digit)))
             }
+            // Photoshop's Content-Aware Scale chord.
+            MenuAction::ContentAwareScaleFree => Shortcut::ctrl_alt_shift('c'),
 
             MenuAction::TogglePanel(PanelId::Brushes) => Shortcut::bare(Key::F(5)),
             MenuAction::TogglePanel(PanelId::Color) => Shortcut::bare(Key::F(6)),
@@ -2807,6 +3126,9 @@ impl MenuAction {
             | MenuAction::SaveAs
             | MenuAction::ExportLayers
             | MenuAction::ExportSlices
+            // W10-A: the pick itself is checked where the dialog opens,
+            // which says why when there is none.
+            | MenuAction::SliceOptions
             | MenuAction::ExportArtboards
             | MenuAction::PlaceEmbedded
             | MenuAction::PlaceLinked
@@ -2814,6 +3136,17 @@ impl MenuAction {
             | MenuAction::Print
             | MenuAction::SaveAsPsd
             | MenuAction::DuplicateDocument => gate(ctx.need_document(), act(self)),
+            // W10-E: Batch / Convert Formats work on folders, not on the open
+            // document; the exports, Variables and Vectorize need one.
+            MenuAction::AutomateBatch | MenuAction::ConvertFormats => act(self),
+            MenuAction::ExportColorLookup
+            | MenuAction::ExportPdf
+            | MenuAction::DefineVariables
+            | MenuAction::DataSets => gate(ctx.need_document(), act(self)),
+            MenuAction::VectorizeBitmap => match ctx.need_pixel_layer() {
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
             MenuAction::CloseAll => gate(
                 (ctx.open_documents == 0).then_some("No document is open"),
                 act(self),
@@ -2890,15 +3223,37 @@ impl MenuAction {
             // Defining a brush preset needs only a document: it captures the
             // live brush, which exists with no selection at all.
             MenuAction::DefineBrush => gate(ctx.need_document(), act(self)),
+            // W10-A: an outline to define from - the active shape layer's,
+            // else the Paths panel's current path.
+            MenuAction::DefineCustomShape => gate(
+                ctx.need_document().or_else(|| {
+                    let shape = ctx.active.is_some_and(|l| l.class == LayerClass::Shape);
+                    (!shape && !ctx.has_current_path)
+                        .then_some("Define Custom Shape needs a shape layer or a path")
+                }),
+                act(self),
+            ),
             MenuAction::KeyboardShortcuts | MenuAction::Preferences => act(self),
 
             // ---- Image -----------------------------------------------------
-            MenuAction::SetColorMode(mode) => {
-                gate(ctx.need_document().or(mode.unsupported_reason()), act(self))
-            }
+            MenuAction::SetColorMode(mode) => gate(
+                ctx.need_document()
+                    .or(mode.unsupported_reason())
+                    .or(mode.conversion_reason(ctx.color_mode))
+                    .or(mode.depth_reason(ctx.color_mode, ctx.bit_depth)),
+                act(self),
+            ),
+            // W10-H: Apply Image writes the active layer's pixels;
+            // Calculations only reads, so it needs a document.
+            MenuAction::ApplyImage => match ctx.need_editable_pixels() {
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::Calculations => gate(ctx.need_document(), act(self)),
             MenuAction::SetBitDepth(depth) => gate(
                 ctx.need_document()
-                    .or(depth.conversion_reason(ctx.bit_depth)),
+                    .or(depth.conversion_reason(ctx.bit_depth))
+                    .or(depth.mode_reason(ctx.color_mode)),
                 act(self),
             ),
             MenuAction::ApplyAdjustment(_)
@@ -2946,6 +3301,19 @@ impl MenuAction {
                 Ok(l) if l.locked.all => Resolution::Disabled("The layer is locked"),
                 Ok(l) => cmd(Command::DeleteLayer { layer_id: l.id }),
                 Err(r) => Resolution::Disabled(r),
+            },
+            // W10-B: the Channels panel's alpha rows.
+            MenuAction::EditAlphaChannel(index) => match ctx.need_document() {
+                Some(r) => Resolution::Disabled(r),
+                None if index >= ctx.saved_selections => {
+                    Resolution::Disabled("That alpha channel is no longer saved")
+                }
+                None => act(self),
+            },
+            MenuAction::CloseAlphaChannel => match ctx.need_document() {
+                Some(r) => Resolution::Disabled(r),
+                None if !ctx.alpha_editing => Resolution::Disabled(NO_ALPHA_CHANNEL_OPEN),
+                None => act(self),
             },
             MenuAction::ToggleLayerVisibility => match ctx.need_layer() {
                 Ok(l) => cmd(Command::SetLayerProperties {
@@ -3274,6 +3642,24 @@ impl MenuAction {
                 Err(r) => Resolution::Disabled(r),
             },
 
+            // ---- W10-G: the Edit gaps -----------------------------------------
+            // The preset store is the application's, not a document's.
+            MenuAction::PresetManager => act(self),
+            MenuAction::Fade => gate(
+                ctx.need_document()
+                    .or(ctx.fade_step.is_none().then_some(FADE_NOTHING)),
+                act(self),
+            ),
+            MenuAction::AutoAlignLayers | MenuAction::AutoBlendLayers => gate(
+                ctx.need_document().or((ctx.selected_layers < 2)
+                    .then_some("Select two or more layers in the Layers panel first")),
+                act(self),
+            ),
+            MenuAction::PerspectiveWarp => match ctx.need_editable_pixels() {
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+
             // ---- View ------------------------------------------------------
             // Zoom to Selection with nothing selected is disabled and says so,
             // rather than being an item that looks live and then no-ops.
@@ -3332,10 +3718,9 @@ impl MenuAction {
                 act(self),
             ),
             MenuAction::SnapToNone => gate(
-                ctx.need_document().or((!ViewFlag::SNAP_TO
-                    .iter()
-                    .any(|f| ctx.view.get(*f)))
-                .then_some("No snap target is on")),
+                ctx.need_document()
+                    .or((!ViewFlag::SNAP_TO.iter().any(|f| ctx.view.get(*f)))
+                        .then_some("No snap target is on")),
                 act(self),
             ),
             MenuAction::NewGuideLayout => gate(ctx.need_document(), act(self)),
@@ -3358,6 +3743,10 @@ impl MenuAction {
                 (digit > 9).then_some("Opacity keys are the digits 0 to 9"),
                 act(self),
             ),
+            MenuAction::ContentAwareScaleFree => match ctx.need_editable_pixels() {
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
 
             // ---- Window ----------------------------------------------------
             MenuAction::ApplyLayout(layout) => Resolution::Enabled(Intent::ApplyLayout(layout)),
@@ -3378,9 +3767,30 @@ impl MenuAction {
             | MenuAction::About => act(self),
 
             // ---- W10-I: Layer additions ------------------------------------
-            MenuAction::SmartObject(_) => match ctx.need_layer() {
-                Ok(l) if l.class == LayerClass::SmartObject => act(self),
+            MenuAction::SmartObject(op) => match ctx.need_layer() {
+                Ok(l) if l.class == LayerClass::SmartObject => gate(
+                    (op == SmartObjectOp::RelinkToFile && !ctx.smart_object_linked)
+                        .then_some(RELINK_EMBEDDED),
+                    act(self),
+                ),
                 Ok(_) => Resolution::Disabled("The active layer is not a smart object"),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::SmartFilter(op) => match ctx.need_layer() {
+                Ok(l) if l.class != LayerClass::SmartObject => {
+                    Resolution::Disabled("The active layer is not a smart object")
+                }
+                Ok(_) => match op {
+                    SmartFilterOp::AddMask if ctx.smart_filters == 0 => {
+                        Resolution::Disabled(NO_SMART_FILTERS)
+                    }
+                    SmartFilterOp::AddMask if ctx.filter_mask.is_some() => {
+                        Resolution::Disabled(FILTER_MASK_EXISTS)
+                    }
+                    SmartFilterOp::AddMask => act(self),
+                    _ if ctx.filter_mask.is_none() => Resolution::Disabled(NO_FILTER_MASK),
+                    _ => act(self),
+                },
                 Err(r) => Resolution::Disabled(r),
             },
             MenuAction::Matting(_) => match ctx.need_editable_pixels() {
@@ -3660,7 +4070,20 @@ fn file_menu(recent_files: usize) -> Menu {
                 "Export",
                 vec![
                     item(MenuAction::ExportSlices),
+                    // W10-A.
+                    item(MenuAction::SliceOptions),
                     item(MenuAction::ExportArtboards),
+                    // W10-E.
+                    item(MenuAction::ExportColorLookup),
+                    item(MenuAction::ExportPdf),
+                ],
+            ),
+            // W10-E: File > Automate.
+            Entry::submenu(
+                "Automate",
+                vec![
+                    item(MenuAction::AutomateBatch),
+                    item(MenuAction::ConvertFormats),
                 ],
             ),
             Entry::Separator,
@@ -3683,6 +4106,8 @@ fn edit_menu() -> Menu {
             item(MenuAction::Redo),
             item(MenuAction::StepForward),
             item(MenuAction::StepBackward),
+            // W10-G: Fade sits under the steps it fades, as in Photoshop.
+            item(MenuAction::Fade),
             Entry::Separator,
             item(MenuAction::Cut),
             item(MenuAction::Copy),
@@ -3703,14 +4128,27 @@ fn edit_menu() -> Menu {
             Entry::Separator,
             item(MenuAction::FreeTransform),
             item(MenuAction::PuppetWarp),
+            // W10-G
+            item(MenuAction::PerspectiveWarp),
             Entry::submenu("Transform", items(TransformOp::ALL, MenuAction::Transform)),
-            Entry::submenu(
-                "Content-Aware Scale",
-                items(ContentAwareScaleStep::ALL, MenuAction::ContentAwareScale),
-            ),
+            Entry::submenu("Content-Aware Scale", {
+                // W10-J: the interactive box first, the fixed steps after.
+                let mut rows = vec![item(MenuAction::ContentAwareScaleFree), Entry::Separator];
+                rows.extend(items(
+                    ContentAwareScaleStep::ALL,
+                    MenuAction::ContentAwareScale,
+                ));
+                rows
+            }),
+            // W10-G
+            item(MenuAction::AutoAlignLayers),
+            item(MenuAction::AutoBlendLayers),
             Entry::Separator,
             item(MenuAction::DefinePattern),
             item(MenuAction::DefineBrush),
+            item(MenuAction::DefineCustomShape),
+            // W10-G
+            item(MenuAction::PresetManager),
             Entry::Separator,
             Entry::submenu("Purge", items(PurgeTarget::ALL, MenuAction::Purge)),
             Entry::Separator,
@@ -3740,6 +4178,10 @@ fn image_menu() -> Menu {
             item(MenuAction::AutoContrast),
             item(MenuAction::AutoColor),
             Entry::Separator,
+            // W10-H
+            item(MenuAction::ApplyImage),
+            item(MenuAction::Calculations),
+            Entry::Separator,
             item(MenuAction::ImageSize),
             item(MenuAction::CanvasSize),
             Entry::submenu(
@@ -3751,6 +4193,16 @@ fn image_menu() -> Menu {
             item(MenuAction::RevealAll),
             Entry::Separator,
             item(MenuAction::DuplicateDocument),
+            // W10-E: Image > Variables and Image > Vectorize Bitmap.
+            Entry::Separator,
+            Entry::submenu(
+                "Variables",
+                vec![
+                    item(MenuAction::DefineVariables),
+                    item(MenuAction::DataSets),
+                ],
+            ),
+            item(MenuAction::VectorizeBitmap),
         ],
     }
 }
@@ -3824,6 +4276,11 @@ fn layer_menu() -> Menu {
                     item(MenuAction::SmartObject(SmartObjectOp::RelinkToFile)),
                     item(MenuAction::SmartObject(SmartObjectOp::ConvertToLayers)),
                 ],
+            ),
+            // W10-I: Layer ▸ Smart Filter — the filters' shared mask.
+            Entry::submenu(
+                "Smart Filter",
+                items(SmartFilterOp::ALL, MenuAction::SmartFilter),
             ),
             Entry::submenu(
                 "Rasterize",
@@ -4471,6 +4928,7 @@ mod tests {
                         asset: layer_model::AssetId::new(),
                         linked: false,
                         filters: Vec::new(),
+                        filter_mask: None,
                     }),
                 ),
                 None,
@@ -4513,7 +4971,10 @@ mod tests {
             .collect();
         for id in [FilterId::CameraRaw, FilterId::LensCorrection] {
             assert!(id.is_top_level());
-            assert!(top.contains(&MenuAction::Filter(id)), "{id:?} is not a top-level row");
+            assert!(
+                top.contains(&MenuAction::Filter(id)),
+                "{id:?} is not a top-level row"
+            );
         }
         let submenu = |label: &str| -> Vec<MenuAction> {
             menu.entries
@@ -4665,6 +5126,46 @@ mod tests {
     }
 
     #[test]
+    fn thirty_two_bits_is_an_image_mode_row_for_rgb_and_grayscale() {
+        // W10-H: Image > Mode lists 32 Bits/Channel and a 32-bit document
+        // checks it; RGB and Grayscale reach it, the ink modes do not.
+        let rows = MenuAction::SetBitDepth(ChannelDepth::ThirtyTwo);
+        assert!(menu_actions().contains(&rows));
+        assert_eq!(rows.label(), "32 Bits/Channel");
+        let mut doc = Document::new(8, 8, "hdr");
+        doc.meta.bit_depth = 32;
+        let ctx = MenuContext::from_document(&doc, &History::default());
+        assert_eq!(ctx.bit_depth, ChannelDepth::ThirtyTwo);
+        assert_eq!(rows.checked(&ctx), Some(true));
+        assert!(rows.resolve(&ctx).reason().is_some());
+        for down in [ChannelDepth::Eight, ChannelDepth::Sixteen] {
+            assert_eq!(MenuAction::SetBitDepth(down).resolve(&ctx).reason(), None);
+        }
+        // A 32-bit document changes colour mode only after going down.
+        assert_eq!(
+            MenuAction::SetColorMode(ColorMode::Cmyk)
+                .resolve(&ctx)
+                .reason(),
+            Some("Convert to 16 or 8 Bits/Channel before changing the colour mode")
+        );
+        let rgb = MenuContext::from_document(&Document::new(8, 8, "s"), &History::default());
+        assert_eq!(rows.resolve(&rgb).reason(), None, "8 -> 32 on RGB");
+        let cmyk = MenuContext {
+            color_mode: ColorMode::Cmyk,
+            ..rgb.clone()
+        };
+        assert_eq!(
+            rows.resolve(&cmyk).reason(),
+            Some("32 Bits/Channel is for RGB and Grayscale documents")
+        );
+        let gray = MenuContext {
+            color_mode: ColorMode::Grayscale,
+            ..rgb
+        };
+        assert_eq!(rows.resolve(&gray).reason(), None);
+    }
+
+    #[test]
     fn feather_is_shift_f6() {
         assert_eq!(
             MenuAction::Modify(ModifySelection::Feather).shortcut(),
@@ -4685,9 +5186,23 @@ mod tests {
             has_document: true,
             ..Default::default()
         };
+        // W10-H: Bitmap and Duotone are reached from Grayscale only; on a
+        // Grayscale document every mode is enabled.
+        let gray = MenuContext {
+            has_document: true,
+            color_mode: ColorMode::Grayscale,
+            ..Default::default()
+        };
+        for mode in [ColorMode::Bitmap, ColorMode::Duotone] {
+            let reason = MenuAction::SetColorMode(mode).resolve(&ctx).reason();
+            assert!(
+                reason.is_some_and(|r| r.contains("Grayscale")),
+                "{mode:?} on RGB: {reason:?}"
+            );
+        }
         for &mode in ColorMode::ALL {
             assert!(
-                MenuAction::SetColorMode(mode).resolve(&ctx).is_enabled(),
+                MenuAction::SetColorMode(mode).resolve(&gray).is_enabled(),
                 "{mode:?} is greyed"
             );
             assert!(mode.is_supported(), "{mode:?}");
@@ -4711,7 +5226,10 @@ mod tests {
             let label = MenuAction::SetColorMode(mode).label();
             assert_eq!(
                 label.ends_with('…'),
-                mode == ColorMode::Indexed,
+                matches!(
+                    mode,
+                    ColorMode::Indexed | ColorMode::Bitmap | ColorMode::Duotone
+                ),
                 "{mode:?}: {label}"
             );
         }
@@ -5233,6 +5751,11 @@ mod tests {
         assert_eq!(MenuAction::Undo.label_in(&ctx), "Undo Create Layer");
         assert_eq!(MenuAction::Redo.label_in(&ctx), "Redo Delete Layer");
         assert_eq!(MenuAction::Undo.label_in(&MenuContext::default()), "Undo");
+        // W10-G: Fade names the step it would fade, and only then.
+        let mut fading = MenuContext::default();
+        assert_eq!(MenuAction::Fade.label_in(&fading), MenuAction::Fade.label());
+        fading.fade_step = Some("Apply Invert".into());
+        assert_eq!(MenuAction::Fade.label_in(&fading), "Fade Apply Invert…");
     }
 
     #[test]
@@ -5714,5 +6237,113 @@ mod tests {
         assert!(EffectSlot::DropShadow.is_set(&effects));
         assert!(!EffectSlot::InnerShadow.is_set(&effects));
         assert_eq!(effects.count(), 1);
+    }
+}
+
+/// W10-J: the View menu's Show and Snap To submenus, its guide rows, and
+/// Snap To > All / None as the workspace absorbs them.
+#[cfg(test)]
+mod w10j_view_tests {
+    use super::*;
+
+    fn actions(entries: &[Entry]) -> Vec<MenuAction> {
+        entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Item(a) => Some(*a),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn submenu<'a>(menu: &'a Menu, label: &str) -> &'a [Entry] {
+        menu.entries
+            .iter()
+            .find_map(|e| match e {
+                Entry::Submenu { label: l, entries } if *l == label => Some(entries.as_slice()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no {label} submenu"))
+    }
+
+    #[test]
+    fn the_view_menu_has_snap_to_show_extras_and_the_guide_rows() {
+        let view = view_menu();
+        let top = actions(&view.entries);
+        assert!(top.contains(&MenuAction::ToggleView(ViewFlag::Extras)));
+        for row in [MenuAction::NewGuideLayout, MenuAction::NewGuidesFromShape] {
+            assert!(top.contains(&row), "View has no {row:?} row");
+        }
+        // The submenu flags are not also flat rows.
+        for flag in ViewFlag::ALL.iter().filter(|f| f.in_submenu()) {
+            assert!(!top.contains(&MenuAction::ToggleView(*flag)), "{flag:?}");
+        }
+        let snap = actions(submenu(&view, "Snap To"));
+        for flag in ViewFlag::SNAP_TO {
+            assert!(snap.contains(&MenuAction::ToggleView(*flag)), "{flag:?}");
+        }
+        assert!(snap.contains(&MenuAction::SnapToAll) && snap.contains(&MenuAction::SnapToNone));
+        assert_eq!(
+            actions(submenu(&view, "Show")),
+            vec![MenuAction::ToggleView(ViewFlag::Slices)]
+        );
+        assert_eq!(
+            MenuAction::ToggleView(ViewFlag::Extras).shortcut(),
+            Some(Shortcut::ctrl('h'))
+        );
+    }
+
+    #[test]
+    fn extras_hides_what_it_names_and_keeps_every_tick() {
+        let mut flags = ViewFlags::defaults();
+        flags.set(ViewFlag::Grid, true);
+        assert!(flags.shows(ViewFlag::Grid) && flags.shows(ViewFlag::Guides));
+        flags.set(ViewFlag::Extras, false);
+        for flag in [
+            ViewFlag::Grid,
+            ViewFlag::Guides,
+            ViewFlag::SmartGuides,
+            ViewFlag::SelectionEdges,
+            ViewFlag::LayerEdges,
+            ViewFlag::Slices,
+        ] {
+            assert!(flags.get(flag), "{flag:?} keeps its tick");
+            assert!(!flags.shows(flag), "{flag:?} is hidden by Extras");
+        }
+        assert!(flags.shows(ViewFlag::Rulers), "rulers are not an extra");
+    }
+
+    #[test]
+    fn snap_to_all_and_none_set_the_five_targets_and_grey_when_moot() {
+        let mut w = crate::Workspace::new();
+        assert!(w.absorb_action(MenuAction::SnapToNone));
+        assert!(ViewFlag::SNAP_TO.iter().all(|f| !w.view_flags.get(*f)));
+        assert!(
+            !w.absorb_action(MenuAction::SnapToNone),
+            "a second None changes nothing"
+        );
+        let ctx = MenuContext {
+            has_document: true,
+            view: w.view_flags,
+            ..MenuContext::default()
+        };
+        assert!(!MenuAction::SnapToNone.resolve(&ctx).is_enabled());
+        assert!(MenuAction::SnapToAll.resolve(&ctx).is_enabled());
+        assert!(w.absorb_action(MenuAction::SnapToAll));
+        assert!(ViewFlag::SNAP_TO.iter().all(|f| w.view_flags.get(*f)));
+    }
+
+    #[test]
+    fn the_content_aware_scale_submenu_leads_with_the_interactive_box() {
+        let edit = edit_menu();
+        let rows = actions(submenu(&edit, "Content-Aware Scale"));
+        assert_eq!(rows.first(), Some(&MenuAction::ContentAwareScaleFree));
+        assert_eq!(
+            MenuAction::ContentAwareScaleFree.shortcut(),
+            Some(Shortcut::ctrl_alt_shift('c'))
+        );
+        for step in ContentAwareScaleStep::ALL {
+            assert!(rows.contains(&MenuAction::ContentAwareScale(*step)));
+        }
     }
 }

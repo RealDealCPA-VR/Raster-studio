@@ -34,8 +34,8 @@ use std::collections::BTreeMap;
 use design::tokens::{Radius, Space};
 use egui::{vec2, Context, TextureHandle};
 use filters::{blur, distort, noise, other, pixelate, render, sharpen, stylize};
-use filters::{displace, pixelate_extra, quick, smart_blur, stylize_extra};
 use filters::{camera_raw, hsb, lens_correction, lighting};
+use filters::{displace, pixelate_extra, quick, smart_blur, stylize_extra};
 use filters::{EdgeMode, FilterBuffer, Interpolation, Sampling};
 use tools::{OptionKind, OptionSpec};
 
@@ -665,7 +665,13 @@ fn camera_raw_of(p: &FilterParams) -> camera_raw::CameraRaw {
 const LENS_CORRECTION: &[OptionSpec] = &[
     float("distortion", "Distortion (+ barrel)", -100.0, 100.0, 0.0),
     float("ca_red_cyan", "Fix red/cyan fringe", -100.0, 100.0, 0.0),
-    float("ca_blue_yellow", "Fix blue/yellow fringe", -100.0, 100.0, 0.0),
+    float(
+        "ca_blue_yellow",
+        "Fix blue/yellow fringe",
+        -100.0,
+        100.0,
+        0.0,
+    ),
     float("vignette_amount", "Vignette amount", -100.0, 100.0, 0.0),
     float("vignette_midpoint", "Vignette midpoint", 0.0, 100.0, 50.0),
     float("vertical", "Vertical perspective", -100.0, 100.0, 0.0),
@@ -1514,7 +1520,8 @@ pub const FILTERS: &[FilterSpec] = &[
     },
     FilterSpec {
         id: FilterId::LightingEffects,
-        summary: "Lights the layer with a spot, point or infinite light. Drag the light on the preview.",
+        summary:
+            "Lights the layer with a spot, point or infinite light. Drag the light on the preview.",
         params: LIGHTING_EFFECTS,
         apply: |src, p| lighting_of(p).apply(src),
     },

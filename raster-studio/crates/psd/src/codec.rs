@@ -124,11 +124,16 @@ impl ChannelShape {
     }
 }
 
-/// Read the RLE byte-count table for `rows` rows.
+/// Read the RLE byte-count table for `rows` rows: 16-bit counts in a `.psd`,
+/// 32-bit in a `.psb` (W10-F).
 fn read_rle_counts(cur: &mut Cursor<'_>, rows: usize) -> PsdResult<Vec<u32>> {
     let mut counts = Vec::with_capacity(rows.min(1 << 16));
     for _ in 0..rows {
-        counts.push(u32::from(cur.u16()?));
+        counts.push(if cur.is_large() {
+            cur.u32()?
+        } else {
+            u32::from(cur.u16()?)
+        });
     }
     Ok(counts)
 }

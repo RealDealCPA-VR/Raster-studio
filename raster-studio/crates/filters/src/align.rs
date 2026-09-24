@@ -414,8 +414,7 @@ fn fast_corners(g: &Gray, threshold: f32, margin: i32) -> Vec<(i32, i32, f32)> {
             } else {
                 0.0
             };
-            if s > 0.0
-                && holes_in(&holes, g.w, x - margin, y - margin, x + margin, y + margin) == 0
+            if s > 0.0 && holes_in(&holes, g.w, x - margin, y - margin, x + margin, y + margin) == 0
             {
                 score[(y * w + x) as usize] = s;
             }
@@ -656,11 +655,7 @@ fn inliers_of(a: C, b: C, pairs: &[([f64; 2], [f64; 2])]) -> Vec<usize> {
         .iter()
         .enumerate()
         .filter(|(_, (z, w))| {
-            a.mul(C::of(*z))
-                .add(b)
-                .sub(C::of(*w))
-                .norm2()
-                <= INLIER_PX * INLIER_PX
+            a.mul(C::of(*z)).add(b).sub(C::of(*w)).norm2() <= INLIER_PX * INLIER_PX
         })
         .map(|(i, _)| i)
         .collect()
@@ -782,7 +777,11 @@ fn fft2(re: &mut [f64], im: &mut [f64], n: usize, inverse: bool) {
     let mut rr = vec![0.0; n];
     let mut ri = vec![0.0; n];
     for y in 0..n {
-        fft(&mut re[y * n..(y + 1) * n], &mut im[y * n..(y + 1) * n], inverse);
+        fft(
+            &mut re[y * n..(y + 1) * n],
+            &mut im[y * n..(y + 1) * n],
+            inverse,
+        );
     }
     for x in 0..n {
         for y in 0..n {
@@ -820,13 +819,14 @@ fn translation(reference: &Gray, moving: &Gray) -> Result<AlignReport, AlignErro
     let (mut br, mut bi) = plane(moving);
     fft2(&mut ar, &mut ai, n, false);
     fft2(&mut br, &mut bi, n, false);
-    // R = B conj(A) / |B conj(A)|: with moving(p) = reference(p + t) the
-    // inverse transform peaks at +t.
+    // R = A conj(B) / |A conj(B)|: with moving(p) = reference(p + t),
+    // B(k) = A(k) e^{+ikt}, so R = e^{-ikt} and the inverse transform peaks
+    // at +t (the map from the moving layer to the reference).
     let mut rr = vec![0.0; n * n];
     let mut ri = vec![0.0; n * n];
     for i in 0..n * n {
-        let re = br[i] * ar[i] + bi[i] * ai[i];
-        let im = bi[i] * ar[i] - br[i] * ai[i];
+        let re = ar[i] * br[i] + ai[i] * bi[i];
+        let im = ai[i] * br[i] - ar[i] * bi[i];
         let mag = (re * re + im * im).sqrt();
         if mag > 1e-12 {
             rr[i] = re / mag;

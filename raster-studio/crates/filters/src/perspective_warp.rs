@@ -133,8 +133,9 @@ fn solve8(mut a: [[f64; 9]; 8]) -> Option<[f64; 8]> {
             if f == 0.0 {
                 continue;
             }
-            for k in col..9 {
-                a[row][k] -= f * a[col][k];
+            let pivot_row = a[col];
+            for (v, p) in a[row].iter_mut().zip(pivot_row).skip(col) {
+                *v -= f * p;
             }
         }
     }
@@ -256,10 +257,7 @@ impl PerspectiveWarp {
                 for (x, px) in row.iter_mut().enumerate() {
                     let c = [x as f32 + 0.5, y as f32 + 0.5];
                     // The last-drawn quad is on top.
-                    let hit = maps
-                        .iter()
-                        .rev()
-                        .find(|(q, _)| quad_contains(&q.target, c));
+                    let hit = maps.iter().rev().find(|(q, _)| quad_contains(&q.target, c));
                     if let Some((_, inv)) = hit {
                         *px = match inv.apply([f64::from(c[0]), f64::from(c[1])]) {
                             Some(s) => {
@@ -296,7 +294,12 @@ mod tests {
     fn a_quad_warped_to_itself_is_the_identity() {
         let src = textured(48, 40);
         let warp = PerspectiveWarp {
-            quads: vec![WarpQuad::new([[4.0, 6.0], [40.0, 3.0], [44.0, 35.0], [7.0, 30.0]])],
+            quads: vec![WarpQuad::new([
+                [4.0, 6.0],
+                [40.0, 3.0],
+                [44.0, 35.0],
+                [7.0, 30.0],
+            ])],
         };
         assert!(warp.is_identity());
         let out = warp.apply(&src);
@@ -354,6 +357,10 @@ mod tests {
         assert!((out.get(25, 15)[0] - 1.0).abs() < 1e-4, "square moved in");
         assert_eq!(out.get(11, 15)[3], 0.0, "the vacated strip is empty");
         assert_eq!(out.get(9, 15)[3], 0.0, "the vacated strip is empty");
-        assert_eq!(out.get(2, 2), src.get(2, 2), "outside every quad is untouched");
+        assert_eq!(
+            out.get(2, 2),
+            src.get(2, 2),
+            "outside every quad is untouched"
+        );
     }
 }

@@ -283,6 +283,14 @@ pub fn is_shown(options: &ToolOptions, tool: ToolId, key: &str) -> bool {
                 .unwrap_or(0);
             tools::edit::crop_option_shown(key, ratio)
         }
+        // W10-J: Content-Aware Scale's Amount only in the Content-Aware mode.
+        ToolId::FreeTransform => {
+            let mode = options
+                .get(tool, "mode")
+                .and_then(OptionValue::as_choice)
+                .unwrap_or(0);
+            tools::transform::TransformMode::option_shown(key, mode)
+        }
         _ => true,
     }
 }

@@ -131,6 +131,9 @@ pub enum ToolId {
     /// W10-A: the parametric spiral in the shape slot. See
     /// [`crate::shape::ShapeKind::Spiral`].
     Spiral,
+    /// W10-B: a click pins a note on the canvas. See
+    /// [`crate::note::NoteTool`].
+    Note,
 }
 
 impl ToolId {
@@ -207,6 +210,7 @@ impl ToolId {
         ToolId::ContentAwareMove,
         ToolId::SliceSelect,
         ToolId::Spiral,
+        ToolId::Note,
     ];
 }
 
@@ -722,6 +726,12 @@ pub enum ToolRequest {
         /// The gizmo's corner delta in document space (column-major).
         delta: [f32; 6],
     },
+    /// W10-B: the Note tool clicked the canvas: pin a new note at `at`, in
+    /// document pixels. A note is a document record the tool cannot see, so
+    /// the shell adds it (one undo step).
+    PlaceNote {
+        at: Vec2,
+    },
 }
 
 /// Everything a tool may read, plus the outboxes for everything it wants
@@ -798,6 +808,11 @@ pub struct ToolContext<'a> {
     pub active_mask: Option<MaskId>,
     /// Whether pixel tools write to the layer or to its mask.
     pub paint_target: PaintTarget,
+    /// W10-I: the mask being painted ([`ToolContext::active_mask`]) is the
+    /// active smart object's shared smart-filter mask, not its layer mask:
+    /// a [`PaintTarget::Mask`] edit then addresses
+    /// [`PixelTarget::FilterMask`]. The shell sets it; `false` otherwise.
+    pub paint_filter_mask: bool,
     /// The document's pixel bounds — what a crop, a fill or an invert is
     /// relative to.
     pub canvas: PixelRect,
@@ -1001,6 +1016,7 @@ impl<'a> ToolContext<'a> {
             active_layer: None,
             active_mask: None,
             paint_target: PaintTarget::Layer,
+            paint_filter_mask: false,
             canvas,
             selection: Selection::None,
             foreground: [0.0, 0.0, 0.0, 1.0],
@@ -1101,6 +1117,7 @@ impl<'a> ToolContext<'a> {
         let id = self.active_layer.ok_or(ToolError::NoActiveLayer)?;
         Ok(match self.paint_target {
             PaintTarget::Layer => PixelTarget::Layer(id),
+            PaintTarget::Mask if self.paint_filter_mask => PixelTarget::FilterMask(id),
             PaintTarget::Mask => PixelTarget::Mask(id),
         })
     }
@@ -1251,6 +1268,17 @@ pub enum SessionGeometry {
     /// W8-C: a Type Mask session over the temporary text layer `layer`: the
     /// painter lays the quick-mask red over everything outside its glyphs.
     TypeMask { layer: LayerId },
+    /// W10-A: the Slice Select tool's view of the document's committed slice
+    /// set: each slice `[min, max]` in document pixels (the one being dragged
+    /// where the pointer has it), the label drawn on it (its own number or
+    /// name, [`crate::slice_select::slice_label`], never its position), and
+    /// the slice the last press picked — the one Delete and Slice Options
+    /// act on — which the painter draws emphasised.
+    SliceSelect {
+        rects: Vec<[Vec2; 2]>,
+        labels: Vec<String>,
+        picked: Option<usize>,
+    },
 }
 
 /// W4-A: the composition guide a published [`SessionGeometry::Crop`] asks

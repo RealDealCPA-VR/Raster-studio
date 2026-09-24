@@ -788,6 +788,9 @@ fn the_canvas_context_menu_offers_fill_stroke_transform_and_selection_ops() {
 fn the_layer_row_context_menu_offers_the_layer_operations() {
     let mut doc = Document::new(320, 240, "Test");
     let id = doc.layers.push_root(Layer::raster("Base")).unwrap();
+    // W10-I: a second layer, so the merge family at the bottom of the
+    // longer menu has something to merge.
+    doc.layers.push_root(Layer::raster("Top")).unwrap();
     doc.set_active_layer(Some(id)).unwrap();
     let mut h = Harness::with_document(doc);
     h.settle();
@@ -807,29 +810,54 @@ fn the_layer_row_context_menu_offers_the_layer_operations() {
     assert_eq!(
         labels,
         vec![
+            // W10-I: Photopea's layer-row menu, in its order.
+            "Blending Options…",
             // The ellipsis is earned: the application opens the Duplicate
             // Layer dialog (the copy's name) for this row.
             "Duplicate Layer…",
             "Delete Layer",
-            "Blending Options…",
-            "Layer",
-            "Merge Down",
+            "Convert to Smart Object",
+            "Rasterize Layer",
+            "Enable Layer Mask",
             "Create Clipping Mask",
+            "Link Layers",
             // W9-A: Photopea's Select Pixels (the active layer's alpha).
             "Select Pixels",
+            "Copy Layer Style",
+            "Paste Layer Style",
+            "Clear Layer Style",
+            "Merge Down",
+            "Merge Visible",
+            "Flatten Image",
         ],
         "the layer row menu's item set"
     );
 
     // Duplicate is enabled with one raster layer; clicking it duplicates.
-    assert!(items[0].resolution.is_enabled());
-    let intents = h.click_context_item(0);
+    assert!(items[1].resolution.is_enabled());
+    let intents = h.click_context_item(1);
     assert!(
         intents
             .iter()
             .any(|i| matches!(i, Intent::Action(ui::menu::MenuAction::DuplicateLayer))),
         "clicking the row menu's duplicate row asks to duplicate: {intents:?}"
     );
+
+    // W10-I: a row far down the longer menu is drawn and clickable too —
+    // Convert to Smart Object, then (re-armed) Flatten Image.
+    for (index, want) in [
+        (3, ui::menu::MenuAction::ConvertToSmartObject),
+        (14, ui::menu::MenuAction::FlattenImage),
+    ] {
+        h.right_click(ui::view::ids::layer_row(id));
+        h.settle();
+        assert!(items[index].resolution.is_enabled(), "{want:?} is greyed");
+        let intents = h.click_context_item(index);
+        assert!(
+            intents.contains(&Intent::Action(want)),
+            "row {index} did not ask for {want:?}: {intents:?}"
+        );
+    }
 }
 
 #[test]

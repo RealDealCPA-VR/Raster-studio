@@ -65,8 +65,15 @@
 pub mod about;
 pub mod action;
 pub mod adjustment_dialog;
+// W10-H: Image > Apply Image..., Calculations..., Mode > Bitmap..., Duotone...
+pub mod apply_image;
+pub mod bitmap;
+pub mod calculations;
+pub mod duotone;
 // W10-G: Edit > Auto-Align Layers and Auto-Blend Layers.
 pub mod auto_align;
+// W10-E: File > Automate > Batch / Convert Formats.
+pub mod batch;
 pub mod blur_gallery;
 pub mod brush_editor;
 pub mod canvas_rotation;
@@ -77,8 +84,16 @@ pub mod color_picker;
 pub mod color_range;
 pub mod controls;
 pub mod defringe;
+// W10-D: Filter > Distort > Displace... with an external map.
+pub mod displace_map;
 pub mod duplicate_layer;
 pub mod export_as;
+// W10-E: File > Export > Color Lookup Tables..., File > File Info...,
+// Image > Variables, Image > Vectorize Bitmap...
+pub mod export_lut;
+pub mod file_info;
+pub mod variables;
+pub mod vectorize;
 // W10-G: Edit > Fade.
 pub mod fade;
 pub mod fill_layer;
@@ -107,8 +122,12 @@ pub mod rename_layer;
 pub mod selection_modify;
 pub mod selection_name;
 pub mod sizes;
+// W10-A: File > Export > Slice Options...
+pub mod slice_options;
 pub mod trim;
 pub mod units;
+// W10-D: Filter > Vanishing Point...
+pub mod vanishing_point;
 // W9-K: Layer > Text > Warp Text...
 pub mod warp_text;
 
@@ -128,6 +147,11 @@ pub use color_picker::{ColorPickerDialog, ColorValue, Eyedropper, RecentColors, 
 pub use color_range::{ColorRangeDialog, ColorRangeSpec, ColorRangeView};
 pub use duplicate_layer::DuplicateLayerDialog;
 pub use export_as::{ExportAsDialog, ExportEntry, ExportJob, PreviewSource};
+// W10-E: the File-menu automation and export dialogs.
+pub use batch::{BatchDialog, BatchFolder, BatchFormat, BatchMode, BatchSpec};
+pub use export_as::{ExportPdfDialog, PdfExportSpec, PdfPageSize};
+pub use export_lut::{ExportLutDialog, ExportLutSpec, LutGrid};
+pub use file_info::FileInfoDialog;
 pub use fill_layer::FillLayerDialog;
 pub use fill_stroke::{
     FillContents, FillContentsKind, FillDialog, FillSpec, StrokeDialog, StrokeLocation, StrokeSpec,
@@ -135,10 +159,27 @@ pub use fill_stroke::{
 pub use filter_dialog::{
     filter_by_id, FilterDialog, FilterGroup, FilterInvocation, FilterParams, FilterSpec, ParamValue,
 };
-pub use filter_gallery::FilterGalleryDialog;
+// W10-E: Image > Variables and Image > Vectorize Bitmap.
+pub use variables::{
+    DataSet, VariableDef, VariableKind, VariableLayer, VariablesDialog, VariablesPage,
+    VariablesRequest, VariablesSpec,
+};
+pub use vectorize::{VectorizeDialog, VectorizeSpec};
+// W10-D: the gallery's stackable effect list, Displace's external map and
+// Vanishing Point.
+pub use displace_map::{DisplaceMapDialog, DisplaceMapSource, DisplaceMapSpec};
+pub use filter_gallery::{FilterGalleryDialog, FilterGallerySpec, GalleryOutcome, GalleryTab};
 pub use gradient_editor::{GradientEditorDialog, StopKind, StopRef};
 pub use image_size::{ImageSizeDialog, ImageSizeSpec};
 pub use indexed_color::{IndexedColorDialog, IndexedSpec};
+pub use vanishing_point::{VanishingMode, VanishingPointDialog, VanishingPointSpec};
+// W10-H: Apply Image, Calculations, Bitmap and Duotone.
+pub use apply_image::{
+    ApplyImageDialog, ApplyImageSpec, ImageSource, SourceChannel, SourceDocument,
+};
+pub use bitmap::BitmapDialog;
+pub use calculations::{CalculationResult, CalculationsDialog, CalculationsSpec};
+pub use duotone::DuotoneDialog;
 pub use layer_style::{shadow_offset, EffectKind, LayerStyleDialog};
 pub use liquify::{LiquifyDialog, LiquifySpec};
 pub use new_document::{
@@ -163,6 +204,7 @@ pub use selection_modify::{ModifySpec, SelectionModifyDialog};
 pub use selection_name::{
     LoadOperation, LoadSelectionDialog, LoadSelectionSpec, SaveSelectionDialog, SaveSelectionSpec,
 };
+pub use slice_options::{SliceOptionsDialog, SliceOptionsSpec};
 pub use trim::{TrimBasis, TrimDialog, TrimSpec};
 pub use units::{format_bytes, ResolutionUnit, Unit};
 pub use warp_text::WarpTextDialog;

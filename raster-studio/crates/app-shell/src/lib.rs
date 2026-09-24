@@ -92,6 +92,8 @@
 pub mod action;
 /// W8-C: File > Export > Artboards to Files.
 pub mod artboard_export;
+// W10-E: File > Automate > Batch / Convert Formats on the job worker.
+pub mod automate;
 pub mod canvas_extras;
 pub mod chrome;
 pub mod clipboard;
@@ -100,10 +102,18 @@ pub mod dialog_host;
 pub mod dialogs;
 pub mod dirty;
 pub mod doc;
+// W10-H: Image > Mode > 32 Bits/Channel (`f32` tiles, float TIFF export).
+pub(crate) mod depth32;
+// W10-G: Preset Manager, Auto-Align / Auto-Blend Layers, Perspective Warp.
+pub mod edit_gaps;
 pub mod edit_session;
 pub mod edit_target;
 pub mod editor;
 pub mod error;
+// W10-G: Edit > Fade.
+pub mod fade;
+// W10-E: Export Color Lookup / PDF, File Info XMP, the W10-E dialog host.
+pub mod file_extras;
 pub mod hit_testing;
 pub mod import;
 pub mod interaction_geometry;
@@ -120,7 +130,12 @@ pub mod session;
 pub mod shell;
 pub mod slices_export;
 pub mod tool_input;
+// W10-E: Image > Variables (data sets) and Image > Vectorize Bitmap.
+pub mod variables;
+pub mod vectorize;
 pub mod version;
+#[cfg(test)]
+mod w10e_tests;
 
 pub use action::{Action, Category, ToolKey};
 pub use canvas_extras::{CanvasExtras, ExtrasReport};

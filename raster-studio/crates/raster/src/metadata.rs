@@ -136,8 +136,11 @@ impl XmpFields {
             body.push_str("</rdf:Bag></dc:subject>\n");
         }
         alt("rights", &self.copyright, &mut body);
+        // The XMP spec's `begin` attribute holds U+FEFF (the byte-order
+        // mark), built from its code point: it is file data, never drawn.
+        let bom = char::from_u32(0xFEFF).unwrap_or_default();
         format!(
-            "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
+            "<?xpacket begin=\"{bom}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
              <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n \
              <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n  \
              <rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n\
@@ -198,9 +201,9 @@ fn unescape_xml(s: &str) -> String {
             "gt" => Some('>'),
             "quot" => Some('"'),
             "apos" => Some('\''),
-            e if e.starts_with("#x") || e.starts_with("#X") => {
-                u32::from_str_radix(&e[2..], 16).ok().and_then(char::from_u32)
-            }
+            e if e.starts_with("#x") || e.starts_with("#X") => u32::from_str_radix(&e[2..], 16)
+                .ok()
+                .and_then(char::from_u32),
             e if e.starts_with('#') => e[1..].parse::<u32>().ok().and_then(char::from_u32),
             _ => None,
         };
@@ -266,10 +269,16 @@ pub fn carries_xmp(format: ExportFormat) -> bool {
 
 /// Splice `packet` into an encoded file of `format`, replacing any XMP the
 /// file already carries.
-pub fn embed_xmp(format: ExportFormat, bytes: &[u8], packet: &str) -> Result<Vec<u8>, MetadataError> {
+pub fn embed_xmp(
+    format: ExportFormat,
+    bytes: &[u8],
+    packet: &str,
+) -> Result<Vec<u8>, MetadataError> {
     match format {
         ExportFormat::Png => png_set_xmp(bytes, packet),
-        ExportFormat::Jpeg(_) => jpeg_set_app1(bytes, JPEG_XMP_HEADER, packet.as_bytes(), "XMP packet"),
+        ExportFormat::Jpeg(_) => {
+            jpeg_set_app1(bytes, JPEG_XMP_HEADER, packet.as_bytes(), "XMP packet")
+        }
         ExportFormat::Tiff => tiff_set_xmp(bytes, packet),
         _ => Err(MetadataError::Unsupported(format.extension_upper())),
     }
@@ -316,6 +325,8 @@ trait ExtensionUpper {
 
 impl ExtensionUpper for ExportFormat {
     fn extension_upper(self) -> &'static str {
+        // A wildcard on purpose: a format added to the codec later is named
+        // generically here rather than breaking this crate's build.
         match self {
             ExportFormat::Png => "PNG",
             ExportFormat::Jpeg(_) => "JPEG",
@@ -326,8 +337,58 @@ impl ExtensionUpper for ExportFormat {
             ExportFormat::Tga => "TGA",
             ExportFormat::Ico => "ICO",
             ExportFormat::Svg => "SVG",
+            #[allow(unreachable_patterns)]
+            _ => "This format",
         }
     }
+}
+
+/// W10-E: the metadata an [`crate::ExportPreset`] writes into its file.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EmbeddedMetadata {
+    /// A complete XMP packet ([`XmpFields::to_packet`]), written into PNG,
+    /// JPEG and TIFF.
+    pub xmp: Option<String>,
+    /// An EXIF block (the TIFF-structured payload after `Exif\0\0`),
+    /// written into JPEG only - the one container Export As carries the
+    /// source's EXIF into.
+    pub exif: Option<Vec<u8>>,
+}
+
+impl EmbeddedMetadata {
+    /// Whether there is nothing to write.
+    pub fn is_empty(&self) -> bool {
+        self.xmp.is_none() && self.exif.is_none()
+    }
+
+    /// The File Info fields as a packet, or nothing when every field is blank.
+    pub fn from_fields(fields: &XmpFields, exif: Option<Vec<u8>>) -> Self {
+        Self {
+            xmp: (!fields.is_empty()).then(|| fields.to_packet()),
+            exif,
+        }
+    }
+}
+
+/// W10-E: write `meta` into the encoded `bytes` of a `format` file: the XMP
+/// packet where [`carries_xmp`] says the container holds one, the EXIF block
+/// into a JPEG. What a container has no slot for is left out (Export As says
+/// so beside the option); the pixels are never touched.
+pub fn embed_all(
+    format: ExportFormat,
+    bytes: Vec<u8>,
+    meta: &EmbeddedMetadata,
+) -> Result<Vec<u8>, MetadataError> {
+    let mut out = bytes;
+    if let (Some(exif), ExportFormat::Jpeg(_)) = (&meta.exif, format) {
+        out = embed_jpeg_exif(&out, exif)?;
+    }
+    if let Some(packet) = &meta.xmp {
+        if carries_xmp(format) {
+            out = embed_xmp(format, &out, packet)?;
+        }
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -460,7 +521,10 @@ fn crc32(data: &[u8]) -> u32 {
 #[allow(clippy::type_complexity)]
 fn jpeg_segments(
     bytes: &[u8],
-) -> Option<(Vec<(u8, std::ops::Range<usize>, std::ops::Range<usize>)>, usize)> {
+) -> Option<(
+    Vec<(u8, std::ops::Range<usize>, std::ops::Range<usize>)>,
+    usize,
+)> {
     if !bytes.starts_with(&[0xFF, 0xD8]) {
         return None;
     }
@@ -592,8 +656,7 @@ fn tiff_ifd0(bytes: &[u8]) -> Option<(Endian, Vec<[u8; 12]>, u32)> {
 }
 
 fn tiff_set_xmp(bytes: &[u8], packet: &str) -> Result<Vec<u8>, MetadataError> {
-    let (endian, mut entries, next) =
-        tiff_ifd0(bytes).ok_or(MetadataError::Malformed("TIFF"))?;
+    let (endian, mut entries, next) = tiff_ifd0(bytes).ok_or(MetadataError::Malformed("TIFF"))?;
     entries.retain(|e| endian.u16(&e[0..2]) != TIFF_XMP_TAG);
     let mut out = bytes.to_vec();
     if out.len() % 2 == 1 {
@@ -672,13 +735,20 @@ mod tests {
         let png = crate::encode(ExportFormat::Png, 5, 4, &pixels(5, 4)).unwrap();
         let tagged = embed_xmp(ExportFormat::Png, &png, &fields().to_packet()).unwrap();
         let packet = read_xmp(&tagged).expect("the iTXt chunk is there");
-        assert_eq!(XmpFields::from_packet(&packet).title, "Harbour at dusk & <night>");
+        assert_eq!(
+            XmpFields::from_packet(&packet).title,
+            "Harbour at dusk & <night>"
+        );
         // A second embed replaces rather than stacks.
-        let again = embed_xmp(ExportFormat::Png, &tagged, &XmpFields {
-            title: "Second".into(),
-            ..XmpFields::default()
-        }
-        .to_packet())
+        let again = embed_xmp(
+            ExportFormat::Png,
+            &tagged,
+            &XmpFields {
+                title: "Second".into(),
+                ..XmpFields::default()
+            }
+            .to_packet(),
+        )
         .unwrap();
         let chunks = png_chunks(&again).unwrap();
         assert_eq!(chunks.iter().filter(|c| is_xmp_itxt(&again, c)).count(), 1);
@@ -698,7 +768,10 @@ mod tests {
         let with_exif = embed_jpeg_exif(&jpeg, &exif).unwrap();
         let tagged = embed_xmp(ExportFormat::Jpeg(90), &with_exif, &fields().to_packet()).unwrap();
         assert_eq!(read_exif(&tagged).as_deref(), Some(&exif[..]));
-        assert_eq!(XmpFields::from_packet(&read_xmp(&tagged).unwrap()), fields());
+        assert_eq!(
+            XmpFields::from_packet(&read_xmp(&tagged).unwrap()),
+            fields()
+        );
         let decoded = crate::decode_bytes(&tagged).expect("the JPEG still decodes");
         assert_eq!((decoded.width, decoded.height), (8, 8));
         // Replacing, not stacking.
@@ -725,7 +798,10 @@ mod tests {
     fn tiff_carries_xmp_in_tag_700_and_still_decodes() {
         let tiff = crate::encode(ExportFormat::Tiff, 6, 3, &pixels(6, 3)).unwrap();
         let tagged = embed_xmp(ExportFormat::Tiff, &tiff, &fields().to_packet()).unwrap();
-        assert_eq!(XmpFields::from_packet(&read_xmp(&tagged).unwrap()), fields());
+        assert_eq!(
+            XmpFields::from_packet(&read_xmp(&tagged).unwrap()),
+            fields()
+        );
         let decoded = crate::decode_bytes(&tagged).expect("the TIFF still decodes");
         assert_eq!(decoded.rgba8, pixels(6, 3));
     }
@@ -737,6 +813,60 @@ mod tests {
             embed_xmp(ExportFormat::Gif, b"GIF89a", "x"),
             Err(MetadataError::Unsupported("GIF"))
         );
+    }
+
+    /// The Export As road: a preset carrying File Info writes it into the
+    /// file `export_batch_to_dir` leaves on disk, EXIF lands in the JPEG
+    /// only, and a preset with nothing embedded writes the bytes it always
+    /// did.
+    #[test]
+    fn an_export_preset_writes_its_xmp_title_and_jpeg_exif_to_disk() {
+        struct Scratch(std::path::PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = Scratch(std::env::temp_dir().join(format!(
+            "raster-w10e-xmp-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let image = crate::export::linear_from_rgba8(5, 4, &pixels(5, 4), &color::ColorSpace::Srgb)
+            .unwrap();
+        let exif = b"MM\0*\0\0\0\x08\0\0\0\0\0\0".to_vec();
+        let embedded = EmbeddedMetadata::from_fields(&fields(), Some(exif.clone()));
+        let mut png = crate::ExportPreset::new("titled", ExportFormat::Png);
+        png.embedded = embedded.clone();
+        let mut jpeg = crate::ExportPreset::new("titled", ExportFormat::Jpeg(90));
+        jpeg.embedded = embedded;
+        let plain = crate::ExportPreset::new("plain", ExportFormat::Png);
+        let meta = crate::export::ExportMetadata {
+            icc_profile: None,
+            icc_profile_space: None,
+        };
+        let paths =
+            crate::export::export_batch_to_dir(&dir.0, &image, &[png, jpeg, plain], &meta).unwrap();
+        let png_bytes = std::fs::read(&paths[0]).unwrap();
+        let packet = read_xmp(&png_bytes).expect("the PNG carries XMP");
+        assert_eq!(XmpFields::from_packet(&packet).title, fields().title);
+        assert_eq!(read_exif(&png_bytes), None, "EXIF goes into JPEG only");
+        let jpeg_bytes = std::fs::read(&paths[1]).unwrap();
+        assert_eq!(
+            XmpFields::from_packet(&read_xmp(&jpeg_bytes).unwrap()),
+            fields()
+        );
+        assert_eq!(read_exif(&jpeg_bytes).as_deref(), Some(&exif[..]));
+        let plain_bytes = std::fs::read(&paths[2]).unwrap();
+        assert_eq!(read_xmp(&plain_bytes), None);
+        assert_eq!(
+            plain_bytes,
+            crate::encode(ExportFormat::Png, 5, 4, &pixels(5, 4)).unwrap(),
+            "no metadata asked for, no bytes changed"
+        );
+        // A blank File Info writes no packet at all.
+        assert!(EmbeddedMetadata::from_fields(&XmpFields::default(), None).is_empty());
     }
 
     #[test]

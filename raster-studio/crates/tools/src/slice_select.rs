@@ -10,7 +10,23 @@
 //! * a drag that starts inside a slice moves it;
 //! * a drag that starts within [`HANDLE_REACH`] pixels of a slice's edge or
 //!   corner resizes it from that edge or corner (a corner moves both edges);
-//! * an Alt+click inside a slice deletes it.
+//! * an Alt+click inside a slice deletes it (so does Delete or Backspace on
+//!   the slice the last press picked: the shell's Edit ▸ Clear arm,
+//!   `app_shell::slices_export::delete_picked_slice`);
+//! * any press inside a slice picks it; the overlay draws the picked slice
+//!   emphasised, and it is the one Delete removes and File ▸ Export ▸ Slice
+//!   Options… edits.
+//!
+//! Between presses the shell rebuilds the tool from the document's store
+//! ([`SliceSelectTool::with_picked`]), so an edit made by another door
+//! (Delete, Slice Options) is what the overlay shows in the same frame.
+//!
+//! Each slice keeps its name through every edit ([`SliceSelectTool::with_slices`]
+//! is built over the stored names), so deleting slice 2 of 3 leaves
+//! `slice_01` and `slice_03`, and the export names follow the slice rather
+//! than its position; the overlay labels them `01` and `03`
+//! ([`slice_label`]). The rest of a slice's options ([`SliceOptions`]: URL
+//! and alt text) are the shell's to keep beside the set.
 //!
 //! The top-most slice (the last drawn) wins where slices overlap. A slice is
 //! kept inside the canvas and at least one pixel wide and tall. A slice set is
@@ -64,29 +80,94 @@ enum Gesture {
     Delete { index: usize },
 }
 
+/// One slice's options, as Photoshop's Slice Options dialog holds them: the
+/// name its exported file takes, and the link and alternate text a web page
+/// built from the slices gives it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SliceOptions {
+    pub name: String,
+    pub url: String,
+    pub alt: String,
+}
+
+impl SliceOptions {
+    /// The options a slice starts with: a name and nothing else.
+    pub fn named(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+}
+
+/// The name the Slice tool gives the `number`th slice of a set (1-based).
+pub fn default_slice_name(number: usize) -> String {
+    format!("slice_{number:02}")
+}
+
+/// The label the canvas draws on a slice named `name`: the number of one of
+/// the Slice tool's own names (`slice_03` is `03`, the number its exported
+/// file carries), else the name itself. A slice is labelled by what it is
+/// called, never by where it sits in the set, so deleting slice 2 of 3 leaves
+/// `01` and `03` on the canvas, as in the export.
+pub fn slice_label(name: &str) -> String {
+    let name = name.trim();
+    match name
+        .strip_prefix("slice_")
+        .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+    {
+        Some(digits) => digits.to_string(),
+        None => name.to_string(),
+    }
+}
+
 /// See the module docs.
 #[derive(Debug, Default)]
 pub struct SliceSelectTool {
     slices: Vec<Slice>,
     gesture: Option<Gesture>,
-    /// The slice the last press picked, for the overlay.
+    /// The slice the last press picked: published in the overlay
+    /// ([`crate::tool::SessionGeometry::SliceSelect`]'s `picked`), which the
+    /// canvas draws emphasised, so the user sees which slice Delete and Slice
+    /// Options act on.
     selected: Option<usize>,
 }
 
 impl SliceSelectTool {
-    /// The tool over a document's committed slice set, in slice order.
+    /// The tool over bare rectangles, named by position
+    /// ([`default_slice_name`]).
     pub fn with_rects(rects: impl IntoIterator<Item = PixelRect>) -> Self {
-        Self {
-            slices: rects
+        Self::with_slices(
+            rects
                 .into_iter()
                 .enumerate()
                 .map(|(i, rect)| Slice {
                     rect,
-                    name: format!("slice_{:02}", i + 1),
+                    name: default_slice_name(i + 1),
                 })
                 .collect(),
+        )
+    }
+
+    /// The tool over a document's committed slice set, in slice order, each
+    /// slice carrying the name the document keeps for it.
+    pub fn with_slices(slices: Vec<Slice>) -> Self {
+        Self {
+            slices,
             gesture: None,
             selected: None,
+        }
+    }
+
+    /// The tool over `slices` with slice `picked` already picked — the state
+    /// the shell rebuilds between presses from the document's store, so the
+    /// overlay shows the set (and the pick) as the document holds them after
+    /// an edit made by another door (Delete, Slice Options).
+    pub fn with_picked(slices: Vec<Slice>, picked: Option<usize>) -> Self {
+        let selected = picked.filter(|i| *i < slices.len());
+        Self {
+            selected,
+            ..Self::with_slices(slices)
         }
     }
 
@@ -219,10 +300,9 @@ impl Tool for SliceSelectTool {
             None => Ok(()),
             Some(Gesture::Delete { index }) => {
                 if index < self.slices.len() {
+                    // The others keep their names: a name follows its
+                    // slice, not its place in the set.
                     self.slices.remove(index);
-                    for (i, s) in self.slices.iter_mut().enumerate() {
-                        s.name = format!("slice_{:02}", i + 1);
-                    }
                     self.selected = None;
                     self.publish(ctx);
                 }
@@ -250,11 +330,18 @@ impl Tool for SliceSelectTool {
     }
 
     /// Every slice of the set, the one being dragged where the pointer has
-    /// it, numbered in slice order.
+    /// it, each labelled by its name ([`slice_label`]), with the picked one
+    /// marked. A slice an Alt+press is about to delete is already gone.
     fn live_geometry(&self) -> Option<crate::tool::SessionGeometry> {
         if self.slices.is_empty() {
             return None;
         }
+        let deleting = match self.gesture {
+            Some(Gesture::Delete { index }) => Some(index),
+            _ => None,
+        };
+        let mut labels = Vec::with_capacity(self.slices.len());
+        let mut picked = None;
         let rects: Vec<[Vec2; 2]> = self
             .slices
             .iter()
@@ -277,16 +364,24 @@ impl Tool for SliceSelectTool {
                         );
                         Self::edited(s.rect, grab, current - from, open)
                     }
-                    Some(Gesture::Delete { index }) if index == i => return None,
+                    _ if deleting == Some(i) => return None,
                     _ => s.rect,
                 };
+                if self.selected == Some(i) {
+                    picked = Some(labels.len());
+                }
+                labels.push(slice_label(&s.name));
                 Some([
                     Vec2::new(r.x as f32, r.y as f32),
                     Vec2::new(r.right() as f32, r.bottom() as f32),
                 ])
             })
             .collect();
-        Some(crate::tool::SessionGeometry::Slices { rects })
+        Some(crate::tool::SessionGeometry::SliceSelect {
+            rects,
+            labels,
+            picked,
+        })
     }
 
     fn is_active(&self) -> bool {
@@ -313,8 +408,10 @@ mod tests {
         };
         tool.on_pointer_down(&mut ctx, PointerEvent::at(from.x, from.y).with_modifiers(m))
             .unwrap();
-        tool.on_pointer_move(&mut ctx, PointerEvent::at(to.x, to.y)).unwrap();
-        tool.on_pointer_up(&mut ctx, PointerEvent::at(to.x, to.y)).unwrap();
+        tool.on_pointer_move(&mut ctx, PointerEvent::at(to.x, to.y))
+            .unwrap();
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(to.x, to.y))
+            .unwrap();
         ctx.drain_requests()
     }
 
@@ -326,7 +423,10 @@ mod tests {
     }
 
     fn two() -> SliceSelectTool {
-        SliceSelectTool::with_rects([PixelRect::new(10, 10, 20, 20), PixelRect::new(50, 50, 20, 20)])
+        SliceSelectTool::with_rects([
+            PixelRect::new(10, 10, 20, 20),
+            PixelRect::new(50, 50, 20, 20),
+        ])
     }
 
     #[test]
@@ -335,7 +435,10 @@ mod tests {
         let out = gesture(&mut t, Vec2::new(60.0, 60.0), Vec2::new(70.0, 55.0), false);
         assert_eq!(
             rects(&out),
-            vec![PixelRect::new(10, 10, 20, 20), PixelRect::new(60, 45, 20, 20)]
+            vec![
+                PixelRect::new(10, 10, 20, 20),
+                PixelRect::new(60, 45, 20, 20)
+            ]
         );
         assert_eq!(t.selected(), Some(1));
     }
@@ -366,7 +469,8 @@ mod tests {
         let mut t = two();
         let out = gesture(&mut t, Vec2::new(20.0, 20.0), Vec2::new(20.0, 20.0), true);
         assert_eq!(rects(&out), vec![PixelRect::new(50, 50, 20, 20)]);
-        assert_eq!(t.slices()[0].name, "slice_01");
+        // The survivor keeps its own name; it is not renumbered.
+        assert_eq!(t.slices()[0].name, "slice_02");
         let out = gesture(&mut t, Vec2::new(5.0, 95.0), Vec2::new(30.0, 95.0), false);
         assert!(out.is_empty(), "{out:?}");
         // A click that does not move publishes nothing either.
@@ -379,21 +483,68 @@ mod tests {
         let mut t = two();
         let mut tiles = MemoryTiles::new();
         let mut ctx = ToolContext::new(&mut tiles, canvas());
-        t.on_pointer_down(&mut ctx, PointerEvent::at(60.0, 60.0)).unwrap();
-        t.on_pointer_move(&mut ctx, PointerEvent::at(65.0, 60.0)).unwrap();
-        let Some(crate::tool::SessionGeometry::Slices { rects }) = t.live_geometry() else {
+        t.on_pointer_down(&mut ctx, PointerEvent::at(60.0, 60.0))
+            .unwrap();
+        t.on_pointer_move(&mut ctx, PointerEvent::at(65.0, 60.0))
+            .unwrap();
+        let Some(crate::tool::SessionGeometry::SliceSelect { rects, picked, .. }) =
+            t.live_geometry()
+        else {
             panic!("no overlay");
         };
         assert_eq!(rects[1], [Vec2::new(55.0, 50.0), Vec2::new(75.0, 70.0)]);
+        assert_eq!(picked, Some(1), "the dragged slice is the picked one");
         t.cancel(&mut ctx);
         t.on_pointer_down(
             &mut ctx,
             PointerEvent::at(20.0, 20.0).with_modifiers(crate::tool::Modifiers::alt()),
         )
         .unwrap();
-        let Some(crate::tool::SessionGeometry::Slices { rects }) = t.live_geometry() else {
+        let Some(crate::tool::SessionGeometry::SliceSelect {
+            rects,
+            labels,
+            picked,
+        }) = t.live_geometry()
+        else {
             panic!("no overlay");
         };
         assert_eq!(rects.len(), 1);
+        assert_eq!(labels, ["02"], "the survivor keeps its own label");
+        assert_eq!(picked, None, "the slice being deleted is not shown picked");
+    }
+
+    /// The overlay labels a slice by its name, not its place in the set, and
+    /// marks the picked slice by its place in the drawn list.
+    #[test]
+    fn the_overlay_labels_slices_by_name_and_marks_the_pick() {
+        assert_eq!(slice_label("slice_03"), "03");
+        assert_eq!(slice_label(" hero "), "hero");
+        assert_eq!(slice_label("slice_x"), "slice_x");
+        let slices = vec![
+            Slice {
+                rect: PixelRect::new(0, 0, 10, 10),
+                name: "slice_01".into(),
+            },
+            Slice {
+                rect: PixelRect::new(20, 0, 10, 10),
+                name: "slice_03".into(),
+            },
+            Slice {
+                rect: PixelRect::new(40, 0, 10, 10),
+                name: "hero".into(),
+            },
+        ];
+        let t = SliceSelectTool::with_picked(slices.clone(), Some(1));
+        assert_eq!(t.selected(), Some(1));
+        let Some(crate::tool::SessionGeometry::SliceSelect { labels, picked, .. }) =
+            t.live_geometry()
+        else {
+            panic!("no overlay");
+        };
+        assert_eq!(labels, ["01", "03", "hero"]);
+        assert_eq!(picked, Some(1));
+        // A pick past the end is no pick.
+        let t = SliceSelectTool::with_picked(slices, Some(7));
+        assert_eq!(t.selected(), None);
     }
 }

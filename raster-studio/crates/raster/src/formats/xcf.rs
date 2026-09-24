@@ -242,7 +242,10 @@ impl<'a> Reader<'a> {
     fn at(bytes: &'a [u8], pos: u64, wide: bool) -> Result<Self, CodecError> {
         let pos = usize::try_from(pos).map_err(|_| malformed(NAME, "an offset overflows"))?;
         if pos > bytes.len() {
-            return Err(malformed(NAME, format!("offset {pos} is past the end of the file")));
+            return Err(malformed(
+                NAME,
+                format!("offset {pos} is past the end of the file"),
+            ));
         }
         Ok(Reader { bytes, pos, wide })
     }
@@ -263,15 +266,13 @@ impl<'a> Reader<'a> {
         Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
     }
 
-    fn i32(&mut self) -> Result<i32, CodecError> {
-        Ok(self.u32()? as i32)
-    }
-
     /// A file offset: 32 bits before version 11, 64 from then on.
     fn offset(&mut self) -> Result<u64, CodecError> {
         if self.wide {
             let b = self.take(8)?;
-            Ok(u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
+            Ok(u64::from_be_bytes([
+                b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+            ]))
         } else {
             Ok(u64::from(self.u32()?))
         }
@@ -426,6 +427,11 @@ pub fn read(bytes: &[u8], limits: ImportLimits) -> Result<XcfDocument<'_>, Codec
             continue;
         }
         match layer.mode {
+            // Dissolve (1) is checked first: it is also an unsupported code.
+            _ if layer.mode_code == 1 => notes.push(format!(
+                "layer {:?} uses Dissolve, which is drawn as Normal",
+                layer.name
+            )),
             XcfMode::Unsupported(code) => notes.push(format!(
                 "layer {:?} uses GIMP blend mode {code}, which is drawn as Normal",
                 layer.name
@@ -433,10 +439,6 @@ pub fn read(bytes: &[u8], limits: ImportLimits) -> Result<XcfDocument<'_>, Codec
             XcfMode::PassThrough => notes.push(format!(
                 "group {:?} passes through; its children are drawn straight onto what is \
                  below it, each with the group's opacity folded in",
-                layer.name
-            )),
-            _ if layer.mode_code == 1 => notes.push(format!(
-                "layer {:?} uses Dissolve, which is drawn as Normal",
                 layer.name
             )),
             _ => {}
@@ -472,39 +474,33 @@ fn insert(
             "XCF groups nest deeper than {MAX_GROUP_DEPTH}"
         )));
     }
-    let mut siblings = roots;
-    if let Some((_, parents)) = path.split_last() {
-        for index in parents {
-            let found = siblings
-                .get_mut(*index as usize)
-                .filter(|g| g.is_group)
-                .map(|g| &mut g.children);
-            match found {
-                Some(children) => siblings = children,
-                None => {
-                    notes.push(format!(
-                        "layer {:?} names a group that does not exist; it was placed at the \
-                         top level",
-                        layer.name
-                    ));
-                    // Restart at the root: `siblings` cannot be re-borrowed
-                    // from `roots` here, so return through a second call.
-                    return insert_top(siblings_root(siblings), layer);
-                }
+    let parents = path.split_last().map_or(&[][..], |(_, parents)| parents);
+    // Walk the path read-only first, so a path naming a group that does not
+    // exist can fall back to the top level without a live borrow.
+    let mut level: &[XcfLayer] = roots;
+    let mut exists = true;
+    for index in parents {
+        match level.get(*index as usize).filter(|g| g.is_group) {
+            Some(group) => level = &group.children,
+            None => {
+                exists = false;
+                break;
             }
         }
     }
+    if !exists {
+        notes.push(format!(
+            "layer {:?} names a group that does not exist; it was placed at the top level",
+            layer.name
+        ));
+        roots.push(layer);
+        return Ok(());
+    }
+    let mut siblings = roots;
+    for index in parents {
+        siblings = &mut siblings[*index as usize].children;
+    }
     siblings.push(layer);
-    Ok(())
-}
-
-/// Helper for [`insert`]'s fallback; see there.
-fn siblings_root(v: &mut Vec<XcfLayer>) -> &mut Vec<XcfLayer> {
-    v
-}
-
-fn insert_top(v: &mut Vec<XcfLayer>, layer: XcfLayer) -> Result<(), CodecError> {
-    v.push(layer);
     Ok(())
 }
 
@@ -578,7 +574,9 @@ fn read_layer(
             PROP_FLOATING_SELECTION => floating = true,
             PROP_ITEM_PATH => {
                 path = payload
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .take(MAX_GROUP_DEPTH + 2)
                     .map(|c| u32::from_be_bytes([c[0], c[1], c[2], c[3]]))
                     .collect();
@@ -597,7 +595,11 @@ impl XcfDocument<'_> {
     /// A layer's own pixels as straight sRGB RGBA8, `width * height * 4`
     /// bytes, with its mask applied when the file says to apply it. A group
     /// has none (its pixels are its children) and returns an empty buffer.
-    pub fn layer_pixels(&self, layer: &XcfLayer, limits: ImportLimits) -> Result<Vec<u8>, CodecError> {
+    pub fn layer_pixels(
+        &self,
+        layer: &XcfLayer,
+        limits: ImportLimits,
+    ) -> Result<Vec<u8>, CodecError> {
         if layer.is_group || layer.width == 0 || layer.height == 0 {
             return Ok(Vec::new());
         }
@@ -623,7 +625,7 @@ impl XcfDocument<'_> {
         drop(raw);
         if self.linear {
             let lut = linear_to_srgb_lut();
-            for px in rgba.chunks_exact_mut(4) {
+            for px in rgba.as_chunks_mut::<4>().0 {
                 for c in &mut px[..3] {
                     *c = lut[*c as usize];
                 }
@@ -631,7 +633,7 @@ impl XcfDocument<'_> {
         }
         if layer.has_applied_mask {
             let mask = self.read_mask(layer)?;
-            for (px, m) in rgba.chunks_exact_mut(4).zip(mask) {
+            for (px, m) in rgba.as_chunks_mut::<4>().0.iter_mut().zip(mask) {
                 px[3] = ((u32::from(px[3]) * u32::from(m) + 127) / 255) as u8;
             }
         }
@@ -742,8 +744,6 @@ impl XcfDocument<'_> {
     pub fn flatten(&self, limits: ImportLimits) -> Result<Vec<u8>, CodecError> {
         let canvas_bytes = u64::from(self.width) * u64::from(self.height) * 4;
         check_decode(limits, self.width, self.height, 4, 0)?;
-        let mut canvas = vec![0f32; 0];
-        drop(std::mem::take(&mut canvas));
         let mut out = vec![0u8; canvas_bytes as usize];
         self.composite(&self.layers, &mut out, 1.0, 1, limits)?;
         Ok(out)
@@ -789,7 +789,11 @@ impl XcfDocument<'_> {
                 continue;
             }
             let layer_bytes = u64::from(item.width) * u64::from(item.height) * 4;
-            limits.check_alloc(canvas_bytes.saturating_mul(level).saturating_add(layer_bytes))?;
+            limits.check_alloc(
+                canvas_bytes
+                    .saturating_mul(level)
+                    .saturating_add(layer_bytes),
+            )?;
             let pixels = self.layer_pixels(item, limits)?;
             if pixels.is_empty() {
                 continue;
@@ -835,10 +839,15 @@ impl XcfDocument<'_> {
 
 /// Decode an RLE tile: each channel is a separate run-length stream filling
 /// every `channels`-th byte of `tile`.
-fn rle_tile(data: &[u8], tile: &mut [u8], pixels: usize, channels: usize) -> Result<(), CodecError> {
+fn rle_tile(
+    data: &[u8],
+    tile: &mut [u8],
+    pixels: usize,
+    channels: usize,
+) -> Result<(), CodecError> {
     let bogus = || malformed(NAME, "an RLE tile is damaged");
     let mut pos = 0usize;
-    let mut next = |pos: &mut usize| -> Result<u8, CodecError> {
+    let next = |pos: &mut usize| -> Result<u8, CodecError> {
         let v = *data.get(*pos).ok_or_else(bogus)?;
         *pos += 1;
         Ok(v)
@@ -907,7 +916,12 @@ fn linear_to_srgb_lut() -> [u8; 256] {
 pub fn decode(bytes: &[u8], limits: ImportLimits) -> Result<DecodedSurface, CodecError> {
     let doc = read(bytes, limits)?;
     let rgba = doc.flatten(limits)?;
-    Ok(rgba8_surface(doc.width, doc.height, rgba, ImportFormat::Xcf))
+    Ok(rgba8_surface(
+        doc.width,
+        doc.height,
+        rgba,
+        ImportFormat::Xcf,
+    ))
 }
 
 #[cfg(test)]
@@ -1051,7 +1065,10 @@ pub(crate) mod tests {
                         }
                     }
                     _ => {
-                        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+                        let mut z = flate2::write::ZlibEncoder::new(
+                            Vec::new(),
+                            flate2::Compression::default(),
+                        );
                         z.write_all(&tile).unwrap();
                         f.extend(z.finish().unwrap());
                     }
@@ -1076,7 +1093,10 @@ pub(crate) mod tests {
                     PROP_OFFSETS,
                     [l.x.to_be_bytes(), l.y.to_be_bytes()].concat(),
                 ),
-                (PROP_APPLY_MASK, u32::from(l.mask.is_some()).to_be_bytes().to_vec()),
+                (
+                    PROP_APPLY_MASK,
+                    u32::from(l.mask.is_some()).to_be_bytes().to_vec(),
+                ),
             ] {
                 u32w(&mut f, prop);
                 u32w(&mut f, payload.len() as u32);
@@ -1150,7 +1170,11 @@ pub(crate) mod tests {
                 assert_eq!((s.width, s.height), (70, 66));
                 // Outside the top layer: the bottom layer, with its gradient.
                 assert_eq!(px(&s, 0, 0), [255, 0, 0, 255]);
-                assert_eq!(px(&s, 69, 65), [255, 69, 0, 255], "v{version} c{compression}");
+                assert_eq!(
+                    px(&s, 69, 65),
+                    [255, 69, 0, 255],
+                    "v{version} c{compression}"
+                );
                 // Under the half-opaque top layer at (2,1)..(5,3): a mix.
                 let [r, g, b, a] = px(&s, 3, 2);
                 assert_eq!(a, 255);
@@ -1203,6 +1227,63 @@ pub(crate) mod tests {
         assert!(b > 180 && r < 80, "{:?}", px(&s, 0, 3));
     }
 
+    /// The two-layer document `testdata/two_layers.xcf` holds: an 8x6 red
+    /// ramp and a half-opaque blue 3x2 layer at (2, 1), zlib tiles, 64-bit
+    /// offsets (version 11).
+    fn fixture_layers() -> Vec<TestLayer> {
+        let mut top = TestLayer::rgba("top", 2, 1, 3, 2, [0, 0, 255, 255]);
+        top.opacity = 128;
+        let mut bottom = TestLayer::rgba("bottom", 0, 0, 8, 6, [255, 0, 0, 255]);
+        for (i, p) in bottom.pixels.chunks_mut(4).enumerate() {
+            p[1] = (i * 5) as u8;
+        }
+        vec![top, bottom]
+    }
+
+    /// The app-level open test (app-shell `doc_formats_w10f_tests`) opens
+    /// the committed fixture; this pins it to the writer above.
+    #[test]
+    fn the_committed_xcf_fixture_is_the_test_writers_output() {
+        let fixture: &[u8] = include_bytes!("testdata/two_layers.xcf");
+        let written = write_xcf(11, 8, 6, false, 2, &fixture_layers());
+        assert_eq!(fixture, &written[..]);
+        let s = decode(fixture, ImportLimits::default()).unwrap();
+        assert_eq!(px(&s, 0, 0), [255, 0, 0, 255]);
+        let [r, _, b, a] = px(&s, 3, 2);
+        assert_eq!(a, 255);
+        assert!((i32::from(r) - 127).abs() <= 1 && (i32::from(b) - 128).abs() <= 1);
+    }
+
+    /// A layer whose item path runs through a group but then names a child
+    /// that does not exist goes to the top level (and is noted), not into
+    /// the group the walk had reached; Dissolve is noted by name.
+    #[test]
+    fn a_dangling_item_path_lands_at_the_top_and_dissolve_is_named() {
+        let mut group = TestLayer::rgba("g", 0, 0, 0, 0, [0; 4]);
+        group.group = true;
+        group.pixels = Vec::new();
+        let mut child = TestLayer::rgba("child", 0, 0, 1, 1, [1, 2, 3, 255]);
+        child.path = vec![0, 0];
+        let mut lost = TestLayer::rgba("lost", 0, 0, 1, 1, [4, 5, 6, 255]);
+        lost.path = vec![0, 3, 0];
+        let mut dissolve = TestLayer::rgba("speckle", 0, 0, 1, 1, [7, 8, 9, 255]);
+        dissolve.mode = 1;
+        let file = write_xcf(11, 1, 1, false, 0, &[group, child, lost, dissolve]);
+        let doc = read(&file, ImportLimits::default()).unwrap();
+        let top: Vec<&str> = doc.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(top, ["g", "lost", "speckle"], "{:?}", doc.notes);
+        assert_eq!(doc.layers[0].children.len(), 1, "only its real child");
+        assert!(doc
+            .notes
+            .iter()
+            .any(|n| n.contains("\"lost\"") && n.contains("top level")));
+        assert!(
+            doc.notes.iter().any(|n| n.contains("Dissolve")),
+            "{:?}",
+            doc.notes
+        );
+    }
+
     #[test]
     fn greyscale_images_decode() {
         let mut l = TestLayer::rgba("g", 0, 0, 2, 1, [0; 4]);
@@ -1216,7 +1297,14 @@ pub(crate) mod tests {
 
     #[test]
     fn unsupported_features_are_refused_or_reported_by_name() {
-        let mut file = write_xcf(11, 4, 4, false, 1, &[TestLayer::rgba("a", 0, 0, 4, 4, [1; 4])]);
+        let mut file = write_xcf(
+            11,
+            4,
+            4,
+            false,
+            1,
+            &[TestLayer::rgba("a", 0, 0, 4, 4, [1; 4])],
+        );
         // Indexed images are refused by name.
         let mut indexed = file.clone();
         indexed[14 + 11] = 2;
@@ -1231,7 +1319,11 @@ pub(crate) mod tests {
         odd.mode = 52;
         let file = write_xcf(0, 1, 1, false, 0, &[odd]);
         let doc = read(&file, ImportLimits::default()).unwrap();
-        assert!(doc.notes.iter().any(|n| n.contains("blend mode 52")), "{:?}", doc.notes);
+        assert!(
+            doc.notes.iter().any(|n| n.contains("blend mode 52")),
+            "{:?}",
+            doc.notes
+        );
     }
 
     #[test]
@@ -1255,5 +1347,51 @@ pub(crate) mod tests {
         huge[18..22].copy_from_slice(&60_000u32.to_be_bytes());
         assert!(decode(&huge, ImportLimits::default()).is_err());
         assert!(decode(b"gimp xcf ", ImportLimits::default()).is_err());
+    }
+
+    /// `testdata/layered_modes.xcf`: the fixture app-shell opens as a layered
+    /// document (`doc_formats_w10f_tests`). Top first: a pass-through group
+    /// "g" at 200/255 holding a Multiply "inside"; Grain merge "grain"; GIMP
+    /// mode 50 "odd"; a hidden "hidden"; Dissolve "speckle"; "off" hanging
+    /// one pixel off the top-left corner; and a full-canvas "bottom".
+    fn layered_modes_layers() -> Vec<TestLayer> {
+        let mut g = TestLayer::rgba("g", 0, 0, 0, 0, [0; 4]);
+        g.group = true;
+        g.pixels = Vec::new();
+        g.mode = 61;
+        g.opacity = 200;
+        let mut inside = TestLayer::rgba("inside", 1, 1, 2, 2, [0, 255, 0, 255]);
+        inside.mode = 30;
+        inside.path = vec![0, 0];
+        let mut grain = TestLayer::rgba("grain", 3, 0, 2, 2, [100, 100, 100, 255]);
+        grain.mode = 47;
+        let mut odd = TestLayer::rgba("odd", 0, 0, 1, 1, [1, 2, 3, 255]);
+        odd.mode = 50;
+        let mut hidden = TestLayer::rgba("hidden", 5, 3, 1, 1, [9, 9, 9, 255]);
+        hidden.visible = false;
+        let mut speckle = TestLayer::rgba("speckle", 0, 3, 1, 1, [7, 8, 9, 255]);
+        speckle.mode = 1;
+        let off = TestLayer::rgba("off", -1, -1, 2, 2, [0, 0, 255, 255]);
+        let bottom = TestLayer::rgba("bottom", 0, 0, 6, 4, [200, 50, 50, 255]);
+        vec![g, inside, grain, odd, hidden, speckle, off, bottom]
+    }
+
+    #[test]
+    fn the_committed_layered_xcf_fixture_is_the_test_writers_output() {
+        let written = write_xcf(11, 6, 4, false, 2, &layered_modes_layers());
+        let fixture: &[u8] = include_bytes!("testdata/layered_modes.xcf");
+        assert_eq!(fixture, &written[..]);
+        let doc = read(fixture, ImportLimits::default()).unwrap();
+        let top: Vec<&str> = doc.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(
+            top,
+            ["g", "grain", "odd", "hidden", "speckle", "off", "bottom"]
+        );
+        assert_eq!(doc.layers[0].mode, XcfMode::PassThrough);
+        assert_eq!(doc.layers[0].children[0].mode, XcfMode::Multiply);
+        assert_eq!(doc.layers[1].mode, XcfMode::GrainMerge);
+        assert_eq!(doc.layers[2].mode, XcfMode::Unsupported(50));
+        assert!(!doc.layers[3].visible);
+        assert_eq!((doc.layers[5].x, doc.layers[5].y), (-1, -1));
     }
 }

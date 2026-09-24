@@ -284,9 +284,18 @@ pub fn duplicate_layer(editor: &mut Editor, name: Option<String>) -> Result<Stri
             m.id = layer_model::MaskId::new();
             old
         });
+        // W10-I: and so does a smart object's filter mask.
+        let filter_mask =
+            crate::menu_bridge::layer_extras::rekey_filter_mask(&mut copy, &doc.document);
         let new_id = copy.id;
         let status = format!("Duplicated {} as {}", source.name, copy.name);
         let mut commands = vec![Command::create_layer(copy)];
+        if let Some(edits) = filter_mask.filter(|e| !e.is_empty()) {
+            commands.push(
+                Command::paint_tiles(editor_core::pixels::PixelTarget::FilterMask(new_id), edits)
+                    .map_err(|e| e.to_string())?,
+            );
+        }
         if let Some(map) = doc.document.layer_tiles(source_id) {
             let edits: Vec<_> = map
                 .iter()

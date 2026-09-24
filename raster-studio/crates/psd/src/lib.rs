@@ -49,9 +49,10 @@
 //!
 //! These are deliberate, and none of them silently corrupts a file:
 //!
-//! * **PSB** (`.psb`, version 2) is refused with
-//!   [`PsdError::UnsupportedVersion`]; its 64-bit section lengths are a
-//!   different parse.
+//! * **PSB** (`.psb`, version 2) is **read** (W10-F: 64-bit section,
+//!   channel and long-key block lengths, 32-bit RLE row counts, canvases to
+//!   [`ReadOptions::max_psb_dimension`]) but not written: [`write`] produces
+//!   version 1, which caps the canvas at 30 000 px a side.
 //! * **Vector masks** are carried, not rendered, here: the path is the
 //!   layer's `vmsk`/`vsms` block (decoded by [`shape::VectorPath`]) and
 //!   W9-G parses and writes the vector mask's own density and feather from
@@ -176,6 +177,8 @@ pub use write::{from_rgba8, write, write_with};
 
 #[cfg(test)]
 mod probe;
+#[cfg(test)]
+mod psb_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

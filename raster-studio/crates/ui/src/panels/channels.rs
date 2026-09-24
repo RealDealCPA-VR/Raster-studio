@@ -19,9 +19,20 @@
 //! exception and says so below: a mask's visibility is the mask's own
 //! `enabled` flag, which is document state, so that row emits a command.
 //!
-//! What this build still does not have is per-channel *editing* — painting into
-//! the red channel alone. The panel's selection is therefore an isolation
-//! target, not a paint target; `docs/parity-matrix.md` carries that gap.
+//! What this build still does not have is per-channel *editing* of a colour
+//! component — painting into the red channel alone. A component row's
+//! selection is therefore an isolation target, not a paint target;
+//! `docs/parity-matrix.md` carries that gap.
+//!
+//! W10-B: the *alpha* rows are editable. Selecting a **mask** row makes its
+//! layer active, aims painting at the mask and shows the mask alone in
+//! grayscale ([`crate::MaskViewMode::Grayscale`]); selecting a colour row
+//! again puts the composite back. A **saved selection** row's eye
+//! ([`alpha_eye_id`]) opens the selection as a channel the same way — the
+//! application builds a hidden scratch layer whose mask is the saved
+//! coverage (`MenuAction::EditAlphaChannel`) — and a second click stores the
+//! painted coverage back into the saved selection
+//! (`MenuAction::CloseAlphaChannel`).
 //!
 //! # Paths
 //!
@@ -192,6 +203,12 @@ impl ChannelsState {
             ChannelKind::Mask { .. } => {}
         }
     }
+}
+
+/// W10-B: the id of the `index`th saved-selection (alpha) row's eye in the
+/// Channels panel.
+pub fn alpha_eye_id(index: usize) -> egui::Id {
+    egui::Id::new(("channels-alpha-eye", index))
 }
 
 /// The component names of a colour mode.

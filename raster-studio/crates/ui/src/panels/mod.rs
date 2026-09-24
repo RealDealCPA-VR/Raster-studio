@@ -24,3 +24,9 @@ pub mod navigator;
 pub mod paths;
 pub mod properties;
 pub mod text;
+// W10-B: the document-record panels and the tool presets.
+pub mod glyphs;
+pub mod layer_comps;
+pub mod notes;
+pub mod text_styles;
+pub mod tool_presets;

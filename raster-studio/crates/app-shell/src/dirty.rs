@@ -131,7 +131,9 @@ pub fn touched_by(command: &Command) -> DirtyTiles {
         | Command::ReplaceAssetSource { .. }
         // W10-B: layer comps, notes and text styles are records, not pixels;
         // a restyle's SetLayerKind members carry the dirtiness.
-        | Command::SetDocumentExtras { .. } => DirtyTiles::none(),
+        | Command::SetDocumentExtras { .. }
+        // W10-B: a stored alpha channel is a saved selection, not pixels.
+        | Command::SetSavedSelection { .. } => DirtyTiles::none(),
         Command::Transaction { commands, .. } => {
             let mut out = DirtyTiles::none();
             for c in commands {

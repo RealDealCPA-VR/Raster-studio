@@ -148,7 +148,8 @@ impl DuotoneSpec {
         let n = kind.inks();
         self.inks.truncate(n);
         while self.inks.len() < n {
-            self.inks.push(DuotoneInk::new(DEFAULT_INKS[self.inks.len()]));
+            self.inks
+                .push(DuotoneInk::new(DEFAULT_INKS[self.inks.len()]));
         }
     }
 

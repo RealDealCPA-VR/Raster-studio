@@ -11,16 +11,25 @@
 //! | --- | --- | --- | --- |
 //! | PPM / PGM / PBM (ASCII and binary) | yes, 1-16 bit | binary P6 / P5 / P4 | [`pnm`] |
 //! | DDS | uncompressed RGB(A)/luminance, BC1, BC2, BC3 | uncompressed BGRA, BC3 | [`dds`] |
-//! | GIMP XCF | 8-bit RGB/RGBA/grey layers, flattened (see [`xcf`]) | no | [`xcf`] |
+//! | GIMP XCF | 8-bit RGB/RGBA/grey: the layer tree ([`xcf::read`], which app-shell opens layered) and the flattened composite ([`xcf::decode`]) | no | [`xcf`] |
 //! | JPEG XL | yes (`jxl-oxide`) | no | [`jxl`] |
-//! | AVIF | yes (`avif-parse` + `rav1d`) | yes (`image` over `ravif`) | [`avif`] |
+//! | AVIF | **refused by name** (see [`avif`]) | yes (`image` over `ravif`) | [`avif`] |
 //! | PSB | through the `psd` crate, as a layered document | no | - |
 //!
-//! HEIC is the one format of this wave with no reader. The only pure-Rust HEVC
-//! decoders on crates.io are `heic` (AGPL-3.0-only or a commercial licence,
-//! which a proprietary build cannot take) and `heic-rs` (a 0.1.1 release that
-//! this wave did not evaluate for correctness or fuzz-safety); everything else
-//! binds libheif / libde265 (C/C++). A `.heic` is refused by name, see
+//! AVIF has no reader: `rav1d` (the pure-Rust dav1d port), the AV1 decoder
+//! this wave built a reader on, was found to abort the process on a damaged
+//! file (the reason is written up in [`avif`]; the other pure-Rust AV1
+//! decoders are 0.0.x releases this wave did not trust; the reader, its test
+//! and the dependency were removed together, so no test in this tree
+//! exercises `rav1d`), and a `.avif` is refused by name instead. What is
+//! tested is the refusal and the brand sniff.
+//!
+//! HEIC has no reader either. The pure-Rust HEVC decoders this wave found
+//! on crates.io are `heic` (AGPL-3.0-only or a commercial licence, which a
+//! proprietary build cannot take) and `heic-rs` (a 0.1.1 release that this
+//! wave did not evaluate for correctness, fuzz-safety or licence terms);
+//! everything else binds libheif / libde265 (C/C++). A `.heic` is refused
+//! by name, see
 //! [`heic_refusal`], instead of reaching `image` and failing as "unknown
 //! format".
 
@@ -35,7 +44,9 @@ pub mod pnm;
 pub mod xcf;
 
 /// How many leading bytes the sniff looks at.
-const SNIFF_BYTES: usize = 32;
+/// 64 bytes hold an `ftyp` box with up to eleven compatible brands, which
+/// is where a `mif1` file says whether it is AVIF or HEIC.
+const SNIFF_BYTES: usize = 64;
 
 /// The formats this module owns, identified by content.
 pub fn sniff(head: &[u8]) -> Option<ImportFormat> {
@@ -69,9 +80,9 @@ pub fn looks_like_heic(head: &[u8]) -> bool {
 /// The refusal a HEIC file gets, naming why rather than "unknown format".
 pub fn heic_refusal() -> CodecError {
     CodecError::Unsupported(
-        "HEIC/HEIF is not supported: no pure-Rust HEVC decoder under a licence this \
-         build can ship exists yet (see docs/parity-matrix.md); convert it to JPEG, PNG \
-         or AVIF first"
+        "HEIC/HEIF is not supported: this build has no HEVC decoder (the pure-Rust ones \
+         found are AGPL-licensed or not yet evaluated, see docs/parity-matrix.md); \
+         convert it to JPEG or PNG first"
             .into(),
     )
 }
@@ -120,13 +131,16 @@ pub(super) fn probe<R: Read>(
     source: R,
     limits: ImportLimits,
 ) -> Result<ImageInfo, CodecError> {
+    if format == ImportFormat::Avif {
+        return Err(avif::refusal());
+    }
     let bytes = read_bounded(source, limits)?;
     match format {
         ImportFormat::Pnm => pnm::probe(&bytes, limits),
         ImportFormat::Dds => dds::probe(&bytes, limits),
         ImportFormat::Xcf => xcf::probe(&bytes, limits),
         ImportFormat::Jxl => jxl::probe(&bytes, limits),
-        ImportFormat::Avif => avif::probe(&bytes, limits),
+        ImportFormat::Avif => Err(avif::refusal()),
         other => Err(not_ours(other)),
     }
 }
@@ -137,13 +151,16 @@ pub(super) fn decode<R: Read>(
     source: R,
     limits: ImportLimits,
 ) -> Result<DecodedSurface, CodecError> {
+    if format == ImportFormat::Avif {
+        return Err(avif::refusal());
+    }
     let bytes = read_bounded(source, limits)?;
     match format {
         ImportFormat::Pnm => pnm::decode(&bytes, limits),
         ImportFormat::Dds => dds::decode(&bytes, limits),
         ImportFormat::Xcf => xcf::decode(&bytes, limits),
         ImportFormat::Jxl => jxl::decode(&bytes, limits),
-        ImportFormat::Avif => avif::decode(&bytes, limits),
+        ImportFormat::Avif => Err(avif::refusal()),
         other => Err(not_ours(other)),
     }
 }
@@ -203,5 +220,122 @@ pub(crate) fn info(width: u32, height: u32, format: ImportFormat, sixteen: bool)
             super::PixelFormat::Rgba8
         },
         icc_profile: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codec::{
+        decode_surface_bytes, decode_surface_bytes_as, decode_surface_path, encode, probe_bytes,
+        CodecError, ExportFormat, ImportFormat, ImportLimits,
+    };
+
+    fn solid(w: u32, h: u32) -> Vec<u8> {
+        (0..w * h)
+            .flat_map(|i| [(i * 9) as u8, 40, 200, 255])
+            .collect()
+    }
+
+    /// The public decode entry points reach every W10-F reader by content,
+    /// with no hint: this is the road File > Open takes.
+    #[test]
+    fn the_codec_facade_sniffs_and_decodes_every_new_format() {
+        let (w, h) = (5u32, 3u32);
+        let px = solid(w, h);
+        for (format, import) in [
+            (ExportFormat::Ppm, ImportFormat::Pnm),
+            (ExportFormat::Pgm, ImportFormat::Pnm),
+            (ExportFormat::Pbm, ImportFormat::Pnm),
+            (ExportFormat::Dds, ImportFormat::Dds),
+            (ExportFormat::DdsBc3, ImportFormat::Dds),
+        ] {
+            let bytes = encode(format, w, h, &px).unwrap();
+            let s = decode_surface_bytes(&bytes, ImportLimits::default())
+                .unwrap_or_else(|e| panic!("{format:?}: {e}"));
+            assert_eq!((s.width, s.height, s.source_format), (w, h, import));
+            assert_eq!(
+                probe_bytes(&bytes, ImportLimits::default()).unwrap().format,
+                import
+            );
+        }
+        let xcf = super::xcf::tests::write_xcf(
+            11,
+            4,
+            2,
+            false,
+            2,
+            &[super::xcf::tests::TestLayer::rgba(
+                "a",
+                0,
+                0,
+                4,
+                2,
+                [9, 8, 7, 255],
+            )],
+        );
+        let s = decode_surface_bytes(&xcf, ImportLimits::default()).unwrap();
+        assert_eq!(s.source_format, ImportFormat::Xcf);
+        let jxl = include_bytes!("testdata/ramp_6x4_rgba_lossless.jxl");
+        let s = decode_surface_bytes(jxl, ImportLimits::default()).unwrap();
+        assert_eq!(
+            (s.width, s.height, s.source_format),
+            (6, 4, ImportFormat::Jxl)
+        );
+    }
+
+    #[test]
+    fn a_path_opens_by_content_and_extensions_map() {
+        let dir = std::env::temp_dir().join(format!("w10f-formats-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let px = solid(3, 2);
+        // A DDS saved under a `.png` name still opens as the DDS it is.
+        let lying = dir.join("really_a_dds.png");
+        std::fs::write(&lying, encode(ExportFormat::Dds, 3, 2, &px).unwrap()).unwrap();
+        let s = decode_surface_path(&lying, ImportLimits::default()).unwrap();
+        assert_eq!(s.source_format, ImportFormat::Dds);
+        // A PNG saved under `.dds` opens as the PNG it is: content wins.
+        let png_named_dds = dir.join("really_a_png.dds");
+        std::fs::write(
+            &png_named_dds,
+            encode(ExportFormat::Png, 3, 2, &px).unwrap(),
+        )
+        .unwrap();
+        let s = decode_surface_path(&png_named_dds, ImportLimits::default()).unwrap();
+        assert_eq!(s.source_format, ImportFormat::Png);
+        // Garbage under `.dds` is reported by the DDS reader, by name.
+        let err = decode_surface_bytes_as(b"garbage!", ImportLimits::default(), ImportFormat::Dds)
+            .unwrap_err();
+        assert!(err.to_string().contains("DDS"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+        for (ext, format) in [
+            ("ppm", ImportFormat::Pnm),
+            ("PGM", ImportFormat::Pnm),
+            ("pbm", ImportFormat::Pnm),
+            ("dds", ImportFormat::Dds),
+            ("xcf", ImportFormat::Xcf),
+            ("jxl", ImportFormat::Jxl),
+            ("avif", ImportFormat::Avif),
+            ("psb", ImportFormat::Psd),
+        ] {
+            assert_eq!(ImportFormat::from_extension(ext), Some(format), "{ext}");
+        }
+        assert_eq!(ImportFormat::from_extension("heic"), None);
+    }
+
+    #[test]
+    fn heic_is_refused_by_name_not_as_an_unknown_format() {
+        let mut heic = vec![0, 0, 0, 24];
+        heic.extend_from_slice(b"ftypheic\0\0\0\0mif1heic");
+        heic.extend_from_slice(&[0; 64]);
+        let err = decode_surface_bytes(&heic, ImportLimits::default()).unwrap_err();
+        assert!(matches!(err, CodecError::Unsupported(_)));
+        assert!(err.to_string().contains("HEIC"), "{err}");
+        // The advice names only formats this build opens: AVIF is refused on
+        // open too, so converting to it cannot help.
+        let advice = err.to_string();
+        assert!(advice.contains("JPEG or PNG"), "{advice}");
+        assert!(!advice.contains("AVIF"), "{advice}");
+        let err = probe_bytes(&heic, ImportLimits::default()).unwrap_err();
+        assert!(err.to_string().contains("HEIC"), "{err}");
     }
 }

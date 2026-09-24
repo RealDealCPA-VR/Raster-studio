@@ -101,6 +101,15 @@ pub enum PixelTarget {
     /// Applying it to a layer with no mask is
     /// [`crate::CommandError::NoMask`].
     Mask(LayerId),
+    /// W10-I: the coverage of a smart object's shared smart-filter mask
+    /// ([`layer_model::SmartObjectLayer::filter_mask`]).
+    ///
+    /// Resolved like [`PixelTarget::Mask`] — to the mask's own [`MaskId`] at
+    /// apply time — but through the smart object's kind instead of the
+    /// layer's own mask slot, so an object can carry both. Applying it to a
+    /// layer that is not a smart object with a filter mask is
+    /// [`crate::CommandError::NoMask`].
+    FilterMask(LayerId),
 }
 
 /// A resolved pixel-store key: what a [`PixelTarget`] points at once the
@@ -421,10 +430,20 @@ impl PixelStore {
     /// a dropped target — a deleted layer's pixels are what its undo restores.
     /// Call it only after the corresponding history has been cleared.
     pub fn retain_referenced(&mut self, tree: &LayerTree) -> usize {
+        // W10-I: a smart object's filter mask is live too.
         let live_masks: Vec<MaskId> = tree
             .iter_depth_first()
             .into_iter()
-            .filter_map(|id| tree.get(id).and_then(|l| l.mask_id()))
+            .filter_map(|id| tree.get(id))
+            .flat_map(|l| {
+                let filter_mask = match &l.kind {
+                    layer_model::LayerKind::SmartObject(so) => {
+                        so.filter_mask.as_ref().map(|m| m.id)
+                    }
+                    _ => None,
+                };
+                l.mask_id().into_iter().chain(filter_mask)
+            })
             .collect();
         let before = self.maps.len();
         self.maps.retain(|key, _| match key {
@@ -560,6 +579,7 @@ impl FillValue {
             (self, target),
             (FillValue::Color(_), PixelTarget::Layer(_))
                 | (FillValue::Coverage(_), PixelTarget::Mask(_))
+                | (FillValue::Coverage(_), PixelTarget::FilterMask(_))
         )
     }
 }

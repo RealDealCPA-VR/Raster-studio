@@ -46,6 +46,11 @@ use crate::format::PixelFormat;
 #[path = "svg_import.rs"]
 pub mod svg_import;
 
+/// W10-F: PNM, DDS, GIMP XCF, JPEG XL and AVIF, read (and PNM / DDS / AVIF
+/// written) by this crate's own code or a pure-Rust crate other than `image`.
+#[path = "formats/mod.rs"]
+pub mod formats;
+
 /// A decoded image in packed RGBA8, plus dimensions.
 ///
 /// The convenience shape: always 8 bits per channel, whatever the file held.
@@ -234,6 +239,18 @@ pub enum ImportFormat {
     /// W9-N: an SVG, rasterised at its own size by `resvg` (see
     /// `svg_import`). Recognised by content as well as by extension.
     Svg,
+    /// W10-F: Netpbm PBM / PGM / PPM, ASCII and binary ([`formats::pnm`]).
+    Pnm,
+    /// W10-F: DirectDraw Surface: uncompressed and BC1-BC3 ([`formats::dds`]).
+    Dds,
+    /// W10-F: GIMP's `.xcf`, opened as its flattened composite
+    /// ([`formats::xcf`]).
+    Xcf,
+    /// W10-F: JPEG XL, decoded by `jxl-oxide` ([`formats::jxl`]).
+    Jxl,
+    /// W10-F: AVIF. **Recognised, refused by name**: no fuzz-safe pure-Rust
+    /// AV1 decoder exists (see [`formats::avif`]); AVIF *export* works.
+    Avif,
 }
 
 impl ImportFormat {
@@ -241,7 +258,7 @@ impl ImportFormat {
     ///
     /// Recognises, not decodes — see [`ImportFormat::Psd`] and
     /// [`ImportFormat::is_decodable_here`].
-    pub const ALL: [ImportFormat; 10] = [
+    pub const ALL: [ImportFormat; 15] = [
         ImportFormat::Png,
         ImportFormat::Jpeg,
         ImportFormat::WebP,
@@ -252,6 +269,11 @@ impl ImportFormat {
         ImportFormat::Tga,
         ImportFormat::Psd,
         ImportFormat::Svg,
+        ImportFormat::Pnm,
+        ImportFormat::Dds,
+        ImportFormat::Xcf,
+        ImportFormat::Jxl,
+        ImportFormat::Avif,
     ];
 
     /// Short stable name for logs and UI.
@@ -267,6 +289,11 @@ impl ImportFormat {
             ImportFormat::Tga => "TGA",
             ImportFormat::Psd => "PSD",
             ImportFormat::Svg => "SVG",
+            ImportFormat::Pnm => "PNM",
+            ImportFormat::Dds => "DDS",
+            ImportFormat::Xcf => "XCF",
+            ImportFormat::Jxl => "JPEG XL",
+            ImportFormat::Avif => "AVIF",
         }
     }
 
@@ -287,14 +314,17 @@ impl ImportFormat {
     /// asks this question gets a truthful answer rather than discovering the
     /// gap as a decode failure.
     pub fn is_decodable_here(self) -> bool {
-        !matches!(self, ImportFormat::Psd)
+        // W10-F: AVIF is recognised so it can be refused by name.
+        !matches!(self, ImportFormat::Psd | ImportFormat::Avif)
     }
 
     /// Match a file extension, case-insensitively and without a leading dot.
     ///
-    /// `.psb` is deliberately absent: it is the large-document variant of PSD,
-    /// with 64-bit section lengths, and nothing in this workspace reads one.
-    /// Mapping it here would advertise a format the application cannot open.
+    /// W10-F: `.psb`, the large-document variant with 64-bit section lengths,
+    /// maps to [`ImportFormat::Psd`]: both start `8BPS`, and the `psd` crate
+    /// reads version 2 as well as version 1 through the same layered road.
+    /// `.heic` / `.heif` map to nothing: no reader exists (see
+    /// [`formats::heic_refusal`]), and the content sniff refuses one by name.
     pub fn from_extension(ext: &str) -> Option<Self> {
         Some(match ext.to_ascii_lowercase().as_str() {
             "png" | "apng" => ImportFormat::Png,
@@ -305,8 +335,13 @@ impl ImportFormat {
             "bmp" | "dib" => ImportFormat::Bmp,
             "ico" | "cur" => ImportFormat::Ico,
             "tga" | "targa" | "icb" | "vda" | "vst" => ImportFormat::Tga,
-            "psd" => ImportFormat::Psd,
+            "psd" | "psb" => ImportFormat::Psd,
             "svg" => ImportFormat::Svg,
+            "ppm" | "pgm" | "pbm" | "pnm" => ImportFormat::Pnm,
+            "dds" => ImportFormat::Dds,
+            "xcf" => ImportFormat::Xcf,
+            "jxl" => ImportFormat::Jxl,
+            "avif" => ImportFormat::Avif,
             _ => return None,
         })
     }
@@ -337,9 +372,53 @@ impl ImportFormat {
             ImportFormat::Bmp => image::ImageFormat::Bmp,
             ImportFormat::Ico => image::ImageFormat::Ico,
             ImportFormat::Tga => image::ImageFormat::Tga,
-            ImportFormat::Psd | ImportFormat::Svg => return None,
+            ImportFormat::Psd
+            | ImportFormat::Svg
+            | ImportFormat::Pnm
+            | ImportFormat::Dds
+            | ImportFormat::Xcf
+            | ImportFormat::Jxl
+            | ImportFormat::Avif => return None,
         })
     }
+
+    /// W10-F: whether [`formats`] (not `image`) decodes this format.
+    fn is_read_by_formats(self) -> bool {
+        matches!(
+            self,
+            ImportFormat::Pnm
+                | ImportFormat::Dds
+                | ImportFormat::Xcf
+                | ImportFormat::Jxl
+                | ImportFormat::Avif
+        )
+    }
+}
+
+/// W10-F: which of [`formats`]' decoders `source` belongs to, if any.
+///
+/// Content first, like everything else here: a sniffed PNM / DDS / XCF / JPEG
+/// XL / AVIF goes to its reader whatever its name. A HEIC is refused by name.
+/// A hint to one of these formats decides only when the content is something
+/// `image` cannot identify either, so the reader names what is wrong with the
+/// file instead of "could not identify the image format".
+fn own_format<R: BufRead + Seek>(
+    source: &mut R,
+    hint: Option<ImportFormat>,
+) -> Result<Option<ImportFormat>, CodecError> {
+    if let Some(format) = formats::sniff_source(source)? {
+        return Ok(Some(format));
+    }
+    let Some(hinted) = hint.filter(|h| h.is_read_by_formats()) else {
+        return Ok(None);
+    };
+    let start = source.stream_position()?;
+    let mut head = [0u8; 32];
+    let filled = read_head(source, &mut head)?;
+    source.seek(std::io::SeekFrom::Start(start))?;
+    let other =
+        image::guess_format(&head[..filled]).is_ok() || head[..filled].starts_with(&PSD_SIGNATURE);
+    Ok((!other).then_some(hinted))
 }
 
 /// The four bytes every `.psd` (and `.psb`) begins with.
@@ -785,6 +864,9 @@ pub fn probe_reader_with_hint<R: BufRead + Seek>(
     if svg_import::is_svg_source(&mut source, hint)? {
         return svg_import::probe_svg(source, limits);
     }
+    if let Some(format) = own_format(&mut source, hint)? {
+        return formats::probe(format, source, limits);
+    }
     let reader = reader_for(source, limits, hint)?;
     let format = import_format_of(&reader)?;
     let mut decoder = reader.into_decoder()?;
@@ -887,6 +969,9 @@ pub fn decode_surface_reader_with_hint<R: BufRead + Seek>(
     let mut source = source;
     if svg_import::is_svg_source(&mut source, hint)? {
         return svg_import::decode_svg(source, limits);
+    }
+    if let Some(format) = own_format(&mut source, hint)? {
+        return formats::decode(format, source, limits);
     }
     let reader = reader_for(source, limits, hint)?;
     let source_format = import_format_of(&reader)?;
@@ -1027,14 +1112,31 @@ pub enum ExportFormat {
     /// what Photopea writes for a raster document. Lossless, alpha, 8 bit, no
     /// ICC. The raster payload is readable back with [`svg_raster_payload`].
     Svg,
+    /// W10-F: binary PPM (`P6`), 8-bit RGB, no alpha ([`formats::pnm`]).
+    Ppm,
+    /// W10-F: binary PGM (`P5`), 8-bit Rec. 601 luma, no alpha.
+    Pgm,
+    /// W10-F: binary PBM (`P4`), 1 bit (luma thresholded at half), no alpha.
+    Pbm,
+    /// W10-F: DDS, uncompressed 32-bit BGRA, lossless, alpha
+    /// ([`formats::dds`]).
+    Dds,
+    /// W10-F: DDS, BC3 (`DXT5`) block compression: lossy, smooth alpha.
+    DdsBc3,
+    /// W10-F: AVIF at the given quality (**`1..=100`**), 8-bit 4:4:4 with
+    /// alpha, through `image`'s `ravif` encoder (pure Rust, `rav1e`).
+    Avif(u8),
 }
 
 /// The square sizes an [`ExportFormat::Ico`] file carries, smallest first.
 pub const ICO_SIZES: [u32; 4] = [16, 32, 48, 256];
 
 impl ExportFormat {
-    /// Every format the exporter can write.
-    pub const ALL: [ExportFormat; 9] = [
+    /// Every format the exporter can write **and this crate can read back**
+    /// (the Export As preview decodes what it encodes). W10-F: AVIF is
+    /// written but cannot be read back, so it is in
+    /// [`ExportFormat::WRITE_ONLY`] instead.
+    pub const ALL: [ExportFormat; 14] = [
         ExportFormat::Png,
         ExportFormat::Jpeg(90),
         ExportFormat::WebP,
@@ -1044,7 +1146,27 @@ impl ExportFormat {
         ExportFormat::Tga,
         ExportFormat::Ico,
         ExportFormat::Svg,
+        ExportFormat::Ppm,
+        ExportFormat::Pgm,
+        ExportFormat::Pbm,
+        ExportFormat::Dds,
+        ExportFormat::DdsBc3,
     ];
+
+    /// W10-F: formats the exporter writes that no decoder here reads back:
+    /// AVIF (see [`formats::avif`] for why there is no AVIF reader).
+    pub const WRITE_ONLY: [ExportFormat; 1] = [ExportFormat::Avif(80)];
+
+    /// W10-F: every format the exporter can write: [`ExportFormat::ALL`]
+    /// followed by [`ExportFormat::WRITE_ONLY`].
+    pub fn writable() -> Vec<ExportFormat> {
+        Self::ALL.iter().chain(&Self::WRITE_ONLY).copied().collect()
+    }
+
+    /// W10-F: whether this crate can decode what the format writes.
+    pub fn reads_back(self) -> bool {
+        !matches!(self, ExportFormat::Avif(_))
+    }
 
     /// The inclusive range a JPEG quality value must fall in.
     pub const JPEG_QUALITY_RANGE: std::ops::RangeInclusive<u8> = 1..=100;
@@ -1065,6 +1187,9 @@ impl ExportFormat {
             ExportFormat::Jpeg(q) if !Self::JPEG_QUALITY_RANGE.contains(&q) => Err(
                 CodecError::InvalidParameter(format!("JPEG quality must be 1..=100, got {q}")),
             ),
+            ExportFormat::Avif(q) if !Self::JPEG_QUALITY_RANGE.contains(&q) => Err(
+                CodecError::InvalidParameter(format!("AVIF quality must be 1..=100, got {q}")),
+            ),
             _ => Ok(()),
         }
     }
@@ -1083,9 +1208,14 @@ impl ExportFormat {
             | ExportFormat::Bmp
             | ExportFormat::Tga
             | ExportFormat::Ico
-            | ExportFormat::Svg => AlphaSupport::Full,
+            | ExportFormat::Svg
+            | ExportFormat::Dds
+            | ExportFormat::DdsBc3
+            | ExportFormat::Avif(_) => AlphaSupport::Full,
             ExportFormat::Gif => AlphaSupport::Binary,
-            ExportFormat::Jpeg(_) => AlphaSupport::None,
+            ExportFormat::Jpeg(_) | ExportFormat::Ppm | ExportFormat::Pgm | ExportFormat::Pbm => {
+                AlphaSupport::None
+            }
         }
     }
 
@@ -1122,6 +1252,11 @@ impl ExportFormat {
             ExportFormat::Tga => "tga",
             ExportFormat::Ico => "ico",
             ExportFormat::Svg => "svg",
+            ExportFormat::Ppm => "ppm",
+            ExportFormat::Pgm => "pgm",
+            ExportFormat::Pbm => "pbm",
+            ExportFormat::Dds | ExportFormat::DdsBc3 => "dds",
+            ExportFormat::Avif(_) => "avif",
         }
     }
 
@@ -1137,6 +1272,11 @@ impl ExportFormat {
             ExportFormat::Tga => "image/x-tga",
             ExportFormat::Ico => "image/vnd.microsoft.icon",
             ExportFormat::Svg => "image/svg+xml",
+            ExportFormat::Ppm => "image/x-portable-pixmap",
+            ExportFormat::Pgm => "image/x-portable-graymap",
+            ExportFormat::Pbm => "image/x-portable-bitmap",
+            ExportFormat::Dds | ExportFormat::DdsBc3 => "image/vnd-ms.dds",
+            ExportFormat::Avif(_) => "image/avif",
         }
     }
 }
@@ -1352,6 +1492,31 @@ pub fn encode_into<W: Write + Seek>(
             )?;
             let document = svg_document(width, height, &png);
             out.write_all(document.as_bytes())
+                .map_err(image::ImageError::IoError)?;
+        }
+        ExportFormat::Ppm | ExportFormat::Pgm | ExportFormat::Pbm => {
+            let rgba = pixels.require_rgba8(format)?;
+            let kind = match format {
+                ExportFormat::Ppm => formats::pnm::PnmKind::Ppm,
+                ExportFormat::Pgm => formats::pnm::PnmKind::Pgm,
+                _ => formats::pnm::PnmKind::Pbm,
+            };
+            out.write_all(&formats::pnm::encode(kind, width, height, rgba))
+                .map_err(image::ImageError::IoError)?;
+        }
+        ExportFormat::Dds | ExportFormat::DdsBc3 => {
+            let rgba = pixels.require_rgba8(format)?;
+            let encoding = if format == ExportFormat::Dds {
+                formats::dds::DdsEncoding::Uncompressed
+            } else {
+                formats::dds::DdsEncoding::Bc3
+            };
+            out.write_all(&formats::dds::encode(encoding, width, height, rgba))
+                .map_err(image::ImageError::IoError)?;
+        }
+        ExportFormat::Avif(quality) => {
+            let rgba = pixels.require_rgba8(format)?;
+            out.write_all(&formats::avif::encode(width, height, rgba, quality)?)
                 .map_err(image::ImageError::IoError)?;
         }
     }
@@ -1784,6 +1949,48 @@ mod tests {
                 ExportFormat::Gif => {
                     assert_eq!(decoded.rgba8, px, "GIF lost a colour from a 2-colour image");
                 }
+                // W10-F: PPM and uncompressed DDS are lossless for an
+                // opaque image (PPM stores no alpha; the checker has none).
+                ExportFormat::Ppm | ExportFormat::Dds => {
+                    assert_eq!(decoded.rgba8, px, "{format:?} is supposed to be lossless");
+                }
+                // W10-F: PGM stores Rec. 601 luma, PBM that luma at one bit.
+                ExportFormat::Pgm | ExportFormat::Pbm => {
+                    for (got, want) in decoded
+                        .rgba8
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .zip(px.as_chunks::<4>().0)
+                    {
+                        let luma = (299 * u32::from(want[0])
+                            + 587 * u32::from(want[1])
+                            + 114 * u32::from(want[2])
+                            + 500)
+                            / 1000;
+                        let expect = if format == ExportFormat::Pgm {
+                            luma as u8
+                        } else if luma < 128 {
+                            0
+                        } else {
+                            255
+                        };
+                        assert_eq!(got, &[expect, expect, expect, 255], "{format:?}");
+                    }
+                }
+                // W10-F: block compression is lossy; a 1-pixel checker is
+                // its worst case, so only the mean is bounded. (AVIF is not
+                // in `ALL`: it cannot be read back.)
+                ExportFormat::DdsBc3 | ExportFormat::Avif(_) => {
+                    let total: i64 = decoded
+                        .rgba8
+                        .iter()
+                        .zip(&px)
+                        .map(|(a, b)| (i64::from(*a) - i64::from(*b)).abs())
+                        .sum();
+                    let mean = total / px.len() as i64;
+                    assert!(mean <= 64, "{format:?} drifted by {mean} on average");
+                }
                 // Lossy and alpha-free.
                 ExportFormat::Jpeg(_) => {
                     for (got, want) in decoded
@@ -1963,16 +2170,17 @@ mod tests {
         );
 
         // --- GIF and BMP are covered as writable formats above; JPEG/PNG/
-        // WebP/TIFF too; SVG (W9-N) has its own tests in `svg_import`. That
-        // is all nine containers this module decodes; the tenth, PSD, is
-        // recognised here and decoded by `app-shell`.
-        assert_eq!(ImportFormat::ALL.len(), 10);
+        // WebP/TIFF too; SVG (W9-N) has its own tests in `svg_import`; W10-F's
+        // PNM, DDS, XCF and JPEG XL theirs in `formats`. That is all thirteen
+        // containers this module decodes; PSD is recognised here and decoded
+        // by `app-shell`, and AVIF is recognised and refused by name.
+        assert_eq!(ImportFormat::ALL.len(), 15);
         assert_eq!(
             ImportFormat::ALL
                 .iter()
                 .filter(|f| f.is_decodable_here())
                 .count(),
-            9
+            13
         );
     }
 
@@ -2010,9 +2218,9 @@ mod tests {
         }
         assert_eq!(ImportFormat::from_extension("psd"), Some(ImportFormat::Psd));
         assert_eq!(ImportFormat::from_extension("PSD"), Some(ImportFormat::Psd));
-        // `.psb` is a different format with 64-bit section lengths, and nothing
-        // here reads one, so it is not advertised.
-        assert_eq!(ImportFormat::from_extension("psb"), None);
+        // W10-F: `.psb` (64-bit section lengths) is read by the `psd` crate
+        // through the same layered road, so it is advertised as a PSD.
+        assert_eq!(ImportFormat::from_extension("psb"), Some(ImportFormat::Psd));
         assert!(ImportFormat::Psd.is_self_identifying());
         assert!(!ImportFormat::Psd.is_decodable_here());
         assert_eq!(ImportFormat::Psd.name(), "PSD");

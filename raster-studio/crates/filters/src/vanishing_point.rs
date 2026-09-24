@@ -289,7 +289,13 @@ fn apply_op(src: &FilterBuffer, plane: &PerspectivePlane, op: &VanishingOp) -> F
             let px = match op {
                 VanishingOp::Paste { image, rect } => {
                     let [u0, v0, u1, v1] = *rect;
-                    if image.is_empty() || u1 <= u0 || v1 <= v0 || u < u0 || u > u1 || v < v0 || v > v1
+                    if image.is_empty()
+                        || u1 <= u0
+                        || v1 <= v0
+                        || u < u0
+                        || u > u1
+                        || v < v0
+                        || v > v1
                     {
                         continue;
                     }
@@ -416,6 +422,16 @@ mod tests {
         let mid = plane.to_plane([62.5, 55.5]).unwrap();
         assert!(mid[0] > 0.5 && mid[1] > 0.5, "{mid:?}");
         assert_eq!(out.get(62, 55)[0], 1.0);
+        // Checked against the closed form, not the homography itself: this
+        // trapezoid is symmetric about x = 60, so the plane's centre sits at
+        // y = 20 + 70 * 40 / (40 + 100) = 40 (widths 40 and 100), and the
+        // pixel (62, 42) is on the plane at u, v ~ 0.53 — inside the paste.
+        let c = plane.to_image([0.5, 0.5]).unwrap();
+        assert!(
+            (c[0] - 60.0).abs() < 1e-3 && (c[1] - 40.0).abs() < 1e-3,
+            "{c:?}"
+        );
+        assert_eq!(out.get(62, 42), [1.0, 0.0, 0.0, 1.0]);
         // Off the plane entirely: untouched.
         assert_eq!(out.get(2, 2), [0.0, 0.0, 1.0, 1.0]);
     }
@@ -440,11 +456,17 @@ mod tests {
         };
         let out = edit.apply(&src);
         let p = plane.to_image([0.8, 0.6]).unwrap();
-        assert!(src.get(p[0] as u32, p[1] as u32)[0] < 0.5, "setup: dark there");
+        assert!(
+            src.get(p[0] as u32, p[1] as u32)[0] < 0.5,
+            "setup: dark there"
+        );
         assert!(out.get(p[0] as u32, p[1] as u32)[0] > 0.99, "cloned white");
         // Outside the dab: untouched.
         let q = plane.to_image([0.8, 0.9]).unwrap();
-        assert_eq!(out.get(q[0] as u32, q[1] as u32), src.get(q[0] as u32, q[1] as u32));
+        assert_eq!(
+            out.get(q[0] as u32, q[1] as u32),
+            src.get(q[0] as u32, q[1] as u32)
+        );
     }
 
     #[test]

@@ -295,6 +295,11 @@ pub struct ChromeOutput {
     pub set_tool_gradient: Option<(ToolId, layer_model::Gradient)>,
     /// The ramp the gradient tools paint with, read back to the editor.
     pub set_gradient_ramp: Option<layer_model::Gradient>,
+    /// W10-B: the Glyphs panel's picks, as (text layer, characters), in
+    /// order. The shell inserts each at the live typing session's caret, or
+    /// appends it to the layer's text when no session is open
+    /// ([`crate::menu_bridge::glyph_insert::insert_glyph`]).
+    pub insert_glyphs: Vec<(LayerId, String)>,
 }
 
 /// The option keys that make up a [`tools::BrushSettings`].
@@ -547,6 +552,16 @@ fn document_signature(doc: &crate::doc::OpenDocument) -> u64 {
         }
         tiles(d.layer_tiles(id), &mut h);
         tiles(d.mask_tiles(id), &mut h);
+        // W10-I: a smart object's filter-mask coverage (its thumbnail).
+        let filter_mask = d
+            .layers
+            .get(id)
+            .and_then(crate::edit_target::filter_mask_of)
+            .map(|m| m.id);
+        tiles(
+            filter_mask.and_then(|m| d.pixels.tiles(editor_core::PixelKey::Mask(m))),
+            &mut h,
+        );
     }
     h.finish()
 }
@@ -896,7 +911,10 @@ impl Chrome {
 
     /// W3-A: View ▸ Selection Edges — whether the marching ants are shown.
     pub fn selection_edges_visible(&self) -> bool {
-        self.workspace.view_flags.get(ui::ViewFlag::SelectionEdges)
+        // W10-J: `shows`: View > Extras (Ctrl+H) off hides the ants too.
+        self.workspace
+            .view_flags
+            .shows(ui::ViewFlag::SelectionEdges)
     }
 
     /// W3-A: the marching ants the shell strokes over the canvas this frame,
@@ -1002,6 +1020,7 @@ impl Chrome {
         if self.thumbs_document != Some(open.id()) {
             self.workspace.layer_thumbs.clear();
             self.workspace.mask_thumbs.clear();
+            self.workspace.filter_mask_thumbs.clear();
             self.thumbs.clear();
             self.thumbs_document = Some(open.id());
         }
@@ -1025,6 +1044,9 @@ impl Chrome {
             .layer_thumbs
             .retain(|id, _| live.contains(id));
         self.workspace.mask_thumbs.retain(|id, _| live.contains(id));
+        self.workspace
+            .filter_mask_thumbs
+            .retain(|id, _| live.contains(id));
         self.thumbs.retain(&live);
 
         let mut budget = THUMBS_PER_FRAME;
@@ -1053,6 +1075,15 @@ impl Chrome {
                     );
                 }
             }
+            // W10-I: a smart object's filter-mask thumbnail, rebuilt only
+            // when its fingerprint moved.
+            crate::menu_bridge::layer_extras::refresh_filter_mask_thumb(
+                ctx,
+                &mut self.workspace.filter_mask_thumbs,
+                open,
+                id,
+                THUMB_EDGE,
+            );
             // Card 059: the mask's real coverage thumbnail, for layers that
             // have a mask. The well falls back to the glyph without it.
             let has_mask = open
@@ -1563,6 +1594,10 @@ impl Chrome {
         } else {
             ui::panels::properties::PropertyFocus::Layer
         };
+        // W10-I: the smart object whose filter mask edits aim at.
+        w.filter_mask_target = editor
+            .edit_target_filter_mask()
+            .and_then(|_| editor.edit_target().map(|t| t.layer));
         w.status.tool = Some(tool);
         // The brush is [`Editor`]'s. Push it into the options bar every frame
         // so `[` and `]` move the slider the user is looking at — without this
@@ -2217,6 +2252,39 @@ impl Chrome {
                         format!("{:02}", i + 1),
                         font.clone(),
                         style.guide,
+                    );
+                }
+            }
+            // W10-A: the Slice Select tool's view of the committed set: each
+            // slice labelled by its name (not its place in the set), the
+            // picked one — what Delete and Slice Options act on — drawn with
+            // the thick selected-handle stroke.
+            tools::SessionGeometry::SliceSelect {
+                rects,
+                labels,
+                picked,
+            } => {
+                let tokens = design::current_theme(ctx).tokens();
+                let font = design::egui_theme::font_id(tokens, TypeRole::Caption);
+                let pad = Space::XSmall.pt();
+                for (i, r) in rects.iter().enumerate() {
+                    let (a, b) = (to_screen(r[0]), to_screen(r[1]));
+                    if !a.is_finite() || !b.is_finite() {
+                        continue;
+                    }
+                    let rect = egui::Rect::from_two_pos(pos(a), pos(b));
+                    let (stroke, ink) = if *picked == Some(i) {
+                        (style.thick(style.handle_selected), style.handle_selected)
+                    } else {
+                        (style.hairline(style.guide), style.guide)
+                    };
+                    painter.rect_stroke(rect, egui::Rounding::ZERO, stroke);
+                    painter.text(
+                        rect.min + egui::vec2(pad, pad),
+                        egui::Align2::LEFT_TOP,
+                        labels.get(i).cloned().unwrap_or_default(),
+                        font.clone(),
+                        ink,
                     );
                 }
             }
@@ -3628,6 +3696,7 @@ fn is_document_directed(intent: &ui::Intent) -> bool {
             | ui::Intent::SelectLayers { .. }
             | ui::Intent::SetGroupExpanded { .. }
             | ui::Intent::EnterTextLayer { .. }
+            | ui::Intent::InsertGlyph { .. }
             | ui::Intent::SetEditTarget { .. }
             | ui::Intent::HistoryJump(_)
             | ui::Intent::SetZoom(_)

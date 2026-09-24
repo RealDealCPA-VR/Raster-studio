@@ -1631,4 +1631,65 @@ mod tests {
             );
         }
     }
+
+    /// W10-J: Photoshop's remaining chords resolve, through the keymap the
+    /// key handler consults, to their own menu actions and to nothing else:
+    /// Ctrl+H Extras, Alt+Ctrl+T duplicate-and-transform, Shift+[ / Shift+]
+    /// hardness, the ten number keys opacity, Alt+Shift+Ctrl+C Content-Aware
+    /// Scale. The application's own table claims none of them, and plain
+    /// [ / ] and Ctrl+0 / Ctrl+1 keep their meaning.
+    #[test]
+    fn the_w10j_chords_resolve_to_their_menu_actions() {
+        use ui::menu::MenuAction as M;
+        let map = Keymap::default();
+        let shift = |c: char| Chord {
+            ctrl_or_cmd: false,
+            alt: false,
+            shift: true,
+            key: Key::character(c),
+        };
+        let mut expected = vec![
+            (
+                Chord::ctrl(Key::character('h')),
+                M::ToggleView(ui::ViewFlag::Extras),
+            ),
+            (
+                Chord::ctrl_alt(Key::character('t')),
+                M::DuplicateFreeTransform,
+            ),
+            (shift('['), M::BrushHardness(false)),
+            (shift(']'), M::BrushHardness(true)),
+            (
+                Chord::ctrl_alt_shift(Key::character('c')),
+                M::ContentAwareScaleFree,
+            ),
+        ];
+        for digit in 0..=9u8 {
+            expected.push((
+                Chord::plain(Key::character(char::from(b'0' + digit))),
+                M::ToolOpacity(digit),
+            ));
+        }
+        for (chord, action) in expected {
+            assert_eq!(
+                map.resolve(&chord),
+                None,
+                "{chord} is the menu's, not the app's"
+            );
+            assert_eq!(
+                map.resolve_any(&chord),
+                Some(Resolved::Menu(action)),
+                "{chord} does not reach {action:?}"
+            );
+        }
+        assert_eq!(
+            map.resolve(&Chord::plain(Key::character('['))),
+            Some(Action::DecreaseBrushSize)
+        );
+        assert_eq!(
+            map.resolve(&Chord::ctrl(Key::character('0'))),
+            Some(Action::ZoomFit)
+        );
+        assert!(conflicts(&Keymap::defaults()).is_empty());
+    }
 }

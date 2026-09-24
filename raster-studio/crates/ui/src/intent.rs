@@ -184,6 +184,14 @@ pub enum Intent {
     },
     /// Change the unit the rulers and readouts measure in.
     SetRulerUnit(crate::dialogs::units::Unit),
+    /// W10-B: the Glyphs panel picked a character for text layer `layer`.
+    /// The application inserts it at the caret of the live typing session
+    /// when one is open (the draft, not the committed text), and otherwise
+    /// appends it to the layer's text as one undo step.
+    InsertGlyph {
+        layer: LayerId,
+        text: String,
+    },
 }
 
 impl Intent {
@@ -499,8 +507,9 @@ mod tests {
 
     #[test]
     fn every_view_flag_fits_in_the_bit_set() {
-        // A tenth flag is fine; a seventeenth would silently alias.
-        assert!(ViewFlag::ALL.len() <= 16);
+        // W10-J: the set is 32 bits wide now; a thirty-third flag would
+        // silently alias.
+        assert!(ViewFlag::ALL.len() <= 32);
         let mut f = ViewFlags::default();
         for flag in ViewFlag::ALL {
             f.set(*flag, true);

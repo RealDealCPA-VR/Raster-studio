@@ -171,6 +171,11 @@ pub struct ExtrasReport {
     pub smart_guides: usize,
     /// How many layer outlines were painted.
     pub layer_edges: usize,
+    /// W10-J: how many committed slices View > Show > Slices painted.
+    pub slices: usize,
+    /// W10-B: how many note pins were painted (the document's notes, while
+    /// View > Extras is on).
+    pub notes: usize,
     /// The precise-cursor crosshair was painted.
     pub precise_cursor: bool,
     /// A guide drag is in progress.
@@ -286,8 +291,10 @@ impl CanvasExtras {
 
         // ---- grid, pixel grid ----
         let mut grid = workspace.canvas.view.grid;
-        grid.visible = flags.get(ViewFlag::Grid);
-        grid.pixel_grid = flags.get(ViewFlag::PixelGrid);
+        // W10-J: `shows`, not `get`: View > Extras (Ctrl+H) off hides every
+        // extra at once while each keeps its own tick.
+        grid.visible = flags.shows(ViewFlag::Grid);
+        grid.pixel_grid = flags.shows(ViewFlag::PixelGrid);
         if grid.visible || grid.pixel_grid {
             report.grid_suppressed =
                 paint::grid(&painter, &camera, &viewport, &grid, canvas, &style);
@@ -307,7 +314,7 @@ impl CanvasExtras {
             // the guide's here exactly when it would be there.
             grab_pt: ui::canvas::GUIDE_GRAB_PT,
         };
-        if flags.get(ViewFlag::Guides) {
+        if flags.shows(ViewFlag::Guides) {
             // View > Guides *is* the visibility switch here, as it is in the
             // `ui` host (`Workspace::sync_canvas_view` writes the flag over
             // `guides.visible`). The document's own `visible` is persisted
@@ -348,21 +355,56 @@ impl CanvasExtras {
         report.dragging_guide = self.guide_drag.is_some();
 
         // ---- smart guides ----
-        if flags.get(ViewFlag::SmartGuides) && !modal_open {
+        let slices = tool_input::committed_slices(editor);
+        if flags.shows(ViewFlag::SmartGuides) && !modal_open {
             let policy = SnapPolicy::from_view_flags(flags);
             let moving = match workspace.canvas.sessions.transform.as_ref() {
                 Some((state, _)) => Some(state.corners),
-                None => self.move_drag(ctx, editor, doc, policy),
+                None => self.move_drag(ctx, editor, doc, &slices, policy),
             };
             if let Some(corners) = moving {
-                let hits = smart_guide_hits(doc, &corners, policy);
+                let hits = smart_guide_hits(doc, &slices, &corners, policy);
                 paint::smart_guides(&painter, &camera, &viewport, &hits, &style);
                 report.smart_guides = hits.len();
             }
         }
 
+        // ---- slices (W10-J: View > Show > Slices) ----
+        if flags.shows(ViewFlag::Slices) && !slices.is_empty() {
+            // W10-A: each slice labelled by its name, as the export names it.
+            let labels: Vec<String> = editor
+                .slices
+                .options(doc.id())
+                .iter()
+                .map(|o| tools::slice_select::slice_label(&o.name))
+                .collect();
+            report.slices = paint_slices(
+                ctx,
+                &painter,
+                (&camera, &viewport),
+                &slices,
+                &labels,
+                &style,
+            );
+        }
+
+        // ---- note pins (W10-B) ----
+        // A note is annotation over the image, never in it: drawn here, on
+        // the overlay, and read by no compositor or exporter. View > Extras
+        // (Ctrl+H) hides the pins with every other extra.
+        if flags.get(ViewFlag::Extras) && !doc.document.extras.notes.is_empty() {
+            report.notes = paint_notes(
+                ctx,
+                &painter,
+                &camera,
+                &viewport,
+                &doc.document.extras.notes,
+                &style,
+            );
+        }
+
         // ---- layer edges ----
-        if flags.get(ViewFlag::LayerEdges) {
+        if flags.shows(ViewFlag::LayerEdges) {
             let edges: Vec<DocRect> = doc
                 .document
                 .active_layer()
@@ -508,6 +550,7 @@ impl CanvasExtras {
         ctx: &egui::Context,
         editor: &Editor,
         doc: &OpenDocument,
+        slices: &[raster::PixelRect],
         policy: SnapPolicy,
     ) -> Option<[Vec2; 4]> {
         if !self.canvas_press || self.guide_drag.is_some() || editor.tool() != tools::ToolId::Move {
@@ -537,7 +580,7 @@ impl CanvasExtras {
         let to_doc = |p: egui::Pos2| {
             crate::interaction_geometry::screen_to_document(&camera, &viewport, from_pos2(p) * ppp)
         };
-        move_drag_corners(doc, base, to_doc(origin), to_doc(now), policy)
+        move_drag_corners(doc, slices, base, to_doc(origin), to_doc(now), policy)
     }
 
     /// The active layer's tight bounds in document space, from the cache when
@@ -687,6 +730,7 @@ fn ruler_dpi(resolution_ppi: f32) -> f32 {
 /// release commits. `None` for a non-finite pointer.
 pub(crate) fn move_drag_corners(
     doc: &OpenDocument,
+    slices: &[raster::PixelRect],
     base: raster::PixelRect,
     start: Vec2,
     now: Vec2,
@@ -702,12 +746,101 @@ pub(crate) fn move_drag_corners(
         &doc.tiles,
         doc.camera.zoom,
         &selected,
+        slices,
         policy,
     );
     let d = tools::snap_delta(base, delta, &candidates, threshold);
     let min = Vec2::new(base.x as f32, base.y as f32) + d;
     let max = min + Vec2::new(base.width as f32, base.height as f32);
     Some([min, Vec2::new(max.x, min.y), max, Vec2::new(min.x, max.y)])
+}
+
+/// W10-J: View > Show > Slices: each committed slice's outline, projected
+/// corner by corner so a turned view tilts it with the image, labelled with
+/// `labels` (W10-A: the slice's own name, as Slice Select and the export
+/// name it; its place in the set only when it has no label). Returns how
+/// many were drawn.
+fn paint_slices(
+    ctx: &egui::Context,
+    painter: &egui::Painter,
+    (camera, viewport): (&ui::canvas::CanvasCamera, &ui::canvas::Viewport),
+    slices: &[raster::PixelRect],
+    labels: &[String],
+    style: &CanvasStyle,
+) -> usize {
+    let tokens = design::current_theme(ctx).tokens();
+    let font = design::egui_theme::font_id(tokens, design::TypeRole::Caption);
+    let stroke = style.hairline(style.guide);
+    let pad = Space::XSmall.pt();
+    let mut drawn = 0;
+    for (i, r) in slices.iter().enumerate() {
+        let rect = DocRect::of_pixel_rect(*r);
+        if rect.is_empty() {
+            continue;
+        }
+        let quad: Vec<egui::Pos2> = rect
+            .corners()
+            .iter()
+            .map(|c| to_pos2(camera.screen_pt_of(viewport, *c)))
+            .collect();
+        if quad.iter().any(|p| p.any_nan()) {
+            continue;
+        }
+        let label_at = quad[0] + egui::vec2(pad, pad);
+        painter.add(egui::Shape::closed_line(quad, stroke));
+        painter.text(
+            label_at,
+            egui::Align2::LEFT_TOP,
+            labels
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| format!("{:02}", i + 1)),
+            font.clone(),
+            style.guide,
+        );
+        drawn += 1;
+    }
+    drawn
+}
+
+/// W10-B: a pin at each note's document position — a filled disc in the
+/// handle colours, numbered in the Notes panel's order — projected through
+/// the camera so it rides the image through pan, zoom and a turned view.
+/// Returns how many were drawn.
+fn paint_notes(
+    ctx: &egui::Context,
+    painter: &egui::Painter,
+    camera: &ui::canvas::CanvasCamera,
+    viewport: &ui::canvas::Viewport,
+    notes: &[layer_model::Note],
+    style: &CanvasStyle,
+) -> usize {
+    let tokens = design::current_theme(ctx).tokens();
+    let font = design::egui_theme::font_id(tokens, design::TypeRole::Caption);
+    let radius = Space::Small.pt() * 0.5;
+    let pad = Space::XSmall.pt();
+    let mut drawn = 0;
+    for (i, note) in notes.iter().enumerate() {
+        let at = to_pos2(camera.screen_pt_of(viewport, Vec2::new(note.x, note.y)));
+        if at.any_nan() {
+            continue;
+        }
+        painter.circle(
+            at,
+            radius,
+            style.handle_selected,
+            style.hairline(style.handle_stroke),
+        );
+        painter.text(
+            at + egui::vec2(radius + pad, -radius - pad),
+            egui::Align2::LEFT_BOTTOM,
+            format!("{}", i + 1),
+            font.clone(),
+            style.handle_selected,
+        );
+        drawn += 1;
+    }
+    drawn
 }
 
 /// The smart guides a moving box has caught on.
@@ -719,7 +852,12 @@ pub(crate) fn move_drag_corners(
 /// [`ui::canvas::SnapKind::shows_smart_guide`] says draw a line are kept: a
 /// canvas edge is already the document border, and grid lines are already on
 /// screen.
-fn smart_guide_hits(doc: &OpenDocument, corners: &[Vec2; 4], policy: SnapPolicy) -> Vec<SnapHit> {
+fn smart_guide_hits(
+    doc: &OpenDocument,
+    slices: &[raster::PixelRect],
+    corners: &[Vec2; 4],
+    policy: SnapPolicy,
+) -> Vec<SnapHit> {
     if !policy.enabled {
         return Vec::new();
     }
@@ -729,6 +867,7 @@ fn smart_guide_hits(doc: &OpenDocument, corners: &[Vec2; 4], policy: SnapPolicy)
         &doc.tiles,
         doc.camera.zoom,
         &selected,
+        slices,
         policy,
     );
     let tolerance = 0.5 / doc.camera.zoom.max(0.05);
@@ -1059,5 +1198,154 @@ mod tests {
                 .is_none(),
             "the menu closed after the choice"
         );
+    }
+
+    /// W10-J: the menu row Ctrl+H reaches, resolved and emitted as a click
+    /// is.
+    fn pick(rig: &mut Rig, action: ui::menu::MenuAction) {
+        let context = crate::menu_bridge::context(&mut rig.editor, rig.chrome.workspace());
+        let intent = crate::menu_bridge::resolve_intent(action, &context, &rig.editor)
+            .unwrap_or_else(|e| panic!("{action:?} is greyed: {e}"));
+        rig.chrome.emit(intent);
+        let _ = rig.step(Vec::new());
+    }
+
+    /// W10-B: the document's notes are pinned on the canvas — one disc per
+    /// note at its document position through the camera (two notes six
+    /// pixels apart at 400% land 24 points apart) — and View > Extras takes
+    /// them down with every other extra.
+    #[test]
+    fn notes_are_pinned_on_the_canvas_at_their_document_positions() {
+        use ui::menu::MenuAction;
+        use ui::ViewFlag;
+        let mut rig = rig(ToolId::Move);
+        for (x, y) in [(1.0, 1.0), (7.0, 7.0)] {
+            let doc = &rig.editor.active().unwrap().document;
+            let (command, _) = editor_core::extras::add_note(doc, x, y, "", "Check");
+            rig.editor.apply_command(command);
+        }
+        let _ = rig.step(Vec::new());
+        let full = rig.step(Vec::new());
+        assert_eq!(rig.chrome.extras_report().notes, 2);
+        let pin = ui::canvas::CanvasStyle::from_context(&rig.ctx).handle_selected;
+        let centres: Vec<egui::Pos2> = full
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Circle(circle) if circle.fill == pin => Some(circle.center),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(centres.len(), 2, "one pin per note: {centres:?}");
+        let d = centres[1] - centres[0];
+        assert!(
+            (d.x - 6.0 * ZOOM).abs() < 0.01 && (d.y - 6.0 * ZOOM).abs() < 0.01,
+            "the pins are not where the notes are: {centres:?}"
+        );
+
+        pick(&mut rig, MenuAction::ToggleView(ViewFlag::Extras));
+        let _ = rig.step(Vec::new());
+        assert_eq!(rig.chrome.extras_report().notes, 0, "Extras off hides them");
+    }
+
+    /// W10-J: View > Show > Slices paints the committed slices, and View >
+    /// Extras (Ctrl+H) takes the grid, the guides, the layer edges and the
+    /// slices down at once — each keeping its own tick, so a second Ctrl+H
+    /// brings back exactly what was showing.
+    #[test]
+    fn extras_hides_every_overlay_at_once_and_slices_show_the_committed_set() {
+        use ui::menu::MenuAction;
+        use ui::ViewFlag;
+        let mut rig = rig(ToolId::Brush);
+        let id = rig.editor.active().unwrap().id();
+        rig.editor
+            .slices
+            .remember(id, vec![raster::PixelRect::new(1, 1, 3, 3)]);
+        rig.editor.active_mut().unwrap().document.guides.list = vec![editor_core::Guide {
+            axis: editor_core::GuideAxis::Vertical,
+            doc: 2.0,
+            locked: false,
+        }];
+        rig.chrome.emit(ui::Intent::SetViewFlag {
+            flag: ViewFlag::Grid,
+            on: true,
+        });
+        let _ = rig.step(Vec::new());
+        let _ = rig.step(Vec::new());
+        let shown = rig.chrome.extras_report();
+        assert_eq!(shown.slices, 1, "the committed slice is painted: {shown:?}");
+        assert_eq!(shown.guides, 1, "{shown:?}");
+        assert!(shown.grid, "{shown:?}");
+        assert_eq!(shown.layer_edges, 1, "{shown:?}");
+
+        // The chord is the menu row's.
+        let chord = crate::keymap::Chord::ctrl(crate::keymap::Key::character('h'));
+        assert_eq!(
+            crate::keymap::Keymap::default().resolve_any(&chord),
+            Some(crate::keymap::Resolved::Menu(MenuAction::ToggleView(
+                ViewFlag::Extras
+            )))
+        );
+        pick(&mut rig, MenuAction::ToggleView(ViewFlag::Extras));
+        let _ = rig.step(Vec::new());
+        let hidden = rig.chrome.extras_report();
+        assert_eq!(
+            (
+                hidden.slices,
+                hidden.guides,
+                hidden.grid,
+                hidden.layer_edges
+            ),
+            (0, 0, false, 0),
+            "Extras off hides them all: {hidden:?}"
+        );
+        let flags = rig.chrome.workspace().view_flags;
+        assert!(flags.get(ViewFlag::Grid) && flags.get(ViewFlag::Guides));
+        assert!(!flags.get(ViewFlag::Extras));
+
+        pick(&mut rig, MenuAction::ToggleView(ViewFlag::Extras));
+        let _ = rig.step(Vec::new());
+        let back = rig.chrome.extras_report();
+        assert_eq!((back.slices, back.guides, back.grid), (1, 1, true));
+
+        // View > Show > Slices on its own.
+        pick(&mut rig, MenuAction::ToggleView(ViewFlag::Slices));
+        let _ = rig.step(Vec::new());
+        assert_eq!(rig.chrome.extras_report().slices, 0, "Slices unticked");
+        assert_eq!(rig.chrome.extras_report().guides, 1, "the rest stay");
+    }
+
+    /// W10-J round 2: View > Extras (Ctrl+H) also takes down the marching
+    /// ants the shell strokes (`Chrome::selection_ants`, what
+    /// `Shell::redraw` calls), with View > Selection Edges still ticked, and
+    /// a second Ctrl+H brings them back.
+    #[test]
+    fn extras_off_hides_the_marching_ants_the_shell_draws() {
+        use ui::menu::MenuAction;
+        use ui::ViewFlag;
+        let mut rig = rig(ToolId::Brush);
+        rig.editor.active_mut().unwrap().document.selection = editor_core::Selection::Rect {
+            min: glam::IVec2::new(1, 1),
+            max: glam::IVec2::new(6, 6),
+        };
+        let _ = rig.step(Vec::new());
+        let ants = |rig: &Rig| {
+            let doc = rig.editor.active().unwrap();
+            let mut outline = crate::presenter::SelectionOutline::new();
+            rig.chrome
+                .selection_ants(&mut outline, doc, 0.0, &Default::default())
+        };
+        assert!(!ants(&rig).is_empty(), "precondition: the ants are drawn");
+
+        pick(&mut rig, MenuAction::ToggleView(ViewFlag::Extras));
+        let _ = rig.step(Vec::new());
+        let flags = rig.chrome.workspace().view_flags;
+        assert!(flags.get(ViewFlag::SelectionEdges), "its own tick stays");
+        assert!(!rig.chrome.selection_edges_visible());
+        assert!(ants(&rig).is_empty(), "Extras off still drew the ants");
+
+        pick(&mut rig, MenuAction::ToggleView(ViewFlag::Extras));
+        let _ = rig.step(Vec::new());
+        assert!(!ants(&rig).is_empty(), "Extras back on, the ants are back");
     }
 }

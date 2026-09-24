@@ -309,6 +309,10 @@ pub struct Preferences {
     /// W4-I: the Brushes panel's presets, on the same terms as `swatches`.
     #[serde(deserialize_with = "lenient")]
     pub brush_presets: Option<Vec<SavedBrushPreset>>,
+    /// W10-B: the Tool Presets panel's presets (a tool with the options the
+    /// user set on it), on the same terms as `brush_presets`.
+    #[serde(deserialize_with = "lenient")]
+    pub tool_presets: Option<Vec<ui::panels::tool_presets::SavedToolPreset>>,
 }
 
 /// W4-I: read an optional list, answering `None` for anything malformed —
@@ -352,6 +356,7 @@ impl Default for Preferences {
             scroll_wheel_zooms: true,
             swatches: None,
             brush_presets: None,
+            tool_presets: None,
         }
     }
 }
@@ -402,6 +407,10 @@ impl Preferences {
         }
         if let Some(list) = &mut self.brush_presets {
             list.retain(|p| p.settings.size.is_finite() && p.settings.hardness.is_finite());
+        }
+        // W10-B: the same for a tool preset's option values.
+        if let Some(list) = &mut self.tool_presets {
+            list.retain(|p| p.is_finite());
         }
         self
     }
@@ -455,6 +464,16 @@ impl Preferences {
             }
         } else if self.brush_presets.as_ref() != Some(&live) {
             self.brush_presets = Some(live);
+            changed = true;
+        }
+        // W10-B: the Tool Presets panel, on the same terms.
+        let live = w.tool_presets.saved();
+        if w.tool_presets.edits() == 0 {
+            if let Some(saved) = self.tool_presets.as_ref().filter(|s| **s != live) {
+                w.tool_presets.restore_saved(saved);
+            }
+        } else if self.tool_presets.as_ref() != Some(&live) {
+            self.tool_presets = Some(live);
             changed = true;
         }
         changed
@@ -543,6 +562,15 @@ mod tests {
                 name: "Mine".to_string(),
                 settings: tools::BrushSettings::default(),
             }]),
+            tool_presets: Some(vec![ui::panels::tool_presets::SavedToolPreset {
+                name: "Big Brush".to_string(),
+                tool: "Brush".to_string(),
+                values: vec![(
+                    "size".to_string(),
+                    ui::panels::tool_presets::SavedValue::Float(80.0),
+                )],
+                gradient: None,
+            }]),
         };
 
         prefs.save(&paths.preferences_file()).unwrap();
@@ -585,6 +613,54 @@ mod tests {
         assert!(fresh.brushes.presets().iter().any(|p| p.name == "My Brush"));
         assert_eq!(fresh.swatches.len(), w.swatches.len());
         assert_eq!(fresh.brushes.len(), w.brushes.len());
+    }
+
+    /// W10-B: a tool preset saved in the Tool Presets panel reaches the
+    /// preferences file, and a fresh start over the reloaded file shows it
+    /// and applies it: the tool comes back with the options it was saved
+    /// with.
+    #[test]
+    fn a_tool_preset_survives_a_prefs_save_and_load_and_applies() {
+        use ui::panels::tool_presets::{ToolPreset, ToolPresetsState};
+        let dir = tmp();
+        let path = dir.path().join("preferences.json");
+        let mut prefs = Preferences::default();
+        let mut w = ui::Workspace::new();
+        assert!(!prefs.sync_panel_presets(&mut w));
+        assert_eq!(
+            prefs.tool_presets, None,
+            "an untouched panel writes nothing"
+        );
+
+        let tool = tools::ToolId::Brush;
+        assert!(w.options.set(tool, "size", ui::OptionValue::Float(77.0)));
+        let preset = ToolPreset::capture("Wide", tool, &w.options);
+        w.tool_presets.add(preset);
+        assert!(prefs.sync_panel_presets(&mut w), "the edit must be written");
+        prefs.save(&path).unwrap();
+
+        let mut back = Preferences::load(&path);
+        let mut fresh = ui::Workspace::new();
+        assert!(fresh.tool_presets.presets().is_empty());
+        assert!(
+            !back.sync_panel_presets(&mut fresh),
+            "a load writes nothing"
+        );
+        assert_eq!(
+            fresh.tool_presets.presets(),
+            w.tool_presets.presets(),
+            "the preset did not survive the restart"
+        );
+        assert_ne!(
+            fresh.options.get(tool, "size"),
+            Some(ui::OptionValue::Float(77.0))
+        );
+        assert!(ToolPresetsState::apply(&mut fresh, 0));
+        assert_eq!(
+            fresh.options.get(tool, "size"),
+            Some(ui::OptionValue::Float(77.0)),
+            "the reloaded preset restores the option"
+        );
     }
 
     /// W4-I: a brush preset this build cannot read drops the list, not the

@@ -1471,6 +1471,8 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
         let rect = out.rect();
         let needed = Tile::byte_len(PixelFormat::Rgba8);
         let deep_len = Tile::byte_len(PixelFormat::Rgba16);
+        // W10-H: a 32-bit document's `f32` tile (`raster::depth32`).
+        let float_len = Tile::byte_len(PixelFormat::RgbaF32);
         for coord in tile_coords_for(rect, self.level) {
             let Some(hash) = map.get(coord) else { continue };
             let Some(data) = self.source.tile(hash) else {
@@ -1480,6 +1482,7 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
                 continue;
             }
             let deep = data.len() == deep_len;
+            let float = data.len() == float_len;
             let (ox, oy) = coord.pixel_origin();
             let x0 = rect.x.max(ox);
             let x1 = rect.right().min(ox + TILE_SIZE as i64);
@@ -1488,7 +1491,24 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             for y in y0..y1 {
                 for x in x0..x1 {
                     let p = ((y - oy) as usize) * TILE_SIZE as usize + (x - ox) as usize;
-                    let (a, lin) = if deep {
+                    let (a, lin) = if float {
+                        // W10-H: read at full `f32` precision; colour above
+                        // 1.0 (HDR) is kept, alpha is clipped into 0..=1.
+                        let s = p * 16;
+                        let ch = |k: usize| {
+                            let q = &data[s + 4 * k..s + 4 * k + 4];
+                            let v = f32::from_ne_bytes([q[0], q[1], q[2], q[3]]);
+                            if v.is_finite() {
+                                v
+                            } else {
+                                0.0
+                            }
+                        };
+                        (
+                            ch(3).clamp(0.0, 1.0),
+                            to_linear(&self.space, [ch(0), ch(1), ch(2)]),
+                        )
+                    } else if deep {
                         let s = p * 8;
                         let ch =
                             |k: usize| u16::from_ne_bytes([data[s + 2 * k], data[s + 2 * k + 1]]);
@@ -1649,6 +1669,12 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
                 // so its whole tile map keys each tile it touches.
                 LayerKind::SmartObject(so) if crate::smart::renders_filtered(&so.filters) => {
                     self.hash_whole_map(PixelKey::Layer(id), h);
+                    // W10-I: the filter mask weighs every filtered pixel.
+                    let mask = so.active_filter_mask();
+                    crate::smart::hash_filter_mask(mask, h);
+                    if let Some(m) = mask {
+                        self.hash_whole_map(PixelKey::Mask(m.id), h);
+                    }
                 }
                 LayerKind::Raster(_) | LayerKind::Generator(_) | LayerKind::SmartObject(_) => {
                     self.hash_tiles(PixelKey::Layer(id), content_rect, h);
@@ -1740,12 +1766,27 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
         self.space.name().hash(&mut h);
         self.hash_whole_map(PixelKey::Layer(layer.id), &mut h);
         crate::smart::hash_stack(stack, &mut h);
+        // W10-I: the shared filter mask, in the object's layer space — the
+        // space the source tiles (and so `extent`) are in.
+        let filter_mask = match &layer.kind {
+            LayerKind::SmartObject(so) => so.active_filter_mask(),
+            _ => None,
+        };
+        crate::smart::hash_filter_mask(filter_mask, &mut h);
+        if let Some(m) = filter_mask {
+            self.hash_whole_map(PixelKey::Mask(m.id), &mut h);
+        }
         let key = h.finish();
         Some(crate::smart::cached_or(key, || {
             match Canvas::transparent(extent) {
                 Ok(mut src) => {
                     self.fill_layer(layer.id, &mut src);
-                    crate::smart::apply_stack(&src, stack, runner)
+                    let coverage = filter_mask.map(|m| {
+                        let mut raw = vec![0.0f32; src.pixels().len()];
+                        self.fill_mask(m.id, extent, &mut raw);
+                        raw.into_iter().map(|v| m.coverage(v)).collect::<Vec<f32>>()
+                    });
+                    crate::smart::apply_stack_masked(&src, stack, runner, coverage.as_deref())
                 }
                 // `Canvas::area` accepted the extent above; an allocation
                 // refused anyway leaves the object empty for this frame.
@@ -2335,6 +2376,8 @@ fn hash_layer_props(layer: &Layer, adjustment: Option<u64>, h: &mut DefaultHashe
             // switching its last filter off serves the unfiltered tiles again.
             if layer_model::stack_is_active(&s.filters) {
                 crate::smart::hash_stack(&s.filters, h);
+                // W10-I: and so does the filters' shared mask.
+                crate::smart::hash_filter_mask(s.active_filter_mask(), h);
             }
         }
         LayerKind::Generator(g) => {

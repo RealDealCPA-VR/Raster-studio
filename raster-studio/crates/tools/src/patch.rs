@@ -297,6 +297,9 @@ impl ColorPatch {
                 None => {}
                 Some(n) if n == rgba8 => {}
                 Some(n) if n == rgba16 => sixteen = true,
+                // W10-H: a 32-bit document's f32 tile is read (clipped) at
+                // 16 bits; the shell lands the 16-bit result back as f32.
+                Some(n) if n == raster::depth32::RGBAF32_TILE_BYTES => sixteen = true,
                 Some(got) => {
                     return Err(ToolError::Tile(raster::TileError::BadLength {
                         expected: rgba8,

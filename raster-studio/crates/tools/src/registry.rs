@@ -807,6 +807,17 @@ const TOOLS: &[ToolInfo] = &[
         Some('i'),
         &[],
     ),
+    // W10-B: after the Ruler in the Eyedropper slot, as in Photoshop.
+    t(
+        ToolId::Note,
+        "Note",
+        ToolGroup::Crop,
+        Some("eyedropper"),
+        "note",
+        Cursor::Crosshair,
+        Some('i'),
+        &[],
+    ),
     t(
         ToolId::SpotHealing,
         "Spot Healing Brush",
@@ -1413,7 +1424,12 @@ const TOOLS: &[ToolInfo] = &[
         shape_opts!(
             f("turns", "Turns", 0.25, 50.0, 3.0),
             f("inner_radius", "Inner Radius", 0.0, 0.95, 0.1),
-            c("direction", "Direction", crate::shape::SPIRAL_DIRECTION_CHOICES, 0),
+            c(
+                "direction",
+                "Direction",
+                crate::shape::SPIRAL_DIRECTION_CHOICES,
+                0
+            ),
         ),
     ),
     t(
@@ -1463,12 +1479,9 @@ const TOOLS: &[ToolInfo] = &[
         // geometry keys apply together on an edit-counter change
         // (`crate::transform::TransformTool::apply_pending_numeric`).
         &[
-            c(
-                "mode",
-                "Mode",
-                &["Scale", "Rotate", "Skew", "Distort", "Perspective", "Warp"],
-                0,
-            ),
+            // W10-J: Content-Aware is the seventh mode (Edit > Content-Aware
+            // Scale), labelled from `TransformMode::LABELS`.
+            c("mode", "Mode", crate::transform::TransformMode::LABELS, 0),
             c(
                 crate::transform::keys::REFERENCE,
                 "Reference",
@@ -1508,6 +1521,14 @@ const TOOLS: &[ToolInfo] = &[
                 0,
             ),
             f(crate::transform::keys::BEND, "Bend", -100.0, 100.0, 50.0),
+            // W10-J: Content-Aware Scale's Amount (the Content-Aware mode).
+            f(
+                crate::transform::keys::CA_AMOUNT,
+                "Amount",
+                0.0,
+                100.0,
+                100.0,
+            ),
             i(crate::transform::keys::NUMERIC_SEQ, "Edit", 0, i32::MAX, 0),
         ],
     ),
@@ -1748,6 +1769,8 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
             Box::new(crate::content_aware_move::ContentAwareMoveTool::default())
         }
         ToolId::SliceSelect => Box::new(crate::slice_select::SliceSelectTool::default()),
+        // W10-B.
+        ToolId::Note => Box::new(crate::note::NoteTool::default()),
         ToolId::Spiral => Box::new(ShapeTool::new(
             ShapeKind::Spiral {
                 turns: 3.0,
@@ -1951,7 +1974,12 @@ mod tests {
         // History Brush in a slot of its own.
         assert_eq!(
             mates("eyedropper"),
-            vec![ToolId::Eyedropper, ToolId::ColorSampler, ToolId::Ruler]
+            vec![
+                ToolId::Eyedropper,
+                ToolId::ColorSampler,
+                ToolId::Ruler,
+                ToolId::Note
+            ]
         );
         assert_eq!(
             mates("clone"),

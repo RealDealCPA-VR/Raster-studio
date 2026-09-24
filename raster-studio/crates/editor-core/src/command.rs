@@ -132,6 +132,10 @@ pub struct LayerPatch {
     /// it here would set the size of every `Command`, including the ones a
     /// brush stroke emits by the hundred. `Box<T>` serializes exactly like `T`.
     pub effects: Option<Box<LayerEffects>>,
+    /// W10-A: the layer's link group ([`layer_model::Layer::link_group`]):
+    /// set to join a group, cleared to leave it. Appended; a patch written
+    /// before it existed reads as `Keep`.
+    pub link_group: Patch<u64>,
 }
 
 impl LayerPatch {
@@ -193,6 +197,7 @@ impl LayerPatch {
             transform,
             mask,
             effects,
+            link_group,
         } = self;
         name.is_some()
             || visible.is_some()
@@ -204,6 +209,7 @@ impl LayerPatch {
             || transform.is_some()
             || !mask.is_keep()
             || effects.is_some()
+            || !link_group.is_keep()
     }
 }
 
@@ -537,6 +543,19 @@ pub enum Command {
         /// layer-style block per layer.
         extras: Box<layer_model::DocumentExtras>,
     },
+    /// W10-B: replace the saved selection (alpha channel) at `index` with
+    /// `name` and `selection`. The inverse carries the previous entry, so
+    /// closing an alpha channel after editing it is undoable. The saved
+    /// selections are records, not pixels: it dirties nothing.
+    ///
+    /// # Wire format
+    ///
+    /// Appended after every other variant and purely additive.
+    SetSavedSelection {
+        index: usize,
+        name: String,
+        selection: crate::selection::Selection,
+    },
 }
 
 /// The class of a layer kind, as a word an error message can use.
@@ -606,7 +625,7 @@ pub enum CommandError {
     #[error("fill value does not match its target's storage format")]
     FillValueMismatch,
     /// A [`Command::SetMetaBitDepth`] named a depth the tile store does not
-    /// hold (only 8 and 16 bits per channel exist).
+    /// hold (only 8, 16 and 32 bits per channel exist).
     #[error("{0} bits per channel is not a depth this build stores")]
     UnsupportedBitDepth(u8),
     /// A [`Command::SetMetaColorMode`] (or a conversion) named a colour mode
@@ -662,6 +681,9 @@ pub enum CommandError {
         cause: Box<CommandError>,
         rollback: Box<CommandError>,
     },
+    /// W10-B: [`Command::SetSavedSelection`] named a slot that does not exist.
+    #[error("there is no saved selection at index {0}")]
+    NoSavedSelection(usize),
 }
 
 impl Command {
@@ -738,7 +760,7 @@ impl Command {
         rect: PixelRect,
         edges: impl IntoIterator<Item = TileEdit>,
     ) -> Result<Self, CommandError> {
-        if let PixelTarget::Mask(id) = target {
+        if let PixelTarget::Mask(id) | PixelTarget::FilterMask(id) = target {
             return Err(CommandError::CannotClearMask(id));
         }
         let delta = region_delta(rect, edges, |_| None)?;
@@ -796,9 +818,9 @@ impl Command {
             }
 
             Command::SetMetaBitDepth { from, to } => {
-                // Journals are untrusted input: only the two depths the tile
-                // store holds are accepted.
-                if !matches!(*to, 8 | 16) {
+                // Journals are untrusted input: only the depths the tile
+                // store holds are accepted (W10-H: 32 is `f32` tiles).
+                if !matches!(*to, 8 | 16 | 32) {
                     return Err(CommandError::UnsupportedBitDepth(*to));
                 }
                 doc.meta.bit_depth = *to;
@@ -958,6 +980,16 @@ impl Command {
                     inverse.effects = Some(Box::new(layer.effects.clone()));
                     layer.effects = v.as_ref().clone();
                 }
+                // W10-A.
+                match patch.link_group {
+                    Patch::Keep => {}
+                    Patch::Set(g) => {
+                        inverse.link_group = Patch::restoring(layer.link_group.replace(g));
+                    }
+                    Patch::Clear => {
+                        inverse.link_group = Patch::restoring(layer.link_group.take());
+                    }
+                }
                 Ok(Command::SetLayerProperties {
                     layer_id: *layer_id,
                     patch: inverse,
@@ -1095,7 +1127,7 @@ impl Command {
                 rect,
                 delta,
             } => {
-                if let PixelTarget::Mask(id) = target {
+                if let PixelTarget::Mask(id) | PixelTarget::FilterMask(id) = target {
                     return Err(CommandError::CannotClearMask(*id));
                 }
                 let key = resolve_target(doc, *target)?;
@@ -1238,6 +1270,23 @@ impl Command {
                     extras: Box::new(previous),
                 })
             }
+
+            Command::SetSavedSelection {
+                index,
+                name,
+                selection,
+            } => {
+                let slot = doc
+                    .saved_selections
+                    .get_mut(*index)
+                    .ok_or(CommandError::NoSavedSelection(*index))?;
+                let previous = std::mem::replace(slot, (name.clone(), selection.clone()));
+                Ok(Command::SetSavedSelection {
+                    index: *index,
+                    name: previous.0,
+                    selection: previous.1,
+                })
+            }
         }
     }
 
@@ -1272,10 +1321,12 @@ impl Command {
             Command::PaintTiles { target, .. } => match target {
                 PixelTarget::Layer(_) => "Paint".into(),
                 PixelTarget::Mask(_) => "Paint Mask".into(),
+                PixelTarget::FilterMask(_) => "Paint Filter Mask".into(),
             },
             Command::FillRegion { target, .. } => match target {
                 PixelTarget::Layer(_) => "Fill".into(),
                 PixelTarget::Mask(_) => "Fill Mask".into(),
+                PixelTarget::FilterMask(_) => "Fill Filter Mask".into(),
             },
             Command::ClearRegion { .. } => "Clear".into(),
             Command::SetCanvasSize { .. } => "Resize Canvas".into(),
@@ -1285,6 +1336,7 @@ impl Command {
             Command::ReplaceAssetSource { .. } => "Replace Contents".into(),
             Command::Transaction { label, .. } => label.clone(),
             Command::SetDocumentExtras { .. } => "Edit Document Records".into(),
+            Command::SetSavedSelection { .. } => "Edit Saved Selection".into(),
         }
     }
 }
@@ -1374,6 +1426,21 @@ pub fn resolve_pixel_key(doc: &Document, target: PixelTarget) -> Result<PixelKey
                 .map(PixelKey::Mask)
                 .ok_or(CommandError::NoMask(id))
         }
+        PixelTarget::FilterMask(id) => filter_mask_key(doc, id),
+    }
+}
+
+/// W10-I: the store key of a smart object's filter mask, or
+/// [`CommandError::NoMask`] when `id` is not a smart object carrying one.
+fn filter_mask_key(doc: &Document, id: LayerId) -> Result<PixelKey, CommandError> {
+    let layer = doc.layers.get(id).ok_or(CommandError::LayerNotFound(id))?;
+    match &layer.kind {
+        LayerKind::SmartObject(so) => so
+            .filter_mask
+            .as_ref()
+            .map(|m| PixelKey::Mask(m.id))
+            .ok_or(CommandError::NoMask(id)),
+        _ => Err(CommandError::NoMask(id)),
     }
 }
 
@@ -1409,6 +1476,15 @@ pub fn resolve_target(doc: &Document, target: PixelTarget) -> Result<PixelKey, C
                 .mask_id()
                 .map(PixelKey::Mask)
                 .ok_or(CommandError::NoMask(id))
+        }
+        // W10-I: the filter mask follows the layer mask's lock rule — only
+        // the blanket lock stops it.
+        PixelTarget::FilterMask(id) => {
+            let layer = doc.layers.get(id).ok_or(CommandError::LayerNotFound(id))?;
+            if layer.locked.all {
+                return Err(CommandError::LayerLocked(id));
+            }
+            filter_mask_key(doc, id)
         }
     }
 }
@@ -1530,6 +1606,9 @@ impl DirtyReach {
         let (layer, mask) = match target {
             PixelTarget::Layer(id) => (id, false),
             PixelTarget::Mask(id) => (id, true),
+            // W10-I: a filter mask re-weights a whole filtered extent (a
+            // blur reads across tiles), so its reach is everything.
+            PixelTarget::FilterMask(_) => return Self::everything(),
         };
         let mut set = BTreeSet::new();
         for c in coords {
@@ -1613,7 +1692,8 @@ impl Command {
             | Command::SetAssetSourceSize { .. }
             | Command::ReplaceAssetSource { .. }
             // W10-B: comps, notes and styles are records, not pixels.
-            | Command::SetDocumentExtras { .. } => DirtyReach::nothing(),
+            | Command::SetDocumentExtras { .. }
+            | Command::SetSavedSelection { .. } => DirtyReach::nothing(),
             // One layer's whole extent, before and after. A create has no
             // "before" and a delete has no "after"; the shell's two-sided
             // query handles both by finding the layer missing on one side.
@@ -1645,6 +1725,44 @@ impl Command {
 
 #[cfg(test)]
 mod tests {
+
+    /// W10-B: SetSavedSelection replaces one saved-selection slot and its
+    /// inverse restores the previous entry exactly; a missing slot refuses.
+    #[test]
+    fn set_saved_selection_replaces_a_slot_and_undoes_exactly() {
+        use crate::selection::Selection;
+        let mut doc = Document::new(64, 64, "t");
+        let before = Selection::Rect {
+            min: glam::IVec2::new(1, 1),
+            max: glam::IVec2::new(5, 5),
+        };
+        doc.saved_selections
+            .push(("Alpha 1".to_string(), before.clone()));
+        let after = Selection::Rect {
+            min: glam::IVec2::new(10, 10),
+            max: glam::IVec2::new(20, 20),
+        };
+        let inverse = Command::SetSavedSelection {
+            index: 0,
+            name: "Alpha 1".to_string(),
+            selection: after.clone(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(doc.saved_selections[0].1, after);
+        inverse.apply(&mut doc).unwrap();
+        assert_eq!(doc.saved_selections[0], ("Alpha 1".to_string(), before));
+        assert!(matches!(
+            Command::SetSavedSelection {
+                index: 3,
+                name: "x".into(),
+                selection: after,
+            }
+            .apply(&mut doc),
+            Err(CommandError::NoSavedSelection(3))
+        ));
+    }
+
     use super::*;
 
     /// Card 017: a corrupt text payload is refused at the command gate, and a
@@ -2007,6 +2125,7 @@ mod tests {
             transform: Some([2.0, 0.0, 0.0, 2.0, 5.0, 6.0]),
             mask: Patch::Set(new_mask.clone()),
             effects: Some(Box::new(styled.clone())),
+            link_group: Patch::Set(3),
         };
         let inverse = Command::SetLayerProperties {
             layer_id: id,
@@ -2031,6 +2150,7 @@ mod tests {
             linked,
             effects,
             kind,
+            link_group,
         } = doc.layers.get(id).unwrap().clone();
 
         assert_eq!(name, "renamed");
@@ -2049,6 +2169,7 @@ mod tests {
         assert_eq!(mask, Some(new_mask));
         assert_eq!(clipping, ClippingMode::ClipToBelow);
         assert!(linked, "the link chain is patchable state");
+        assert_eq!(link_group, Some(3), "the link group is patchable state");
         assert_eq!(effects, styled, "layer styles must be editable by command");
         // The two out of scope, unchanged:
         assert_eq!(layer_id, id, "identity is not patchable");
@@ -4287,13 +4408,20 @@ mod tests {
         inverse.apply(&mut doc).unwrap();
         assert_eq!(doc.meta.bit_depth, 8);
         assert!(matches!(
-            Command::SetMetaBitDepth { from: 8, to: 32 }.apply(&mut doc),
-            Err(CommandError::UnsupportedBitDepth(32))
+            Command::SetMetaBitDepth { from: 8, to: 24 }.apply(&mut doc),
+            Err(CommandError::UnsupportedBitDepth(24))
         ));
         assert_eq!(
             doc.meta.bit_depth, 8,
             "a refused depth leaves the document alone"
         );
+        // W10-H: 32 Bits/Channel is a depth the store holds (`f32` tiles).
+        let back = Command::SetMetaBitDepth { from: 8, to: 32 }
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(doc.meta.bit_depth, 32);
+        back.apply(&mut doc).unwrap();
+        assert_eq!(doc.meta.bit_depth, 8);
     }
 
     #[test]

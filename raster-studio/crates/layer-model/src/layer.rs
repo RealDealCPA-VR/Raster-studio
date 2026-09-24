@@ -107,6 +107,17 @@ pub struct Layer {
     #[serde(default, skip_serializing_if = "LayerEffects::is_default")]
     pub effects: LayerEffects,
     pub kind: LayerKind,
+    /// W10-A: the link group this layer belongs to (Layer ▸ Link Layers
+    /// makes a new group per click, as Photopea does, so a document can hold
+    /// several independent groups). `None` is no group. It only says *which*
+    /// group: [`Layer::linked`] says *whether* the layer is linked, so a
+    /// layer whose flag is off links nothing whatever id it still holds. A
+    /// document written before groups existed has only the single-chain
+    /// flag; [`Layer::link_key`] reads such a layer as a member of the one
+    /// legacy group [`LEGACY_LINK_GROUP`]. Appended and skipped when `None`,
+    /// so older documents load and unlinked layers save unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_group: Option<u64>,
 }
 
 impl Layer {
@@ -150,6 +161,7 @@ impl Layer {
             linked: false,
             effects: LayerEffects::default(),
             kind,
+            link_group: None,
         }
     }
 
@@ -753,6 +765,24 @@ pub struct SmartObjectLayer {
     /// documents that predate smart filters load and save unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filters: Vec<crate::smart_filter::SmartFilter>,
+    /// W10-I: the smart filters' shared mask (Photopea's filter mask): where
+    /// its coverage is 0 the stack's result gives way to the object's
+    /// unfiltered source, where it is 1 the filtered result shows. Its
+    /// coverage lives in the pixel store under the mask's own id, in the
+    /// object's layer space (a linked, untransformed mask: it rides the
+    /// layer), and is painted through `editor_core::PixelTarget::FilterMask`.
+    /// `None` — and then not written — for an object without one, so
+    /// documents from before the field load and save unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter_mask: Option<crate::mask::LayerMask>,
+}
+
+impl SmartObjectLayer {
+    /// W10-I: the filter mask when it is switched on — the one the
+    /// compositor mixes by. A disabled mask is kept and ignored.
+    pub fn active_filter_mask(&self) -> Option<&crate::mask::LayerMask> {
+        self.filter_mask.as_ref().filter(|m| m.enabled)
+    }
 }
 
 /// Where a smart object's pixels come from — the nested-source model. The
@@ -1316,6 +1346,7 @@ mod tests {
                 asset: AssetId::new(),
                 linked: false,
                 filters: Vec::new(),
+                filter_mask: None,
             }),
             LayerKind::Generator(GeneratorLayer {
                 provenance_key: "prov".into(),

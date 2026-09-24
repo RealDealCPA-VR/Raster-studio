@@ -1448,6 +1448,7 @@ mod w3j {
                 asset: layer_model::AssetId::new(),
                 linked: false,
                 filters: Vec::new(),
+                filter_mask: None,
             }),
         )]);
         let mut h = Live::new(doc, PanelId::Properties);

@@ -792,9 +792,15 @@ mod tests {
         let m = PaletteModel::build();
         let slot = |id| m.slot_of(id).expect("in the palette");
         let eyedropper = slot(ToolId::Eyedropper);
+        // W10-B appended the Note tool to the same slot, as Photoshop has it.
         assert_eq!(
             m.slots()[eyedropper].tools,
-            vec![ToolId::Eyedropper, ToolId::ColorSampler, ToolId::Ruler]
+            vec![
+                ToolId::Eyedropper,
+                ToolId::ColorSampler,
+                ToolId::Ruler,
+                ToolId::Note
+            ]
         );
         assert_eq!(
             registry::cycle('i', Some(ToolId::Eyedropper)),

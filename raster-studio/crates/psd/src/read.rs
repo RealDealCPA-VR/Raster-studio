@@ -61,6 +61,14 @@ const SIG_8B64: [u8; 4] = *b"8B64";
 /// document, in the order they are looked for.
 const NESTED_LAYER_KEYS: [[u8; 4]; 3] = [*b"Lr16", *b"Lr32", *b"Layr"];
 
+/// W10-F: the tagged-block keys whose length is 64-bit in a `.psb` (Adobe's
+/// file-format specification, "Additional Layer Information"); every other
+/// key keeps its 32-bit length.
+const PSB_LONG_KEYS: [[u8; 4]; 13] = [
+    *b"LMsk", *b"Lr16", *b"Lr32", *b"Layr", *b"Mt16", *b"Mt32", *b"Mtrn", *b"Alph", *b"FMsk",
+    *b"lnk2", *b"FEid", *b"FXid", *b"PxSD",
+];
+
 /// The name Photoshop gives the hidden record that closes a group.
 pub const GROUP_DIVIDER_NAME: &str = "</Layer group>";
 
@@ -70,9 +78,25 @@ pub fn read(bytes: &[u8]) -> PsdResult<PsdFile> {
 }
 
 /// Parse a `.psd`, bounding every allocation with `opts`.
+///
+/// W10-F: a `.psb` (version 2) is read too: the cursor switches to 64-bit
+/// section, channel and long-key block lengths and 32-bit RLE row counts
+/// ([`Cursor::with_large`]), and layer rectangles are bounded by
+/// [`ReadOptions::max_psb_dimension`]. The result is the same [`PsdFile`];
+/// nothing downstream needs to know which variant it came from.
 pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> PsdResult<PsdFile> {
     let mut cur = Cursor::new(bytes);
-    let header = PsdHeader::read(&mut cur, opts)?;
+    let (header, psb) = PsdHeader::read_any(&mut cur, opts)?;
+    let psb_opts;
+    let opts = if psb {
+        let mut o = *opts;
+        o.max_dimension = opts.max_psb_dimension;
+        psb_opts = o;
+        &psb_opts
+    } else {
+        opts
+    };
+    let mut cur = cur.with_large(psb);
     let mut budget = Budget::new(opts.max_decoded_bytes);
     let mut warnings = Vec::new();
 
@@ -94,7 +118,7 @@ pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> PsdResult<PsdFile> {
         warnings,
     };
 
-    let lmi_len = cur.u32()? as usize;
+    let lmi_len = cur.length()?;
     if lmi_len > 0 {
         let mut lmi = cur.sub(lmi_len)?;
         read_layer_and_mask(&mut lmi, &mut file, opts, &mut budget)?;
@@ -135,7 +159,7 @@ fn read_layer_and_mask(
     budget: &mut Budget,
 ) -> PsdResult<()> {
     if lmi.remaining() >= 4 {
-        let layer_info_len = lmi.u32()? as usize;
+        let layer_info_len = lmi.length()?;
         let mut layer_info = lmi.sub(layer_info_len)?;
         if layer_info.remaining() >= 2 {
             file.layers = read_layer_info(
@@ -161,7 +185,7 @@ fn read_layer_and_mask(
             .position(|b| NESTED_LAYER_KEYS.contains(&b.key))
         {
             let block = file.extra.remove(idx);
-            let mut nested = Cursor::new(&block.data);
+            let mut nested = Cursor::new(&block.data).with_large(lmi.is_large());
             if nested.remaining() >= 2 {
                 file.layers =
                     read_layer_info(&mut nested, file.header, opts, budget, &mut file.warnings)?;
@@ -234,7 +258,7 @@ fn read_layer_record(
     let mut channel_lens = Vec::with_capacity(nchannels);
     for _ in 0..nchannels {
         channel_ids.push(cur.i16()?);
-        channel_lens.push(cur.u32()? as usize);
+        channel_lens.push(cur.length()?);
     }
 
     cur.expect_tag(&SIG_8BIM, "8BIM (layer blend signature)")?;
@@ -753,7 +777,11 @@ pub fn read_tagged_blocks(
         }
         let signature = cur.tag()?;
         let key = cur.tag()?;
-        let len = cur.u32()? as usize;
+        let len = if cur.is_large() && PSB_LONG_KEYS.contains(&key) {
+            cur.length()?
+        } else {
+            cur.u32()? as usize
+        };
         check_limit(
             "tagged block length",
             len as u64,

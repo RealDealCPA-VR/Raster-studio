@@ -529,6 +529,15 @@ pub(crate) fn snap_candidates_kinded(
     (candidates, threshold_doc)
 }
 
+/// W10-J: the active document's committed slices (File > Export > Slices'
+/// set, `Editor::slices`), what View > Snap To > Slices snaps to.
+pub(crate) fn committed_slices(editor: &Editor) -> Vec<raster::PixelRect> {
+    editor
+        .active()
+        .map(|doc| editor.slices.get(doc.id()).to_vec())
+        .unwrap_or_default()
+}
+
 /// The tool-facing candidates: [`snap_candidates_kinded`] with the kinds
 /// dropped and the axes in the `tools` crate's vocabulary. Empty when `policy`
 /// has Snap off.
@@ -890,6 +899,10 @@ pub struct PointerOutcome {
     /// W4-B: canvas tiles whose live stroke preview changed with this
     /// sample. Nonzero asks for a repaint without touching the document.
     pub preview_tiles: usize,
+    /// W10-A: the slice set Slice Select published at this release, which
+    /// the document now keeps (`Some` of an empty set when it deleted the
+    /// last slice). Not a document edit, but the overlay changed.
+    pub slices: Option<Vec<Slice>>,
 }
 
 impl PointerOutcome {
@@ -904,6 +917,7 @@ impl PointerOutcome {
             || self.view_changed
             || self.picked.is_some()
             || self.preview_tiles > 0
+            || self.slices.is_some()
     }
 }
 
@@ -967,6 +981,9 @@ pub struct PinnedEditTarget {
     pub layer: Option<layer_model::LayerId>,
     pub mask: Option<layer_model::MaskId>,
     pub paint: tools::PaintTarget,
+    /// W10-I: `mask` is the smart object's shared smart-filter mask (edits
+    /// address `PixelTarget::FilterMask`, in the object's layer space).
+    pub filter_mask: bool,
 }
 
 /// Card 055: THE target resolver - one function for pointer gestures and
@@ -983,6 +1000,7 @@ fn resolve_edit_target(
     edit_target_is_mask: bool,
     active_layer: Option<layer_model::LayerId>,
     active_mask: Option<layer_model::MaskId>,
+    filter_mask: Option<layer_model::MaskId>,
 ) -> PinnedEditTarget {
     if quick_mask {
         if let Some(sid) = quick_mask_layer {
@@ -990,20 +1008,33 @@ fn resolve_edit_target(
                 layer: Some(sid),
                 mask: doc.layers.get(sid).and_then(|l| l.mask_id()),
                 paint: PaintTarget::Mask,
+                filter_mask: false,
             };
         }
+    }
+    // W10-I: the sticky target is the active smart object's filter mask
+    // (`Editor::edit_target_filter_mask` validated it).
+    if let (Some(_), Some(mask)) = (active_layer, filter_mask) {
+        return PinnedEditTarget {
+            layer: active_layer,
+            mask: Some(mask),
+            paint: PaintTarget::Mask,
+            filter_mask: true,
+        };
     }
     if edit_target_is_mask && active_mask.is_some() {
         PinnedEditTarget {
             layer: active_layer,
             mask: active_mask,
             paint: PaintTarget::Mask,
+            filter_mask: false,
         }
     } else {
         PinnedEditTarget {
             layer: active_layer,
             mask: active_mask,
             paint: PaintTarget::Layer,
+            filter_mask: false,
         }
     }
 }
@@ -1310,6 +1341,9 @@ impl ToolPointer {
         // Card 055: the off-pointer route resolves the target through the
         // SAME resolver the pointer gestures use (one answer everywhere).
         let edit_target_is_mask = editor.edit_target_is_mask();
+        let filter_mask = editor.edit_target_filter_mask();
+        // W10-J: View > Snap To > Slices snaps to the committed slices.
+        let slices = committed_slices(editor);
         let Some(doc) = editor.active_mut() else {
             return (Ok(()), Vec::new(), Vec::new());
         };
@@ -1338,20 +1372,27 @@ impl ToolPointer {
         // descendants), in document space. The threshold rides along in
         // doc pixels.
         let selected = doc.document.layer_selection();
-        let (snap_candidates, snap_threshold_doc) =
-            snap_candidates_for(&doc.document, &doc.tiles, doc.camera.zoom, &selected, snap);
+        let (snap_candidates, snap_threshold_doc) = snap_candidates_for(
+            &doc.document,
+            &doc.tiles,
+            doc.camera.zoom,
+            &selected,
+            &slices,
+            snap,
+        );
         // Card 042: the commit route gets the same tight-ink answer as the
         // gesture route — a future snap consumer here must not see None.
         let active_layer_ink_bounds =
             active_layer.and_then(|layer| tight_document_bounds(&doc.document, &doc.tiles, layer));
-        // Card 043: the link chain — every layer carrying the flag.
-        let linked_layers: Vec<layer_model::LayerId> = doc
-            .document
-            .layers
-            .iter_depth_first()
-            .into_iter()
-            .filter(|id| doc.document.layers.get(*id).is_some_and(|l| l.linked))
-            .collect();
+        // Card 043 / W10-A: the link GROUPS of the selection and the active
+        // layer - each Link Layers click makes an independent group, so a
+        // move takes its own group only; an old document's single chain is
+        // one group (`layer_model::Layer::link_key`).
+        let linked_layers: Vec<layer_model::LayerId> = {
+            let mut seeds = selected.clone();
+            seeds.extend(active_layer);
+            doc.document.layers.link_partners(&seeds)
+        };
 
         // Card 034: the bounds query borrows the tile source immutably, so
         // it runs BEFORE the mutable tool access is built. document_bounds
@@ -1382,10 +1423,12 @@ impl ToolPointer {
             edit_target_is_mask,
             active_layer,
             active_mask,
+            filter_mask,
         );
         ctx.active_layer = target.layer;
         ctx.active_mask = target.mask;
         ctx.paint_target = target.paint;
+        ctx.paint_filter_mask = target.filter_mask;
         // Card 044: the effective edit target keeps editable geometry?
         // Computed AFTER the quick-mask reroute so the flag describes the
         // layer that will actually be edited (card 040's lesson).
@@ -1771,6 +1814,29 @@ impl ToolPointer {
         }
     }
 
+    /// W10-B: pin a new note at `at` (document pixels) on the active
+    /// document — the Note tool's click — as one undo step. Answers the
+    /// history steps it took.
+    fn perform_place_note(editor: &mut Editor, at: glam::Vec2) -> usize {
+        let Some(doc) = editor.active() else {
+            return 0;
+        };
+        let before = doc.history_depth();
+        let (command, _) = editor_core::extras::add_note(
+            &doc.document,
+            at.x,
+            at.y,
+            String::new(),
+            ui::panels::notes::NEW_NOTE_TEXT,
+        );
+        editor.apply_command(command);
+        let after = editor.active().map_or(before, |d| d.history_depth());
+        if after > before {
+            editor.set_status("Pinned a note: write it in the Notes panel");
+        }
+        after.saturating_sub(before)
+    }
+
     fn perform_text_request(
         editor: &mut Editor,
         request: tools::ToolRequest,
@@ -2052,6 +2118,10 @@ impl ToolPointer {
                     // every other selection change).
                     editor.set_layer_selection(vec![id], Some(id));
                 }
+                // W10-B: the Note tool's click.
+                ToolRequest::PlaceNote { at } => {
+                    Self::perform_place_note(editor, at);
+                }
             }
         }
 
@@ -2125,7 +2195,45 @@ impl ToolPointer {
         } else {
             self.move_display_seeded = None;
         }
+        changed |= self.sync_slice_select(editor);
         changed
+    }
+
+    /// W10-A: between presses, the Slice Select session IS the active
+    /// document's slice store: rebuilt from it (the set, each slice's name
+    /// and the picked slice) whenever what it would draw differs from what
+    /// the live session draws. So an edit made by another door — Delete
+    /// removing the picked slice, Slice Options renaming it, another
+    /// document becoming active, the tool just being picked — is what the
+    /// overlay shows in the frame that made it, not after the next press.
+    /// The shell calls this after every menu pick and on every pointer
+    /// sample ([`Self::begin_pending_session`]). Reports whether the
+    /// published geometry changed.
+    fn sync_slice_select(&mut self, editor: &Editor) -> bool {
+        if editor.effective_tool() != ToolId::SliceSelect {
+            return false;
+        }
+        let Some(doc_id) = editor.active().map(|d| d.id()) else {
+            return false;
+        };
+        let live = match self.current.as_ref() {
+            Some((ToolId::SliceSelect, tool)) if tool.is_active() => return false,
+            Some((ToolId::SliceSelect, tool)) => tool.live_geometry(),
+            _ => None,
+        };
+        let fresh = tools::slice_select::SliceSelectTool::with_picked(
+            editor.slices.slices(doc_id),
+            editor.slices.picked(doc_id),
+        );
+        let want = fresh.live_geometry();
+        let same_doc = self.session_doc.or(self.aimed_at) == Some(doc_id);
+        let is_slice_select = matches!(self.current, Some((ToolId::SliceSelect, _)));
+        if is_slice_select && live == want && (want.is_none() || same_doc) {
+            return false;
+        }
+        self.current = Some((ToolId::SliceSelect, Box::new(fresh)));
+        self.session_doc = want.is_some().then_some(doc_id);
+        live != want || want.is_some()
     }
 
     /// W9-L: Free Transform's numeric options bar edits the LIVE session.
@@ -2154,7 +2262,12 @@ impl ToolPointer {
         let before = tool.live_geometry();
         for (key, setting) in settings {
             let key = key.as_str();
-            if keys::GEOMETRY.contains(&key) || key == keys::LINK || key == keys::INTERPOLATION {
+            // W10-J: and Content-Aware Scale's Amount, which the commit reads.
+            if keys::GEOMETRY.contains(&key)
+                || key == keys::LINK
+                || key == keys::INTERPOLATION
+                || key == keys::CA_AMOUNT
+            {
                 let _ = tool.set_setting(key, *setting);
             }
         }
@@ -2331,6 +2444,7 @@ impl ToolPointer {
         // Card 055: the validated edit target, read once per event before the
         // document borrow. The gesture pins it (see the ctx build below).
         let edit_target_is_mask = editor.edit_target_is_mask();
+        let filter_mask = editor.edit_target_filter_mask();
 
         let (dispatch, viewport) = {
             let doc = editor.active_mut().expect("checked immediately above");
@@ -2404,6 +2518,21 @@ impl ToolPointer {
         // one sample of it.
         let mut pinned_paint_target = self.pinned_paint_target;
         let brush = (routed.phase == PointerPhase::Down).then(|| editor.brush_for(id));
+        // W10-A: Slice Select edits the document's committed slice set (the
+        // one File > Export > Slices writes), so it is built over that set at
+        // every press; its release hands the edited set back as
+        // `ToolRequest::Slices`, which `slices_export::remember_edited` keeps.
+        // The press also records which slice it picked (the one Delete
+        // removes), and each slice carries its stored name through the edit.
+        if id == ToolId::SliceSelect && routed.phase == PointerPhase::Down {
+            if let Some(doc_id) = editor.active().map(|d| d.id()) {
+                let tool =
+                    tools::slice_select::SliceSelectTool::with_slices(editor.slices.slices(doc_id));
+                let picked = tool.hit(routed.event.pos).map(|(index, _)| index);
+                editor.slices.set_picked(doc_id, picked);
+                self.current = Some((id, Box::new(tool)));
+            }
+        }
         let tool = self.tool(id);
         if let Some(brush) = brush {
             tool.set_brush(brush);
@@ -2432,6 +2561,8 @@ impl ToolPointer {
 
         // W4-B: the live stroke preview a Move sample produced, if any.
         let mut live_paint: Option<tools::stroke::LivePaint> = None;
+        // W10-J: View > Snap To > Slices snaps to the committed slices.
+        let slices = committed_slices(editor);
         let (result, commands, selection_edits, requests, picked, canvas_rect, deferred) = {
             let doc = editor.active_mut().expect("checked above");
             let canvas = doc.canvas_rect();
@@ -2452,6 +2583,7 @@ impl ToolPointer {
                     edit_target_is_mask,
                     active_layer,
                     active_mask,
+                    filter_mask,
                 );
                 pinned_paint_target = Some(t);
                 t
@@ -2464,6 +2596,7 @@ impl ToolPointer {
                         edit_target_is_mask,
                         active_layer,
                         active_mask,
+                        filter_mask,
                     )
                 })
             };
@@ -2549,18 +2682,23 @@ impl ToolPointer {
             // Card 042: snap candidates (tight ink bounds, selection and
             // its descendants excluded) + the dragged layer's tight ink.
             let selected = doc.document.layer_selection();
-            let (snap_candidates, snap_threshold_doc) =
-                snap_candidates_for(&doc.document, &doc.tiles, doc.camera.zoom, &selected, snap);
+            let (snap_candidates, snap_threshold_doc) = snap_candidates_for(
+                &doc.document,
+                &doc.tiles,
+                doc.camera.zoom,
+                &selected,
+                &slices,
+                snap,
+            );
             let active_layer_ink_bounds = effective_layer
                 .and_then(|layer| tight_document_bounds(&doc.document, &doc.tiles, layer));
-            // Card 043: the link chain — every layer carrying the flag.
-            let linked_layers: Vec<layer_model::LayerId> = doc
-                .document
-                .layers
-                .iter_depth_first()
-                .into_iter()
-                .filter(|id| doc.document.layers.get(*id).is_some_and(|l| l.linked))
-                .collect();
+            // Card 043 / W10-A: the link GROUPS of the selection and the
+            // effective layer; a move takes its own group only.
+            let linked_layers: Vec<layer_model::LayerId> = {
+                let mut seeds = selected.clone();
+                seeds.extend(effective_layer);
+                doc.document.layers.link_partners(&seeds)
+            };
             // Card 044: the active layer keeps editable geometry?
             let active_layer_parametric = effective_layer.is_some_and(|id| {
                 doc.document
@@ -2622,13 +2760,20 @@ impl ToolPointer {
             ctx.active_layer = target.layer;
             ctx.active_mask = target.mask;
             ctx.paint_target = target.paint;
+            ctx.paint_filter_mask = target.filter_mask;
             ctx.active_layer_content_bounds = active_layer_content_bounds;
-            ctx.sample_to_layer =
-                sample_to_paint_target_of(&doc.document, ctx.active_layer, ctx.paint_target);
+            // W10-I: a filter mask lies in the object's own layer space (it
+            // has no pose of its own), so it maps like the layer's content.
+            let space = if target.filter_mask {
+                tools::PaintTarget::Layer
+            } else {
+                ctx.paint_target
+            };
+            ctx.sample_to_layer = sample_to_paint_target_of(&doc.document, ctx.active_layer, space);
             ctx.paint_space_canvas = Some(paint_space_canvas_of(
                 &doc.document,
                 ctx.active_layer,
-                ctx.paint_target,
+                space,
                 canvas,
             ));
             ctx.content_pick = Some(content_hit);
@@ -2817,9 +2962,12 @@ impl ToolPointer {
         // Through the editor, so a gesture is undone by exactly the Ctrl+Z that
         // undoes a panel edit. The count is what history really took, not what
         // the tool offered: a command History refuses is not a step.
-        for command in commands {
-            editor.apply_command(command);
-        }
+        // W10-H: a paint stroke may keep a 32-bit layer's clipped HDR pixels.
+        crate::depth32::with_in_place_stroke(crate::depth32::in_place_tool(id), || {
+            for command in commands {
+                editor.apply_command(command);
+            }
+        });
         // W8-D: a deferred stroke finish runs on the content-aware job worker
         // and lands as ONE history entry when it completes (with the inline
         // spawner, before this returns, so it is counted below).
@@ -2899,6 +3047,17 @@ impl ToolPointer {
                         // commit drain would, and COUNT the history step so
                         // changed_document/repaint see it.
                         out.steps += Self::perform_transform_layers(editor, &layers, delta);
+                    }
+                    // W10-A: Slice Select publishes its edited set at
+                    // pointer-up; it replaces the document's committed set.
+                    ToolRequest::Slices(slices) if id == ToolId::SliceSelect => {
+                        let status = crate::slices_export::remember_edited(editor, &slices);
+                        editor.set_status(status);
+                        out.slices = Some(slices);
+                    }
+                    // W10-B: the Note tool's click pins a note, one step.
+                    ToolRequest::PlaceNote { at } => {
+                        out.steps += Self::perform_place_note(editor, at);
                     }
                     ToolRequest::Crop(_) | ToolRequest::Slices(_) => deferred += 1,
                 }
@@ -8245,7 +8404,7 @@ mod tests {
         let doc = editor.active().unwrap();
         let selected = doc.document.layer_selection();
         let run = |policy: SnapPolicy| {
-            snap_candidates_for(&doc.document, &doc.tiles, 1.0, &selected, policy).0
+            snap_candidates_for(&doc.document, &doc.tiles, 1.0, &selected, &[], policy).0
         };
         let on = run(SnapPolicy::default());
         assert!(
@@ -8257,14 +8416,92 @@ mod tests {
         let off = run(SnapPolicy {
             enabled: false,
             to_layers: true,
+            ..SnapPolicy::default()
         });
         assert!(off.is_empty(), "Snap off offered {off:?}");
         let canvas_only = run(SnapPolicy {
             enabled: true,
             to_layers: false,
+            ..SnapPolicy::default()
         });
         assert_eq!(canvas_only.len(), 6, "{canvas_only:?}");
         assert!(!canvas_only.iter().any(|c| c.doc == 62.0));
+    }
+
+    /// W10-J: each View > Snap To target adds its own candidates and only
+    /// its own — Guides the document's guides, Grid the grid's lines,
+    /// Document Bounds the canvas edges and centre, Slices each committed
+    /// slice's edges — and the View flags reach the policy through Extras:
+    /// with Extras off neither guides, grid nor slices are snap targets.
+    #[test]
+    fn each_snap_to_target_offers_only_its_own_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.active_mut().unwrap().document.guides.list = vec![editor_core::Guide {
+            axis: editor_core::GuideAxis::Vertical,
+            doc: 17.0,
+            locked: false,
+        }];
+        let doc = editor.active().unwrap();
+        let slice = raster::PixelRect::new(5, 9, 11, 13);
+        let none = SnapPolicy {
+            enabled: true,
+            to_layers: false,
+            to_guides: false,
+            to_grid: false,
+            to_bounds: false,
+            to_slices: false,
+        };
+        let run = |policy: SnapPolicy| {
+            snap_candidates_for(&doc.document, &doc.tiles, 1.0, &[], &[slice], policy).0
+        };
+        let docs = |c: &[tools::SnapCandidate], axis: tools::SnapAxis| -> Vec<f32> {
+            c.iter().filter(|c| c.axis == axis).map(|c| c.doc).collect()
+        };
+        assert!(run(none).is_empty(), "no target, no candidate");
+        let guides = run(SnapPolicy {
+            to_guides: true,
+            ..none
+        });
+        assert_eq!(docs(&guides, tools::SnapAxis::X), vec![17.0]);
+        assert!(docs(&guides, tools::SnapAxis::Y).is_empty());
+        let bounds = run(SnapPolicy {
+            to_bounds: true,
+            ..none
+        });
+        assert_eq!(bounds.len(), 6, "{bounds:?}");
+        let slices = run(SnapPolicy {
+            to_slices: true,
+            ..none
+        });
+        assert_eq!(docs(&slices, tools::SnapAxis::X), vec![5.0, 16.0]);
+        assert_eq!(docs(&slices, tools::SnapAxis::Y), vec![9.0, 22.0]);
+        let grid = run(SnapPolicy {
+            to_grid: true,
+            ..none
+        });
+        let step = ui::canvas::GridSettings::default()
+            .minor_spacing()
+            .unwrap_or_else(|| ui::canvas::GridSettings::default().major_spacing());
+        let xs = docs(&grid, tools::SnapAxis::X);
+        assert!(!xs.is_empty(), "the grid offers lines");
+        assert!(xs.iter().all(|x| (x / step).fract().abs() < 1e-4), "{xs:?}");
+
+        // The View flags: every target on by default, the grid only while
+        // the grid shows, and Extras off takes guides, grid and slices away.
+        let mut flags = ui::ViewFlags::defaults();
+        let policy = SnapPolicy::from_view_flags(flags);
+        assert!(policy.to_guides && policy.to_bounds && policy.to_slices);
+        assert!(!policy.to_grid, "the grid is not showing");
+        flags.set(ui::ViewFlag::Grid, true);
+        assert!(SnapPolicy::from_view_flags(flags).to_grid);
+        flags.set(ui::ViewFlag::Extras, false);
+        let hidden = SnapPolicy::from_view_flags(flags);
+        assert!(!hidden.to_guides && !hidden.to_grid && !hidden.to_slices);
+        assert!(hidden.to_bounds, "the canvas is no extra");
+        flags.set(ui::ViewFlag::Extras, true);
+        flags.set(ui::ViewFlag::SnapToGuides, false);
+        assert!(!SnapPolicy::from_view_flags(flags).to_guides);
     }
 
     /// W3-A's real route: View ▸ Snap unticked in the chrome reaches a Move
@@ -8328,6 +8565,100 @@ mod tests {
         );
     }
 
+    /// W10-J round 2: each View > Snap To target, unticked in the chrome,
+    /// reaches a Move drag through the option seed the shell hands the
+    /// pointer (`Chrome::tool_options` -> `SnapPolicy::split_settings`): with
+    /// only that target on (Snap To > Layers off, so B's edge cannot catch),
+    /// the drag lands A's edge on the target; with the target unticked the
+    /// same drag lands where the pointer put it.
+    #[test]
+    fn unticking_each_snap_to_target_in_the_chrome_stops_a_move_drag_catching_it() {
+        use tools::ToolId;
+        use ui::ViewFlag as F;
+        // (target, the drag's x distance, where A's right edge lands snapped,
+        // where it lands free)
+        let cases: [(F, f32, i64, std::ops::RangeInclusive<i64>); 4] = [
+            // A guide at x = 62.
+            (F::SnapToGuides, 20.4, 62, 60..=61),
+            // A slice whose left edge is x = 62.
+            (F::SnapToSlices, 20.4, 62, 60..=61),
+            // The canvas's right edge, x = 64.
+            (F::SnapToBounds, 20.4, 64, 60..=61),
+            // The grid's line at x = 16 catches A's left edge: 40 + 16.
+            (F::SnapToGrid, 14.6, 56, 54..=55),
+        ];
+        let drag = |target: F, dx: f32, on: bool| -> (i64, Option<String>) {
+            let dir = tempfile::tempdir().unwrap();
+            let mut editor = editor(dir.path());
+            let (a_id, _) = two_inked_layers(&mut editor);
+            let id = editor.active().unwrap().id();
+            editor
+                .slices
+                .remember(id, vec![raster::PixelRect::new(62, 50, 2, 10)]);
+            editor.active_mut().unwrap().document.guides.list = vec![editor_core::Guide {
+                axis: editor_core::GuideAxis::Vertical,
+                doc: 62.0,
+                locked: false,
+            }];
+            editor.set_tool(ToolId::Move);
+            let mut chrome = crate::chrome::Chrome::new();
+            // Only `target` on (the grid shown for its case), then `target`
+            // unticked when `on` is false — each through the View menu's
+            // own toggle intent.
+            let mut flags = vec![(F::Grid, target == F::SnapToGrid)];
+            for flag in ui::ViewFlag::SNAP_TO {
+                flags.push((*flag, *flag == target && on));
+            }
+            flags.push((F::SnapToLayers, false));
+            for (flag, on) in flags {
+                chrome.emit(ui::Intent::SetViewFlag { flag, on });
+            }
+            let ctx = egui::Context::default();
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                chrome.ui(ctx, &mut editor);
+            });
+            let settings = shell_settings(&chrome, ToolId::Move);
+            let screen_at = |doc_pt: Vec2| -> Vec2 {
+                let center = Vec2::new(W as f32 / 2.0, H as f32 / 2.0);
+                VIEWPORT * 0.5 + (doc_pt - center)
+            };
+            let mut pointer = ToolPointer::new();
+            let mut failed = None;
+            let to = Vec2::new(10.0 + dx, 10.0);
+            for (phase, at) in [
+                (PointerPhase::Down, Vec2::new(10.0, 10.0)),
+                (PointerPhase::Move, to),
+                (PointerPhase::Up, to),
+            ] {
+                let out =
+                    pointer.handle(&mut editor, sample(phase, screen_at(at)), false, &settings);
+                failed = failed.or(out.failed);
+            }
+            let policy = pointer.snap_policy();
+            let reached = match target {
+                F::SnapToGuides => policy.to_guides,
+                F::SnapToSlices => policy.to_slices,
+                F::SnapToBounds => policy.to_bounds,
+                _ => policy.to_grid,
+            };
+            assert_eq!(reached, on, "{target:?} did not reach the pointer");
+            let doc = editor.active().unwrap();
+            let a = tight_document_bounds(&doc.document, &doc.tiles, a_id).expect("bounds");
+            (a.x + a.width as i64, failed)
+        };
+        for (target, dx, snapped, free) in cases {
+            let (landed, failed) = drag(target, dx, true);
+            assert_eq!(landed, snapped, "{target:?} on: the edge catches it");
+            assert_eq!(failed, None, "{target:?}");
+            let (landed, failed) = drag(target, dx, false);
+            assert!(
+                free.contains(&landed),
+                "{target:?} unticked: the drag lands where the pointer put it, not {snapped}: {landed}"
+            );
+            assert_eq!(failed, None, "the reserved keys were refused by the tool");
+        }
+    }
+
     /// W3-A (round 3): the box the chrome's Smart Guides draw for a plain
     /// Move drag (`canvas_extras::move_drag_corners`) is the box the release
     /// commits: the same drag, routed through the real pointer, lands A's
@@ -8343,8 +8674,15 @@ mod tests {
         let predicted = {
             let doc = editor.active().unwrap();
             let base = tight_document_bounds(&doc.document, &doc.tiles, a_id).expect("bounds");
-            crate::canvas_extras::move_drag_corners(doc, base, start, now, SnapPolicy::default())
-                .expect("a finite drag")
+            crate::canvas_extras::move_drag_corners(
+                doc,
+                &[],
+                base,
+                start,
+                now,
+                SnapPolicy::default(),
+            )
+            .expect("a finite drag")
         };
         assert_eq!(predicted[1].x, 62.0, "the drawn box caught B's edge");
         let screen_at = |doc_pt: Vec2| -> Vec2 {

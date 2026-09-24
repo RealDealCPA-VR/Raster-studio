@@ -59,19 +59,52 @@ pub enum TransformMode {
     Perspective,
     /// The control mesh bends the interior, not just the outline.
     Warp,
+    /// W10-J: Edit > Content-Aware Scale. The handles resize an upright box
+    /// as in [`TransformMode::Scale`] (no rotation), and the commit retargets
+    /// the layer into that box by seam carving
+    /// ([`filters::content_aware_scale`]), blended with a plain scale by the
+    /// options bar's Amount ([`keys::CA_AMOUNT`]): 100% is all seam carving,
+    /// 0% a plain scale. Photoshop's Protect (an alpha channel) and Protect
+    /// Skin Tones options do not exist here.
+    ContentAware,
 }
 
 impl TransformMode {
     /// Every mode, in the registry's choice-option order — the same order the
     /// options bar's segmented control and [`Tool::set_choice`] speak.
-    pub const ALL: [TransformMode; 6] = [
+    pub const ALL: [TransformMode; 7] = [
         TransformMode::Scale,
         TransformMode::Rotate,
         TransformMode::Skew,
         TransformMode::Distort,
         TransformMode::Perspective,
         TransformMode::Warp,
+        TransformMode::ContentAware,
     ];
+
+    /// W10-J: the options bar's labels for the Mode choice, in
+    /// [`TransformMode::ALL`] order.
+    pub const LABELS: &'static [&'static str] = &[
+        "Scale",
+        "Rotate",
+        "Skew",
+        "Distort",
+        "Perspective",
+        "Warp",
+        "Content-Aware",
+    ];
+
+    /// W10-J: the Mode choice index of [`TransformMode::ContentAware`].
+    pub const CONTENT_AWARE_INDEX: usize = 6;
+
+    /// W10-J: whether the options bar shows the Free Transform option `key`
+    /// while the Mode choice holds `mode_index`. Content-Aware Scale's Amount
+    /// ([`keys::CA_AMOUNT`]) means something only in
+    /// [`TransformMode::ContentAware`], so it is hidden in every other mode;
+    /// every other option always shows.
+    pub fn option_shown(key: &str, mode_index: usize) -> bool {
+        key != keys::CA_AMOUNT || mode_index == Self::CONTENT_AWARE_INDEX
+    }
 
     /// The mode a choice index names, clamped into range.
     pub fn from_index(index: usize) -> Self {
@@ -419,6 +452,8 @@ impl TransformState {
                     }
                 }
             }
+            // W10-J: Content-Aware Scale keeps the box upright.
+            Handle::Rotate(_) if mode == TransformMode::ContentAware => {}
             Handle::Rotate(_) => {
                 let a0 = (from - self.pivot).y.atan2((from - self.pivot).x);
                 let a1 = (to - self.pivot).y.atan2((to - self.pivot).x);
@@ -918,6 +953,9 @@ pub mod keys {
     pub const WARP: &str = "warp";
     /// The warp preset's Bend, `-100..=100`.
     pub const BEND: &str = "bend";
+    /// W10-J: Content-Aware Scale's Amount, `0..=100` percent: how much of
+    /// the result is seam carving rather than a plain scale.
+    pub const CA_AMOUNT: &str = "ca_amount";
     /// The edit counter: the options bar bumps it with every numeric edit,
     /// and the tool applies the numeric fields only when it has moved on.
     pub const NUMERIC_SEQ: &str = "numeric_seq";
@@ -1278,6 +1316,8 @@ pub struct TransformTool {
     /// W9-L: the options bar's Warp choice (0 = None) and its Bend.
     pub warp: usize,
     pub bend: f32,
+    /// W10-J: Content-Aware Scale's Amount, `0..=100` ([`keys::CA_AMOUNT`]).
+    pub ca_amount: f32,
     /// W9-L: the options bar's edit counter, and the value of it the live
     /// session has already applied (or began at).
     numeric_seq: i32,
@@ -1301,6 +1341,7 @@ impl Default for TransformTool {
             interpolation: Interpolation::Bicubic,
             warp: 0,
             bend: 50.0,
+            ca_amount: 100.0,
             numeric_seq: 0,
             numeric_seen: 0,
         }
@@ -1534,6 +1575,15 @@ impl TransformTool {
             return Err(ToolError::not_invertible());
         }
 
+        // W10-J: Content-Aware Scale retargets the whole layer into the box.
+        if self.mode == TransformMode::ContentAware {
+            let result = self.commit_content_aware(ctx, &state);
+            self.state = None;
+            self.grabbed = None;
+            self.floating = false;
+            return result;
+        }
+
         // W5-C: a pixel selection floats. The selected pixels are lifted,
         // carried through the session and laid back over the rest of the
         // layer, the selection travelling with them: ONE transaction. A
@@ -1695,6 +1745,135 @@ impl TransformTool {
         }
         Ok(())
     }
+}
+
+impl TransformTool {
+    /// W10-J: the Content-Aware Scale commit: the layer's source box seam
+    /// carved into the upright box the handles left, at the session's Amount,
+    /// as one `PaintTiles` step. A mask target and a parametric layer (text,
+    /// shape, smart object) are refused rather than rasterised.
+    fn commit_content_aware(
+        &self,
+        ctx: &mut ToolContext<'_>,
+        state: &TransformState,
+    ) -> Result<(), ToolError> {
+        if ctx.paint_target != PaintTarget::Layer {
+            return Err(ToolError::UnsupportedOnMask);
+        }
+        if ctx.active_layer_parametric {
+            return Err(ToolError::NonAffineParametric);
+        }
+        let dest = content_aware_dest(state).ok_or(ToolError::Degenerate)?;
+        let target = ctx.pixel_target()?;
+        let key = ctx.pixel_key()?;
+        let rect = union_unclipped(state.source, dest).ok_or(ToolError::Degenerate)?;
+        let mut patch = ColorPatch::load_native(ctx.tiles, key, rect)?;
+        let src = patch.buffer().clone();
+        let out = content_aware_resample(&src, rect, state.source, dest, self.ca_amount / 100.0)?;
+        patch.replace(out)?;
+        let delta = patch.commit(ctx.tiles, key)?;
+        if !delta.is_empty() {
+            ctx.emit(Command::PaintTiles { target, delta });
+        }
+        Ok(())
+    }
+}
+
+/// W10-J: the upright box a Content-Aware Scale session lands in: the
+/// corners' bounding box, rounded to whole pixels. `None` when it has no area
+/// or a corner is not finite.
+pub fn content_aware_dest(state: &TransformState) -> Option<PixelRect> {
+    if !state.corners.iter().all(|c| c.is_finite()) {
+        return None;
+    }
+    let lo = state
+        .corners
+        .iter()
+        .copied()
+        .fold(Vec2::INFINITY, Vec2::min);
+    let hi = state
+        .corners
+        .iter()
+        .copied()
+        .fold(Vec2::NEG_INFINITY, Vec2::max);
+    let (x0, y0) = (lo.x.round() as i64, lo.y.round() as i64);
+    let (x1, y1) = (hi.x.round() as i64, hi.y.round() as i64);
+    (x1 > x0 && y1 > y0).then(|| PixelRect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
+}
+
+/// W10-J: Content-Aware Scale over one plane. `src` lives on `patch_rect`;
+/// the pixels of `source` (document space) are cleared and laid back down
+/// retargeted to `dest`: seam carved ([`filters::content_aware_scale`]),
+/// blended with a plain bilinear scale of the same box by `1 - amount`
+/// (`amount` in `0..=1`; 1 is all seam carving). Everything outside `source`
+/// and `dest` is left exactly as it was.
+pub fn content_aware_resample(
+    src: &FilterBuffer,
+    patch_rect: PixelRect,
+    source: PixelRect,
+    dest: PixelRect,
+    amount: f32,
+) -> Result<FilterBuffer, ToolError> {
+    if source.is_empty() || dest.is_empty() || !amount.is_finite() {
+        return Err(ToolError::Degenerate);
+    }
+    let amount = amount.clamp(0.0, 1.0);
+    let (w, h) = (src.width(), src.height());
+    let local = |x: i64, y: i64| -> Option<(u32, u32)> {
+        let (lx, ly) = (x - patch_rect.x, y - patch_rect.y);
+        (lx >= 0 && ly >= 0 && lx < i64::from(w) && ly < i64::from(h))
+            .then_some((lx as u32, ly as u32))
+    };
+    let mut region = FilterBuffer::transparent(source.width, source.height)?;
+    for y in 0..source.height {
+        for x in 0..source.width {
+            if let Some((lx, ly)) = local(source.x + i64::from(x), source.y + i64::from(y)) {
+                region.set(x, y, src.get(lx, ly));
+            }
+        }
+    }
+    let carved = if amount > 0.0 {
+        Some(
+            filters::content_aware_scale(&region, dest.width, dest.height)
+                .map_err(|_| ToolError::Degenerate)?,
+        )
+    } else {
+        None
+    };
+    let sampling = Sampling::new(EdgeMode::Clamp, Interpolation::Bilinear);
+    let (sx, sy) = (
+        source.width as f32 / dest.width as f32,
+        source.height as f32 / dest.height as f32,
+    );
+    let mut out = src.clone();
+    for y in source.y..source.bottom() {
+        for x in source.x..source.right() {
+            if let Some((lx, ly)) = local(x, y) {
+                out.set(lx, ly, [0.0; 4]);
+            }
+        }
+    }
+    for y in 0..dest.height {
+        for x in 0..dest.width {
+            let Some((lx, ly)) = local(dest.x + i64::from(x), dest.y + i64::from(y)) else {
+                continue;
+            };
+            let carve = carved.as_ref().map(|c| c.get(x, y));
+            let px = if amount >= 1.0 {
+                carve.unwrap_or([0.0; 4])
+            } else {
+                let plain = region.sample(
+                    (x as f32 + 0.5) * sx - 0.5,
+                    (y as f32 + 0.5) * sy - 0.5,
+                    sampling,
+                );
+                let carve = carve.unwrap_or(plain);
+                std::array::from_fn(|i| carve[i] * amount + plain[i] * (1.0 - amount))
+            };
+            out.set(lx, ly, px);
+        }
+    }
+    Ok(out)
 }
 
 /// Card 044: the quad's signed area (shoelace) — the collapse detector.
@@ -2020,6 +2199,9 @@ impl Tool for TransformTool {
             }
             (keys::WARP, ToolSetting::Choice(i)) if i < WARP_PRESET_LABELS.len() => self.warp = i,
             (keys::BEND, ToolSetting::Float(v)) => self.bend = float(v)?.clamp(-100.0, 100.0),
+            (keys::CA_AMOUNT, ToolSetting::Float(v)) => {
+                self.ca_amount = float(v)?.clamp(0.0, 100.0)
+            }
             (keys::NUMERIC_SEQ, ToolSetting::Int(v)) => self.numeric_seq = v,
             (keys::APPLY_NUMERIC, ToolSetting::Bool(true)) => {
                 self.apply_pending_numeric();
@@ -2040,6 +2222,7 @@ impl Tool for TransformTool {
                 | keys::INTERPOLATION
                 | keys::WARP
                 | keys::BEND
+                | keys::CA_AMOUNT
                 | keys::NUMERIC_SEQ
                 | keys::APPLY_NUMERIC,
                 _,
@@ -3152,5 +3335,122 @@ mod w9l_tests {
         assert_eq!(distinct(Interpolation::Nearest), 2);
         assert!(distinct(Interpolation::Bilinear) > 2);
         assert!(distinct(Interpolation::Bicubic) > 2);
+    }
+
+    // ---- W10-J: Content-Aware Scale as a transform mode -------------------
+
+    /// A 64x64 opaque layer: a light ground with a black 8 px square at
+    /// x 4..12, y 28..36.
+    fn square_layer() -> (MemoryTiles, layer_model::LayerId) {
+        let mut tiles = MemoryTiles::new();
+        let layer = layer_model::LayerId::new();
+        let ts = raster::TILE_SIZE as usize;
+        let mut data = vec![0u8; ts * ts * 4];
+        for y in 0..64usize {
+            for x in 0..64usize {
+                let dark = (4..12).contains(&x) && (28..36).contains(&y);
+                let v = if dark { 0 } else { 220 };
+                data[(y * ts + x) * 4..(y * ts + x) * 4 + 4].copy_from_slice(&[v, v, v, 255]);
+            }
+        }
+        tiles.put(
+            PixelKey::Layer(layer),
+            raster::TileCoord::new(0, 0, 0),
+            data,
+        );
+        (tiles, layer)
+    }
+
+    /// Drag the right edge's handle of the live box from x 64 to x 48, then
+    /// commit; the dark pixels left on row 32, and the commands emitted.
+    fn cas_commit(amount: f32) -> (usize, usize) {
+        let (mut tiles, layer) = square_layer();
+        let key = PixelKey::Layer(layer);
+        let mut tool = registry::make(ToolId::FreeTransform);
+        tool.set_setting(
+            "mode",
+            ToolSetting::Choice(TransformMode::CONTENT_AWARE_INDEX),
+        )
+        .unwrap();
+        tool.set_setting(keys::CA_AMOUNT, ToolSetting::Float(amount))
+            .unwrap();
+        let commands = {
+            let mut ctx =
+                ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64)).with_layer(layer);
+            press(&mut *tool, &mut ctx);
+            let (state, mode) = live(&*tool);
+            assert_eq!(mode, TransformMode::ContentAware);
+            assert_eq!(state.source, PixelRect::new(0, 0, 64, 64));
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(64.0, 32.0))
+                .unwrap();
+            tool.on_pointer_move(&mut ctx, PointerEvent::at(56.0, 32.0))
+                .unwrap();
+            tool.on_pointer_move(&mut ctx, PointerEvent::at(48.0, 32.0))
+                .unwrap();
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(48.0, 32.0))
+                .unwrap();
+            let (state, _) = live(&*tool);
+            assert_eq!(
+                content_aware_dest(&state),
+                Some(PixelRect::new(0, 0, 48, 64)),
+                "the right edge handle narrowed the box: {state:?}"
+            );
+            tool.commit(&mut ctx).unwrap();
+            ctx.drain()
+        };
+        let paints: Vec<_> = commands
+            .into_iter()
+            .filter_map(|c| match c {
+                Command::PaintTiles { delta, .. } => Some(delta),
+                _ => None,
+            })
+            .collect();
+        let count = paints.len();
+        for delta in &paints {
+            tiles.apply_delta(key, delta);
+        }
+        let dark = (0..64)
+            .filter(|&x| tiles.pixel(key, x, 32)[3] > 0 && tiles.pixel(key, x, 32)[0] < 110)
+            .count();
+        (dark, count)
+    }
+
+    #[test]
+    fn content_aware_mode_carves_the_ground_and_keeps_the_square_as_one_step() {
+        let (carved, steps) = cas_commit(100.0);
+        assert_eq!(steps, 1, "one PaintTiles step");
+        assert_eq!(carved, 8, "seam carving keeps the square 8 px wide");
+        // Amount 0 is a plain scale: the square shrinks with the box.
+        let (plain, _) = cas_commit(0.0);
+        assert!(
+            (5..=6).contains(&plain),
+            "a plain 75% scale makes it about 6 px, not {plain}"
+        );
+    }
+
+    #[test]
+    fn content_aware_mode_keeps_the_box_upright_and_is_offered_by_the_options_bar() {
+        let mut s = TransformState::new(PixelRect::new(0, 0, 40, 20));
+        let before = s.corners;
+        s.drag(
+            TransformMode::ContentAware,
+            Handle::Rotate(0),
+            Vec2::new(-4.0, -4.0),
+            Vec2::new(10.0, -12.0),
+        );
+        assert_eq!(s.corners, before, "no rotation in Content-Aware Scale");
+        let info = registry::info(ToolId::FreeTransform).unwrap();
+        let mode = info.options.iter().find(|o| o.key == "mode").unwrap();
+        assert_eq!(
+            format!("{:?}", mode.kind).matches("Content-Aware").count(),
+            1,
+            "the Mode choice offers Content-Aware: {:?}",
+            mode.kind
+        );
+        assert!(info.options.iter().any(|o| o.key == keys::CA_AMOUNT));
+        assert_eq!(
+            TransformMode::from_index(TransformMode::CONTENT_AWARE_INDEX),
+            TransformMode::ContentAware
+        );
     }
 }

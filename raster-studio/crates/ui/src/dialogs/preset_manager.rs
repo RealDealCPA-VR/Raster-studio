@@ -1,9 +1,11 @@
 //! Edit ▸ Preset Manager (W10-G): every saved preset in one window.
 //!
-//! One list per kind — brushes, gradients, patterns, styles and custom
-//! shapes, the kinds the application's preset store keeps — each renamed,
-//! deleted and reordered in place, and the whole library written to or read
-//! from a JSON file.
+//! One list per kind — brushes, swatches, gradients, patterns, styles,
+//! custom shapes and tool presets — each renamed, deleted and reordered in
+//! place, and the whole library written to or read from a JSON file. Five
+//! kinds are the application's preset store's; swatches and tool presets are
+//! the Swatches and Tool Presets panels' lists, which the application reads
+//! from and writes back to the workspace.
 //!
 //! The dialog edits a [`PresetLibrary`]: a name and an opaque payload per
 //! entry. The payload is the application's (it knows each kind's schema);
@@ -32,15 +34,22 @@ pub enum PresetKind {
     Patterns,
     Styles,
     Shapes,
+    /// The Swatches panel's colours (appended: serde is append-only).
+    Swatches,
+    /// The Tool Presets panel's saved tools.
+    ToolPresets,
 }
 
 impl PresetKind {
-    pub const ALL: [PresetKind; 5] = [
+    /// In the order the dialog lists them.
+    pub const ALL: [PresetKind; 7] = [
         PresetKind::Brushes,
+        PresetKind::Swatches,
         PresetKind::Gradients,
         PresetKind::Patterns,
         PresetKind::Styles,
         PresetKind::Shapes,
+        PresetKind::ToolPresets,
     ];
 
     pub fn label(self) -> &'static str {
@@ -50,6 +59,9 @@ impl PresetKind {
             PresetKind::Patterns => "Patterns",
             PresetKind::Styles => "Styles",
             PresetKind::Shapes => "Shapes",
+            // The panels' own titles: these two kinds are those panels.
+            PresetKind::Swatches => crate::dock::PanelId::Swatches.title(),
+            PresetKind::ToolPresets => crate::dock::PanelId::ToolPresets.title(),
         }
     }
 
@@ -79,6 +91,12 @@ pub struct PresetLibrary {
     pub styles: Vec<PresetEntry>,
     #[serde(default)]
     pub shapes: Vec<PresetEntry>,
+    /// Each payload is the swatch's `[r, g, b, a]` as JSON.
+    #[serde(default)]
+    pub swatches: Vec<PresetEntry>,
+    /// Each payload is the panel's saved form of the tool preset, as JSON.
+    #[serde(default)]
+    pub tool_presets: Vec<PresetEntry>,
 }
 
 impl PresetLibrary {
@@ -89,6 +107,8 @@ impl PresetLibrary {
             PresetKind::Patterns => &self.patterns,
             PresetKind::Styles => &self.styles,
             PresetKind::Shapes => &self.shapes,
+            PresetKind::Swatches => &self.swatches,
+            PresetKind::ToolPresets => &self.tool_presets,
         }
     }
 
@@ -99,6 +119,8 @@ impl PresetLibrary {
             PresetKind::Patterns => &mut self.patterns,
             PresetKind::Styles => &mut self.styles,
             PresetKind::Shapes => &mut self.shapes,
+            PresetKind::Swatches => &mut self.swatches,
+            PresetKind::ToolPresets => &mut self.tool_presets,
         }
     }
 
@@ -308,9 +330,14 @@ impl PresetManagerDialog {
     pub fn show(&mut self, ctx: &Context) -> DialogOutcome<PresetLibrary> {
         let mut outcome = self.resolve(DialogKeys::read(ctx));
         let title = self.title();
-        let drawn = modal(ctx, "preset-manager", &title, None, DialogWidth::Wide, |ui| {
-            self.body(ui)
-        });
+        let drawn = modal(
+            ctx,
+            "preset-manager",
+            &title,
+            None,
+            DialogWidth::Wide,
+            |ui| self.body(ui),
+        );
         if let Some(Some(button)) = drawn {
             outcome = match button {
                 DialogButton::Cancel => DialogOutcome::Cancelled,
@@ -430,7 +457,12 @@ mod tests {
         assert!(d.rename_selected("Hard Round"));
         assert!(d.move_selected(-1));
         assert_eq!(d.selected(), Some(0));
-        let names: Vec<_> = d.library().brushes.iter().map(|e| e.name.as_str()).collect();
+        let names: Vec<_> = d
+            .library()
+            .brushes
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
         assert_eq!(names, ["Hard Round", "Soft", "Chalk"]);
         // The payload travels with the entry, untouched.
         assert_eq!(d.library().brushes[0].data, "{\"n\":\"Hard\"}");
@@ -464,6 +496,46 @@ mod tests {
         assert_eq!(d.library().brushes.len(), 3, "same name replaces");
         assert_eq!(d.library().brushes[0].data, "new");
         assert_eq!(d.library().styles.len(), 1);
+    }
+
+    #[test]
+    fn swatches_and_tool_presets_are_kinds_of_their_own() {
+        let labels: Vec<_> = PresetKind::ALL.iter().map(|k| k.label()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Brushes",
+                "Swatches",
+                "Gradients",
+                "Patterns",
+                "Styles",
+                "Shapes",
+                "Tool Presets"
+            ]
+        );
+        let mut d = PresetManagerDialog::new(PresetLibrary {
+            swatches: vec![entry("Red"), entry("Blue")],
+            tool_presets: vec![entry("Brush 1")],
+            ..PresetLibrary::default()
+        });
+        d.set_kind(PresetKind::Swatches);
+        d.select(Some(1));
+        assert!(d.rename_selected("Navy"));
+        assert!(d.move_selected(-1));
+        d.set_kind(PresetKind::ToolPresets);
+        d.select(Some(0));
+        assert!(d.delete_selected());
+        let lib = d.library().clone();
+        let names: Vec<_> = lib.swatches.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["Navy", "Red"]);
+        assert!(lib.tool_presets.is_empty());
+        assert_eq!(lib.len(), 2);
+        // A file written before these kinds existed still reads.
+        let old: PresetLibrary = serde_json::from_str(r#"{"brushes":[]}"#).unwrap();
+        assert!(old.swatches.is_empty() && old.tool_presets.is_empty());
+        let back: PresetLibrary =
+            serde_json::from_str(&serde_json::to_string(&lib).unwrap()).unwrap();
+        assert_eq!(back, lib);
     }
 
     #[test]
