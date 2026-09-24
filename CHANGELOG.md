@@ -10,11 +10,224 @@ names what changed and, where it matters, how it was verified.
 
 ## [Unreleased]
 
-Six fix waves, each from a fresh adversarial audit of the commit before it.
-Every entry below is taken from its commit message and checked against the
-code; where a wave left something open, its "Known gaps" says so. CI was green
-on every wave commit: `53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727`, `7bb295a`,
-`b477a09` and `0e4a6fd` (run 35907846548).
+Six fix waves, each from a fresh adversarial audit of the commit before it,
+then five Photopea-parity waves (7-11), each from an audit of Photopea's
+features against this build. Every entry below is taken from its commit
+message and checked against the code; where a wave left something open, its
+"Known gaps" says so, and the parity matrix
+(`raster-studio/docs/parity-matrix.md`) carries the row-by-row detail. CI was
+green on the six fix-wave commits (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727`,
+`7bb295a`, `b477a09` and `0e4a6fd`, run 35907846548) and on waves 7-10
+(`8b6c399` run 35931490726, `f9329d0` run 35939564122, `9a61faa` run
+35957810847, `05ec9b1` run 36026393650). Wave 11 (`fe978d3`) is run
+36048266245; whether it passed is what the Actions tab says.
+
+### Wave 11 — `fe978d3`
+
+The last gaps from the parity audit of `05ec9b1`.
+
+#### Added
+
+- **PSD adjustment layers open and save live** (W11-A,
+  `psd::adjustments::{decode, encode}`): Levels, Curves,
+  Brightness/Contrast, Hue/Saturation, Color Balance, Black & White, Photo
+  Filter, Channel Mixer, Posterize, Threshold, Gradient Map, Selective Color,
+  Exposure, Vibrance and Color Lookup, each under its own key (Invert, which
+  opened and saved before, moved into the same module). A payload that
+  does not decode is kept as an empty layer and named in the import report;
+  a setting the layout cannot store is named on export, never clamped. The
+  layouts follow Adobe's published specification and are verified by round
+  trips through this build only, not against files Photoshop wrote.
+- **PSD inner shadow, inner glow, bevel and emboss, satin and gradient
+  overlay** import and export (W11-B, `crates/psd/src/effects_rest.rs`), with contours,
+  through the one mapping the `.asl` import also uses. A gradient overlay's
+  offset, a gradient- or pattern-filled glow or stroke, and the extra
+  instances of a repeated effect are named, not written.
+- **PSD guides, saved paths and the work path, alpha channels and slices**
+  round-trip (W11-C, `crates/app-shell/src/psd_resources.rs`), and a pixel mask's
+  density and feather are written.
+- **Every open route handles resource files** (W11-D: the File ▸ Open picker,
+  drag-and-drop, Open Recent and the command line, through
+  `Editor::open_resource_file` / `Editor::open_any`); Edit ▸ Paste with no
+  document opens the clipboard image as a new document; File ▸ Revert.
+- **Layer operations** (W11-E): Merge Layers for a multi-selection (Ctrl+E),
+  Edit ▸ Transform ▸ Again / Again with Copy, Layer ▸ Arrange ▸ Reverse,
+  Select Linked Layers, Smart Object ▸ Convert to Linked / Embed Linked,
+  layer colour labels, New Layer Based Slice.
+- **Held-key gestures** (W11-F): Alt-click samples a colour while painting,
+  Shift-click paints a straight line, Ctrl is a temporary Move tool,
+  Ctrl+Space / Alt+Space zoom in / out, Alt+wheel zooms.
+- **Object Selection tool; chords; two Help rows** (W11-G): layer navigation
+  (Alt+[ / ] / , / .) and blend-mode chords, Ctrl+Shift+F Fade, Ctrl+Alt+R
+  Refine Edge, Ctrl+P Print, Help ▸ Keyboard Shortcut Sheet and Help ▸
+  Search Commands.
+- **Formats** (W11-H): OpenEXR and Radiance HDR open as 32 Bits/Channel
+  documents, EXR export, ICNS, IFF and KRA (its merged image) open, Save as
+  PSB; lossless JPEG XL export (`zune-jpegxl`) and lossy WebP export with a
+  quality setting (`tiny-webp`).
+- **CSS panel and tool options** (W11-I): Window ▸ CSS; Align to the
+  selected layers' bounds; Dodge / Burn Protect Tones, Sponge Vibrance,
+  Gradient Transparency; slices saved with the `.rstudio` document.
+
+#### Changed
+
+- Slice edits are one History step each (`Command::SetSlices`), as in
+  Photoshop; undo, redo and history jumps resync the slice store.
+- Tests that pinned superseded behaviour (EXR refused, satin not written,
+  slices not in history) now pin the new behaviour.
+
+#### Known gaps
+
+- Colour labels are not written to or read from a `.psd` (`lclr`); Transform
+  Again repeats only a whole-layer scale / rotate / skew; the Object Selection
+  tool has no hover-to-highlight finder; an Export As EXR row at a scale
+  other than 100% writes the clipped 8/16-bit composite; no lossy JPEG XL.
+
+### Wave 10 — `05ec9b1`
+
+Finishes the partial, unverified wave-10 commit `8289491` (stopped by a usage
+limit) with eleven doer/reviewer pairs and three follow-up pairs.
+
+#### Added
+
+- **Tools** (W10-A): Content-Aware Move, Slice Select (with File ▸ Export ▸
+  Slice Options… and an HTML page carrying each slice's URL and alt text),
+  the Spiral shape, Edit ▸ Define Custom Shape, independent link groups.
+- **Panels** (W10-B): Layer Comps, Tool Presets, Glyphs, Notes (and the Note
+  tool), Character Styles and Paragraph Styles; the Channels panel views and
+  edits layer-mask and alpha (saved-selection) channels.
+- **Filters** (W10-C, W10-D): Camera Raw (the Basic panel), Lens Correction,
+  Lighting Effects, HSB/HSL; the Filter Gallery's Artistic, Brush Strokes,
+  Sketch and Texture sets; Displace with an external map; Vanishing Point.
+- **File** (W10-E): Automate ▸ Batch / Convert Formats, Image ▸ Variables,
+  Export Color Lookup Tables, Image ▸ Vectorize Bitmap, Export PDF, File Info
+  (XMP), EXIF carried into exports.
+- **Formats** (W10-F): PSB, XCF (layered), PBM / PGM / PPM, DDS and JPEG XL
+  open; PBM / PGM / PPM, DDS and AVIF export; SVG export with shape layers as
+  real `<path>` elements and text as `<text>`. HEIC and AVIF decoding are
+  refused with the reason (no acceptable pure-Rust decoder).
+- **Edit** (W10-G): Preset Manager, Fade, Auto-Align Layers, Auto-Blend
+  Layers, Perspective Warp.
+- **Image** (W10-H): Mode ▸ Bitmap, Duotone and 32 Bits/Channel (`f32`
+  tiles, a tested 32-bit Fill), Apply Image, Calculations; Lab adjustment
+  layers evaluate in Lab; Indexed Color flattens; 16-bit strokes write
+  16-bit dabs. The package's per-tile cap
+  (`project_format::tiles::MAX_TILE_BYTES`) is now one `f32` tile (1 MiB),
+  so a 32-bit document saves.
+- **Layer** (W10-I): Smart Object ▸ Export Contents / New via Copy / Convert
+  to Layers / Relink to File; Matting ▸ Remove Black / White Matte; Hide
+  Layers; a smart-filter mask, reordering and per-filter blending; Photopea's
+  layer-row context menu; the Animation (frame timeline) panel.
+- **View** (W10-J): the Snap To submenu, Extras (Ctrl+H), Show ▸ Slices, New
+  Guide Layout, New Guides from Shape; Alt+Ctrl+T, Shift+[ / ] hardness,
+  number-key opacity; an Artboard option in New Document and an artboard
+  Properties page; interactive Content-Aware Scale.
+- **Select ▸ Subject** (W10-K) is back without a model: saliency and GrabCut
+  on the job worker.
+
+#### Fixed
+
+- `Command::SetSavedSelection`, deleted by a concurrent file restore, is
+  restored, with an undo test.
+
+### Wave 9 — `9a61faa`
+
+Daily and frequent gaps from an exhaustive audit against Photopea's own Learn
+pages.
+
+#### Added
+
+- Ctrl / Ctrl+Shift / Ctrl+Alt-click on a layer or mask thumbnail loads its
+  pixels as a selection (new / add / subtract / intersect); a Select Pixels
+  row.
+- Live Solid Color / Gradient / Pattern fill layers with their dialogs,
+  re-editable, round-tripping through PSD (`SoCo` / `GdFl` / `PtFl`).
+- PSD type layers keep their fonts, sizes, colours, runs and paragraphs (a
+  bounded EngineData parser); the `TySh` transform follows Photoshop's
+  baseline anchor on import and export.
+- Clone Stamp, Healing, Spot Healing, Blur, Sharpen and Smudge sample
+  Current / Current & Below / All Layers.
+- Brush engine: shape, scatter, colour and transfer dynamics with a
+  deterministic seed; sampled tips; Define Brush from pixels; `.abr` import.
+- Shapes: Path mode, gradient / pattern fills, stroke alignment / cap / join
+  / dash, path combine and align, Layer ▸ Combine Shapes.
+- Live vector masks (compositor, menu, Properties, PSD `vmsk`).
+- Layer styles: exterior effects blend against the backdrop, contours, Blend
+  If, multiple effect instances, a style picker, `.asl` import.
+- Duplicate Layer into another open document; drag a layer onto a tab.
+- Animated GIF / APNG / WebP open as `_a_` frame layers and export animated.
+- Text: Warp Text, Type on a Path, Convert to Shape, installed fonts in the
+  options bar, `.ttf` / `.otf` open.
+- Free Transform numeric options and warp presets; XOR selections and Fixed
+  Ratio / Fixed Size marquees; Gradient / Paint Bucket blend modes; the Move
+  tool's align / distribute buttons.
+- The PSD round trip keeps shape layers, smart objects (`SoLd` / `PlLd`) and
+  16-bit depth.
+- SVG and `.pat` / `.grd` / `.csh` / `.aco` / `.ase` / `.icc` resources open;
+  TGA export.
+- Filter ▸ Blur Gallery: Field, Iris, Tilt-Shift, Path and Spin Blur.
+
+### Wave 8 — `f9329d0`
+
+Follow-ups from the wave-7 reviews.
+
+#### Added
+
+- Opacity from Pressure; a pen touching down at zero pressure lays a
+  zero-weight first dab; the brush ring follows a hovering pen.
+- Levels and Curves offer L / a / b in Lab mode; the Color panel follows the
+  document's mode; File ▸ Export of a Lab document says it writes RGB.
+- Artboards clip their children and export one file each (a layer outside
+  every artboard is left out, pinned by a route test); Perspective Crop has
+  corner handles and rectifies every layer; the Mixer Brush previews while
+  dragging; the Type Masks show the quick-mask overlay and honour add /
+  subtract / intersect; vertical type has a caret and hit-testing.
+- The Spot Healing Brush's Content-Aware type runs on the worker and commits
+  one step; PSD pattern resources import and map onto pattern effects.
+
+#### Fixed
+
+- Indexed documents always export (palette alpha is quantised too), through
+  one shared colour-mode export path.
+- Previewing the Mixer Brush no longer changes what it commits (new test).
+- The options bar's Reset sits beside the tool name, so a long options row
+  can no longer push it off the window.
+
+### Wave 7 — `8b6c399`
+
+Closing the Photopea gaps.
+
+#### Added
+
+- Stylus pressure: winit `Touch` / pen force drives the stroke (size and flow
+  from pressure); emulated mouse events are ignored during a contact.
+  Verified with synthetic events only; a physical pen still has to confirm
+  it.
+- Pattern Overlay and pattern-filled strokes / glows render; patterns travel
+  with the effect, so save / reopen, undo and export keep them.
+- 16-bit documents are edited at 16-bit precision by filters, adjustments,
+  fills, transforms, Image Size and Canvas Size.
+- Image ▸ Mode ▸ Lab, CMYK (a documented naive RGB-CMYK model, no ICC press
+  profile) and Indexed (a palette dialog with dither); View ▸ Proof Colors
+  and Gamut Warning show the CMYK round trip.
+- Smart filters: Filter ▸ Convert for Smart Filters; filters on a smart
+  object stay editable, toggleable and removable, and save with the
+  document.
+- Tools: Perspective Crop, Vertical Type, Horizontal / Vertical Type Mask,
+  Mixer Brush, Artboard, Curvature Pen, Freeform Pen.
+- Adjustments: HDR Toning, Match Color.
+- Filter ▸ Liquify and Edit ▸ Puppet Warp.
+- Content-aware fill (PatchMatch, no model): Edit ▸ Fill ▸ Content-Aware,
+  the Spot Healing Brush's Content-Aware type, Edit ▸ Content-Aware Scale.
+
+### Docs pass — `bf12cd8`
+
+- README, the workspace README, this changelog, the parity matrix and the
+  architecture / file-format / threat-model docs re-verified against the
+  code after the six fix waves.
+- **Fixed:** File ▸ Open decodes on a worker and never recorded a 16-bit
+  source's depth, unlike drag-and-drop and recent files. Both routes now
+  share `OpenDocument::record_source_depth` (route test and mutation check).
 
 ### Wave 5 — `0e4a6fd`
 

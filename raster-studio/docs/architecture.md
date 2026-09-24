@@ -78,7 +78,11 @@ The UI thread owns the documents. File ▸ Open's decode and PSD parse, save,
 autosave, Export As, File ▸ Export and Export Layers each run on a worker
 thread (`app-shell/src/jobs.rs`); drag-and-drop, recent files and the
 command-line argument still decode on the UI thread through
-`Editor::open_path`. A save or an export works on a cloned `Document`
+`Editor::open_path`. The same job machinery also runs the content-aware
+fill, the Spot Healing Brush's Content-Aware type and the Content-Aware Scale
+presets (W7-I, W8-D), Select ▸ Subject (W10-K), the Object Selection tool
+(W11-G) and File ▸ Automate ▸ Batch / Convert Formats (W10-E); each lands on a
+later frame. A save or an export works on a cloned `Document`
 and tile snapshot. The UI thread polls each job once a frame; an import result
 from a cancelled (stale) generation is dropped unread, and a save's outcome
 decides whether the live document is clean by comparing its digest with the
@@ -160,8 +164,8 @@ the manifests actually support.
 | `design` | Tokens (colour, type scale, 4pt grid, radii, elevation, motion), the egui theme, themed widgets |
 | `editor-core` | `Document`, `Command`, `History`, the `PixelStore` of tile hashes, `Selection` |
 | `layer-model` | Layer tree, groups, masks, effects data, and the reference math for all 27 blend modes |
-| `compositor` | The authoritative CPU tile compositor, its tile cache, the adjustment application path, and the layer effects (`effects.rs`: nine of the ten render; Pattern Overlay and pattern-filled glows/strokes draw nothing, as the crate has no asset store) |
-| `raster` | Tiles, tile grids, mip chains, pixel formats, the codec facade, export |
+| `compositor` | The authoritative CPU tile compositor, its tile cache, the adjustment application path, and the layer effects (`effects.rs`: all ten render; since W7-B a Pattern Overlay and a pattern-filled glow or stroke carry their pattern's pixels inside the effect, so no asset store is needed) |
+| `raster` | Tiles, tile grids, mip chains, pixel formats (RGBA8, RGBA16, and RGBA `f32` since W10-H), the codec facade, the format readers and writers beyond `image` (`formats/`: Netpbm, DDS, JPEG XL, XCF, OpenEXR / HDR, ICNS, IFF, KRA, and the AVIF refusal), export |
 | `color` | Colour spaces, transfer functions, premultiply, CIELAB, HSL/HSV |
 | `selection` | Marquee, lasso, wand, colour range, morphology on fractional coverage, outline extraction |
 | `adjustments` | Parametric, non-destructive adjustment math |
@@ -170,8 +174,8 @@ the manifests actually support.
 | `vector` | Bézier paths, one anti-aliased coverage rasteriser, stroke-to-outline, booleans, SVG path I/O |
 | `text-engine` | Font enumeration and matching, shaping and layout via `cosmic-text`, glyph rasterisation |
 | `project-format` | The `.rstudio` package: read, write, migrate, verify, recover |
-| `asset-store` | Content-addressed blob storage, in memory or write-through to disk |
-| `psd` | `.psd` read and write, written from the published format documentation |
+| `asset-store` | Content-addressed blob storage, in memory or write-through to disk; the presets file (`presets.rs`); the Photoshop resource-file parsers (`abr.rs`, `asl.rs`, `resources/`: `.pat`, `.grd`, `.csh`, `.aco`, `.ase`, `.icc`) |
+| `psd` | `.psd` and (since W10-F / W11-H) `.psb` read and write, written from the published format documentation: layers, masks, vector masks, shape and fill layers, placed smart objects, adjustment payloads, the `lfx2` effects, type-layer engine data, patterns and the image resources |
 | `render` | wgpu: context, textures, mip generation, the camera affine, the quad pass, offscreen readback |
 | `render-shaders` | The WGSL sources (`quad`, `composite`, `mipmap`) as embedded constants |
 | `telemetry` | `tracing` initialisation and a local diagnostic bundle |
@@ -195,9 +199,10 @@ Stated here rather than left for someone to discover:
   `project-format` builds the memory-only store (`assets::new_store`), and
   `AssetStore::open` — the write-through, symlink-checked, refcount-journalled
   variant — is called only from that crate's own tests.
-- **Stylus pressure has no source.** `Shell::set_pen_pressure` is the seam the
-  pressure-aware stroke engine reads through, but only tests call it; no
-  winit tablet event is subscribed.
+- **Stylus pressure is wired but unproven on hardware.** Since W7-A winit's
+  `Touch` events (a pen's force included) reach `Shell::set_pen_pressure`
+  through `app-shell/src/pen_input.rs`; the tests drive synthetic events, and
+  no physical pen has been tried.
 
 ## Non-goals, and where they are enforced
 

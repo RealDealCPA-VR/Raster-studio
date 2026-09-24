@@ -16,12 +16,16 @@ cd raster-studio
 cargo run -p studio-desktop -- path/to/image.png
 ```
 
-![Raster Studio's main window with a 3628×2041 layered project open at 20.8%:
-the menu bar and the Move tool's options bar across the top, the tool column
-on the left with the colour wells at its foot, rulers along the top and left of the canvas, a
-narrow dock column (Navigator, Color, Brushes) beside a wide one (Properties,
-History, and a Layers panel listing groups and a masked layer), and the status
-bar](raster-studio/docs/main-window.png)
+![Raster Studio's main window with a 3628×2041 layered project fitted at
+19.7%: the menu bar, and the Move tool's options bar with Auto-Select, Select
+Groups, Show Transform Controls and the Align and Distribute buttons across the
+top; the tool column on the left with the colour wells at its foot; rulers
+along the top and left of the canvas; a narrow dock column (Navigator, Color
+with its HSB sliders, Brushes) beside a wide one (Properties, History with its
+Open step, and a Layers panel listing the Alternatives and Logos groups, a
+masked Portrait layer and the selected Background); and the status bar with
+the zoom, the canvas size, the active tool and the file that was
+opened](raster-studio/docs/main-window.png)
 
 ## The idea: one engine, no drift
 
@@ -41,9 +45,12 @@ wired, with the gaps listed below by name.** Nothing is claimed here unless it
 is implemented, tested and reachable from the UI. Documentation is a claim,
 and claims get checked against the code.
 
-Six fix waves have landed on `main` since the last spec was closed (`53dd398`,
-`2caaa6c`, `02c7e1b`, `1c5b727` + `7bb295a`, `b477a09`, `0e4a6fd`); the
-[CHANGELOG](CHANGELOG.md) says what each changed. The row-by-row state lives
+Eleven waves have landed on `main` since the last spec was closed: six fix
+waves (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727` + `7bb295a`, `b477a09`,
+`0e4a6fd`), then five Photopea-parity waves (wave 7 `8b6c399`, wave 8
+`f9329d0`, wave 9 `9a61faa`, wave 10 `05ec9b1`, wave 11 `fe978d3`). The
+labels W7-A … W11-I below name the wave that brought a feature. The
+[CHANGELOG](CHANGELOG.md) says what each wave changed. The row-by-row state lives
 in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
 [`docs/REMAINING.md`](raster-studio/docs/REMAINING.md) is the historical
 2026-08 spec; all its items are closed and it no longer describes the code.
@@ -74,7 +81,16 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   decoders found are AGPL-licensed (`heic`) or not yet evaluated
   (`heic-rs`). Layered `.psd`
   and (W10-F) `.psb`, Photoshop's large-document format (64-bit lengths,
-  canvases past 30 000 px), open as layered documents (groups, masks, blend modes, channels, adjustments, the ten layer effects, with contours on the shadows, glows and bevel (W11-B; a gradient- or pattern-filled glow or stroke is named in the report instead),
+  canvases past 30 000 px), in RGB or greyscale (opened as RGB; other colour
+  modes are refused by name) at 8 or 16 bits (a 32-bit file is converted
+  down to 8), open as layered documents (groups, masks with their density
+  and feather, blend modes; Invert and, since W11-A, Levels, Curves,
+  Brightness/Contrast, Hue/Saturation, Color Balance, Black & White, Photo
+  Filter, Channel Mixer, Posterize, Threshold, Gradient Map, Selective
+  Color, Exposure, Vibrance and Color Lookup adjustment layers as live
+  adjustment layers, a payload that does not decode kept as an empty layer
+  and named; W11-C: the guides, saved paths and work path, named alpha
+  channels and slices; the ten layer effects, with contours on the shadows, glows and bevel (W11-B; a gradient- or pattern-filled glow or stroke is named in the report instead),
   type layers as editable text with each run's font, size, fill, tracking
   and faux bold/italic, the first run's leading and caps and the first
   paragraph's alignment and indents, read from the text engine data, placed
@@ -99,8 +115,9 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   the reason (the Actions library replays recorded edits, not parametric
   steps). File ▸
   Open decodes on a background thread; drag-and-drop, recent files and a
-  file named on the command line open on the UI thread. Drag-and-drop, recent files, and a start
-  screen with New / Open / Templates and a recent-files grid. File ▸ Open also
+  file named on the command line open on the UI thread. With no document
+  open, a start screen offers New / Open / Templates and a recent-files
+  grid. File ▸ Open also
   opens a `.rstudio` project when you pick the `manifest.json` inside it.
   W11-D: every route — the File ▸ Open picker, drag-and-drop (onto an open
   document or an empty window), File ▸ Open Recent and a file named on the
@@ -122,12 +139,14 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   32-bit document whose file has another bit depth. File ▸ New does not yet
   pre-fill the clipboard image's size.
 - **Work in Photopea's layout:** the menu bar, a full-width options bar,
-  document tabs over the canvas, and two dock columns holding 15 panels
-  (Layers, Channels, Paths, Properties, Adjustments, History, Navigator, Info,
-  Histogram, Color, Swatches, Brushes, Character, Paragraph, Actions; W11-I
-  adds Window ▸ CSS: the active layer's position and size, opacity, fill
-  colour or gradient, border and border-radius, box-shadow / text-shadow
-  and text colour and font as CSS, with a Copy button). The
+  document tabs over the canvas, and two dock columns holding 23 panels
+  (`ui::dock::PanelId::ALL`): Layers, Channels, Paths, Properties,
+  Adjustments, History, Navigator, Info, Histogram, Color, Swatches, Brushes,
+  Character, Paragraph and Actions; W10-I's Animation; W10-B's Layer Comps,
+  Tool Presets, Glyphs, Notes, Character Styles and Paragraph Styles; and
+  W11-I's CSS (the active layer's position and size, opacity, fill colour or
+  gradient, border and border-radius, box-shadow / text-shadow and text
+  colour and font as CSS, with a Copy button). The
   document is fitted and drawn inside the canvas area, between the tool column,
   the docks and the bars. Workspaces: Essentials, Painting, Photography,
   Minimal. F cycles the screen modes. Light and dark themes.
@@ -153,7 +172,7 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   and free-transforms the copy; Shift+[ / Shift+] step the brush hardness by
   25%; the number keys set the painting tool's opacity (1 = 10% … 0 = 100%,
   two quick digits an exact value).
-- **Paint** with the 58 tools of a grouped, Photopea-ordered palette (59
+- **Paint** with the 68 tools of a grouped, Photopea-ordered palette (69
   counting Free Transform, which is `Ctrl+T` and a menu item, not a button),
   including brush, pencil (Auto Erase), eraser, background and magic eraser;
   clone and pattern stamp, history brush; healing, spot healing, patch,
@@ -318,8 +337,8 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   group; the unselected layers keep their slots), one undo step; Layer ▸
   Select Linked Layers adds every layer in the selection's link groups;
   Layer ▸ New Layer Based Slice adds a slice over the active layer's ink,
-  named after the layer and picked for Slice Options (a slice is not a
-  history step); Edit ▸ Transform ▸ Again (Shift+Ctrl+T) re-applies the
+  named after the layer and picked for Slice Options, one undo step (since
+  W11-E every slice edit is one History step); Edit ▸ Transform ▸ Again (Shift+Ctrl+T) re-applies the
   last committed whole-layer Free Transform (scale / rotate / skew) to the
   active layer and Again with Copy (Shift+Alt+Ctrl+T) applies it to a
   duplicate, one undo step each (the record is kept for the session; a
@@ -387,7 +406,10 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   Selection, Reveal All, Image Size, Canvas Size, rotate or flip the canvas.
   The Ruler tool straightens a layer; a four-point Color Sampler reads values.
 - **Channels:** isolate one RGB component, then paint, erase, fill, filter or
-  bake an adjustment into it alone.
+  bake an adjustment into it alone. W10-B: a layer-mask row shows the mask
+  alone in grayscale and aims painting at it, and a saved selection's eye
+  opens it as an alpha channel you can paint, stored back when you close it
+  (see Known gaps).
 - **16-bit:** create a 16-bit document, or convert with Image ▸ Mode (one
   undoable step). It composites at 16 bits, saves and reopens as `.rstudio`
   with its 16-bit tiles, and exports 16-bit PNG and TIFF. Filters,
@@ -417,7 +439,8 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   no 32-bit New Document. W11-H: an EXR or HDR opens into a 32-bit
   document, and File > Export to `.exr` (and an Export As EXR row at 100%)
   writes its float composite, values above 1.0 included; other formats and
-  scaled rows still write the clipped 8/16-bit composite.
+  scaled rows still write the clipped 8/16-bit composite, and Save as PSD
+  writes an 8-bit file of clipped layers.
 - **Edit:** Cut, Copy, Copy Merged, Paste, Paste in Place, Paste Into, Paste
   Outside, Clear (Delete or Backspace); Fill and Stroke dialogs, with
   Alt+Backspace / Ctrl+Backspace filling with the foreground / background
@@ -484,8 +507,10 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   under the current one, and Add / Duplicate / Delete frame are ordinary
   undoable layer edits (playback and onion skin are view state, never
   history).
-- **Export** PNG, JPEG, WebP (lossless), TIFF, GIF, BMP, TGA, ICO, SVG (the
-  raster embedded as a PNG) and (W10-F) PPM / PGM / PBM, DDS (uncompressed
+- **Export** PNG, JPEG, WebP (lossless, and since W11-H lossy, below), TIFF,
+  GIF, BMP, TGA, ICO, SVG (at 100%, shape layers as `<path>` and text as
+  `<text>`, the rest as embedded PNGs; see Known gaps) and (W10-F) PPM / PGM /
+  PBM, DDS (uncompressed
   BGRA or BC3 / DXT5) and AVIF (8-bit 4:4:4 with alpha and a quality
   slider, `ravif`; Export As estimates its size but cannot preview it, as
   nothing here reads AVIF back); W11-H: EXR (32-bit float, linear light,
@@ -496,7 +521,8 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   JPEG XL by name from File ▸ Export too; and File ▸ Export / Save as PSD to
   a `.psb` writes Photoshop's large document format (version 2, 64-bit
   lengths); Save as PSD on a canvas past 30 000 px offers `.psb` first, and
-  such a canvas under a `.psd` name is refused, naming `.psb` — with presets and several presets in one run;
+  such a canvas under a `.psd` name is refused, naming `.psb`. Export As has
+  presets and writes several rows (format and scale) in one run;
   Export Layers and File ▸ Export ▸ Slices (the Slice Select tool moves,
   resizes by an edge or corner, and Alt+click or Delete on the picked slice
   deletes the committed slices; the canvas draws the picked slice
@@ -551,12 +577,22 @@ matrix, each with its reason there:
 | --- | --- |
 | ICC-accurate CMYK, spot colours, Lab files | Since W7-D: Image ▸ Mode ▸ Lab / CMYK / Indexed convert (one undo step each; CMYK on a documented naive ink model, not an ICC press profile; Indexed through its own dialog); File ▸ Export and Export As write a CMYK document as CMYK JPEG/TIFF and an Indexed one as a palette PNG (GIF keeps its colours) — since W8-B the palette PNG always writes: an image past 256 RGBA colours (a soft stroke painted after the conversion) is re-quantised with 1-bit alpha, as Photoshop's Indexed stores it; Export As says when a format writes the document as RGB instead (always, for Lab), and since W8-B File ▸ Export says so in the status line; Info adds a Lab or CMYK row for a document in that mode, and since W8-B the Color panel switches to Lab / CMYK / Gray (K%) notation when the document is in that mode (the user can still pick another); since W8-B Image ▸ Adjustments ▸ Levels and Curves on a Lab document list Lightness / a / b (no composite row; they open on Lightness, so a first move keeps greys neutral) and preview and apply on those channels, and since W10-H so does a Levels/Curves *adjustment layer* in a Lab document; since W10-H Indexed Color flattens a layered document (one undo step, and the status line says so), Image ▸ Mode ▸ Bitmap… (threshold, pattern / diffusion dither, halftone screen) and Duotone… (1-4 inks with curves, baked into the pixels) convert from Grayscale, and Image ▸ Apply Image… / Calculations… exist; View ▸ Proof Colors and Gamut Warning are enabled and change the canvas. Still missing: a press profile and spot colours, any Lab file (Lab goes out as RGB, and both export routes say so), and re-editable duotone inks. |
 | Camera RAW files, PDF / AI import, Sketch / XD / Figma | Per-sensor demosaic (Filter ▸ Camera Raw… exists and edits any layer's pixels, but no raw file opens); a PDF interpreter; proprietary formats. |
-| Video timeline; collaboration, cloud, mobile | Out of scope; non-goals. (The frame-animation timeline exists since W10-I: Window ▸ Animation, see Animations above.) |
+| Video timeline | Out of scope for this release: no keyframed layer properties, video layers or audio. (The frame-animation timeline exists since W10-I: Window ▸ Animation, see Animations above.) |
+| Collaboration, cloud storage, sharing online, mobile | Non-goals: this is a local-first desktop application whose own code makes no network calls, so nothing that needs a server is offered. |
 
-**Absent, and not yet decided:**
-Adaptive Wide Angle;
-Scripts;
-JPEG XL export is lossless only (no pure-Rust lossy JPEG XL encoder); opening AVIF or HEIC (see Open above).
+**Absent, and not yet decided** (the parity matrix lists the same):
+
+- Filter ▸ Adaptive Wide Angle.
+- Scripts: there is no scripting engine; the Actions panel replays recorded
+  edits only.
+- Take a Picture (capturing an image from a camera).
+- Generative and neural-model features (AI fill, model-based cut-outs): no
+  model ships. Select ▸ Subject and the Object Selection tool are classical
+  (saliency and GrabCut), colour-driven rather than semantic.
+- Lossy JPEG XL export: File ▸ Export and Export As write lossless JPEG XL
+  only, because no pure-Rust lossy JPEG XL encoder exists.
+- Opening AVIF or HEIC: both are refused by name, with the reason (see Open
+  above): no pure-Rust decoder this build accepts. AVIF *export* works.
 
 **Known gaps in what exists:**
 
@@ -634,8 +670,9 @@ JPEG XL export is lossless only (no pure-Rust lossy JPEG XL encoder); opening AV
   16-bit document writes its raster layers' 16-bit samples, but a shape's,
   smart object's or text layer's rendered preview and the merged image are
   8-bit values widened to 16 bits.
-- **Pattern effects cross PSD one way only.** A Pattern Overlay (and a
-  pattern-filled glow or stroke) renders, and is saved inside the `.rstudio`
+- **Pattern-filled glows and strokes do not cross PSD, and cannot be set in
+  the dialog.** A Pattern Overlay (and a pattern-filled glow or stroke)
+  renders, and is saved inside the `.rstudio`
   document with its pixels. PSD import reads the file's patterns (the
   `Patt`/`Pat2`/`Pat3` blocks) when they are 8-bit RGB or greyscale, raw or
   RLE; a pattern in any other image mode (indexed, CMYK, Lab ...), at any
@@ -650,7 +687,8 @@ JPEG XL export is lossless only (no pure-Rust lossy JPEG XL encoder); opening AV
   stroke is still named as not written. The Layer
   Style dialog picks the overlay's pattern, but has no control yet that sets a
   glow's or stroke's fill to a pattern.
-- **Channels** isolate a layer mask (selecting its row shows it alone in
+- **Channels** isolate a colour component (and paint, fill, filter or adjust
+  it alone), a layer mask (selecting its row shows it alone in
   grayscale and aims painting at it) and a saved selection (W10-B: its eye
   opens it as a hidden scratch layer's mask, shown alone in grayscale and
   painted like any mask, and a second click stores the painted coverage
@@ -733,6 +771,11 @@ JPEG XL export is lossless only (no pure-Rust lossy JPEG XL encoder); opening AV
   goes ahead. Guide locks, the Paths panel's unsaved Work Path and a slice's target,
   message and cell text are not written. Checked by re-reading the written
   file in this build, not yet in Photoshop.
+- **Colour labels do not cross PSD.** The W11-E labels are saved in the
+  `.rstudio` document only: PSD export writes no `lclr`, and a `.psd`'s own
+  label is dropped on import and named in the report (its note still says
+  "is not shown by this layers panel and was not kept", worded before the
+  labels existed).
 - **Print** writes a PDF; there is no OS printer-spooler dialog.
 - **Content-aware:** Fill, Content-Aware Scale and the Spot Healing Brush's
   Content-Aware type run on a job worker (the heal lands as one undo step
@@ -784,7 +827,7 @@ the workflow.
 ```bash
 cd raster-studio
 cargo check --workspace --all-targets   # type-check everything
-cargo test  --workspace                 # ~4,500 tests
+cargo test  --workspace                 # ~5,600 #[test] functions
 cargo run   -p studio-desktop           # launch
 ```
 

@@ -48,7 +48,7 @@ quality-of-implementation note.
 | A package that writes into a file outside itself, for a whole session | `commands.journal` is the one file the application writes back into a package it did not build. A symlinked journal would be an arbitrary-file-write primitive: `append` writes attacker-chosen JSON into the target and `clear` truncates it. It is refused on open **and re-checked by every writer immediately before opening it**, since a link can be planted after the open. | `project-format/src/journal.rs`; `project-format/src/package.rs` |
 | A declared size that becomes a huge allocation | Every read is capped **before** the allocation, against the file's metadata first and re-checked after the read so a file that grew in between is still refused (in that race, only after the grown file was read into memory). Aggregates are capped as well as per-item sizes, and the tile-count cap is enforced *while collecting* rather than by measuring the finished set. The bounds are tabulated in [`file-format.md`](file-format.md). | `project-format/src/safepath.rs` — `read_capped`; `tiles.rs`, `assets.rs`, `package.rs` (`FileCaps`, `TileCaps`, `AssetCaps`) |
 | A package that saves and then never reopens | Every one of those bounds is applied on the way **out** as well, from the same accessor the load reads, so the two sides cannot drift. A save can fail loudly; it cannot succeed into a file that will not open. This is a fix, not a design flourish: an embedded asset over the store's blob limit and an asset index over 16 MiB each saved `Ok` and then failed every subsequent open with the user's only copy inside. | `project-format/src/assets.rs` (`caps`), `tiles.rs` (`TileCaps`), `package.rs` (`file_caps`) |
-| A compressed tile blob (`.tilez`) that inflates without bound | The inflate is capped at `MAX_TILE_BYTES` (one RGBA16 tile, 512 KiB) while it runs; a blob that would inflate past it is `FileTooLarge`, and one that does not inflate is `CorruptBlob` (`a_compressed_blob_that_inflates_past_the_cap_is_refused`). The cap is the same number on the write side. | `project-format/src/tiles.rs` — `inflate_capped`, `TileCaps` |
+| A compressed tile blob (`.tilez`) that inflates without bound | The inflate is capped at `MAX_TILE_BYTES` (one RGBA `f32` tile, 1 MiB, since W10-H) while it runs; a blob that would inflate past it is `FileTooLarge`, and one that does not inflate is `CorruptBlob` (`a_compressed_blob_that_inflates_past_the_cap_is_refused`). The cap is the same number on the write side. | `project-format/src/tiles.rs` — `inflate_capped`, `TileCaps` |
 | Tampered or corrupted pixels | Every tile and asset blob is named by the BLAKE3 of its own bytes and re-hashed on read; a mismatch is `CorruptBlob`. The three files that are not content-addressed — `document.msgpack`, `assets/index.json`, `previews/preview.png` — are verified against the digest `Manifest::contents` records, with a *missing* entry treated as a failure rather than as permission to skip. | `project-format/src/tiles.rs`, `assets.rs`, `package.rs` — `verify_listed` |
 | A rewritten manifest | The manifest carries a BLAKE3 seal over its own fields and over `contents`, computed in a canonical order-stable encoding. An empty `integrity` never verifies. | `project-format/src/manifest.rs` — `seal`, `verify_seal` |
 | A document from a newer build decoding into nonsense | The format version is read out of the serialized document by a one-field probe **before** the document is decoded, and a version outside `1..=4` is refused by name. | `project-format/src/migrate.rs` |
@@ -103,12 +103,12 @@ and its full-size `.new-` sibling is left on disk for a human to delete.
 | Threat | Mitigation | Implemented in |
 | --- | --- | --- |
 | A truncated or lying section causing an out-of-bounds index | Every multi-byte field is read through a bounds-checked `Cursor` that returns `PsdError::Truncated` instead of panicking, and each section is parsed through a **sub-cursor** carved to the length the file declared — so a section that lies can only damage itself. Where a byte-for-byte inner loop does index directly (PackBits, the ZIP row predictor, the channel interleavers), the bound is established in that same function from a length it is holding; nothing indexes on the strength of a count another function promised. | `psd/src/bytes.rs` — `Cursor`, `Cursor::sub`; `psd/src/packbits.rs`, `zip.rs`, `codec.rs` |
-| A four-billion-layer header reserving four billion records | Every count is checked against `ReadOptions` **before** the `Vec` is reserved, and additionally against the bytes actually remaining. Defaults: 30 000 px per edge, 8 192 layers, 64 channels per layer, 4 096 name units, 8 192 descriptor items. | `psd/src/limits.rs` — `ReadOptions` |
+| A four-billion-layer header reserving four billion records | Every count is checked against `ReadOptions` **before** the `Vec` is reserved, and additionally against the bytes actually remaining. Defaults: 30 000 px per edge (300 000 for a `.psb`, `max_psb_dimension`), 8 192 layers, 64 channels per layer, 4 096 name units, 8 192 descriptor items. | `psd/src/limits.rs` — `ReadOptions` |
 | Many individually reasonable layers adding up to a hostile total | All decoded pixel bytes are drawn from one shrinking `Budget` shared by the whole read — 1 GiB by default. Per-field ceilings cannot express this. | `psd/src/limits.rs` — `Budget` |
 | A decompression bomb | ZIP channels inflate through a `take` capped one byte past what the channel's geometry requires, so a bomb is refused after one extra byte. | `psd/src/zip.rs` |
 | A stack overflow (an abort, not an error) from deep nesting | Descriptor parsing and group nesting are both depth-limited (32 and 64). Walking, writing, flattening and **dropping** the resulting tree are each written with an explicit stack, including `GroupData`'s `Drop` — defence in one layer is not defence. | `psd/src/limits.rs`, `descriptor.rs`, `model.rs`, `read.rs` |
 | A header alone asking the allocator for fourteen gigabytes | `flatten` takes its canvas size from a header a caller can supply with no file behind it, so it draws every canvas from `WriteOptions::max_flatten_bytes` (2 GiB) and refuses before it reserves. | `psd/src/flatten.rs` |
-| Colour modes read as RGB producing silently wrong pixels | CMYK, Lab, Indexed, Duotone, Multichannel and Bitmap are **refused by name** rather than approximated. PSB (`.psb`, version 2) is refused with `UnsupportedVersion`. | `psd/src/header.rs`, `read.rs` |
+| Colour modes read as RGB producing silently wrong pixels | CMYK, Lab, Indexed, Duotone, Multichannel and Bitmap are **refused by name** rather than approximated. Since W10-F a `.psb` (version 2) is read through the same bounded cursor with 64-bit lengths (`PsdHeader::read_any`); any other version is refused with `UnsupportedVersion`. | `psd/src/header.rs`, `read.rs` |
 
 **Reachability, live:** `psd` is wired into `app-shell`. File ▸ Open reads the
 file on an import worker, refusing anything over 2 GiB before reading
@@ -157,9 +157,19 @@ gigabyte. A caller in that position must construct its own limits.
 | Clipboard images | Refused over 16 384 px per side — after `arboard` has already materialised them. | `app-shell/src/clipboard.rs` |
 | Recent-file thumbnails | The start screen reads a recent package's `previews/preview.png` with plain `std::fs::read`: no size cap, no symlink refusal, no digest check. The decode is bounded by `ImportLimits`. | `app-shell/src/chrome.rs` — `recent_thumb_image` |
 | System fonts and `RASTER_STUDIO_FONT_DIRS` | Parsed in-process by the text engine's font loader. | `text-engine/src/font.rs` |
+| A font file opened with File ▸ Open (`.ttf` `.otf` `.ttc` `.otc`, W9-K) | Read whole with `std::fs::read` (**no size cap**) and parsed in-process for the session. | `app-shell/src/editor.rs` — `load_font_file` |
+| Other image formats (W10-F, W11-H): Netpbm, DDS, JPEG XL, GIMP `.xcf`, OpenEXR, Radiance `.hdr`, `.icns`, IFF, Krita `.kra` | Each reader checks the declared size against `ImportLimits` before allocating (OpenEXR: the header and every part's data and display window, before `image` decodes a block), and each has truncation and bit-flip sweeps that error without panicking. A `.kra` is read through this crate's own bounded ZIP reader (stored / deflate, inflate capped at the allocation ceiling, ZIP64 and encryption refused). | `raster/src/formats/` |
+| SVG and `.svgz` (W9-N) | The file, and a `.svgz`'s inflated text, are each capped at 64 MiB (inflated through a capped reader); `<image>` references resolve for `data:` URLs only; the raster is bounded by `ImportLimits`. | `raster/src/codec.rs` — `svg_import` |
+| AVIF and HEIC | Refused by name before any decoding: no decoder for either is linked (AVIF is encode-only). | `raster/src/formats/avif.rs`, `formats/mod.rs` |
+| A `.abr` brush library (W9-E) | Refused from its metadata over 64 MiB (`MAX_ABR_BYTES`); at most 1 000 brushes, 5 000 px a side, and 256 Mi decoded pixels in total, taken before each tip is decoded, so a PackBits bomb is refused rather than expanded. | `asset-store/src/abr.rs`; `app-shell/src/editor.rs` — `import_abr` |
+| A `.asl` style library (W9-H) | Read whole with `std::fs::read` (**no size cap**); at most 100 000 styles (`MAX_ASL_STYLES`); its patterns are read under the `psd` crate's decode `Budget`. | `asset-store/src/asl.rs`; `app-shell/src/menu_bridge/asl_import.rs` |
+| `.pat` `.grd` `.csh` `.aco` `.ase` `.icc` resource files (W9-N) | The whole file is capped at 64 MiB (`MAX_RESOURCE_BYTES`) before it is read, every read goes through the `psd` crate's bounds-checked `Cursor`, and every declared count is checked against a limit (`MAX_ENTRIES`, `MAX_STOPS`, `MAX_KNOTS`; an ICC profile at 16 MiB) before anything is reserved. | `asset-store/src/resources/` |
 
 A linked smart object's path would be read by `refresh_linked_sources`, but no
-UI route calls it yet. ICO and SVG export add no input surface.
+UI route calls it yet. Layer ▸ Smart Object ▸ Embed Linked (W11-E) does read
+the linked file: whole, with `std::fs::read` and **no size cap**
+(`app-shell/src/layer_ops_w11e.rs` — `embed_linked`). Export formats add no
+input surface.
 
 ## 5. Untrusted asset-store directory
 
@@ -189,7 +199,7 @@ the platform will not name one).
 | Threat | Mitigation | Implemented in |
 | --- | --- | --- |
 | A corrupt or hostile preferences file stopping the app from starting, or dividing the layout by a zero UI scale | Loading is **infallible**: a missing, truncated or newer file falls back to defaults, and every scalar setting is clamped on the way in rather than trusted. Swatch colours and brush-preset ranges are not clamped; only non-finite entries are dropped. | `app-shell/src/prefs.rs` — `Preferences::load`, `sanitized` |
-| A hostile `actions.json` | Refused from its metadata over 256 MiB (`MAX_ACTIONS_FILE_BYTES`) and read through a bounded `take`; every recorded tile must be an RGBA8 or RGBA16 layer tile or an 8-bit mask tile filed under its own hash, or the whole file is refused. Saved atomically. | `app-shell/src/actions_library.rs` |
+| A hostile `actions.json` | Refused from its metadata over 256 MiB (`MAX_ACTIONS_FILE_BYTES`) and read through a bounded `take`; every recorded tile must be an RGBA8, RGBA16 or (W10-H) RGBA `f32` layer tile or an 8-bit mask tile filed under its own hash, or the whole file is refused. Saved atomically. | `app-shell/src/actions_library.rs` |
 | A hostile `presets.json` | **Not defended.** It is read whole with no cap, and a pattern preset with a zero width or height, or a short `rgba8`, panics when sampled (`PatternPreset::pixel`) — an abort under `panic = "abort"`. The file is loaded at startup. | `asset-store/src/presets.rs` |
 | A stale session marker blocking a start, or one instance deleting another's recovery data | Markers are per-pid, not a lock. A run only ever writes and removes the file named after its own pid, and a marker whose pid still names a live process is skipped rather than offered — declining a recovery deletes the autosave it was offering, which may be another instance's only copy of an hour of work. | `app-shell/src/session.rs` — `SessionMarker`, `process_is_running` |
 
@@ -241,8 +251,10 @@ network code to download an update with.
 - One feature-unification hazard, named where it happens: `image`'s codec
   features are requested in `crates/raster`, but Cargo unifies features across a
   workspace build, so `image` is compiled once with the union of every member's
-  requests and the GIF, BMP, ICO and TGA decoders are linked into every crate in
-  the workspace that depends on `image`. Treat that list as workspace-wide
+  requests (`crates/raster/Cargo.toml` asks for `gif`, `bmp`, `ico`, `tga`,
+  `avif`, `exr` and `hdr`) and the GIF, BMP, ICO, TGA, OpenEXR and Radiance HDR
+  decoders (and the AVIF encoder) are linked into every crate in the
+  workspace that depends on `image`. Treat that list as workspace-wide
   attack surface, not as one crate's private set.
 
 ## Out of scope

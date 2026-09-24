@@ -113,8 +113,17 @@ the same version fails to decode an unknown variant and silently drops unknown
 fields.
 
 The document also persists `meta.bit_depth` and `meta.color_mode` (a 16-bit
-document reopens as 16-bit), the guides (changed by the undoable
-`Command::SetGuides`), `stored_selection` and `saved_selections`.
+document reopens as 16-bit, and since W10-H a 32-bit one keeps its `f32`
+tiles), the guides (changed by the undoable `Command::SetGuides`),
+`stored_selection` and `saved_selections`, and the asset table that smart
+objects name. Two records were added within version 4, each omitted while
+empty so an older file loads without them: `extras` (W10-B: the layer comps,
+notes, character and paragraph styles with the links saying which text layer
+wears which, and the alpha channel open for editing; W11-E: the layer colour
+labels; edited through `Command::SetDocumentExtras`) and `slices` (W11-I: each
+slice's rectangle, name, URL and alt text, `editor_core::slices::DocumentSlice`;
+since W11-E slice edits go through `Command::SetSlices`). File Info (XMP) and
+Image ▸ Variables are kept for the session only and are not saved.
 
 ## Integrity: what the seal proves
 
@@ -217,7 +226,7 @@ succeed into a file that will not reopen.
 | `document.msgpack` | `MAX_DOCUMENT_BYTES` | 1 GiB |
 | `manifest.json` | `MAX_MANIFEST_BYTES` | 64 MiB |
 | `previews/preview.png` | `MAX_PREVIEW_BYTES` | 64 MiB |
-| one tile blob (on disk, and inflated) | `MAX_TILE_BYTES` | one `TILE_SIZE²` RGBA16 tile — 512 KiB (an RGBA8 tile is half that) |
+| one tile blob (on disk, and inflated) | `MAX_TILE_BYTES` | one `TILE_SIZE²` RGBA `f32` tile (W10-H) — 1 MiB (an RGBA16 tile is half that, an RGBA8 one a quarter) |
 | distinct tiles per package | `MAX_PACKAGE_TILES` | 1 048 576 |
 | all tile data | `MAX_TILE_DATA_BYTES` | 8 GiB |
 | one asset | `MAX_ASSET_BYTES` | 512 MiB |
@@ -227,7 +236,7 @@ succeed into a file that will not reopen.
 | `commands.journal` | `MAX_JOURNAL_BYTES` | 512 MiB — **read side only** |
 
 The aggregates are not implied by the per-item caps: a million tiles at
-`MAX_TILE_BYTES` is 512 GiB against an 8 GiB budget, and `MAX_ASSETS ×
+`MAX_TILE_BYTES` is 1 TiB against an 8 GiB budget, and `MAX_ASSETS ×
 MAX_ASSET_BYTES` is 32 TiB against 2 GiB. The tile-count cap is enforced *while
 collecting* rather than afterwards, so `TooManyTiles.count` is the point at
 which collecting stopped (`max + 1`) — the total is exactly what is never
@@ -238,7 +247,9 @@ the store's blob limit, and an asset index over 16 MiB, each saved `Ok` and then
 failed every subsequent open with the user's only copy inside. A third was
 wrong in the other direction: until W5 the tile cap was the RGBA8 size, so
 every save of a 16-bit document was refused
-(`a_16_bit_document_saves_and_reopens_with_the_same_pixels` pins the fix).
+(`a_16_bit_document_saves_and_reopens_with_the_same_pixels` pins the fix). W10-H
+raised it again, to one `f32` tile, when 32 Bits/Channel put those tiles in the
+store (`project_format::tiles::MAX_TILE_BYTES`).
 
 ## Untrusted input
 

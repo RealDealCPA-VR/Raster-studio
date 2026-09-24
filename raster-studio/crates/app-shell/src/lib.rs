@@ -29,8 +29,9 @@
 //!   the layers panel say "No layers yet" under a visible photograph.
 //! * **There is one chrome.** [`chrome::Chrome`] owns a [`ui::Workspace`] and
 //!   draws it: the nine menus, the tool palette and its fly-outs, the options
-//!   bar, all fifteen docked panels and the dialogs (Preferences included,
-//!   hosted by [`dialog_host`]) are the `ui` crate's, reached from the binary.
+//!   bar, all twenty-three docked panels (`ui::PanelId::ALL`) and the
+//!   dialogs (Preferences included, hosted by [`dialog_host`]) are the `ui`
+//!   crate's, reached from the binary.
 //!   What this crate still draws itself is what that crate has no model for —
 //!   the document tab strip, the start screen, the canvas extras
 //!   ([`canvas_extras`]: rulers, guides, grid, cursors, the brush ring, the
@@ -61,7 +62,8 @@
 //!   and Delete Cropped Pixels included — see `crop_apply::crop`, which
 //!   [`tool_input::ToolPointer::commit`] calls ([`tool_input::crop_command`]
 //!   is its geometry half alone). A slice set is exported by File > Export >
-//!   Slices, one file per region ([`slices_export`]).
+//!   Slices, one file per region, and saved with the `.rstudio` document
+//!   ([`slices_export`]); each slice edit is one History step (W11-E).
 //!
 //! # Known gaps
 //!

@@ -1,12 +1,21 @@
-# PSD thumbnail support — fidelity matrix and failure policy
+# PSD support — fidelity matrix and failure policy
 
-Card 072's contract: what the `.psd` reader/writer in `crates/psd` can
-actually carry for the thumbnail workflow, and what happens when it
-cannot. Every row below is grounded in source: the import conversion is
-`crates/app-shell/src/import.rs` (`psd::read` → the document model; the
-export back-trip is `psd::write`), and every **fallback** row names the
-exact status-bar note the import emits (see `Tally::record`). The notes
-are the user-visible failure policy — nothing is silently dropped.
+Card 072's contract, brought up to date at `fe978d3` (wave 11): what the
+`.psd` / `.psb` reader and writer in `crates/psd` carry into and out of this
+editor, and what happens when they cannot. Every row below is grounded in
+source. The import conversion is `crates/app-shell/src/import.rs`
+(`document_from_psd`: `psd::read` → the document model), with its child
+modules `psd_live.rs` (shape layers, smart objects, 16-bit samples),
+`psd_vector_mask.rs` (vector masks) and `psd_resources.rs` (guides, paths,
+alpha channels, slices); the export back-trip is `psd_from_document` in the
+same file (the document model → `psd::write`). The byte layouts live in the
+`psd` crate: `adjustments.rs`, `effects.rs` + `effects_rest.rs`, `fill.rs`,
+`pattern.rs`, `placed.rs`, `shape.rs`, `text.rs` + `engine_data.rs`,
+`resource.rs`.
+
+Every **fallback** row names the note the import or export puts in its
+report (see `Tally::record` and the other `notes.push` calls in `import.rs`).
+The notes are the user-visible failure policy — nothing is silently dropped.
 
 **A correct merged preview is explicitly insufficient proof of an
 editable layer round-trip.** The flattened composite is only the
@@ -14,63 +23,94 @@ appearance; the rows below are about the layers and their parameters.
 Original PSD bytes are never modified on import — `psd::read` takes a
 byte slice, and opening a file writes nothing.
 
+**What "verified" means here.** Unless a row says otherwise, a mapping is
+verified by this build's own tests: a file this build writes (or a
+hand-built one) read back by this build's own reader. The independent-reader
+evidence is listed at the end, and so is what has **not** been checked in
+Photoshop or Photopea themselves.
+
 ## Outcome vocabulary
 
 - **Editable** — the feature lands in the document model and stays
   editable (parameters, re-orderable, undoable).
 - **Appearance fallback** — the feature's *effect* is preserved as pixels
-  (or recorded prose) but the editable definition is not; the status bar
+  (or recorded prose) but the editable definition is not; the report
   names exactly what was lost.
 - **Unsupported (explicit)** — the feature has no model here and the
-  import says so, by name, in the status notes.
+  import or export says so, by name, in its notes.
 
 ## Import matrix (`psd::read` → editor document)
 
 | Feature | Outcome | Notes |
 |---|---|---|
-| Canvas size, bit depth, colour mode (8-bit RGB paths) | **Editable** | Canvas becomes the document; other depths/modes fall through the same converter the codecs use. |
+| File versions | **Editable** | Version 1 (`.psd`) and version 2 (`.psb`, 64-bit lengths, canvases to 300 000 px) open through the same road (`PsdHeader::read_any`; W10-F). |
+| Colour mode | **Editable** (RGB) / **Explicit** (greyscale) / **Unsupported (explicit)** (the rest) | `psd::ColorMode` has two modes: RGB, and greyscale, which opens as RGB with the note "a greyscale document was opened as RGB". A Bitmap, Indexed, CMYK, Lab, Multichannel or Duotone file is refused by name (`PsdError::UnsupportedColorMode`). |
+| Bit depth | **Editable** (8, 16) / **Appearance fallback** (32) | An 8-bit file opens as an 8-bit document; a 16-bit file opens as a 16-bit document whose layer tiles keep every sample (W9-M, `psd_live::deep_tile_edits`). A 32-bit file is converted down to 8 bits with the note "this is a 32-bit-per-channel document; Raster Studio edits 8, so its pixels were converted down" — although the editor has 32 Bits/Channel documents since W10-H, this road does not use them. |
 | Layer tree, groups (open/collapsed, PassThrough vs Isolated) | **Editable** | `LayerKind::Group` with `GroupBlending`; children keep order. |
 | Layer name, bounds, visibility | **Editable** | |
 | Blend mode, opacity, fill opacity | **Editable** | Modelled on both sides (`psd::BlendMode` ↔ `BlendMode`). |
 | Clipping ("clipped to layer below") | **Editable** | `ClippingMode::ClipToBelow`. |
-| Raster layer pixels (8-bit, incl. RLE/ZIP channels) | **Editable** | Tiles stored at the layer's own bounds; **full extents preserved** — ink outside the canvas is kept in the tile store and moves into view with the layer (or shows in an extended-region composite) rather than being dropped at import. |
-| Layer masks (8-bit coverage) | **Editable** | Imported as raster mask coverage at the mask's bounds, honouring the default colour; the default-colour region extends past the canvas the same way the layer extents do. |
-| Mask density / feather parameters | **Editable** | Card 076: density (`0..=255`) maps onto the model's `0.0..=1.0`; feather is stored in pixels, already the model's `feather_px` unit (a `.psd` mask has no space of its own beyond its layer's). The import note only fires for values the model refuses — a non-finite feather. (Export still does not write the parameters — see the export matrix.) |
-| Vector masks | **Appearance fallback** | Written as their rasterised coverage — "the vector mask on … was written as its rasterised coverage". A second, vector-derived mask "was not imported" by name. |
-| Adjustment layers — **Invert** (`nvrt`) | **Editable** | The one adjustment whose whole definition is its name. |
-| Adjustment layers — everything else | **Unsupported (explicit)** | The payload survives in `psd`'s model but this build will not invent slider values: the layer is kept empty and named — "adjustment layer(s) … were kept as empty layers; their effect is in the flattened image but not editable". |
-| Type layers — parseable `Txt ` string | **Editable (reported substitution)** | The string imports as an editable `LayerKind::Text` under the `TySh` transform (any affine). The format carries no font/size/fill outside the engine data, so the editor's new-text defaults are used and named — "type layer(s) … were imported as editable text with the default font, size and fill — the source font is not in this build's supported subset". The raw `TySh` bytes stay in the model and survive a save verbatim. |
-| Type layers — unparseable (`Txt ` missing or unreadable) | **Appearance fallback** | Pixels are imported; the text is not editable — "type layer(s) … were imported as pixels; the text is no longer editable". |
-| Layer effects — drop shadow, solid stroke, solid colour overlay, outer glow | **Editable** | Card 075: decoded from the `lfx2` descriptor into parameters (`crates/psd/src/effects.rs`): the enabled flag and master switch, blend mode, colour (stored gamma-encoded as document-space 0..1 — decoded to linear at render by the compositor, the same convention the 8-bit pixel path uses), opacity, radius/size, distance, angle and spread (stored as a fraction of size), and the block scale applied to every pixel length. An effect the file switches off stays absent — nothing is invented. The verbatim `lfx2` bytes are also retained on every layer, but **retention is not rendering**. |
-| Layer effects — everything else | **Unsupported (explicit)** | Inner shadow/glow, bevel, satin, gradient/pattern overlays, a gradient or pattern stroke, or any effect with required fields missing: named per effect kind — "the {kinds} effect(s) on {names} were not imported". A block that cannot be decoded at all keeps the blanket note — "layer effect(s) on {names} were not imported". |
-| Embedded ICC profile | **Retained (metadata)** | Card 076: resource 1039 is extracted (`psd::resource::icc_profile`) and its bytes ride in the document's colour space (`ColorSpace::IccProfile`, hashed like every other carrier of the variant). The pixels are NOT transformed at import — deliberate, documented: they load verbatim, the compositor converts matrix-shaper profiles at render, and a profile this engine cannot parse falls back to identity (`is_transform_supported`) rather than being silently reinterpreted. A profile that is measurably sRGB (`MatrixShaper::is_srgb_equivalent`, sampled over primaries and tone curves) is recorded as sRGB — exact, so the bytes are redundant. When a profile is retained, the resources note drops "the colour profile" from its list. |
-| Smart objects (cached composite pixels) | **Appearance fallback** | The cached pixels import as a raster layer; the placed-source identity does not survive the trip (a `.psd` stores a different structure). |
-| Layer transforms (arbitrary affines) | **Appearance fallback** | Where a `.psd` cannot express the stored transform, pixels are written where they are stored — "… their pixels were written where they are stored". |
-| Layer locks (composite/pixels, transparency protect) | **Editable** | Round-trip both directions (import `import.rs:899–905`, export `psd_layers_for`). A PSD never produces a blanket lock; the "no .psd equivalent" note is export-side only — a blanket lock authored here "has no .psd equivalent and was not written". |
-| Layer colour labels | **Unsupported (explicit)** | Not shown by this layers panel and not kept — named. |
-| Pass-through + blend mode on one group | **Appearance fallback** | A `.psd` "stores only the" pass-through; the blend mode is named as lost. |
-| Files with no layers / no flattened image | **Explicit** | Notes state the flattened image became one layer, or the canvas is empty. |
+| Layer locks (composite/pixels, position, transparency protect) | **Editable** | Round-trip both directions (import `layer_common`, export `psd_layers_for`). A PSD never produces a blanket lock; the "no .psd equivalent" note is export-side only. |
+| Raster layer pixels (8- or 16-bit, raw / RLE / ZIP channels) | **Editable** | Tiles stored at the layer's own bounds; **full extents preserved** — ink outside the canvas is kept in the tile store and moves into view with the layer rather than being dropped at import. |
+| Layer masks | **Editable** | Imported as raster mask coverage at the mask's bounds, honouring the default colour; the default-colour region extends past the canvas the same way the layer extents do. |
+| Mask density / feather parameters | **Editable** | Card 076: density (`0..=255`) maps onto the model's `0.0..=1.0`; feather is stored in pixels, already the model's `feather_px` unit (a `.psd` mask has no space of its own beyond its layer's). The import note only fires for values the model refuses — a non-finite feather. W11-C: export writes them too (export matrix). |
+| Vector masks (`vmsk` / `vsms`) | **Editable** | W9-G: a non-shape layer's path becomes a live vector mask (`psd_vector_mask::path_from_psd`), with its density and feather from the mask parameter block. The mask record's rendering of the vector is not imported as pixels; a second (`real`) record becomes the pixel mask. A `real` record with no path block is the one case left: "{names} carried a second, vector-derived mask that was not imported". |
+| Shape layers (path + `SoCo` / `GdFl` / `PtFl` fill + `vstk` stroke) | **Editable** | W9-M: a live shape layer — path in canvas pixels with an identity transform, solid / gradient / pattern fill, stroke width, colour, opacity, cap, join, alignment and dash (`psd_live::shape_from_psd`). A shape whose path does not parse, or whose pattern fill names a pattern the file does not carry, does not open as a live shape layer. |
+| Fill layers (`SoCo` / `GdFl` / `PtFl` with no path) | **Editable** | W9-B: live Solid Color / Gradient / Pattern fill layers, evaluated by the compositor, re-editable from Properties. A noise gradient, or a pattern fill naming a pattern the file does not carry, is not mapped: the fill key then goes to the adjustment decoder, which does not know it, so the layer is kept empty and named by the adjustment note below. |
+| Adjustment layers | **Editable** | W11-A: all sixteen adjustment keys a `.psd` defines — Invert (`nvrt`), Levels (`levl`), Curves (`curv`), Brightness/Contrast (`brit`), Hue/Saturation (`hue2`), Color Balance (`blnc`), Black & White (`blwh`), Photo Filter (`phfl`), Channel Mixer (`mixr`), Posterize (`post`), Threshold (`thrs`), Gradient Map (`grdm`), Selective Color (`selc`), Exposure (`expA`), Vibrance (`vibA`), Color Lookup (`clrL`, with its embedded `.cube`) — open as live adjustment layers (`psd::adjustments::decode`, bounded). Settings the model cannot hold (per-range Hue/Saturation settings, gradient colour midpoints, curves beyond red, green and blue) are named — "the {what} of “{layer}” did not import; the layer's other settings did". |
+| Adjustment layers — payloads that do not decode | **Unsupported (explicit)** | A malformed payload, Photo Filter version 3 (XYZ colour), a Color Lookup with no embedded `.cube` or Curves stored as 256-entry maps: the bytes survive in the `psd` crate's model, but this build will not invent slider values — the layer is kept empty and named ("adjustment layer(s) this build cannot evaluate …", below). |
+| Type layers — string and engine data | **Editable** | W9-C: the `Txt ` string (or the engine data's own text) imports as a `LayerKind::Text`, styled from the text engine data (a bounded parser): each run's font, size, fill, tracking, faux bold / italic, underline / strikethrough and super / subscript; the first run's leading, caps, horizontal / vertical scale and baseline shift; the first paragraph's alignment, indents and spacing; point or box frame. The `TySh` transform is placed at Photoshop's anchor (point text's first baseline at its aligned edge, measured by shaping the layer; box text by its box corner). A font this machine lacks is kept by name and its stand-in reported — "the font “{font}” used by {names} is not installed; “{substitute}” stands in for it until it is". A later run's different leading / caps / scale / baseline shift, manual kerning and a later paragraph that differs are named, not applied. The raw `TySh` bytes stay in the model. |
+| Type layers — engine data absent or unreadable | **Editable (reported substitution)** | The string still imports as editable text with the editor's new-text defaults, named — "type layer(s) … were imported as editable text with the default font, size and fill — the source font is not in this build's supported subset"; unreadable engine data also gets "the text styling of “{layer}” could not be read ({reason}); it was imported with the default font, size and fill". |
+| Type layers — no parseable string | **Appearance fallback** | Pixels are imported; the text is not editable — "type layer(s) … were imported as pixels; the text is no longer editable". Warp and the other engine-data keys this build does not read are neither applied nor reported. |
+| Layer effects — all ten kinds | **Editable** | Card 075 (drop shadow, solid stroke, colour overlay, outer glow), W8-D (pattern overlay, resolved against the file's patterns) and W11-B (inner shadow, inner glow, bevel and emboss, satin, gradient overlay, through `effects_rest.rs`, the mapping the `.asl` import shares): blend mode, colour, opacity, sizes and distances scaled by the block's `Scl `, angles, and the drop-shadow / inner-shadow / glow / bevel contours (`TrnS`). Photoshop CC's repeated effects map when their `...Multi` lists sit inside the `lfx2` descriptor. An effect the file switches off stays absent. The verbatim `lfx2` bytes are also retained on every layer, but **retention is not rendering**. |
+| Layer effects — what does not map | **Unsupported (explicit)** | A gradient- or pattern-filled stroke or glow, an effect with required fields missing, an unknown effect key, and a pattern overlay naming a pattern the file does not carry: named per kind — "the {kinds} effect(s) on {names} were not imported". The separate `lmfx` block Photoshop CC writes for repeated effects is not read and not reported. A block that cannot be decoded at all keeps the blanket note — "layer effect(s) on {names} were not imported". |
+| Patterns (`Patt` / `Pat2` / `Pat3`) | **Editable** / **Unsupported (explicit)** | W8-D: 8-bit RGB or greyscale, raw or RLE, feed pattern overlays and pattern fills. Any other image mode, 16- or 32-bit depth, or ZIP compression is refused and noted ("…; layers that use it keep no pattern"). |
+| Smart objects (`SoLd` / `PlLd` + `lnk2` / `lnk3` / `lnkD`) | **Editable** | W9-M: an embedded placed file becomes a live smart object — the file is its asset, its decoded pixels its source, the four placed corners its transform (`psd_live::smart_from_psd`). |
+| Smart objects — linked, missing or undecodable file | **Appearance fallback** | The cached pixels import as a raster layer — "the smart object “{layer}” was imported as pixels: {why}" (e.g. "it links to a file outside the document"). A linked-file entry the reader refuses is named too ("…; smart objects that place it open as pixels"). |
+| Guides (resource 1032) | **Editable** | W11-C: the document's guides (`psd_resources::import_resources`). Guide locks are not a `.psd` concept. |
+| Saved paths (2000–2997) and the work path (1025) | **Editable** | W11-C: path layers (no-fill, no-stroke shape layers, the Paths panel's rows); the work path arrives as a saved path called "Work Path". A path with no drawable geometry is named: "the path {name} has no geometry this build can draw and was not kept". |
+| Alpha channels (merged-image extra channels named by 1006 / 1045) | **Editable** | W11-C: saved selections (the Channels panel's alpha rows). One that cannot be kept is named: "the alpha channel {name} could not be kept as a saved selection: {reason}". |
+| Slices (1050) | **Editable** | W11-C: user and layer slices (version 6, and versions 7-8 as a descriptor, tested on a descriptor this build writes) with name, URL and alt text become the document's slices, loaded into the Slice tools' store; Photoshop's auto-generated fill slices are skipped. |
+| Embedded ICC profile | **Retained (metadata)** | Card 076: resource 1039 is extracted (`psd::resource::icc_profile`) and its bytes ride in the document's colour space (`ColorSpace::IccProfile`). The pixels are NOT transformed at import — deliberate, documented: they load verbatim, the compositor converts matrix-shaper profiles at render, and a profile this engine cannot parse falls back to identity (`is_transform_supported`) rather than being silently reinterpreted. A profile that is measurably sRGB (`MatrixShaper::is_srgb_equivalent`) is recorded as sRGB. When a profile is retained, the resources note drops "the colour profile" from its list. |
+| Other image resources | **Unsupported (explicit)** | Everything but guides, slices, paths, alpha-channel names, the resolution (every writer synthesises one, so it is not reported) and a retained profile is counted and named as left behind (failure policy 1). |
+| Layer colour labels (`lclr`) | **Unsupported (explicit)** | Dropped and named — "the colour label on {names} is not shown by this layers panel and was not kept". The note's wording predates W11-E: the editor has colour labels now (saved in the `.rstudio` document), but a `.psd`'s label is not mapped onto them. |
+| Pass-through + blend mode on one group | **Appearance fallback** | Export-side: a `.psd` "stores only the" pass-through; the blend mode is named as lost. |
+| Files with no layers / no flattened image | **Explicit** | "this file has no layers, so its flattened image became one layer", or "this file has neither layers nor a flattened image; the canvas is empty". |
+| A damaged file the reader could repair | **Explicit** | "the file was read with a repair: {warning}". |
 
-## Export matrix (`psd::write` — the back-trip)
+## Export matrix (`psd_from_document` → `psd::write`)
 
 | Feature | Outcome | Notes |
 |---|---|---|
+| File version | **Editable** | A canvas up to 30 000 px is written as a `.psd`; past that (to 300 000 px) as a `.psb`, and Save as PSD offers `.psb` first (W11-H). `.psb` bytes under a `.psd` name are refused, naming `.psb`. |
+| Bit depth | **Editable** (8, 16) / **Appearance fallback** (32) | A 16-bit document is written as a 16-bit file (raster layers at their stored samples; rendered previews, masks and the merged image are 8-bit values widened exactly). A 32 Bits/Channel document is written as an 8-bit file: its `f32` tiles are clipped and rounded (`raster::rgba8_view`), and no note says so. |
 | Layer tree, groups, order, names, bounds, visibility | **Editable** | Round-trips. |
-| Blend mode, opacity, fill opacity, clipping | **Editable** | |
-| Raster pixels, layer masks (8-bit coverage) | **Editable** | |
-| Invert adjustment | **Editable** | |
-| Editable text (TySh) — the card-072 subset | **Editable** | Card 079: a complete `TySh` block is synthesized — string, layer transform, no-warp, bounds, and a full engine-data payload (one paragraph, one style run covering every character, named font/size, black fill) — so a re-typesetting reader has every run it demands, and the layer's rendered appearance rides as valid fallback pixels beneath it. Styling beyond the subset (per-span styles, custom kerning, paragraph boxes) is NOT claimed; the export report names the subset. Independent-editor (Photoshop/Photopea) confirmation of the synthesized payload is recorded as pending manual evidence. |
-| This editor's Text / Shape / SmartObject layers | **Appearance fallback** | Card 078: the layer is rendered alone through the compositor (its real transform, mask detached so the mask channel cannot double-apply) and the rendered pixels are written as the record's channels — an independent reader shows the layer. The note names the fallback. A smart object's smart filters (W7-E) are part of that rendered appearance: they are baked into the pixels, and the stack itself is **not** written as editable PSD smart-filter data (out of scope). |
-| Drop shadow, stroke (solid), colour overlay, outer glow | **Editable** | Card 080: written as a real `lfx2` descriptor block (the exact inverse of the import mapping) — an independent reader can toggle and restyle them. Fallback-rendered layers strip effects from their baked pixels so nothing draws twice. |
-| Inner shadow / inner glow / bevel / satin / gradient & pattern overlays, non-solid effect fills | **Unsupported (explicit)** | Not written; named per effect kind by the export note. |
-| Mask density/feather authored here | **Unsupported (explicit)** | Not written; named. |
-| Arbitrary per-layer affines | **Appearance fallback** | Pixels are written at their stored locations (the note above). |
+| Blend mode, opacity, fill opacity, clipping, locks | **Editable** | A blanket lock is named: "the blanket lock on {names} has no .psd equivalent and was not written". |
+| Raster pixels, layer masks | **Editable** | A layer whose transform a `.psd` cannot express is written where its pixels are stored — "{names} carry a transform a .psd cannot express; their pixels were written where they are stored". |
+| Mask density / feather | **Editable** | W11-C: written in the mask record's parameter block. Only a pixel mask with no stored pixels, which writes no record, still gets "the mask density or feather on {names} was not written". |
+| Vector masks | **Editable** | W9-G: `vmsk` path records (through the layer's and the mask's pose) and the vector density / feather pair; with a pixel mask too, the first record is the vector's rendering and the pixel mask the `real` one. A vector-only mask is written with no rendered coverage, so a reader that ignores `vmsk` sees no mask. A mask whose path cannot be written, or an older vector-kind mask with no path, goes out as coverage — "the vector mask on {names} was written as its rasterised coverage". |
+| Adjustment layers | **Editable** | W11-A: every kind a `.psd` has a key for is written under that key (`psd::adjustments::encode`; Curves as version 1). Auto, Desaturate, Equalize, Shadows/Highlights, Replace Color, HDR Toning and Match Color have no `.psd` adjustment layer, and a setting the layout cannot spell (Brightness past ±150/255, a Black & White weight below -200%, Posterize 256, curve inputs that collide once quantised) is refused rather than clamped: each is written as an empty layer, named with its reason ("adjustment layer(s) this build cannot evaluate …"). |
+| Fill layers | **Editable** | W9-B: `SoCo` / `GdFl` / `PtFl`, pattern pixels in the document's `Patt` block. `SoCo` has no alpha, so a translucent colour's alpha rides the layer's fill opacity. |
+| Shape layers | **Editable** | W9-M: `vmsk` path in canvas pixels, `SoCo` (or `GdFl` / `PtFl`) fill, `vstk` stroke, `vogk` live rectangle for an axis-aligned rectangle, over the rendered pixels. A translucent solid fill, a stroke under a non-uniform transform, a path with an arc, a pattern fill under any transform or a gradient fill under more than a translation keeps the card-078 raster fallback — "shape and smart-object layer(s) ({names}) cannot stay editable in a .psd; their rendered appearance was written as a raster layer's pixels". |
+| Smart objects | **Editable** (embedded, unfiltered) / **Appearance fallback** (linked or filtered) | W9-M: `SoLd` + `PlLd` naming the asset, whose bytes go in the document's `lnk2` block. A linked object, or one carrying smart filters (the filter stack is not written as PSD smart-filter data), keeps the raster fallback, named by the note above. |
+| Type layers | **Editable** | Card 079 + W9-C: a complete `TySh` block — string, transform at Photoshop's anchor, bounds and an engine-data payload with every style run (font with its weight in the name, size, fill, tracking, …), the paragraph and the frame — over the layer's rendered pixels as fallback. Every text layer is named — "type layer(s) ({names}) were exported with the editable text subset; styling beyond it is covered by the layer's raster fallback" — and styling the writer cannot spell is named per layer ("the {what} of “{layer}” could not be written to its editable text; the layer's raster fallback shows it as it was"). |
+| Layer effects — all ten kinds | **Editable** | Card 080 + W8-D + W11-B: a real `lfx2` descriptor, the exact inverse of the import mapping, contours included; a pattern overlay's pattern goes in the `Patt` block. Rendered fallback layers strip effects from their baked pixels so nothing draws twice. |
+| Layer effects — what is not written | **Unsupported (explicit)** | A gradient overlay's offset, a gradient- or pattern-filled stroke or glow, and the extra instances of a repeated effect (named as a "repeated" kind): "the {kinds} effect(s) on {names} were not imported" is the shared wording, and the export report lists the kinds. |
+| Guides | **Editable** | W11-C: resource 1032. Guide locks are not written — "guide locks have no .psd equivalent and were not written". |
+| Path layers | **Editable** | W11-C: a no-fill, no-stroke, unstyled shape layer is written as a saved-path resource from 2000, not as a layer record (so it does not come back doubled); a styled one (hidden, masked, with effects, clipping, a non-Normal blend or reduced opacity / fill) stays a layer record. Past the 998 saved paths a `.psd` holds, a path is named and not written. The Paths panel's unsaved Work Path is not written. |
+| Saved selections | **Editable** | W11-C: named alpha channels in the merged image (1006 + 1045), up to the 56-channel ceiling (52 on an RGBA file); the ones past it are named in the save notes and the save goes ahead. |
+| Slices | **Editable** | W11-C: a version-6 1050 resource of user slices with name, URL and alt text. A slice's target, message and cell text are not written. |
+| Layer colour labels | **Unsupported** | Not written (`psd_layers_for` never sets the record's `lclr`, although the `psd` crate can write one) and not named. |
+| Pass-through group with a blend mode | **Appearance fallback** | "{names} pass through *and* carry a blend mode; a .psd stores only the pass-through". |
+| The merged (flattened) image | **Editable** | Taken from this application's compositor, not from the `psd` crate's fallback flattener. |
 
 ## Tally notes (verbatim)
 
-The import's status notes, verbatim from `Tally::record`
+The report notes collected per category by `Tally::record`
 (`{names}` is the affected layers, two shown then "and N more") — the
-honesty gate in `import.rs` asserts this file keeps quoting every one:
+honesty gate in `import.rs`
+(`the_psd_support_matrix_names_every_fallback_the_import_emits`) asserts
+this file keeps quoting every one:
 
 - "the colour label on {names} is not shown by this layers panel and was not kept"
 - "adjustment layer(s) this build cannot evaluate ({names}) were kept as empty layers; their effect is in the flattened image but not editable"
@@ -87,19 +127,28 @@ honesty gate in `import.rs` asserts this file keeps quoting every one:
 - "the blanket lock on {names} has no .psd equivalent and was not written"
 - "{names} pass through *and* carry a blend mode; a .psd stores only the pass-through"
 
+The other notes (per layer or per resource, not tallied) are quoted in the
+rows above: the text-styling, font-substitution and unwritten-styling notes
+(W9-C), the adjustment-settings note (W11-A), the smart-object and pattern
+refusals (W9-M, W8-D), the 32-bit, greyscale, repair and no-layers notes,
+and the path, alpha-channel, guide-lock and saved-selection notes of
+`psd_resources.rs` (W11-C).
+
 ## Failure policy
 
-1. **Nothing silent.** Every fallback and refusal pushes a status note
+1. **Nothing silent.** Every fallback and refusal pushes a note
    naming the affected layers (two shown, then "and N more"); resources
    the document cannot carry are counted and named as left behind:
-   "{n} image resource(s) — guides, paths, the colour profile — are not part of this document model and were left behind".
-   When a profile is embedded and retained, "the colour profile" is
-   dropped from that list; when no profile is embedded, or the embedded
-   one is measurably sRGB (treated as sRGB, bytes redundant), the wording
-   above stands.
+   "{n} image resource(s) — the colour profile — are not part of this document model and were left behind"
+   (the list reads "the colour profile, other resources", or "other
+   resources", depending on what was dropped). When a profile is embedded
+   and retained, "the colour profile" is dropped from that list. Guides,
+   slices, saved and work paths and the alpha-channel names (W11-C) are
+   mapped, so they are not counted.
 2. **No invented numbers.** A payload this build cannot evaluate is
    never decoded into guessed parameters ("inventing one would put the
-   wrong numbers behind a slider").
+   wrong numbers behind a slider"), and a setting the writer cannot spell
+   is refused by name, never clamped.
 3. **Original bytes untouched.** Import never writes to the source file.
 4. **Loud refusals over bad output.** Malformed input fails through
    `PsdError` with the byte offset; limits (tile/allocation ceilings in
@@ -119,9 +168,9 @@ open. The report contains:
 - one line per layer from the per-layer outcome list
   (`PsdNotes::layers`): *editable* (mapped exactly, or editable text
   with a substituted font), *raster fallback* (text became pixels, a
-  vector mask became coverage), or *unsupported* (the layer arrived
-  empty — a kind with no home here, or an adjustment this build cannot
-  evaluate) — each with the reason;
+  vector mask became coverage, a smart object opened as pixels), or
+  *unsupported* (the layer arrived empty — an adjustment this build
+  cannot evaluate) — each with the reason;
 - the original file's path, a statement that the original was not
   modified, and the encouragement to continue in the native `.rstudio`
   format via File ▸ Save As.
@@ -142,9 +191,9 @@ another name, or Save As a native `.rstudio` first.
 ## What would change rows
 
 The rows move only with code: an editable row becomes possible when the
-document model grows the vocabulary (e.g. effect descriptors, a type
-decoder); a fallback becomes explicit only when the status note names
-it. Update this file in the same commit that changes either side.
+document model grows the vocabulary; a fallback becomes explicit only when
+a note names it. Update this file in the same commit that changes either
+side.
 
 ## Card 081 — external evidence status
 
@@ -176,7 +225,28 @@ readers with **no code in common with this project** were run against it
 Known reader quirks recorded, not hidden: psd-tools keeps the spec's
 terminating NUL in layer names and its naive compositor ignores layer
 effects (it is not a full blending engine), so appearance was compared
-through the flattened image with Pillow instead. What remains
-genuinely manual: driving the UI of Photoshop/Photopea with a mouse to
-restyle the headline — the on-disk editability contract is now proven
-by two independent readers.
+through the flattened image with Pillow instead.
+
+That evidence predates waves 9-11. Wave 9 recorded (in the parity matrix's
+PSD export row, with no transcript committed) that psd-tools 1.19.0 reads
+the W9-M fixture — written by the ignored test
+`psd_live::tests::w9m_fixture_for_independent_readers` — as a shape layer,
+an embedded smart object and a 16-bit pixel layer.
+
+## What remains unverified
+
+- **Nothing on this page has been opened in Photoshop or Photopea
+  themselves.** Every export row above is proven by this build's own reader
+  and, for the rows named in the previous section, by psd-tools and Pillow.
+- **The W11 mappings have been read back by this build only:** the
+  adjustment-layer payloads (their layouts follow Adobe's published
+  specification and are checked by round trips through
+  `psd::adjustments`), the five W11-B effects, and the guides, paths, alpha
+  channels, slices and mask parameters of W11-C (slice versions 7-8 are
+  tested on a descriptor this build writes, not on a Photoshop file).
+- **The W9-C text engine data** (every style run, auto leading, the anchor)
+  is re-read by this build's own importer; whether Photoshop re-typesets it
+  the same way is unchecked, which is why the rendered pixels ride under
+  every text layer.
+- Driving Photoshop's or Photopea's UI to restyle a layer from one of these
+  files remains a manual step.
