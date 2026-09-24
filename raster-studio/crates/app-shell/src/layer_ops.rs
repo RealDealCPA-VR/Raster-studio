@@ -51,18 +51,33 @@ fn subjects(doc: &OpenDocument) -> Vec<LayerId> {
     set
 }
 
-/// The rectangle Align measures against: the selection when there is one,
-/// the canvas otherwise. Photopea's rule.
-fn align_target(doc: &OpenDocument) -> (f32, f32, f32, f32) {
-    match doc.document.selection.bounds() {
-        Some((min, max)) => (min.x as f32, min.y as f32, max.x as f32, max.y as f32),
-        None => (
-            0.0,
-            0.0,
-            doc.document.width() as f32,
-            doc.document.height() as f32,
-        ),
+/// The rectangle Align measures against, Photopea's (and Photoshop's) rule:
+/// the pixel selection when there is one; otherwise, with two or more
+/// layers carrying ink, the union of those layers' bounds (so they align
+/// to *each other* — "their upper edge to the same height"); otherwise,
+/// with a single layer, the canvas.
+fn align_target(doc: &OpenDocument, subjects: &[LayerId]) -> (f32, f32, f32, f32) {
+    if let Some((min, max)) = doc.document.selection.bounds() {
+        return (min.x as f32, min.y as f32, max.x as f32, max.y as f32);
     }
+    let inked: Vec<_> = subjects
+        .iter()
+        .filter_map(|id| ink_bounds(doc, *id))
+        .collect();
+    if inked.len() >= 2 {
+        return inked.into_iter().fold(
+            (f32::MAX, f32::MAX, f32::MIN, f32::MIN),
+            |(ax0, ay0, ax1, ay1), (x0, y0, x1, y1)| {
+                (ax0.min(x0), ay0.min(y0), ax1.max(x1), ay1.max(y1))
+            },
+        );
+    }
+    (
+        0.0,
+        0.0,
+        doc.document.width() as f32,
+        doc.document.height() as f32,
+    )
 }
 
 /// The whole-pixel translation that brings `bounds`' named edge onto
@@ -100,14 +115,17 @@ fn translate(layer_id: LayerId, dx: f32, dy: f32) -> Command {
 }
 
 /// Layer ▸ Align ▸ `edge`: move every selected layer so its named edge meets
-/// the selection's (when there is one) or the canvas's. One undoable step.
+/// the selection's (when there is one), the selected layers' combined
+/// bounds' (two or more layers), or the canvas's (one layer). One undoable
+/// step.
 pub fn align(editor: &mut Editor, edge: AlignEdge) -> Result<String, String> {
     let command = {
         let doc = editor.active().ok_or("No document is open")?;
-        let target = align_target(doc);
+        let subjects = subjects(doc);
+        let target = align_target(doc, &subjects);
         let mut commands = Vec::new();
         let mut skipped_locked = 0usize;
-        for id in subjects(doc) {
+        for id in subjects {
             let Some(layer) = doc.document.layers.get(id) else {
                 continue;
             };
@@ -268,6 +286,25 @@ pub fn duplicate_layer(editor: &mut Editor, name: Option<String>) -> Result<Stri
     let (command, new_id, status) = {
         let doc = editor.active().ok_or("No document is open")?;
         let source_id = doc.document.active_layer().ok_or("No layer is active")?;
+        let (commands, new_id, status, label) = duplicate_commands(doc, source_id, name)?;
+        (Command::Transaction { label, commands }, new_id, status)
+    };
+    editor.apply_command(command);
+    editor.set_layer_selection(vec![new_id], Some(new_id));
+    Ok(status)
+}
+
+/// The commands Duplicate Layer applies (W11-E: shared with Edit ▸
+/// Transform ▸ Again with Copy, which appends its transform to them): the
+/// copy of `source_id` named `name` (or "<name> copy"), its pixels, masks and
+/// colour label, seated directly above the source. Answers the commands, the
+/// copy's id, the status sentence and the transaction label.
+pub(crate) fn duplicate_commands(
+    doc: &OpenDocument,
+    source_id: LayerId,
+    name: Option<String>,
+) -> Result<(Vec<Command>, LayerId, String, String), String> {
+    {
         let source = doc
             .document
             .layers
@@ -333,18 +370,22 @@ pub fn duplicate_layer(editor: &mut Editor, name: Option<String>) -> Result<Stri
             parent: doc.document.layers.parent_of(source_id),
             index: doc.document.layers.index_in_parent(source_id).unwrap_or(0),
         });
-        (
-            Command::Transaction {
-                label: format!("Duplicate {}", source.name),
-                commands,
-            },
+        // W11-E: the copy wears its source's colour label, as in Photoshop.
+        let color = doc.document.extras.color_label(source_id);
+        if color != layer_model::ColorLabel::NoColor {
+            let mut extras = doc.document.extras.clone();
+            extras.set_color_label(new_id, color);
+            commands.push(Command::SetDocumentExtras {
+                extras: Box::new(extras),
+            });
+        }
+        Ok((
+            commands,
             new_id,
             status,
-        )
-    };
-    editor.apply_command(command);
-    editor.set_layer_selection(vec![new_id], Some(new_id));
-    Ok(status)
+            format!("Duplicate {}", source.name),
+        ))
+    }
 }
 
 /// The rectangle Image ▸ Trim… keeps, as `(x, y, width, height)`, judged
@@ -501,7 +542,12 @@ pub fn save_as_psd(editor: &mut Editor) -> Result<String, String> {
     if editor.active().is_none() {
         return Err("No document is open".to_string());
     }
-    crate::dialogs::arm_psd_save();
+    // W11-H: a canvas past 30 000 px is offered as a `.psb`.
+    let size = editor
+        .active()
+        .map(|d| (d.document.width(), d.document.height()))
+        .unwrap_or_default();
+    crate::dialogs::arm_psd_save_for(size);
     let outcome = editor.dispatch(Action::Export);
     // A dispatch that never reached the picker leaves the arming behind;
     // clear it so the next plain Export is a plain Export.
@@ -514,6 +560,15 @@ pub fn save_as_psd(editor: &mut Editor) -> Result<String, String> {
         Err(e) => Err(format!("Save as PSD: {e}")),
     }
 }
+
+#[cfg(test)]
+#[path = "w11i_align_tests.rs"]
+mod w11i_align_tests;
+
+// W11-E: Transform Again, Arrange > Reverse, Select Linked Layers, Smart
+// Object Convert to Linked / Embed Linked and the colour labels.
+#[path = "layer_ops_w11e.rs"]
+pub(crate) mod w11e;
 
 #[cfg(test)]
 mod tests {

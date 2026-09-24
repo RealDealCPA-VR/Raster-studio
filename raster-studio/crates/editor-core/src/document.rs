@@ -214,6 +214,9 @@ struct DocumentRepr {
     /// W10-B: layer comps, notes, text styles, the alpha-channel edit.
     #[serde(default)]
     extras: layer_model::DocumentExtras,
+    /// W11-I: the Slice tool's regions and their options.
+    #[serde(default)]
+    slices: Vec<crate::slices::DocumentSlice>,
 }
 
 impl TryFrom<DocumentRepr> for Document {
@@ -263,6 +266,7 @@ impl TryFrom<DocumentRepr> for Document {
             layer_selection,
             guides: r.guides,
             extras: r.extras,
+            slices: r.slices,
             dirty: false,
             path: None,
         })
@@ -345,6 +349,11 @@ pub struct Document {
     /// every change is one undoable step. Nothing here is a layer: no
     /// composite and no export reads it.
     pub extras: layer_model::DocumentExtras,
+    /// W11-I: the document's slices ([`crate::slices::DocumentSlice`]), in
+    /// slice order. Persisted but omitted while empty. Written by the shell's
+    /// slice store whenever the set changes (a record, not an undoable edit:
+    /// the Slice tool's gestures are not history steps).
+    pub slices: Vec<crate::slices::DocumentSlice>,
     /// Unsaved-changes flag. Session state, not document content: never
     /// serialized, and a freshly loaded document is clean.
     dirty: bool,
@@ -391,8 +400,10 @@ impl Serialize for Document {
             (!self.layer_selection().is_empty()).then_some(self.layer_selection());
         let assets = (!self.assets.is_empty()).then_some(&self.assets);
         let extras = (!self.extras.is_empty()).then_some(&self.extras);
+        let slices = (!self.slices.is_empty()).then_some(&self.slices);
         let fields = 3
             + usize::from(extras.is_some())
+            + usize::from(slices.is_some())
             + usize::from(selection.is_some())
             + usize::from(pixels.is_some())
             + usize::from(active_layer.is_some())
@@ -428,6 +439,9 @@ impl Serialize for Document {
         if let Some(extras) = extras {
             s.serialize_field("extras", extras)?;
         }
+        if let Some(slices) = slices {
+            s.serialize_field("slices", slices)?;
+        }
         s.end()
     }
 }
@@ -443,6 +457,7 @@ impl PartialEq for Document {
             || self.layer_selection() != other.layer_selection()
             || self.assets != other.assets
             || self.extras != other.extras
+            || self.slices != other.slices
             // Through the accessor, not the field: a cursor left pointing at a
             // deleted layer reads as "no active layer" everywhere else, so it
             // must here too.
@@ -477,6 +492,7 @@ impl Document {
             saved_selections: Vec::new(),
             guides: Guides::default(),
             extras: layer_model::DocumentExtras::default(),
+            slices: Vec::new(),
             dirty: false,
             path: None,
         }

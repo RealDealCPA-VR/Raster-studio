@@ -228,8 +228,14 @@ impl PsdHeader {
     }
 
     pub fn write(&self, sink: &mut Sink) {
+        self.write_as(sink, false);
+    }
+
+    /// W11-H: write a version-1 (`.psd`) header, or a version-2 (`.psb`) one
+    /// when `psb`; the two differ only in the version field.
+    pub fn write_as(&self, sink: &mut Sink, psb: bool) {
         sink.tag(&SIGNATURE);
-        sink.u16(VERSION_PSD);
+        sink.u16(if psb { VERSION_PSB } else { VERSION_PSD });
         sink.zeros(6);
         sink.u16(self.channels);
         sink.u32(self.height);

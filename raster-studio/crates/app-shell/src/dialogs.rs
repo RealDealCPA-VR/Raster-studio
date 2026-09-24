@@ -27,9 +27,12 @@ pub enum CloseChoice {
 /// layered document, `import::document_from_xcf`) and JPEG XL join the list. AVIF and HEIC are *not*
 /// offered: neither has a reader (`raster::codec::formats` says why), and a
 /// filter must not advertise what File > Open cannot open.
+///
+/// W11-H: OpenEXR and Radiance HDR (opened as 32 Bits/Channel documents), Apple ICNS,
+/// Amiga IFF ILBM/PBM and Krita KRA (its merged image) join the list.
 pub const IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "tif", "tiff", "gif", "bmp", "ico", "tga", "svg", "ppm", "pgm",
-    "pbm", "pnm", "dds", "xcf", "jxl",
+    "pbm", "pnm", "dds", "xcf", "jxl", "exr", "hdr", "icns", "iff", "ilbm", "lbm", "kra",
 ];
 /// W10-F: extension of Photoshop's large-document format, opened through the
 /// same layered road as a `.psd` (both start `8BPS`; the `psd` crate reads
@@ -116,6 +119,19 @@ thread_local! {
     /// action. Thread-local, like the parked adjustment parameters in
     /// `dialog_host`, so parallel tests cannot arm each other's pickers.
     static PSD_SAVE_ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// W11-H: set with the PSD arming when the canvas is past what a `.psd`
+    /// can describe, so that picker offers `.psb` first; consumed with it.
+    static PSB_PREFERRED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// W11-H: File ▸ Save as PSD… for a `width x height` canvas: arms the next
+/// export picker as a PSD save ([`arm_psd_save`]) and, past
+/// `psd::write::MAX_DIMENSION` (30 000 px) on either edge, makes it lead with
+/// Photoshop's large document format and suggest a `.psb` name.
+pub fn arm_psd_save_for((width, height): (u32, u32)) {
+    arm_psd_save();
+    let large = width > psd::write::MAX_DIMENSION || height > psd::write::MAX_DIMENSION;
+    PSB_PREFERRED.with(|preferred| preferred.set(large));
 }
 
 /// Arm the next export picker as a PSD save.
@@ -159,9 +175,18 @@ impl ExportPickerRequest {
     /// because `export_to` writes a layered `.psd` by extension either way.
     pub fn next(suggested: &Path) -> Self {
         let psd = take_psd_save();
+        // W11-H: consumed on every picker, used only when armed.
+        let psb = PSB_PREFERRED.with(|preferred| preferred.replace(false)) && psd;
         let mut filters: Vec<(&'static str, &'static [&'static str])> = Vec::new();
-        if psd {
+        if psb {
+            // W11-H: a canvas no `.psd` can describe leads with `.psb`.
+            filters.push(("Photoshop large document", &[PSB_EXTENSION]));
             filters.push(("Photoshop", &[PSD_EXTENSION]));
+        } else if psd {
+            filters.push(("Photoshop", &[PSD_EXTENSION]));
+            // W11-H: the large document format, for a canvas past 30 000 px
+            // (a `.psd` save of one is refused with advice to pick this).
+            filters.push(("Photoshop large document", &[PSB_EXTENSION]));
         }
         filters.extend([
             ("PNG", &["png"] as &[&str]),
@@ -177,16 +202,29 @@ impl ExportPickerRequest {
             ("PBM", &["pbm"]),
             ("DDS", &["dds"]),
             ("AVIF", &["avif"]),
+            // W11-H: `export_format_for` maps these too; a 32 Bits/Channel
+            // document writes its float composite to `.exr`.
+            ("OpenEXR", &["exr"]),
+            ("JPEG XL", &["jxl"]),
             // Shape layers as paths, text as text (`doc::write_vector_svg`).
             ("SVG", &["svg"]),
         ]);
         if !psd {
+            filters.push(("Photoshop large document", &[PSB_EXTENSION]));
             filters.push(("Photoshop", &[PSD_EXTENSION]));
         }
         Self {
-            title: if psd { "Save as PSD" } else { "Export" },
+            title: if psb {
+                "Save as PSB"
+            } else if psd {
+                "Save as PSD"
+            } else {
+                "Export"
+            },
             filters,
-            suggested: if psd {
+            suggested: if psb {
+                suggested.with_extension(PSB_EXTENSION)
+            } else if psd {
                 psd_save_suggestion(suggested)
             } else {
                 suggested.to_path_buf()

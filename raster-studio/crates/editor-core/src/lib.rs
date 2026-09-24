@@ -37,6 +37,7 @@ pub mod extras;
 pub mod history;
 pub mod pixels;
 pub mod selection;
+pub mod slices;
 
 pub use command::{layer_class_name, resolve_target, Command, CommandError, LayerPatch, Patch};
 pub use document::{

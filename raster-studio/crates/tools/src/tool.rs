@@ -134,6 +134,11 @@ pub enum ToolId {
     /// W10-B: a click pins a note on the canvas. See
     /// [`crate::note::NoteTool`].
     Note,
+    /// W11-G: drag a rectangle round an object; the shell runs
+    /// `selection::select_object` (GrabCut from the rectangle) on a job
+    /// worker and lands one `SetSelection`. See
+    /// [`crate::select::ObjectSelectionTool`].
+    ObjectSelection,
 }
 
 impl ToolId {
@@ -153,6 +158,7 @@ impl ToolId {
         ToolId::MagneticLasso,
         ToolId::MagicWand,
         ToolId::QuickSelect,
+        ToolId::ObjectSelection,
         ToolId::Crop,
         ToolId::Slice,
         ToolId::Eyedropper,

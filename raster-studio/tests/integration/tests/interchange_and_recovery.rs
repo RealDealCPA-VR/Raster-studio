@@ -155,9 +155,11 @@ fn a_jpeg_export_decodes_back_to_the_composite_within_the_formats_tolerance() {
 fn an_export_to_a_format_the_product_cannot_write_is_refused_rather_than_guessed() {
     let tmp = tempfile::tempdir().unwrap();
     let mut doc = photo_document(32, 32);
-    let out = tmp.path().join("flat.exr");
+    // EXR became writable in W11-H; a genuinely unknown extension is the
+    // refusal case now.
+    let out = tmp.path().join("flat.xyz");
     let err = doc.export_to(&out).unwrap_err();
-    assert!(err.to_string().contains("exr"), "{err}");
+    assert!(err.to_string().contains("xyz"), "{err}");
     assert!(!out.exists(), "a refusal must not leave a file behind");
 }
 

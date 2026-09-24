@@ -1398,3 +1398,163 @@ mod w9l_tests {
         ));
     }
 }
+
+/// W11-G: the Object Selection tool — drag a rectangle round an object.
+///
+/// The tool itself only records the rectangle: its release emits ONE
+/// [`SelectionEdit`] whose `incoming` is the dragged [`Selection::Rect`] and
+/// whose `op` is the gesture's mode (Shift adds, Alt subtracts, both
+/// intersect, otherwise the options bar's Mode). The rectangle is not the
+/// selection: the shell (`app_shell::tool_input`) recognises
+/// [`ToolId::ObjectSelection`], hands the rectangle and the active layer's
+/// pixels to `selection::select_object` (GrabCut initialised from the
+/// rectangle) on a job worker, and folds the object's mask in with `op` as one
+/// `SetSelection` step. A click, or a drag narrower than a pixel, emits
+/// nothing.
+#[derive(Debug, Default)]
+pub struct ObjectSelectionTool {
+    /// The options bar's Mode.
+    pub mode: BooleanOp,
+    anchor: Option<Vec2>,
+    current: Option<Vec2>,
+    op: BooleanOp,
+}
+
+impl ObjectSelectionTool {
+    /// The rectangle a press at `a` and a release at `b` name, in whole
+    /// document pixels, or `None` when it has no area.
+    pub fn rect_of(a: Vec2, b: Vec2) -> Option<(IVec2, IVec2)> {
+        let min = a.min(b).floor().as_ivec2();
+        let max = a.max(b).ceil().as_ivec2();
+        (max.x - min.x >= 1 && max.y - min.y >= 1 && a.is_finite() && b.is_finite())
+            .then_some((min, max))
+    }
+}
+
+impl Tool for ObjectSelectionTool {
+    fn id(&self) -> ToolId {
+        ToolId::ObjectSelection
+    }
+
+    fn on_pointer_down(
+        &mut self,
+        _ctx: &mut ToolContext<'_>,
+        event: PointerEvent,
+    ) -> Result<(), ToolError> {
+        crate::error::finite_pt("object selection corner", event.pos)?;
+        self.op = gesture_op(self.mode, event.modifiers);
+        self.anchor = Some(event.pos);
+        self.current = Some(event.pos);
+        Ok(())
+    }
+
+    fn on_pointer_move(
+        &mut self,
+        _ctx: &mut ToolContext<'_>,
+        event: PointerEvent,
+    ) -> Result<(), ToolError> {
+        if self.anchor.is_some() {
+            self.current = Some(event.pos);
+        }
+        Ok(())
+    }
+
+    /// The rubber band while the button is down, drawn as the rectangular
+    /// marquee's.
+    fn live_geometry(&self) -> Option<crate::tool::SessionGeometry> {
+        let (a, b) = (self.anchor?, self.current?);
+        (a.is_finite() && b.is_finite()).then(|| crate::tool::SessionGeometry::Marquee {
+            shape: MarqueeShape::Rect,
+            rect: [a.min(b), a.max(b)],
+        })
+    }
+
+    fn on_pointer_up(
+        &mut self,
+        ctx: &mut ToolContext<'_>,
+        event: PointerEvent,
+    ) -> Result<(), ToolError> {
+        let Some(anchor) = self.anchor.take() else {
+            return Ok(());
+        };
+        self.current = None;
+        crate::error::finite_pt("object selection corner", event.pos)?;
+        if let Some((min, max)) = Self::rect_of(anchor, event.pos) {
+            ctx.emit_selection(SelectionEdit::new(Selection::Rect { min, max }, self.op));
+        }
+        Ok(())
+    }
+
+    fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {
+        self.anchor = None;
+        self.current = None;
+    }
+
+    fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        match (key, setting) {
+            ("mode", ToolSetting::Choice(i)) => {
+                self.mode = mode_from_choice(key, i)?;
+                Ok(())
+            }
+            ("mode", _) => Err(ToolError::OptionKindMismatch {
+                key: key.to_owned(),
+            }),
+            _ => Err(unknown(key)),
+        }
+    }
+
+    fn set_choice(&mut self, key: &str, index: usize) {
+        let _ = self.set_setting(key, ToolSetting::Choice(index));
+    }
+
+    fn is_active(&self) -> bool {
+        self.anchor.is_some()
+    }
+}
+
+#[cfg(test)]
+mod object_selection_tests {
+    use super::*;
+    use crate::registry;
+    use crate::tiles::MemoryTiles;
+    use raster::PixelRect;
+
+    fn drag(mods: Modifiers, from: (f32, f32), to: (f32, f32)) -> Vec<SelectionEdit> {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64));
+        let mut tool = registry::make(ToolId::ObjectSelection);
+        let at = |p: (f32, f32)| PointerEvent::at(p.0, p.1).with_modifiers(mods);
+        tool.on_pointer_down(&mut ctx, at(from)).unwrap();
+        tool.on_pointer_move(&mut ctx, at(to)).unwrap();
+        assert!(tool.live_geometry().is_some(), "the rubber band shows");
+        tool.on_pointer_up(&mut ctx, at(to)).unwrap();
+        assert!(tool.live_geometry().is_none());
+        ctx.drain_selection()
+    }
+
+    #[test]
+    fn a_drag_emits_the_rectangle_with_the_gesture_mode_and_a_click_nothing() {
+        let edits = drag(Modifiers::NONE, (40.5, 30.2), (10.2, 8.9));
+        assert_eq!(edits.len(), 1);
+        assert_eq!(
+            edits[0].incoming,
+            Selection::Rect {
+                min: IVec2::new(10, 8),
+                max: IVec2::new(41, 31),
+            }
+        );
+        assert_eq!(edits[0].op, BooleanOp::Replace);
+        assert_eq!(
+            drag(Modifiers::shift(), (1.0, 1.0), (9.0, 9.0))[0].op,
+            BooleanOp::Add
+        );
+        assert_eq!(
+            drag(Modifiers::alt(), (1.0, 1.0), (9.0, 9.0))[0].op,
+            BooleanOp::Subtract
+        );
+        assert!(drag(Modifiers::NONE, (5.0, 5.0), (5.0, 5.0)).is_empty());
+        assert!(registry::make(ToolId::ObjectSelection)
+            .set_setting("tolerance", ToolSetting::Float(0.5))
+            .is_err());
+    }
+}

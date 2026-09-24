@@ -151,6 +151,9 @@ use compositor::MemoryTileSource;
 // W9-D: the composite a retouching stroke's Sample choice reads.
 #[path = "tool_input_sampler.rs"]
 mod sampler;
+// W11-G: the Object Selection tool's rectangle runs on a job worker.
+#[path = "tool_input_object_select.rs"]
+pub(crate) mod object_select;
 // The tests read tile bytes back; the lib reads them through `NarrowedReads`.
 #[cfg(test)]
 use compositor::TileSource;
@@ -1147,6 +1150,8 @@ impl ToolPointer {
     /// committed, cancelled and abandoned gesture all end with the preview
     /// gone and the committed document exactly as it was.
     pub fn settle_preview(&mut self, editor: &mut Editor) {
+        // W11-G: land a finished Object Selection job, once a frame.
+        object_select::poll(editor);
         let geometry = self.live_geometry();
         match &geometry {
             Some((
@@ -2907,6 +2912,26 @@ impl ToolPointer {
         // selection fold and the pixel commands — so a selection gesture
         // reports the history step it landed (card 056).
         let before = editor.active().map(|d| d.history_depth()).unwrap_or(0);
+        // W11-G: Object Selection's edit carries the dragged rectangle, which
+        // is the object's bounds, not the selection: GrabCut runs from it on
+        // the job worker and lands its own single SetSelection step.
+        let selection_edits = if id == ToolId::ObjectSelection {
+            for edit in &selection_edits {
+                let Some(rect) = edit.incoming.bounds() else {
+                    continue;
+                };
+                match object_select::start(editor, rect, edit.op, canvas_rect) {
+                    Ok(landed) => out.selection_changed |= landed,
+                    Err(message) => {
+                        out.failed = Some(message.clone());
+                        editor.set_status(message);
+                    }
+                }
+            }
+            Vec::new()
+        } else {
+            selection_edits
+        };
         if !selection_edits.is_empty() {
             // Card 056: selection changes ride HISTORY as Command::SetSelection
             // (whose inverse is the previous selection), with one gesture's
@@ -6614,7 +6639,7 @@ mod tests {
             outcome.slices[0].rect.width, 16,
             "the slice is not the dragged rectangle"
         );
-        assert_eq!(outcome.steps, 0, "a slice set is not a document edit");
+        assert_eq!(outcome.steps, 1, "a slice set is one History step (W11-E)");
         assert!(editor
             .status()
             .is_some_and(|s| s.contains("2 slice(s)") && s.contains("Export > Slices")));

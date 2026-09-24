@@ -4,7 +4,13 @@
 //! Card 075: the four effects the thumbnail workflow requires — drop shadow
 //! (`DrSh`), solid-colour stroke (`FrFX`), solid colour overlay (`SoFi`,
 //! accepted under the older `SoCo` key too) and outer glow (`OrGl`, accepted
-//! under `OglD` as well) — map into editable native parameters. Everything
+//! under `OglD` as well) — map into editable native parameters. W11-B: inner
+//! shadow, inner glow, bevel and emboss, satin, gradient overlay, contours and
+//! any `...Multi` repeated-effect lists present in this descriptor map too,
+//! through [`map_rest`] (`effects_rest.rs`), the one mapping the `.asl`
+//! import shares (the separate `lmfx` block Photoshop CC writes for repeated
+//! effects is not read). [`export_effects`] writes the ten primary slots back;
+//! the extra instances of a repeated effect are named, not written. Anything
 //! else the descriptor lists is named and left behind rather than half-mapped.
 //!
 //! # Retention is not rendering
@@ -62,6 +68,10 @@ use layer_model::effects::{
     ShadowEffect, StrokeEffect, StrokePosition,
 };
 use layer_model::{BlendMode, Rgba};
+
+#[path = "effects_rest.rs"]
+mod rest;
+pub use rest::{map_rest, struck};
 
 /// What an `lfx2` block decoded to.
 pub struct ImportedEffects {
@@ -126,7 +136,8 @@ pub fn import_effects(effects: &Effects, opts: &ReadOptions) -> Option<ImportedE
                 Some(s) => out.effects.outer_glow = Some(s),
                 None => out.unmapped.push("outer glow".into()),
             },
-            // Known kinds this build does not model, named for the report.
+            // W11-B: named here, then mapped (and struck) by [`map_rest`]
+            // below — one mapping shared with the `.asl` import.
             "IrSh" => out.unmapped.push("inner shadow".into()),
             "IrGl" => out.unmapped.push("inner glow".into()),
             "ebbl" => out.unmapped.push("bevel and emboss".into()),
@@ -143,6 +154,7 @@ pub fn import_effects(effects: &Effects, opts: &ReadOptions) -> Option<ImportedE
                 .push(format!("an effect this build does not know ({other})")),
         }
     }
+    map_rest(&descriptor, &mut out.effects, &mut out.unmapped);
     Some(out)
 }
 
@@ -446,7 +458,7 @@ fn enumerated_value(type_id: &str, value: &str) -> Value {
 }
 
 /// Encode the model's layer effects as an `lfx2` descriptor payload (card
-/// 080) — the exact inverse of [`import_effects`] for the four kinds this
+/// 080, W11-B) — the exact inverse of [`import_effects`] for every kind this
 /// build maps, with the same keys and units its parsers read.
 ///
 /// Returns the bytes plus the human kind names that could NOT be written
@@ -496,24 +508,18 @@ fn export_impl(
     let mut unmapped: Vec<String> = Vec::new();
     let mut wrote = false;
 
+    let contours = &effects.extras.contours;
     if let Some(s) = &effects.drop_shadow {
-        let mut d = crate::Descriptor::new("DrSh");
-        let _ = d.push("enab", Value::Bool(true));
-        let _ = d.push("Md  ", enumerated_value("BlnM", blnm(s.blend_mode)));
-        let _ = d.push("Clr ", rgbc(s.color));
-        let _ = d.push("opacity", percent_value(s.opacity));
-        let _ = d.push("lagl", angle_value(s.angle_deg));
-        let _ = d.push("uglg", Value::Bool(s.use_global_light));
-        let _ = d.push("Dstn", px_value(s.distance_px));
-        let _ = d.push("blur", px_value(s.size_px));
-        let _ = d.push("Ckmt", px_value(s.spread * s.size_px));
-        let _ = d.push("Nose", percent_value(s.noise));
-        let _ = d.push("layerConceals", Value::Bool(s.knockout));
+        let d = rest::shadow_descriptor("DrSh", s, &contours.drop_shadow);
         let _ = top.push("DrSh", Value::Descriptor(d));
         wrote = true;
     }
-    if effects.inner_shadow.is_some() {
-        unmapped.push("inner shadow".into());
+    // W11-B: the five kinds past card 080's four, written as the exact
+    // inverse of [`map_rest`].
+    if let Some(s) = &effects.inner_shadow {
+        let d = rest::shadow_descriptor("IrSh", s, &contours.inner_shadow);
+        let _ = top.push("IrSh", Value::Descriptor(d));
+        wrote = true;
     }
     if let Some(s) = &effects.stroke {
         match &s.fill {
@@ -557,36 +563,7 @@ fn export_impl(
     if let Some(s) = &effects.outer_glow {
         match &s.fill {
             FillStyle::Solid(color) => {
-                let mut d = crate::Descriptor::new("OrGl");
-                let _ = d.push("enab", Value::Bool(true));
-                let _ = d.push("Md  ", enumerated_value("BlnM", blnm(s.blend_mode)));
-                let _ = d.push("Clr ", rgbc(*color));
-                let _ = d.push("Opct", percent_value(s.opacity));
-                let _ = d.push("blur", px_value(s.size_px));
-                let _ = d.push("Ckmt", px_value(s.spread * s.size_px));
-                let _ = d.push("Nose", percent_value(s.noise));
-                let _ = d.push(
-                    "GlwT",
-                    enumerated_value(
-                        "BETE",
-                        match s.technique {
-                            GlowTechnique::Precise => "PrBL",
-                            GlowTechnique::Softer => "SfBL",
-                        },
-                    ),
-                );
-                let _ = d.push("RngL", percent_value(s.range));
-                let _ = d.push("Jitter", percent_value(s.jitter));
-                let _ = d.push(
-                    "Slct",
-                    enumerated_value(
-                        "BESl",
-                        match s.source {
-                            GlowSource::Center => "Ctr ",
-                            GlowSource::Edge => "Edgs",
-                        },
-                    ),
-                );
+                let d = rest::glow_descriptor(false, s, *color, &contours.outer_glow);
                 let _ = top.push("OrGl", Value::Descriptor(d));
                 wrote = true;
             }
@@ -595,17 +572,38 @@ fn export_impl(
             }
         }
     }
-    if effects.inner_glow.is_some() {
-        unmapped.push("inner glow".into());
+    if let Some(s) = &effects.inner_glow {
+        match &s.fill {
+            FillStyle::Solid(color) => {
+                let d = rest::glow_descriptor(true, s, *color, &contours.inner_glow);
+                let _ = top.push("IrGl", Value::Descriptor(d));
+                wrote = true;
+            }
+            FillStyle::Gradient(_) | FillStyle::Pattern(_) => {
+                unmapped.push("inner glow".into());
+            }
+        }
     }
-    if effects.bevel_emboss.is_some() {
-        unmapped.push("bevel and emboss".into());
+    if let Some(b) = &effects.bevel_emboss {
+        let d = rest::bevel_descriptor(b, &contours.bevel);
+        let _ = top.push("ebbl", Value::Descriptor(d));
+        wrote = true;
     }
-    if effects.satin.is_some() {
-        unmapped.push("satin".into());
+    if let Some(s) = &effects.satin {
+        let _ = top.push("ChFX", Value::Descriptor(rest::satin_descriptor(s)));
+        wrote = true;
     }
-    if effects.gradient_overlay.is_some() {
-        unmapped.push("gradient overlay".into());
+    if let Some(g) = &effects.gradient_overlay {
+        let _ = top.push(
+            "GrFl",
+            Value::Descriptor(rest::gradient_overlay_descriptor(g)),
+        );
+        if g.offset_px != [0.0, 0.0] {
+            // `Ofst` is a percentage of the layer's box, which this writer
+            // does not know; the offset is named rather than dropped.
+            unmapped.push("gradient overlay offset".into());
+        }
+        wrote = true;
     }
     if let Some(overlay) = &effects.pattern_overlay {
         match (patterns, overlay.pattern.tile.as_ref()) {
@@ -640,6 +638,22 @@ fn export_impl(
                 wrote = true;
             }
             _ => unmapped.push("pattern overlay".into()),
+        }
+    }
+
+    // W11-B round 2: the import decodes Photoshop CC's `...Multi` lists
+    // into `extras`, but this writer emits one instance per kind. The
+    // extra instances are named, never silently dropped.
+    let extras = &effects.extras;
+    for (count, name) in [
+        (extras.drop_shadows.len(), "repeated drop shadow"),
+        (extras.inner_shadows.len(), "repeated inner shadow"),
+        (extras.strokes.len(), "repeated stroke"),
+        (extras.color_overlays.len(), "repeated colour overlay"),
+        (extras.gradient_overlays.len(), "repeated gradient overlay"),
+    ] {
+        if count > 0 {
+            unmapped.push(name.into());
         }
     }
 
@@ -1001,5 +1015,428 @@ mod w9m_pattern_export_tests {
         assert!((overlay.pattern.scale - 1.5).abs() < 1e-6);
         assert!((overlay.pattern.angle_deg - 30.0).abs() < 1e-6);
         assert_eq!(overlay.pattern.tile.unwrap().rgba8(), tile.rgba8());
+    }
+}
+
+#[cfg(test)]
+mod w11b_rest_effect_tests {
+    //! W11-B: inner shadow, inner glow, bevel and emboss, satin and gradient
+    //! overlay through a whole `.psd` file (written by [`export_effects`],
+    //! saved by [`crate::write`], read back by [`crate::read`] and decoded by
+    //! [`import_effects`]) with every parameter intact.
+    use super::*;
+    use crate::{PsdFile, PsdHeader, PsdLayer, Rect, TaggedBlock};
+    use layer_model::effects::{
+        BevelDirection, BevelEffect, BevelStyle, BevelTechnique, Contour, ContourPreset, Gradient,
+        GradientOverlayEffect, GradientStop, GradientStyle, PatternFill, PatternOverlayEffect,
+        PatternTile, SatinEffect,
+    };
+
+    /// Save `effects` on a layer of a real `.psd`, read the file back, and
+    /// decode the layer's block, the pattern overlay resolved against the
+    /// file's `Patt` block as the import path does.
+    fn through_psd(effects: &LayerEffects) -> (LayerEffects, Vec<String>, Vec<String>) {
+        let (data, not_written, patterns) =
+            export_effects_with_patterns(effects).expect("the block is written");
+        let mut file = PsdFile::new(PsdHeader::rgba8(4, 4));
+        let mut layer = PsdLayer::raster("fx", Rect::new(0, 0, 4, 4));
+        layer.set_rgba8(&[200u8; 4 * 4 * 4]).unwrap();
+        layer.effects = Some(Effects {
+            key: *b"lfx2",
+            data,
+        });
+        file.layers.push(layer);
+        if !patterns.is_empty() {
+            file.extra.push(TaggedBlock::new(
+                *b"Patt",
+                crate::pattern::encode_block(&patterns),
+            ));
+        }
+        let bytes = crate::write(&file).unwrap();
+        let back = crate::read(&bytes).unwrap();
+        let opts = ReadOptions::default();
+        let fx = back.layers[0].effects.as_ref().expect("the lfx2 block");
+        let imported = import_effects(fx, &opts).expect("the block decodes");
+        let mut decoded = imported.effects;
+        let mut unmapped = imported.unmapped;
+        let library = crate::pattern::PatternLibrary::read(&back, &opts);
+        if let Some(overlay) = crate::pattern::pattern_overlay(fx, &opts, &library) {
+            decoded.pattern_overlay = Some(overlay);
+            struck(&mut unmapped, "pattern overlay");
+        }
+        (decoded, not_written, unmapped)
+    }
+
+    fn custom_contour() -> Contour {
+        Contour {
+            preset: ContourPreset::Custom,
+            points: vec![[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]],
+        }
+    }
+
+    fn inner_shadow() -> ShadowEffect {
+        ShadowEffect {
+            blend_mode: BlendMode::ColorBurn,
+            color: [0.5, 0.0, 1.0, 1.0],
+            opacity: 0.4,
+            angle_deg: 45.0,
+            use_global_light: false,
+            distance_px: 6.0,
+            spread: 0.25,
+            size_px: 8.0,
+            noise: 0.1,
+            knockout: false,
+        }
+    }
+
+    fn inner_glow() -> GlowEffect {
+        GlowEffect {
+            blend_mode: BlendMode::Screen,
+            fill: FillStyle::Solid([1.0, 0.5, 0.0, 1.0]),
+            opacity: 0.6,
+            noise: 0.2,
+            technique: GlowTechnique::Precise,
+            spread: 0.5,
+            size_px: 12.0,
+            source: GlowSource::Center,
+            range: 0.75,
+            jitter: 0.25,
+        }
+    }
+
+    fn bevel() -> BevelEffect {
+        BevelEffect {
+            style: BevelStyle::PillowEmboss,
+            technique: BevelTechnique::ChiselSoft,
+            direction: BevelDirection::Down,
+            depth: 2.5,
+            size_px: 9.0,
+            soften_px: 3.0,
+            angle_deg: 60.0,
+            altitude_deg: 45.0,
+            use_global_light: false,
+            highlight_mode: BlendMode::LinearDodge,
+            highlight_color: [1.0, 1.0, 0.5, 1.0],
+            highlight_opacity: 0.8,
+            shadow_mode: BlendMode::Darken,
+            shadow_color: [0.0, 0.0, 0.5, 1.0],
+            shadow_opacity: 0.3,
+        }
+    }
+
+    fn satin() -> SatinEffect {
+        SatinEffect {
+            blend_mode: BlendMode::Overlay,
+            color: [0.0, 1.0, 0.5, 1.0],
+            opacity: 0.7,
+            angle_deg: 33.0,
+            distance_px: 5.0,
+            size_px: 7.0,
+            invert: false,
+        }
+    }
+
+    fn gradient_overlay() -> GradientOverlayEffect {
+        GradientOverlayEffect {
+            blend_mode: BlendMode::SoftLight,
+            opacity: 0.8,
+            gradient: Gradient {
+                stops: vec![
+                    GradientStop {
+                        position: 0.0,
+                        color: [1.0, 0.0, 0.0, 1.0],
+                        midpoint: 0.5,
+                    },
+                    GradientStop {
+                        position: 0.25,
+                        color: [0.0, 0.5, 1.0, 1.0],
+                        midpoint: 0.4,
+                    },
+                    GradientStop {
+                        position: 1.0,
+                        color: [0.0, 0.0, 1.0, 1.0],
+                        midpoint: 0.5,
+                    },
+                ],
+                alpha_stops: vec![
+                    GradientStop {
+                        position: 0.0,
+                        color: [1.0, 1.0, 1.0, 1.0],
+                        midpoint: 0.5,
+                    },
+                    GradientStop {
+                        position: 0.75,
+                        color: [1.0, 1.0, 1.0, 0.4],
+                        midpoint: 0.6,
+                    },
+                ],
+                smoothness: 0.5,
+            },
+            style: GradientStyle::Radial,
+            reverse: true,
+            align_with_layer: false,
+            angle_deg: 30.0,
+            scale: 1.5,
+            offset_px: [0.0, 0.0],
+            dither: true,
+        }
+    }
+
+    #[test]
+    fn an_inner_shadow_round_trips_through_a_psd_with_its_contour() {
+        let mut fx = LayerEffects {
+            inner_shadow: Some(inner_shadow()),
+            ..Default::default()
+        };
+        fx.extras.contours.inner_shadow = Contour::preset(ContourPreset::Cone);
+        let (back, not_written, unmapped) = through_psd(&fx);
+        assert!(not_written.is_empty(), "{not_written:?}");
+        assert!(unmapped.is_empty(), "{unmapped:?}");
+        assert_eq!(back, fx);
+    }
+
+    #[test]
+    fn an_inner_glow_round_trips_through_a_psd_with_its_source_and_contour() {
+        let mut fx = LayerEffects {
+            inner_glow: Some(inner_glow()),
+            ..Default::default()
+        };
+        fx.extras.contours.inner_glow = custom_contour();
+        let (back, not_written, unmapped) = through_psd(&fx);
+        assert!(not_written.is_empty(), "{not_written:?}");
+        assert!(unmapped.is_empty(), "{unmapped:?}");
+        assert_eq!(back, fx);
+        // The edge source, the other value, survives too.
+        let mut edge = fx.clone();
+        edge.inner_glow.as_mut().unwrap().source = GlowSource::Edge;
+        assert_eq!(through_psd(&edge).0, edge);
+    }
+
+    #[test]
+    fn a_bevel_and_emboss_round_trips_through_a_psd_with_its_gloss_contour() {
+        let mut fx = LayerEffects {
+            bevel_emboss: Some(bevel()),
+            ..Default::default()
+        };
+        fx.extras.contours.bevel = Contour::preset(ContourPreset::Gaussian);
+        let (back, not_written, unmapped) = through_psd(&fx);
+        assert!(not_written.is_empty(), "{not_written:?}");
+        assert!(unmapped.is_empty(), "{unmapped:?}");
+        assert_eq!(back, fx);
+        // Every style, technique and direction value survives.
+        for style in [
+            BevelStyle::InnerBevel,
+            BevelStyle::OuterBevel,
+            BevelStyle::Emboss,
+            BevelStyle::PillowEmboss,
+            BevelStyle::StrokeEmboss,
+        ] {
+            for technique in [
+                BevelTechnique::SmoothBevel,
+                BevelTechnique::ChiselHard,
+                BevelTechnique::ChiselSoft,
+            ] {
+                for direction in [BevelDirection::Up, BevelDirection::Down] {
+                    let mut one = fx.clone();
+                    let b = one.bevel_emboss.as_mut().unwrap();
+                    (b.style, b.technique, b.direction) = (style, technique, direction);
+                    assert_eq!(through_psd(&one).0, one);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_satin_round_trips_through_a_psd() {
+        let fx = LayerEffects {
+            satin: Some(satin()),
+            ..Default::default()
+        };
+        let (back, not_written, unmapped) = through_psd(&fx);
+        assert!(not_written.is_empty(), "{not_written:?}");
+        assert!(unmapped.is_empty(), "{unmapped:?}");
+        assert_eq!(back, fx);
+    }
+
+    #[test]
+    fn a_gradient_overlay_round_trips_through_a_psd_with_its_stops() {
+        let fx = LayerEffects {
+            gradient_overlay: Some(gradient_overlay()),
+            ..Default::default()
+        };
+        let (back, not_written, unmapped) = through_psd(&fx);
+        assert!(not_written.is_empty(), "{not_written:?}");
+        assert!(unmapped.is_empty(), "{unmapped:?}");
+        assert_eq!(back, fx);
+        // An offset has no descriptor form here: it is named, not dropped
+        // silently.
+        let mut offset = fx.clone();
+        offset.gradient_overlay.as_mut().unwrap().offset_px = [4.0, 0.0];
+        let (_, not_written, _) = through_psd(&offset);
+        assert_eq!(not_written, ["gradient overlay offset"]);
+    }
+
+    #[test]
+    fn a_layer_with_all_ten_effects_reimports_all_ten() {
+        let tile = PatternTile::new("Dots", 1, 2, vec![1, 2, 3, 255, 4, 5, 6, 128]).unwrap();
+        let mut fx = LayerEffects {
+            enabled: true,
+            drop_shadow: Some(ShadowEffect {
+                blend_mode: BlendMode::Multiply,
+                color: [0.0, 0.0, 0.0, 1.0],
+                opacity: 0.75,
+                angle_deg: 120.0,
+                use_global_light: true,
+                distance_px: 5.0,
+                spread: 0.5,
+                size_px: 4.0,
+                noise: 0.0,
+                knockout: true,
+            }),
+            inner_shadow: Some(inner_shadow()),
+            outer_glow: Some(GlowEffect {
+                source: GlowSource::Edge,
+                ..inner_glow()
+            }),
+            inner_glow: Some(inner_glow()),
+            bevel_emboss: Some(bevel()),
+            satin: Some(satin()),
+            color_overlay: Some(ColorOverlayEffect {
+                blend_mode: BlendMode::Color,
+                color: [1.0, 0.5, 0.0, 1.0],
+                opacity: 0.5,
+            }),
+            gradient_overlay: Some(gradient_overlay()),
+            pattern_overlay: Some(PatternOverlayEffect {
+                blend_mode: BlendMode::Normal,
+                opacity: 0.25,
+                pattern: PatternFill {
+                    tile: Some(tile),
+                    scale: 1.5,
+                    angle_deg: 30.0,
+                    ..Default::default()
+                },
+            }),
+            stroke: Some(StrokeEffect {
+                size_px: 3.0,
+                position: StrokePosition::Center,
+                blend_mode: BlendMode::Normal,
+                opacity: 1.0,
+                fill: FillStyle::Solid([0.0, 0.5, 0.0, 1.0]),
+                overprint: false,
+            }),
+            ..Default::default()
+        };
+        fx.extras.contours.drop_shadow = Contour::preset(ContourPreset::Ring);
+        fx.extras.contours.inner_shadow = Contour::preset(ContourPreset::Cone);
+        fx.extras.contours.outer_glow = Contour::preset(ContourPreset::RoundedSteps);
+        fx.extras.contours.inner_glow = custom_contour();
+        fx.extras.contours.bevel = Contour::preset(ContourPreset::Gaussian);
+
+        let (back, not_written, unmapped) = through_psd(&fx);
+        assert!(not_written.is_empty(), "{not_written:?}");
+        assert!(unmapped.is_empty(), "{unmapped:?}");
+        let slots = [
+            back.drop_shadow.is_some(),
+            back.inner_shadow.is_some(),
+            back.outer_glow.is_some(),
+            back.inner_glow.is_some(),
+            back.bevel_emboss.is_some(),
+            back.satin.is_some(),
+            back.color_overlay.is_some(),
+            back.gradient_overlay.is_some(),
+            back.pattern_overlay.is_some(),
+            back.stroke.is_some(),
+        ];
+        assert_eq!(slots, [true; 10], "{back:#?}");
+        let pattern = back.pattern_overlay.clone().unwrap();
+        let want = fx.pattern_overlay.clone().unwrap();
+        assert_eq!(pattern.opacity, want.opacity);
+        assert_eq!(pattern.pattern.scale, want.pattern.scale);
+        assert_eq!(pattern.pattern.angle_deg, want.pattern.angle_deg);
+        assert_eq!(
+            pattern.pattern.tile.as_ref().map(|t| t.rgba8().to_vec()),
+            want.pattern.tile.as_ref().map(|t| t.rgba8().to_vec())
+        );
+        // Everything else comes back field for field.
+        let (mut back, mut fx) = (back, fx);
+        back.pattern_overlay = None;
+        fx.pattern_overlay = None;
+        assert_eq!(back, fx);
+    }
+    #[test]
+    fn the_extra_instances_of_a_repeated_effect_are_named_not_silently_dropped() {
+        // Review round 2: the import decodes Photoshop CC's `...Multi`
+        // lists into `extras`; the writer emits one instance per kind, so
+        // every extra kind must be named in the export report.
+        use layer_model::effects::ShadowInstance;
+        let extra_shadow = ShadowInstance {
+            effect: inner_shadow(),
+            contour: Contour::default(),
+        };
+        let mut fx = LayerEffects {
+            drop_shadow: Some(ShadowEffect::default()),
+            ..Default::default()
+        };
+        fx.extras.drop_shadows = vec![extra_shadow.clone(), extra_shadow.clone()];
+        fx.extras.inner_shadows = vec![extra_shadow];
+        fx.extras.strokes = vec![StrokeEffect::default()];
+        fx.extras.color_overlays = vec![ColorOverlayEffect::default()];
+        fx.extras.gradient_overlays = vec![GradientOverlayEffect::default()];
+
+        let (back, not_written, _unmapped) = through_psd(&fx);
+        assert_eq!(
+            not_written,
+            vec![
+                "repeated drop shadow".to_string(),
+                "repeated inner shadow".to_string(),
+                "repeated stroke".to_string(),
+                "repeated colour overlay".to_string(),
+                "repeated gradient overlay".to_string(),
+            ]
+        );
+        // The primary slot is still written and read back.
+        assert!(back.drop_shadow.is_some());
+    }
+    #[test]
+    fn a_multi_list_inside_the_lfx2_descriptor_maps_through_a_psd() {
+        // Review round 3: the parity matrix says repeated effects map when
+        // their `...Multi` list sits inside the `lfx2` descriptor (the
+        // separate `lmfx` block is not read). This drives that through a
+        // whole `.psd`: written, read back, decoded by `import_effects`.
+        let first = ShadowEffect {
+            opacity: 0.3,
+            ..ShadowEffect::default()
+        };
+        let second = inner_shadow();
+        let mut top = crate::Descriptor::new("Lfx2");
+        top.push("masterFXSwitch", Value::Bool(true)).unwrap();
+        top.push("Scl ", percent_value(1.0)).unwrap();
+        top.push(
+            "dropShadowMulti",
+            Value::List(vec![
+                Value::Descriptor(rest::shadow_descriptor("DrSh", &first, &Contour::default())),
+                Value::Descriptor(rest::shadow_descriptor("DrSh", &second, &custom_contour())),
+            ]),
+        )
+        .unwrap();
+        let mut file = PsdFile::new(PsdHeader::rgba8(4, 4));
+        let mut layer = PsdLayer::raster("fx", Rect::new(0, 0, 4, 4));
+        layer.set_rgba8(&[200u8; 4 * 4 * 4]).unwrap();
+        layer.effects = Some(Effects {
+            key: *b"lfx2",
+            data: super::tests::lfx2(&top),
+        });
+        file.layers.push(layer);
+        let back = crate::read(&crate::write(&file).unwrap()).unwrap();
+        let fx = back.layers[0].effects.as_ref().expect("the lfx2 block");
+        let imported = import_effects(fx, &ReadOptions::default()).expect("decodes");
+        assert!(imported.unmapped.is_empty(), "{:?}", imported.unmapped);
+        let shadow = imported.effects.drop_shadow.expect("the first instance");
+        assert!((shadow.opacity - 0.3).abs() < 1e-6);
+        let extras = &imported.effects.extras.drop_shadows;
+        assert_eq!(extras.len(), 1, "the second instance is an extra");
+        assert_eq!(extras[0].effect, second);
+        assert_eq!(extras[0].contour, custom_contour());
     }
 }

@@ -2039,7 +2039,143 @@ pub enum MenuAction {
     /// Slices writes it as, the URL and alt text go into the HTML page that
     /// export writes beside the images.
     SliceOptions,
+
+    // ---- W11-D ---------------------------------------------------------------
+    /// File ▸ Revert: read the document's file again and put what it holds in
+    /// place of the current state, as one undoable history step.
+    Revert,
+
+    // ---- W11-E: the last Layer / Edit gaps ------------------------------------
+    /// Edit ▸ Transform ▸ Again (Shift+Ctrl+T): the last committed free
+    /// transform's affine applied again to the active layer, one undo step.
+    TransformAgain,
+    /// Edit ▸ Transform ▸ Again with Copy (Shift+Alt+Ctrl+T): duplicate the
+    /// active layer and apply the last free transform to the copy, one undo
+    /// step.
+    TransformAgainCopy,
+    /// Layer ▸ Arrange ▸ Reverse: reverse the stacking order of the selected
+    /// sibling layers, one undo step.
+    ReverseLayers,
+    /// Layer ▸ Select Linked Layers: select every layer linked with the
+    /// selected ones.
+    SelectLinkedLayers,
+    /// Layer ▸ Smart Object ▸ Convert to Linked…: write the embedded source
+    /// to a file and link the object to it, one undo step.
+    ConvertToLinked,
+    /// Layer ▸ Smart Object ▸ Embed Linked: read the linked file into the
+    /// document and embed it, one undo step.
+    EmbedLinked,
+    /// The Layers panel's colour label for the selected layers, one undo
+    /// step.
+    SetLayerColor(layer_model::ColorLabel),
+    /// Layer ▸ New Layer Based Slice: a slice over the active layer's ink.
+    NewLayerBasedSlice,
+
+    // ---- W11-G: the shortcut sheet, command search, layer / blend chords ----
+    /// Help ▸ Keyboard Shortcut Sheet… (Shift+/, the `?` key): a searchable,
+    /// read-only list of every chord the live keymap answers.
+    ShortcutSheet,
+    /// Help ▸ Search Commands… (Ctrl+Shift+P): type to filter every enabled
+    /// menu item by label, Enter runs the highlighted one.
+    CommandSearch,
+    /// Alt+[ / Alt+] / Alt+, / Alt+.: make the layer below / above / the
+    /// bottom / the top layer the active one. Keyboard only, no menu row.
+    SelectLayerStep(LayerStep),
+    /// Shift+Alt+letter: Photoshop's blend-mode letter chords. With a
+    /// painting tool active (`tools::composites_strokes`) they set that
+    /// tool's options-bar Mode (`tools::BLEND_MODE_KEY`); otherwise the
+    /// active layer's blend mode. Keyboard only, no menu row.
+    BlendModeChord(layer_model::BlendMode),
+    /// Shift+Plus (`true`, next) / Shift+Minus (`false`, previous): step the
+    /// same blend mode through [`layer_model::BlendMode::ALL`].
+    CycleBlendMode(bool),
 }
+
+/// W11-G: which layer [`MenuAction::SelectLayerStep`] makes active.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub enum LayerStep {
+    /// Alt+[: the next layer down the stack.
+    Below,
+    /// Alt+]: the next layer up the stack.
+    Above,
+    /// Alt+,: the bottom-most layer.
+    Bottom,
+    /// Alt+.: the top-most layer.
+    Top,
+}
+
+impl LayerStep {
+    /// Every step, in the order the chords are listed.
+    pub const ALL: [LayerStep; 4] = [
+        LayerStep::Below,
+        LayerStep::Above,
+        LayerStep::Bottom,
+        LayerStep::Top,
+    ];
+
+    /// The position this step lands on in a flat list of `count` layers
+    /// ordered top-most first, from `current` (`None`: nothing active).
+    /// `None` when there are no layers.
+    pub fn target(self, current: Option<usize>, count: usize) -> Option<usize> {
+        let last = count.checked_sub(1)?;
+        Some(match (self, current) {
+            (LayerStep::Top, _) => 0,
+            (LayerStep::Bottom, _) => last,
+            (LayerStep::Below, Some(i)) => (i + 1).min(last),
+            (LayerStep::Above, Some(i)) => i.saturating_sub(1),
+            (LayerStep::Below, None) => 0,
+            (LayerStep::Above, None) => last,
+        })
+    }
+}
+
+/// W11-G: Photoshop's Shift+Alt letter for `mode`, when it has one.
+pub fn blend_mode_letter(mode: layer_model::BlendMode) -> Option<char> {
+    use layer_model::BlendMode as B;
+    Some(match mode {
+        B::Normal => 'n',
+        B::Dissolve => 'i',
+        B::Darken => 'k',
+        B::Multiply => 'm',
+        B::ColorBurn => 'b',
+        B::LinearBurn => 'a',
+        B::Lighten => 'g',
+        B::Screen => 's',
+        B::ColorDodge => 'd',
+        B::LinearDodge => 'w',
+        B::Overlay => 'o',
+        B::SoftLight => 'f',
+        B::HardLight => 'h',
+        B::VividLight => 'v',
+        B::LinearLight => 'j',
+        B::PinLight => 'z',
+        B::HardMix => 'l',
+        B::Difference => 'e',
+        B::Exclusion => 'x',
+        B::Hue => 'u',
+        B::Saturation => 't',
+        B::Color => 'c',
+        B::Luminosity => 'y',
+        B::DarkerColor | B::LighterColor | B::Subtract | B::Divide => return None,
+    })
+}
+
+/// W11-G: the mode [`MenuAction::CycleBlendMode`] steps to from `mode`,
+/// wrapping at both ends of [`layer_model::BlendMode::ALL`].
+pub fn cycle_blend_mode(mode: layer_model::BlendMode, forward: bool) -> layer_model::BlendMode {
+    let all = layer_model::BlendMode::ALL;
+    let i = all.iter().position(|m| *m == mode).unwrap_or(0);
+    let n = all.len();
+    all[if forward {
+        (i + 1) % n
+    } else {
+        (i + n - 1) % n
+    }]
+}
+
+/// W11-E: why Transform Again is greyed.
+pub const NO_TRANSFORM_TO_REPEAT: &str =
+    "There is no free transform to repeat: commit one with Edit > Free Transform first";
 
 /// The outcome of asking whether an item can be used right now.
 #[derive(Clone, PartialEq, Debug)]
@@ -2270,6 +2406,15 @@ pub struct MenuContext {
     /// Smart Filter rows are gated on.
     pub smart_filters: usize,
     pub filter_mask: Option<bool>,
+    /// W11-E: a free transform has been committed, so Edit > Transform >
+    /// Again has something to repeat. Filled by the application, which keeps
+    /// the record.
+    pub has_last_transform: bool,
+    /// W11-E: the active layer's colour label.
+    pub active_color_label: layer_model::ColorLabel,
+    /// W11-E: the selected layers are linked to at least one layer outside
+    /// the selection, so Select Linked Layers has something to add.
+    pub has_unselected_link_partners: bool,
 }
 
 /// W10-I: the active layer's smart object, if it is one.
@@ -2328,6 +2473,9 @@ impl Default for MenuContext {
             smart_object_linked: false,
             smart_filters: 0,
             filter_mask: None,
+            has_last_transform: false,
+            active_color_label: layer_model::ColorLabel::NoColor,
+            has_unselected_link_partners: false,
         }
     }
 }
@@ -2387,6 +2535,19 @@ impl MenuContext {
             filter_mask: active_smart_object(doc)
                 .and_then(|so| so.filter_mask.as_ref())
                 .map(|m| m.enabled),
+            active_color_label: doc
+                .active_layer()
+                .map_or(layer_model::ColorLabel::NoColor, |id| {
+                    doc.extras.color_label(id)
+                }),
+            has_unselected_link_partners: {
+                let mut chosen = doc.layer_selection();
+                chosen.extend(doc.active_layer());
+                doc.layers
+                    .link_partners(&chosen)
+                    .iter()
+                    .any(|id| !chosen.contains(id))
+            },
             ..Self::default()
         }
     }
@@ -2487,6 +2648,8 @@ impl MenuAction {
             MenuAction::CloseAll,
         ]);
         out.extend([MenuAction::Save, MenuAction::SaveAs, MenuAction::SaveAsPsd]);
+        // W11-D.
+        out.push(MenuAction::Revert);
         out.extend(ExportFormat::ALL.iter().copied().map(MenuAction::Export));
         out.extend([
             MenuAction::ExportLayers,
@@ -2758,6 +2921,41 @@ impl MenuAction {
             MenuAction::DataSets,
             MenuAction::VectorizeBitmap,
         ]);
+        // ---- W11-E: the last Layer / Edit gaps ----
+        out.extend([
+            MenuAction::TransformAgain,
+            MenuAction::TransformAgainCopy,
+            MenuAction::ReverseLayers,
+            MenuAction::SelectLinkedLayers,
+            MenuAction::ConvertToLinked,
+            MenuAction::EmbedLinked,
+            MenuAction::NewLayerBasedSlice,
+        ]);
+        out.extend(
+            layer_model::ColorLabel::ALL
+                .iter()
+                .copied()
+                .map(MenuAction::SetLayerColor),
+        );
+        // ---- W11-G: the sheet, the search, the layer / blend chords ----
+        out.extend([MenuAction::ShortcutSheet, MenuAction::CommandSearch]);
+        out.extend(
+            LayerStep::ALL
+                .iter()
+                .copied()
+                .map(MenuAction::SelectLayerStep),
+        );
+        out.extend(
+            layer_model::BlendMode::ALL
+                .iter()
+                .copied()
+                .filter(|m| blend_mode_letter(*m).is_some())
+                .map(MenuAction::BlendModeChord),
+        );
+        out.extend([
+            MenuAction::CycleBlendMode(true),
+            MenuAction::CycleBlendMode(false),
+        ]);
         out
     }
 
@@ -2773,6 +2971,8 @@ impl MenuAction {
             MenuAction::Save => "Save".into(),
             MenuAction::SaveAs => "Save As…".into(),
             MenuAction::SaveAsPsd => "Save as PSD…".into(),
+            // W11-D.
+            MenuAction::Revert => "Revert".into(),
             MenuAction::Export(f) => format!("{}…", f.extension().to_uppercase()),
             MenuAction::ExportLayers => "Export Layers…".into(),
             MenuAction::ExportSlices => "Slices…".into(),
@@ -2954,6 +3154,25 @@ impl MenuAction {
             MenuAction::ShowLayers => "Show Layers".into(),
             MenuAction::LinkLayers => "Link Layers".into(),
             MenuAction::SmartFilter(op) => op.label().into(),
+            // W11-E
+            MenuAction::TransformAgain => "Again".into(),
+            MenuAction::TransformAgainCopy => "Again with Copy".into(),
+            MenuAction::ReverseLayers => "Reverse".into(),
+            MenuAction::SelectLinkedLayers => "Select Linked Layers".into(),
+            MenuAction::ConvertToLinked => "Convert to Linked…".into(),
+            MenuAction::EmbedLinked => "Embed Linked".into(),
+            MenuAction::SetLayerColor(color) => color.label().into(),
+            MenuAction::NewLayerBasedSlice => "New Layer Based Slice".into(),
+            // W11-G
+            MenuAction::ShortcutSheet => "Keyboard Shortcut Sheet…".into(),
+            MenuAction::CommandSearch => "Search Commands…".into(),
+            MenuAction::SelectLayerStep(LayerStep::Below) => "Select Layer Below".into(),
+            MenuAction::SelectLayerStep(LayerStep::Above) => "Select Layer Above".into(),
+            MenuAction::SelectLayerStep(LayerStep::Bottom) => "Select Bottom Layer".into(),
+            MenuAction::SelectLayerStep(LayerStep::Top) => "Select Top Layer".into(),
+            MenuAction::BlendModeChord(mode) => format!("Blend Mode: {}", mode.label()),
+            MenuAction::CycleBlendMode(true) => "Next Blend Mode".into(),
+            MenuAction::CycleBlendMode(false) => "Previous Blend Mode".into(),
         }
     }
 
@@ -2977,6 +3196,9 @@ impl MenuAction {
                 Some(step) => format!("Redo {step}"),
                 None => self.label(),
             },
+            // W11-E: with two or more layers selected, Ctrl+E merges them,
+            // and the row says so (Photoshop's one row, two names).
+            MenuAction::MergeDown if ctx.selected_layers >= 2 => MERGE_LAYERS.into(),
             // W10-G: Edit > Fade names the step it fades ("Fade Apply
             // Invert..."), as the dialog's title does.
             MenuAction::Fade => match ctx.fade_step.as_deref() {
@@ -3078,6 +3300,9 @@ impl MenuAction {
             }
             // Photoshop's Content-Aware Scale chord.
             MenuAction::ContentAwareScaleFree => Shortcut::ctrl_alt_shift('c'),
+            // W11-E: Photoshop's Transform Again chords.
+            MenuAction::TransformAgain => Shortcut::ctrl_shift('t'),
+            MenuAction::TransformAgainCopy => Shortcut::ctrl_alt_shift('t'),
 
             MenuAction::TogglePanel(PanelId::Brushes) => Shortcut::bare(Key::F(5)),
             MenuAction::TogglePanel(PanelId::Color) => Shortcut::bare(Key::F(6)),
@@ -3085,6 +3310,34 @@ impl MenuAction {
             MenuAction::TogglePanel(PanelId::Info) => Shortcut::bare(Key::F(8)),
 
             MenuAction::Help => Shortcut::bare(Key::F(1)),
+
+            // W11-G: Photoshop's (and Photopea's) remaining chords.
+            MenuAction::Fade => Shortcut::ctrl_shift('f'),
+            MenuAction::RefineEdge => Shortcut::ctrl_alt('r'),
+            MenuAction::Print => Shortcut::ctrl('p'),
+            MenuAction::ShortcutSheet => Shortcut {
+                shift: true,
+                ..Shortcut::bare(Key::Slash)
+            },
+            MenuAction::CommandSearch => Shortcut::ctrl_shift('p'),
+            MenuAction::SelectLayerStep(step) => Shortcut {
+                alt: true,
+                ..Shortcut::bare(match step {
+                    LayerStep::Below => Key::LeftBracket,
+                    LayerStep::Above => Key::RightBracket,
+                    LayerStep::Bottom => Key::Comma,
+                    LayerStep::Top => Key::Period,
+                })
+            },
+            MenuAction::BlendModeChord(mode) => Shortcut {
+                alt: true,
+                shift: true,
+                ..Shortcut::bare(Key::character(blend_mode_letter(mode)?))
+            },
+            MenuAction::CycleBlendMode(forward) => Shortcut {
+                shift: true,
+                ..Shortcut::bare(if forward { Key::Plus } else { Key::Minus })
+            },
 
             _ => return None,
         })
@@ -3119,6 +3372,14 @@ impl MenuAction {
             MenuAction::NewDocument | MenuAction::Open | MenuAction::Quit => act(self),
             MenuAction::OpenRecent(i) => gate(
                 (i >= ctx.recent_files.len()).then_some("This slot has no recent file"),
+                act(self),
+            ),
+            // W11-D: Revert reads the document's file again, so it needs one
+            // on disk and changes to take back.
+            MenuAction::Revert => gate(
+                ctx.need_document()
+                    .or((!ctx.has_path).then_some("The document has never been saved"))
+                    .or((!ctx.is_dirty).then_some("The document has no unsaved changes")),
                 act(self),
             ),
             MenuAction::CloseDocument
@@ -3172,9 +3433,11 @@ impl MenuAction {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
             },
+            // W11-D: with no document open, Paste opens the clipboard's image
+            // as a new document of its size (Photopea), so only an empty
+            // clipboard greys it.
             MenuAction::Paste => gate(
-                ctx.need_document()
-                    .or(ctx.clipboard.is_empty().then_some("The clipboard is empty")),
+                ctx.clipboard.is_empty().then_some("The clipboard is empty"),
                 act(self),
             ),
             // Card 052: Paste Into is gated on the APPLICATION's own store —
@@ -3448,6 +3711,9 @@ impl MenuAction {
                 }),
                 Err(r) => Resolution::Disabled(r),
             },
+            // W11-E: two or more selected layers merge together (Merge
+            // Layers), whatever is below the active one.
+            MenuAction::MergeDown if ctx.has_document && ctx.selected_layers >= 2 => act(self),
             MenuAction::MergeDown => match ctx.need_layer() {
                 Ok(l) if !l.has_layer_below() => {
                     Resolution::Disabled("There is no layer below to merge into")
@@ -3765,6 +4031,22 @@ impl MenuAction {
             | MenuAction::ExportDiagnostics
             | MenuAction::ReportIssue
             | MenuAction::About => act(self),
+            // W11-G: the sheet and the search ask nothing of the document.
+            MenuAction::ShortcutSheet | MenuAction::CommandSearch => act(self),
+            // W11-G: the layer steps need a layer to step from; the blend
+            // chords need a document. With a painting tool active a blend
+            // chord sets that tool's Mode (Photoshop); otherwise it sets the
+            // active layer's blend mode, and does nothing without one.
+            MenuAction::SelectLayerStep(_) => match ctx.need_layer() {
+                Ok(_) if ctx.layer_count < 2 => {
+                    Resolution::Disabled("There is no other layer to select")
+                }
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::BlendModeChord(_) | MenuAction::CycleBlendMode(_) => {
+                gate(ctx.need_document(), act(self))
+            }
 
             // ---- W10-I: Layer additions ------------------------------------
             MenuAction::SmartObject(op) => match ctx.need_layer() {
@@ -3818,9 +4100,68 @@ impl MenuAction {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
             },
+            // ---- W11-E ----
+            MenuAction::TransformAgain | MenuAction::TransformAgainCopy => {
+                match ctx.need_layer() {
+                    Ok(_) if !ctx.has_last_transform => Resolution::Disabled(NO_TRANSFORM_TO_REPEAT),
+                    Ok(l) if self == MenuAction::TransformAgain && l.locked.blocks_transform() => {
+                        Resolution::Disabled("The layer's position is locked")
+                    }
+                    Ok(_) => act(self),
+                    Err(r) => Resolution::Disabled(r),
+                }
+            }
+            MenuAction::ReverseLayers => match ctx.need_layer() {
+                Ok(_) if ctx.selected_layers < 2 => {
+                    Resolution::Disabled("Select two or more layers to reverse")
+                }
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::SelectLinkedLayers => match ctx.need_layer() {
+                Ok(_) if !ctx.has_unselected_link_partners => {
+                    Resolution::Disabled("No other layer is linked to the selection")
+                }
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::ConvertToLinked | MenuAction::EmbedLinked => match ctx.need_layer() {
+                Ok(l) if l.class != LayerClass::SmartObject => {
+                    Resolution::Disabled("The active layer is not a smart object")
+                }
+                Ok(_) if self == MenuAction::ConvertToLinked && ctx.smart_object_linked => {
+                    Resolution::Disabled("The smart object is already linked")
+                }
+                Ok(_) if self == MenuAction::EmbedLinked && !ctx.smart_object_linked => {
+                    Resolution::Disabled("The smart object is already embedded")
+                }
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::SetLayerColor(color) => match ctx.need_layer() {
+                Ok(_) if ctx.selected_layers <= 1 && ctx.active_color_label == color => {
+                    Resolution::Disabled(if color == layer_model::ColorLabel::NoColor {
+                        "The layer has no color label"
+                    } else {
+                        "The layer already wears this color label"
+                    })
+                }
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::NewLayerBasedSlice => match ctx.need_layer() {
+                Ok(l) if l.class == LayerClass::Group => {
+                    Resolution::Disabled("A group has no pixels of its own to slice")
+                }
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
         }
     }
 }
+
+/// W11-E: what Merge Down reads (and does) with two or more layers selected.
+pub const MERGE_LAYERS: &str = "Merge Layers";
 
 /// W9-G: Layer ▸ Vector Mask. The menu gates; the application performs —
 /// a vector mask is attached, edited or removed by one undoable
@@ -4057,6 +4398,8 @@ fn file_menu(recent_files: usize) -> Menu {
             item(MenuAction::Save),
             item(MenuAction::SaveAs),
             item(MenuAction::SaveAsPsd),
+            // W11-D.
+            item(MenuAction::Revert),
             Entry::Separator,
             Entry::submenu(
                 "Export As",
@@ -4130,7 +4473,17 @@ fn edit_menu() -> Menu {
             item(MenuAction::PuppetWarp),
             // W10-G
             item(MenuAction::PerspectiveWarp),
-            Entry::submenu("Transform", items(TransformOp::ALL, MenuAction::Transform)),
+            Entry::submenu("Transform", {
+                // W11-E: Again / Again with Copy head the submenu, as in
+                // Photoshop.
+                let mut rows = vec![
+                    item(MenuAction::TransformAgain),
+                    item(MenuAction::TransformAgainCopy),
+                    Entry::Separator,
+                ];
+                rows.extend(items(TransformOp::ALL, MenuAction::Transform));
+                rows
+            }),
             Entry::submenu("Content-Aware Scale", {
                 // W10-J: the interactive box first, the fixed steps after.
                 let mut rows = vec![item(MenuAction::ContentAwareScaleFree), Entry::Separator];
@@ -4237,6 +4590,13 @@ fn layer_menu() -> Menu {
             // W10-I: Photopea's Hide Layers / Show Layers.
             item(MenuAction::HideLayers),
             item(MenuAction::ShowLayers),
+            // W11-E: the Layers panel's colour label, and a slice over the
+            // layer.
+            Entry::submenu(
+                "Color Label",
+                items(layer_model::ColorLabel::ALL, MenuAction::SetLayerColor),
+            ),
+            item(MenuAction::NewLayerBasedSlice),
             Entry::Separator,
             Entry::submenu("Layer Mask", items(MaskOp::ALL, MenuAction::Mask)),
             Entry::submenu(
@@ -4275,6 +4635,10 @@ fn layer_menu() -> Menu {
                     item(MenuAction::SmartObject(SmartObjectOp::ExportContents)),
                     item(MenuAction::SmartObject(SmartObjectOp::RelinkToFile)),
                     item(MenuAction::SmartObject(SmartObjectOp::ConvertToLayers)),
+                    // W11-E
+                    Entry::Separator,
+                    item(MenuAction::ConvertToLinked),
+                    item(MenuAction::EmbedLinked),
                 ],
             ),
             // W10-I: Layer ▸ Smart Filter — the filters' shared mask.
@@ -4308,7 +4672,15 @@ fn layer_menu() -> Menu {
             item(MenuAction::GroupLayers),
             item(MenuAction::UngroupLayers),
             item(MenuAction::LinkLayers),
-            Entry::submenu("Arrange", items(Arrange::ALL, MenuAction::ArrangeLayer)),
+            Entry::submenu("Arrange", {
+                let mut rows = items(Arrange::ALL, MenuAction::ArrangeLayer);
+                // W11-E
+                rows.push(Entry::Separator);
+                rows.push(item(MenuAction::ReverseLayers));
+                rows
+            }),
+            // W11-E
+            item(MenuAction::SelectLinkedLayers),
             Entry::submenu("Align", items(AlignEdge::ALL, MenuAction::AlignLayers)),
             Entry::submenu(
                 "Distribute",
@@ -4466,6 +4838,9 @@ fn help_menu() -> Menu {
         entries: vec![
             item(MenuAction::Help),
             item(MenuAction::KeyboardShortcuts),
+            // W11-G: the read-only sheet and the command search.
+            item(MenuAction::ShortcutSheet),
+            item(MenuAction::CommandSearch),
             Entry::Separator,
             item(MenuAction::ReleaseNotes),
             item(MenuAction::ExportDiagnostics),
@@ -4776,6 +5151,72 @@ mod tests {
                 ..with
             })
             .is_enabled());
+    }
+
+    /// W11-D: with no document open, Paste stays live while the clipboard
+    /// holds an image (it opens that image as a new document), and Revert
+    /// needs a document with a file on disk and unsaved changes.
+    #[test]
+    fn paste_without_a_document_and_revert_resolve_as_photopea_does() {
+        let external = ClipboardState {
+            pixels: false,
+            external_pixels: true,
+            layers: false,
+        };
+        let empty = MenuContext::default();
+        assert_eq!(
+            MenuAction::Paste.resolve(&empty).reason(),
+            Some("The clipboard is empty")
+        );
+        let clip = MenuContext {
+            clipboard: external,
+            ..Default::default()
+        };
+        assert!(MenuAction::Paste.resolve(&clip).is_enabled());
+        // The masked pastes still need a document.
+        assert_eq!(
+            MenuAction::PasteInPlace.resolve(&clip).reason(),
+            Some("No document is open")
+        );
+
+        assert_eq!(
+            MenuAction::Revert.resolve(&empty).reason(),
+            Some("No document is open")
+        );
+        let unsaved = MenuContext {
+            has_document: true,
+            is_dirty: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            MenuAction::Revert.resolve(&unsaved).reason(),
+            Some("The document has never been saved")
+        );
+        let clean = MenuContext {
+            has_document: true,
+            has_path: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            MenuAction::Revert.resolve(&clean).reason(),
+            Some("The document has no unsaved changes")
+        );
+        let edited = MenuContext {
+            is_dirty: true,
+            ..clean
+        };
+        assert!(MenuAction::Revert.resolve(&edited).is_enabled());
+        // The File menu draws it, right under the saves.
+        let file = &menu_bar(1)[0];
+        let at = |a: MenuAction| {
+            file.entries
+                .iter()
+                .position(|e| matches!(e, Entry::Item(i) if *i == a))
+        };
+        assert_eq!(
+            at(MenuAction::Revert),
+            at(MenuAction::SaveAsPsd).map(|i| i + 1)
+        );
     }
 
     #[test]

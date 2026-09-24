@@ -2511,9 +2511,8 @@ mod tests {
                 _ => decode_surface_bytes(&raster, ImportLimits::default()),
             }
             .unwrap();
-            let SurfacePixels::Rgba8(px) = decoded.pixels else {
-                unreachable!()
-            };
+            // W11-H: an EXR reads back at 16 bits; compare at 8.
+            let px = decoded.pixels.into_rgba8();
             assert!(
                 (i32::from(px[3]) - 128).abs() <= 1,
                 "{format:?} claims full alpha but wrote {px:?}"

@@ -161,6 +161,7 @@ impl StepKind {
             Command::SetDocumentExtras { .. } => StepKind::LayerChanged,
             // W10-B: storing an alpha channel edits a saved selection.
             Command::SetSavedSelection { .. } => StepKind::LayerChanged,
+            Command::SetSlices { .. } => StepKind::LayerChanged,
         }
     }
 }

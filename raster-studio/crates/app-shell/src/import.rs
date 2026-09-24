@@ -117,10 +117,11 @@ pub enum ImportError {
     /// applies to what is *inside* it.
     #[error("this Photoshop document is {bytes} bytes, more than the {max} this build will read")]
     PsdTooLarge { bytes: u64, max: u64 },
-    /// A canvas neither side can serve: zero-area, or past what a `.psd` can
-    /// describe (30 000 a side — beyond that the format is `.psb`) or what this
-    /// build will open.
-    #[error("a {width}x{height} canvas cannot be exchanged as a .psd")]
+    /// A canvas neither side can serve: zero-area, past what this build will
+    /// open, or (on save) past what even a `.psb` can describe (300 000 a
+    /// side, `psd::write::MAX_PSB_DIMENSION`). A canvas past 30 000 a side but
+    /// within that is not refused: it is written as a `.psb`.
+    #[error("a {width}x{height} canvas cannot be exchanged as a .psd or .psb")]
     PsdCanvas { width: u32, height: u32 },
     /// A layer tree nested deeper than [`MAX_PSD_GROUP_DEPTH`].
     #[error("this document nests groups more than {max} deep, which a .psd cannot describe")]
@@ -511,8 +512,9 @@ pub fn composite_animation_frames(
 /// real document and still finite.
 pub const MAX_PSD_FILE_BYTES: u64 = 2 << 30;
 
-/// Largest canvas edge a `.psd` can describe. Past this the format is `.psb`,
-/// which this workspace neither reads nor writes.
+/// Largest canvas edge a `.psd` can describe. Past this the format is `.psb`
+/// (W11-H: [`psd_from_document`] writes one, up to
+/// `psd::write::MAX_PSB_DIMENSION`).
 pub const MAX_PSD_DIMENSION: u32 = 30_000;
 
 /// Deepest group nesting exchanged with a `.psd`.
@@ -1658,28 +1660,52 @@ pub fn document_from_psd(
     // document's colour space, so it is no longer "left behind" and must not
     // be counted (or named) as dropped.
     let retained_profile = matches!(profile_space, color::ColorSpace::IccProfile { .. });
-    let dropped_resources = file
+    // W11-C: guides (1032), slices (1050), saved and work paths (2000–2997,
+    // 1025) and the alpha channel names (1006 / 1045) are mapped onto the
+    // document below (`psd_resources`), so they are not "left behind" either.
+    let mapped = |id: u16| {
+        use psd::resource as r;
+        matches!(
+            id,
+            r::ID_GRID_GUIDES
+                | r::ID_SLICES
+                | r::ID_WORK_PATH
+                | r::ID_ALPHA_NAMES
+                | r::ID_UNICODE_ALPHA_NAMES
+        ) || (r::ID_SAVED_PATH_FIRST..=r::ID_SAVED_PATH_LAST).contains(&id)
+    };
+    let dropped: Vec<u16> = file
         .resources
         .iter()
-        .filter(|r| {
-            r.id != psd::resource::ID_RESOLUTION_INFO
-                && !(retained_profile && r.id == psd::resource::ID_ICC_PROFILE)
+        .map(|r| r.id)
+        .filter(|&id| {
+            id != psd::resource::ID_RESOLUTION_INFO
+                && !(retained_profile && id == psd::resource::ID_ICC_PROFILE)
+                && !mapped(id)
         })
-        .count();
-    if dropped_resources > 0 {
-        let contents = if retained_profile {
-            "guides, paths"
-        } else {
-            "guides, paths, the colour profile"
-        };
+        .collect();
+    if !dropped.is_empty() {
+        let is_named = |id: &u16| *id == psd::resource::ID_ICC_PROFILE;
+        let mut kinds = Vec::new();
+        if dropped.contains(&psd::resource::ID_ICC_PROFILE) {
+            kinds.push("the colour profile");
+        }
+        if dropped.iter().any(|id| !is_named(id)) {
+            kinds.push("other resources");
+        }
         notes.push(format!(
-            "{dropped_resources} image resource(s) — {contents} — are \
-             not part of this document model and were left behind"
+            "{} image resource(s) — {} — are not part of this document model and were \
+             left behind",
+            dropped.len(),
+            kinds.join(", ")
         ));
     }
 
     let mut document = Document::new(width, height, title);
     document.meta.color_space = profile_space;
+    // W11-C: guides, slices and alpha channels land now; the paths become path layers
+    // once the layer tree is built.
+    let saved_paths = psd_resources::import_resources(&file, &mut document, &mut notes);
     if header.depth == psd::Depth::Sixteen {
         document.meta.bit_depth = 16;
     }
@@ -1758,13 +1784,6 @@ pub fn document_from_psd(
                 psd_live::Live::None => {}
             },
             psd::LayerKind::Raster => match &source.adjustment {
-                // Invert is the one adjustment whose whole definition is its
-                // name: there are no parameters to decode, so it maps exactly.
-                Some(adjustment) if adjustment.key == *b"nvrt" => {
-                    layer.kind = LayerKind::Adjustment(layer_model::AdjustmentLayer {
-                        kind: AdjustmentKind::Invert,
-                    });
-                }
                 Some(_) if fill_source.is_some() => {
                     // W9-B: the fill's parameters — colour, ramp and its
                     // geometry, or the pattern with its scale, phase, angle
@@ -1774,15 +1793,43 @@ pub fn document_from_psd(
                         fill_source.clone().expect("checked by the guard"),
                     ));
                 }
+                // W11-A: every adjustment key a `.psd` defines (Invert,
+                // Levels, Curves, Brightness/Contrast, Hue/Saturation, Colour
+                // Balance, Black & White, Photo Filter, Channel Mixer,
+                // Posterize, Threshold, Gradient Map, Selective Colour,
+                // Exposure, Vibrance, Colour Lookup) opens as a LIVE
+                // adjustment layer with its parameters.
                 Some(adjustment) => {
-                    // The payload survives in the `psd` crate's model but this
-                    // document has no vocabulary for it, and inventing one
-                    // would put the wrong numbers behind a slider.
-                    tally.adjustments.push(format!(
-                        "{} ({})",
-                        source.name,
-                        psd::error::tag_name(adjustment.key)
-                    ));
+                    match psd::adjustments::decode(adjustment, &psd::ReadOptions::default()) {
+                        Ok(decoded) => {
+                            layer.kind = LayerKind::Adjustment(layer_model::AdjustmentLayer {
+                                kind: decoded.kind,
+                            });
+                            // Settings the model has no room for are named,
+                            // never dropped silently.
+                            if !decoded.unmapped.is_empty() {
+                                let what = decoded.unmapped.join(", ");
+                                notes.push(format!(
+                                    "the {what} of \u{201c}{}\u{201d} did not import; the \
+                                     layer's other settings did",
+                                    source.name
+                                ));
+                                text_detail = Some(format!("not imported: {what}"));
+                            }
+                        }
+                        Err(error) => {
+                            // A key this build does not decode, or a payload
+                            // that is malformed: the bytes survive in the
+                            // `psd` crate's model, but inventing numbers
+                            // would put the wrong ones behind a slider.
+                            tally.adjustments.push(format!(
+                                "{} ({})",
+                                source.name,
+                                psd::error::tag_name(adjustment.key)
+                            ));
+                            text_detail = Some(format!("payload not read: {}", error.reason));
+                        }
+                    }
                 }
                 None => {
                     // A type layer: the `Txt ` string (or the engine data's
@@ -2019,6 +2066,8 @@ pub fn document_from_psd(
             notes.push("this file has neither layers nor a flattened image; the canvas is empty");
         }
     }
+    // W11-C: saved and work paths as path layers (the Paths panel's rows).
+    psd_resources::push_path_layers(&mut document, saved_paths, &mut notes)?;
 
     tally.record(&mut notes);
 
@@ -2191,6 +2240,10 @@ pub use xcf_import::{document_from_xcf, looks_like_xcf, read_xcf_bytes};
 #[path = "psd_vector_mask.rs"]
 mod psd_vector_mask;
 
+// W11-C: guides, saved paths and alpha channels, both ways.
+#[path = "psd_resources.rs"]
+mod psd_resources;
+
 /// One level of the document's tree as `.psd` layer records, bottom-to-top.
 fn psd_layers_for(
     document: &Document,
@@ -2212,6 +2265,10 @@ fn psd_layers_for(
         let Some(layer) = document.layers.get(id) else {
             continue;
         };
+        // W11-C: a path layer is a saved-path resource, not a layer record.
+        if psd_resources::is_path_layer(layer) {
+            continue;
+        }
         let mut record = psd::PsdLayer::raster(&layer.name, psd::Rect::default());
         record.opacity = to_byte(layer.effective_opacity());
         let fill = layer.effective_fill_opacity();
@@ -2279,17 +2336,22 @@ fn psd_layers_for(
             }
             LayerKind::Adjustment(adjustment) => {
                 record.pixel_data_irrelevant = true;
-                if matches!(adjustment.kind, AdjustmentKind::Invert) {
-                    record.adjustment = Some(psd::Adjustment {
-                        key: *b"nvrt",
-                        data: Vec::new(),
-                    });
-                } else {
+                // W11-A: every kind a `.psd` has an adjustment layer for goes
+                // out live, as its own key and payload.
+                let kind: &AdjustmentKind = &adjustment.kind;
+                match psd::adjustments::encode(kind) {
+                    Ok(payload) => record.adjustment = Some(payload),
                     // Card 078: an adjustment whose payload cannot be written
-                    // gets NO invented pixels — an empty layer plus the note
-                    // beats pixels that look evaluated but are not. Its
-                    // appearance survives in the file's flattened preview.
-                    tally.adjustments.push(layer.name.clone());
+                    // (Auto, Desaturate, Equalize, Shadows/Highlights, Replace
+                    // Color, HDR Toning, Match Color, or settings the layout
+                    // cannot spell) gets NO invented pixels — an empty layer
+                    // plus the note beats pixels that look evaluated but are
+                    // not. Its appearance survives in the flattened preview.
+                    // The note carries the reason, e.g. a Brightness past
+                    // what `brit` stores: nothing is clamped silently.
+                    Err(e) => tally
+                        .adjustments
+                        .push(format!("{} ({})", layer.name, e.reason)),
                 }
             }
             LayerKind::Raster(_) | LayerKind::Generator(_) => wants_pixels = true,
@@ -2445,9 +2507,9 @@ fn psd_layers_for(
             if mask.kind == MaskKind::Vector && mask.vector.is_none() {
                 tally.vector_masks.push(layer.name.clone());
             }
-            if mask.density() != 1.0 || mask.feather_px() != 0.0 {
-                tally.mask_params.push(layer.name.clone());
-            }
+            // W11-C: density and feather are written below, on the pixel
+            // mask's record; the note is left only when no record went out.
+            let has_params = mask.density() != 1.0 || mask.feather_px() != 0.0;
             // A linked mask travels with the layer; an unlinked one never moved.
             let (mdx, mdy) = if mask.linked { (dx, dy) } else { (0, 0) };
             if let Some(map) = document.pixels.tiles(PixelKey::Mask(mask.id)) {
@@ -2464,6 +2526,7 @@ fn psd_layers_for(
                     record.mask = Some(written);
                 }
             }
+            let pixel_written = record.mask.is_some();
             // W9-G: the vector mask as `vmsk` path records (document
             // pixels, through the layer's and the mask's pose), and its
             // density and feather in the mask record's parameter block.
@@ -2516,6 +2579,20 @@ fn psd_layers_for(
                     _ => {}
                 }
             }
+            // W11-C: the pixel mask's density (`0..=1` → the format's byte)
+            // and feather (document pixels, the format's unit too) in the
+            // user-mask pair of the parameter block. With a vector mask the
+            // pixel mask moved to `real`, but the user-mask pair still names
+            // it — the convention the import reads.
+            if has_params {
+                match record.mask.as_mut() {
+                    Some(rec) if pixel_written => {
+                        rec.density = (mask.density().clamp(0.0, 1.0) * 255.0).round() as u8;
+                        rec.feather_px = f64::from(mask.feather_px());
+                    }
+                    _ => tally.mask_params.push(layer.name.clone()),
+                }
+            }
         }
 
         out.push(record);
@@ -2537,7 +2614,11 @@ pub fn psd_from_document(
     composite_rgba8: &[u8],
 ) -> Result<(Vec<u8>, PsdNotes), ImportError> {
     let (width, height) = (document.width(), document.height());
-    if width == 0 || height == 0 || width > MAX_PSD_DIMENSION || height > MAX_PSD_DIMENSION {
+    // W11-H: past MAX_PSD_DIMENSION the `psd` writer emits a `.psb`
+    // (version 2), up to its own ceiling; `doc::write_atomically` refuses
+    // those bytes under a `.psd` name, naming `.psb`.
+    let max = psd::write::MAX_PSB_DIMENSION;
+    if width == 0 || height == 0 || width > max || height > max {
         return Err(ImportError::PsdCanvas { width, height });
     }
     let expected = (width as usize) * (height as usize) * 4;
@@ -2593,6 +2674,9 @@ pub fn psd_from_document(
             psd::pattern::encode_block(&tally.fill_patterns),
         ));
     }
+    // W11-C: guides, path layers and saved selections as resources and alpha
+    // channels.
+    psd_resources::export_resources(document, &mut file, &mut notes)?;
     tally.record(&mut notes);
     Ok((psd::write(&file)?, notes))
 }
@@ -3776,9 +3860,9 @@ mod tests {
 
     #[test]
     fn a_document_the_format_cannot_hold_is_refused_with_a_reason() {
-        // A canvas past what a `.psd` can describe is a `.psb`, which nothing
-        // here writes; saying so beats writing a file Photoshop cannot open.
-        let doc = Document::new(MAX_PSD_DIMENSION + 1, 4, "huge");
+        // W11-H: a canvas past what even a `.psb` can describe is refused;
+        // saying so beats writing a file Photoshop cannot open.
+        let doc = Document::new(psd::write::MAX_PSB_DIMENSION + 1, 4, "huge");
         let err = psd_from_document(&doc, &MemoryTileSource::new(), &[]).unwrap_err();
         assert!(matches!(err, ImportError::PsdCanvas { .. }), "{err}");
 
@@ -4300,10 +4384,9 @@ mod tests {
         };
 
         let composite = vec![0u8; 64 * 64 * 4];
-        let (bytes, notes) = psd_from_document(&doc, &tiles, &composite).unwrap();
-        // The kind this writer cannot produce is named, not silently dropped.
-        let told = notes.summary().expect("the satin must be named");
-        assert!(told.contains("satin"), "{told}");
+        let (bytes, _notes) = psd_from_document(&doc, &tiles, &composite).unwrap();
+        // W11-B: satin is one of the kinds this writer now produces, so it
+        // is no longer named as dropped; it must round-trip instead (below).
 
         // An independent reader decodes the block back into editable
         // parameters through the same parser the import path uses.
@@ -4327,7 +4410,10 @@ mod tests {
             .as_ref()
             .expect("the overlay round-trips");
         assert_eq!(overlay.blend_mode, BlendMode::Color);
-        assert!(decoded.satin.is_none(), "only the written kinds decode");
+        assert!(
+            decoded.satin.is_some(),
+            "the satin now travels as an editable descriptor too"
+        );
         Ok(())
     }
 
@@ -5163,3 +5249,8 @@ mod w9c_text_tests {
         );
     }
 }
+
+/// W11-A: adjustment layers export and reimport live.
+#[cfg(test)]
+#[path = "import_adjustment_tests.rs"]
+mod w11a_adjustment_tests;

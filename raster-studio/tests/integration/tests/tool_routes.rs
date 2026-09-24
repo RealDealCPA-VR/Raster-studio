@@ -635,6 +635,59 @@ fn quick_selection_grows_from_the_scrubbed_region_to_its_colour() {
     undo_restores_selection(&mut ed, id, &before);
 }
 
+/// W11-G: a textured orange disc (radius 26 at 60, 66) on a textured teal
+/// ground: an object with a real edge and no flat colour to flood.
+fn object_disc(x: u32, y: u32) -> [u8; 4] {
+    let t = ((x * 7 + y * 13) % 11) as i32 * 4 - 20;
+    let c: [i32; 3] = if in_object_disc(x, y) {
+        [220 + t / 2, 130 + t, 40]
+    } else {
+        [40, 120 + t, 150 - t]
+    };
+    [
+        c[0].clamp(0, 255) as u8,
+        c[1].clamp(0, 255) as u8,
+        c[2].clamp(0, 255) as u8,
+        255,
+    ]
+}
+
+fn in_object_disc(x: u32, y: u32) -> bool {
+    (x as f32 + 0.5 - 60.0).powi(2) + (y as f32 + 0.5 - 66.0).powi(2) < 26.0 * 26.0
+}
+
+/// W11-G: the Object Selection tool — a rectangle dragged loosely round the
+/// disc runs `select_object` (GrabCut from the rectangle) on the job worker
+/// (inline here) and lands the DISC, not the rectangle, as one undoable
+/// `SetSelection` step.
+#[test]
+fn object_selection_selects_the_object_inside_the_dragged_rectangle() {
+    let id = ToolId::ObjectSelection;
+    let (_dir, mut ed) = open(&object_disc);
+    let mut pointer = ToolPointer::new();
+    let before = run_selection_route(&mut ed, &mut pointer, id, |p, ed| {
+        drag(p, ed, &[v(26.0, 32.0), v(60.0, 66.0), v(96.0, 102.0)])
+    });
+    let (mut inter, mut union) = (0u32, 0u32);
+    for y in 0..H {
+        for x in 0..W {
+            let a = cov(&ed, x as i32, y as i32) >= 0.5;
+            let b = in_object_disc(x, y);
+            inter += u32::from(a && b);
+            union += u32::from(a || b);
+        }
+    }
+    let iou = f64::from(inter) / f64::from(union.max(1));
+    assert!(iou >= 0.85, "IoU {iou} against the disc");
+    assert_eq!(
+        cov(&ed, 30, 36),
+        0.0,
+        "a corner of the rectangle outside the disc is not selected"
+    );
+    assert_eq!(ed.status(), Some("Selected the object"));
+    undo_restores_selection(&mut ed, id, &before);
+}
+
 // --------------------------------------------------------- retouch tools --
 
 #[test]
@@ -1414,8 +1467,10 @@ fn slice_drag_then_enter_reports_one_slice_and_edits_nothing() {
     let commit = pointer.commit(&mut ed);
     assert!(commit.had_pending, "{commit:?}");
     assert_eq!(commit.slices.len(), 1, "one drag is one slice: {commit:?}");
-    assert_eq!(commit.steps, 0, "a slice set is not an edit: {commit:?}");
-    assert_eq!(depth(&ed), d0);
+    // W11-E: slices are one History step each, as in Photoshop, and touch
+    // no pixels.
+    assert_eq!(commit.steps, 1, "a slice set is one step: {commit:?}");
+    assert_eq!(depth(&ed), d0 + 1);
     assert_eq!(composite(&mut ed), before);
 }
 
@@ -2216,6 +2271,8 @@ fn every_palette_tool_has_a_real_route_test_or_an_owner() {
         MagneticLasso,
         MagicWand,
         QuickSelect,
+        // W11-G
+        ObjectSelection,
         SpotHealing,
         HealingBrush,
         Patch,
@@ -3716,7 +3773,11 @@ fn slice_select_moves_then_deletes_the_committed_slice_without_a_history_entry()
         "the old slice came back: the store did not keep the edits"
     );
 
-    assert_eq!(depth(&ed), d0, "a slice set is not a document edit");
+    assert_eq!(
+        depth(&ed),
+        d0 + 2,
+        "the move and the delete are one History step each (W11-E)"
+    );
     assert_eq!(composite(&mut ed), before, "Slice Select touched pixels");
 }
 
@@ -3788,7 +3849,11 @@ fn slice_select_delete_key_removes_the_picked_slice_and_names_survive_to_the_exp
     assert_eq!(frame.menu, vec![action], "{frame:?}");
     let said = menu_bridge::perform(action, &mut ed).expect("Delete performs");
     assert!(said.contains("slice_02"), "{said}");
-    assert_eq!(depth(&ed), d0, "deleting a slice is not a document edit");
+    assert_eq!(
+        depth(&ed),
+        d0 + 1,
+        "deleting a slice is one History step (W11-E)"
+    );
     assert_eq!(composite(&mut ed), before, "Delete cleared pixels");
     // The shell's step after the menu pick (no press in between): the
     // overlay is the store's — the middle slice gone, the survivors keeping

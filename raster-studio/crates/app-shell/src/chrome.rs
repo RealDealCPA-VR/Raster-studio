@@ -1473,6 +1473,8 @@ impl Chrome {
         // the harvest below turns into actions the same frame.
         let menu_ctx = crate::menu_bridge::context(editor, &self.workspace);
         ui::context_menu::draw_open(&mut self.workspace, ctx, &menu_ctx);
+        // W11-G: Help > Search Commands resolves its rows against this.
+        self.dialogs.set_menu_context(&menu_ctx);
         self.channel_chords(ctx, editor);
         self.harvest(editor, &mut out);
         // W3-A: a View toggle this build cannot honour was refused rather
@@ -2574,6 +2576,16 @@ impl Chrome {
                 ui::menu::MenuAction::LoadSelection => self.workspace.take_pending_selection_load(),
                 _ => None,
             };
+            // W11-G: a blend-mode chord with a painting tool active sets the
+            // tool's Mode, as Photoshop does; otherwise the layer's (below).
+            let tool = editor.effective_tool();
+            if let Some(pick) =
+                crate::dialog_host::paint_chord_pick(*action, tool, &self.workspace.options)
+            {
+                pick.into_iter()
+                    .for_each(|p| crate::menu_bridge::record(p, out));
+                return;
+            }
             if self.dialogs.open_for_menu_action_at(action, editor, load) {
                 return;
             }
@@ -2718,6 +2730,8 @@ impl Chrome {
     /// that says which of them this build can actually perform.
     fn menu_bar(&mut self, ctx: &egui::Context, editor: &mut Editor, out: &mut ChromeOutput) {
         let context = crate::menu_bridge::context(editor, &self.workspace);
+        // W11-G: a Help > Search Commands click routes inside `draw`.
+        self.dialogs.set_menu_context(&context);
         let editor: &Editor = editor;
         crate::menu_bridge::draw(ctx, editor, &context, &mut |intent| {
             self.menu_click(intent, editor, out)

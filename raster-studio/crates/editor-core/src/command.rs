@@ -556,6 +556,16 @@ pub enum Command {
         name: String,
         selection: crate::selection::Selection,
     },
+    /// W11-E: replace the document's slice set wholesale. The inverse carries
+    /// the previous set, so creating, editing or deleting slices is one undo
+    /// step (Photoshop). Slices are records, not pixels: it dirties nothing.
+    ///
+    /// # Wire format
+    ///
+    /// Appended after every other variant and purely additive.
+    SetSlices {
+        slices: Vec<crate::slices::DocumentSlice>,
+    },
 }
 
 /// The class of a layer kind, as a word an error message can use.
@@ -1271,6 +1281,11 @@ impl Command {
                 })
             }
 
+            Command::SetSlices { slices } => {
+                let previous = std::mem::replace(&mut doc.slices, slices.clone());
+                Ok(Command::SetSlices { slices: previous })
+            }
+
             Command::SetSavedSelection {
                 index,
                 name,
@@ -1337,6 +1352,7 @@ impl Command {
             Command::Transaction { label, .. } => label.clone(),
             Command::SetDocumentExtras { .. } => "Edit Document Records".into(),
             Command::SetSavedSelection { .. } => "Edit Saved Selection".into(),
+            Command::SetSlices { .. } => "Edit Slices".into(),
         }
     }
 }
@@ -1693,7 +1709,8 @@ impl Command {
             | Command::ReplaceAssetSource { .. }
             // W10-B: comps, notes and styles are records, not pixels.
             | Command::SetDocumentExtras { .. }
-            | Command::SetSavedSelection { .. } => DirtyReach::nothing(),
+            | Command::SetSavedSelection { .. }
+            | Command::SetSlices { .. } => DirtyReach::nothing(),
             // One layer's whole extent, before and after. A create has no
             // "before" and a delete has no "after"; the shell's two-sided
             // query handles both by finding the layer missing on one side.

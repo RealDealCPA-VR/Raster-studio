@@ -1692,4 +1692,85 @@ mod tests {
         );
         assert!(conflicts(&Keymap::defaults()).is_empty());
     }
+
+    /// W11-G: every new chord, spelled as the key winit reports on a US
+    /// layout (the shifted glyph for `?`, `+` and `_`), resolves to its
+    /// action through the live keymap, and the default table stays
+    /// conflict-free.
+    #[test]
+    fn the_w11g_chords_resolve_from_the_keys_winit_reports() {
+        use layer_model::BlendMode as B;
+        use ui::menu::{LayerStep, MenuAction as M};
+        use winit::keyboard::{Key as WKey, ModifiersState};
+        let map = Keymap::default();
+        let key = |glyph: &str, ctrl: bool, alt: bool, shift: bool| {
+            let mut mods = ModifiersState::empty();
+            mods.set(ModifiersState::CONTROL, ctrl);
+            mods.set(ModifiersState::ALT, alt);
+            mods.set(ModifiersState::SHIFT, shift);
+            let chord = crate::shell::chord_from_key(&WKey::Character(glyph.into()), mods)
+                .unwrap_or_else(|| panic!("{glyph:?} forms no chord"));
+            map.resolve_any(&chord)
+        };
+        let expected: Vec<(&str, bool, bool, bool, M)> = vec![
+            ("F", true, false, true, M::Fade),
+            ("r", true, true, false, M::RefineEdge),
+            ("p", true, false, false, M::Print),
+            ("?", false, false, true, M::ShortcutSheet),
+            ("P", true, false, true, M::CommandSearch),
+            (
+                "[",
+                false,
+                true,
+                false,
+                M::SelectLayerStep(LayerStep::Below),
+            ),
+            (
+                "]",
+                false,
+                true,
+                false,
+                M::SelectLayerStep(LayerStep::Above),
+            ),
+            (
+                ",",
+                false,
+                true,
+                false,
+                M::SelectLayerStep(LayerStep::Bottom),
+            ),
+            (".", false, true, false, M::SelectLayerStep(LayerStep::Top)),
+            ("N", false, true, true, M::BlendModeChord(B::Normal)),
+            ("M", false, true, true, M::BlendModeChord(B::Multiply)),
+            ("S", false, true, true, M::BlendModeChord(B::Screen)),
+            ("O", false, true, true, M::BlendModeChord(B::Overlay)),
+            ("+", false, false, true, M::CycleBlendMode(true)),
+            ("_", false, false, true, M::CycleBlendMode(false)),
+        ];
+        for (glyph, ctrl, alt, shift, action) in expected {
+            assert_eq!(
+                key(glyph, ctrl, alt, shift),
+                Some(Resolved::Menu(action)),
+                "{glyph:?} ctrl={ctrl} alt={alt} shift={shift}"
+            );
+        }
+        // Every lettered blend mode has its own chord, and none is shadowed.
+        for mode in B::ALL {
+            let Some(letter) = ui::menu::blend_mode_letter(mode) else {
+                continue;
+            };
+            let chord = Chord {
+                ctrl_or_cmd: false,
+                alt: true,
+                shift: true,
+                key: Key::character(letter),
+            };
+            assert_eq!(
+                map.resolve_any(&chord),
+                Some(Resolved::Menu(M::BlendModeChord(mode))),
+                "Shift+Alt+{letter}"
+            );
+        }
+        assert!(conflicts(&Keymap::defaults()).is_empty());
+    }
 }

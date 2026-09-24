@@ -35,6 +35,8 @@
 
 pub mod artboard;
 pub mod blend;
+// W11-E: the Layers panel's colour labels.
+pub mod color_label;
 // W10-B: layer comps, notes, text styles and the alpha-channel edit.
 pub mod doc_extras;
 pub mod effects;
@@ -70,6 +72,8 @@ pub use layer::{ShapeFill, ShapeFillPaint, ShapeGradientFill, ShapeStrokeAlign};
 pub use mask::{LayerMask, MaskError, MaskKind, VectorMask};
 pub use smart_filter::{stack_is_active, SmartFilter, SmartParam};
 pub use tree::{ClippingGroup, DetachedSubtree, LayerTree, TreeError};
+// W11-E: a layer's colour label.
+pub use color_label::{ColorLabel, LayerColorLabel};
 // W10-A: the group an old document's single link chain maps to.
 pub use link_groups::LEGACY_LINK_GROUP;
 // W10-B: the document-level records of the Layer Comps, Notes and style panels.

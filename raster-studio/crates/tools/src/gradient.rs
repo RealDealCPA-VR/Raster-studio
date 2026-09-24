@@ -213,6 +213,20 @@ impl GradientRamp {
         &self.opacities
     }
 
+    /// W11-I: this ramp with its opacity stops ignored — the same colours,
+    /// fully opaque end to end. What the Gradient tool draws with its
+    /// Transparency option off (Photoshop/Photopea: "when off, the
+    /// gradient's opacity stops are ignored").
+    pub fn opaque(&self) -> Self {
+        Self {
+            colors: self.colors.clone(),
+            opacities: vec![OpacityStop {
+                position: 0.0,
+                opacity: 1.0,
+            }],
+        }
+    }
+
     /// Straight-alpha linear RGBA at `t`, clamped at both ends.
     ///
     /// Interpolation is in **linear light**, which is the whole reason the ramp
@@ -536,15 +550,24 @@ pub struct GradientTool {
     /// source-over exactly as before. A mask target has no colour to blend
     /// with, so the coverage renderer reads only the opacity.
     pub mode: BlendMode,
+    /// W11-I: the options bar's Transparency toggle
+    /// ([`GRADIENT_TRANSPARENCY_KEY`]). On (the default) the ramp's opacity
+    /// stops apply; off, they are ignored and the ramp is drawn opaque
+    /// ([`GradientRamp::opaque`]).
+    pub transparency: bool,
     start: Option<Vec2>,
     current: Option<Vec2>,
 }
+
+/// W11-I: the Gradient tool's "Transparency" checkbox (a Bool).
+pub const GRADIENT_TRANSPARENCY_KEY: &str = "transparency";
 
 impl GradientTool {
     pub fn new(settings: GradientSettings) -> Self {
         Self {
             settings,
             mode: BlendMode::Normal,
+            transparency: true,
             start: None,
             current: None,
         }
@@ -640,11 +663,17 @@ impl Tool for GradientTool {
         let Some(rect) = self.target_rect(ctx) else {
             return Ok(());
         };
+        // W11-I: Transparency off ignores the ramp's opacity stops.
+        let ramp = if self.transparency {
+            ctx.ramp.clone()
+        } else {
+            ctx.ramp.opaque()
+        };
         let delta = match ctx.paint_target {
             PaintTarget::Layer => {
                 let mut patch = ColorPatch::load(ctx.tiles, key, rect)?;
                 let settings = GradientSettings {
-                    ramp: ctx.ramp.clone(),
+                    ramp: ramp.clone(),
                     ..self.settings.clone()
                 };
                 render_gradient_with_mode(
@@ -666,7 +695,7 @@ impl Tool for GradientTool {
                     start,
                     end,
                     &GradientSettings {
-                        ramp: ctx.ramp.clone(),
+                        ramp,
                         ..self.settings.clone()
                     },
                     &ctx.selection,
@@ -718,6 +747,13 @@ impl Tool for GradientTool {
                 self.settings.reverse = v;
                 Ok(())
             }
+            (GRADIENT_TRANSPARENCY_KEY, ToolSetting::Bool(v)) => {
+                self.transparency = v;
+                Ok(())
+            }
+            (GRADIENT_TRANSPARENCY_KEY, _) => Err(ToolError::OptionKindMismatch {
+                key: key.to_owned(),
+            }),
             ("opacity", ToolSetting::Float(v)) => {
                 self.settings.opacity = finite("opacity", v)?.clamp(0.0, 1.0);
                 Ok(())

@@ -559,6 +559,8 @@ impl ExportAsDialog {
                 ExportFormat::Jpeg(_) => ExportFormat::Jpeg(quality.unwrap_or(90)),
                 // W10-F: AVIF has a quality too; it carries over likewise.
                 ExportFormat::Avif(_) => ExportFormat::Avif(quality.unwrap_or(80)),
+                // W11-H: and lossy WebP.
+                ExportFormat::WebPLossy(_) => ExportFormat::WebPLossy(quality.unwrap_or(80)),
                 other => other,
             };
             if !entry.preset.format.supports_16_bit() {
@@ -567,12 +569,12 @@ impl ExportAsDialog {
         }
     }
 
-    /// The selected row's JPEG (W10-F: or AVIF) quality, or `None` for a
-    /// format without one. WebP has none: the only pure-Rust WebP encoder in
-    /// the tree writes lossless VP8L (see `raster::ExportFormat::WebP`).
+    /// The selected row's JPEG (W10-F: or AVIF; W11-H: or lossy WebP)
+    /// quality, or `None` for a format without one. Lossless WebP has none
+    /// (`raster::ExportFormat::WebP`); "WebP (lossy)" is its own row.
     pub fn quality(&self) -> Option<u8> {
         match self.format() {
-            ExportFormat::Jpeg(q) | ExportFormat::Avif(q) => Some(q),
+            ExportFormat::Jpeg(q) | ExportFormat::Avif(q) | ExportFormat::WebPLossy(q) => Some(q),
             _ => None,
         }
     }
@@ -593,6 +595,10 @@ impl ExportAsDialog {
             }
             Some(entry) if matches!(entry.preset.format, ExportFormat::Avif(_)) => {
                 entry.preset.format = ExportFormat::Avif(quality);
+                true
+            }
+            Some(entry) if matches!(entry.preset.format, ExportFormat::WebPLossy(_)) => {
+                entry.preset.format = ExportFormat::WebPLossy(quality);
                 true
             }
             _ => false,
@@ -1126,6 +1132,10 @@ pub fn format_name(format: ExportFormat) -> String {
         ExportFormat::Dds => "DDS".to_string(),
         ExportFormat::DdsBc3 => "DDS/BC3".to_string(),
         ExportFormat::Avif(_) => "AVIF".to_string(),
+        // W11-H: OpenEXR (32-bit float) and lossless JPEG XL.
+        ExportFormat::Exr => "EXR".to_string(),
+        ExportFormat::Jxl => "JXL".to_string(),
+        ExportFormat::WebPLossy(_) => crate::strings::tr("ui.export_as.webp.lossy").to_string(),
         // A format the codec gains later reads as its extension until it is
         // given a name here.
         #[allow(unreachable_patterns)]
@@ -1141,6 +1151,7 @@ fn lossless(format: ExportFormat) -> bool {
         format,
         ExportFormat::Jpeg(_)
             | ExportFormat::Avif(_)
+            | ExportFormat::WebPLossy(_)
             | ExportFormat::Pgm
             | ExportFormat::Pbm
             | ExportFormat::DdsBc3
@@ -1778,6 +1789,69 @@ mod tests {
         let large = d.proxy.encoded_len(ExportFormat::Avif(95)).unwrap();
         assert!(small < large, "{small} vs {large}");
         // WebP keeps no quality: its encoder is lossless only.
+        d.set_format(ExportFormat::WebP);
+        assert_eq!(d.quality(), None);
+    }
+
+    /// W11-H: the format list the dialog draws offers EXR and JPEG XL, each
+    /// sized by a real encode and previewed from what it wrote.
+    #[test]
+    fn exr_and_jpeg_xl_are_offered_sized_and_previewed() {
+        let mut d = dialog();
+        for (format, name) in [(ExportFormat::Exr, "EXR"), (ExportFormat::Jxl, "JXL")] {
+            assert!(ExportFormat::writable().contains(&format), "{name}");
+            d.set_format(format);
+            assert_eq!(d.job().entries[0].preset.format, format, "{name}");
+            assert_eq!(d.quality(), None, "{name} has no quality knob");
+            let texts = drawn_texts(&mut d);
+            assert!(
+                texts.iter().any(|t| t == name),
+                "{name} not drawn: {texts:?}"
+            );
+            assert!(
+                d.measure_proxy(0).is_some_and(|b| b > 0),
+                "{name} has no size"
+            );
+            let preview = d.proxy.render(format).expect("previewed");
+            assert_eq!(
+                (preview.width, preview.height),
+                (d.proxy.width(), d.proxy.height()),
+                "{name}"
+            );
+        }
+    }
+
+    /// W11-H: "WebP (lossy)" is offered beside the lossless row, carries a
+    /// quality that reaches the encoder, and is sized and previewed by a
+    /// real encode.
+    #[test]
+    fn lossy_webp_is_offered_with_a_quality_sized_and_previewed() {
+        let mut d = dialog();
+        let lossy = ExportFormat::WebPLossy(80);
+        assert!(ExportFormat::writable().contains(&lossy));
+        d.set_format(lossy);
+        let name = crate::strings::tr("ui.export_as.webp.lossy");
+        assert_eq!(name, "WebP (lossy)");
+        let texts = drawn_texts(&mut d);
+        assert!(texts.iter().any(|t| t == name), "{texts:?}");
+        assert_eq!(d.quality(), Some(80));
+        assert!(d.set_quality(30));
+        assert_eq!(
+            d.job().entries[0].preset.format,
+            ExportFormat::WebPLossy(30)
+        );
+        let small = d.proxy.encoded_len(ExportFormat::WebPLossy(5)).unwrap();
+        let large = d.proxy.encoded_len(ExportFormat::WebPLossy(100)).unwrap();
+        assert!(small < large, "{small} vs {large}");
+        let preview = d
+            .proxy
+            .render(ExportFormat::WebPLossy(30))
+            .expect("previewed");
+        assert_eq!(
+            (preview.width, preview.height),
+            (d.proxy.width(), d.proxy.height())
+        );
+        // The lossless row still has no quality knob.
         d.set_format(ExportFormat::WebP);
         assert_eq!(d.quality(), None);
     }

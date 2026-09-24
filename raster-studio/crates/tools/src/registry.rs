@@ -269,7 +269,18 @@ const TONE_OPTS: &[OptionSpec] = &[
     f("hardness", "Hardness", 0.0, 1.0, 0.0),
     f("exposure", "Exposure", 0.0, 1.0, 0.25),
     c("range", "Range", &["Shadows", "Midtones", "Highlights"], 1),
+    // W11-I: Photoshop/Photopea's Protect Tones, on by default.
+    b(
+        crate::stroke::PROTECT_TONES_KEY,
+        "Protect Tones",
+        TONE_PROTECT_DEFAULT,
+    ),
 ];
+
+/// W11-I: Protect Tones and Vibrance start on, as in Photoshop; the tools
+/// [`make`] builds start in the same state.
+const TONE_PROTECT_DEFAULT: bool = true;
+const SPONGE_VIBRANCE_DEFAULT: bool = true;
 
 const SHAPE_OPTS: &[OptionSpec] = shape_opts!();
 
@@ -697,6 +708,17 @@ const TOOLS: &[ToolInfo] = &[
             f("tolerance", "Tolerance", 0.0, 1.0, 16.0 / 255.0),
         ],
     ),
+    // W11-G: third in the wand slot, as in Photopea / Photoshop.
+    t(
+        ToolId::ObjectSelection,
+        "Object Selection",
+        ToolGroup::Select,
+        Some("wand"),
+        "object-select",
+        Cursor::Crosshair,
+        Some('w'),
+        &[SELECTION_MODE],
+    ),
     t(
         ToolId::Crop,
         "Crop",
@@ -1061,6 +1083,11 @@ const TOOLS: &[ToolInfo] = &[
             b("dither", "Dither", true),
             b("reverse", "Reverse", false),
             f("opacity", "Opacity", 0.0, 1.0, 1.0),
+            b(
+                crate::gradient::GRADIENT_TRANSPARENCY_KEY,
+                "Transparency",
+                true,
+            ),
         ],
     ),
     t(
@@ -1173,6 +1200,11 @@ const TOOLS: &[ToolInfo] = &[
             f("size", "Size", 1.0, 5000.0, 60.0),
             f("amount", "Flow", 0.0, 1.0, 0.3),
             c("mode", "Mode", &["Desaturate", "Saturate"], 0),
+            b(
+                crate::stroke::VIBRANCE_KEY,
+                "Vibrance",
+                SPONGE_VIBRANCE_DEFAULT,
+            ),
         ],
     ),
     t(
@@ -1594,6 +1626,7 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
         ToolId::MagneticLasso => Box::new(LassoTool::new(LassoKind::Magnetic)),
         ToolId::MagicWand => Box::new(WandTool::new(WandKind::Magic)),
         ToolId::QuickSelect => Box::new(WandTool::new(WandKind::Quick)),
+        ToolId::ObjectSelection => Box::new(crate::select::ObjectSelectionTool::default()),
         ToolId::Crop => Box::new(CropTool::default()),
         ToolId::Slice => Box::new(SliceTool::default()),
         ToolId::Eyedropper => Box::new(EyedropperTool::default()),
@@ -1677,30 +1710,42 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
             brush(40.0, 0.0, 0.05),
             StrokeOp::Smudge { strength: 0.5 },
         )),
-        ToolId::Dodge => Box::new(StrokeTool::new(
-            id,
-            brush(60.0, 0.0, 0.05),
-            StrokeOp::Dodge {
-                exposure: 0.25,
-                range: ToneRange::Midtones,
-            },
-        )),
-        ToolId::Burn => Box::new(StrokeTool::new(
-            id,
-            brush(60.0, 0.0, 0.05),
-            StrokeOp::Burn {
-                exposure: 0.25,
-                range: ToneRange::Midtones,
-            },
-        )),
-        ToolId::Sponge => Box::new(StrokeTool::new(
-            id,
-            brush(60.0, 0.0, 0.05),
-            StrokeOp::Sponge {
-                amount: 0.3,
-                mode: SpongeMode::Desaturate,
-            },
-        )),
+        ToolId::Dodge => {
+            let mut tool = StrokeTool::new(
+                id,
+                brush(60.0, 0.0, 0.05),
+                StrokeOp::Dodge {
+                    exposure: 0.25,
+                    range: ToneRange::Midtones,
+                },
+            );
+            tool.protect_tones = TONE_PROTECT_DEFAULT;
+            Box::new(tool)
+        }
+        ToolId::Burn => {
+            let mut tool = StrokeTool::new(
+                id,
+                brush(60.0, 0.0, 0.05),
+                StrokeOp::Burn {
+                    exposure: 0.25,
+                    range: ToneRange::Midtones,
+                },
+            );
+            tool.protect_tones = TONE_PROTECT_DEFAULT;
+            Box::new(tool)
+        }
+        ToolId::Sponge => {
+            let mut tool = StrokeTool::new(
+                id,
+                brush(60.0, 0.0, 0.05),
+                StrokeOp::Sponge {
+                    amount: 0.3,
+                    mode: SpongeMode::Desaturate,
+                },
+            );
+            tool.vibrance = SPONGE_VIBRANCE_DEFAULT;
+            Box::new(tool)
+        }
         ToolId::Pen => Box::new(crate::pen::PenTool::default()),
         ToolId::PathSelect => Box::new(crate::path_select::PathSelectTool::default()),
         ToolId::DirectSelection => Box::new(crate::path_select::DirectSelectionTool::default()),

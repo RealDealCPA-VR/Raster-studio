@@ -36,7 +36,9 @@ fn items(ctx: &MenuContext, actions: &[MenuAction]) -> Vec<MenuItem> {
     actions
         .iter()
         .map(|action| MenuItem {
-            label: action.label(),
+            // W11-E: the frame's own wording, so Merge Down reads Merge
+            // Layers over a multi-selection, as on the menu bar.
+            label: action.label_in(ctx),
             action: *action,
             resolution: action.resolve(ctx),
         })
@@ -69,8 +71,9 @@ pub fn canvas_items(ctx: &MenuContext) -> Vec<MenuItem> {
 /// Create on any other, as Photopea does; the mask row says which way it
 /// flips (Disable on an enabled mask, Enable otherwise). Two rows are
 /// relabelled for a menu that has no submenu to name them: the Layer ▸
-/// Rasterize ▸ Layer row reads "Rasterize Layer". This build keeps no colour
-/// label on a layer, so there is no colour row.
+/// Rasterize ▸ Layer row reads "Rasterize Layer". W11-E: the colour labels
+/// close the menu, flat as in Photoshop's row menu (No Color, Red … Gray),
+/// and Merge Down reads Merge Layers when two or more layers are selected.
 pub fn layer_items(ctx: &MenuContext) -> Vec<MenuItem> {
     let clipped = ctx.active.is_some_and(|l| l.is_clipping);
     let mask_on = ctx.active.is_some_and(|l| l.has_mask && l.mask_enabled);
@@ -104,6 +107,13 @@ pub fn layer_items(ctx: &MenuContext) -> Vec<MenuItem> {
             MenuAction::FlattenImage,
         ],
     );
+    // W11-E: the colour labels.
+    let colors: Vec<MenuAction> = layer_model::ColorLabel::ALL
+        .iter()
+        .copied()
+        .map(MenuAction::SetLayerColor)
+        .collect();
+    rows.extend(items(ctx, &colors));
     for row in &mut rows {
         match row.action {
             MenuAction::Rasterize(crate::menu::RasterizeTarget::Layer) => {

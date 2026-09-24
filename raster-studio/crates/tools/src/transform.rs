@@ -1282,6 +1282,25 @@ pub fn warp_preset_mesh(preset: WarpPreset, rect: PixelRect, bend: f32) -> WarpM
     mesh
 }
 
+thread_local! {
+    /// W11-E: the document-space affine of the last whole-layer free
+    /// transform this thread committed (Scale / Rotate / Skew over a layer),
+    /// for Edit > Transform > Again. The shell is single-threaded, so this is
+    /// the application's one free transform; the tool's own instance lives in
+    /// the pointer, out of the menu's reach.
+    static LAST_COMMITTED_AFFINE: std::cell::Cell<Option<[f32; 6]>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// W11-E: take the affine of the last committed whole-layer free transform
+/// (document space, `glam::Affine2::to_cols_array` order), leaving nothing
+/// behind. The editor keeps what it takes as its last-transform record.
+pub fn take_committed_affine() -> Option<glam::Affine2> {
+    LAST_COMMITTED_AFFINE
+        .with(|c| c.take())
+        .map(|a| glam::Affine2::from_cols_array(&a))
+}
+
 /// The free transform tool.
 pub struct TransformTool {
     pub mode: TransformMode,
@@ -1676,6 +1695,8 @@ impl TransformTool {
                     return Err(ToolError::LayerLocked);
                 }
             }
+            // W11-E: Edit > Transform > Again repeats this affine.
+            LAST_COMMITTED_AFFINE.with(|c| c.set(Some(delta_doc.to_cols_array())));
             if participants.len() > 1 {
                 ctx.emit_request(crate::tool::ToolRequest::TransformLayers {
                     layers: participants,

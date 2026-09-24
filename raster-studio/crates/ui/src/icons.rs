@@ -282,6 +282,15 @@ const QUICK_SELECT: &[Prim] = &[
     Prim::Line([0.78, 0.06], [0.78, 0.30]),
 ];
 
+/// W11-G: Object Selection — the dragged box's four corners and the
+/// pointer inside it.
+const OBJECT_SELECT: &[Prim] = &[
+    Prim::Poly(&[[0.08, 0.30], [0.08, 0.08], [0.30, 0.08]], false),
+    Prim::Poly(&[[0.62, 0.08], [0.84, 0.08], [0.84, 0.30]], false),
+    Prim::Poly(&[[0.08, 0.62], [0.08, 0.84], [0.30, 0.84]], false),
+    Prim::Fill(&[[0.44, 0.40], [0.44, 0.88], [0.84, 0.72]]),
+];
+
 const CROP: &[Prim] = &[
     Prim::Poly(&[[0.28, 0.08], [0.28, 0.72], [0.92, 0.72]], false),
     Prim::Poly(&[[0.08, 0.28], [0.72, 0.28], [0.72, 0.92]], false),
@@ -970,6 +979,7 @@ pub fn icon_for(key: &str) -> Icon {
         "lasso-magnetic" => LASSO_MAGNETIC,
         "wand" => WAND,
         "quick-select" => QUICK_SELECT,
+        "object-select" => OBJECT_SELECT,
         "crop" => CROP,
         "slice" => SLICE,
         "eyedropper" => EYEDROPPER,

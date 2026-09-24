@@ -65,6 +65,9 @@
 pub mod about;
 pub mod action;
 pub mod adjustment_dialog;
+// W11-G: Help > Keyboard Shortcut Sheet and Help > Search Commands.
+pub mod command_search;
+pub mod shortcut_sheet;
 // W10-H: Image > Apply Image..., Calculations..., Mode > Bitmap..., Duotone...
 pub mod apply_image;
 pub mod bitmap;
@@ -145,8 +148,10 @@ pub use chrome::{
 pub use color_edit::ColorEdit;
 pub use color_picker::{ColorPickerDialog, ColorValue, Eyedropper, RecentColors, ScreenSampler};
 pub use color_range::{ColorRangeDialog, ColorRangeSpec, ColorRangeView};
+pub use command_search::{CommandEntry, CommandSearchDialog, CommandSearchOutcome};
 pub use duplicate_layer::DuplicateLayerDialog;
 pub use export_as::{ExportAsDialog, ExportEntry, ExportJob, PreviewSource};
+pub use shortcut_sheet::{ShortcutRow, ShortcutSheet};
 // W10-E: the File-menu automation and export dialogs.
 pub use batch::{BatchDialog, BatchFolder, BatchFormat, BatchMode, BatchSpec};
 pub use export_as::{ExportPdfDialog, PdfExportSpec, PdfPageSize};

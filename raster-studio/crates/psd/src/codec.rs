@@ -218,6 +218,20 @@ fn rle_row_count(len: usize) -> PsdResult<u16> {
     })
 }
 
+/// W11-H: one RLE row count, range-checked for the table it goes in: 16-bit
+/// in a `.psd` ([`rle_row_count`]), 32-bit in a `.psb`.
+fn rle_count(len: usize, psb: bool) -> PsdResult<u32> {
+    if psb {
+        u32::try_from(len).map_err(|_| {
+            PsdError::InvalidDocument(format!(
+                "a PackBits row packed to {len} bytes, past the 32-bit row-count table"
+            ))
+        })
+    } else {
+        rle_row_count(len).map(u32::from)
+    }
+}
+
 /// Decode one channel whose compression code has already been read.
 ///
 /// `budget` is drawn against before the output buffer exists, so a channel that
@@ -265,6 +279,17 @@ pub fn encode_channel(
     compression: Compression,
     shape: ChannelShape,
 ) -> PsdResult<Vec<u8>> {
+    encode_channel_as(data, compression, shape, false)
+}
+
+/// W11-H: [`encode_channel`] for a `.psd` (`psb == false`: 16-bit RLE row
+/// counts) or a `.psb` (`psb == true`: 32-bit RLE row counts).
+pub fn encode_channel_as(
+    data: &[u8],
+    compression: Compression,
+    shape: ChannelShape,
+    psb: bool,
+) -> PsdResult<Vec<u8>> {
     let expected = shape.byte_len()?;
     if data.len() != expected {
         return Err(PsdError::ChannelSizeMismatch {
@@ -285,11 +310,15 @@ pub fn encode_channel(
             for row in data.chunks(row_bytes) {
                 let before = packed.len();
                 packbits::encode_into(row, &mut packed);
-                counts.push(rle_row_count(packed.len() - before)?);
+                counts.push(rle_count(packed.len() - before, psb)?);
             }
-            let mut out = Vec::with_capacity(counts.len() * 2 + packed.len());
+            let mut out = Vec::with_capacity(counts.len() * 4 + packed.len());
             for c in &counts {
-                out.extend_from_slice(&c.to_be_bytes());
+                if psb {
+                    out.extend_from_slice(&c.to_be_bytes());
+                } else {
+                    out.extend_from_slice(&(*c as u16).to_be_bytes());
+                }
             }
             out.extend_from_slice(&packed);
             Ok(out)
@@ -371,6 +400,17 @@ pub fn encode_merged(
     shape: ChannelShape,
     sink: &mut Sink,
 ) -> PsdResult<()> {
+    encode_merged_as(channels, compression, shape, sink, false)
+}
+
+/// W11-H: [`encode_merged`] with `.psb` (32-bit) RLE row counts when `psb`.
+pub fn encode_merged_as(
+    channels: &[Vec<u8>],
+    compression: Compression,
+    shape: ChannelShape,
+    sink: &mut Sink,
+    psb: bool,
+) -> PsdResult<()> {
     let expected = shape.byte_len()?;
     for (i, chan) in channels.iter().enumerate() {
         if chan.len() != expected {
@@ -393,17 +433,21 @@ pub fn encode_merged(
     let row_bytes = shape.row_bytes()?;
     match compression {
         Compression::Rle => {
-            let mut counts: Vec<u16> = Vec::with_capacity(shape.height * channels.len());
+            let mut counts: Vec<u32> = Vec::with_capacity(shape.height * channels.len());
             let mut packed = Vec::new();
             for chan in channels {
                 for row in chan.chunks(row_bytes) {
                     let before = packed.len();
                     packbits::encode_into(row, &mut packed);
-                    counts.push(rle_row_count(packed.len() - before)?);
+                    counts.push(rle_count(packed.len() - before, psb)?);
                 }
             }
             for c in counts {
-                sink.u16(c);
+                if psb {
+                    sink.u32(c);
+                } else {
+                    sink.u16(c as u16);
+                }
             }
             sink.bytes(&packed);
         }

@@ -251,6 +251,16 @@ pub enum ImportFormat {
     /// W10-F: AVIF. **Recognised, refused by name**: no fuzz-safe pure-Rust
     /// AV1 decoder exists (see [`formats::avif`]); AVIF *export* works.
     Avif,
+    /// W11-H: OpenEXR, opened as a 16-bit sRGB surface ([`formats::float`]).
+    Exr,
+    /// W11-H: Radiance RGBE `.hdr`, opened like an EXR ([`formats::float`]).
+    Hdr,
+    /// W11-H: Apple `.icns`, its largest entry ([`formats::icns`]).
+    Icns,
+    /// W11-H: Amiga IFF ILBM / PBM ([`formats::iff`]).
+    Iff,
+    /// W11-H: Krita `.kra`, its merged image ([`formats::kra`]).
+    Kra,
 }
 
 impl ImportFormat {
@@ -258,7 +268,7 @@ impl ImportFormat {
     ///
     /// Recognises, not decodes — see [`ImportFormat::Psd`] and
     /// [`ImportFormat::is_decodable_here`].
-    pub const ALL: [ImportFormat; 15] = [
+    pub const ALL: [ImportFormat; 20] = [
         ImportFormat::Png,
         ImportFormat::Jpeg,
         ImportFormat::WebP,
@@ -274,6 +284,11 @@ impl ImportFormat {
         ImportFormat::Xcf,
         ImportFormat::Jxl,
         ImportFormat::Avif,
+        ImportFormat::Exr,
+        ImportFormat::Hdr,
+        ImportFormat::Icns,
+        ImportFormat::Iff,
+        ImportFormat::Kra,
     ];
 
     /// Short stable name for logs and UI.
@@ -294,6 +309,11 @@ impl ImportFormat {
             ImportFormat::Xcf => "XCF",
             ImportFormat::Jxl => "JPEG XL",
             ImportFormat::Avif => "AVIF",
+            ImportFormat::Exr => "OpenEXR",
+            ImportFormat::Hdr => "Radiance HDR",
+            ImportFormat::Icns => "ICNS",
+            ImportFormat::Iff => "IFF",
+            ImportFormat::Kra => "Krita",
         }
     }
 
@@ -342,6 +362,11 @@ impl ImportFormat {
             "xcf" => ImportFormat::Xcf,
             "jxl" => ImportFormat::Jxl,
             "avif" => ImportFormat::Avif,
+            "exr" => ImportFormat::Exr,
+            "hdr" | "rgbe" => ImportFormat::Hdr,
+            "icns" => ImportFormat::Icns,
+            "iff" | "ilbm" | "lbm" => ImportFormat::Iff,
+            "kra" => ImportFormat::Kra,
             _ => return None,
         })
     }
@@ -356,6 +381,8 @@ impl ImportFormat {
             image::ImageFormat::Bmp => ImportFormat::Bmp,
             image::ImageFormat::Ico => ImportFormat::Ico,
             image::ImageFormat::Tga => ImportFormat::Tga,
+            image::ImageFormat::OpenExr => ImportFormat::Exr,
+            image::ImageFormat::Hdr => ImportFormat::Hdr,
             _ => return None,
         })
     }
@@ -378,7 +405,12 @@ impl ImportFormat {
             | ImportFormat::Dds
             | ImportFormat::Xcf
             | ImportFormat::Jxl
-            | ImportFormat::Avif => return None,
+            | ImportFormat::Avif
+            | ImportFormat::Exr
+            | ImportFormat::Hdr
+            | ImportFormat::Icns
+            | ImportFormat::Iff
+            | ImportFormat::Kra => return None,
         })
     }
 
@@ -391,6 +423,11 @@ impl ImportFormat {
                 | ImportFormat::Xcf
                 | ImportFormat::Jxl
                 | ImportFormat::Avif
+                | ImportFormat::Exr
+                | ImportFormat::Hdr
+                | ImportFormat::Icns
+                | ImportFormat::Iff
+                | ImportFormat::Kra
         )
     }
 }
@@ -1084,14 +1121,10 @@ pub enum ExportFormat {
     /// JPEG at the given quality. **Must be `1..=100`**; [`encode`] rejects
     /// anything else rather than letting a codec clamp it silently.
     Jpeg(u8),
-    /// WebP. Lossless only — the backing encoder (`image-webp` 0.2, already in
-    /// the tree behind `image`) writes VP8L and has no lossy VP8 mode, so a
-    /// quality knob here would be a lie. Pure-Rust lossy encoders do exist on
-    /// crates.io; none was adopted yet (`zenwebp` is AGPL-3.0, `webp-rust`
-    /// 0.3.1 measured about 17 dB PSNR at quality 90 and wrote one stream
-    /// `image-webp` rejects, `vaam-image-webp` and `tiny-webp` are 0.1.0
-    /// releases weeks or days old). `docs/parity-matrix.md` records the
-    /// evaluation and the gap.
+    /// WebP, lossless (VP8L, through `image-webp` 0.2 behind `image`), so it
+    /// has no quality knob. W11-H: the lossy choice is
+    /// [`ExportFormat::WebPLossy`]; `docs/parity-matrix.md` records the
+    /// evaluation of the pure-Rust lossy encoders behind that choice.
     WebP,
     /// TIFF. Lossless, alpha, 8 or 16 bit, ICC.
     Tiff,
@@ -1126,6 +1159,20 @@ pub enum ExportFormat {
     /// W10-F: AVIF at the given quality (**`1..=100`**), 8-bit 4:4:4 with
     /// alpha, through `image`'s `ravif` encoder (pure Rust, `rav1e`).
     Avif(u8),
+    /// W11-H: OpenEXR, 32-bit float RGBA, linear light, premultiplied
+    /// alpha: the display-encoded 8- or 16-bit samples are linearised
+    /// ([`formats::float::encode_exr`]). No ICC.
+    Exr,
+    /// W11-H: JPEG XL, **lossless** modular, 8-bit RGBA, 2x2 or larger, through
+    /// `zune-jpegxl` (pure Rust); read back by `jxl-oxide`. No lossy mode
+    /// (no pure-Rust lossy JPEG XL encoder is in the tree), no ICC.
+    Jxl,
+    /// W11-H: **lossy** WebP at the given quality (**`1..=100`**, cwebp's
+    /// scale): one VP8 key frame through `tiny-webp` (pure Rust), 8-bit,
+    /// 4:2:0 chroma, alpha kept exactly in an uncompressed `ALPH` chunk
+    /// (so a transparent image stays large). No ICC. [`ExportFormat::WebP`]
+    /// stays the lossless choice.
+    WebPLossy(u8),
 }
 
 /// The square sizes an [`ExportFormat::Ico`] file carries, smallest first.
@@ -1136,7 +1183,7 @@ impl ExportFormat {
     /// (the Export As preview decodes what it encodes). W10-F: AVIF is
     /// written but cannot be read back, so it is in
     /// [`ExportFormat::WRITE_ONLY`] instead.
-    pub const ALL: [ExportFormat; 14] = [
+    pub const ALL: [ExportFormat; 15] = [
         ExportFormat::Png,
         ExportFormat::Jpeg(90),
         ExportFormat::WebP,
@@ -1151,16 +1198,33 @@ impl ExportFormat {
         ExportFormat::Pbm,
         ExportFormat::Dds,
         ExportFormat::DdsBc3,
+        ExportFormat::Exr,
     ];
 
     /// W10-F: formats the exporter writes that no decoder here reads back:
     /// AVIF (see [`formats::avif`] for why there is no AVIF reader).
     pub const WRITE_ONLY: [ExportFormat; 1] = [ExportFormat::Avif(80)];
 
+    /// W11-H: formats written and read back, but only at **2x2 pixels or
+    /// more**: JPEG XL, whose encoder (`zune-jpegxl`) refuses a one-pixel
+    /// edge. Kept out of [`ExportFormat::ALL`], whose members take any size.
+    pub const MIN_TWO_PIXELS: [ExportFormat; 1] = [ExportFormat::Jxl];
+
+    /// W11-H: lossy formats read back by this crate but only approximately,
+    /// kept out of [`ExportFormat::ALL`]: lossy WebP (VP8).
+    pub const LOSSY_READ_BACK: [ExportFormat; 1] = [ExportFormat::WebPLossy(80)];
+
     /// W10-F: every format the exporter can write: [`ExportFormat::ALL`]
-    /// followed by [`ExportFormat::WRITE_ONLY`].
+    /// followed by [`ExportFormat::WRITE_ONLY`] and (W11-H)
+    /// [`ExportFormat::MIN_TWO_PIXELS`].
     pub fn writable() -> Vec<ExportFormat> {
-        Self::ALL.iter().chain(&Self::WRITE_ONLY).copied().collect()
+        Self::ALL
+            .iter()
+            .chain(&Self::WRITE_ONLY)
+            .chain(&Self::MIN_TWO_PIXELS)
+            .chain(&Self::LOSSY_READ_BACK)
+            .copied()
+            .collect()
     }
 
     /// W10-F: whether this crate can decode what the format writes.
@@ -1190,6 +1254,11 @@ impl ExportFormat {
             ExportFormat::Avif(q) if !Self::JPEG_QUALITY_RANGE.contains(&q) => Err(
                 CodecError::InvalidParameter(format!("AVIF quality must be 1..=100, got {q}")),
             ),
+            ExportFormat::WebPLossy(q) if !Self::JPEG_QUALITY_RANGE.contains(&q) => {
+                Err(CodecError::InvalidParameter(format!(
+                    "lossy WebP quality must be 1..=100, got {q}"
+                )))
+            }
             _ => Ok(()),
         }
     }
@@ -1211,7 +1280,10 @@ impl ExportFormat {
             | ExportFormat::Svg
             | ExportFormat::Dds
             | ExportFormat::DdsBc3
-            | ExportFormat::Avif(_) => AlphaSupport::Full,
+            | ExportFormat::Avif(_)
+            | ExportFormat::Exr
+            | ExportFormat::Jxl
+            | ExportFormat::WebPLossy(_) => AlphaSupport::Full,
             ExportFormat::Gif => AlphaSupport::Binary,
             ExportFormat::Jpeg(_) | ExportFormat::Ppm | ExportFormat::Pgm | ExportFormat::Pbm => {
                 AlphaSupport::None
@@ -1237,7 +1309,10 @@ impl ExportFormat {
 
     /// Whether the container can store 16 bits per channel.
     pub fn supports_16_bit(self) -> bool {
-        matches!(self, ExportFormat::Png | ExportFormat::Tiff)
+        matches!(
+            self,
+            ExportFormat::Png | ExportFormat::Tiff | ExportFormat::Exr
+        )
     }
 
     /// The conventional file extension, without a dot.
@@ -1257,6 +1332,9 @@ impl ExportFormat {
             ExportFormat::Pbm => "pbm",
             ExportFormat::Dds | ExportFormat::DdsBc3 => "dds",
             ExportFormat::Avif(_) => "avif",
+            ExportFormat::Exr => "exr",
+            ExportFormat::Jxl => "jxl",
+            ExportFormat::WebPLossy(_) => "webp",
         }
     }
 
@@ -1277,6 +1355,9 @@ impl ExportFormat {
             ExportFormat::Pbm => "image/x-portable-bitmap",
             ExportFormat::Dds | ExportFormat::DdsBc3 => "image/vnd-ms.dds",
             ExportFormat::Avif(_) => "image/avif",
+            ExportFormat::Exr => "image/x-exr",
+            ExportFormat::Jxl => "image/jxl",
+            ExportFormat::WebPLossy(_) => "image/webp",
         }
     }
 }
@@ -1518,6 +1599,58 @@ pub fn encode_into<W: Write + Seek>(
             let rgba = pixels.require_rgba8(format)?;
             out.write_all(&formats::avif::encode(width, height, rgba, quality)?)
                 .map_err(image::ImageError::IoError)?;
+        }
+        // W11-H: OpenEXR, linearised and premultiplied (`formats::float`).
+        ExportFormat::Exr => {
+            let bytes = match pixels {
+                EncodedPixels::Rgba8(v) => formats::float::encode_exr(
+                    width,
+                    height,
+                    v.iter().map(|s| f32::from(*s) / 255.0),
+                )?,
+                EncodedPixels::Rgba16(v) => formats::float::encode_exr(
+                    width,
+                    height,
+                    v.iter().map(|s| f32::from(*s) / 65_535.0),
+                )?,
+            };
+            out.write_all(&bytes).map_err(image::ImageError::IoError)?;
+        }
+        // W11-H: lossless JPEG XL through `zune-jpegxl`, 8 bits only: its
+        // 16-bit RGBA output reads back with the alpha channel gone
+        // (`w11h_tests::jpeg_xl_refuses_16_bit_samples`), so 16-bit input is
+        // refused like any other 8-bit container's.
+        ExportFormat::Jxl => {
+            use zune_core::bit_depth::BitDepth;
+            use zune_core::colorspace::ColorSpace as ZuneSpace;
+            use zune_core::options::EncoderOptions;
+            let rgba = pixels.require_rgba8(format)?;
+            if width < 2 || height < 2 {
+                return Err(CodecError::InvalidParameter(format!(
+                    "the JPEG XL encoder needs an image of at least 2x2, not {width}x{height}"
+                )));
+            }
+            let options = EncoderOptions::new(
+                width as usize,
+                height as usize,
+                ZuneSpace::RGBA,
+                BitDepth::Eight,
+            )
+            .set_num_threads(1);
+            let mut bytes = Vec::new();
+            zune_jpegxl::JxlSimpleEncoder::new(rgba, options)
+                .encode(&mut bytes)
+                .map_err(|e| CodecError::Unsupported(format!("JPEG XL encode failed: {e}")))?;
+            out.write_all(&bytes).map_err(image::ImageError::IoError)?;
+        }
+        // W11-H: lossy WebP (VP8) through `tiny-webp`, 8 bits only.
+        ExportFormat::WebPLossy(quality) => {
+            let rgba = pixels.require_rgba8(format)?;
+            let mut opts = tiny_webp::Options::default();
+            opts.quality = quality;
+            let bytes = tiny_webp::encode_rgba(rgba, width, height, &opts)
+                .map_err(|e| CodecError::InvalidParameter(format!("lossy WebP: {e}")))?;
+            out.write_all(&bytes).map_err(image::ImageError::IoError)?;
         }
     }
     Ok(())
@@ -1941,7 +2074,10 @@ mod tests {
                 | ExportFormat::Bmp
                 | ExportFormat::Tga
                 | ExportFormat::Ico
-                | ExportFormat::Svg => {
+                | ExportFormat::Svg
+                // W11-H: lossless JPEG XL, and EXR through 32-bit float.
+                | ExportFormat::Jxl
+                | ExportFormat::Exr => {
                     assert_eq!(decoded.rgba8, px, "{format:?} is supposed to be lossless");
                 }
                 // Palettised: only two colours are used, so a 256-entry palette
@@ -1981,7 +2117,7 @@ mod tests {
                 // W10-F: block compression is lossy; a 1-pixel checker is
                 // its worst case, so only the mean is bounded. (AVIF is not
                 // in `ALL`: it cannot be read back.)
-                ExportFormat::DdsBc3 | ExportFormat::Avif(_) => {
+                ExportFormat::DdsBc3 | ExportFormat::Avif(_) | ExportFormat::WebPLossy(_) => {
                     let total: i64 = decoded
                         .rgba8
                         .iter()
@@ -2174,13 +2310,14 @@ mod tests {
         // PNM, DDS, XCF and JPEG XL theirs in `formats`. That is all thirteen
         // containers this module decodes; PSD is recognised here and decoded
         // by `app-shell`, and AVIF is recognised and refused by name.
-        assert_eq!(ImportFormat::ALL.len(), 15);
+        // W11-H: EXR, HDR, ICNS, IFF and KRA in `formats` too.
+        assert_eq!(ImportFormat::ALL.len(), 20);
         assert_eq!(
             ImportFormat::ALL
                 .iter()
                 .filter(|f| f.is_decodable_here())
                 .count(),
-            13
+            18
         );
     }
 

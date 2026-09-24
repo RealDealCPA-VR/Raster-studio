@@ -64,7 +64,7 @@ const NESTED_LAYER_KEYS: [[u8; 4]; 3] = [*b"Lr16", *b"Lr32", *b"Layr"];
 /// W10-F: the tagged-block keys whose length is 64-bit in a `.psb` (Adobe's
 /// file-format specification, "Additional Layer Information"); every other
 /// key keeps its 32-bit length.
-const PSB_LONG_KEYS: [[u8; 4]; 13] = [
+pub(crate) const PSB_LONG_KEYS: [[u8; 4]; 13] = [
     *b"LMsk", *b"Lr16", *b"Lr32", *b"Layr", *b"Mt16", *b"Mt32", *b"Mtrn", *b"Alph", *b"FMsk",
     *b"lnk2", *b"FEid", *b"FXid", *b"PxSD",
 ];

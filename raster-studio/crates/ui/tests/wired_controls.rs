@@ -829,6 +829,15 @@ fn the_layer_row_context_menu_offers_the_layer_operations() {
             "Merge Down",
             "Merge Visible",
             "Flatten Image",
+            // W11-E: the colour labels, flat as in Photoshop's row menu.
+            "No Color",
+            "Red",
+            "Orange",
+            "Yellow",
+            "Green",
+            "Blue",
+            "Violet",
+            "Gray",
         ],
         "the layer row menu's item set"
     );

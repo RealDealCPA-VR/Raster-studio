@@ -35,6 +35,11 @@ use crate::tool::ToolSetting;
 use crate::tool::{CompositeSampler, SampleLayers, SAMPLE_LAYERS_KEY};
 use crate::tool::{PaintTarget, Pattern, PointerEvent, Tool, ToolContext, ToolId};
 
+/// W11-I: the Dodge and Burn tools' "Protect Tones" checkbox (a Bool).
+pub const PROTECT_TONES_KEY: &str = "protect_tones";
+/// W11-I: the Sponge tool's "Vibrance" checkbox (a Bool).
+pub const VIBRANCE_KEY: &str = "vibrance";
+
 /// Which tones a dodge/burn/sponge dab acts on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ToneRange {
@@ -339,6 +344,37 @@ pub struct StrokeSources<'a> {
     /// Document-space offset added to a destination point to find its source.
     pub offset: IVec2,
     pub pattern: Option<&'a Pattern>,
+    /// W11-I: Dodge/Burn "Protect Tones" — keep each pixel's hue and
+    /// saturation and change only its lightness ([`protect_tones`]).
+    pub protect_tones: bool,
+    /// W11-I: Sponge "Vibrance" — a Saturate dab boosts a dull colour more
+    /// than an already-saturated one, so vivid colours do not clip.
+    pub vibrance: bool,
+}
+
+/// W11-I: Photoshop's Protect Tones. `adjusted` is what the plain dodge or
+/// burn made of `original` (both straight-alpha **linear** RGB); the answer
+/// keeps `original`'s hue and saturation (HSL, on the display curve) and
+/// takes only `adjusted`'s lightness, so a dodged red gets lighter without
+/// washing out toward white and a burned one darker without muddying.
+pub fn protect_tones(original: [f32; 3], adjusted: [f32; 3]) -> [f32; 3] {
+    let [h, s, _] = color::rgb_to_hsl(color::linear_to_srgb3(original));
+    let [_, _, l] = color::rgb_to_hsl(color::linear_to_srgb3(adjusted));
+    color::srgb_to_linear3(color::hsl_to_rgb([h, s, l]))
+}
+
+/// W11-I: the Sponge's saturation factor. `k` is the plain factor
+/// (`1 − amount` to desaturate, `1 + amount` to saturate); with Vibrance on
+/// a Saturate boost is scaled by how *unsaturated* the pixel already is
+/// (its HSL saturation on the display curve), so a vivid colour is left
+/// nearly alone while a dull one gains. Desaturating is unchanged: it
+/// cannot clip.
+pub fn sponge_factor(k: f32, vibrance: bool, straight_linear: [f32; 3]) -> f32 {
+    if !vibrance || k <= 1.0 {
+        return k;
+    }
+    let [_, s, _] = color::rgb_to_hsl(color::linear_to_srgb3(straight_linear));
+    1.0 + (k - 1.0) * (1.0 - s).clamp(0.0, 1.0)
 }
 
 /// How far the radius may be doubled looking for a pixel outside the healed
@@ -1073,16 +1109,20 @@ fn prepare(
         StrokeOp::Dodge { exposure, range } => {
             let e = exposure.clamp(0.0, 1.0);
             let r = *range;
+            let protect = sources.protect_tones;
             Prepared {
                 aux: Some(mapped(&|dst, _| {
                     let w = r.weight(encoded_luma(dst)) * e;
                     let s = unpremultiply(dst);
-                    premultiply([
+                    let mut o = [
                         s[0] + (1.0 - s[0]) * w,
                         s[1] + (1.0 - s[1]) * w,
                         s[2] + (1.0 - s[2]) * w,
-                        s[3],
-                    ])
+                    ];
+                    if protect {
+                        o = protect_tones([s[0], s[1], s[2]], o);
+                    }
+                    premultiply([o[0], o[1], o[2], s[3]])
                 })?),
                 gate: None,
                 blend: Blend::Lerp,
@@ -1091,11 +1131,16 @@ fn prepare(
         StrokeOp::Burn { exposure, range } => {
             let e = exposure.clamp(0.0, 1.0);
             let r = *range;
+            let protect = sources.protect_tones;
             Prepared {
                 aux: Some(mapped(&|dst, _| {
                     let w = r.weight(encoded_luma(dst)) * e;
                     let s = unpremultiply(dst);
-                    premultiply([s[0] * (1.0 - w), s[1] * (1.0 - w), s[2] * (1.0 - w), s[3]])
+                    let mut o = [s[0] * (1.0 - w), s[1] * (1.0 - w), s[2] * (1.0 - w)];
+                    if protect {
+                        o = protect_tones([s[0], s[1], s[2]], o);
+                    }
+                    premultiply([o[0], o[1], o[2], s[3]])
                 })?),
                 gate: None,
                 blend: Blend::Lerp,
@@ -1104,6 +1149,7 @@ fn prepare(
         StrokeOp::Sponge { amount, mode } => {
             let a = amount.clamp(0.0, 1.0);
             let m = *mode;
+            let vibrance = sources.vibrance;
             Prepared {
                 aux: Some(mapped(&|dst, _| {
                     let s = unpremultiply(dst);
@@ -1112,6 +1158,7 @@ fn prepare(
                         SpongeMode::Desaturate => 1.0 - a,
                         SpongeMode::Saturate => 1.0 + a,
                     };
+                    let k = sponge_factor(k, vibrance, [s[0], s[1], s[2]]);
                     premultiply([
                         (g + (s[0] - g) * k).max(0.0),
                         (g + (s[1] - g) * k).max(0.0),
@@ -1733,9 +1780,19 @@ pub struct StrokeTool {
     /// the healing brushes, Blur, Sharpen and Smudge: where the stroke reads
     /// its source pixels. It always writes the active layer.
     pub sample_layers: SampleLayers,
+    /// W11-I: Dodge/Burn "Protect Tones" ([`PROTECT_TONES_KEY`]): change
+    /// lightness only, keeping hue and saturation.
+    pub protect_tones: bool,
+    /// W11-I: Sponge "Vibrance" ([`VIBRANCE_KEY`]): a Saturate dab spares
+    /// already-saturated colours.
+    pub vibrance: bool,
     /// W9-D: the shell's composite, taken at the press of a stroke whose
     /// Sample is not Current Layer and kept until its release.
     sampler: Option<std::sync::Arc<dyn CompositeSampler>>,
+    /// W11-F: where the last stroke ended, in DOCUMENT space — the start of
+    /// the straight line a Shift-click paints from. `None` until a stroke
+    /// has been released.
+    line_end: Option<Vec2>,
 }
 
 /// W7-I: the Spot Healing Brush's Type option key (a Choice: 0 Proximity
@@ -1993,7 +2050,10 @@ impl StrokeTool {
             spot_content_aware: false,
             deferred: None,
             sample_layers: SampleLayers::Current,
+            protect_tones: false,
+            vibrance: false,
             sampler: None,
+            line_end: None,
         }
     }
 
@@ -2322,6 +2382,8 @@ impl StrokeTool {
                         source: source.as_ref(),
                         offset: self.offset,
                         pattern: env.pattern,
+                        protect_tones: self.protect_tones,
+                        vibrance: self.vibrance,
                     };
                     apply_stroke(
                         &mut patch,
@@ -2455,6 +2517,8 @@ impl StrokeTool {
                     source: source.as_ref(),
                     offset: self.offset,
                     pattern: env.pattern,
+                    protect_tones: self.protect_tones,
+                    vibrance: self.vibrance,
                 };
                 let bounds = intersect(patch.rect(), clip).ok_or(ToolError::Degenerate)?;
                 let mut writes = Vec::new();
@@ -2806,8 +2870,20 @@ impl Tool for StrokeTool {
             self.clone.set_anchor(pos);
             return Ok(());
         }
+        // W11-F: Shift-click paints a straight line from where the last
+        // stroke ended to the click (Photoshop's gesture): the stroke begins
+        // at that end and its first extension is the click itself.
+        let line_from = if event.modifiers.shift {
+            self.line_end.map(|end| to_layer.transform_point2(end))
+        } else {
+            None
+        };
+        let start = line_from.unwrap_or(pos);
         if self.op.needs_source() {
-            self.offset = self.clone.begin_stroke(pos).ok_or(ToolError::Degenerate)?;
+            self.offset = self
+                .clone
+                .begin_stroke(start)
+                .ok_or(ToolError::Degenerate)?;
         }
         if self.use_foreground {
             // W9-E: Color Dynamics jitter the stroke's colour once, seeded
@@ -2815,7 +2891,7 @@ impl Tool for StrokeTool {
             let fg = self
                 .settings
                 .dynamics
-                .stroke_color(ctx.foreground, ctx.background, pos);
+                .stroke_color(ctx.foreground, ctx.background, start);
             match &mut self.op {
                 StrokeOp::Paint { color } | StrokeOp::ColorReplacement { color, .. } => *color = fg,
                 _ => {}
@@ -2823,7 +2899,7 @@ impl Tool for StrokeTool {
         }
         match &self.op {
             StrokeOp::ColorReplacement { .. } | StrokeOp::BackgroundErase { .. } => {
-                self.sample_base(ctx, to_layer.transform_point2(event.pos))
+                self.sample_base(ctx, start)
             }
             _ => {}
         }
@@ -2834,7 +2910,11 @@ impl Tool for StrokeTool {
         } else {
             None
         };
-        self.emitter = Some(DabEmitter::begin(self.settings, pos, event.pressure)?);
+        let mut emitter = DabEmitter::begin(self.settings, start, event.pressure)?;
+        if line_from.is_some() {
+            emitter.extend(pos, event.pressure)?;
+        }
+        self.emitter = Some(emitter);
         self.previewed = 0;
         self.smudge = None;
         Ok(())
@@ -2861,6 +2941,8 @@ impl Tool for StrokeTool {
         if let Some(e) = &mut self.emitter {
             let to_layer = ctx.sample_to_layer.unwrap_or(glam::Affine2::IDENTITY);
             e.finish(to_layer.transform_point2(event.pos), event.pressure)?;
+            // W11-F: the next Shift-click draws its line from here.
+            self.line_end = Some(event.pos);
         }
         let committed = self.commit(ctx);
         self.sampler = None;
@@ -3060,6 +3142,18 @@ impl Tool for StrokeTool {
                 self.clone.aligned = v;
                 Ok(())
             }
+            (
+                PROTECT_TONES_KEY,
+                ToolSetting::Bool(v),
+                StrokeOp::Dodge { .. } | StrokeOp::Burn { .. },
+            ) => {
+                self.protect_tones = v;
+                Ok(())
+            }
+            (VIBRANCE_KEY, ToolSetting::Bool(v), StrokeOp::Sponge { .. }) => {
+                self.vibrance = v;
+                Ok(())
+            }
             // W7-I: the Spot Healing Brush's Type — 0 Proximity Match,
             // 1 Content-Aware (an index past the end clamps to the last).
             (SPOT_HEAL_TYPE_KEY, ToolSetting::Choice(index), StrokeOp::SpotHealing) => {
@@ -3093,6 +3187,8 @@ impl Tool for StrokeTool {
             | ("softness", _, StrokeOp::Healing { .. })
             | ("exposure" | "range", _, StrokeOp::Dodge { .. } | StrokeOp::Burn { .. })
             | ("mode", _, StrokeOp::Sponge { .. })
+            | (PROTECT_TONES_KEY, _, StrokeOp::Dodge { .. } | StrokeOp::Burn { .. })
+            | (VIBRANCE_KEY, _, StrokeOp::Sponge { .. })
             | ("aligned", _, StrokeOp::CloneStamp | StrokeOp::Healing { .. })
             | (SPOT_HEAL_TYPE_KEY, _, StrokeOp::SpotHealing)
             | (

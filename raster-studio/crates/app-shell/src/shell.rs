@@ -200,6 +200,82 @@ pub fn is_temporary_hand_key(logical: &winit::keyboard::Key) -> bool {
     matches!(logical, winit::keyboard::Key::Named(NamedKey::Space))
 }
 
+/// W11-F: the tool a held modifier lends while `tool` is selected, the
+/// Photoshop/Photopea everyday gestures:
+///
+/// * Space held with Ctrl (Command) or Alt is the Zoom tool — a click zooms in
+///   at the point, and with Alt it zooms out (the Zoom route reads Alt);
+/// * Space alone is the hand, which [`Editor::effective_tool`] already answers
+///   from the space bar, so nothing is lent;
+/// * Ctrl alone is the Move tool, except on the tools whose own gestures read
+///   Ctrl or that already move or navigate ([`ctrl_keeps_the_tool`]);
+/// * Alt alone on a colour-painting tool is the Eyedropper, so an Alt-click
+///   samples the composite into the foreground and paints nothing.
+///
+/// Shift never lends a tool: on a stroke tool it draws the straight line
+/// (`tools::stroke`), on the selection tools it adds.
+pub fn temporary_tool_for(
+    tool: tools::ToolId,
+    space_held: bool,
+    mods: tools::Modifiers,
+) -> Option<tools::ToolId> {
+    use tools::ToolId as T;
+    if space_held {
+        return (mods.ctrl || mods.alt).then_some(T::Zoom);
+    }
+    if mods.ctrl && !mods.alt && !ctrl_keeps_the_tool(tool) {
+        return Some(T::Move);
+    }
+    if mods.alt && !mods.ctrl && alt_samples_colour(tool) {
+        return Some(T::Eyedropper);
+    }
+    None
+}
+
+/// W11-F: the tools a held Ctrl does not turn into the Move tool — the ones
+/// that already move or navigate, and the ones whose own gestures read Ctrl
+/// or hold an open session (the path tools, text, transforms, crops, slices).
+fn ctrl_keeps_the_tool(tool: tools::ToolId) -> bool {
+    use tools::ToolId as T;
+    matches!(
+        tool,
+        T::Move
+            | T::Hand
+            | T::Zoom
+            | T::RotateView
+            | T::Pen
+            | T::FreeformPen
+            | T::CurvaturePen
+            | T::AddAnchor
+            | T::DeleteAnchor
+            | T::ConvertAnchor
+            | T::PathSelect
+            | T::DirectSelection
+            | T::Type
+            | T::VerticalType
+            | T::HorizontalTypeMask
+            | T::VerticalTypeMask
+            | T::FreeTransform
+            | T::Crop
+            | T::PerspectiveCrop
+            | T::Slice
+            | T::SliceSelect
+            | T::Artboard
+    )
+}
+
+/// W11-F: the colour-painting tools on which Alt is the Eyedropper. The
+/// source-reading stroke tools (Clone Stamp, the healing brushes) keep Alt
+/// for their sample point, the selection tools for subtract, the Eraser and
+/// the retouching tools have no colour to pick.
+fn alt_samples_colour(tool: tools::ToolId) -> bool {
+    use tools::ToolId as T;
+    matches!(
+        tool,
+        T::Brush | T::Pencil | T::ColorReplacement | T::PaintBucket | T::Gradient | T::MixerBrush
+    )
+}
+
 /// `true` for the key egui would use to move widget focus.
 ///
 /// Tab, and only Tab. egui advances focus on any Tab press
@@ -343,9 +419,16 @@ enum WheelGesture {
 /// `wheel_zooms` is the Scroll-wheel-zooms preference. When it is on, every
 /// wheel zooms; when it is off, only Ctrl (Command) + wheel zooms and a plain
 /// wheel pans — Shift swaps the vertical wheel onto the horizontal axis, the
-/// convention every scrolling surface follows.
-fn wheel_gesture(lines: Vec2, ctrl: bool, shift: bool, wheel_zooms: bool) -> WheelGesture {
-    if wheel_zooms || ctrl {
+/// convention every scrolling surface follows. Alt + wheel zooms whatever the
+/// preference says, as Ctrl + wheel does (W11-F, Photoshop's gesture).
+fn wheel_gesture(
+    lines: Vec2,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    wheel_zooms: bool,
+) -> WheelGesture {
+    if wheel_zooms || ctrl || alt {
         return WheelGesture::Zoom((1.0 + lines.y * 0.1).clamp(0.2, 5.0));
     }
     let lines = if shift && lines.x == 0.0 {
@@ -1972,7 +2055,9 @@ impl Shell {
     /// window event calls, and the one tests drive.
     ///
     /// A native project (an `.rstudio` package — by name or by manifest —
-    /// plus `.psd`/`.psb`) OPENS; anything else PLACES into the active
+    /// plus `.psd`/`.psb`) OPENS; a library file (W11-D: `.abr` `.asl`
+    /// `.pat` `.grd` `.csh` `.aco` `.ase` `.icc` fonts `.cube`) reaches its
+    /// importer through [`crate::editor::Editor::open_any`]; anything else PLACES into the active
     /// composition when one is open, and opens when none is. Multiple
     /// dropped files are processed in arrival order, each as its own
     /// documented per-file step: every failure is collected and reported in
@@ -1989,10 +2074,15 @@ impl Shell {
                     .extension()
                     .map(|e| e.eq_ignore_ascii_case("psd") || e.eq_ignore_ascii_case("psb"))
                     .unwrap_or(false);
-            if opens || self.editor.active().is_none() {
-                // open_path answers the failure instead of raising the
+            // W11-D: a library file (brushes, styles, patterns, gradients,
+            // shapes, swatches, a profile, a font, a `.cube`) goes to its
+            // importer whether or not a document is open - it is never
+            // placed as a picture.
+            let library = crate::editor::Editor::is_library_file(path);
+            if opens || library || self.editor.active().is_none() {
+                // open_any answers the failure instead of raising the
                 // blocking modal open_paths routes through.
-                if let Err(e) = self.editor.open_path(path) {
+                if let Err(e) = self.editor.open_any(path) {
                     failures.push(format!(
                         "{}: {e}",
                         path.file_name()
@@ -2106,14 +2196,42 @@ impl Shell {
                 match self.editor.keymap().resolve_any(&chord) {
                     Some(Resolved::App(action)) => self.perform(action),
                     Some(Resolved::Menu(action)) => self.perform_menu_chord(action),
+                    // W11-F: Ctrl+Space and Alt+Space, unless the keymap
+                    // binds them, hold the space bar's slot too — the tool
+                    // they lend is the Zoom tool (`temporary_tool_for`).
+                    None if chord.key == Key::Space && (chord.ctrl_or_cmd || chord.alt) => {
+                        self.perform(Action::TemporaryHand)
+                    }
                     None => {}
                 }
+                self.sync_temporary_tool();
             }
             KeyOutcome::ReleaseTemporaryHand => {
                 self.editor.release_temporary_hand();
+                self.sync_temporary_tool();
                 self.repaint_at = Some(Instant::now());
             }
             KeyOutcome::Ignore => {}
+        }
+    }
+
+    /// W11-F: the held modifiers changed. The tool a modifier lends
+    /// (`temporary_tool_for`) follows at once, so releasing Ctrl or Alt gives
+    /// the selected tool back.
+    fn on_modifiers(&mut self, mods: ModifiersState) {
+        self.modifiers = mods;
+        self.sync_temporary_tool();
+    }
+
+    /// W11-F: lend the editor whatever tool the held keys now ask for.
+    fn sync_temporary_tool(&mut self) {
+        let lent = temporary_tool_for(
+            self.editor.tool(),
+            self.editor.temporary_hand(),
+            modifiers_of(self.modifiers),
+        );
+        if self.editor.set_temporary_tool(lent) {
+            self.repaint_at = Some(Instant::now());
         }
     }
 
@@ -2127,6 +2245,7 @@ impl Shell {
         let gesture = wheel_gesture(
             lines,
             self.modifiers.control_key() || self.modifiers.super_key(),
+            self.modifiers.alt_key(),
             self.modifiers.shift_key(),
             self.editor.preferences().scroll_wheel_zooms,
         );
@@ -2423,6 +2542,12 @@ impl Shell {
         // scrim already makes egui consume the click; this veto is the second
         // half, for a press that arrives before the next frame is drawn.
         let over_panel = over_panel || self.chrome.dialog_open();
+        // W11-F: a press takes the tool the keys held right now lend, even
+        // if a modifier change was never reported (focus came back with the
+        // key already down); the router pins it for the gesture.
+        if phase == PointerPhase::Down {
+            self.sync_temporary_tool();
+        }
         let input = PointerInput {
             phase,
             button,
@@ -2724,7 +2849,7 @@ impl ApplicationHandler<crate::shell::AppEvent> for Shell {
                 self.repaint_at = Some(Instant::now());
             }
             WindowEvent::Ime(ime) => self.on_ime(&ime),
-            WindowEvent::ModifiersChanged(mods) => self.modifiers = mods.state(),
+            WindowEvent::ModifiersChanged(mods) => self.on_modifiers(mods.state()),
             WindowEvent::RedrawRequested => self.redraw(),
             WindowEvent::DroppedFile(path) => {
                 self.on_dropped_files(&[path]);
@@ -2798,6 +2923,15 @@ mod w7i_tests;
 #[cfg(test)]
 #[path = "shell_w10k_tests.rs"]
 mod w10k_tests;
+
+#[cfg(test)]
+#[path = "shell_w11f_tests.rs"]
+mod w11f_tests;
+
+// W11-D: Ctrl+V with no document open, through the real key route.
+#[cfg(test)]
+#[path = "shell_w11d_tests.rs"]
+mod w11d_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2875,20 +3009,25 @@ mod tests {
     fn the_wheel_gesture_follows_the_preference_and_the_modifiers() {
         let notch = Vec2::new(0.0, 1.0);
         assert!(matches!(
-            wheel_gesture(notch, false, false, true),
+            wheel_gesture(notch, false, false, false, true),
             WheelGesture::Zoom(f) if f > 1.0
         ));
         assert_eq!(
-            wheel_gesture(notch, false, false, false),
+            wheel_gesture(notch, false, false, false, false),
             WheelGesture::Pan(Vec2::new(0.0, WHEEL_LINE_PX))
         );
         assert_eq!(
-            wheel_gesture(notch, false, true, false),
+            wheel_gesture(notch, false, false, true, false),
             WheelGesture::Pan(Vec2::new(WHEEL_LINE_PX, 0.0))
         );
         assert!(matches!(
-            wheel_gesture(notch, true, false, false),
+            wheel_gesture(notch, true, false, false, false),
             WheelGesture::Zoom(_)
+        ));
+        // W11-F: Alt + wheel zooms with wheel-pan configured.
+        assert!(matches!(
+            wheel_gesture(notch, false, true, false, false),
+            WheelGesture::Zoom(f) if f > 1.0
         ));
     }
 
@@ -2921,6 +3060,7 @@ mod tests {
                     "{:?}",
                     wheel_gesture(
                         Vec2::new(0.0, 1.0),
+                        false,
                         false,
                         false,
                         ed.preferences().scroll_wheel_zooms

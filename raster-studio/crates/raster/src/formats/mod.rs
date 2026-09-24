@@ -12,9 +12,13 @@
 //! | PPM / PGM / PBM (ASCII and binary) | yes, 1-16 bit | binary P6 / P5 / P4 | [`pnm`] |
 //! | DDS | uncompressed RGB(A)/luminance, BC1, BC2, BC3 | uncompressed BGRA, BC3 | [`dds`] |
 //! | GIMP XCF | 8-bit RGB/RGBA/grey: the layer tree ([`xcf::read`], which app-shell opens layered) and the flattened composite ([`xcf::decode`]) | no | [`xcf`] |
-//! | JPEG XL | yes (`jxl-oxide`) | no | [`jxl`] |
+//! | JPEG XL | yes (`jxl-oxide`) | W11-H: lossless 8-bit RGBA only, at least 2x2 (`zune-jpegxl`, in `codec::encode_into`); 16-bit samples are refused | [`jxl`] |
 //! | AVIF | **refused by name** (see [`avif`]) | yes (`image` over `ravif`) | [`avif`] |
-//! | PSB | through the `psd` crate, as a layered document | no | - |
+//! | PSB | through the `psd` crate, as a layered document | through the `psd` crate (W11-H: version 2, 8-byte lengths) | - |
+//! | OpenEXR, Radiance HDR (W11-H) | yes: File > Open makes a 32-bit document (`app-shell`); the surface returned here is clipped to 16-bit sRGB | EXR, 32-bit float | [`float`] |
+//! | Apple ICNS (W11-H) | PNG, ARGB and 24-bit RLE entries, largest | no | [`icns`] |
+//! | IFF ILBM / PBM (W11-H) | 1-8 planes (EHB, HAM6/8), 24, 32; ByteRun1 | no | [`iff`] |
+//! | Krita KRA (W11-H) | the merged image only | no | [`kra`] |
 //!
 //! AVIF has no reader: `rav1d` (the pure-Rust dav1d port), the AV1 decoder
 //! this wave built a reader on, was found to abort the process on a damaged
@@ -39,7 +43,11 @@ use super::{read_head, CodecError, DecodedSurface, ImageInfo, ImportFormat, Impo
 
 pub mod avif;
 pub mod dds;
+pub mod float;
+pub mod icns;
+pub mod iff;
 pub mod jxl;
+pub mod kra;
 pub mod pnm;
 pub mod xcf;
 
@@ -60,6 +68,16 @@ pub fn sniff(head: &[u8]) -> Option<ImportFormat> {
         Some(ImportFormat::Jxl)
     } else if avif::looks_like_avif(head) {
         Some(ImportFormat::Avif)
+    } else if float::looks_like_exr(head) {
+        Some(ImportFormat::Exr)
+    } else if float::looks_like_hdr(head) {
+        Some(ImportFormat::Hdr)
+    } else if icns::looks_like_icns(head) {
+        Some(ImportFormat::Icns)
+    } else if iff::looks_like_iff(head) {
+        Some(ImportFormat::Iff)
+    } else if kra::looks_like_kra(head) {
+        Some(ImportFormat::Kra)
     } else {
         None
     }
@@ -140,6 +158,10 @@ pub(super) fn probe<R: Read>(
         ImportFormat::Dds => dds::probe(&bytes, limits),
         ImportFormat::Xcf => xcf::probe(&bytes, limits),
         ImportFormat::Jxl => jxl::probe(&bytes, limits),
+        ImportFormat::Exr | ImportFormat::Hdr => float::probe(format, &bytes, limits),
+        ImportFormat::Icns => icns::probe(&bytes, limits),
+        ImportFormat::Iff => iff::probe(&bytes, limits),
+        ImportFormat::Kra => kra::probe(&bytes, limits),
         ImportFormat::Avif => Err(avif::refusal()),
         other => Err(not_ours(other)),
     }
@@ -160,6 +182,10 @@ pub(super) fn decode<R: Read>(
         ImportFormat::Dds => dds::decode(&bytes, limits),
         ImportFormat::Xcf => xcf::decode(&bytes, limits),
         ImportFormat::Jxl => jxl::decode(&bytes, limits),
+        ImportFormat::Exr | ImportFormat::Hdr => float::decode(format, &bytes, limits),
+        ImportFormat::Icns => icns::decode(&bytes, limits),
+        ImportFormat::Iff => iff::decode(&bytes, limits),
+        ImportFormat::Kra => kra::decode(&bytes, limits),
         ImportFormat::Avif => Err(avif::refusal()),
         other => Err(not_ours(other)),
     }
@@ -222,6 +248,10 @@ pub(crate) fn info(width: u32, height: u32, format: ImportFormat, sixteen: bool)
         icc_profile: None,
     }
 }
+
+#[cfg(test)]
+#[path = "w11h_tests.rs"]
+mod w11h_tests;
 
 #[cfg(test)]
 mod tests {

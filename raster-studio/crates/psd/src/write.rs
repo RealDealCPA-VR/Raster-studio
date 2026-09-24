@@ -24,7 +24,7 @@
 
 use crate::blend::{key_from_blend, PASS_THROUGH};
 use crate::bytes::Sink;
-use crate::codec::{encode_channel, encode_merged, ChannelShape};
+use crate::codec::{encode_channel_as, encode_merged_as, ChannelShape};
 use crate::error::{PsdError, PsdResult};
 use crate::flatten::flatten_with;
 use crate::header::{Depth, PsdHeader};
@@ -33,15 +33,19 @@ use crate::model::{
     GroupData, LayerKind, MergedImage, PsdFile, PsdLayer, PsdMask, Rect, CHANNEL_ALPHA,
     CHANNEL_REAL_USER_MASK, CHANNEL_USER_MASK,
 };
-use crate::read::GROUP_DIVIDER_NAME;
+use crate::read::{GROUP_DIVIDER_NAME, PSB_LONG_KEYS};
 use crate::resource::{resolution_info, write_resources, ID_RESOLUTION_INFO};
 
 /// The largest layer count the `i16` in the layer-info section can carry.
 const MAX_RECORDS: usize = i16::MAX as usize;
 
 /// The largest canvas edge a `.psd` can describe. Beyond this the document is a
-/// `.psb`, which this crate does not write.
-const MAX_DIMENSION: u32 = 30_000;
+/// `.psb` (W11-H: which [`write`] then writes, see [`write_psb`]).
+pub const MAX_DIMENSION: u32 = 30_000;
+
+/// W11-H: the largest canvas edge a `.psb` can describe (Adobe's limit, and
+/// what [`crate::ReadOptions::max_psb_dimension`] reads back by default).
+pub const MAX_PSB_DIMENSION: u32 = 300_000;
 
 /// Refuse a header that cannot be expressed, *before* anything is built from it.
 ///
@@ -57,10 +61,9 @@ fn check_header(header: PsdHeader) -> PsdResult<()> {
             header.width, header.height
         )));
     }
-    if header.width > MAX_DIMENSION || header.height > MAX_DIMENSION {
+    if header.width > MAX_PSB_DIMENSION || header.height > MAX_PSB_DIMENSION {
         return Err(PsdError::InvalidDocument(format!(
-            "a .psd canvas may be at most {MAX_DIMENSION}x{MAX_DIMENSION}, not {}x{}; \
-             larger documents need the .psb format, which this crate does not write",
+            "a .psb canvas may be at most {MAX_PSB_DIMENSION}x{MAX_PSB_DIMENSION}, not {}x{}",
             header.width, header.height
         )));
     }
@@ -79,11 +82,64 @@ pub fn write(file: &PsdFile) -> PsdResult<Vec<u8>> {
     write_with(file, &WriteOptions::default())
 }
 
+/// Serialise with `opts`.
+///
+/// W11-H: a canvas wider or taller than [`MAX_DIMENSION`] (30 000 px) has
+/// no `.psd` encoding, so it is written as a `.psb` (version 2): the one
+/// file this document can be. Whether that suits the file *name* is the
+/// caller's question ([`is_psb`] answers what was written).
 pub fn write_with(file: &PsdFile, opts: &WriteOptions) -> PsdResult<Vec<u8>> {
+    let psb = file.header.width > MAX_DIMENSION || file.header.height > MAX_DIMENSION;
+    write_impl(file, opts, psb)
+}
+
+/// W11-H: serialise as a `.psb` (Photoshop's large document format,
+/// version 2) with default options, whatever the canvas size.
+///
+/// A `.psb` differs from a `.psd` only in field widths: the version is 2;
+/// the layer-and-mask section, the layer-info section and every layer
+/// channel carry a 64-bit length; the long-key tagged blocks (`Lr16`,
+/// `Lr32`, `Layr`, `lnk2`, `FMsk`... the list [`crate::read`] honours) do
+/// too; and PackBits row counts are 32-bit. Canvas edges may reach
+/// [`MAX_PSB_DIMENSION`].
+pub fn write_psb(file: &PsdFile) -> PsdResult<Vec<u8>> {
+    write_psb_with(file, &WriteOptions::default())
+}
+
+/// W11-H: [`write_psb`] with `opts`.
+pub fn write_psb_with(file: &PsdFile, opts: &WriteOptions) -> PsdResult<Vec<u8>> {
+    write_impl(file, opts, true)
+}
+
+/// W11-H: whether `bytes` is a version-2 (`.psb`) file.
+pub fn is_psb(bytes: &[u8]) -> bool {
+    bytes.len() >= 6 && bytes[..4] == *b"8BPS" && bytes[4..6] == [0, 2]
+}
+
+/// W11-H: a length field, 32-bit in a `.psd` and 64-bit in a `.psb`.
+fn put_len(sink: &mut Sink, len: usize, psb: bool) {
+    if psb {
+        sink.u32((len as u64 >> 32) as u32);
+        sink.u32(len as u32);
+    } else {
+        sink.u32(len as u32);
+    }
+}
+
+/// W11-H: `body` as a length-prefixed section padded to an even length (the
+/// pad counted in the length), at the width `psb` asks for.
+fn put_section_even(sink: &mut Sink, body: &[u8], psb: bool) {
+    let pad = body.len() % 2;
+    put_len(sink, body.len() + pad, psb);
+    sink.bytes(body);
+    sink.zeros(pad);
+}
+
+fn write_impl(file: &PsdFile, opts: &WriteOptions, psb: bool) -> PsdResult<Vec<u8>> {
     let header = file.header;
     check_header(header)?;
     let mut sink = Sink::new();
-    header.write(&mut sink);
+    header.write_as(&mut sink, psb);
 
     // Colour mode data.
     sink.u32(file.color_mode_data.len() as u32);
@@ -98,7 +154,7 @@ pub fn write_with(file: &PsdFile, opts: &WriteOptions) -> PsdResult<Vec<u8>> {
     write_resources(&resources, &mut sink);
     sink.end_len_even(slot);
 
-    write_layer_and_mask(file, opts, &mut sink)?;
+    write_layer_and_mask(file, opts, &mut sink, psb)?;
 
     // Merged composite.
     let merged = match &file.merged {
@@ -116,40 +172,50 @@ pub fn write_with(file: &PsdFile, opts: &WriteOptions) -> PsdResult<Vec<u8>> {
         )));
     }
     let shape = ChannelShape::new(header.width, header.height, header.depth);
-    encode_merged(&merged.channels, opts.merged_compression, shape, &mut sink)?;
+    encode_merged_as(
+        &merged.channels,
+        opts.merged_compression,
+        shape,
+        &mut sink,
+        psb,
+    )?;
 
     Ok(sink.into_inner())
 }
 
-fn write_layer_and_mask(file: &PsdFile, opts: &WriteOptions, sink: &mut Sink) -> PsdResult<()> {
-    let body = build_layer_info(file, opts)?;
+fn write_layer_and_mask(
+    file: &PsdFile,
+    opts: &WriteOptions,
+    sink: &mut Sink,
+    psb: bool,
+) -> PsdResult<()> {
+    let body = build_layer_info(file, opts, psb)?;
     let deep = file.header.depth != Depth::Eight;
 
-    let lmi = sink.begin_len();
+    // W11-H: built apart so its length can be written at either width.
+    let mut lmi = Sink::new();
     if deep {
         // A 16- or 32-bit document leaves this length at zero and carries its
         // layers in a tagged block further down the same section.
-        sink.u32(0);
+        put_len(&mut lmi, 0, psb);
     } else {
-        let li = sink.begin_len();
-        sink.bytes(&body);
-        sink.end_len_even(li);
+        put_section_even(&mut lmi, &body, psb);
     }
 
-    sink.u32(file.global_mask.len() as u32);
-    sink.bytes(&file.global_mask);
+    lmi.u32(file.global_mask.len() as u32);
+    lmi.bytes(&file.global_mask);
 
     if deep {
         let key = match file.header.depth {
             Depth::Sixteen => b"Lr16",
             _ => b"Lr32",
         };
-        write_global_block(sink, b"8BIM", key, &body);
+        write_global_block(&mut lmi, b"8BIM", key, &body, psb);
     }
     for block in &file.extra {
-        write_global_block(sink, &block.signature, &block.key, &block.data);
+        write_global_block(&mut lmi, &block.signature, &block.key, &block.data, psb);
     }
-    sink.end_len_even(lmi);
+    put_section_even(sink, lmi.as_slice(), psb);
     Ok(())
 }
 
@@ -167,9 +233,9 @@ struct Record {
 }
 
 /// The layer-info section body: count, records, then all channel data.
-fn build_layer_info(file: &PsdFile, opts: &WriteOptions) -> PsdResult<Vec<u8>> {
+fn build_layer_info(file: &PsdFile, opts: &WriteOptions, psb: bool) -> PsdResult<Vec<u8>> {
     let mut records = Vec::new();
-    build_records(&file.layers, file.header, opts, &mut records)?;
+    build_records(&file.layers, file.header, opts, &mut records, psb)?;
     if records.len() > MAX_RECORDS {
         return Err(PsdError::InvalidDocument(format!(
             "{} layer records (groups need two each) exceeds the {MAX_RECORDS} \
@@ -195,7 +261,7 @@ fn build_layer_info(file: &PsdFile, opts: &WriteOptions) -> PsdResult<Vec<u8>> {
         sink.u16(r.channels.len() as u16);
         for (id, payload) in &r.channels {
             sink.i16(*id);
-            sink.u32(payload.len() as u32);
+            put_len(&mut sink, payload.len(), psb);
         }
         sink.tag(b"8BIM");
         sink.tag(&r.blend_key);
@@ -235,6 +301,7 @@ fn build_records(
     header: PsdHeader,
     opts: &WriteOptions,
     out: &mut Vec<Record>,
+    psb: bool,
 ) -> PsdResult<()> {
     let mut stack = vec![Task::List(layers, 0)];
     while let Some(task) = stack.pop() {
@@ -244,7 +311,7 @@ fn build_records(
                 // The rest of this level resumes once the layer is done.
                 stack.push(Task::List(list, at + 1));
                 match &layer.kind {
-                    LayerKind::Raster => out.push(build_record(layer, header, opts, None)?),
+                    LayerKind::Raster => out.push(build_record(layer, header, opts, None, psb)?),
                     LayerKind::Group(g) => {
                         out.push(divider_record(header)?);
                         stack.push(Task::Close(layer, g));
@@ -252,7 +319,7 @@ fn build_records(
                     }
                 }
             }
-            Task::Close(layer, g) => out.push(build_record(layer, header, opts, Some(g))?),
+            Task::Close(layer, g) => out.push(build_record(layer, header, opts, Some(g), psb)?),
         }
     }
     Ok(())
@@ -266,10 +333,10 @@ fn divider_record(header: PsdHeader) -> PsdResult<Record> {
     extra.pascal_string(GROUP_DIVIDER_NAME, 4);
     let mut lsct = Sink::new();
     lsct.u32(3);
-    write_block(&mut extra, b"8BIM", b"lsct", lsct.as_slice());
+    write_block(&mut extra, b"8BIM", b"lsct", lsct.as_slice(), false);
     let mut luni = Sink::new();
     luni.unicode_string(GROUP_DIVIDER_NAME);
-    write_block(&mut extra, b"8BIM", b"luni", luni.as_slice());
+    write_block(&mut extra, b"8BIM", b"luni", luni.as_slice(), false);
 
     Ok(Record {
         bounds: Rect::default(),
@@ -298,6 +365,7 @@ fn build_record(
     header: PsdHeader,
     opts: &WriteOptions,
     group: Option<&GroupData>,
+    psb: bool,
 ) -> PsdResult<Record> {
     let mut channels = Vec::with_capacity(layer.channels.len() + 2);
     if layer.channels.is_empty() {
@@ -315,7 +383,7 @@ fn build_record(
         for channel in &layer.channels {
             channels.push((
                 channel.id,
-                channel_payload(&channel.data, shape, opts, &layer.name)?,
+                channel_payload(&channel.data, shape, opts, &layer.name, psb)?,
             ));
         }
     }
@@ -324,13 +392,13 @@ fn build_record(
         let shape = ChannelShape::new(mask.bounds.width(), mask.bounds.height(), header.depth);
         channels.push((
             CHANNEL_USER_MASK,
-            channel_payload(&mask.data, shape, opts, &layer.name)?,
+            channel_payload(&mask.data, shape, opts, &layer.name, psb)?,
         ));
         if let Some(real) = &mask.real {
             let shape = ChannelShape::new(real.bounds.width(), real.bounds.height(), header.depth);
             channels.push((
                 CHANNEL_REAL_USER_MASK,
-                channel_payload(&real.data, shape, opts, &layer.name)?,
+                channel_payload(&real.data, shape, opts, &layer.name, psb)?,
             ));
         }
     }
@@ -358,7 +426,7 @@ fn build_record(
         opacity: layer.opacity,
         clipping: u8::from(layer.clipping),
         flags,
-        extra: build_extra(layer, group),
+        extra: build_extra(layer, group, psb),
     })
 }
 
@@ -367,6 +435,7 @@ fn channel_payload(
     shape: ChannelShape,
     opts: &WriteOptions,
     layer_name: &str,
+    psb: bool,
 ) -> PsdResult<Vec<u8>> {
     let expected = shape.byte_len()?;
     if data.len() != expected {
@@ -380,11 +449,16 @@ fn channel_payload(
     }
     let mut sink = Sink::new();
     sink.u16(opts.layer_compression.code());
-    sink.bytes(&encode_channel(data, opts.layer_compression, shape)?);
+    sink.bytes(&encode_channel_as(
+        data,
+        opts.layer_compression,
+        shape,
+        psb,
+    )?);
     Ok(sink.into_inner())
 }
 
-fn build_extra(layer: &PsdLayer, group: Option<&GroupData>) -> Vec<u8> {
+fn build_extra(layer: &PsdLayer, group: Option<&GroupData>, psb: bool) -> Vec<u8> {
     let mut sink = Sink::new();
     write_mask(&mut sink, layer.mask.as_ref());
     sink.u32(layer.blending_ranges.len() as u32);
@@ -400,46 +474,46 @@ fn build_extra(layer: &PsdLayer, group: Option<&GroupData>) -> Vec<u8> {
         } else {
             key_from_blend(layer.blend_mode)
         });
-        write_block(&mut sink, b"8BIM", b"lsct", body.as_slice());
+        write_block(&mut sink, b"8BIM", b"lsct", body.as_slice(), psb);
     }
 
     let mut luni = Sink::new();
     luni.unicode_string(&layer.name);
-    write_block(&mut sink, b"8BIM", b"luni", luni.as_slice());
+    write_block(&mut sink, b"8BIM", b"luni", luni.as_slice(), psb);
 
     if let Some(id) = layer.layer_id {
         let mut body = Sink::new();
         body.u32(id);
-        write_block(&mut sink, b"8BIM", b"lyid", body.as_slice());
+        write_block(&mut sink, b"8BIM", b"lyid", body.as_slice(), psb);
     }
     if let Some(color) = layer.sheet_color {
         let mut body = Sink::new();
         body.u16(color);
         body.zeros(6);
-        write_block(&mut sink, b"8BIM", b"lclr", body.as_slice());
+        write_block(&mut sink, b"8BIM", b"lclr", body.as_slice(), psb);
     }
     if let Some(fill) = layer.fill_opacity {
         let mut body = Sink::new();
         body.u8(fill);
         body.zeros(3);
-        write_block(&mut sink, b"8BIM", b"iOpa", body.as_slice());
+        write_block(&mut sink, b"8BIM", b"iOpa", body.as_slice(), psb);
     }
     if !layer.protection.is_default() {
         let mut body = Sink::new();
         body.u32(layer.protection.to_bits());
-        write_block(&mut sink, b"8BIM", b"lspf", body.as_slice());
+        write_block(&mut sink, b"8BIM", b"lspf", body.as_slice(), psb);
     }
     if let Some(adj) = &layer.adjustment {
-        write_block(&mut sink, b"8BIM", &adj.key, &adj.data);
+        write_block(&mut sink, b"8BIM", &adj.key, &adj.data, psb);
     }
     if let Some(fx) = &layer.effects {
-        write_block(&mut sink, b"8BIM", &fx.key, &fx.data);
+        write_block(&mut sink, b"8BIM", &fx.key, &fx.data, psb);
     }
     if let Some(text) = &layer.text {
-        write_block(&mut sink, b"8BIM", b"TySh", &text.raw);
+        write_block(&mut sink, b"8BIM", b"TySh", &text.raw, psb);
     }
     for block in &layer.extra {
-        write_block(&mut sink, &block.signature, &block.key, &block.data);
+        write_block(&mut sink, &block.signature, &block.key, &block.data, psb);
     }
     sink.into_inner()
 }
@@ -539,8 +613,8 @@ fn mask_flags(relative: bool, disabled: bool, invert: bool, from_render: bool) -
 /// length is two past a multiple of four (an `Lr16` section often is). The
 /// padding sits outside the declared length, which every reader tolerates:
 /// this crate's reader resynchronises on the next signature.
-fn write_global_block(sink: &mut Sink, signature: &[u8; 4], key: &[u8; 4], data: &[u8]) {
-    write_block(sink, signature, key, data);
+fn write_global_block(sink: &mut Sink, signature: &[u8; 4], key: &[u8; 4], data: &[u8], psb: bool) {
+    write_block(sink, signature, key, data, psb);
     // `write_block` already padded an odd length by one byte; make the pad
     // after the data reach the next multiple of four of its LENGTH (which is
     // how psd-tools computes it), not of the file offset.
@@ -548,10 +622,12 @@ fn write_global_block(sink: &mut Sink, signature: &[u8; 4], key: &[u8; 4], data:
     sink.zeros(pad - data.len() % 2);
 }
 
-fn write_block(sink: &mut Sink, signature: &[u8; 4], key: &[u8; 4], data: &[u8]) {
+/// W11-H: in a `.psb` a long-key block ([`crate::read::PSB_LONG_KEYS`]) carries a
+/// 64-bit length; every other block keeps its 32-bit one.
+fn write_block(sink: &mut Sink, signature: &[u8; 4], key: &[u8; 4], data: &[u8], psb: bool) {
     sink.tag(signature);
     sink.tag(key);
-    sink.u32(data.len() as u32);
+    put_len(sink, data.len(), psb && PSB_LONG_KEYS.contains(key));
     sink.bytes(data);
     if data.len() % 2 == 1 {
         sink.u8(0);

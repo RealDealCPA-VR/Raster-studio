@@ -18,7 +18,15 @@ blake3.workspace = true
 # requests and these four decoders are linked into every crate in the workspace
 # that depends on `image`, whatever its own manifest asks for. Treat this list
 # as workspace-wide attack surface, not as this crate's private set.
-image = { workspace = true, features = ["gif", "bmp", "ico", "tga", "avif"] }
+image = { workspace = true, features = ["gif", "bmp", "ico", "tga", "avif", "exr", "hdr"] }
+# W11-H: `exr` pulls in the pure-Rust `exr` crate (BSD-3-Clause; it forbids
+# unsafe itself but depends on `pulp`, a SIMD-dispatch crate that uses it;
+# `image` takes it with default features off, so no rayon pool); `hdr`
+# is `image`'s own Radiance RGBE codec (no extra dependency). Both are driven
+# by `src/formats/float.rs`, not by `image`'s content sniff. `exr` is also
+# named directly (the same crate `image` links, default features off) so the
+# header can be read and bounded before `image` decodes a block.
+exr = { version = "1.74", default-features = false }
 # W10-F: `avif` above is the AVIF *encoder* only: `image` wires it to `ravif`
 # (BSD-3-Clause) over `rav1e` (BSD-2-Clause), both pure Rust, and `image`
 # itself turns off ravif's `asm` feature (nasm). There is no AVIF *decoder*:
@@ -27,6 +35,21 @@ image = { workspace = true, features = ["gif", "bmp", "ico", "tga", "avif"] }
 # W10-F: JPEG XL decoding, pure Rust (MIT OR Apache-2.0); default features
 # off, so no rayon thread pool and no C colour engine (lcms2).
 jxl-oxide = { version = "0.12", default-features = false }
+# W11-H: JPEG XL *encoding*: lossless modular only, pure Rust with no unsafe
+# code (MIT OR Apache-2.0 OR Zlib). `threads` off: one thread, no pool. What
+# it writes is read back by `jxl-oxide` above. `zune-core` (same licence) is
+# its options/colour-space vocabulary, already in the tree through `image`.
+zune-jpegxl = { version = "0.5", default-features = false, features = ["std"] }
+zune-core = "0.5"
+# W11-H: lossy WebP export (`ExportFormat::WebPLossy`): one VP8 key frame,
+# exact alpha in an uncompressed `ALPH` chunk. Pure Rust, `#![forbid(unsafe_code)]`,
+# `no_std` + `alloc`, no dependencies with default features off (the `cli`
+# feature's PNG/JPEG readers are not wanted), MIT OR Apache-2.0, rust-version
+# 1.85 (under the workspace MSRV). Chosen over `gamut-webp` 0.3.1 (MSRV 1.92)
+# and `webpkit` 0.1.0 (MSRV 1.96), which would raise the workspace MSRV, and
+# over `vaam-image-webp` 0.1.0, which measured 7-13 dB PSNR on small images;
+# the measurements are in docs/parity-matrix.md.
+tiny-webp = { version = "0.1.0", default-features = false, features = ["std"] }
 color.workspace = true
 # Reinterpreting `&[u16]` as `&[u8]` for 16-bit encoders, without a copy.
 bytemuck.workspace = true

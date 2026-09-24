@@ -58,9 +58,11 @@
 //!   W9-G parses and writes the vector mask's own density and feather from
 //!   the parameter block ([`model::PsdMask::vector_density`] /
 //!   [`model::PsdMask::vector_feather_px`]) beside the raster mask's pair.
-//! * **Adjustment payloads** are preserved but not decoded into
-//!   `layer_model::AdjustmentKind`; [`model::Adjustment::descriptor`] gives a
-//!   caller the parsed tree to do it from.
+//! * **Adjustment payloads** are preserved byte for byte, and W11-A's
+//!   [`adjustments`] decodes and encodes the sixteen adjustment-layer keys
+//!   to and from `layer_model::AdjustmentKind`. Photo Filter version 3
+//!   (an XYZ colour), a Color Lookup without an embedded `.cube` and Curves
+//!   stored as 256-entry maps are refused by name rather than guessed.
 //! * **Type layers: the engine data covers the common styling, not all of
 //!   it.** [`text`] extracts the string and transform, and
 //!   [`engine_data`] reads the text engine's style runs (font via the
@@ -136,6 +138,9 @@
 //! are safe on anything this crate parses; a caller that assembles a
 //! thousand-level tree by hand and then clones it is on its own.
 
+/// W11-A: adjustment-layer payloads (`levl`, `curv`, `hue2`, ...) to and
+/// from `layer_model::AdjustmentKind`.
+pub mod adjustments;
 pub mod blend;
 pub mod bytes;
 pub mod codec;
@@ -173,12 +178,14 @@ pub use model::{
     CHANNEL_REAL_USER_MASK, CHANNEL_USER_MASK,
 };
 pub use read::{read, read_with};
-pub use write::{from_rgba8, write, write_with};
+pub use write::{from_rgba8, is_psb, write, write_psb, write_psb_with, write_with};
 
 #[cfg(test)]
 mod probe;
 #[cfg(test)]
 mod psb_tests;
+#[cfg(test)]
+mod psb_write_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

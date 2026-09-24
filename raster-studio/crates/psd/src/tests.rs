@@ -584,7 +584,9 @@ fn a_header_that_cannot_be_expressed_is_refused_before_anything_is_allocated() {
         PsdError::InvalidDocument(_)
     ));
 
-    file.header = PsdHeader::rgba8(30_001, 10);
+    // W11-H: past the .psd edge a canvas is a .psb, whose own edge is
+    // 300 000 px.
+    file.header = PsdHeader::rgba8(300_001, 10);
     assert!(matches!(
         write(&file).unwrap_err(),
         PsdError::InvalidDocument(_)

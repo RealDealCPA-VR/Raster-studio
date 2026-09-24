@@ -260,6 +260,9 @@ pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
         },
     };
     context.recent_files = recent_files;
+    // W11-D: File > Revert reads the document's package, or the image it
+    // was opened from; either is a file on disk to go back to.
+    context.has_path = editor.revert_source().is_some();
     // The clipboard is the *editor's*, not the workspace's. `ui::Workspace`
     // carries a `ClipboardState`, but nothing ever wrote it, so Paste and Paste
     // Into were greyed out no matter how many times Copy had been used.
@@ -312,6 +315,8 @@ pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
     }
     // W10-G: Edit > Fade names the step it would fade, or greys out.
     context.fade_step = crate::fade::fadeable(editor);
+    // W11-E: Edit > Transform > Again needs a committed free transform.
+    context.has_last_transform = editor.last_transform().is_some();
     context
 }
 
@@ -1524,6 +1529,15 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::ShowLayers => layer_extras::set_layers_visible(editor, true),
         // W10-A: each click makes an independent link group.
         MenuAction::LinkLayers => link_groups::link_layers(editor),
+        // W11-E: the last Layer / Edit gaps (`layer_ops::w11e`).
+        MenuAction::TransformAgain => crate::layer_ops::w11e::transform_again(editor, false),
+        MenuAction::TransformAgainCopy => crate::layer_ops::w11e::transform_again(editor, true),
+        MenuAction::ReverseLayers => crate::layer_ops::w11e::reverse_layers(editor),
+        MenuAction::SelectLinkedLayers => crate::layer_ops::w11e::select_linked_layers(editor),
+        MenuAction::ConvertToLinked => crate::layer_ops::w11e::convert_to_linked(editor),
+        MenuAction::EmbedLinked => crate::layer_ops::w11e::embed_linked(editor),
+        MenuAction::SetLayerColor(color) => crate::layer_ops::w11e::set_color_label(editor, color),
+        MenuAction::NewLayerBasedSlice => crate::slices_export::new_layer_based_slice(editor),
         // ---- Filter --------------------------------------------------------
         MenuAction::ConvertForSmartFilters => convert_for_smart_filters(editor),
         // W10-D: a Displace the external-map dialog confirmed runs that map;
@@ -1837,9 +1851,24 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::DistributeLayers(axis) => crate::layer_ops::distribute(editor, axis),
         MenuAction::StampVisible => crate::layer_ops::stamp_visible(editor),
         MenuAction::SaveAsPsd => crate::layer_ops::save_as_psd(editor),
+        // W11-D: File > Revert, one undoable history step.
+        MenuAction::Revert => editor.revert_active(),
         MenuAction::GroupLayers => group_layers(editor),
         MenuAction::UngroupLayers => ungroup_layers(editor),
-        MenuAction::MergeDown => merge(editor, MergeScope::Down),
+        // W11-E: Ctrl+E over two or more selected layers is Merge Layers.
+        MenuAction::MergeDown => {
+            let many = editor
+                .active()
+                .is_some_and(|d| d.document.layer_selection().len() >= 2);
+            merge(
+                editor,
+                if many {
+                    MergeScope::Selected
+                } else {
+                    MergeScope::Down
+                },
+            )
+        }
         MenuAction::MergeVisible => merge(editor, MergeScope::Visible),
         MenuAction::FlattenImage => merge(editor, MergeScope::All),
         MenuAction::Mask(MaskOp::Toggle) => toggle_mask(editor, false),
@@ -3983,14 +4012,22 @@ fn cut(editor: &mut Editor) -> Result<String, String> {
 /// selection. Both read only the internal store: an OS-clipboard image has no
 /// copied position and no in-document origin.
 fn paste(editor: &mut Editor, mode: PasteMode) -> Result<String, String> {
+    // Plain Paste reads the OS clipboard exactly once; W11-D sizes a new
+    // document from that same read, and the paste below uses it too.
+    let external = if mode == PasteMode::Plain {
+        editor.image_clipboard_mut().get_image().ok().flatten()
+    } else {
+        None
+    };
+    // W11-D: Paste with no document open (Photopea) makes a document the
+    // clipboard image's size first; the paste below lands in it.
+    if mode == PasteMode::Plain && editor.active().is_none() {
+        editor.new_document_for_paste(external.as_ref())?;
+    }
     let into = matches!(mode, PasteMode::Into | PasteMode::Outside);
-    if mode == PasteMode::Plain {
-        let external = editor.image_clipboard_mut().get_image();
-        match external {
-            Ok(Some(image)) if !editor.os_copy_is_ours(&image) => {
-                return editor.paste_external_image(image);
-            }
-            Ok(Some(_)) | Ok(None) | Err(_) => {}
+    if let Some(image) = external {
+        if !editor.os_copy_is_ours(&image) {
+            return editor.paste_external_image(image);
         }
     }
     let clip = editor
@@ -4445,6 +4482,9 @@ enum MergeScope {
     Visible,
     /// Every layer, visible or not.
     All,
+    /// W11-E: the selected layers (Merge Layers, Ctrl+E over a
+    /// multi-selection).
+    Selected,
 }
 
 /// Merge Down / Merge Visible / Flatten Image.
@@ -4464,6 +4504,34 @@ fn merge(editor: &mut Editor, scope: MergeScope) -> Result<String, String> {
         // topmost, layer.
         let (label, doomed, home) = match scope {
             MergeScope::All => ("Flatten Image", order.clone(), None),
+            // W11-E: the selection, in depth-first order; the result takes
+            // the topmost selected layer's place. Everything listed after it
+            // in depth-first order, so no selected sibling sits above it in
+            // its parent and its index still names its slot once the others
+            // are gone.
+            MergeScope::Selected => {
+                let chosen = doc.document.layer_selection();
+                // A selected group brings its whole subtree: its children
+                // are what it draws, so they join the composite (and go with
+                // it), as in Photoshop.
+                let doomed: Vec<LayerId> = order
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        chosen
+                            .iter()
+                            .any(|c| doc.document.layers.is_descendant_of(*id, *c))
+                    })
+                    .collect();
+                let top = *doomed.first().ok_or("Select two or more layers")?;
+                let parent = doc.document.layers.parent_of(top);
+                let at = doc
+                    .document
+                    .layers
+                    .index_in_parent(top)
+                    .ok_or("The selected layer is not in the tree")?;
+                ("Merge Layers", doomed, Some((parent, at)))
+            }
             MergeScope::Visible => (
                 "Merge Visible",
                 order
@@ -4510,6 +4578,11 @@ fn merge(editor: &mut Editor, scope: MergeScope) -> Result<String, String> {
                 }
             }
         }
+        // W11-E: a merge that lands back in its parent (Merge Down, Merge
+        // Layers) keeps the groups around it drawing, but neutral.
+        if home.is_some() {
+            crate::layer_ops::w11e::neutralize_containing_groups(&mut staged.layers, &doomed);
+        }
         let rect = doc.canvas_rect();
         let canvas = compositor::composite_region(
             &staged,
@@ -4531,8 +4604,13 @@ fn merge(editor: &mut Editor, scope: MergeScope) -> Result<String, String> {
     let command = {
         let doc = editor.active_mut().ok_or("No document is open")?;
         let layer = layer_model::Layer::raster(match scope {
-            MergeScope::All => "Background",
-            _ => "Merged",
+            MergeScope::All => "Background".to_string(),
+            // W11-E: Photoshop names merged layers after the topmost one.
+            MergeScope::Selected => doomed
+                .first()
+                .and_then(|id| doc.document.layers.get(*id))
+                .map_or_else(|| "Merged".to_string(), |l| l.name.clone()),
+            _ => "Merged".to_string(),
         });
         let new_id = layer.id;
         let mut commands = vec![Command::create_layer(layer)];
@@ -4560,12 +4638,21 @@ fn merge(editor: &mut Editor, scope: MergeScope) -> Result<String, String> {
                 index,
             });
         }
-        Command::Transaction {
-            label: label.to_string(),
-            commands,
-        }
+        (
+            Command::Transaction {
+                label: label.to_string(),
+                commands,
+            },
+            new_id,
+        )
     };
+    let (command, new_id) = command;
     editor.apply_command(command);
+    // W11-E: Merge Layers leaves the merged layer selected and active, as
+    // Photoshop does (the selection it merged is gone).
+    if matches!(scope, MergeScope::Selected) {
+        editor.set_layer_selection(vec![new_id], Some(new_id));
+    }
     Ok(format!("{label} applied"))
 }
 

@@ -166,6 +166,10 @@ pub fn export_format_for(path: &Path) -> Option<raster::ExportFormat> {
         "pbm" => raster::ExportFormat::Pbm,
         "dds" => raster::ExportFormat::Dds,
         "avif" => raster::ExportFormat::Avif(80),
+        // W11-H: OpenEXR (a 32-bit document writes its float composite,
+        // `depth32::write_float_tiff`) and lossless JPEG XL.
+        "exr" => raster::ExportFormat::Exr,
+        "jxl" => raster::ExportFormat::Jxl,
         _ => return None,
     })
 }
@@ -174,10 +178,62 @@ pub fn export_format_for(path: &Path) -> Option<raster::ExportFormat> {
 ///
 /// By name, unlike [`crate::import::looks_like_psd`], which asks by content:
 /// nothing exists at an export destination yet, so the name is all there is.
+///
+/// W11-H: `.psb` too — Photoshop's large document format, the same layered
+/// writer at version 2 (see [`exports_as_psb`]).
 pub fn exports_as_psd(path: &Path) -> bool {
     path.extension()
-        .map(|e| e.eq_ignore_ascii_case("psd"))
+        .map(|e| e.eq_ignore_ascii_case("psd") || e.eq_ignore_ascii_case("psb"))
         .unwrap_or(false)
+}
+
+/// W11-H: `true` when the destination is a `.psb`: the layered bytes are
+/// written at version 2 (64-bit lengths) by [`write_atomically`], whatever
+/// the canvas size.
+pub fn exports_as_psb(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("psb"))
+}
+
+/// W11-H: Save as PSB routing, at the one place every layered save passes
+/// with both its bytes and its destination (the synchronous
+/// [`OpenDocument::export_psd_to`] and the File > Export worker alike):
+///
+/// * a `.psb` destination given `.psd` (version 1) bytes gets them re-written
+///   as a `.psb` (`psd::write_psb`, after reading back this build's own
+///   output);
+/// * a `.psd` destination given `.psb` bytes — what `psd::write` produces
+///   for a canvas past 30 000 px, which no `.psd` can describe — is refused
+///   with a message that offers `.psb` instead.
+fn layered_bytes_for<'a>(
+    path: &Path,
+    bytes: &'a [u8],
+) -> std::io::Result<std::borrow::Cow<'a, [u8]>> {
+    let layered = bytes.starts_with(&raster::codec::PSD_SIGNATURE);
+    if !layered || !exports_as_psd(path) {
+        return Ok(bytes.into());
+    }
+    let psb = psd::is_psb(bytes);
+    if exports_as_psb(path) && !psb {
+        // This build's own output: bounded by what it just wrote, not by the
+        // untrusted-file defaults.
+        let mut opts = psd::ReadOptions::default();
+        opts.max_decoded_bytes = u64::MAX;
+        opts.max_resource_bytes = usize::MAX;
+        opts.max_tagged_block_bytes = usize::MAX;
+        let file = psd::read_with(bytes, &opts).map_err(std::io::Error::other)?;
+        return psd::write_psb(&file)
+            .map(Into::into)
+            .map_err(std::io::Error::other);
+    }
+    if !exports_as_psb(path) && psb {
+        return Err(std::io::Error::other(format!(
+            "this document is wider or taller than {} px, which a .psd cannot describe: \
+             save it as a .psb (Photoshop large document) instead",
+            psd::write::MAX_DIMENSION
+        )));
+    }
+    Ok(bytes.into())
 }
 
 /// `true` when two paths name the same file — canonically when both resolve,
@@ -199,6 +255,9 @@ pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
 /// sibling so the rename stays on one filesystem, and it is removed when the
 /// rename does not happen.
 pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    // W11-H: Save as PSB routing (see `layered_bytes_for`).
+    let bytes = layered_bytes_for(path, bytes)?;
+    let bytes = bytes.as_ref();
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
     let name = path
         .file_name()
@@ -548,6 +607,10 @@ impl OpenDocument {
     /// synchronous open and the off-thread File > Open import alike.
     pub fn record_source_depth(&mut self, sixteen_bit: bool) {
         self.source_sixteen_bit = sixteen_bit;
+        // W11-H: a float file already opened as 32 Bits/Channel stays there.
+        if self.document.meta.bit_depth == 32 {
+            return;
+        }
         self.document.meta.bit_depth = if sixteen_bit { 16 } else { 8 };
     }
 
@@ -565,6 +628,9 @@ impl OpenDocument {
         let imported = crate::import::document_from_image(&image, &title, history_depth)?;
         let mut open = OpenDocument::from_import(id, imported);
         open.source_path = Some(path.to_path_buf());
+        // W11-H: an OpenEXR / Radiance HDR becomes a 32 Bits/Channel document
+        // holding the file's unclipped float samples.
+        float_open::promote_float_source(&mut open, path)?;
         Ok(open)
     }
 
@@ -3306,6 +3372,15 @@ pub use svg_export::{exports_as_svg, vector_svg, write_vector_svg, SvgExport};
 #[path = "doc_formats_w10f_tests.rs"]
 mod formats_w10f_tests;
 
+// W11-H: an OpenEXR / Radiance HDR opens as a 32 Bits/Channel document.
+#[path = "doc_float_open.rs"]
+mod float_open;
+
+// W11-H: EXR, HDR, ICNS, IFF, KRA, JPEG XL export and Save as PSB.
+#[cfg(test)]
+#[path = "doc_formats_w11h_tests.rs"]
+mod formats_w11h_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4184,9 +4259,10 @@ mod tests {
     fn export_refuses_a_format_it_cannot_write() {
         let dir = tempfile::tempdir().unwrap();
         let mut d = doc_of(8, 8);
-        let err = d.export_to(&dir.path().join("out.exr")).unwrap_err();
-        assert!(err.to_string().contains("exr"), "{err}");
-        assert!(!dir.path().join("out.exr").exists(), "nothing was written");
+        // W11-H: `.exr` is a format now; `.xyz` is not.
+        let err = d.export_to(&dir.path().join("out.xyz")).unwrap_err();
+        assert!(err.to_string().contains("xyz"), "{err}");
+        assert!(!dir.path().join("out.xyz").exists(), "nothing was written");
         // A destination with no extension at all names no format either.
         assert!(d.export_to(&dir.path().join("out")).is_err());
     }
@@ -4257,7 +4333,7 @@ mod tests {
             );
         }
         assert_eq!(export_format_for(Path::new("x")), None);
-        assert_eq!(export_format_for(Path::new("x.exr")), None);
+        assert_eq!(export_format_for(Path::new("x.xyz")), None);
         // Case does not matter — Windows hands back whatever the user typed.
         assert_eq!(
             export_format_for(Path::new("x.PNG")),

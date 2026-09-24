@@ -715,6 +715,12 @@ fn run_export(job: &ExportJob) -> Result<Vec<PathBuf>, crate::doc::DocumentError
         if preset.format == raster::ExportFormat::Svg && preset.scale == 1.0 {
             crate::doc::write_vector_svg(doc, &job.tiles, path)?;
         }
+        // W11-H: an EXR row at 100% of a 32 Bits/Channel document is
+        // rewritten from the float composite, values above 1.0 kept
+        // (`depth32::write_float_tiff`; a no-op for any other document).
+        if preset.format == raster::ExportFormat::Exr && preset.scale == 1.0 {
+            crate::depth32::write_float_tiff(path, preset.format, doc, || Ok(canvas.clone()))?;
+        }
     }
     Ok(written)
 }

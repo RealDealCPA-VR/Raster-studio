@@ -66,11 +66,9 @@ fn lfx2_block(lefx: &psd::Descriptor) -> Option<psd::Effects> {
 }
 
 /// One style's `Styl` descriptor → its `Lefx` item → the native effect
-/// block. The `psd` decoder maps what a `.psd` import maps (drop shadow,
-/// outer glow, colour overlay, solid stroke); the rest a Photoshop style
-/// carries (inner shadow, inner glow, bevel, satin, gradient and pattern
-/// overlays, contours, repeated effects) is mapped here from the same
-/// descriptor, and struck from the "not imported" list.
+/// block, through the same `psd` decoder a `.psd` import uses (every
+/// effect kind, contours and repeated effects included); the pattern
+/// overlay resolves against the library's own patterns.
 fn decode_style(
     style: &AslStyle,
     patterns: &psd::pattern::PatternLibrary,
@@ -81,14 +79,17 @@ fn decode_style(
     let styl = psd::Descriptor::read(&mut cur, &opts).ok()?;
     let lefx = styl.descriptor("Lefx")?;
     let block = lfx2_block(lefx)?;
+    // W11-B: `import_effects` runs `psd::effects::map_rest` on the block, so
+    // the kinds past card 075's four (inner shadow, inner glow, bevel, satin,
+    // gradient overlay, contours, repeated effects) map through the same one
+    // mapping a `.psd` layer's `lfx2` block does.
     let imported = psd::import_effects(&block, &opts)?;
     let mut effects = imported.effects;
     let mut unmapped = imported.unmapped;
-    photoshop::map_rest(lefx, &mut effects, &mut unmapped);
     photoshop::blend_options(&styl, &mut unmapped);
     if let Some(overlay) = psd::pattern::pattern_overlay(&block, &opts, patterns) {
         effects.pattern_overlay = Some(overlay);
-        photoshop::struck(&mut unmapped, "pattern overlay");
+        psd::effects::struck(&mut unmapped, "pattern overlay");
     }
     Some(ImportedStyle {
         name: style.name.clone(),
@@ -97,313 +98,13 @@ fn decode_style(
     })
 }
 
-/// W9-H: the part of a Photoshop effect descriptor the `psd` importer does
-/// not map, decoded into the native model. Key and value spellings are
-/// Photoshop's own, as its `.asl`/`.psd` writers emit them.
+/// W9-H: the part of a style `.asl` carries beyond its effect block. The
+/// effect mapping itself lives in `psd::effects` (W11-B).
 mod photoshop {
-    use layer_model::effects::{
-        BevelDirection, BevelEffect, BevelStyle, BevelTechnique, ColorOverlayEffect, Contour,
-        ContourPreset, GlowSource, Gradient, GradientOverlayEffect, GradientStop, GradientStyle,
-        SatinEffect, ShadowInstance,
-    };
-    use layer_model::LayerEffects;
     use psd::{Descriptor, Value};
-
-    /// Drop the first `name` from the "not imported" list.
-    pub(super) fn struck(unmapped: &mut Vec<String>, name: &str) {
-        if let Some(i) = unmapped.iter().position(|u| u == name) {
-            unmapped.remove(i);
-        }
-    }
-
-    fn unknown(key: &str) -> String {
-        format!("an effect this build does not know ({key})")
-    }
-
-    fn enabled(d: &Descriptor) -> bool {
-        !matches!(d.get("enab"), Some(Value::Bool(false)))
-    }
-
-    fn flag(d: &Descriptor, key: &str) -> Option<bool> {
-        match d.get(key)? {
-            Value::Bool(b) => Some(*b),
-            _ => None,
-        }
-    }
-
-    fn enumerated<'a>(d: &'a Descriptor, key: &str) -> Option<&'a str> {
-        match d.get(key)? {
-            Value::Enumerated { value, .. } => Some(value),
-            _ => None,
-        }
-    }
 
     fn num(d: &Descriptor, key: &str) -> Option<f32> {
         d.number(key).map(|v| v as f32).filter(|v| v.is_finite())
-    }
-
-    /// Run one effect descriptor through the `psd` decoder, filed under
-    /// `as_key` (an inner shadow has a drop shadow's fields, an inner glow
-    /// an outer glow's), so both roads decode a field the same way.
-    fn via_psd(as_key: &str, d: &Descriptor, scale: f32) -> Option<LayerEffects> {
-        let mut lefx = Descriptor::new("Lefx");
-        lefx.push(
-            "Scl ",
-            Value::UnitFloat {
-                unit: *b"#Prc",
-                value: f64::from(scale) * 100.0,
-            },
-        )
-        .ok()?;
-        lefx.push(as_key, Value::Descriptor(d.clone())).ok()?;
-        let block = super::lfx2_block(&lefx)?;
-        Some(psd::import_effects(&block, &psd::ReadOptions::default())?.effects)
-    }
-
-    /// A mode / colour / opacity triple under the given keys, decoded the
-    /// way a colour overlay's is. `color` `None` stands in black.
-    fn paint(
-        d: &Descriptor,
-        mode: &str,
-        color: Option<&str>,
-        opacity: &str,
-    ) -> Option<ColorOverlayEffect> {
-        let mut sofi = Descriptor::new("SoFi");
-        sofi.push("Md  ", d.get(mode)?.clone()).ok()?;
-        let clr = match color {
-            Some(key) => d.get(key)?.clone(),
-            None => {
-                let mut black = Descriptor::new("RGBC");
-                for k in ["Rd  ", "Grn ", "Bl  "] {
-                    black.push(k, Value::Double(0.0)).ok()?;
-                }
-                Value::Descriptor(black)
-            }
-        };
-        sofi.push("Clr ", clr).ok()?;
-        sofi.push("Opct", d.get(opacity)?.clone()).ok()?;
-        via_psd("SoFi", &sofi, 1.0)?.color_overlay
-    }
-
-    /// A contour object (`ShpC`): a named preset where the name is one the
-    /// picker lists, otherwise the file's own curve (knots on 0..=255).
-    pub(super) fn contour(d: &Descriptor, key: &str) -> Contour {
-        let Some(c) = d.descriptor(key) else {
-            return Contour::default();
-        };
-        // Photoshop may write a localisation key: "$$$/Contours/...=Cone".
-        let name = c.text("Nm  ").unwrap_or_default();
-        let name = name.rsplit('=').next().unwrap_or_default().trim();
-        let preset = match name {
-            "Linear" => Some(ContourPreset::Linear),
-            "Cone" => Some(ContourPreset::Cone),
-            "Gaussian" => Some(ContourPreset::Gaussian),
-            "Ring" => Some(ContourPreset::Ring),
-            "Rounded Steps" => Some(ContourPreset::RoundedSteps),
-            _ => None,
-        };
-        if let Some(preset) = preset {
-            return Contour::preset(preset);
-        }
-        let points: Vec<[f32; 2]> = match c.get("Crv ") {
-            Some(Value::List(knots)) => knots
-                .iter()
-                .filter_map(|k| match k {
-                    Value::Descriptor(p) => Some([
-                        (num(p, "Hrzn")? / 255.0).clamp(0.0, 1.0),
-                        (num(p, "Vrtc")? / 255.0).clamp(0.0, 1.0),
-                    ]),
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
-        if points.len() < 2 {
-            return Contour::default();
-        }
-        Contour {
-            preset: ContourPreset::Custom,
-            points,
-        }
-    }
-
-    fn shadow(d: &Descriptor, scale: f32) -> Option<ShadowInstance> {
-        Some(ShadowInstance {
-            effect: via_psd("DrSh", d, scale)?.drop_shadow?,
-            contour: contour(d, "TrnS"),
-        })
-    }
-
-    fn bevel(d: &Descriptor, scale: f32) -> Option<BevelEffect> {
-        let hi = paint(d, "hglM", Some("hglC"), "hglO")?;
-        let lo = paint(d, "sdwM", Some("sdwC"), "sdwO")?;
-        let style = match enumerated(d, "bvlS") {
-            Some("InrB") | None => BevelStyle::InnerBevel,
-            Some("OtrB") => BevelStyle::OuterBevel,
-            Some("Embs") => BevelStyle::Emboss,
-            Some("PlEb") => BevelStyle::PillowEmboss,
-            Some("strokeEmboss") => BevelStyle::StrokeEmboss,
-            Some(_) => return None,
-        };
-        let technique = match enumerated(d, "bvlT") {
-            Some("SfBL") | None => BevelTechnique::SmoothBevel,
-            Some("PrBL") => BevelTechnique::ChiselHard,
-            Some("Slmt") => BevelTechnique::ChiselSoft,
-            Some(_) => return None,
-        };
-        let direction = match enumerated(d, "bvlD") {
-            Some("Out ") => BevelDirection::Down,
-            _ => BevelDirection::Up,
-        };
-        let defaults = BevelEffect::default();
-        Some(BevelEffect {
-            style,
-            technique,
-            direction,
-            depth: num(d, "srgR").map_or(defaults.depth, |p| (p / 100.0).clamp(0.0, 10.0)),
-            size_px: num(d, "blur").map_or(defaults.size_px, |v| v.max(0.0) * scale),
-            soften_px: num(d, "Sftn").map_or(0.0, |v| v.max(0.0) * scale),
-            angle_deg: num(d, "lagl").unwrap_or(defaults.angle_deg),
-            altitude_deg: num(d, "Lald").map_or(defaults.altitude_deg, |v| v.clamp(0.0, 90.0)),
-            use_global_light: flag(d, "uglg").unwrap_or(true),
-            highlight_mode: hi.blend_mode,
-            highlight_color: hi.color,
-            highlight_opacity: hi.opacity,
-            shadow_mode: lo.blend_mode,
-            shadow_color: lo.color,
-            shadow_opacity: lo.opacity,
-        })
-    }
-
-    fn satin(d: &Descriptor, scale: f32) -> Option<SatinEffect> {
-        let p = paint(d, "Md  ", Some("Clr "), "Opct")?;
-        let defaults = SatinEffect::default();
-        Some(SatinEffect {
-            blend_mode: p.blend_mode,
-            color: p.color,
-            opacity: p.opacity,
-            angle_deg: num(d, "lagl").unwrap_or(defaults.angle_deg),
-            distance_px: num(d, "Dstn").map_or(defaults.distance_px, |v| v * scale),
-            size_px: num(d, "blur").map_or(defaults.size_px, |v| v.max(0.0) * scale),
-            invert: flag(d, "Invr").unwrap_or(defaults.invert),
-        })
-    }
-
-    /// A gradient stop's colour: `RGBC` (0..=255) or `Grsc` (percent ink).
-    fn stop_color(c: &Descriptor) -> Option<[f32; 4]> {
-        if let (Some(r), Some(g), Some(b)) = (num(c, "Rd  "), num(c, "Grn "), num(c, "Bl  ")) {
-            return Some([
-                (r / 255.0).clamp(0.0, 1.0),
-                (g / 255.0).clamp(0.0, 1.0),
-                (b / 255.0).clamp(0.0, 1.0),
-                1.0,
-            ]);
-        }
-        let gray = 1.0 - (num(c, "Gry ")? / 100.0).clamp(0.0, 1.0);
-        Some([gray, gray, gray, 1.0])
-    }
-
-    /// The descriptors of a list item.
-    fn descriptors<'a>(d: &'a Descriptor, key: &str) -> Vec<&'a Descriptor> {
-        match d.get(key) {
-            Some(Value::List(items)) => items
-                .iter()
-                .filter_map(|v| match v {
-                    Value::Descriptor(d) => Some(d),
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        }
-    }
-
-    /// A `Grdn` object with its own stops (`CstS`); a noise gradient has no
-    /// stops to map.
-    fn gradient(g: &Descriptor) -> Option<Gradient> {
-        if enumerated(g, "GrdF") == Some("ClNs") {
-            return None;
-        }
-        let span = num(g, "Intr").filter(|v| *v > 0.0).unwrap_or(4096.0);
-        let position = |d: &Descriptor| (num(d, "Lctn").unwrap_or(0.0) / span).clamp(0.0, 1.0);
-        let midpoint = |d: &Descriptor| (num(d, "Mdpn").unwrap_or(50.0) / 100.0).clamp(0.0, 1.0);
-        let mut stops: Vec<GradientStop> = descriptors(g, "Clrs")
-            .into_iter()
-            .map(|d| GradientStop {
-                position: position(d),
-                // Foreground/background stops carry no colour of their own.
-                color: d.descriptor("Clr ").and_then(stop_color).unwrap_or(
-                    match enumerated(d, "Type") {
-                        Some("BckC") => [1.0, 1.0, 1.0, 1.0],
-                        _ => [0.0, 0.0, 0.0, 1.0],
-                    },
-                ),
-                midpoint: midpoint(d),
-            })
-            .collect();
-        if stops.is_empty() {
-            return None;
-        }
-        stops.sort_by(|a, b| a.position.total_cmp(&b.position));
-        let mut alpha_stops: Vec<GradientStop> = descriptors(g, "Trns")
-            .into_iter()
-            .map(|d| GradientStop {
-                position: position(d),
-                color: [
-                    1.0,
-                    1.0,
-                    1.0,
-                    (num(d, "Opct").unwrap_or(100.0) / 100.0).clamp(0.0, 1.0),
-                ],
-                midpoint: midpoint(d),
-            })
-            .collect();
-        alpha_stops.sort_by(|a, b| a.position.total_cmp(&b.position));
-        Some(Gradient {
-            stops,
-            alpha_stops,
-            smoothness: 1.0,
-        })
-    }
-
-    fn gradient_overlay(d: &Descriptor) -> Option<GradientOverlayEffect> {
-        let p = paint(d, "Md  ", None, "Opct")?;
-        let style = match enumerated(d, "Type") {
-            Some("Lnr ") | None => GradientStyle::Linear,
-            Some("Rdl ") => GradientStyle::Radial,
-            Some("Angl") => GradientStyle::Angle,
-            Some("Rflc") => GradientStyle::Reflected,
-            Some("Dmnd") => GradientStyle::Diamond,
-            Some(_) => return None,
-        };
-        let defaults = GradientOverlayEffect::default();
-        Some(GradientOverlayEffect {
-            blend_mode: p.blend_mode,
-            opacity: p.opacity,
-            gradient: gradient(d.descriptor("Grad")?)?,
-            style,
-            reverse: flag(d, "Rvrs").unwrap_or(false),
-            align_with_layer: flag(d, "Algn").unwrap_or(true),
-            angle_deg: num(d, "Angl").unwrap_or(defaults.angle_deg),
-            scale: num(d, "Scl ").map_or(1.0, |v| (v / 100.0).max(0.01)),
-            // `Ofst` is a percentage of a box this library does not know;
-            // the ramp stays centred.
-            offset_px: [0.0, 0.0],
-            dither: flag(d, "Dthr").unwrap_or(false),
-        })
-    }
-
-    /// The enabled descriptors of a `...Multi` list, in file order.
-    fn multi(value: &Value) -> Vec<&Descriptor> {
-        match value {
-            Value::List(items) => items
-                .iter()
-                .filter_map(|v| match v {
-                    Value::Descriptor(d) if enabled(d) => Some(d),
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        }
     }
 
     /// A style's `blendOptions` (Photoshop's Blending Options: fill
@@ -442,114 +143,6 @@ mod photoshop {
             };
             if !unmapped.contains(&what) {
                 unmapped.push(what);
-            }
-        }
-    }
-
-    /// Map everything in `lefx` the `psd` importer left out.
-    pub(super) fn map_rest(lefx: &Descriptor, fx: &mut LayerEffects, unmapped: &mut Vec<String>) {
-        let scale = num(lefx, "Scl ").map_or(1.0, |s| (s / 100.0).clamp(0.0, 10.0));
-        for (key, value) in &lefx.items {
-            if let Value::Descriptor(d) = value {
-                if !enabled(d) {
-                    continue;
-                }
-            }
-            match (key.as_str(), value) {
-                ("DrSh", Value::Descriptor(d)) => {
-                    fx.extras.contours.drop_shadow = contour(d, "TrnS");
-                }
-                ("OrGl" | "OglD", Value::Descriptor(d)) => {
-                    fx.extras.contours.outer_glow = contour(d, "TrnS");
-                }
-                ("IrSh", Value::Descriptor(d)) => {
-                    if let Some(s) = shadow(d, scale) {
-                        fx.inner_shadow = Some(s.effect);
-                        fx.extras.contours.inner_shadow = s.contour;
-                        struck(unmapped, "inner shadow");
-                    }
-                }
-                ("IrGl", Value::Descriptor(d)) => {
-                    if let Some(mut glow) = via_psd("OrGl", d, scale).and_then(|e| e.outer_glow) {
-                        glow.source = match enumerated(d, "glwS") {
-                            Some("SrcC") => GlowSource::Center,
-                            _ => GlowSource::Edge,
-                        };
-                        fx.inner_glow = Some(glow);
-                        fx.extras.contours.inner_glow = contour(d, "TrnS");
-                        struck(unmapped, "inner glow");
-                    }
-                }
-                ("ebbl", Value::Descriptor(d)) => {
-                    if let Some(b) = bevel(d, scale) {
-                        fx.bevel_emboss = Some(b);
-                        // The gloss contour shades the bevel.
-                        fx.extras.contours.bevel = contour(d, "TrnS");
-                        struck(unmapped, "bevel and emboss");
-                    }
-                }
-                ("ChFX", Value::Descriptor(d)) => {
-                    if let Some(s) = satin(d, scale) {
-                        fx.satin = Some(s);
-                        struck(unmapped, "satin");
-                    }
-                }
-                ("GrFl" | "Grdf", Value::Descriptor(d)) => {
-                    if let Some(g) = gradient_overlay(d) {
-                        fx.gradient_overlay = Some(g);
-                        struck(unmapped, "gradient overlay");
-                    }
-                }
-                // Photoshop CC's repeated effects: the first instance is the
-                // primary slot, the rest are the style's extra instances.
-                ("dropShadowMulti" | "innerShadowMulti", list) => {
-                    let found: Vec<ShadowInstance> = multi(list)
-                        .into_iter()
-                        .filter_map(|d| shadow(d, scale))
-                        .collect();
-                    let mut found = found.into_iter();
-                    if let Some(first) = found.next() {
-                        if key == "dropShadowMulti" {
-                            fx.drop_shadow = Some(first.effect);
-                            fx.extras.contours.drop_shadow = first.contour;
-                            fx.extras.drop_shadows = found.collect();
-                        } else {
-                            fx.inner_shadow = Some(first.effect);
-                            fx.extras.contours.inner_shadow = first.contour;
-                            fx.extras.inner_shadows = found.collect();
-                        }
-                    }
-                    struck(unmapped, &unknown(key));
-                }
-                ("frameFXMulti", list) => {
-                    let mut found = multi(list)
-                        .into_iter()
-                        .filter_map(|d| via_psd("FrFX", d, scale)?.stroke);
-                    if let Some(first) = found.next() {
-                        fx.stroke = Some(first);
-                        fx.extras.strokes = found.collect();
-                    }
-                    struck(unmapped, &unknown(key));
-                }
-                ("solidFillMulti", list) => {
-                    let mut found = multi(list)
-                        .into_iter()
-                        .filter_map(|d| via_psd("SoFi", d, 1.0)?.color_overlay);
-                    if let Some(first) = found.next() {
-                        fx.color_overlay = Some(first);
-                        fx.extras.color_overlays = found.collect();
-                    }
-                    struck(unmapped, &unknown(key));
-                }
-                ("gradientFillMulti", list) => {
-                    let mut found = multi(list).into_iter().filter_map(gradient_overlay);
-                    if let Some(first) = found.next() {
-                        fx.gradient_overlay = Some(first);
-                        fx.extras.gradient_overlays = found.collect();
-                    }
-                    struck(unmapped, &unknown(key));
-                }
-                _ => {}
             }
         }
     }

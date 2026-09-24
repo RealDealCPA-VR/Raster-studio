@@ -14,7 +14,8 @@
 //!   layer is read as `f32`, filtered in the `f32` [`filters::FilterBuffer`]
 //!   and written back as `f32` tiles, never clipped;
 //! * File ▸ Export to `.tif`/`.tiff`, which writes a 32-bit float TIFF of the
-//!   linear composite ([`write_float_tiff`]);
+//!   linear composite ([`write_float_tiff`]), and (W11-H) to `.exr` — File ▸
+//!   Export and an Export As row at 100% alike — a 32-bit float OpenEXR of it;
 //! * the whole-layer remaps (Image ▸ Image Rotation 180°/Flip Canvas, the
 //!   layer flips), Edit ▸ Clear and Edit ▸ Fill, and Image ▸ Image Size,
 //!   which read, move and write `f32` samples ([`layer_rgbaf32`],
@@ -464,13 +465,20 @@ pub(crate) fn write_float_tiff(
     document: &Document,
     canvas: impl FnOnce() -> Result<compositor::Canvas, DocumentError>,
 ) -> Result<bool, DocumentError> {
-    if document.meta.bit_depth != 32 || format != raster::ExportFormat::Tiff {
+    // W11-H: and to `.exr`, a 32-bit float OpenEXR of the same linear
+    // composite (premultiplied, as OpenEXR defines alpha).
+    let exr = format == raster::ExportFormat::Exr;
+    if document.meta.bit_depth != 32 || !(exr || format == raster::ExportFormat::Tiff) {
         return Ok(false);
     }
     let canvas = canvas()?;
     let samples: Vec<f32> = canvas.to_straight().into_iter().flatten().collect();
-    let bytes =
-        raster::depth32::encode_tiff_rgbaf32(document.width(), document.height(), &samples)?;
+    let (w, h) = (document.width(), document.height());
+    let bytes = if exr {
+        raster::codec::formats::float::encode_exr_linear(w, h, &samples)?
+    } else {
+        raster::depth32::encode_tiff_rgbaf32(w, h, &samples)?
+    };
     crate::doc::write_atomically(path, &bytes).map_err(crate::import::ImportError::from)?;
     Ok(true)
 }

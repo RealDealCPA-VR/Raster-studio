@@ -191,6 +191,110 @@ impl SliceStore {
     }
 }
 
+// ---------------------------------------------------------------------------
+// W11-I: persistence. The slice set is saved in the `.rstudio` document
+// (`editor_core::Document::slices`) and restored from it, as Photopea keeps
+// slices in the file.
+// ---------------------------------------------------------------------------
+
+impl SliceStore {
+    /// W11-I: `document`'s set as the document file records it: each
+    /// rectangle with its name, URL and alt text, in slice order.
+    pub fn document_slices(&self, document: DocumentId) -> Vec<editor_core::slices::DocumentSlice> {
+        self.get(document)
+            .iter()
+            .zip(self.options(document))
+            .map(|(r, o)| editor_core::slices::DocumentSlice {
+                x: r.x,
+                y: r.y,
+                width: r.width,
+                height: r.height,
+                name: o.name.clone(),
+                url: o.url.clone(),
+                alt: o.alt.clone(),
+            })
+            .collect()
+    }
+
+    /// W11-I: take in the set a document file carried. Degenerate
+    /// rectangles are dropped; a blank name takes the Slice tool's name for
+    /// its position.
+    pub fn restore(&mut self, document: DocumentId, saved: &[editor_core::slices::DocumentSlice]) {
+        let kept: Vec<_> = saved
+            .iter()
+            .filter(|s| s.width > 0 && s.height > 0)
+            .collect();
+        let rects = kept
+            .iter()
+            .map(|s| PixelRect::new(s.x, s.y, s.width, s.height))
+            .collect();
+        let options = kept
+            .iter()
+            .enumerate()
+            .map(|(i, s)| SliceOptions {
+                name: name_or_default(&s.name, i),
+                url: s.url.clone(),
+                alt: s.alt.clone(),
+            })
+            .collect();
+        self.remember_with(document, rects, options);
+    }
+}
+
+/// W11-I: write the ACTIVE document's slice set into the document itself,
+/// so the next save carries it. Every slice action works on the active
+/// document, so only its record can have changed; another open document's
+/// record is never rewritten from the store (a document whose saved set the
+/// store had not loaded would otherwise lose it). A record that changes
+/// marks the document dirty (a new or edited slice set is an unsaved
+/// change, as in Photopea).
+pub fn persist_slices(editor: &mut Editor) {
+    let Some(id) = editor.active().map(OpenDocument::id) else {
+        return;
+    };
+    let record = editor.slices.document_slices(id);
+    let changed = editor
+        .active()
+        .is_some_and(|doc| doc.document.slices != record);
+    if changed {
+        // W11-E: through history, so every slice action is one undo step and
+        // the document is marked dirty the way any edit marks it.
+        editor.apply_command(editor_core::Command::SetSlices { slices: record });
+    }
+}
+
+/// W11-E: after an undo, a redo or a history jump the document's slice set
+/// may have moved under the editor's store; make the store show the
+/// document's set again (an empty set clears it).
+pub fn resync_active_slices(editor: &mut Editor) {
+    let Some((id, slices)) = editor.active().map(|d| (d.id(), d.document.slices.clone())) else {
+        return;
+    };
+    if editor.slices.document_slices(id) != slices {
+        editor.slices.restore(id, &slices);
+    }
+}
+
+/// W11-I: load the slices a document was saved with into the slice store,
+/// for every open document the store holds no set for yet. Returns how many
+/// documents got their slices back.
+pub fn restore_saved_slices(editor: &mut Editor) -> usize {
+    let mut restored = 0;
+    let saved: Vec<_> = editor
+        .documents()
+        .iter()
+        .filter(|d| !d.document.slices.is_empty())
+        .map(|d| (d.id(), d.document.slices.clone()))
+        .collect();
+    for (id, slices) in saved {
+        if editor.slices.get(id).is_empty() {
+            editor.slices.restore(id, &slices);
+            restored += 1;
+        }
+    }
+    restored
+}
+
 /// `name`, or the Slice tool's name for slice `index` (0-based) when blank.
 fn name_or_default(name: &str, index: usize) -> String {
     if name.trim().is_empty() {
@@ -212,6 +316,7 @@ pub fn delete_picked_slice(editor: &mut Editor) -> Option<Result<String, String>
     let index = editor.slices.picked(id)?;
     let name = editor.slices.options(id).get(index)?.name.clone();
     editor.slices.delete(id, index);
+    persist_slices(editor);
     let left = editor.slices.get(id).len();
     Some(Ok(format!("Deleted slice {name}; {left} slice(s) left")))
 }
@@ -225,7 +330,9 @@ pub fn set_slice_options(
 ) -> Result<String, String> {
     let doc = editor.active().ok_or("No document is open")?;
     let (id, doc_stem) = (doc.id(), document_stem(doc.title()));
+    restore_saved_slices(editor);
     editor.slices.set_options(id, &doc_stem, index, options)?;
+    persist_slices(editor);
     let name = editor.slices.options(id)[index].name.clone();
     Ok(format!("Slice {} is now named {name}", index + 1))
 }
@@ -321,10 +428,82 @@ pub fn remember_committed(editor: &mut Editor, slices: &[tools::Slice]) -> Strin
     editor
         .slices
         .remember_with(id, slices.iter().map(|s| s.rect).collect(), options);
+    persist_slices(editor);
     format!(
         "{} slice(s) defined; File > Export > Slices writes one file each",
         slices.len()
     )
+}
+
+/// W11-E: Layer ▸ New Layer Based Slice: a slice over the active layer's
+/// ink (its tight bounds, clipped to the canvas), added to the active
+/// document's set and named after the layer (numbered when another slice
+/// already exports under that name). The new slice is picked and the Slice
+/// Select tool raised, so it shows and Slice Options edits it next.
+///
+/// The new set reaches the document through [`persist_slices`], so it is one
+/// history step: Undo removes the slice.
+pub fn new_layer_based_slice(editor: &mut Editor) -> Result<String, String> {
+    let (id, stem, rect, layer_name) = {
+        let doc = editor.active().ok_or("No document is open")?;
+        let layer = doc.document.active_layer().ok_or("Select a layer first")?;
+        let ink = crate::tool_input::tight_document_bounds(&doc.document, &doc.tiles, layer)
+            .filter(|r| r.width > 0 && r.height > 0)
+            .ok_or("The layer has no pixels to slice")?;
+        let (w, h) = (doc.document.width() as i64, doc.document.height() as i64);
+        let x0 = ink.x.max(0);
+        let y0 = ink.y.max(0);
+        let x1 = (ink.x + ink.width as i64).min(w);
+        let y1 = (ink.y + ink.height as i64).min(h);
+        if x1 <= x0 || y1 <= y0 {
+            return Err("The layer's pixels lie outside the canvas".to_string());
+        }
+        let name = doc
+            .document
+            .layers
+            .get(layer)
+            .map(|l| l.name.clone())
+            .unwrap_or_default();
+        (
+            doc.id(),
+            document_stem(doc.title()),
+            PixelRect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32),
+            name,
+        )
+    };
+    restore_saved_slices(editor);
+    let mut rects = editor.slices.get(id).to_vec();
+    let mut options = editor.slices.options(id).to_vec();
+    if rects.contains(&rect) {
+        return Err("A slice already covers exactly this layer".to_string());
+    }
+    let number = rects.len() + 1;
+    let base = name_or_default(&layer_name, rects.len());
+    // The name exports as a file, so it must not collide with another
+    // slice's file (compared as `SliceStore::set_options` compares).
+    let taken = |name: &str| {
+        let stem_of = slice_file_stem(&stem, name, number);
+        options
+            .iter()
+            .enumerate()
+            .any(|(i, o)| slice_file_stem(&stem, &o.name, i + 1).eq_ignore_ascii_case(&stem_of))
+    };
+    let mut name = base.clone();
+    let mut n = 2;
+    while taken(&name) {
+        name = format!("{base} {n}");
+        n += 1;
+    }
+    rects.push(rect);
+    options.push(SliceOptions::named(name.clone()));
+    editor.slices.remember_with(id, rects, options);
+    persist_slices(editor);
+    editor.slices.set_picked(id, Some(number - 1));
+    editor.set_tool(tools::ToolId::SliceSelect);
+    Ok(format!(
+        "Slice {name} covers the layer ({} x {} at {}, {}); {number} slice(s)",
+        rect.width, rect.height, rect.x, rect.y
+    ))
 }
 
 /// W10-A: keep the set the Slice Select tool just edited on the active
@@ -334,7 +513,9 @@ pub fn remember_edited(editor: &mut Editor, slices: &[tools::Slice]) -> String {
     let Some(id) = editor.active().map(OpenDocument::id) else {
         return format!("{} slice(s), but no document is open", slices.len());
     };
+    restore_saved_slices(editor);
     editor.slices.remember_edited(id, slices);
+    persist_slices(editor);
     format!(
         "{} slice(s); File > Export > Slices writes one file each",
         slices.len()
@@ -344,6 +525,7 @@ pub fn remember_edited(editor: &mut Editor, slices: &[tools::Slice]) -> String {
 /// File ▸ Export ▸ Slices…: ask for a folder and write every committed slice
 /// of the active document into it.
 pub fn export_slices(editor: &mut Editor) -> Result<String, String> {
+    restore_saved_slices(editor);
     let doc = editor.active().ok_or("No document is open")?;
     let rects = editor.slices.get(doc.id()).to_vec();
     let options = editor.slices.options(doc.id()).to_vec();
@@ -556,6 +738,10 @@ fn unique_stem(stem: &str, taken: &mut std::collections::HashSet<String>) -> Str
     taken.insert(candidate.to_ascii_lowercase());
     candidate
 }
+
+#[cfg(test)]
+#[path = "w11i_slices_tests.rs"]
+mod w11i_slices_tests;
 
 #[cfg(test)]
 mod tests {

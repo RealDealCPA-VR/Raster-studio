@@ -133,7 +133,8 @@ pub fn touched_by(command: &Command) -> DirtyTiles {
         // a restyle's SetLayerKind members carry the dirtiness.
         | Command::SetDocumentExtras { .. }
         // W10-B: a stored alpha channel is a saved selection, not pixels.
-        | Command::SetSavedSelection { .. } => DirtyTiles::none(),
+        | Command::SetSavedSelection { .. }
+        | Command::SetSlices { .. } => DirtyTiles::none(),
         Command::Transaction { commands, .. } => {
             let mut out = DirtyTiles::none();
             for c in commands {

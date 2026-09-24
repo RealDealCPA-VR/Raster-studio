@@ -30,6 +30,9 @@
 use std::cell::RefCell;
 
 use crate::chrome::ChromeOutput;
+// W11-G: the sheet's rows, the palette's candidates, the chord picks.
+#[path = "dialog_host_w11g.rs"]
+mod w11g;
 use tools::ToolId;
 use ui::dialogs::{
     AdjustmentDialog, AdjustmentInvocation, ArbitraryRotationDialog, BrushEditorDialog,
@@ -38,6 +41,7 @@ use ui::dialogs::{
     ScreenSampler,
 };
 use ui::menu::AdjustmentId;
+pub(crate) use w11g::paint_chord_pick;
 
 /// W5-B: the `.cube` file Color Lookup's "Load" button asks for. A test sets
 /// [`PICKED_CUBE_FOR_TEST`] to stand in for the person at the file dialog, so
@@ -427,6 +431,10 @@ pub enum ActiveDialog {
     /// Select tool picked. Its confirmation is parked by
     /// `crate::slices_export` for the `SliceOptions` arm.
     SliceOptions(Box<ui::dialogs::SliceOptionsDialog>),
+    /// W11-G: Help > Keyboard Shortcut Sheet, built from the live keymap.
+    ShortcutSheet(Box<ui::dialogs::ShortcutSheet>),
+    /// W11-G: Help > Search Commands, over the rows enabled at open time.
+    CommandSearch(Box<ui::dialogs::CommandSearchDialog>),
 }
 
 impl ActiveDialog {
@@ -493,7 +501,10 @@ impl ActiveDialog {
             // W10-E: driven by `crate::file_extras::drive`.
             | Self::FileExtras(_)
             // W10-A: parks a `SliceOptionsSpec`.
-            | Self::SliceOptions(_) => DialogOutcome::Open,
+            | Self::SliceOptions(_)
+            // W11-G: answered by `DialogHost::ui` (dismissed / run).
+            | Self::ShortcutSheet(_)
+            | Self::CommandSearch(_) => DialogOutcome::Open,
         }
     }
 
@@ -523,6 +534,8 @@ impl ActiveDialog {
                 | Self::ImageGap(_)
                 | Self::FileExtras(_)
                 | Self::SliceOptions(_)
+                | Self::ShortcutSheet(_)
+                | Self::CommandSearch(_)
         )
     }
 }
@@ -539,6 +552,17 @@ pub struct DialogHost {
     color_target: Option<ui::panels::color::ColorWell>,
     /// Which tool the open gradient editor edits, when one does.
     gradient_target: Option<ToolId>,
+    /// W11-G: the command the palette ran, routed on the next frame (it
+    /// needs the editor, which [`DialogHost::ui`] does not have).
+    command_to_run: Option<ui::menu::MenuAction>,
+    /// W11-G: picks answered here with the editor in hand (a palette command
+    /// with no dialog, a layer-step or blend-mode chord), recorded into the
+    /// next [`DialogHost::ui`]'s output exactly as `Chrome::route` records.
+    routed: Vec<crate::menu_bridge::Pick>,
+    /// W11-G: the menu context the chrome built this frame, which the
+    /// command palette resolves its rows against (see
+    /// [`DialogHost::set_menu_context`]).
+    menu_context: Option<ui::MenuContext>,
 }
 
 impl DialogHost {
@@ -549,6 +573,16 @@ impl DialogHost {
             self.active.as_ref(),
             Some(ActiveDialog::Preferences(dialog)) if dialog.capturing().is_some()
         )
+    }
+
+    /// W11-G: the menu context `crate::menu_bridge::context` built this
+    /// frame. `Chrome::ui` hands it over before routing the frame's intents,
+    /// so Help > Search Commands enables exactly what the menu bar enables.
+    pub fn set_menu_context(&mut self, ctx: &ui::MenuContext) {
+        match &mut self.menu_context {
+            Some(held) => held.clone_from(ctx),
+            None => self.menu_context = Some(ctx.clone()),
+        }
     }
 
     /// Whether a modal is open this frame.
@@ -600,6 +634,33 @@ impl DialogHost {
         editor: &crate::Editor,
         load: Option<ui::SelectionLoadRequest>,
     ) -> bool {
+        match action {
+            // W11-G: Help > Keyboard Shortcut Sheet, from the live keymap.
+            ui::menu::MenuAction::ShortcutSheet => {
+                self.open(ActiveDialog::ShortcutSheet(Box::new(
+                    ui::dialogs::ShortcutSheet::new(w11g::sheet_rows(editor)),
+                )));
+                return true;
+            }
+            // W11-G: Help > Search Commands, over the rows enabled now.
+            ui::menu::MenuAction::CommandSearch => {
+                self.open(ActiveDialog::CommandSearch(Box::new(
+                    w11g::command_palette(editor, self.menu_context.as_ref()),
+                )));
+                return true;
+            }
+            // W11-G: the keyboard-only layer-step and blend-mode chords have
+            // no menu row and no `perform` arm: the editor is in hand here,
+            // so the target layer / mode is computed and the pick recorded
+            // on the next frame. A chord with nothing to act on does nothing.
+            ui::menu::MenuAction::SelectLayerStep(_)
+            | ui::menu::MenuAction::BlendModeChord(_)
+            | ui::menu::MenuAction::CycleBlendMode(_) => {
+                self.routed.extend(w11g::chord_pick(*action, editor));
+                return true;
+            }
+            _ => {}
+        }
         match action {
             // Edit ▸ Keyboard Shortcuts… is the Preferences dialog opened on
             // its Keymap page (W3-G). Answered here, where a menu click, the
@@ -1411,6 +1472,17 @@ impl DialogHost {
     /// that has the editor — composites once. The dialog's own encode counter
     /// shows the swap: one re-encode, then a steady frame encodes nothing.
     pub fn refresh_preview(&mut self, editor: &crate::Editor) {
+        // W11-G: the palette's command goes the road a menu click goes: the
+        // dialog it opens, or the pick the bridge answers.
+        if let Some(action) = self.command_to_run.take() {
+            if !self.open_for_menu_action_at(&action, editor, None) {
+                let intent = ui::Intent::Action(action);
+                match crate::menu_bridge::pick(&intent, editor) {
+                    Some(pick) => self.routed.push(pick),
+                    None => tracing::warn!("{}: the palette found no route", action.label()),
+                }
+            }
+        }
         if self.preview_seeded {
             return;
         }
@@ -1442,9 +1514,33 @@ impl DialogHost {
         sampler: Option<&dyn ScreenSampler>,
         out: &mut ChromeOutput,
     ) {
+        // W11-G: picks answered with the editor in hand last frame.
+        for pick in self.routed.drain(..) {
+            crate::menu_bridge::record(pick, out);
+        }
         let Some(active) = self.active.as_mut() else {
             return;
         };
+        // W11-G: the shortcut sheet is dismissed; the palette runs a command
+        // (routed next frame by `refresh_preview`, which has the editor).
+        if let ActiveDialog::ShortcutSheet(sheet) = active {
+            if sheet.show(ctx) {
+                self.active = None;
+            }
+            return;
+        }
+        if let ActiveDialog::CommandSearch(palette) = active {
+            match palette.show(ctx) {
+                ui::dialogs::CommandSearchOutcome::Open => {}
+                ui::dialogs::CommandSearchOutcome::Closed => self.active = None,
+                ui::dialogs::CommandSearchOutcome::Run(action) => {
+                    self.active = None;
+                    self.command_to_run = Some(action);
+                    ctx.request_repaint();
+                }
+            }
+            return;
+        }
         // The Adjustments dialog is applied through the menu's own route, not
         // through its `DialogAction`: the confirmed parameters are parked for
         // `menu_bridge::perform`, and the pick that reaches that arm rides

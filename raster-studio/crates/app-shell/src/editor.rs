@@ -646,6 +646,15 @@ pub struct Editor {
     embedded: Option<EmbeddedContents>,
     pending_conflict: Option<Conflict>,
     temporary_hand: bool,
+    /// W11-F: the tool a held modifier lends the pointer — Move under Ctrl,
+    /// the Eyedropper under Alt on a painting tool, Zoom under Ctrl/Alt+Space
+    /// — which [`Editor::effective_tool`] answers ahead of the hand. Set by
+    /// the shell from the keys it sees held; `None` when nothing is borrowed.
+    /// Held as `(selected, lent)`: a lend is answered only while `selected`
+    /// is still the selected tool, so a tool change made with the modifier
+    /// down (Ctrl+T picking Free Transform) is never shadowed by a lend
+    /// computed for the tool before it.
+    temporary_tool: Option<(ToolId, ToolId)>,
     quit_requested: bool,
     status: Option<String>,
 
@@ -698,6 +707,9 @@ pub struct Editor {
     /// The Slice tool's committed regions per document, for File > Export >
     /// Slices. See [`crate::slices_export`].
     pub(crate) slices: crate::slices_export::SliceStore,
+    /// W11-E: the last committed free transform's document-space affine,
+    /// what Edit > Transform > Again repeats. See [`Editor::last_transform`].
+    last_transform: Option<glam::Affine2>,
     /// Card 067: the style block Copy Layer Style captured — style fields
     /// ONLY (never position, masks, text, or asset identity), pasted by
     /// `paste_layer_style` as one wholesale `LayerPatch::effects` replace.
@@ -931,6 +943,7 @@ impl Editor {
             actions: Vec::new(),
             pending_conflict: None,
             temporary_hand: false,
+            temporary_tool: None,
             quit_requested: false,
             status: None,
             next_autosave: None,
@@ -942,6 +955,7 @@ impl Editor {
             clipboard: None,
             purge_armed: None,
             slices: crate::slices_export::SliceStore::default(),
+            last_transform: None,
             copied_style: None,
             edit_targets: crate::edit_target::EditTargets::default(),
             edit_sessions: crate::edit_session::EditSessions::default(),
@@ -2451,6 +2465,23 @@ impl Editor {
         Ok((active, origin))
     }
 
+    /// W11-E: the last committed free transform's document-space affine —
+    /// what Edit > Transform > Again repeats. A transform the tool committed
+    /// since the last read (`tools::transform::take_committed_affine`)
+    /// replaces the record first; Again itself leaves it as it is.
+    pub fn last_transform(&mut self) -> Option<glam::Affine2> {
+        if let Some(fresh) = tools::transform::take_committed_affine() {
+            self.last_transform = Some(fresh);
+        }
+        self.last_transform
+    }
+
+    /// W11-E: ask the file dialogs for a save path (Layer > Smart Object >
+    /// Convert to Linked writes the embedded source there).
+    pub(crate) fn pick_save_path(&mut self, suggested: &std::path::Path) -> Option<PathBuf> {
+        self.dialogs.pick_save_path(suggested)
+    }
+
     /// W10-I: Layer ▸ Smart Object ▸ Export Contents…: write the active smart
     /// object's source to a file the user picks — the embedded bytes exactly
     /// as they were placed (a PNG stays that PNG, a PSD that PSD), or, for a
@@ -2766,6 +2797,8 @@ impl Editor {
         let copy = self.docs[idx].duplicate(new_id);
         self.docs.push(copy);
         self.active = Some(self.docs.len() - 1);
+        // W11-I: the duplicate carries the original's slices.
+        crate::slices_export::restore_saved_slices(self);
         self.touch();
         Ok("Duplicated document".to_string())
     }
@@ -3824,6 +3857,7 @@ impl Editor {
             self.set_status(reason);
         }
         if moved > 0 {
+            crate::slices_export::resync_active_slices(self);
             self.touch();
         }
         moved
@@ -4053,9 +4087,13 @@ impl Editor {
             .unwrap_or_else(|| seeded_brush(tool))
     }
 
-    /// The tool that is actually acting, which is the hand while Space is held.
+    /// The tool that is actually acting: a tool a held modifier lends
+    /// ([`Editor::set_temporary_tool`], W11-F), else the hand while Space is
+    /// held, else the selected tool.
     pub fn effective_tool(&self) -> ToolId {
-        if self.temporary_hand {
+        if let Some(lent) = self.temporary_tool() {
+            lent
+        } else if self.temporary_hand {
             ToolId::Hand
         } else {
             self.tool
@@ -4183,6 +4221,30 @@ impl Editor {
 
     pub fn temporary_hand(&self) -> bool {
         self.temporary_hand
+    }
+
+    /// W11-F: the tool a held modifier is lending, if any.
+    pub fn temporary_tool(&self) -> Option<ToolId> {
+        self.temporary_tool
+            .filter(|(selected, _)| *selected == self.tool)
+            .map(|(_, lent)| lent)
+    }
+
+    /// W11-F: lend (or, with `None`, give back) a tool for as long as a
+    /// modifier is held. The selected tool is untouched, so releasing the
+    /// key returns to it. Reports whether the effective tool changed.
+    pub fn set_temporary_tool(&mut self, tool: Option<ToolId>) -> bool {
+        let lend = tool.map(|lent| (self.tool, lent));
+        if self.temporary_tool == lend {
+            return false;
+        }
+        let before = self.effective_tool();
+        self.temporary_tool = lend;
+        let changed = self.effective_tool() != before;
+        if changed {
+            self.touch();
+        }
+        changed
     }
 
     /// Space was released: give the previous tool back.
@@ -4424,6 +4486,8 @@ impl Editor {
         };
         self.docs.push(doc);
         self.active = Some(self.docs.len() - 1);
+        // W11-I: the slices the file was saved with reach the Slice tools.
+        crate::slices_export::restore_saved_slices(self);
         self.recent.record(path);
         let _ = self.recent.save(&self.paths.recent_file());
         self.status = Some(format!("Opened {}", path.display()));
@@ -4472,10 +4536,11 @@ impl Editor {
     pub fn open_paths(&mut self, paths: &[PathBuf]) -> Vec<DocumentId> {
         let mut opened = Vec::new();
         for path in paths {
-            // W9-N: a dropped resource file feeds its library, as File > Open
-            // does; it opens no tab.
-            if Self::is_resource_path(path) {
-                if let Err(e) = self.open_resource(path) {
+            // W11-D: a library file (brushes, styles, fonts, a `.cube`, the
+            // W9-N resources) feeds its library through the routing table
+            // File > Open uses; it opens no tab.
+            if let Some(result) = self.open_resource_file(path) {
+                if let Err(e) = result {
                     self.dialogs
                         .report_error("Cannot open this file", &e.to_string());
                     self.status = Some(format!("Could not open {}", path.display()));
@@ -4770,6 +4835,8 @@ impl Editor {
             || !self.content_aware_jobs.is_empty()
             // W10-K: Select Subject's worker (so an idle window still wakes).
             || crate::menu_bridge::subject_job::pending()
+            // W11-G: the Object Selection tool's worker, likewise.
+            || crate::tool_input::object_select::pending()
     }
 
     /// Apply every finished job of every kind. Once a frame.
@@ -4779,6 +4846,7 @@ impl Editor {
         self.poll_exports();
         crate::menu_bridge::content_aware_job::poll(self);
         crate::menu_bridge::subject_job::poll(self);
+        crate::tool_input::object_select::poll(self);
     }
 
     /// W2-G: apply every save that has finished, and refresh the status line
@@ -5224,6 +5292,8 @@ impl Editor {
             doc.invalidate_all();
             self.docs.push(doc);
             self.active = Some(self.docs.len() - 1);
+            // W11-I: a recovered document keeps its slices too.
+            crate::slices_export::restore_saved_slices(self);
             // Keep writing to the file it came from, so this run's autosaves do
             // not leave the previous run's copy behind for ever.
             self.autosaves.insert(id, autosave.clone());
@@ -5308,12 +5378,16 @@ impl Editor {
             | Action::ZoomFit
             | Action::ZoomActualPixels
             | Action::TemporaryHand
-            // Copy reads the canvas; Cut and Paste edit it. All three need a
-            // document — there is no canvas to copy from without one.
+            // Copy reads the canvas and Cut edits it: both need a document.
             | Action::Copy
             | Action::Cut
-            | Action::Paste
             | Action::NewLayer => doc.map(|_| ()).ok_or_else(no_doc),
+            // W11-D: Paste (Ctrl+V) with no document open makes one the size
+            // of the clipboard's image (Photopea), so it is not refused here.
+            // The perform reads the OS clipboard once, on the keypress, sizes
+            // the new document from that same read and pastes it; an
+            // empty clipboard lands on the status line with nothing created.
+            Action::Paste => Ok(()),
 
             Action::Undo => match doc {
                 None => Err(no_doc()),
@@ -5422,13 +5496,18 @@ impl Editor {
                     Ok(Effect::View)
                 }
             },
-            Action::Paste => match crate::menu_bridge::perform(ui::menu::MenuAction::Paste, self) {
-                Ok(_) => Ok(Effect::DocumentEdited),
-                Err(e) => {
-                    self.status = Some(e);
-                    Ok(Effect::View)
+            Action::Paste => {
+                // W11-D: with no document open the paste makes one first.
+                let had_document = self.active().is_some();
+                match crate::menu_bridge::perform(ui::menu::MenuAction::Paste, self) {
+                    Ok(_) if !had_document => Ok(Effect::DocumentSet),
+                    Ok(_) => Ok(Effect::DocumentEdited),
+                    Err(e) => {
+                        self.status = Some(e);
+                        Ok(Effect::View)
+                    }
                 }
-            },
+            }
             Action::Undo => self.act_undo(),
             Action::Redo => self.act_redo(),
             Action::NewLayer => self.act_new_layer(),
@@ -5576,17 +5655,12 @@ impl Editor {
         let Some(path) = self.dialogs.pick_open_file() else {
             return Err(ActionError::Cancelled(Action::Open));
         };
-        // W9-K: a font file is not a document - its faces load for the
-        // session and the Type tool's Font list offers its family.
-        if crate::dialogs::is_font_path(&path) {
-            self.load_font_file(&path)
-                .map_err(|e| ActionError::failed(Action::Open, e))?;
-            return Ok(Effect::Tool);
-        }
-        // W9-N: a resource file (patterns, gradients, shapes, swatches, a
-        // profile) feeds its library instead of opening as a picture.
-        if Self::is_resource_path(&path) {
-            return self.open_resource(&path);
+        // W11-D: fonts (W9-K), brushes (W9-E), styles (W9-H), a `.cube`
+        // and the W9-N resources (patterns, gradients, shapes, swatches, a
+        // profile) feed their libraries through the one routing table every
+        // open route shares; none of them is a document.
+        if let Some(result) = self.open_resource_file(&path) {
+            return result;
         }
         // W5-D: a pick inside a `.rstudio` package (its manifest) opens the
         // project — the import worker only decodes images, so the package
@@ -5595,20 +5669,6 @@ impl Editor {
             self.open_path(&package)
                 .map_err(|e| ActionError::failed(Action::Open, e))?;
             return Ok(Effect::DocumentSet);
-        }
-        // W9-E: a brush file adds brushes to the Brushes panel; it is not a
-        // document, so it never reaches the image import worker.
-        if Self::is_abr_path(&path) {
-            self.import_abr(&path)
-                .map_err(|e| ActionError::failed(Action::Open, e))?;
-            return Ok(Effect::Tool);
-        }
-        // W9-H: a style library adds its styles to the style presets (the
-        // Layer Style dialog's Styles grid); it is not a document either.
-        if crate::dialogs::is_style_library_path(&path) {
-            self.import_style_library(&path)
-                .map_err(|e| ActionError::failed(Action::Open, e))?;
-            return Ok(Effect::Tool);
         }
         // Card 087: the read and decode run off the interaction thread; the
         // document appears (or the failure is reported) when the shell polls
@@ -5808,6 +5868,8 @@ impl Editor {
         let notes = doc.psd_notes().clone();
         self.docs.push(doc);
         self.active = Some(self.docs.len() - 1);
+        // W11-I: the slices the file was saved with reach the Slice tools.
+        crate::slices_export::restore_saved_slices(self);
         self.recent.record(path);
         let _ = self.recent.save(&self.paths.recent_file());
         self.status = Some(format!("Opened {}", path.display()));
@@ -6108,6 +6170,7 @@ impl Editor {
         let undone = doc
             .undo()
             .map_err(|e| ActionError::failed(Action::Undo, e))?;
+        crate::slices_export::resync_active_slices(self);
         if !undone {
             // `can` said there was something; if that is no longer true the
             // state changed under us and saying so beats a silent no-op.
@@ -6125,6 +6188,7 @@ impl Editor {
         let redone = doc
             .redo()
             .map_err(|e| ActionError::failed(Action::Redo, e))?;
+        crate::slices_export::resync_active_slices(self);
         if !redone {
             return Err(ActionError::unavailable(
                 Action::Redo,
@@ -6605,6 +6669,11 @@ pub use actions_library::NamedAction;
 // W9-N: File > Open of a resource file (.pat .grd .csh .aco .ase .icc .atn).
 #[path = "resource_import.rs"]
 mod resource_import;
+
+// W11-D: one open route for every file (open_any), Paste with no document,
+// File > Revert.
+#[path = "editor_open_any.rs"]
+pub(crate) mod open_any;
 
 // W9-J: Export As rows marked Animated, for a document with `_a_` frame
 // layers — one frame per frame layer (Photopea's convention), written on a

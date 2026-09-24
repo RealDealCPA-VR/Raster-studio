@@ -526,6 +526,8 @@ fn body_of(
             doc,
             crate::panels::text_styles::StyleKind::Paragraph,
         ),
+        // W11-I: Window > CSS.
+        PanelId::Css => crate::panels::css::css_body(w, ui, doc),
     }
 }
 
@@ -577,6 +579,8 @@ fn layers_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, fill_bottom: Opti
         let mut hovered: Option<DropPosition> = None;
         for row in &rows {
             let response = layer_row(w, ui, row, &rows);
+            // W11-E: the row's colour label, a chip in its left margin.
+            color_label_chip(ui, doc, row.id, response.rect);
             // W7-E: a smart object's filter stack hangs under its row.
             smart_filter_rows(w, ui, doc, row);
             if let Some(position) = row_drag_position(w, ui, doc, row, &response) {
@@ -757,6 +761,33 @@ fn percent_slider(ui: &mut Ui, label: &str, value: &mut f32, id: egui::Id) -> eg
     let response = slider | field;
     super::mark(ui, response.rect, id);
     response
+}
+
+/// W11-E: the id the colour chip of `layer`'s row paints under, so a
+/// headless test can find the chip's rectangle.
+pub fn color_label_chip_id(layer: LayerId) -> egui::Id {
+    egui::Id::new(("raster-layer-color-label", layer))
+}
+
+/// W11-E: paint `layer`'s colour label (if it has one) as a chip filling the
+/// left margin of its row, `row_rect`: the strip the row's content leaves
+/// free. The label's colour is document data (the user's tag), which is why
+/// it is not a design token.
+fn color_label_chip(ui: &mut Ui, doc: &Document, layer: LayerId, row_rect: egui::Rect) {
+    let Some([r, g, b]) = doc.extras.color_label(layer).rgb() else {
+        return;
+    };
+    let chip = egui::Rect::from_min_size(
+        row_rect.left_top(),
+        Vec2::new(Space::XSmall.pt(), row_rect.height()),
+    );
+    // Registered (hover only) so the chip's rectangle is readable by id.
+    let _ = ui.interact(chip, color_label_chip_id(layer), Sense::hover());
+    ui.painter().rect_filled(
+        chip,
+        egui::Rounding::ZERO,
+        egui::Color32::from_rgba_unmultiplied(r, g, b, 255),
+    );
 }
 
 fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) -> egui::Response {

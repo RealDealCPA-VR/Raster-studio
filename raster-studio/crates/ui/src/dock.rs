@@ -59,6 +59,8 @@ pub enum PanelId {
     CharacterStyles,
     /// W10-B: named paragraph styles for text layers.
     ParagraphStyles,
+    /// W11-I: the CSS of the active layer, with a Copy button.
+    Css,
 }
 
 impl PanelId {
@@ -91,6 +93,8 @@ impl PanelId {
         PanelId::Notes,
         PanelId::CharacterStyles,
         PanelId::ParagraphStyles,
+        // W11-I: appended last for the same by-position reason.
+        PanelId::Css,
     ];
 
     /// Panel title, as shown on its header and in the Window menu.
@@ -118,6 +122,7 @@ impl PanelId {
             PanelId::Notes => "Notes",
             PanelId::CharacterStyles => "Character Styles",
             PanelId::ParagraphStyles => "Paragraph Styles",
+            PanelId::Css => "CSS",
         }
     }
 
@@ -146,6 +151,7 @@ impl PanelId {
             PanelId::Notes => "notes",
             PanelId::CharacterStyles => "character-styles",
             PanelId::ParagraphStyles => "paragraph-styles",
+            PanelId::Css => "css",
         }
     }
 }

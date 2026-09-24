@@ -49,6 +49,10 @@ pub struct DocumentExtras {
     pub style_links: Vec<StyleLink>,
     /// A saved selection currently open for editing as an alpha channel.
     pub alpha_edit: Option<AlphaEdit>,
+    /// W11-E: the Layers panel's colour labels, one row per labelled layer
+    /// (see [`crate::color_label`]). Appended; a document written before it
+    /// loads with no labels.
+    pub layer_colors: Vec<crate::color_label::LayerColorLabel>,
 }
 
 impl DocumentExtras {
