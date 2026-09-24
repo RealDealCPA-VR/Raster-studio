@@ -391,7 +391,7 @@ mod tests {
             ActiveDialog::ShortcutSheet(sheet) => {
                 let visible = sheet.visible();
                 assert_eq!(visible.len(), 1, "{visible:?}");
-                assert_eq!(visible[0].chord, "Ctrl+Shift+P");
+                assert_eq!(visible[0].chord, spell("Ctrl+Shift+P"));
             }
             _ => panic!("the sheet did not open"),
         }
