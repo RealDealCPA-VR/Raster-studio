@@ -365,6 +365,12 @@ pub enum FilterId {
     Maximum,
     Minimum,
     Offset,
+    // W10-C: Photopea's remaining filter rows. Camera Raw and Lens
+    // Correction are top-level Filter rows (see `FilterId::is_top_level`).
+    CameraRaw,
+    LensCorrection,
+    LightingEffects,
+    HsbHsl,
 }
 
 /// A submenu of the Filter menu.
@@ -463,6 +469,10 @@ impl FilterId {
         FilterId::Maximum,
         FilterId::Minimum,
         FilterId::Offset,
+        FilterId::CameraRaw,
+        FilterId::LensCorrection,
+        FilterId::LightingEffects,
+        FilterId::HsbHsl,
     ];
 
     pub const fn group(self) -> FilterGroup {
@@ -507,7 +517,8 @@ impl FilterId {
             | FilterId::DifferenceClouds
             | FilterId::Fibers
             | FilterId::GradientFill
-            | FilterId::LensFlare => FilterGroup::Render,
+            | FilterId::LensFlare
+            | FilterId::LightingEffects => FilterGroup::Render,
             FilterId::Diffuse
             | FilterId::Emboss
             | FilterId::Extrude
@@ -521,7 +532,11 @@ impl FilterId {
             | FilterId::HighPass
             | FilterId::Maximum
             | FilterId::Minimum
-            | FilterId::Offset => FilterGroup::Other,
+            | FilterId::Offset
+            | FilterId::HsbHsl => FilterGroup::Other,
+            // Top-level rows (`is_top_level`): catalogued under Other, drawn
+            // directly in the Filter menu and in no submenu.
+            FilterId::CameraRaw | FilterId::LensCorrection => FilterGroup::Other,
         }
     }
 
@@ -584,7 +599,18 @@ impl FilterId {
             FilterId::Maximum => "Maximum…",
             FilterId::Minimum => "Minimum…",
             FilterId::Offset => "Offset…",
+            FilterId::CameraRaw => "Camera Raw…",
+            FilterId::LensCorrection => "Lens Correction…",
+            FilterId::LightingEffects => "Lighting Effects…",
+            FilterId::HsbHsl => "HSB/HSL…",
         }
+    }
+
+    /// Whether the filter is a row of the Filter menu itself rather than of
+    /// its group's submenu — Camera Raw and Lens Correction, where Photopea
+    /// and Photoshop put them.
+    pub const fn is_top_level(self) -> bool {
+        matches!(self, FilterId::CameraRaw | FilterId::LensCorrection)
     }
 }
 
@@ -1201,6 +1227,58 @@ impl WarpTextItem {
     }
 }
 
+/// W10-I: a Layer ▸ Smart Object row beyond Edit / Replace / Commit.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub enum SmartObjectOp {
+    /// Write the object's source (its embedded bytes, or the linked file's)
+    /// to a file the user picks.
+    ExportContents,
+    /// A copy of the object with its OWN source: editing or replacing one
+    /// leaves the other alone (Duplicate Layer shares the source).
+    NewViaCopy,
+    /// Unpack the object into a group of ordinary layers in its place.
+    ConvertToLayers,
+    /// Point a linked object at another file.
+    RelinkToFile,
+}
+
+impl SmartObjectOp {
+    pub const ALL: &'static [SmartObjectOp] = &[
+        SmartObjectOp::NewViaCopy,
+        SmartObjectOp::ExportContents,
+        SmartObjectOp::RelinkToFile,
+        SmartObjectOp::ConvertToLayers,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            SmartObjectOp::ExportContents => "Export Contents…",
+            SmartObjectOp::NewViaCopy => "New Smart Object via Copy",
+            SmartObjectOp::ConvertToLayers => "Convert to Layers",
+            SmartObjectOp::RelinkToFile => "Relink to File…",
+        }
+    }
+}
+
+/// W10-I: a Layer ▸ Matting row — undo a matte the layer's edge pixels were
+/// composited against.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub enum MattingOp {
+    RemoveBlackMatte,
+    RemoveWhiteMatte,
+}
+
+impl MattingOp {
+    pub const ALL: &'static [MattingOp] = &[MattingOp::RemoveBlackMatte, MattingOp::RemoveWhiteMatte];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            MattingOp::RemoveBlackMatte => "Remove Black Matte",
+            MattingOp::RemoveWhiteMatte => "Remove White Matte",
+        }
+    }
+}
+
 /// A Layer ▸ Rasterize target.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum RasterizeTarget {
@@ -1646,11 +1724,10 @@ pub enum MenuAction {
     SelectAllLayers,
     DeselectLayers,
     ColorRange,
+    /// Select ▸ Subject (W10-K): the most salient region, found without a
+    /// neural model — saliency seeds and a GrabCut graph cut
+    /// (`selection::subject`), run on the job worker.
     SelectSubject,
-    // ^ Emitted by no menu: subject selection needs a segmentation model this
-    // build deliberately does not bundle, so the Select menu carries no item
-    // for it (a permanently disabled item would promise a capability the
-    // project has decided not to ship). Tier C in the parity matrix.
     Modify(ModifySelection),
     GrowSelection,
     SimilarSelection,
@@ -1713,6 +1790,27 @@ pub enum MenuAction {
     /// View ▸ Lock Guides: flip the document-level guide lock the canvas drag
     /// code honours (`ui::canvas` refuses to drag a guide while it is on).
     LockGuides,
+    // W10-J: the rest of Photoshop's View menu and its keyboard chords.
+    /// View > Snap To > All: every Snap To target on, as one step.
+    SnapToAll,
+    /// View > Snap To > None: every Snap To target off.
+    SnapToNone,
+    /// View > New Guide Layout...: columns, rows, gutters and margins as one
+    /// [`Command::SetGuides`].
+    NewGuideLayout,
+    /// View > New Guides from Shape: guides at the active shape layer's
+    /// bounds (edges and centres), one [`Command::SetGuides`].
+    NewGuidesFromShape,
+    /// Alt+Ctrl+T: duplicate the layer (or float a copy of the selection)
+    /// and free-transform the copy. No menu row; the chord reaches it.
+    DuplicateFreeTransform,
+    /// Shift+[ / Shift+]: step the painting tool's hardness by 25%
+    /// (`true` is harder). No menu row.
+    BrushHardness(bool),
+    /// The number keys: `1`..`9` set the painting tool's opacity to
+    /// 10%..90%, `0` to 100%; two digits typed quickly are an exact value.
+    /// Carries the digit. No menu row.
+    ToolOpacity(u8),
 
     // ---- Window --------------------------------------------------------
     ApplyLayout(LayoutId),
@@ -1727,6 +1825,27 @@ pub enum MenuAction {
     ExportDiagnostics,
     ReportIssue,
     About,
+
+    // ---- W10-I: Layer additions ------------------------------------------
+    /// Layer ▸ Smart Object ▸ Export Contents / New via Copy / Convert to
+    /// Layers / Relink to File.
+    SmartObject(SmartObjectOp),
+    /// Layer ▸ Matting ▸ Remove Black / White Matte.
+    Matting(MattingOp),
+    /// Layer ▸ Hide Layers: every selected layer's eye off, one undo step.
+    HideLayers,
+    /// Layer ▸ Show Layers: every selected layer's eye on, one undo step.
+    ShowLayers,
+    /// Layer ▸ Link Layers: chain the selected layers (or unchain them when
+    /// every one already is), one undo step.
+    LinkLayers,
+
+    // ---- W10-D: Filter > Vanishing Point ------------------------------------
+    /// Filter ▸ Vanishing Point… (W10-D): define a perspective plane by its
+    /// four corners, then clone-stamp or paste inside it with
+    /// perspective-correct scaling; the confirmed edit lands on the active
+    /// layer as one undo step.
+    VanishingPoint,
 }
 
 /// The outcome of asking whether an item can be used right now.
@@ -2297,6 +2416,7 @@ impl MenuAction {
             MenuAction::LastFilter,
             MenuAction::FilterGallery,
             MenuAction::Liquify,
+            MenuAction::VanishingPoint,
             MenuAction::ConvertForSmartFilters,
         ]);
         out.extend(
@@ -2320,7 +2440,15 @@ impl MenuAction {
             MenuAction::NewGuide,
             MenuAction::ClearGuides,
             MenuAction::LockGuides,
+            MenuAction::SnapToAll,
+            MenuAction::SnapToNone,
+            MenuAction::NewGuideLayout,
+            MenuAction::NewGuidesFromShape,
+            MenuAction::DuplicateFreeTransform,
+            MenuAction::BrushHardness(false),
+            MenuAction::BrushHardness(true),
         ]);
+        out.extend((0..=9u8).map(MenuAction::ToolOpacity));
         // ---- Window ----
         out.extend(LayoutId::ALL.iter().copied().map(MenuAction::ApplyLayout));
         out.extend(PanelId::ALL.iter().copied().map(MenuAction::TogglePanel));
@@ -2332,6 +2460,19 @@ impl MenuAction {
             MenuAction::ExportDiagnostics,
             MenuAction::ReportIssue,
             MenuAction::About,
+        ]);
+        // ---- W10-I: Layer additions ----
+        out.extend(
+            SmartObjectOp::ALL
+                .iter()
+                .copied()
+                .map(MenuAction::SmartObject),
+        );
+        out.extend(MattingOp::ALL.iter().copied().map(MenuAction::Matting));
+        out.extend([
+            MenuAction::HideLayers,
+            MenuAction::ShowLayers,
+            MenuAction::LinkLayers,
         ]);
         out
     }
@@ -2461,6 +2602,7 @@ impl MenuAction {
             MenuAction::LastFilter => "Last Filter".into(),
             MenuAction::FilterGallery => "Filter Gallery…".into(),
             MenuAction::Liquify => "Liquify…".into(),
+            MenuAction::VanishingPoint => "Vanishing Point…".into(),
             MenuAction::BlurGallery(kind) => kind.label().into(),
             MenuAction::PuppetWarp => "Puppet Warp".into(),
             MenuAction::ConvertForSmartFilters => "Convert for Smart Filters".into(),
@@ -2479,6 +2621,16 @@ impl MenuAction {
             MenuAction::NewGuide => "New Guide…".into(),
             MenuAction::ClearGuides => "Clear Guides".into(),
             MenuAction::LockGuides => "Lock Guides".into(),
+            MenuAction::SnapToAll => "All".into(),
+            MenuAction::SnapToNone => "None".into(),
+            MenuAction::NewGuideLayout => "New Guide Layout…".into(),
+            MenuAction::NewGuidesFromShape => "New Guides from Shape".into(),
+            MenuAction::DuplicateFreeTransform => "Free Transform a Copy".into(),
+            MenuAction::BrushHardness(false) => "Softer Brush".into(),
+            MenuAction::BrushHardness(true) => "Harder Brush".into(),
+            MenuAction::ToolOpacity(digit) => {
+                format!("Opacity {}%", opacity_of_digit(digit))
+            }
 
             MenuAction::ApplyLayout(l) => l.title().into(),
             MenuAction::TogglePanel(p) => p.title().into(),
@@ -2489,6 +2641,12 @@ impl MenuAction {
             MenuAction::ExportDiagnostics => "Export Diagnostics…".into(),
             MenuAction::ReportIssue => "Report an Issue".into(),
             MenuAction::About => "About Raster Studio".into(),
+            // W10-I
+            MenuAction::SmartObject(op) => op.label().into(),
+            MenuAction::Matting(op) => op.label().into(),
+            MenuAction::HideLayers => "Hide Layers".into(),
+            MenuAction::ShowLayers => "Show Layers".into(),
+            MenuAction::LinkLayers => "Link Layers".into(),
         }
     }
 
@@ -2587,6 +2745,20 @@ impl MenuAction {
             MenuAction::ToggleView(ViewFlag::Grid) => Shortcut::ctrl_key(Key::Quote),
             MenuAction::ToggleView(ViewFlag::Guides) => Shortcut::ctrl_key(Key::Semicolon),
             MenuAction::ToggleView(ViewFlag::Snap) => Shortcut::ctrl_shift_key(Key::Semicolon),
+            // W10-J: Photoshop's (and Photopea's) remaining View / tool chords.
+            MenuAction::ToggleView(ViewFlag::Extras) => Shortcut::ctrl('h'),
+            MenuAction::DuplicateFreeTransform => Shortcut::ctrl_alt('t'),
+            MenuAction::BrushHardness(harder) => Shortcut {
+                shift: true,
+                ..Shortcut::bare(if harder {
+                    Key::RightBracket
+                } else {
+                    Key::LeftBracket
+                })
+            },
+            MenuAction::ToolOpacity(digit) if digit <= 9 => {
+                Shortcut::bare(Key::character(char::from(b'0' + digit)))
+            }
 
             MenuAction::TogglePanel(PanelId::Brushes) => Shortcut::bare(Key::F(5)),
             MenuAction::TogglePanel(PanelId::Color) => Shortcut::bare(Key::F(6)),
@@ -3095,6 +3267,7 @@ impl MenuAction {
             MenuAction::FilterGallery
             | MenuAction::Filter(_)
             | MenuAction::Liquify
+            | MenuAction::VanishingPoint
             | MenuAction::BlurGallery(_)
             | MenuAction::PuppetWarp => match ctx.need_editable_pixels() {
                 Ok(_) => act(self),
@@ -3149,6 +3322,42 @@ impl MenuAction {
                     },
                 }),
             ),
+            // W10-J: Snap To > All / None set the five targets at once; a
+            // click that would change nothing is greyed with the reason.
+            MenuAction::SnapToAll => gate(
+                ctx.need_document().or(ViewFlag::SNAP_TO
+                    .iter()
+                    .all(|f| ctx.view.get(*f))
+                    .then_some("Every snap target is already on")),
+                act(self),
+            ),
+            MenuAction::SnapToNone => gate(
+                ctx.need_document().or((!ViewFlag::SNAP_TO
+                    .iter()
+                    .any(|f| ctx.view.get(*f)))
+                .then_some("No snap target is on")),
+                act(self),
+            ),
+            MenuAction::NewGuideLayout => gate(ctx.need_document(), act(self)),
+            MenuAction::NewGuidesFromShape => match ctx.need_layer() {
+                Ok(l) if l.class == LayerClass::Shape => act(self),
+                Ok(_) => Resolution::Disabled("The active layer is not a shape layer"),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::DuplicateFreeTransform => match ctx.need_layer() {
+                Ok(l) if l.locked.blocks_transform() => {
+                    Resolution::Disabled("The layer's position is locked")
+                }
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            // The painting tool's own settings: no document needed, and the
+            // application refuses (with the reason) a tool that has no brush.
+            MenuAction::BrushHardness(_) => act(self),
+            MenuAction::ToolOpacity(digit) => gate(
+                (digit > 9).then_some("Opacity keys are the digits 0 to 9"),
+                act(self),
+            ),
 
             // ---- Window ----------------------------------------------------
             MenuAction::ApplyLayout(layout) => Resolution::Enabled(Intent::ApplyLayout(layout)),
@@ -3167,6 +3376,38 @@ impl MenuAction {
             | MenuAction::ExportDiagnostics
             | MenuAction::ReportIssue
             | MenuAction::About => act(self),
+
+            // ---- W10-I: Layer additions ------------------------------------
+            MenuAction::SmartObject(_) => match ctx.need_layer() {
+                Ok(l) if l.class == LayerClass::SmartObject => act(self),
+                Ok(_) => Resolution::Disabled("The active layer is not a smart object"),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::Matting(_) => match ctx.need_editable_pixels() {
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::HideLayers => match ctx.need_layer() {
+                Ok(l) if !l.visible && ctx.selected_layers <= 1 => {
+                    Resolution::Disabled("The layer is already hidden")
+                }
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::ShowLayers => match ctx.need_layer() {
+                Ok(l) if l.visible && ctx.selected_layers <= 1 => {
+                    Resolution::Disabled("The layer is already showing")
+                }
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::LinkLayers => match ctx.need_layer() {
+                Ok(_) if ctx.selected_layers < 2 => {
+                    Resolution::Disabled("Select two or more layers to link")
+                }
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
         }
     }
 }
@@ -3280,6 +3521,28 @@ fn resolve_rasterize(target: RasterizeTarget, ctx: &MenuContext) -> Resolution {
             RasterizeTarget::SmartObject => "The active layer is not a smart object",
             RasterizeTarget::AllLayers => unreachable!("handled above"),
         })
+    }
+}
+
+/// W10-J: the opacity percent one number key means on its own — `1`..`9`
+/// are 10%..90% and `0` is 100%, Photoshop's table.
+pub const fn opacity_of_digit(digit: u8) -> u8 {
+    match digit {
+        0 => 100,
+        d if d <= 9 => d * 10,
+        _ => 100,
+    }
+}
+
+/// W10-J: the opacity two number keys typed quickly mean together — the
+/// exact percent they spell (`5` `5` is 55%, `0` `5` is 5%, `0` `0` is 0%),
+/// Photoshop's second-digit rule.
+pub const fn opacity_of_two_digits(first: u8, second: u8) -> u8 {
+    let v = (first as u16) * 10 + second as u16;
+    if v > 100 {
+        100
+    } else {
+        v as u8
     }
 }
 
@@ -3519,6 +3782,9 @@ fn layer_menu() -> Menu {
             item(MenuAction::DeleteLayer),
             item(MenuAction::RenameLayer),
             Entry::submenu("Lock", items(LayerLock::ALL, MenuAction::LockLayer)),
+            // W10-I: Photopea's Hide Layers / Show Layers.
+            item(MenuAction::HideLayers),
+            item(MenuAction::ShowLayers),
             Entry::Separator,
             Entry::submenu("Layer Mask", items(MaskOp::ALL, MenuAction::Mask)),
             Entry::submenu(
@@ -3527,6 +3793,8 @@ fn layer_menu() -> Menu {
             ),
             item(MenuAction::RefineMask),
             item(MenuAction::RemoveColorFringe),
+            // W10-I: Layer ▸ Matting.
+            Entry::submenu("Matting", items(MattingOp::ALL, MenuAction::Matting)),
             item(MenuAction::CreateClippingMask),
             item(MenuAction::ReleaseClippingMask),
             Entry::Separator,
@@ -3549,6 +3817,12 @@ fn layer_menu() -> Menu {
                     item(MenuAction::EditSmartObjectContents),
                     item(MenuAction::ReplaceContents),
                     item(MenuAction::CommitSmartObjectContents),
+                    // W10-I: the rest of Photopea's Smart Object submenu.
+                    Entry::Separator,
+                    item(MenuAction::SmartObject(SmartObjectOp::NewViaCopy)),
+                    item(MenuAction::SmartObject(SmartObjectOp::ExportContents)),
+                    item(MenuAction::SmartObject(SmartObjectOp::RelinkToFile)),
+                    item(MenuAction::SmartObject(SmartObjectOp::ConvertToLayers)),
                 ],
             ),
             Entry::submenu(
@@ -3576,6 +3850,7 @@ fn layer_menu() -> Menu {
             Entry::Separator,
             item(MenuAction::GroupLayers),
             item(MenuAction::UngroupLayers),
+            item(MenuAction::LinkLayers),
             Entry::submenu("Arrange", items(Arrange::ALL, MenuAction::ArrangeLayer)),
             Entry::submenu("Align", items(AlignEdge::ALL, MenuAction::AlignLayers)),
             Entry::submenu(
@@ -3604,10 +3879,9 @@ fn select_menu() -> Menu {
             item(MenuAction::DeselectLayers),
             Entry::Separator,
             item(MenuAction::ColorRange),
-            // Select Subject deliberately has no menu item: this build ships
-            // no segmentation model, and an item permanently disabled for a
-            // capability the project has decided not to ship would lie about
-            // the product. The capability stays on the deferred list.
+            // W10-K: back as a classical pipeline (saliency + GrabCut, no
+            // model); see `selection::subject` for what it can and cannot see.
+            item(MenuAction::SelectSubject),
             Entry::Separator,
             Entry::submenu("Modify", items(ModifySelection::ALL, MenuAction::Modify)),
             item(MenuAction::GrowSelection),
@@ -3629,12 +3903,19 @@ fn select_menu() -> Menu {
 pub const SMART_FILTERS_ALREADY: &str =
     "The layer is already a smart object: filters applied to it are smart filters";
 
+/// W10-D: Filter ▸ Vanishing Point's name, shared by the menu row and the
+/// dialog title.
+pub const VANISHING_POINT_TITLE: &str = "Vanishing Point";
+
 fn filter_menu() -> Menu {
     let mut entries = vec![
         item(MenuAction::LastFilter),
         Entry::Separator,
         item(MenuAction::FilterGallery),
+        item(MenuAction::Filter(FilterId::CameraRaw)),
+        item(MenuAction::Filter(FilterId::LensCorrection)),
         item(MenuAction::Liquify),
+        item(MenuAction::VanishingPoint),
         Entry::submenu(
             "Blur Gallery",
             items(
@@ -3651,7 +3932,7 @@ fn filter_menu() -> Menu {
             group.label(),
             FilterId::ALL
                 .iter()
-                .filter(|f| f.group() == *group)
+                .filter(|f| f.group() == *group && !f.is_top_level())
                 .map(|f| item(MenuAction::Filter(*f)))
                 .collect(),
         ));
@@ -3673,12 +3954,29 @@ fn view_menu() -> Menu {
         items(crate::dialogs::units::Unit::ALL, MenuAction::SetRulerUnit),
     ));
     entries.push(Entry::Separator);
-    entries.extend(items(ViewFlag::ALL, MenuAction::ToggleView));
+    // W10-J: the Show and Snap To flags have submenus of their own below.
+    entries.extend(
+        ViewFlag::ALL
+            .iter()
+            .filter(|f| !f.in_submenu())
+            .map(|f| item(MenuAction::ToggleView(*f))),
+    );
+    entries.push(Entry::submenu(
+        "Show",
+        vec![item(MenuAction::ToggleView(ViewFlag::Slices))],
+    ));
+    let mut snap_to = items(ViewFlag::SNAP_TO, MenuAction::ToggleView);
+    snap_to.push(Entry::Separator);
+    snap_to.push(item(MenuAction::SnapToAll));
+    snap_to.push(item(MenuAction::SnapToNone));
+    entries.push(Entry::submenu("Snap To", snap_to));
     // Guides are a document feature (persisted, undoable through
     // `Command::SetGuides`), so their rows sit beside the Guides overlay
     // toggle rather than in a document menu.
     entries.push(Entry::Separator);
     entries.push(item(MenuAction::NewGuide));
+    entries.push(item(MenuAction::NewGuideLayout));
+    entries.push(item(MenuAction::NewGuidesFromShape));
     entries.push(item(MenuAction::ClearGuides));
     entries.push(item(MenuAction::LockGuides));
     Menu {
@@ -4197,6 +4495,50 @@ mod tests {
         assert!(!MenuAction::Filter(FilterId::GaussianBlur)
             .resolve(&ctx_with_layer(&doc, smart))
             .is_enabled());
+    }
+
+    /// W10-C: Camera Raw and Lens Correction are rows of the Filter menu
+    /// itself (and of no submenu); Lighting Effects is under Render and
+    /// HSB/HSL under Other, each once.
+    #[test]
+    fn w10c_filter_rows_sit_where_photopea_puts_them() {
+        let menu = filter_menu();
+        let top: Vec<MenuAction> = menu
+            .entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Item(a) => Some(*a),
+                _ => None,
+            })
+            .collect();
+        for id in [FilterId::CameraRaw, FilterId::LensCorrection] {
+            assert!(id.is_top_level());
+            assert!(top.contains(&MenuAction::Filter(id)), "{id:?} is not a top-level row");
+        }
+        let submenu = |label: &str| -> Vec<MenuAction> {
+            menu.entries
+                .iter()
+                .find_map(|e| match e {
+                    Entry::Submenu { label: l, entries } if *l == label => Some(
+                        entries
+                            .iter()
+                            .filter_map(|e| match e {
+                                Entry::Item(a) => Some(*a),
+                                _ => None,
+                            })
+                            .collect(),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no {label} submenu"))
+        };
+        assert!(submenu("Render").contains(&MenuAction::Filter(FilterId::LightingEffects)));
+        assert!(submenu("Other").contains(&MenuAction::Filter(FilterId::HsbHsl)));
+        assert!(!submenu("Other").contains(&MenuAction::Filter(FilterId::CameraRaw)));
+        assert_eq!(FilterId::CameraRaw.label(), "Camera Raw…");
+        assert_eq!(FilterId::LensCorrection.label(), "Lens Correction…");
+        assert_eq!(FilterId::LightingEffects.label(), "Lighting Effects…");
+        assert_eq!(FilterId::HsbHsl.label(), "HSB/HSL…");
     }
 
     /// The Photopea rows the parity audit found missing are in the submenu

@@ -225,6 +225,24 @@ pub enum ViewFlag {
     /// Swap the pictorial cursors — the brush ring, the bucket — for a
     /// crosshair, for work that needs the exact pixel.
     PreciseCursor,
+    // W10-J: appended (bit positions follow `ALL`, so older flags keep theirs).
+    /// View > Extras (Ctrl+H): the master switch over every overlay
+    /// [`ViewFlag::is_extra`] names. Off hides them all at once while each
+    /// keeps its own tick, so turning Extras back on restores exactly the set
+    /// that was showing.
+    Extras,
+    /// View > Show > Slices: the committed Slice-tool regions on the canvas.
+    Slices,
+    /// View > Snap To > Guides.
+    SnapToGuides,
+    /// View > Snap To > Grid (only while the grid is showing).
+    SnapToGrid,
+    /// View > Snap To > Layers: other layers' edges and centres.
+    SnapToLayers,
+    /// View > Snap To > Document Bounds: the canvas edges and centre.
+    SnapToBounds,
+    /// View > Snap To > Slices (only while slices are showing).
+    SnapToSlices,
 }
 
 impl ViewFlag {
@@ -243,7 +261,51 @@ impl ViewFlag {
         ViewFlag::FlipHorizontal,
         ViewFlag::FlipVertical,
         ViewFlag::PreciseCursor,
+        ViewFlag::Extras,
+        ViewFlag::Slices,
+        ViewFlag::SnapToGuides,
+        ViewFlag::SnapToGrid,
+        ViewFlag::SnapToLayers,
+        ViewFlag::SnapToBounds,
+        ViewFlag::SnapToSlices,
     ];
+
+    /// W10-J: the View > Snap To submenu's targets, in Photoshop's order.
+    pub const SNAP_TO: &'static [ViewFlag] = &[
+        ViewFlag::SnapToGuides,
+        ViewFlag::SnapToGrid,
+        ViewFlag::SnapToLayers,
+        ViewFlag::SnapToSlices,
+        ViewFlag::SnapToBounds,
+    ];
+
+    /// W10-J: the overlays View > Extras hides at once.
+    pub const fn is_extra(self) -> bool {
+        matches!(
+            self,
+            ViewFlag::Guides
+                | ViewFlag::SmartGuides
+                | ViewFlag::Grid
+                | ViewFlag::PixelGrid
+                | ViewFlag::SelectionEdges
+                | ViewFlag::LayerEdges
+                | ViewFlag::Slices
+        )
+    }
+
+    /// W10-J: whether the flag's row lives in a View submenu (Show, Snap To)
+    /// rather than in the flat list of toggles.
+    pub const fn in_submenu(self) -> bool {
+        matches!(
+            self,
+            ViewFlag::Slices
+                | ViewFlag::SnapToGuides
+                | ViewFlag::SnapToGrid
+                | ViewFlag::SnapToLayers
+                | ViewFlag::SnapToBounds
+                | ViewFlag::SnapToSlices
+        )
+    }
 
     /// Menu label.
     pub const fn label(self) -> &'static str {
@@ -261,6 +323,13 @@ impl ViewFlag {
             ViewFlag::FlipHorizontal => "Flip View Horizontal",
             ViewFlag::FlipVertical => "Flip View Vertical",
             ViewFlag::PreciseCursor => "Precise Cursor",
+            ViewFlag::Extras => "Extras",
+            ViewFlag::Slices => "Slices",
+            ViewFlag::SnapToGuides => "Guides",
+            ViewFlag::SnapToGrid => "Grid",
+            ViewFlag::SnapToLayers => "Layers",
+            ViewFlag::SnapToBounds => "Document Bounds",
+            ViewFlag::SnapToSlices => "Slices",
         }
     }
 }
@@ -271,7 +340,7 @@ impl ViewFlag {
 /// [`ViewFlag::ALL`] and a new flag cannot be forgotten in the menu builder.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct ViewFlags {
-    bits: u16,
+    bits: u32,
 }
 
 impl ViewFlags {
@@ -287,13 +356,29 @@ impl ViewFlags {
             ViewFlag::Snap,
             ViewFlag::SelectionEdges,
             ViewFlag::LayerEdges,
+            // W10-J: Extras on, slices shown, every Snap To target on —
+            // Photoshop's fresh-install View menu.
+            ViewFlag::Extras,
+            ViewFlag::Slices,
+            ViewFlag::SnapToGuides,
+            ViewFlag::SnapToGrid,
+            ViewFlag::SnapToLayers,
+            ViewFlag::SnapToBounds,
+            ViewFlag::SnapToSlices,
         ] {
             f.set(flag, true);
         }
         f
     }
 
-    fn mask(flag: ViewFlag) -> u16 {
+    /// W10-J: whether `flag`'s overlay is actually drawn: its own tick, and
+    /// for an [extra](ViewFlag::is_extra) View > Extras as well. The menu's
+    /// checkmark reads [`ViewFlags::get`]; every painter reads this.
+    pub fn shows(self, flag: ViewFlag) -> bool {
+        self.get(flag) && (!flag.is_extra() || self.get(ViewFlag::Extras))
+    }
+
+    fn mask(flag: ViewFlag) -> u32 {
         let index = ViewFlag::ALL
             .iter()
             .position(|f| *f == flag)

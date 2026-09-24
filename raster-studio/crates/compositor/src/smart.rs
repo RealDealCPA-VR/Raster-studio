@@ -198,6 +198,24 @@ pub fn take_edit_request() -> Option<EditRequest> {
     EDIT_REQUEST.with(|r| r.take())
 }
 
+/// W10-I: the stack with the filter at `from` moved to `to` — the Layers
+/// panel's drag of a smart-filter row onto another. Both are stack indices
+/// (bottom, first applied, = 0), and every other filter keeps its relative
+/// order. `None` when the move changes nothing or either index is outside
+/// the stack, so a drop on the row it started from emits no command.
+///
+/// Order is part of the result: filters do not commute (a blur then a
+/// sharpen is not a sharpen then a blur), which is why the drag exists.
+pub fn move_filter(stack: &[SmartFilter], from: usize, to: usize) -> Option<Vec<SmartFilter>> {
+    if from == to || from >= stack.len() || to >= stack.len() {
+        return None;
+    }
+    let mut next = stack.to_vec();
+    let moved = next.remove(from);
+    next.insert(to, moved);
+    Some(next)
+}
+
 /// How many filtered extents the cache keeps.
 const CACHE_ENTRIES: usize = 8;
 
@@ -567,5 +585,44 @@ mod composite_tests {
         let after = warm(&t);
         assert_eq!(after, cold(&t));
         assert!(after.get(255, 100)[0] < before.get(255, 100)[0]);
+    }
+
+    /// W10-I: dragging a smart-filter row reorders the stack through
+    /// [`move_filter`], and the compositor renders the new order. Invert and
+    /// Brighten do not commute on a grey source (Invert then Brighten is
+    /// min(2(1 - g), 1); Brighten then Invert is 1 - min(2g, 1)), so the two
+    /// orders give two composites; moving back restores the first exactly.
+    #[test]
+    fn a_reordered_stack_renders_in_its_new_order() {
+        test_runner::install();
+        let (mut t, id) = edge_doc();
+        t.paint_tile(id, TileCoord::new(0, 0, 0), [64, 64, 64, 255]);
+        let named = |key: &str| SmartFilter::new(key, BTreeMap::new());
+        let stack = vec![named("Invert"), named("Brighten")];
+        // Moving a filter onto itself, or past either end, is no move.
+        assert_eq!(move_filter(&stack, 1, 1), None);
+        assert_eq!(move_filter(&stack, 0, 2), None);
+        assert_eq!(move_filter(&stack, 2, 0), None);
+
+        set_stack(&mut t, id, stack.clone());
+        let invert_first = left_tile(&t).get(10, 100)[0];
+
+        let moved = move_filter(&stack, 1, 0).expect("a real move");
+        assert_eq!(moved[0].filter, "Brighten");
+        assert_eq!(moved[1].filter, "Invert");
+        set_stack(&mut t, id, moved.clone());
+        let brighten_first = left_tile(&t).get(10, 100)[0];
+        assert!(
+            (invert_first - brighten_first).abs() > 0.1,
+            "the order must change the pixel: {invert_first} vs {brighten_first}"
+        );
+
+        set_stack(&mut t, id, move_filter(&moved, 0, 1).expect("and back"));
+        assert_eq!(left_tile(&t).get(10, 100)[0], invert_first);
+        assert_eq!(
+            t.doc.layer_tiles(id).map(|m| m.iter().count()),
+            Some(2),
+            "reordering never touches the source tiles"
+        );
     }
 }

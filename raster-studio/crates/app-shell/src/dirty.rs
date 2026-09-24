@@ -128,7 +128,10 @@ pub fn touched_by(command: &Command) -> DirtyTiles {
         // Card 069: the replace's asset-row swap is bookkeeping the same way
         // the recorded size is — it always rides inside a replace Transaction
         // whose PaintTiles/TransformLayer members carry the dirtiness.
-        | Command::ReplaceAssetSource { .. } => DirtyTiles::none(),
+        | Command::ReplaceAssetSource { .. }
+        // W10-B: layer comps, notes and text styles are records, not pixels;
+        // a restyle's SetLayerKind members carry the dirtiness.
+        | Command::SetDocumentExtras { .. } => DirtyTiles::none(),
         Command::Transaction { commands, .. } => {
             let mut out = DirtyTiles::none();
             for c in commands {

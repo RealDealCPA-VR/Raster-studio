@@ -362,6 +362,67 @@ pub fn arrow(from: Point, to: Point, style: ArrowStyle) -> Path {
     p
 }
 
+/// W10-A: the largest number of turns [`spiral`] draws.
+pub const SPIRAL_MAX_TURNS: f64 = 50.0;
+
+/// W10-A: the samples [`spiral`] places per turn on each edge of its band.
+const SPIRAL_SAMPLES_PER_TURN: f64 = 96.0;
+
+/// W10-A: a filled Archimedean spiral — the Spiral shape tool's geometry.
+///
+/// The centre line winds `turns` times from `inner` (a fraction `0..1` of the
+/// outer radius) out to the ellipse with semi-axes `radii` about `center`, so
+/// a drag box's inscribed ellipse bounds it. The filled band grows from zero
+/// width at the start to half the spacing between arms at the outer end, so
+/// neighbouring arms never touch. `clockwise` is the direction the arm winds
+/// outward on screen (y down); the other direction is its mirror image.
+///
+/// Emitted in positive orientation, like every primitive here. Degenerate
+/// input (non-finite, a non-positive radius, fewer than a quarter turn) gives
+/// an empty path; `inner` is clamped into `0..=0.95` and `turns` to
+/// [`SPIRAL_MAX_TURNS`].
+pub fn spiral(center: Point, radii: Point, inner: f64, turns: f64, clockwise: bool) -> Path {
+    if !center.is_finite()
+        || !radii.is_finite()
+        || radii.x <= 0.0
+        || radii.y <= 0.0
+        || !inner.is_finite()
+        || !turns.is_finite()
+        || turns < 0.25
+    {
+        return Path::new();
+    }
+    let turns = turns.min(SPIRAL_MAX_TURNS);
+    let inner = inner.clamp(0.0, 0.95);
+    let span = TAU * turns;
+    // The distance between neighbouring arms, in unit-circle terms.
+    let spacing = (1.0 - inner) / turns;
+    let n = ((SPIRAL_SAMPLES_PER_TURN * turns).ceil() as usize).max(8);
+    let sign = if clockwise { 1.0 } else { -1.0 };
+    let at = |t: f64, r: f64| {
+        let a = sign * span * t - FRAC_PI_2;
+        center + point(a.cos() * r * radii.x, a.sin() * r * radii.y)
+    };
+    let mut verts = Vec::with_capacity(2 * n + 2);
+    // The outer edge, from the start outward...
+    for i in 0..=n {
+        let t = i as f64 / n as f64;
+        verts.push(at(t, inner + (1.0 - inner) * t));
+    }
+    // ...and the inner edge back to the start, the band tapering to nothing.
+    for i in (0..n).rev() {
+        let t = i as f64 / n as f64;
+        let r = inner + (1.0 - inner) * t - 0.5 * spacing * t;
+        verts.push(at(t, r.max(0.0)));
+    }
+    let path = Path::from_polyline(&verts, true);
+    if path.signed_area2(0.1) < 0.0 {
+        path.reversed()
+    } else {
+        path
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,5 +691,54 @@ mod tests {
         assert_eq!(area(&nan_rect), 0.0);
         // A zero-width rectangle encloses nothing, and says so without panicking.
         assert_eq!(area(&rect(Bounds::from_xywh(1.0, 1.0, 0.0, 5.0))), 0.0);
+    }
+
+    /// W10-A: the spiral fills its box's ellipse, winds positively in both
+    /// directions, mirrors with the direction, and its arms stay apart — a
+    /// ray from the centre crosses the band once per turn.
+    #[test]
+    fn a_spiral_winds_its_turns_inside_its_ellipse_in_either_direction() {
+        let c = point(50.0, 50.0);
+        let cw = spiral(c, point(40.0, 40.0), 0.1, 3.0, true);
+        let ccw = spiral(c, point(40.0, 40.0), 0.1, 3.0, false);
+        for s in [&cw, &ccw] {
+            assert!(s.is_finite() && !s.is_empty());
+            assert!(s.signed_area2(0.01) > 0.0, "wound the other way");
+            let b = s.bounds();
+            assert!(b.min.x >= 9.9 && b.max.x <= 90.1, "{b:?}");
+            assert!(b.min.y >= 9.9 && b.max.y <= 90.1, "{b:?}");
+        }
+        // Mirror images: the same area, different pixels.
+        assert!((area(&cw) - area(&ccw)).abs() < 1.0);
+        assert_ne!(cw.elements(), ccw.elements());
+        // Walk the ray straight right from the centre: the band is crossed
+        // once per turn (entering and leaving), so the inside/outside state
+        // flips 2 x turns times.
+        let flips = |s: &Path| {
+            let mut last = false;
+            let mut n = 0;
+            for i in 0..4000 {
+                let x = 50.0 + i as f64 * 0.01;
+                let inside = contains(s, point(x, 50.0), FillRule::NonZero);
+                if inside != last {
+                    n += 1;
+                    last = inside;
+                }
+            }
+            n
+        };
+        assert_eq!(flips(&cw), 6, "three turns cross the ray three times");
+        assert_eq!(
+            flips(&spiral(c, point(40.0, 40.0), 0.1, 5.0, true)),
+            10,
+            "five turns cross it five times"
+        );
+        // An elliptical box squashes it.
+        let flat = spiral(c, point(40.0, 10.0), 0.1, 3.0, true);
+        assert!(flat.bounds().height() <= 20.1);
+        // Degenerate input is refused, not panicked on.
+        assert!(spiral(c, point(0.0, 5.0), 0.1, 3.0, true).is_empty());
+        assert!(spiral(c, point(5.0, 5.0), 0.1, f64::NAN, true).is_empty());
+        assert!(spiral(c, point(5.0, 5.0), 0.1, 0.1, true).is_empty());
     }
 }

@@ -26,6 +26,28 @@ pub enum DisplaceFit {
     Tile,
 }
 
+/// What Displace reads where a shifted pixel lands outside the image —
+/// Photoshop's "Undefined Areas" choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum DisplaceEdges {
+    /// Wrap Around: read from the opposite side, as if the image tiled.
+    WrapAround,
+    /// Repeat Edge Pixels: read the nearest edge pixel.
+    #[default]
+    RepeatEdgePixels,
+}
+
+impl DisplaceEdges {
+    /// The [`Sampling`] that implements this choice, bilinear.
+    pub const fn sampling(self) -> Sampling {
+        let edge = match self {
+            DisplaceEdges::WrapAround => crate::support::EdgeMode::Wrap,
+            DisplaceEdges::RepeatEdgePixels => crate::support::EdgeMode::Clamp,
+        };
+        Sampling::new(edge, crate::support::Interpolation::Bilinear)
+    }
+}
+
 /// Displace `src` by `map`.
 ///
 /// * `scale_x`, `scale_y` — the shift, in pixels, that a fully white map
@@ -164,6 +186,24 @@ mod tests {
         assert_eq!(tiled.get(4, 4), src.get(6, 4));
         assert_eq!(tiled.get(5, 4), src.get(3, 4));
         assert_ne!(stretched.pixels(), tiled.pixels());
+    }
+
+    #[test]
+    fn wrap_around_and_repeat_edge_differ_only_where_the_shift_leaves_the_image() {
+        let src = ramp(16, 8);
+        let white = FilterBuffer::filled(1, 1, [1.0, 0.5, 0.5, 1.0]).unwrap();
+        let run = |edges: DisplaceEdges| {
+            displace(&src, &white, 4.0, 0.0, DisplaceFit::Tile, edges.sampling())
+        };
+        let wrap = run(DisplaceEdges::WrapAround);
+        let repeat = run(DisplaceEdges::RepeatEdgePixels);
+        // Inside: both read four pixels to the right.
+        assert_eq!(wrap.get(3, 2), src.get(7, 2));
+        assert_eq!(repeat.get(3, 2), src.get(7, 2));
+        // Past the right edge: wrap reads the left side, repeat the last
+        // column.
+        assert_eq!(wrap.get(14, 2), src.get(2, 2));
+        assert_eq!(repeat.get(14, 2), src.get(15, 2));
     }
 
     #[test]

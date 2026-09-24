@@ -2290,7 +2290,11 @@ impl StrokeTool {
                 patch.commit(access, key)?
             }
             PaintTarget::Layer => {
-                let mut patch = ColorPatch::load(access, key, rect)?;
+                // W10-H: the plane is read at the layer's own depth, so a
+                // brush, pencil or eraser dab on a 16-bit layer is blended
+                // and written at 16 bits (an 8-bit layer reads exactly what
+                // `ColorPatch::load` reads and commits the same bytes).
+                let mut patch = ColorPatch::load_native(access, key, rect)?;
                 if let StrokeOp::Smudge { strength } = self.op {
                     apply_smudge(
                         &mut patch,
@@ -2750,6 +2754,19 @@ impl TileAccess for SideStore<'_> {
         let hash = TileHash::of(&data);
         self.stored.entry(hash).or_insert(data);
         hash
+    }
+
+    // W10-H: the preview reads a 16-bit layer at its own depth, as the
+    // release does, so the last preview stays byte-equal to the commit.
+    fn native_bytes(&self, hash: TileHash) -> Option<&[u8]> {
+        match self.stored.get(&hash) {
+            Some(bytes) => Some(bytes.as_slice()),
+            None => self.base.native_bytes(hash),
+        }
+    }
+
+    fn sixteen_bit_document(&self) -> bool {
+        self.base.sixteen_bit_document()
     }
 }
 

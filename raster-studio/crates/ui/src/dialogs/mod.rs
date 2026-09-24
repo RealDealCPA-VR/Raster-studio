@@ -65,6 +65,8 @@
 pub mod about;
 pub mod action;
 pub mod adjustment_dialog;
+// W10-G: Edit > Auto-Align Layers and Auto-Blend Layers.
+pub mod auto_align;
 pub mod blur_gallery;
 pub mod brush_editor;
 pub mod canvas_rotation;
@@ -77,6 +79,8 @@ pub mod controls;
 pub mod defringe;
 pub mod duplicate_layer;
 pub mod export_as;
+// W10-G: Edit > Fade.
+pub mod fade;
 pub mod fill_layer;
 pub mod fill_stroke;
 pub mod filter_dialog;
@@ -86,10 +90,17 @@ pub mod ids;
 pub mod image_size;
 pub mod indexed_color;
 pub mod layer_style;
+pub mod lighting;
 pub mod liquify;
 pub mod new_document;
 pub mod new_guide;
+// W10-G: Edit > Perspective Warp.
+pub mod perspective_warp;
+// W10-J: View > New Guide Layout...
+pub mod new_guide_layout;
 pub mod preferences;
+// W10-G: Edit > Preset Manager.
+pub mod preset_manager;
 pub mod puppet_warp;
 pub mod refine_mask;
 pub mod rename_layer;
@@ -134,11 +145,19 @@ pub use new_document::{
     BackgroundContents, ColorMode, DocumentPreset, NewDocumentDialog, NewDocumentSpec, PresetGroup,
 };
 pub use new_guide::NewGuideDialog;
+pub use new_guide_layout::{GuideLayoutSpec, NewGuideLayoutDialog};
 pub use preferences::{
     GeneralPrefs, HistoryPrefs, InterfacePrefs, Keymap, KeymapError, PreferencesDialog,
     PrefsSection, Shortcut, ThemeChoice, UiPreferences,
 };
 pub use puppet_warp::{PuppetWarpDialog, PuppetWarpSpec};
+// W10-G: the Edit gaps.
+pub use auto_align::{AutoAlignDialog, AutoAlignSpec, AutoBlendDialog, AutoBlendSpec};
+pub use fade::{FadeDialog, FadeSpec};
+pub use perspective_warp::{PerspectiveWarpDialog, PerspectiveWarpSpec, WarpMode};
+pub use preset_manager::{
+    PresetEntry, PresetFileRequest, PresetKind, PresetLibrary, PresetManagerDialog,
+};
 pub use rename_layer::RenameLayerDialog;
 pub use selection_modify::{ModifySpec, SelectionModifyDialog};
 pub use selection_name::{
@@ -217,6 +236,11 @@ pub(crate) mod tests_support {
             Box::new(NewGuideDialog::new(
                 editor_core::Guides::default(),
                 (64, 64),
+            )),
+            // W10-J: the default 8 columns x 20 px gutters fit 640 px.
+            Box::new(NewGuideLayoutDialog::new(
+                editor_core::Guides::default(),
+                (640, 480),
             )),
             Box::new({
                 let mut dialog = RenameLayerDialog::new(layer_model::LayerId::new(), "Layer 1");

@@ -762,6 +762,17 @@ const TOOLS: &[ToolInfo] = &[
         Some('c'),
         &[],
     ),
+    // W10-A: after the Slice tool in the Crop slot, as in Photoshop.
+    t(
+        ToolId::SliceSelect,
+        "Slice Select",
+        ToolGroup::Crop,
+        Some("crop"),
+        "slice-select",
+        Cursor::Arrow,
+        Some('c'),
+        &[],
+    ),
     t(
         ToolId::Eyedropper,
         "Eyedropper",
@@ -837,6 +848,31 @@ const TOOLS: &[ToolInfo] = &[
         Cursor::Crosshair,
         Some('j'),
         &[f("softness", "Softness", 0.5, 64.0, 4.0)],
+    ),
+    // W10-A: after the Patch tool in the Healing slot, as in Photoshop.
+    t(
+        ToolId::ContentAwareMove,
+        "Content-Aware Move",
+        ToolGroup::Retouch,
+        Some("heal"),
+        "content-aware-move",
+        Cursor::Crosshair,
+        Some('j'),
+        &[
+            c(
+                crate::content_aware_move::MODE_KEY,
+                "Mode",
+                crate::content_aware_move::CamMode::CHOICES,
+                0,
+            ),
+            f(
+                crate::content_aware_move::ADAPTATION_KEY,
+                "Adaptation",
+                0.0,
+                crate::content_aware_move::MAX_ADAPTATION,
+                2.0,
+            ),
+        ],
     ),
     t(
         ToolId::RedEye,
@@ -1365,6 +1401,21 @@ const TOOLS: &[ToolInfo] = &[
         // labels are built from the enum so the two cannot disagree.
         shape_opts!(c("preset", "Shape", &vector::CUSTOM_SHAPE_NAMES, 0)),
     ),
+    // W10-A: the parametric spiral, last in the shape slot.
+    t(
+        ToolId::Spiral,
+        "Spiral",
+        ToolGroup::Draw,
+        Some("shape"),
+        "shape-spiral",
+        Cursor::Crosshair,
+        Some('u'),
+        shape_opts!(
+            f("turns", "Turns", 0.25, 50.0, 3.0),
+            f("inner_radius", "Inner Radius", 0.0, 0.95, 0.1),
+            c("direction", "Direction", crate::shape::SPIRAL_DIRECTION_CHOICES, 0),
+        ),
+    ),
     t(
         ToolId::Hand,
         "Hand",
@@ -1692,6 +1743,19 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
         ToolId::Artboard => Box::new(crate::artboard::ArtboardTool::default()),
         ToolId::CurvaturePen => Box::new(crate::curvature_pen::CurvaturePenTool::default()),
         ToolId::FreeformPen => Box::new(crate::pen::FreeformPenTool::default()),
+        // W10-A.
+        ToolId::ContentAwareMove => {
+            Box::new(crate::content_aware_move::ContentAwareMoveTool::default())
+        }
+        ToolId::SliceSelect => Box::new(crate::slice_select::SliceSelectTool::default()),
+        ToolId::Spiral => Box::new(ShapeTool::new(
+            ShapeKind::Spiral {
+                turns: 3.0,
+                inner_ratio: 0.1,
+                clockwise: true,
+            },
+            ShapeMode::VectorLayer,
+        )),
     }
 }
 
@@ -1856,6 +1920,8 @@ mod tests {
                 ToolId::SpotHealing,
                 ToolId::HealingBrush,
                 ToolId::Patch,
+                // W10-A: after the Patch tool, as in Photoshop.
+                ToolId::ContentAwareMove,
                 ToolId::RedEye
             ]
         );
@@ -1873,7 +1939,13 @@ mod tests {
         assert_eq!(mates("move"), vec![ToolId::Move, ToolId::Artboard]);
         assert_eq!(
             mates("crop"),
-            vec![ToolId::Crop, ToolId::PerspectiveCrop, ToolId::Slice]
+            vec![
+                ToolId::Crop,
+                ToolId::PerspectiveCrop,
+                ToolId::Slice,
+                // W10-A.
+                ToolId::SliceSelect
+            ]
         );
         // W4-G: Photoshop's order inside the slots that grew, and the
         // History Brush in a slot of its own.
@@ -1901,6 +1973,8 @@ mod tests {
             mates("path"),
             vec![ToolId::PathSelect, ToolId::DirectSelection]
         );
+        // W10-A: the Spiral closes the shape slot.
+        assert_eq!(mates("shape").last(), Some(&ToolId::Spiral));
     }
 
     #[test]

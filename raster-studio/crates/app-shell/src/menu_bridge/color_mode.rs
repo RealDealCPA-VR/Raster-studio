@@ -45,6 +45,13 @@ pub(crate) fn set_color_mode(
     }
     let tile_bytes = (TILE_SIZE as usize) * (TILE_SIZE as usize) * 4;
 
+    // W10-H: Indexed Color flattens a document of more than one layer, as
+    // Photoshop does, so no blending between layers can composite a colour
+    // outside the palette; the status line says so.
+    if to == mode::INDEXED && doc.document.layers.iter_depth_first().len() > 1 {
+        return indexed_flattened(editor, indexed.unwrap_or_default(), label);
+    }
+
     // Indexed: the palette is the whole document's, built before any tile is
     // mapped so every layer shares it.
     let palette = if to == mode::INDEXED {
@@ -116,6 +123,77 @@ pub(crate) fn set_color_mode(
         return Err(format!("Could not convert to {}", target.label()));
     }
     Ok(format!("Changed colour mode to {}", target.label()))
+}
+
+/// W10-H: Image > Mode > Indexed Color on a document of several layers: the
+/// visible composite becomes one "Background" layer quantised onto a palette
+/// built from that composite, every old layer is deleted and the mode flag
+/// set — one Transaction, so one undo restores the layers and the mode.
+fn indexed_flattened(
+    editor: &mut Editor,
+    spec: ui::dialogs::IndexedSpec,
+    label: String,
+) -> Result<String, String> {
+    let doc = editor.active_mut().ok_or("No document is open")?;
+    let (w, h) = (doc.document.width(), doc.document.height());
+    let canvas = compositor::composite_region(
+        &doc.document,
+        &doc.tiles,
+        doc.canvas_rect(),
+        0,
+        compositor::CompositeOptions::default(),
+    )
+    .map_err(|e| e.to_string())?
+    .to_rgba8(&doc.document.meta.color_space);
+    let mut histogram = Histogram::new();
+    histogram.add_rgba8(&canvas);
+    let palette = quantize::build_palette(&histogram, spec.palette, spec.colors)
+        .map_err(|e| format!("Cannot convert to Indexed Color: {e}"))?;
+    let grid = raster::TileGrid::from_rgba8(w, h, &canvas).map_err(|e| e.to_string())?;
+    let layer = layer_model::Layer::raster("Background");
+    let new_id = layer.id;
+    let old: Vec<layer_model::LayerId> = doc.document.layers.iter_depth_first();
+    let mut commands = vec![
+        editor_core::Command::SetMetaColorMode {
+            from: doc.document.meta.color_mode,
+            to: mode::INDEXED,
+        },
+        editor_core::Command::create_layer(layer),
+    ];
+    let mut edits = Vec::new();
+    for (coord, tile) in grid.iter() {
+        let mut bytes = tile.data().to_vec();
+        quantize::remap_rgba8(&mut bytes, TILE_SIZE as usize, &palette, spec.dither);
+        if bytes.iter().all(|&b| b == 0) {
+            continue;
+        }
+        edits.push(editor_core::pixels::TileEdit::set(
+            coord,
+            doc.tiles.insert_bytes(bytes),
+        ));
+    }
+    if !edits.is_empty() {
+        commands.push(
+            editor_core::Command::paint_tiles(editor_core::PixelTarget::Layer(new_id), edits)
+                .map_err(|e| e.to_string())?,
+        );
+    }
+    // Deepest first, so deleting a group never strands a child on the list.
+    for id in old.iter().rev() {
+        commands.push(editor_core::Command::DeleteLayer { layer_id: *id });
+    }
+    let layers = old.len();
+    let revision = editor.revision();
+    editor.apply_command(editor_core::Command::Transaction { label, commands });
+    let applied = editor
+        .active()
+        .is_some_and(|d| d.document.meta.color_mode == mode::INDEXED);
+    if !applied || editor.revision() == revision {
+        return Err("Could not convert to Indexed Color".into());
+    }
+    Ok(format!(
+        "Changed colour mode to Indexed Color; its {layers} layers were flattened into one"
+    ))
 }
 
 /// W8-B: Image > Adjustments > Levels / Curves on a Lab document run on its
@@ -511,6 +589,71 @@ mod tests {
         assert_eq!(reopened, after, "the palette came through exactly");
     }
 
+    /// W10-H: add a raster layer over the fixture holding a half-transparent
+    /// wash of `rgba` over the whole 64x32 canvas.
+    fn add_wash_layer(ed: &mut Editor, rgba: [u8; 4]) {
+        let doc = ed.active_mut().unwrap();
+        let pixels: Vec<u8> = std::iter::repeat_n(rgba, 64 * 32).flatten().collect();
+        let grid = raster::TileGrid::from_rgba8(64, 32, &pixels).unwrap();
+        let layer = layer_model::Layer::raster("wash");
+        let id = layer.id;
+        let edits: Vec<_> = grid
+            .iter()
+            .map(|(coord, tile)| {
+                editor_core::pixels::TileEdit::set(coord, doc.tiles.insert_bytes(tile.data().to_vec()))
+            })
+            .collect();
+        let command = editor_core::Command::Transaction {
+            label: "wash".into(),
+            commands: vec![
+                editor_core::Command::create_layer(layer),
+                editor_core::Command::paint_tiles(editor_core::PixelTarget::Layer(id), edits)
+                    .unwrap(),
+            ],
+        };
+        ed.apply_command(command);
+    }
+
+    /// W10-H: Indexed Color flattens a layered document like Photoshop: one
+    /// layer remains, the composite holds only palette colours (a half-
+    /// transparent layer over a quantised one would blend new ones), the
+    /// status line warns that the layers were flattened, and one undo gives
+    /// the layers and the mode back.
+    #[test]
+    fn indexed_color_flattens_a_layered_document_in_one_step_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = fixture(dir.path());
+        add_wash_layer(&mut ed, [200, 30, 90, 128]);
+        assert_eq!(ed.active().unwrap().document.layers.iter_depth_first().len(), 2);
+        let before = composite(&mut ed);
+        let steps = history_len(&ed);
+        let status = set_color_mode_for_test(
+            &mut ed,
+            ui::dialogs::IndexedSpec {
+                palette: color::quantize::PaletteKind::Adaptive,
+                colors: 8,
+                dither: color::quantize::Dither::None,
+            },
+        );
+        assert!(status.contains("flattened"), "no warning: {status}");
+        assert_eq!(history_len(&ed), steps + 1, "one undo step");
+        let doc = ed.active().unwrap();
+        assert_eq!(doc.document.meta.color_mode, 4);
+        assert_eq!(doc.document.layers.iter_depth_first().len(), 1);
+        let after = composite(&mut ed);
+        let n = distinct(&after);
+        assert!(n <= 8, "{n} colours in an 8-colour indexed composite");
+        ed.active_mut().unwrap().undo().unwrap();
+        let doc = ed.active().unwrap();
+        assert_eq!(doc.document.meta.color_mode, 0);
+        assert_eq!(doc.document.layers.iter_depth_first().len(), 2);
+        assert_eq!(composite(&mut ed), before);
+    }
+
+    fn set_color_mode_for_test(ed: &mut Editor, spec: ui::dialogs::IndexedSpec) -> String {
+        super::set_color_mode(ed, ColorMode::Indexed, Some(spec)).unwrap()
+    }
+
     /// The SOF0 component count of a baseline JPEG and whether it carries
     /// the Adobe APP14 marker a CMYK JPEG is read by.
     fn jpeg_components(bytes: &[u8]) -> (u8, bool) {
@@ -701,6 +844,52 @@ mod tests {
             PointerInput::at(PointerPhase::Up, screen(x, y)),
             false,
             &[],
+        );
+    }
+
+    /// W10-H: a brush stroke at 1% flow on a 16-bit layer is blended and
+    /// written at 16 bits through the real pointer route. The layer was
+    /// widened from 8 bits, so every stored code is a multiple of 257; a
+    /// dab rounded through 8 bits would leave only such codes (and at 1%
+    /// flow would mostly not move a pixel at all), while a 16-bit dab lands
+    /// between them.
+    #[test]
+    fn a_one_percent_flow_brush_on_a_sixteen_bit_layer_writes_sixteen_bit_codes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = half_transparent(dir.path(), dir.path().join("unused.png"));
+        perform(
+            MenuAction::SetBitDepth(ui::menu::ChannelDepth::Sixteen),
+            &mut ed,
+        )
+        .unwrap();
+        let layer = ed.active().unwrap().document.active_layer().unwrap();
+        let before = ed.active().unwrap().layer_rgba16(layer);
+        assert!(
+            before.iter().all(|c| c % 257 == 0),
+            "precondition: a widened 8-bit layer"
+        );
+        let mut brush = ed.brush().clone();
+        brush.flow = 0.01;
+        brush.opacity = 1.0;
+        brush.size = 12.0;
+        brush.hardness = 1.0;
+        ed.set_brush(brush);
+        brush_stroke(&mut ed, &[(6.0, 10.0), (14.0, 10.0), (22.0, 10.0)]);
+        let doc = ed.active().unwrap();
+        assert_eq!(doc.document.meta.bit_depth, 16);
+        let after = doc.layer_rgba16(layer);
+        let changed: Vec<usize> = (0..before.len() / 4)
+            .filter(|&i| before[i * 4..i * 4 + 4] != after[i * 4..i * 4 + 4])
+            .collect();
+        assert!(changed.len() > 50, "the stroke moved {} pixels", changed.len());
+        let between = changed
+            .iter()
+            .filter(|&&i| after[i * 4..i * 4 + 3].iter().any(|c| c % 257 != 0))
+            .count();
+        assert!(
+            between * 10 >= changed.len() * 9,
+            "only {between} of {} painted pixels hold a code between two 8-bit ones",
+            changed.len()
         );
     }
 

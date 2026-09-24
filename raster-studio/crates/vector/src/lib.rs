@@ -98,6 +98,8 @@ pub mod segment;
 pub mod shapes;
 pub mod stroke;
 pub mod svg;
+// W10-E: Image > Vectorize Bitmap (posterize, crack-trace, Schneider fit).
+pub mod trace;
 
 pub use affine::Affine;
 pub use boolean::{difference, fold, intersection, union, xor, BoolOp};

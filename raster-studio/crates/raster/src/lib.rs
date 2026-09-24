@@ -24,6 +24,8 @@ pub mod depth;
 pub mod export;
 pub mod format;
 pub mod grid;
+// W10-E: XMP (File Info) and EXIF written into exported PNG/JPEG/TIFF.
+pub mod metadata;
 pub mod mipmap;
 pub mod pdf;
 pub mod tile;

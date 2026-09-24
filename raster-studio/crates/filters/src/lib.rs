@@ -6,11 +6,12 @@
 //! # The four invariants
 //!
 //! * **Linear light.** [`FilterBuffer`] holds scene-referred linear sRGB, so
-//!   averaging pixels averages *light*. Exactly three filters leave linear
+//!   averaging pixels averages *light*. Exactly four filters leave linear
 //!   space, because they are defined on gamma-encoded values, and each says so
 //!   in its own documentation: [`stylize::solarize`],
-//!   [`pixelate::color_halftone`], and the binning fallback inside
-//!   [`noise::median`].
+//!   [`pixelate::color_halftone`], the binning fallback inside
+//!   [`noise::median`], and [`hsb::hsb_hsl`] (hue, saturation and brightness
+//!   are defined on encoded values).
 //! * **Premultiplied alpha.** A weighted average of premultiplied pixels is
 //!   the correct composite of what they cover. Filters that are *not* linear
 //!   in the pixel value — noise, the rank filters, solarize, difference clouds
@@ -64,17 +65,27 @@
 
 #![forbid(unsafe_code)]
 
+pub mod align;
+pub mod blend_layers;
 pub mod blur;
 pub mod blur_gallery;
 pub mod buffer;
+pub mod camera_raw;
 pub mod content_aware;
 pub mod defringe;
 pub mod displace;
+// W10-D: Filter Gallery sets and Vanishing Point.
+pub mod gallery_sets;
+pub mod vanishing_point;
 pub mod distort;
+pub mod hsb;
+pub mod lens_correction;
+pub mod lighting;
 pub mod liquify;
 pub mod noise;
 pub mod other;
 pub mod patchmatch;
+pub mod perspective_warp;
 pub mod pixelate;
 pub mod pixelate_extra;
 pub mod puppet;
@@ -95,7 +106,7 @@ pub use blur::{
     RadialBlurKind,
 };
 pub use content_aware::{content_aware_fill, content_aware_scale, ContentAwareError, FillOptions};
-pub use displace::{displace, DisplaceFit};
+pub use displace::{displace, DisplaceEdges, DisplaceFit};
 pub use distort::{
     pinch, polar_coordinates, ripple, shear, spherize, twirl, wave, zigzag, PolarMode, Wave,
     WaveKind, ZigZag, ZigZagKind,

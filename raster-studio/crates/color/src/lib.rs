@@ -85,7 +85,9 @@
 #![forbid(unsafe_code)]
 
 pub mod alpha;
+pub mod bitmap;
 pub mod cmyk;
+pub mod duotone;
 pub mod icc;
 pub mod model;
 pub mod quantize;

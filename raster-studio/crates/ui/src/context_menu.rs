@@ -60,17 +60,31 @@ pub fn canvas_items(ctx: &MenuContext) -> Vec<MenuItem> {
     )
 }
 
-/// The layer-row menu: the operations Photopea's Layers panel offers on a row.
+/// The layer-row menu: the rows Photopea's Layers panel offers on a row
+/// (W10-I), in Photopea's order — style, duplicate / delete, the smart-object
+/// and rasterize pair, the mask and clipping rows, linking, Select Pixels,
+/// the layer-style clipboard, and the merge family.
+///
+/// Clipping shows the one row that applies: Release on a clipped layer,
+/// Create on any other, as Photopea does. This build keeps no colour label
+/// on a layer, so there is no colour row.
 pub fn layer_items(ctx: &MenuContext) -> Vec<MenuItem> {
+    let clipped = ctx.active.is_some_and(|l| l.is_clipping);
     items(
         ctx,
         &[
+            MenuAction::BlendingOptions,
             MenuAction::DuplicateLayer,
             MenuAction::DeleteLayer,
-            MenuAction::BlendingOptions,
+            MenuAction::ConvertToSmartObject,
             MenuAction::Rasterize(crate::menu::RasterizeTarget::Layer),
-            MenuAction::MergeDown,
-            MenuAction::CreateClippingMask,
+            MenuAction::Mask(crate::menu::MaskOp::Toggle),
+            if clipped {
+                MenuAction::ReleaseClippingMask
+            } else {
+                MenuAction::CreateClippingMask
+            },
+            MenuAction::LinkLayers,
             // W9-A: Photopea's "Select Pixels" — the active layer's
             // transparency as a new selection.
             MenuAction::SelectLayerPixels {
@@ -78,6 +92,12 @@ pub fn layer_items(ctx: &MenuContext) -> Vec<MenuItem> {
                 mask: false,
                 op: crate::dialogs::LoadOperation::New,
             },
+            MenuAction::CopyLayerStyle,
+            MenuAction::PasteLayerStyle,
+            MenuAction::ClearLayerStyle,
+            MenuAction::MergeDown,
+            MenuAction::MergeVisible,
+            MenuAction::FlattenImage,
         ],
     )
 }

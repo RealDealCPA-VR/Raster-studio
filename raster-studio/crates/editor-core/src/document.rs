@@ -211,6 +211,9 @@ struct DocumentRepr {
     assets: Vec<layer_model::AssetRecord>,
     #[serde(default)]
     guides: Guides,
+    /// W10-B: layer comps, notes, text styles, the alpha-channel edit.
+    #[serde(default)]
+    extras: layer_model::DocumentExtras,
 }
 
 impl TryFrom<DocumentRepr> for Document {
@@ -259,6 +262,7 @@ impl TryFrom<DocumentRepr> for Document {
             active_layer,
             layer_selection,
             guides: r.guides,
+            extras: r.extras,
             dirty: false,
             path: None,
         })
@@ -335,6 +339,12 @@ pub struct Document {
     /// commands — selecting layers is not an undoable edit in Photoshop
     /// either, and the DELETE that uses this set is the undo step.
     layer_selection: Vec<LayerId>,
+    /// W10-B: the Layer Comps, Notes, Character / Paragraph Styles panels'
+    /// records and the alpha channel open for editing. Persisted but omitted
+    /// while empty; edited through [`crate::Command::SetDocumentExtras`], so
+    /// every change is one undoable step. Nothing here is a layer: no
+    /// composite and no export reads it.
+    pub extras: layer_model::DocumentExtras,
     /// Unsaved-changes flag. Session state, not document content: never
     /// serialized, and a freshly loaded document is clean.
     dirty: bool,
@@ -380,7 +390,9 @@ impl Serialize for Document {
         let layer_selection =
             (!self.layer_selection().is_empty()).then_some(self.layer_selection());
         let assets = (!self.assets.is_empty()).then_some(&self.assets);
+        let extras = (!self.extras.is_empty()).then_some(&self.extras);
         let fields = 3
+            + usize::from(extras.is_some())
             + usize::from(selection.is_some())
             + usize::from(pixels.is_some())
             + usize::from(active_layer.is_some())
@@ -413,6 +425,9 @@ impl Serialize for Document {
         if let Some(assets) = assets {
             s.serialize_field("assets", assets)?;
         }
+        if let Some(extras) = extras {
+            s.serialize_field("extras", extras)?;
+        }
         s.end()
     }
 }
@@ -427,6 +442,7 @@ impl PartialEq for Document {
             || self.saved_selections != other.saved_selections
             || self.layer_selection() != other.layer_selection()
             || self.assets != other.assets
+            || self.extras != other.extras
             // Through the accessor, not the field: a cursor left pointing at a
             // deleted layer reads as "no active layer" everywhere else, so it
             // must here too.
@@ -460,6 +476,7 @@ impl Document {
             stored_selection: None,
             saved_selections: Vec::new(),
             guides: Guides::default(),
+            extras: layer_model::DocumentExtras::default(),
             dirty: false,
             path: None,
         }

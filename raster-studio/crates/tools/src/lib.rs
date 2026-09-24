@@ -118,6 +118,7 @@
 pub mod artboard;
 pub mod brush;
 pub mod bucket;
+pub mod content_aware_move;
 pub mod curvature_pen;
 pub mod edit;
 pub mod error;
@@ -133,6 +134,7 @@ pub mod perspective_crop;
 pub mod registry;
 pub mod select;
 pub mod shape;
+pub mod slice_select;
 pub mod stroke;
 pub mod text;
 pub mod tiles;

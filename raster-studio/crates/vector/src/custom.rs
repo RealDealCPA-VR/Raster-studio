@@ -166,6 +166,81 @@ pub fn normalised(path: &Path) -> Path {
     path.transform(&t)
 }
 
+/// W10-A: one knot of a user-defined custom shape — the incoming control
+/// point, the anchor and the outgoing control point, in that order. A
+/// straight side's controls sit on its anchors.
+pub type Knot = [Point; 3];
+
+/// W10-A: one subpath of a user-defined custom shape: closed, and its knots.
+pub type KnotRun = (bool, Vec<Knot>);
+
+/// W10-A: `path` as cubic Bézier knots, one run per subpath — the form a
+/// custom-shape library entry is stored in (Edit ▸ Define Custom Shape keeps
+/// it in the shape presets beside the `.csh` imports). Lines and quadratics
+/// are raised to cubics exactly; a subpath with no segments is dropped.
+/// [`path_from_knots`] reads it back.
+pub fn knots_of(path: &Path) -> Vec<KnotRun> {
+    let mut out = Vec::new();
+    for sub in path.subpaths() {
+        if sub.segments.is_empty() {
+            continue;
+        }
+        let cubics: Vec<[Point; 4]> = sub
+            .segments
+            .iter()
+            .map(|s| match s.to_cubic() {
+                crate::Segment::Cubic(a, b, c, d) => [a, b, c, d],
+                // `to_cubic` answers a cubic for every kind; a line is its
+                // own controls should that ever change.
+                other => [other.start(), other.start(), other.end(), other.end()],
+            })
+            .collect();
+        // A closed run's last segment ends where it began, so its end is not
+        // a knot of its own: it is the first knot's incoming side.
+        let anchors = if sub.closed {
+            cubics.len()
+        } else {
+            cubics.len() + 1
+        };
+        let mut knots: Vec<Knot> = Vec::with_capacity(anchors);
+        knots.push([sub.start; 3]);
+        for c in &cubics[..anchors - 1] {
+            knots.push([c[3]; 3]);
+        }
+        for (i, c) in cubics.iter().enumerate() {
+            let to = (i + 1) % anchors;
+            knots[i][2] = c[1];
+            knots[to][0] = c[2];
+        }
+        out.push((sub.closed, knots));
+    }
+    out
+}
+
+/// W10-A: the path [`knots_of`] describes — each run a move to its first
+/// anchor, a cubic per pair of neighbouring knots, and a close when it is
+/// closed.
+pub fn path_from_knots(runs: &[KnotRun]) -> Path {
+    let mut p = Path::new();
+    for (closed, knots) in runs {
+        let Some(first) = knots.first() else {
+            continue;
+        };
+        p.move_to(first[1]);
+        for pair in knots.windows(2) {
+            p.curve_to(pair[0][2], pair[1][0], pair[1][1]);
+        }
+        if *closed {
+            let last = knots[knots.len() - 1];
+            if knots.len() > 1 {
+                p.curve_to(last[2], first[0], first[1]);
+            }
+            p.close();
+        }
+    }
+    p
+}
+
 fn polygon(points: &[(f64, f64)]) -> Path {
     let pts: Vec<Point> = points.iter().map(|(x, y)| point(*x, *y)).collect();
     Path::from_polyline(&pts, true)
@@ -304,5 +379,43 @@ mod tests {
         flat.move_to(point(0.0, 3.0));
         flat.line_to(point(10.0, 3.0));
         assert_eq!(normalised(&flat), flat);
+    }
+
+    /// W10-A: every library entry, a square with a hole and an open run
+    /// survive the knot form a defined custom shape is stored in: the same
+    /// subpaths, the same bounds, the same pixels.
+    #[test]
+    fn a_path_round_trips_through_its_knots() {
+        let mut cases: Vec<Path> = CustomShape::ALL.iter().map(|s| s.path()).collect();
+        let mut ring = shapes::rect(Bounds::from_xywh(0.0, 0.0, 40.0, 40.0));
+        ring.extend(&shapes::circle(point(20.0, 20.0), 8.0).reversed());
+        cases.push(ring);
+        let mut open = Path::new();
+        open.move_to(point(0.0, 0.0))
+            .line_to(point(10.0, 0.0))
+            .quad_to(point(15.0, 5.0), point(10.0, 10.0));
+        cases.push(open);
+        for path in cases {
+            let runs = knots_of(&path);
+            assert_eq!(runs.len(), path.subpaths().len());
+            let back = path_from_knots(&runs);
+            assert_eq!(back.subpaths().len(), path.subpaths().len());
+            let (a, b) = (path.bounds(), back.bounds());
+            assert!(
+                (a.min - b.min).length() < 1e-9 && (a.max - b.max).length() < 1e-9,
+                "{a:?} vs {b:?}"
+            );
+            if path.subpaths().iter().all(|s| s.closed) {
+                let scale = Affine::scale(100.0, 100.0);
+                let m1 = fill(&path.transform(&scale), &FillOptions::default()).unwrap();
+                let m2 = fill(&back.transform(&scale), &FillOptions::default()).unwrap();
+                assert!(
+                    (m1.area() - m2.area()).abs() < 1.0,
+                    "{} vs {}",
+                    m1.area(),
+                    m2.area()
+                );
+            }
+        }
     }
 }

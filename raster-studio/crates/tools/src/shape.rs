@@ -75,7 +75,19 @@ pub enum ShapeKind {
         path: Path,
         name: String,
     },
+    /// W10-A: a filled Archimedean spiral ([`vector::shapes::spiral`])
+    /// winding `turns` times from `inner_ratio` of the box's radius out to
+    /// its inscribed ellipse, clockwise or not.
+    Spiral {
+        turns: f64,
+        inner_ratio: f64,
+        clockwise: bool,
+    },
 }
+
+/// W10-A: the Spiral tool's Direction labels, index for index with
+/// [`ShapeKind::Spiral`]'s `clockwise` (0 = clockwise).
+pub const SPIRAL_DIRECTION_CHOICES: &[&str] = &["Clockwise", "Counter-clockwise"];
 
 impl ShapeKind {
     pub fn tool_id(&self) -> ToolId {
@@ -87,6 +99,7 @@ impl ShapeKind {
             ShapeKind::Star { .. } => ToolId::Star,
             ShapeKind::Line { .. } => ToolId::Line,
             ShapeKind::Custom { .. } => ToolId::CustomShape,
+            ShapeKind::Spiral { .. } => ToolId::Spiral,
         }
     }
 
@@ -695,6 +708,11 @@ pub fn path_for(kind: &ShapeKind, a: Vec2, b: Vec2) -> Result<Path, ToolError> {
                 .then(vector::Affine::translate(min.x as f64, min.y as f64));
             path.transform(&t)
         }
+        ShapeKind::Spiral {
+            turns,
+            inner_ratio,
+            clockwise,
+        } => shapes::spiral(center, point(rx, ry), *inner_ratio, *turns, *clockwise),
     };
     if path.is_empty() || !path.is_finite() {
         return Err(ToolError::Degenerate);
@@ -1122,6 +1140,21 @@ impl Tool for ShapeTool {
                 Ok(())
             }
             ("preset", _, ShapeKind::Custom { .. }) => mismatch(),
+            ("turns", ToolSetting::Float(v), ShapeKind::Spiral { turns, .. }) => {
+                crate::error::finite("spiral turns", v)?;
+                *turns = f64::from(v).clamp(0.25, vector::shapes::SPIRAL_MAX_TURNS);
+                Ok(())
+            }
+            ("inner_radius", ToolSetting::Float(v), ShapeKind::Spiral { inner_ratio, .. }) => {
+                crate::error::finite("spiral inner radius", v)?;
+                *inner_ratio = f64::from(v).clamp(0.0, 0.95);
+                Ok(())
+            }
+            ("direction", ToolSetting::Choice(index), ShapeKind::Spiral { clockwise, .. }) => {
+                *clockwise = index == 0;
+                Ok(())
+            }
+            ("turns" | "inner_radius" | "direction", _, ShapeKind::Spiral { .. }) => mismatch(),
             _ => Err(ToolError::UnknownOption {
                 key: key.to_owned(),
             }),

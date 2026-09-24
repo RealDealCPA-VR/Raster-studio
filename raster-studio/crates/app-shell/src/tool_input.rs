@@ -272,6 +272,10 @@ pub(crate) fn tight_document_bounds(
 /// Candidate LAYERS are capped so layer-heavy documents stay cheap.
 pub(crate) const SNAP_CANDIDATE_LAYER_CAP: usize = 64;
 
+/// W10-J: the most grid lines one axis offers as snap candidates; a canvas
+/// whose grid is denser than this offers none rather than a huge list.
+pub(crate) const SNAP_GRID_LINE_CAP: usize = 4096;
+
 /// W3-A: what View ▸ Snap and View ▸ Smart Guides say about snapping.
 ///
 /// The flags live on the chrome's workspace; the pointer route lives here and
@@ -291,13 +295,27 @@ pub struct SnapPolicy {
     /// caught — so one flag governs both, as `ui::Workspace::sync_canvas_view`
     /// already states.
     pub to_layers: bool,
+    /// W10-J: View > Snap To > Guides, while the guides are showing.
+    pub to_guides: bool,
+    /// W10-J: View > Snap To > Grid, while the grid is showing.
+    pub to_grid: bool,
+    /// W10-J: View > Snap To > Document Bounds: the canvas edges and centre.
+    pub to_bounds: bool,
+    /// W10-J: View > Snap To > Slices, while the slices are showing.
+    pub to_slices: bool,
 }
 
 impl Default for SnapPolicy {
+    /// What `ui::ViewFlags::defaults()` says: every target on, the grid off
+    /// because a fresh window does not show it.
     fn default() -> Self {
         Self {
             enabled: true,
             to_layers: true,
+            to_guides: true,
+            to_grid: false,
+            to_bounds: true,
+            to_slices: true,
         }
     }
 }
@@ -309,12 +327,24 @@ impl SnapPolicy {
     pub const SNAP_KEY: &'static str = "view.snap";
     /// The reserved setting key that carries View ▸ Smart Guides.
     pub const SMART_GUIDES_KEY: &'static str = "view.smart_guides";
+    /// W10-J: the reserved keys of the four other Snap To targets.
+    pub const GUIDES_KEY: &'static str = "view.snap_to_guides";
+    pub const GRID_KEY: &'static str = "view.snap_to_grid";
+    pub const BOUNDS_KEY: &'static str = "view.snap_to_bounds";
+    pub const SLICES_KEY: &'static str = "view.snap_to_slices";
 
-    /// Read the two flags off the View menu's state.
+    /// Read the flags off the View menu's state. W10-J: View > Snap To's
+    /// targets, each only while what it snaps to is on screen (guides, grid
+    /// and slices go with View > Extras), and Layers on top of Smart Guides.
     pub fn from_view_flags(flags: ui::ViewFlags) -> Self {
+        use ui::ViewFlag as F;
         Self {
-            enabled: flags.get(ui::ViewFlag::Snap),
-            to_layers: flags.get(ui::ViewFlag::SmartGuides),
+            enabled: flags.get(F::Snap),
+            to_layers: flags.get(F::SmartGuides) && flags.get(F::SnapToLayers),
+            to_guides: flags.get(F::SnapToGuides) && flags.shows(F::Guides),
+            to_grid: flags.get(F::SnapToGrid) && flags.shows(F::Grid),
+            to_bounds: flags.get(F::SnapToBounds),
+            to_slices: flags.get(F::SnapToSlices) && flags.shows(F::Slices),
         }
     }
 
@@ -332,6 +362,10 @@ impl SnapPolicy {
                 Self::SMART_GUIDES_KEY.to_string(),
                 bool_value(self.to_layers),
             ),
+            (Self::GUIDES_KEY.to_string(), bool_value(self.to_guides)),
+            (Self::GRID_KEY.to_string(), bool_value(self.to_grid)),
+            (Self::BOUNDS_KEY.to_string(), bool_value(self.to_bounds)),
+            (Self::SLICES_KEY.to_string(), bool_value(self.to_slices)),
         ]
     }
 
@@ -347,7 +381,19 @@ impl SnapPolicy {
             match (key.as_str(), value) {
                 (Self::SNAP_KEY, tools::ToolSetting::Bool(on)) => policy.enabled = *on,
                 (Self::SMART_GUIDES_KEY, tools::ToolSetting::Bool(on)) => policy.to_layers = *on,
-                (Self::SNAP_KEY | Self::SMART_GUIDES_KEY, _) => {}
+                (Self::GUIDES_KEY, tools::ToolSetting::Bool(on)) => policy.to_guides = *on,
+                (Self::GRID_KEY, tools::ToolSetting::Bool(on)) => policy.to_grid = *on,
+                (Self::BOUNDS_KEY, tools::ToolSetting::Bool(on)) => policy.to_bounds = *on,
+                (Self::SLICES_KEY, tools::ToolSetting::Bool(on)) => policy.to_slices = *on,
+                (
+                    Self::SNAP_KEY
+                    | Self::SMART_GUIDES_KEY
+                    | Self::GUIDES_KEY
+                    | Self::GRID_KEY
+                    | Self::BOUNDS_KEY
+                    | Self::SLICES_KEY,
+                    _,
+                ) => {}
                 _ => rest.push((key.clone(), *value)),
             }
         }
@@ -364,6 +410,7 @@ pub(crate) fn snap_candidates_kinded(
     tiles: &compositor::MemoryTileSource,
     zoom: f32,
     selected: &[layer_model::LayerId],
+    slices: &[raster::PixelRect],
     policy: SnapPolicy,
 ) -> (Vec<ui::canvas::SnapCandidate>, f32) {
     use ui::canvas::{Axis, SnapCandidate, SnapKind};
@@ -373,13 +420,54 @@ pub(crate) fn snap_candidates_kinded(
         return (candidates, threshold_doc);
     }
     let canvas = glam::vec2(doc.width() as f32, doc.height() as f32);
-    for (axis, lo, hi, mid) in [
-        (Axis::X, 0.0f32, canvas.x, canvas.x * 0.5),
-        (Axis::Y, 0.0f32, canvas.y, canvas.y * 0.5),
-    ] {
-        candidates.push(SnapCandidate::new(axis, lo, SnapKind::CanvasEdge));
-        candidates.push(SnapCandidate::new(axis, hi, SnapKind::CanvasEdge));
-        candidates.push(SnapCandidate::new(axis, mid, SnapKind::CanvasCenter));
+    // W10-J: Snap To > Document Bounds.
+    if policy.to_bounds {
+        for (axis, lo, hi, mid) in [
+            (Axis::X, 0.0f32, canvas.x, canvas.x * 0.5),
+            (Axis::Y, 0.0f32, canvas.y, canvas.y * 0.5),
+        ] {
+            candidates.push(SnapCandidate::new(axis, lo, SnapKind::CanvasEdge));
+            candidates.push(SnapCandidate::new(axis, hi, SnapKind::CanvasEdge));
+            candidates.push(SnapCandidate::new(axis, mid, SnapKind::CanvasCenter));
+        }
+    }
+    // W10-J: Snap To > Guides: the document's guide set.
+    if policy.to_guides {
+        for guide in &doc.guides.list {
+            if guide.doc.is_finite() {
+                let axis = match guide.axis {
+                    editor_core::GuideAxis::Vertical => Axis::X,
+                    editor_core::GuideAxis::Horizontal => Axis::Y,
+                };
+                candidates.push(SnapCandidate::new(axis, guide.doc, SnapKind::Guide));
+            }
+        }
+    }
+    // W10-J: Snap To > Grid: every line the grid draws (its subdivisions
+    // included, as Photoshop snaps), across the canvas. The spacing is the
+    // workspace grid's, which no setting changes yet: `GridSettings::default()`.
+    if policy.to_grid {
+        let grid = ui::canvas::GridSettings::default();
+        let step = grid.minor_spacing().unwrap_or_else(|| grid.major_spacing());
+        for (axis, extent) in [(Axis::X, canvas.x), (Axis::Y, canvas.y)] {
+            if step > 0.0 && extent / step <= SNAP_GRID_LINE_CAP as f32 {
+                let mut at = 0.0f32;
+                while at <= extent {
+                    candidates.push(SnapCandidate::new(axis, at, SnapKind::GridLine));
+                    at += step;
+                }
+            }
+        }
+    }
+    // W10-J: Snap To > Slices: each committed slice's four edges.
+    if policy.to_slices {
+        for r in slices {
+            let (x0, y0) = (r.x as f32, r.y as f32);
+            let (x1, y1) = (x0 + r.width as f32, y0 + r.height as f32);
+            for (axis, v) in [(Axis::X, x0), (Axis::X, x1), (Axis::Y, y0), (Axis::Y, y1)] {
+                candidates.push(SnapCandidate::new(axis, v, SnapKind::Guide));
+            }
+        }
     }
     if !policy.to_layers {
         return (candidates, threshold_doc);
@@ -449,9 +537,11 @@ pub(crate) fn snap_candidates_for(
     tiles: &compositor::MemoryTileSource,
     zoom: f32,
     selected: &[layer_model::LayerId],
+    slices: &[raster::PixelRect],
     policy: SnapPolicy,
 ) -> (Vec<tools::SnapCandidate>, f32) {
-    let (kinded, threshold_doc) = snap_candidates_kinded(doc, tiles, zoom, selected, policy);
+    let (kinded, threshold_doc) =
+        snap_candidates_kinded(doc, tiles, zoom, selected, slices, policy);
     let candidates = kinded
         .into_iter()
         .map(|c| tools::SnapCandidate {

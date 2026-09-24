@@ -89,6 +89,10 @@ enum Prepared {
     /// because a prepared `Curves` carries four splines and this enum is stored
     /// once per adjustment layer.
     Delegated(Box<adjustments::PreparedAdjustment>),
+    /// W10-H: a Levels or Curves adjustment layer in a Lab document, run on
+    /// L, a and b ([`adjustments::LabTone`]) as Image > Adjustments runs it
+    /// there, rather than on R, G and B.
+    Lab(Box<adjustments::LabTone>),
 }
 
 impl PreparedAdjustment {
@@ -161,6 +165,28 @@ impl PreparedAdjustment {
         Self { kind }
     }
 
+    /// W10-H: prepare `kind` for a document in colour mode `color_mode`
+    /// (`editor_core::color_mode::mode`). In a Lab document a Levels or
+    /// Curves adjustment layer evaluates on L, a and b — its per-channel
+    /// fields are Lightness, a and b, and its composite acts on Lightness
+    /// only ([`adjustments::LabTone`]); every other kind, and every kind in
+    /// any other mode, is [`PreparedAdjustment::new`].
+    pub fn new_in_mode(kind: &AdjustmentKind, color_mode: u8) -> Self {
+        if color_mode == editor_core::color_mode::mode::LAB {
+            if let Some(tone) = adjustments::LabTone::from_kind(kind) {
+                return Self {
+                    kind: Prepared::Lab(Box::new(tone)),
+                };
+            }
+        }
+        Self::new(kind)
+    }
+
+    /// Whether this adjustment runs on the Lab channels.
+    pub fn is_lab(&self) -> bool {
+        matches!(self.kind, Prepared::Lab(_))
+    }
+
     /// `true` when this adjustment cannot change any pixel, so the compositor
     /// can skip the whole layer.
     pub fn is_identity(&self) -> bool {
@@ -177,6 +203,7 @@ impl PreparedAdjustment {
             }
             Prepared::ColorBalance { bands } => bands.iter().all(|b| b.iter().all(|v| *v == 0.0)),
             Prepared::Delegated(p) => p.is_identity(),
+            Prepared::Lab(t) => t.is_identity(),
         }
     }
 
@@ -205,6 +232,8 @@ impl PreparedAdjustment {
             // The `adjustments` crate does its own encode/decode, because which
             // domain an adjustment is defined on is part of the adjustment.
             Prepared::Delegated(p) => p.apply(adjustments::LinearRgb(linear), space).get(),
+            // W10-H: CIELAB from linear sRGB, the mapping on L/a/b, back.
+            Prepared::Lab(t) => t.apply_linear(linear),
             other => {
                 let enc = from_linear(space, linear);
                 let out = match other {
@@ -234,7 +263,7 @@ impl PreparedAdjustment {
                     // Both handled above; unreachable without adding a variant,
                     // and a new variant should be an explicit arm rather than a
                     // silent identity.
-                    Prepared::Exposure { .. } | Prepared::Delegated(_) => enc,
+                    Prepared::Exposure { .. } | Prepared::Delegated(_) | Prepared::Lab(_) => enc,
                 };
                 to_linear(space, out)
             }
@@ -672,5 +701,53 @@ mod tests {
         let in_srgb = a.apply(linear, &ColorSpace::Srgb);
         let in_p3 = a.apply(linear, &ColorSpace::DisplayP3);
         assert!(!close3(in_srgb, in_p3, 1e-3), "{in_srgb:?} vs {in_p3:?}");
+    }
+
+    /// W10-H: a Curves adjustment LAYER whose second channel curve is
+    /// raised, in a Lab document, moves a mid grey's `a` towards magenta at
+    /// the same lightness (the channel is `a` there); in an RGB document the
+    /// same stored layer is green's. And the tile compositor's cache does
+    /// not hand the RGB answer back after the mode changes.
+    #[test]
+    fn a_curves_adjustment_layer_in_a_lab_document_runs_on_the_a_channel() {
+        use crate::testkit::TestDoc;
+        use crate::{composite_region, CompositeOptions, TileCompositor};
+        use raster::{PixelRect, TileCoord};
+        let mut t = TestDoc::new(256, 256);
+        let base = t.push_raster("grey");
+        t.paint_tile(base, TileCoord::new(0, 0, 0), [128, 128, 128, 255]);
+        let id = vec![[0.0, 0.0], [1.0, 1.0]];
+        t.push_adjustment(
+            "Curves",
+            AdjustmentKind::CurvesFull {
+                composite: id.clone(),
+                red: id.clone(),
+                green: vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]],
+                blue: id,
+            },
+        );
+        let rect = PixelRect::new(0, 0, 4, 4);
+        let mut tc = TileCompositor::new();
+        let px = |doc: &editor_core::Document, tc: &mut TileCompositor| {
+            let c = tc
+                .composite_region(doc, &t.src, rect, 0, CompositeOptions::default())
+                .unwrap()
+                .to_rgba8(&doc.meta.color_space);
+            let fresh = composite_region(doc, &t.src, rect, 0, CompositeOptions::default())
+                .unwrap()
+                .to_rgba8(&doc.meta.color_space);
+            assert_eq!(c, fresh, "the cache and a fresh composite disagree");
+            [c[0], c[1], c[2]]
+        };
+        let rgb = px(&t.doc, &mut tc);
+        assert!(rgb[1] > rgb[0] && rgb[1] > rgb[2], "RGB: green's curve {rgb:?}");
+        let mut lab_doc = t.doc.clone();
+        lab_doc.meta.color_mode = editor_core::color_mode::mode::LAB;
+        let lab = px(&lab_doc, &mut tc);
+        let lab_of = |p: [u8; 3]| color::model::rgb_to_lab(p.map(|c| f32::from(c) / 255.0));
+        let (grey, moved) = (lab_of([128, 128, 128]), lab_of(lab));
+        assert!(moved[1] > 10.0, "a did not move: {grey:?} -> {moved:?} ({lab:?})");
+        assert!((moved[0] - grey[0]).abs() < 3.0, "L moved: {grey:?} -> {moved:?}");
+        assert!(lab[0] > lab[1], "a Lab +a is magenta, not green: {lab:?}");
     }
 }

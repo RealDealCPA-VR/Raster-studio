@@ -121,6 +121,16 @@ pub enum ToolId {
     /// W7-F: a freehand drag fitted into a path. See
     /// [`crate::pen::FreeformPenTool`].
     FreeformPen,
+    /// W10-A: lasso a region (or start inside the selection) and drag it;
+    /// the source is filled content-aware and the patch blended at the
+    /// destination. See [`crate::content_aware_move::ContentAwareMoveTool`].
+    ContentAwareMove,
+    /// W10-A: pick, move, resize and delete the document's slices. See
+    /// [`crate::slice_select::SliceSelectTool`].
+    SliceSelect,
+    /// W10-A: the parametric spiral in the shape slot. See
+    /// [`crate::shape::ShapeKind::Spiral`].
+    Spiral,
 }
 
 impl ToolId {
@@ -194,6 +204,9 @@ impl ToolId {
         ToolId::Artboard,
         ToolId::CurvaturePen,
         ToolId::FreeformPen,
+        ToolId::ContentAwareMove,
+        ToolId::SliceSelect,
+        ToolId::Spiral,
     ];
 }
 

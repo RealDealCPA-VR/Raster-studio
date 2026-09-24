@@ -65,9 +65,15 @@ mod color_mode;
 // W7-I: Content-Aware Fill and Content-Aware Scale, run on a worker.
 pub(crate) mod content_aware_job;
 
+// W10-K: Select > Subject (saliency seeds + GrabCut, no model), run on a worker.
+pub(crate) mod subject_job;
+
 // W9-H: Photoshop style libraries (.asl) into the style presets, and the
 // style presets as the Layer Style dialog's Styles grid lists them.
 pub mod asl_import;
+
+// W10-J: New Guides from Shape, Alt+Ctrl+T, Shift+[ / ] and the number keys.
+pub(crate) mod view_keys;
 
 /// Shown on an item the shared menu model allows but this build cannot perform.
 ///
@@ -203,6 +209,8 @@ pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
     // W7-E: every frame builds this, so the smart-filter runner is in place
     // before the canvas composites a smart object.
     install_smart_filter_runner();
+    // W10-K: and so a finished Select Subject lands on the next frame.
+    subject_job::poll(editor);
     let recent_files = editor
         .recent()
         .entries()
@@ -443,6 +451,11 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
     if is_workspace_camera_action(action) {
         return Some(Pick::Workspace(Box::new(Intent::Action(action))));
     }
+    // W10-J: View > Snap To > All / None set the workspace's five Snap To
+    // flags at once (`ui::Workspace::absorb`), an absolute set.
+    if matches!(action, MenuAction::SnapToAll | MenuAction::SnapToNone) {
+        return Some(Pick::Workspace(Box::new(Intent::Action(action))));
+    }
     // `Edit Adjustments…` and the Properties panel's "Open editor…" are the
     // same request: reveal the Properties panel, which is where an adjustment
     // layer's parameters are edited. Routing it here (rather than through
@@ -584,8 +597,8 @@ pub fn unavailable_reason(action: MenuAction) -> Option<&'static str> {
         // Select ▸ All Layers performs now — the document keeps a real
         // multi-selection set (see `perform`), so it has no reason here.
         // ---- Select --------------------------------------------------------
-        // SelectSubject has no reason here either: P2.12 removed the item
-        // from `select_menu()` entirely, so no user can reach the arm.
+        // SelectSubject has no reason here either: W10-K put the item back
+        // and `perform` runs it on the job worker (`subject_job`).
         // Transform Selection routes to the gizmo wearing its Selection
         // target now (P2.2): the drag resamples the selection mask and
         // commits as one undoable SetSelection step. It has no reason here.
@@ -1607,6 +1620,9 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
             grow_or_similar(editor, action == MenuAction::GrowSelection)
         }
         MenuAction::ColorRange => color_range(editor),
+        // W10-K: Select > Subject runs on the job worker (`subject_job`) and
+        // lands as one undoable SetSelection step.
+        MenuAction::SelectSubject => subject_job::start(editor),
         // Select ▸ Save / Load / Reselect — the store lives on the document
         // (`Document::stored_selection` / `saved_selections`); the selection
         // changes themselves ride history since card 056.
@@ -1728,7 +1744,13 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         | MenuAction::RefineMask
         | MenuAction::RemoveColorFringe
         | MenuAction::RenameLayer
-        | MenuAction::NewGuide => Err(dialog_refused(action, editor)),
+        | MenuAction::NewGuide
+        | MenuAction::NewGuideLayout => Err(dialog_refused(action, editor)),
+        // W10-J: the View guide rows and the chords with no menu row.
+        MenuAction::NewGuidesFromShape => view_keys::guides_from_shape(editor),
+        MenuAction::DuplicateFreeTransform => view_keys::duplicate_free_transform(editor),
+        MenuAction::BrushHardness(harder) => view_keys::brush_hardness(editor, harder),
+        MenuAction::ToolOpacity(digit) => view_keys::tool_opacity(editor, digit),
         MenuAction::SelectAllLayers => {
             let doc = editor
                 .active_mut()
@@ -5913,6 +5935,16 @@ mod tests {
             if matches!(id, ui::menu::FilterId::Custom | ui::menu::FilterId::Offset) {
                 continue;
             }
+            // W10-C: Camera Raw and Lens Correction are the identity at their
+            // defaults too (every slider at zero), as in Photoshop.
+            // `w10c_filters_open_from_the_menu_and_land_as_one_step_or_a_smart_filter`
+            // drives their dialogs with a moved slider end to end.
+            if matches!(
+                id,
+                ui::menu::FilterId::CameraRaw | ui::menu::FilterId::LensCorrection
+            ) {
+                continue;
+            }
             let mut ed = opened(dir.path());
             match invoke(&mut ed, MenuAction::Filter(*id)) {
                 Ok(true) => {}
@@ -9742,6 +9774,11 @@ mod tests {
                 ]
                 .map(MenuAction::Filter),
             );
+            // W10-C: Camera Raw, Lens Correction, Lighting Effects, HSB/HSL.
+            asked.extend(
+                [F::CameraRaw, F::LensCorrection, F::LightingEffects, F::HsbHsl]
+                    .map(MenuAction::Filter),
+            );
         }
         // W7-E: Convert for Smart Filters is live over a pixel layer, and
         // routes to `perform`.
@@ -12066,6 +12103,77 @@ mod tests {
                 assert!((a - b).abs() <= 2, "x = {x}: {a} vs {b}");
             }
             assert!(red(&flat, 23) > 20, "the PSD holds the blurred pixels");
+        }
+
+        /// W10-C: each new filter, opened from its Filter-menu row through the
+        /// real dialog host, confirms as exactly one undo step on a pixel
+        /// layer, and over a smart object joins its smart-filter stack under
+        /// its `FilterId` key, re-renders the composite, and undoes in one.
+        #[test]
+        fn w10c_filters_open_from_the_menu_and_land_as_one_step_or_a_smart_filter() {
+            use ui::dialogs::ParamValue as P;
+            use ui::menu::FilterId as F;
+            let cases: [(F, &str, P); 4] = [
+                (F::CameraRaw, "exposure", P::Float(-1.0)),
+                (F::LensCorrection, "vignette_amount", P::Float(-100.0)),
+                (F::LightingEffects, "intensity", P::Float(80.0)),
+                (F::HsbHsl, "output", P::Choice(2)),
+            ];
+            let confirm = |ed: &mut Editor, id: F, key: &str, value: P| -> String {
+                let mut host = crate::dialog_host::DialogHost::default();
+                assert!(
+                    host.open_for_menu_action(&MenuAction::Filter(id), ed),
+                    "{id:?} opened no dialog"
+                );
+                let crate::dialog_host::ActiveDialog::Filter(dialog) = host.active_for_test()
+                else {
+                    panic!("{id:?} did not open the filter dialog");
+                };
+                assert_eq!(dialog.spec().id, id);
+                assert!(dialog.set_param(key, value), "{id:?}/{key}");
+                let invocation = dialog.invocation();
+                run_filter_invocation(ed, &invocation).unwrap()
+            };
+            for (id, key, value) in cases {
+                // A pixel layer: one undo step that changes the pixels.
+                let dir = tempfile::tempdir().unwrap();
+                let mut ed = opened(dir.path());
+                let layer = ed.active().unwrap().document.active_layer().unwrap();
+                let paint =
+                    pixels::write_layer(ed.active_mut().unwrap(), layer, &edge_rgba(), "Edge")
+                        .unwrap();
+                ed.apply_command(paint);
+                let before = composite(&mut ed);
+                let depth = ed.active().unwrap().history.undo_depth();
+                confirm(&mut ed, id, key, value);
+                assert_ne!(composite(&mut ed), before, "{id:?} changed nothing");
+                assert_eq!(
+                    ed.active().unwrap().history.undo_depth(),
+                    depth + 1,
+                    "{id:?} was not exactly one undo step"
+                );
+                assert!(ed.active_mut().unwrap().undo().unwrap());
+                assert_eq!(composite(&mut ed), before, "{id:?}: undo did not restore");
+
+                // A smart object: a smart filter, not a pixel rewrite.
+                let dir = tempfile::tempdir().unwrap();
+                let (mut ed, so) = converted(dir.path());
+                let source = ed.active().unwrap().document.layer_tiles(so).cloned();
+                let before = composite(&mut ed);
+                confirm(&mut ed, id, key, value);
+                let filters = stack(&ed, so);
+                assert_eq!(filters.len(), 1, "{id:?} did not join the stack");
+                assert_eq!(filters[0].filter, format!("{id:?}"));
+                assert_ne!(composite(&mut ed), before, "{id:?}: the smart filter renders nothing");
+                assert_eq!(
+                    ed.active().unwrap().document.layer_tiles(so).cloned(),
+                    source,
+                    "{id:?} rewrote the smart object's source"
+                );
+                assert!(ed.active_mut().unwrap().undo().unwrap());
+                assert!(stack(&ed, so).is_empty(), "{id:?}: undo left the filter");
+                assert_eq!(composite(&mut ed), before);
+            }
         }
     }
 }

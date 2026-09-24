@@ -341,6 +341,8 @@ pub enum ActiveDialog {
     /// W9-K: Layer > Text > Warp Text... over the active text layer. Confirms
     /// to a `SetLayerKind` carrying the whole new warp - one undo step.
     WarpText(Box<ui::dialogs::WarpTextDialog>),
+    /// W10-J: View > New Guide Layout... Confirms to a `SetGuides` command.
+    NewGuideLayout(Box<ui::dialogs::NewGuideLayoutDialog>),
 }
 
 impl ActiveDialog {
@@ -376,6 +378,7 @@ impl ActiveDialog {
             Self::NewGuide(dialog) => dialog.show(ctx),
             Self::RenameLayer(dialog) => dialog.show(ctx),
             Self::WarpText(dialog) => dialog.show(ctx),
+            Self::NewGuideLayout(dialog) => dialog.show(ctx),
             Self::RefineEdge(dialog) => dialog.show(ctx),
             Self::FillLayer(dialog) => dialog.show(ctx, sampler),
             // Neither confirms to a `DialogAction`: `DialogHost::ui` drives
@@ -768,6 +771,19 @@ impl DialogHost {
             ui::menu::MenuAction::NewGuide => match new_guide_dialog(editor) {
                 Some(dialog) => {
                     self.open(dialog);
+                    true
+                }
+                None => false,
+            },
+            // W10-J: View > New Guide Layout... over the same set.
+            ui::menu::MenuAction::NewGuideLayout => match editor.active() {
+                Some(open) => {
+                    self.open(ActiveDialog::NewGuideLayout(Box::new(
+                        ui::dialogs::NewGuideLayoutDialog::new(
+                            open.document.guides.clone(),
+                            (open.document.width(), open.document.height()),
+                        ),
+                    )));
                     true
                 }
                 None => false,

@@ -461,7 +461,10 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
         std::sync::Arc::clone(cell.get_or_init(|| {
             self.adjustment_prepares
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            std::sync::Arc::new(PreparedAdjustment::new(kind))
+            std::sync::Arc::new(PreparedAdjustment::new_in_mode(
+                kind,
+                self.doc.meta.color_mode,
+            ))
         }))
     }
 
@@ -475,6 +478,11 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut h = DefaultHasher::new();
             hash_adjustment(kind, &mut h);
+            // W10-H: a Levels/Curves layer means something else in a Lab
+            // document, so a mode change must not reuse the RGB tiles.
+            PreparedAdjustment::new_in_mode(kind, self.doc.meta.color_mode)
+                .is_lab()
+                .hash(&mut h);
             h.finish()
         })
     }
@@ -727,7 +735,8 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
             }
             match &layer.kind {
                 LayerKind::Adjustment(adj) => {
-                    let prepared = PreparedAdjustment::new(&adj.kind);
+                    let prepared =
+                        PreparedAdjustment::new_in_mode(&adj.kind, self.doc.meta.color_mode);
                     if !prepared.is_identity() {
                         let cov = self.adjustment_coverage(layer, work)?;
                         // `buf`'s alpha is the base's shape, and the adjustment

@@ -69,6 +69,7 @@ pub mod boolean;
 pub mod buf;
 pub mod channel;
 pub mod error;
+pub mod grabcut;
 pub mod image;
 pub mod lasso;
 pub mod marquee;
@@ -77,6 +78,7 @@ pub mod modify;
 pub mod outline;
 pub mod rect;
 mod scan;
+pub mod subject;
 pub mod transform;
 pub mod wand;
 
@@ -102,6 +104,7 @@ pub use modify::{
 };
 pub use outline::{outline, outline_selection, Polyline};
 pub use rect::{Rect, COORD_LIMIT};
+pub use subject::{select_object, select_subject, SubjectOptions, SubjectOutcome};
 pub use transform::{transform, transform_selection, ResampleFilter};
 pub use wand::{
     color_range, grow, luminance_range, magic_wand, quick_select, similar, ColorRangeOptions,

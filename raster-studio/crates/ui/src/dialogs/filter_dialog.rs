@@ -35,6 +35,7 @@ use design::tokens::{Radius, Space};
 use egui::{vec2, Context, TextureHandle};
 use filters::{blur, distort, noise, other, pixelate, render, sharpen, stylize};
 use filters::{displace, pixelate_extra, quick, smart_blur, stylize_extra};
+use filters::{camera_raw, hsb, lens_correction, lighting};
 use filters::{EdgeMode, FilterBuffer, Interpolation, Sampling};
 use tools::{OptionKind, OptionSpec};
 
@@ -615,6 +616,157 @@ fn gradient_axis(w: u32, h: u32, angle_deg: f32) -> ((f32, f32), (f32, f32)) {
     let half = 0.5 * (f64::from(w) * f64::from(w) + f64::from(h) * f64::from(h)).sqrt() as f32;
     let (sin, cos) = angle_deg.to_radians().sin_cos();
     ((cx, cy), (cx + cos * half, cy + sin * half))
+}
+
+// ---- W10-C: Camera Raw, Lens Correction, Lighting Effects, HSB/HSL ------
+
+const CAMERA_RAW: &[OptionSpec] = &[
+    float("temperature", "Temperature", -100.0, 100.0, 0.0),
+    float("tint", "Tint", -100.0, 100.0, 0.0),
+    float("exposure", "Exposure", -5.0, 5.0, 0.0),
+    float("contrast", "Contrast", -100.0, 100.0, 0.0),
+    float("highlights", "Highlights", -100.0, 100.0, 0.0),
+    float("shadows", "Shadows", -100.0, 100.0, 0.0),
+    float("whites", "Whites", -100.0, 100.0, 0.0),
+    float("blacks", "Blacks", -100.0, 100.0, 0.0),
+    float("texture", "Texture", -100.0, 100.0, 0.0),
+    float("clarity", "Clarity", -100.0, 100.0, 0.0),
+    float("dehaze", "Dehaze", -100.0, 100.0, 0.0),
+    float("vibrance", "Vibrance", -100.0, 100.0, 0.0),
+    float("saturation", "Saturation", -100.0, 100.0, 0.0),
+    float("curve_highlights", "Curve: highlights", -100.0, 100.0, 0.0),
+    float("curve_lights", "Curve: lights", -100.0, 100.0, 0.0),
+    float("curve_darks", "Curve: darks", -100.0, 100.0, 0.0),
+    float("curve_shadows", "Curve: shadows", -100.0, 100.0, 0.0),
+];
+
+fn camera_raw_of(p: &FilterParams) -> camera_raw::CameraRaw {
+    camera_raw::CameraRaw {
+        temperature: p.float("temperature"),
+        tint: p.float("tint"),
+        exposure: p.float("exposure"),
+        contrast: p.float("contrast"),
+        highlights: p.float("highlights"),
+        shadows: p.float("shadows"),
+        whites: p.float("whites"),
+        blacks: p.float("blacks"),
+        texture: p.float("texture"),
+        clarity: p.float("clarity"),
+        dehaze: p.float("dehaze"),
+        vibrance: p.float("vibrance"),
+        saturation: p.float("saturation"),
+        curve_highlights: p.float("curve_highlights"),
+        curve_lights: p.float("curve_lights"),
+        curve_darks: p.float("curve_darks"),
+        curve_shadows: p.float("curve_shadows"),
+    }
+}
+
+const LENS_CORRECTION: &[OptionSpec] = &[
+    float("distortion", "Distortion (+ barrel)", -100.0, 100.0, 0.0),
+    float("ca_red_cyan", "Fix red/cyan fringe", -100.0, 100.0, 0.0),
+    float("ca_blue_yellow", "Fix blue/yellow fringe", -100.0, 100.0, 0.0),
+    float("vignette_amount", "Vignette amount", -100.0, 100.0, 0.0),
+    float("vignette_midpoint", "Vignette midpoint", 0.0, 100.0, 50.0),
+    float("vertical", "Vertical perspective", -100.0, 100.0, 0.0),
+    float("horizontal", "Horizontal perspective", -100.0, 100.0, 0.0),
+    float("angle", "Angle", -180.0, 180.0, 0.0),
+    float("scale", "Scale (%)", 50.0, 150.0, 100.0),
+    choice("edge", "Edges", EDGE_MODES, 0),
+];
+
+fn lens_correction_of(p: &FilterParams) -> lens_correction::LensCorrection {
+    lens_correction::LensCorrection {
+        distortion: p.float("distortion"),
+        ca_red_cyan: p.float("ca_red_cyan"),
+        ca_blue_yellow: p.float("ca_blue_yellow"),
+        vignette_amount: p.float("vignette_amount"),
+        vignette_midpoint: p.float("vignette_midpoint"),
+        vertical_perspective: p.float("vertical"),
+        horizontal_perspective: p.float("horizontal"),
+        angle: p.float("angle"),
+        scale: p.float("scale"),
+        edge: edge_mode(p, "edge"),
+    }
+}
+
+const LIGHT_KINDS: &[&str] = &["Spot", "Point", "Infinite"];
+const TEXTURE_CHANNELS: &[&str] = &["None", "Red", "Green", "Blue", "Luminance"];
+
+/// The keys the Lighting Effects preview's position handle writes; see
+/// [`super::lighting`].
+pub const LIGHT_POSITION_KEYS: (&str, &str) = ("light_x", "light_y");
+
+const LIGHTING_EFFECTS: &[OptionSpec] = &[
+    choice("style", "Light type", LIGHT_KINDS, 0),
+    color("color", "Color", [1.0, 1.0, 1.0, 1.0]),
+    float("intensity", "Intensity", -100.0, 100.0, 50.0),
+    float("focus", "Focus", -100.0, 100.0, 60.0),
+    float("light_x", "Position X", 0.0, 1.0, 0.5),
+    float("light_y", "Position Y", 0.0, 1.0, 0.5),
+    float("radius", "Radius", 0.05, 2.0, 0.5),
+    float("angle", "Angle", -180.0, 180.0, 45.0),
+    float("ambience", "Ambience", -100.0, 100.0, -50.0),
+    choice("texture", "Texture channel", TEXTURE_CHANNELS, 0),
+    float("height", "Height", 0.0, 100.0, 50.0),
+    flag("white_high", "White is high", true),
+];
+
+fn lighting_of(p: &FilterParams) -> lighting::LightingEffects {
+    let c = p.color("color");
+    lighting::LightingEffects {
+        lights: vec![lighting::Light {
+            kind: p
+                .choose(
+                    "style",
+                    &[
+                        lighting::LightKind::Spot,
+                        lighting::LightKind::Point,
+                        lighting::LightKind::Infinite,
+                    ],
+                )
+                .unwrap_or_default(),
+            color: [c[0], c[1], c[2]],
+            intensity: p.float("intensity"),
+            focus: p.float("focus"),
+            position: [p.float("light_x"), p.float("light_y")],
+            radius: p.float("radius"),
+            angle: p.float("angle"),
+        }],
+        ambience: p.float("ambience"),
+        texture: p
+            .choose(
+                "texture",
+                &[
+                    lighting::TextureChannel::None,
+                    lighting::TextureChannel::Red,
+                    lighting::TextureChannel::Green,
+                    lighting::TextureChannel::Blue,
+                    lighting::TextureChannel::Luminance,
+                ],
+            )
+            .unwrap_or_default(),
+        height: p.float("height"),
+        white_is_high: p.flag("white_high"),
+    }
+}
+
+const CHANNEL_MODELS: &[&str] = &["RGB", "HSB", "HSL"];
+const HSB_HSL: &[OptionSpec] = &[
+    choice("input", "Input mode", CHANNEL_MODELS, 0),
+    choice("output", "Row order", CHANNEL_MODELS, 1),
+];
+
+fn channel_model(p: &FilterParams, key: &str) -> hsb::ChannelModel {
+    p.choose(
+        key,
+        &[
+            hsb::ChannelModel::Rgb,
+            hsb::ChannelModel::Hsb,
+            hsb::ChannelModel::Hsl,
+        ],
+    )
+    .unwrap_or_default()
 }
 
 /// Every filter that has a dialog: exactly the entries of [`FilterId::ALL`],
@@ -1348,6 +1500,30 @@ pub const FILTERS: &[FilterSpec] = &[
             )
         },
     },
+    FilterSpec {
+        id: FilterId::CameraRaw,
+        summary: "Basic panel and tone curve: white balance, exposure, tone, presence.",
+        params: CAMERA_RAW,
+        apply: |src, p| camera_raw_of(p).apply(src),
+    },
+    FilterSpec {
+        id: FilterId::LensCorrection,
+        summary: "Distortion, chromatic aberration, vignette and perspective.",
+        params: LENS_CORRECTION,
+        apply: |src, p| lens_correction_of(p).apply(src),
+    },
+    FilterSpec {
+        id: FilterId::LightingEffects,
+        summary: "Lights the layer with a spot, point or infinite light. Drag the light on the preview.",
+        params: LIGHTING_EFFECTS,
+        apply: |src, p| lighting_of(p).apply(src),
+    },
+    FilterSpec {
+        id: FilterId::HsbHsl,
+        summary: "Rewrites the RGB channels as HSB or HSL values, or back.",
+        params: HSB_HSL,
+        apply: |src, p| hsb::hsb_hsl(src, channel_model(p, "input"), channel_model(p, "output")),
+    },
 ];
 
 /// Look a filter's dialog up by the menu entry that opens it.
@@ -1564,11 +1740,12 @@ impl FilterDialog {
         if checkbox_row(ui, "Preview", &mut preview).changed() {
             self.set_preview_enabled(preview);
         }
+        let mut shown = None;
         match (&self.texture, self.preview_enabled) {
             (Some(texture), true) => {
                 let size = texture.size_vec2();
                 let scale = (sizes::filter_preview_width() / size.x.max(1.0)).min(2.0);
-                ui.image((texture.id(), size * scale));
+                shown = Some(ui.image((texture.id(), size * scale)).rect);
             }
             (_, true) => {
                 caption(ui, "Nothing to preview.");
@@ -1586,6 +1763,13 @@ impl FilterDialog {
                 };
                 super::controls::checkerboard(ui, rect, radius);
                 caption(ui, "Preview is off.");
+            }
+        }
+        // W10-C: Lighting Effects places its light by dragging on the preview.
+        if let Some(image) = shown {
+            let writes = super::lighting::position_handle(ui, self.spec.id, image, &self.params);
+            for (key, value) in writes.into_iter().flatten() {
+                self.set_param(key, value);
             }
         }
 
@@ -2093,7 +2277,102 @@ mod tests {
             "edge",
             "the default kernel reads only the centre tap, so it never reaches              outside the buffer for the edge mode to have a say",
         ),
+        (
+            FilterId::LensCorrection,
+            "vignette_midpoint",
+            "the default vignette amount is zero, so there is no falloff for the midpoint to place",
+        ),
+        (
+            FilterId::LensCorrection,
+            "edge",
+            "the default geometry is the identity, so nothing is sampled from outside the frame",
+        ),
+        (
+            FilterId::LightingEffects,
+            "height",
+            "the default texture channel is None, so there is no bump map for the height to scale",
+        ),
+        (
+            FilterId::LightingEffects,
+            "white_high",
+            "the default texture channel is None, so there is no bump map to invert",
+        ),
     ];
+
+    /// W10-C: the four new filters' inert-at-default controls come alive as
+    /// soon as the control they depend on moves.
+    #[test]
+    fn w10c_inert_parameters_come_alive_once_their_neighbour_moves() {
+        let source = busy_buffer(24);
+        let live = |id: FilterId, first: (&str, ParamValue), then: (&str, ParamValue)| {
+            let mut dialog = FilterDialog::new(filter_by_id(id).unwrap(), source.clone());
+            assert!(dialog.set_param(first.0, first.1));
+            let before = dialog.preview_buffer().to_rgba8();
+            assert!(dialog.set_param(then.0, then.1));
+            assert_ne!(
+                dialog.preview_buffer().to_rgba8(),
+                before,
+                "{id:?}/{} does nothing once {} moves",
+                then.0,
+                first.0
+            );
+        };
+        live(
+            FilterId::LensCorrection,
+            ("vignette_amount", ParamValue::Float(-80.0)),
+            ("vignette_midpoint", ParamValue::Float(10.0)),
+        );
+        live(
+            FilterId::LensCorrection,
+            ("distortion", ParamValue::Float(80.0)),
+            ("edge", ParamValue::Choice(1)),
+        );
+        live(
+            FilterId::LightingEffects,
+            ("texture", ParamValue::Choice(4)),
+            ("height", ParamValue::Float(100.0)),
+        );
+        live(
+            FilterId::LightingEffects,
+            ("texture", ParamValue::Choice(4)),
+            ("white_high", ParamValue::Bool(false)),
+        );
+    }
+
+    /// W10-C: Camera Raw and Lens Correction at their defaults are the
+    /// identity (within one 8-bit level), HSB/HSL's two passes round-trip,
+    /// and exposure +1 doubles linear light, through the dialog's own
+    /// parameter path.
+    #[test]
+    fn w10c_defaults_and_round_trips_hold_through_the_dialog() {
+        let source = busy_buffer(32);
+        for id in [FilterId::CameraRaw, FilterId::LensCorrection] {
+            let dialog = FilterDialog::new(filter_by_id(id).unwrap(), source.clone());
+            let out = dialog.preview_buffer();
+            for (a, b) in out.pixels().iter().zip(source.pixels()) {
+                for c in 0..4 {
+                    assert!((a[c] - b[c]).abs() <= 1.0 / 255.0, "{id:?}: {a:?} vs {b:?}");
+                }
+            }
+        }
+        let mut raw = FilterDialog::new(filter_by_id(FilterId::CameraRaw).unwrap(), source.clone());
+        assert!(raw.set_param("exposure", ParamValue::Float(1.0)));
+        for (a, b) in raw.preview_buffer().pixels().iter().zip(source.pixels()) {
+            for c in 0..3 {
+                assert!((a[c] - 2.0 * b[c]).abs() < 1e-5, "{a:?} vs {b:?}");
+            }
+        }
+        let spec = filter_by_id(FilterId::HsbHsl).unwrap();
+        let forward = FilterDialog::new(spec, source.clone()).preview_buffer();
+        let mut back = FilterDialog::new(spec, forward);
+        assert!(back.set_param("input", ParamValue::Choice(1)));
+        assert!(back.set_param("output", ParamValue::Choice(0)));
+        for (a, b) in back.preview_buffer().pixels().iter().zip(source.pixels()) {
+            for c in 0..4 {
+                assert!((a[c] - b[c]).abs() < 1.0 / 255.0, "{a:?} vs {b:?}");
+            }
+        }
+    }
 
     #[test]
     fn the_inert_parameter_list_stays_honest() {

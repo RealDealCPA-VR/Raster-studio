@@ -35,6 +35,8 @@
 
 pub mod artboard;
 pub mod blend;
+// W10-B: layer comps, notes, text styles and the alpha-channel edit.
+pub mod doc_extras;
 pub mod effects;
 pub mod fill;
 pub mod ids;
@@ -66,3 +68,8 @@ pub use layer::{ShapeFill, ShapeFillPaint, ShapeGradientFill, ShapeStrokeAlign};
 pub use mask::{LayerMask, MaskError, MaskKind, VectorMask};
 pub use smart_filter::{stack_is_active, SmartFilter, SmartParam};
 pub use tree::{ClippingGroup, DetachedSubtree, LayerTree, TreeError};
+// W10-B: the document-level records of the Layer Comps, Notes and style panels.
+pub use doc_extras::{
+    AlphaEdit, CharacterStyle, CompLayerState, DocumentExtras, LayerComp, Note, ParagraphStyle,
+    StyleLink,
+};

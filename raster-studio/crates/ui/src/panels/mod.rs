@@ -12,6 +12,8 @@
 //! it lives in the `*Model` / `*State` types each module leads with.
 
 pub mod actions;
+// W10-I: the frame-animation timeline.
+pub mod animation;
 pub mod brushes;
 pub mod channels;
 pub mod color;

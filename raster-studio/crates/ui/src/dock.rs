@@ -44,6 +44,8 @@ pub enum PanelId {
     Actions,
     /// The RGB / luminosity histogram of the active composite (W2-D).
     Histogram,
+    /// W10-I: the frame-animation timeline — the document's `_a_` layers.
+    Animation,
 }
 
 impl PanelId {
@@ -67,6 +69,8 @@ impl PanelId {
         // this list *by position*, so a panel added anywhere but the end
         // would make every older file mean something else.
         PanelId::Histogram,
+        // W10-I: appended after Histogram for the same by-position reason.
+        PanelId::Animation,
     ];
 
     /// Panel title, as shown on its header and in the Window menu.
@@ -87,6 +91,7 @@ impl PanelId {
             PanelId::Paths => "Paths",
             PanelId::Actions => "Actions",
             PanelId::Histogram => "Histogram",
+            PanelId::Animation => "Animation",
         }
     }
 
@@ -108,6 +113,7 @@ impl PanelId {
             PanelId::Paths => "paths",
             PanelId::Actions => "actions",
             PanelId::Histogram => "histogram",
+            PanelId::Animation => "animation",
         }
     }
 }

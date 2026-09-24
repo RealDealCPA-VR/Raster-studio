@@ -37,6 +37,8 @@ raster.workspace = true
 # here and not in `raster` (whose codec facade moves flat images only).
 psd.workspace = true
 tools.workspace = true
+# W10-E: Image > Vectorize Bitmap traces through `vector::trace`.
+vector.workspace = true
 # The engines behind the Filter, Image ▸ Adjustments and Select menus. The
 # shell reaches them through `menu_bridge::perform`, which is what makes those
 # menus do something; before this wave every one of those items was drawn

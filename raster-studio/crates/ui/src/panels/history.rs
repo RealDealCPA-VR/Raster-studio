@@ -156,6 +156,9 @@ impl StepKind {
             Command::FillRegion { .. } => StepKind::Filled,
             Command::ClearRegion { .. } => StepKind::Cleared,
             Command::Transaction { .. } => StepKind::Batch,
+            // W10-B: a comp, note or style record edit changes the document
+            // without changing any one layer.
+            Command::SetDocumentExtras { .. } => StepKind::LayerChanged,
         }
     }
 }

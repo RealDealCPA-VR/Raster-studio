@@ -32,6 +32,8 @@
 pub mod color_mode;
 pub mod command;
 pub mod document;
+// W10-B: layer comps, notes and text styles as commands.
+pub mod extras;
 pub mod history;
 pub mod pixels;
 pub mod selection;

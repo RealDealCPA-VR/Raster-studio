@@ -116,7 +116,10 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   Exclude (XOR); the rectangular and elliptical marquees have a Style of
   Normal, Fixed Ratio (W : H) or Fixed Size (W x H px); Color Range, Modify (border, smooth, expand, contract,
   feather), Grow, Similar, Refine Edge, Transform Selection, quick mask, and
-  Save / Load / Reselect. Gestures draw live, show marching ants and are
+  Save / Load / Reselect. Select ▸ Subject selects the region that stands
+  out most from the frame's border with no neural model (saliency seeds +
+  GrabCut graph cut, run on a worker, one undo step); it is colour-driven,
+  not semantic, and a flat image selects nothing and says so. Gestures draw live, show marching ants and are
   undoable. Ctrl+click a layer thumbnail to select its pixels (Ctrl+Shift
   adds, Ctrl+Alt subtracts, Ctrl+Shift+Alt intersects); on a mask thumbnail
   it selects the mask's coverage; the layer row's right-click menu has Select
@@ -271,7 +274,7 @@ matrix, each with its reason there:
 | Missing | Why |
 | --- | --- |
 | ICC-accurate CMYK, spot colours, Lab files, L/a/b in Levels/Curves | Since W7-D: Image ▸ Mode ▸ Lab / CMYK / Indexed convert (one undo step each; CMYK on a documented naive ink model, not an ICC press profile; Indexed through its own dialog); File ▸ Export and Export As write a CMYK document as CMYK JPEG/TIFF and an Indexed one as a palette PNG (GIF keeps its colours) — since W8-B the palette PNG always writes: an image past 256 RGBA colours (a soft stroke painted after the conversion) is re-quantised with 1-bit alpha, as Photoshop's Indexed stores it; Export As says when a format writes the document as RGB instead (always, for Lab), and since W8-B File ▸ Export says so in the status line; Info adds a Lab or CMYK row for a document in that mode, and since W8-B the Color panel switches to Lab / CMYK / Gray (K%) notation when the document is in that mode (the user can still pick another); since W8-B Image ▸ Adjustments ▸ Levels and Curves on a Lab document list Lightness / a / b (no composite row; they open on Lightness, so a first move keeps greys neutral) and preview and apply on those channels; View ▸ Proof Colors and Gamut Warning are enabled and change the canvas. Still missing: a press profile and spot colours, any Lab file (Lab goes out as RGB, and both export routes say so), L/a/b channels on Levels/Curves *adjustment layers* (a Levels/Curves adjustment layer in a Lab document still renders on RGB), and Indexed flattening (semi-transparent layers can still blend colours outside the palette). |
-| Select Subject, Object Selection | No segmentation model ships. |
+| Object Selection tool | No toolbox mode yet; its rectangle-initialised GrabCut engine exists (`selection::select_object`). Select ▸ Subject itself now exists (see Select above). |
 | Vanishing Point | Perspective-plane tooling. (Liquify and Puppet Warp now exist: Filter ▸ Liquify… and Edit ▸ Puppet Warp, each applied as one undo step; their gaps are in the parity matrix.) |
 | Lighting Effects | Needs on-canvas light handles the parameter dialog cannot express. |
 | Camera RAW, PDF / AI import, Sketch / XD / Figma | Per-sensor demosaic; a PDF interpreter; proprietary formats. |

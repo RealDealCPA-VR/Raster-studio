@@ -567,6 +567,16 @@ impl Workspace {
         use menu::ZoomCommand;
         let before = self.canvas.view.camera;
         match action {
+            // W10-J: View > Snap To > All / None — an absolute set of the five
+            // targets, so absorbing it twice is absorbing it once.
+            MenuAction::SnapToAll | MenuAction::SnapToNone => {
+                let flags_before = self.view_flags;
+                for flag in ViewFlag::SNAP_TO {
+                    self.view_flags
+                        .set(*flag, action == MenuAction::SnapToAll);
+                }
+                return self.view_flags != flags_before;
+            }
             MenuAction::Zoom(ZoomCommand::In) => self.canvas.view.zoom_in(),
             MenuAction::Zoom(ZoomCommand::Out) => self.canvas.view.zoom_out(),
             MenuAction::Zoom(ZoomCommand::FitOnScreen) => self.canvas.zoom_to_fit(),

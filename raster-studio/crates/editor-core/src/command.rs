@@ -521,6 +521,22 @@ pub enum Command {
         label: String,
         commands: Vec<Command>,
     },
+    /// W10-B: replace the document's Layer Comps, Notes, Character /
+    /// Paragraph Styles and alpha-channel record ([`crate::Document::extras`])
+    /// wholesale. The inverse carries the previous record, so undo restores
+    /// it exactly. Nothing in the record is a pixel or a layer, so the
+    /// command dirties nothing; a style edit that also restyles text layers
+    /// rides in a [`Command::Transaction`] beside their
+    /// [`Command::SetLayerKind`] edits, which carry the dirtiness.
+    ///
+    /// # Wire format
+    ///
+    /// Appended after every other variant and purely additive.
+    SetDocumentExtras {
+        /// Boxed like [`Command::CreateLayer`]'s layer: a comp carries a whole
+        /// layer-style block per layer.
+        extras: Box<layer_model::DocumentExtras>,
+    },
 }
 
 /// The class of a layer kind, as a word an error message can use.
@@ -1215,6 +1231,13 @@ impl Command {
                     commands: inverses,
                 })
             }
+
+            Command::SetDocumentExtras { extras } => {
+                let previous = std::mem::replace(&mut doc.extras, extras.as_ref().clone());
+                Ok(Command::SetDocumentExtras {
+                    extras: Box::new(previous),
+                })
+            }
         }
     }
 
@@ -1261,6 +1284,7 @@ impl Command {
             Command::SetAssetSourceSize { .. } => "Record Source Size".into(),
             Command::ReplaceAssetSource { .. } => "Replace Contents".into(),
             Command::Transaction { label, .. } => label.clone(),
+            Command::SetDocumentExtras { .. } => "Edit Document Records".into(),
         }
     }
 }
@@ -1587,7 +1611,9 @@ impl Command {
             | Command::SetMetaColorMode { .. }
             | Command::SetMetaBitDepth { .. }
             | Command::SetAssetSourceSize { .. }
-            | Command::ReplaceAssetSource { .. } => DirtyReach::nothing(),
+            | Command::ReplaceAssetSource { .. }
+            // W10-B: comps, notes and styles are records, not pixels.
+            | Command::SetDocumentExtras { .. } => DirtyReach::nothing(),
             // One layer's whole extent, before and after. A create has no
             // "before" and a delete has no "after"; the shell's two-sided
             // query handles both by finding the layer missing on one side.

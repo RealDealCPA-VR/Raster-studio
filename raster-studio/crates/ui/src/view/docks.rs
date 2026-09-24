@@ -507,6 +507,8 @@ fn body_of(
         PanelId::Channels => channels_body(w, ui, doc, history),
         PanelId::Paths => paths_body(w, ui, doc),
         PanelId::Actions => actions_body(w, ui),
+        // W10-I: the frame-animation timeline.
+        PanelId::Animation => crate::panels::animation::animation_body(w, ui, doc),
     }
 }
 
@@ -909,6 +911,12 @@ pub(crate) fn smart_filter_part_id(layer: LayerId, index: usize, part: &str) -> 
     egui::Id::new(("raster-smart-filter", layer, index, part))
 }
 
+/// W10-I: the id of one blend-mode choice in a smart filter's Blending
+/// Options row, so a headless test can pick it by name.
+pub(crate) fn smart_filter_mode_id(layer: LayerId, index: usize, mode: BlendMode) -> egui::Id {
+    egui::Id::new(("raster-smart-filter-mode", layer, index, mode.shader_index()))
+}
+
 /// W7-E: the "Smart Filters" block under a smart object's row — a header,
 /// then one row per filter with the most recently applied on top (Photopea's
 /// order). Each row's eye switches the filter off or on, its trash button
@@ -916,6 +924,12 @@ pub(crate) fn smart_filter_part_id(layer: LayerId, index: usize, part: &str) -> 
 /// parameters it stored. Every change is one [`Command::SetLayerKind`]
 /// carrying the object with its new stack, so each is one undo step and the
 /// source pixels are never touched.
+///
+/// W10-I: a filter's name drags — dropped on another filter's row, it takes
+/// that row's place in the stack ([`compositor::smart::move_filter`]) — and
+/// its blending-options button (part `"blend"`) opens a row under it with
+/// the filter's own blend mode and opacity, Photopea's per-filter Blending
+/// Options.
 fn smart_filter_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document, row: &LayerRow) {
     let Some(layer_model::LayerKind::SmartObject(so)) = doc.layers.get(row.id).map(|l| &l.kind)
     else {
@@ -935,6 +949,16 @@ fn smart_filter_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document, row: &Layer
             kind: Box::new(layer_model::LayerKind::SmartObject(next)),
         }));
     };
+    // W10-I: which filter's Blending Options row is open, and which filter
+    // a drag started on — frame-to-frame view state, kept in egui's memory
+    // under this layer's id rather than in the document.
+    let blend_open_key = egui::Id::new(("raster-smart-filter-blend-open", row.id));
+    let drag_key = egui::Id::new(("raster-smart-filter-drag", row.id));
+    let blend_open: Option<usize> = ui.data(|d| d.get_temp(blend_open_key));
+    let mut dragging: Option<usize> = ui.data(|d| d.get_temp(drag_key));
+    let pointer = ui.input(|i| i.pointer.interact_pos());
+    let released = ui.input(|i| i.pointer.any_released());
+    let mut drop_on: Option<usize> = None;
     ui.allocate_ui_with_layout(
         Vec2::new(ui.available_width(), height),
         Layout::left_to_right(Align::Center),
@@ -953,7 +977,7 @@ fn smart_filter_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document, row: &Layer
             .and_then(crate::dialogs::filter_by_id)
             .map(|spec| spec.name().to_string())
             .unwrap_or_else(|| filter.filter.clone());
-        ui.allocate_ui_with_layout(
+        let filter_row = ui.allocate_ui_with_layout(
             Vec2::new(ui.available_width(), height),
             Layout::left_to_right(Align::Center),
             |ui| {
@@ -975,8 +999,12 @@ fn smart_filter_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document, row: &Layer
                 let label = ui.interact(
                     label.rect,
                     smart_filter_part_id(row.id, index, "name"),
-                    Sense::click(),
+                    Sense::click_and_drag(),
                 );
+                if label.drag_started() {
+                    dragging = Some(index);
+                    ui.data_mut(|d| d.insert_temp(drag_key, index));
+                }
                 if label.double_clicked() {
                     if let Some(id) = id {
                         // The request tells the application which entry of
@@ -1010,10 +1038,115 @@ fn smart_filter_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document, row: &Layer
                         stack.remove(index);
                         emit_stack(w, stack);
                     }
+                    let blend_tip = crate::menu::MenuAction::BlendingOptions.label();
+                    if icon_action_id(
+                        ui,
+                        "adjustment",
+                        &blend_tip,
+                        ActionState::selected_if(blend_open == Some(index)),
+                        Some(smart_filter_part_id(row.id, index, "blend")),
+                    )
+                    .clicked()
+                    {
+                        let next = (blend_open != Some(index)).then_some(index);
+                        ui.data_mut(|d| match next {
+                            Some(i) => d.insert_temp(blend_open_key, i),
+                            None => d.remove::<usize>(blend_open_key),
+                        });
+                    }
                 });
             },
         );
+        if dragging.is_some() && pointer.is_some_and(|p| filter_row.response.rect.contains(p)) {
+            drop_on = Some(index);
+        }
+        if blend_open == Some(index) {
+            smart_filter_blend_row(w, ui, so, row.id, index, indent, &emit_stack);
+        }
     }
+    // The drop is decided by the frame's release, not by any one row's
+    // response — the same reason the layer rows decide theirs that way.
+    if released {
+        if let Some(from) = dragging.take() {
+            ui.data_mut(|d| d.remove::<usize>(drag_key));
+            if let Some(stack) =
+                drop_on.and_then(|to| compositor::smart::move_filter(&so.filters, from, to))
+            {
+                emit_stack(w, stack);
+            }
+        }
+    }
+}
+
+/// W10-I: one smart filter's Blending Options, as a row under the filter:
+/// its blend mode and its opacity, each change one stack command. The
+/// compositor lands the filtered result through exactly these two
+/// ([`compositor::smart::apply_stack`]).
+fn smart_filter_blend_row(
+    w: &mut Workspace,
+    ui: &mut Ui,
+    so: &layer_model::SmartObjectLayer,
+    layer: LayerId,
+    index: usize,
+    indent: f32,
+    emit_stack: &dyn Fn(&mut Workspace, Vec<layer_model::SmartFilter>),
+) {
+    let t = current_tokens(ui);
+    let filter = &so.filters[index];
+    let mode = filter.blend_mode;
+    let mut opacity = filter.effective_opacity() * 100.0;
+    ui.allocate_ui_with_layout(
+        Vec2::new(ui.available_width(), t.metrics.control_height),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            ui.add_space(indent + t.metrics.min_hit_target);
+            let mut picked = mode;
+            let combo =
+                egui::ComboBox::from_id_salt(("raster-smart-filter-mode-combo", layer, index))
+                    .width(t.metrics.numeric_field_width * 2.0)
+                    .selected_text(body(ui, mode.label()))
+                    .show_ui(ui, |ui| {
+                        for candidate in BlendMode::ALL {
+                            let option =
+                                ui.selectable_label(candidate == mode, body(ui, candidate.label()));
+                            super::mark(
+                                ui,
+                                option.rect,
+                                smart_filter_mode_id(layer, index, candidate),
+                            );
+                            if option.clicked() {
+                                picked = candidate;
+                            }
+                        }
+                    });
+            super::mark(
+                ui,
+                combo.response.rect,
+                smart_filter_part_id(layer, index, "mode"),
+            );
+            if picked != mode {
+                let mut stack = so.filters.clone();
+                stack[index].blend_mode = picked;
+                emit_stack(w, stack);
+            }
+            ui.label(hint(ui, "Opacity"));
+            let slider = ui.add(
+                egui::Slider::new(&mut opacity, 0.0..=100.0)
+                    .max_decimals(0)
+                    .suffix("%"),
+            );
+            super::mark(
+                ui,
+                slider.rect,
+                smart_filter_part_id(layer, index, "opacity"),
+            );
+            if slider.changed() {
+                let mut stack = so.filters.clone();
+                stack[index].opacity = (opacity / 100.0).clamp(0.0, 1.0);
+                emit_stack(w, stack);
+            }
+        },
+    );
 }
 
 /// W3-J: the inline rename, drawn where the name label was.
