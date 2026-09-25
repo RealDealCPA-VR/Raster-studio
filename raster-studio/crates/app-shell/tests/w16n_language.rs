@@ -37,6 +37,9 @@ impl Window {
     fn new(editor: &mut Editor) -> Self {
         let ctx = egui::Context::default();
         install_theme(&ctx, design::Theme::Dark);
+        // The frames here carry no clock, so an animated fade (an opening
+        // menu's) would stop part-way; the fills are checked at rest.
+        ctx.style_mut(|s| s.animation_time = 0.0);
         let mut window = Self {
             ctx,
             chrome: Chrome::new(),
