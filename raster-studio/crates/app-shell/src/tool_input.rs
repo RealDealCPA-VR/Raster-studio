@@ -6130,10 +6130,21 @@ mod tests {
                 "{tool:?} put nothing on the canvas: the shape rasteriser is \
                  not reached from a canvas gesture"
             );
+            // W16-G: Photopea draws a parametric Polygon or Star from its
+            // centre (the press), out to the drag's length; the others span
+            // the dragged box corner to corner.
+            let centred = matches!(tool, ToolId::Polygon | ToolId::Star);
+            let radius = (30.0f32 * 30.0 * 2.0).sqrt() + 1.5;
             for (x, y) in &reached {
+                let inside = if centred {
+                    let (dx, dy) = (*x as f32 + 0.5 - 10.0, *y as f32 + 0.5 - 10.0);
+                    (dx * dx + dy * dy).sqrt() <= radius
+                } else {
+                    (9..=41).contains(x) && (9..=41).contains(y)
+                };
                 assert!(
-                    (9..=41).contains(x) && (9..=41).contains(y),
-                    "{tool:?} painted ({x}, {y}), outside the dragged box"
+                    inside,
+                    "{tool:?} painted ({x}, {y}), outside its shape's reach"
                 );
             }
 

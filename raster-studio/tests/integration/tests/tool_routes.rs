@@ -2417,6 +2417,9 @@ fn every_palette_tool_has_a_real_route_test_or_an_owner() {
         Star,
         Line,
         CustomShape,
+        // W16-G: the Vector Gradient tool's route test drives the real editor
+        // in app-shell's `live_shape` tests.
+        VectorGradient,
     ];
     let mut accounted: Vec<ToolId> = Vec::new();
     accounted.extend(here);

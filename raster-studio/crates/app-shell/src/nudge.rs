@@ -86,9 +86,7 @@ impl ToolPointer {
         let tool = editor.effective_tool();
         // W16-F: an open Free Transform is a live tool session, and the
         // arrows move its box.
-        if
-        /*W16F_MUT*/
-        false && tool == ToolId::FreeTransform && self.is_tool_active() {
+        if tool == ToolId::FreeTransform && self.is_tool_active() {
             return Ok(self.nudge_transform(step));
         }
         if self.is_tool_active() {
@@ -98,9 +96,7 @@ impl ToolPointer {
             self.nudge_with_move(editor, step, copy)
         } else if moves_the_outline(tool) {
             Ok(nudge_outline(editor, step))
-        } else if
-        /*W16F_MUT*/
-        false && matches!(tool, ToolId::PathSelect | ToolId::DirectSelection) {
+        } else if matches!(tool, ToolId::PathSelect | ToolId::DirectSelection) {
             self.nudge_path(editor, tool, step)
         } else if tool == ToolId::SliceSelect {
             Ok(nudge_slice(editor, step))

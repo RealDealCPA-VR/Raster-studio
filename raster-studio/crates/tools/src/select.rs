@@ -557,6 +557,9 @@ pub struct LassoTool {
     /// W16-A: the pixels the magnetic lasso snaps its anchors onto, read once
     /// at the press that starts an outline.
     edge_image: Option<(raster::PixelRect, Vec<u8>)>,
+    /// Where the press that started the outline landed, before the magnetic
+    /// lasso snapped it onto an edge: a drag released back there closes.
+    start_press: Option<Vec2>,
 }
 
 impl LassoTool {
@@ -572,6 +575,7 @@ impl LassoTool {
             alt_armed: false,
             rubber: None,
             last_press: None,
+            start_press: None,
             spacing: MAGNETIC_ANCHOR_SPACING,
             edge_image: None,
         }
@@ -603,6 +607,7 @@ impl LassoTool {
         self.rubber = None;
         self.last_press = None;
         self.edge_image = None;
+        self.start_press = None;
     }
 
     /// W16-A: Backspace/Delete — drop the last point of an open outline.
@@ -771,6 +776,7 @@ impl Tool for LassoTool {
         // A fresh outline.
         self.reset();
         self.last_press = Some((pos, double_click_doc_px(ctx)));
+        self.start_press = Some(pos);
         match self.kind {
             LassoKind::Polygonal => self.points.push(pos),
             LassoKind::Magnetic => {
@@ -879,8 +885,9 @@ impl Tool for LassoTool {
                 self.dragging = false;
                 // W16-A: a drag released back on its start closes; any other
                 // release leaves the outline open for the pointer to extend.
+                let near = |p: Vec2| (event.pos - p).length() <= POLYGON_CLOSE_PX;
                 if self.points.len() >= 3
-                    && (event.pos - self.points[0]).length() <= POLYGON_CLOSE_PX
+                    && (near(self.points[0]) || self.start_press.is_some_and(near))
                 {
                     return self.close(ctx);
                 }

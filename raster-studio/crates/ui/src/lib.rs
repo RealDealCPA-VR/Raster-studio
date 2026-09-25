@@ -1738,6 +1738,10 @@ mod tests {
         w.palette
             .activate(&PaletteModel::build(), ToolId::FreeTransform);
         workspace_frame(&mut w, &ctx, &doc, &history, 1.0, Vec::new());
+        // A long options bar (Free Transform's, with its unit suffixes) gains
+        // its horizontal scrollbar a frame after egui first measures it, so
+        // the baseline is the settled frame.
+        workspace_frame(&mut w, &ctx, &doc, &history, 1.0, Vec::new());
         let bare = workspace_frame(&mut w, &ctx, &doc, &history, 1.0, Vec::new()).len();
 
         w.canvas.sessions.transform = Some((

@@ -2394,11 +2394,12 @@ fn psd_layers_for(
                     // (e.g. a Brightness past what `brit` stores: nothing is
                     // clamped silently).
                     Err(e) => {
-                        record.pixel_data_irrelevant = true; /*W16J-MUT*/
                         if let Some((bounds, rgba)) =
                             psd_live::adjustment_as_pixels(document, tiles, id, canvas)?
-                                .filter(|_| false /*W16J-MUT*/)
                         {
+                            // The pixels ARE the layer now: Photoshop must
+                            // read them.
+                            record.pixel_data_irrelevant = false;
                             record.bounds = bounds.to_psd();
                             record.set_rgba8(&rgba)?;
                         }
