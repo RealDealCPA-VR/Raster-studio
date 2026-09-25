@@ -29,7 +29,7 @@
 //!   the layers panel say "No layers yet" under a visible photograph.
 //! * **There is one chrome.** [`chrome::Chrome`] owns a [`ui::Workspace`] and
 //!   draws it: the nine menus, the tool palette and its fly-outs, the options
-//!   bar, all twenty-three docked panels (`ui::PanelId::ALL`) and the
+//!   bar, all twenty-six docked panels (`ui::PanelId::ALL`) and the
 //!   dialogs (Preferences included, hosted by [`dialog_host`]) are the `ui`
 //!   crate's, reached from the binary.
 //!   What this crate still draws itself is what that crate has no model for —

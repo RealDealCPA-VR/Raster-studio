@@ -1,13 +1,13 @@
 # PSD support — fidelity matrix and failure policy
 
-Card 072's contract, brought up to date at `fe978d3` (wave 11): what the
+Card 072's contract, brought up to date at `25b66e0` (wave 13X): what the
 `.psd` / `.psb` reader and writer in `crates/psd` carry into and out of this
 editor, and what happens when they cannot. Every row below is grounded in
 source. The import conversion is `crates/app-shell/src/import.rs`
 (`document_from_psd`: `psd::read` → the document model), with its child
 modules `psd_live.rs` (shape layers, smart objects, 16-bit samples),
-`psd_vector_mask.rs` (vector masks) and `psd_resources.rs` (guides, paths,
-alpha channels, slices); the export back-trip is `psd_from_document` in the
+`psd_vector_mask.rs` (vector masks), `psd_resources.rs` (guides, paths,
+alpha channels, slices) and `spot_channel.rs` (W13X-4: spot channels); the export back-trip is `psd_from_document` in the
 same file (the document model → `psd::write`). The byte layouts live in the
 `psd` crate: `adjustments.rs`, `effects.rs` + `effects_rest.rs`, `fill.rs`,
 `pattern.rs`, `placed.rs`, `shape.rs`, `text.rs` + `engine_data.rs`,
@@ -70,9 +70,10 @@ Photoshop or Photopea themselves.
 | Guides (resource 1032) | **Editable** | W11-C: the document's guides (`psd_resources::import_resources`). Guide locks are not a `.psd` concept. |
 | Saved paths (2000–2997) and the work path (1025) | **Editable** | W11-C: path layers (no-fill, no-stroke shape layers, the Paths panel's rows); the work path arrives as a saved path called "Work Path". A path with no drawable geometry is named: "the path {name} has no geometry this build can draw and was not kept". |
 | Alpha channels (merged-image extra channels named by 1006 / 1045) | **Editable** | W11-C: saved selections (the Channels panel's alpha rows). One that cannot be kept is named: "the alpha channel {name} could not be kept as a saved selection: {reason}". |
+| Spot channels (extra channels marked spot in DisplayInfo, 1077) | **Editable** | W13X-4: `spot_channel::adopt_psd_spots` moves each channel whose DisplayInfo record has kind 2 out of the saved selections and into `Document::spot_channels`, with its ink colour and solidity (the record's opacity). A spot channel whose plane cannot become a mask is skipped without a note. The DisplayInfo resource itself is not in the import's list of mapped resources, so it is still counted among the resources "left behind" (next rows) even though its spot records were read. |
 | Slices (1050) | **Editable** | W11-C: user and layer slices (version 6, and versions 7-8 as a descriptor, tested on a descriptor this build writes) with name, URL and alt text become the document's slices, loaded into the Slice tools' store; Photoshop's auto-generated fill slices are skipped. |
 | Embedded ICC profile | **Retained (metadata)** | Card 076: resource 1039 is extracted (`psd::resource::icc_profile`) and its bytes ride in the document's colour space (`ColorSpace::IccProfile`). The pixels are NOT transformed at import — deliberate, documented: they load verbatim, the compositor converts matrix-shaper profiles at render, and a profile this engine cannot parse falls back to identity (`is_transform_supported`) rather than being silently reinterpreted. A profile that is measurably sRGB (`MatrixShaper::is_srgb_equivalent`) is recorded as sRGB. When a profile is retained, the resources note drops "the colour profile" from its list. |
-| Other image resources | **Unsupported (explicit)** | Everything but guides, slices, paths, alpha-channel names, the resolution (every writer synthesises one, so it is not reported) and a retained profile is counted and named as left behind (failure policy 1). |
+| Other image resources | **Unsupported (explicit)** | Everything but guides, slices, paths, alpha-channel names, the resolution (every writer synthesises one, so it is not reported) and a retained profile is counted and named as left behind (failure policy 1) — DisplayInfo (1077) included, although W13X-4 reads its spot records (row above). |
 | Layer colour labels (`lclr`) | **Supported** | W13-B: `lclr` 0..=7 (none, red, orange, yellow, green, blue, violet, gray) opens as the layer's colour label (`layer_model::ColorLabel::from_psd_index`, kept in the document's extras). Only an index past those eight is dropped and named — "the colour label on {names} is not one of the eight this build knows and was not kept". |
 | Pass-through + blend mode on one group | **Appearance fallback** | Export-side: a `.psd` "stores only the" pass-through; the blend mode is named as lost. |
 | Files with no layers / no flattened image | **Explicit** | "this file has no layers, so its flattened image became one layer", or "this file has neither layers nor a flattened image; the canvas is empty". |
@@ -82,14 +83,14 @@ Photoshop or Photopea themselves.
 
 | Feature | Outcome | Notes |
 |---|---|---|
-| File version | **Editable** | A canvas up to 30 000 px is written as a `.psd`; past that (to 300 000 px) as a `.psb`, and Save as PSD offers `.psb` first (W11-H). `.psb` bytes under a `.psd` name are refused, naming `.psb`. |
+| File version | **Editable** | Chosen by the file name first: any export named `.psb` is written as version 2, whatever the canvas size (`doc::write_atomically` re-writes version-1 bytes with `psd::write_psb`). Under a `.psd` name a canvas up to 30 000 px is written as version 1; past that (to 300 000 px) the writer produces `.psb` bytes, which a `.psd` name refuses, naming `.psb`, and Save as PSD offers `.psb` first for such a canvas (W11-H). |
 | Bit depth | **Editable** (8, 16) / **Appearance fallback** (32) | A 16-bit document is written as a 16-bit file (raster layers at their stored samples; rendered previews, masks and the merged image are 8-bit values widened exactly). A 32 Bits/Channel document is written as an 8-bit file: its `f32` tiles are clipped and rounded (`raster::rgba8_view`), and no note says so. |
 | Layer tree, groups, order, names, bounds, visibility | **Editable** | Round-trips. |
 | Blend mode, opacity, fill opacity, clipping, locks | **Editable** | A blanket lock is named: "the blanket lock on {names} has no .psd equivalent and was not written". |
 | Raster pixels, layer masks | **Editable** | A layer whose transform a `.psd` cannot express is written where its pixels are stored — "{names} carry a transform a .psd cannot express; their pixels were written where they are stored". |
 | Mask density / feather | **Editable** | W11-C: written in the mask record's parameter block. Only a pixel mask with no stored pixels, which writes no record, still gets "the mask density or feather on {names} was not written". |
 | Vector masks | **Editable** | W9-G: `vmsk` path records (through the layer's and the mask's pose) and the vector density / feather pair; with a pixel mask too, the first record is the vector's rendering and the pixel mask the `real` one. A vector-only mask is written with no rendered coverage, so a reader that ignores `vmsk` sees no mask. A mask whose path cannot be written, or an older vector-kind mask with no path, goes out as coverage — "the vector mask on {names} was written as its rasterised coverage". |
-| Adjustment layers | **Editable** | W11-A: every kind a `.psd` has a key for is written under that key (`psd::adjustments::encode`; Curves as version 1). Auto, Desaturate, Equalize, Shadows/Highlights, Replace Color, HDR Toning and Match Color have no `.psd` adjustment layer, and a setting the layout cannot spell (Brightness past ±150/255, a Black & White weight below -200%, Posterize 256, curve inputs that collide once quantised) is refused rather than clamped: each is written as an empty layer, named with its reason ("adjustment layer(s) this build cannot evaluate …"). |
+| Adjustment layers | **Editable** | W11-A: every kind a `.psd` has a key for is written under that key (`psd::adjustments::encode`; Curves as version 1). Auto, Desaturate, Equalize, Shadows/Highlights, Replace Color, HDR Toning and Match Color have no `.psd` adjustment layer, and a setting the layout cannot spell (Brightness past ±150/255, a Black & White weight outside -200%..+300%, Posterize 256, curve inputs that collide once quantised) is refused rather than clamped: each is written as an empty layer, named with its reason ("adjustment layer(s) this build cannot evaluate …"). |
 | Fill layers | **Editable** | W9-B: `SoCo` / `GdFl` / `PtFl`, pattern pixels in the document's `Patt` block. `SoCo` has no alpha, so a translucent colour's alpha rides the layer's fill opacity. |
 | Shape layers | **Editable** | W9-M: `vmsk` path in canvas pixels, `SoCo` (or `GdFl` / `PtFl`) fill, `vstk` stroke, `vogk` live rectangle for an axis-aligned rectangle, over the rendered pixels. A translucent solid fill, a stroke under a non-uniform transform, a path with an arc, a pattern fill under any transform or a gradient fill under more than a translation keeps the card-078 raster fallback — "shape and smart-object layer(s) ({names}) cannot stay editable in a .psd; their rendered appearance was written as a raster layer's pixels". |
 | Smart objects | **Editable** (embedded, unfiltered) / **Appearance fallback** (linked or filtered) | W9-M: `SoLd` + `PlLd` naming the asset, whose bytes go in the document's `lnk2` block. A linked object, or one carrying smart filters (the filter stack is not written as PSD smart-filter data), keeps the raster fallback, named by the note above. |
@@ -99,6 +100,7 @@ Photoshop or Photopea themselves.
 | Guides | **Editable** | W11-C: resource 1032. Guide locks are not written — "guide locks have no .psd equivalent and were not written". |
 | Path layers | **Editable** | W11-C: a no-fill, no-stroke, unstyled shape layer is written as a saved-path resource from 2000, not as a layer record (so it does not come back doubled); a styled one (hidden, masked, with effects, clipping, a non-Normal blend or reduced opacity / fill) stays a layer record. Past the 998 saved paths a `.psd` holds, a path is named and not written. The Paths panel's unsaved Work Path is not written. |
 | Saved selections | **Editable** | W11-C: named alpha channels in the merged image (1006 + 1045), up to the 56-channel ceiling (52 on an RGBA file); the ones past it are named in the save notes and the save goes ahead. |
+| Spot channels | **Editable** | W13X-4: after the saved selections, as more named channels of the merged image, with a DisplayInfo (1077) record per extra channel marking each spot one with its ink and solidity (`spot_channel::push_psd_spots`). One past the channel ceiling is named — "the spot channel {name} is past the channels this .psd can hold and was not written". The merged image is this build's composite, which already shows the ink. |
 | Slices | **Editable** | W11-C: a version-6 1050 resource of user slices with name, URL and alt text. A slice's target, message and cell text are not written. |
 | Layer colour labels | **Supported** | W13-B: a labelled layer's record carries `lclr` with the label's index (`ColorLabel::psd_index`); an unlabelled layer writes none. |
 | Pass-through group with a blend mode | **Appearance fallback** | "{names} pass through *and* carry a blend mode; a .psd stores only the pass-through". |
@@ -227,7 +229,7 @@ terminating NUL in layer names and its naive compositor ignores layer
 effects (it is not a full blending engine), so appearance was compared
 through the flattened image with Pillow instead.
 
-That evidence predates waves 9-11. Wave 9 recorded (in the parity matrix's
+That evidence predates waves 9-13X. Wave 9 recorded (in the parity matrix's
 PSD export row, with no transcript committed) that psd-tools 1.19.0 reads
 the W9-M fixture — written by the ignored test
 `psd_live::tests::w9m_fixture_for_independent_readers` — as a shape layer,
@@ -244,6 +246,13 @@ an embedded smart object and a 16-bit pixel layer.
   `psd::adjustments`), the five W11-B effects, and the guides, paths, alpha
   channels, slices and mask parameters of W11-C (slice versions 7-8 are
   tested on a descriptor this build writes, not on a Photoshop file).
+- **The W13-B and W13X-4 mappings have been read back by this build
+  only:** colour labels (`lclr`), the gradient- and pattern-filled strokes,
+  gradient-filled glows, a gradient overlay's `Ofst` and the `...Multi`
+  repeated-effect lists (`psd` `effects::w11b_rest_effect_tests::*`,
+  `app-shell` `import::tests::every_colour_label_round_trips_through_a_psd_as_its_lclr_index`
+  and `repeated_gradient_pattern_and_offset_effects_survive_a_psd_save_and_reopen`),
+  and spot channels in DisplayInfo (`spot_channel::tests::*`).
 - **The W9-C text engine data** (every style run, auto leading, the anchor)
   is re-read by this build's own importer; whether Photoshop re-typesets it
   the same way is unchecked, which is why the rendered pixels ride under

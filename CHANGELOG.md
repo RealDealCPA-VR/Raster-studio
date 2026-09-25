@@ -10,17 +10,207 @@ names what changed and, where it matters, how it was verified.
 
 ## [Unreleased]
 
-Six fix waves, each from a fresh adversarial audit of the commit before it,
-then five Photopea-parity waves (7-11), each from an audit of Photopea's
-features against this build. Every entry below is taken from its commit
-message and checked against the code; where a wave left something open, its
-"Known gaps" says so, and the parity matrix
-(`raster-studio/docs/parity-matrix.md`) carries the row-by-row detail. CI was
-green on the six fix-wave commits (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727`,
-`7bb295a`, `b477a09` and `0e4a6fd`, run 35907846548) and on waves 7-10
-(`8b6c399` run 35931490726, `f9329d0` run 35939564122, `9a61faa` run
-35957810847, `05ec9b1` run 36026393650). Wave 11 (`fe978d3`) is run
-36048266245; whether it passed is what the Actions tab says.
+Six fix waves (0-5), each from a fresh adversarial audit of the commit
+before it, then the Photopea-parity waves 7-11, 13 and 13X, each from an
+audit of Photopea's features against this build. Every entry below is taken
+from its commit message and checked against the code; where a wave left
+something open, its "Known gaps" says so, and the parity matrix
+(`raster-studio/docs/parity-matrix.md`) carries the row-by-row detail. The
+older entries keep their gaps as they stood at their commit; where a later
+wave closed one, the entry says which.
+
+CI, as the Actions tab reports it: the six fix waves are seven commits, each
+green on its own run (`53dd398` 35792257651, `2caaa6c` 35799963384,
+`02c7e1b` 35817391510, `1c5b727` 35871476210 and its integration `7bb295a`
+35876205854, `b477a09` 35893831056, `0e4a6fd` 35907846548); waves 7-10 are
+green (`8b6c399` 35931490726, `f9329d0` 35939564122, `9a61faa` 35957810847,
+`05ec9b1` 36026393650). Wave 11 (`fe978d3`, run 36048266245) **failed**: its
+`test (macos-latest)` job failed and the other test, lint and audit jobs passed. The CI fixes
+below ended that: `c52c407` (run 36051745607) was still red on macOS, as was
+the docs commit `6e0287d` (run 36052957676), and `22e31a7` (run
+36054206009) is green. Wave 13 (`06abd74`, run 36084801672) is
+green. Wave 13X (`25b66e0`, run 36102799475) is green (the release job is skipped on every run: no tag).
+
+### Wave 14 — docs honesty after waves 13 and 13X (uncommitted)
+
+#### Added
+
+- **File ▸ Export… is a menu row.** Single-file export by extension was
+  reachable only by its chord (Ctrl+Alt+Shift+S, the keymap's default for
+  `Action::Export`) and was not in Help ▸ Search Commands. The File menu
+  now has an **Export…** row above the Export As submenu
+  (`ui::menu::MenuAction::ExportByName`, greyed with no document), which
+  `app_shell::menu_bridge` routes to `Action::Export`: the platform save
+  picker, then the format the typed extension names
+  (`doc::export_format_for`, plus `.svg` and `.psd` / `.psb`). Help ▸ Search
+  Commands lists it as "File > Export…", since the palette is built from
+  the menu bar. Known gap: the row paints no chord. Ctrl+Alt+Shift+S still
+  performs it, but painting the chord beside the row needs
+  `keymap::menu_twin` to name the row, which this change does not touch.
+  Verified by `app-shell`
+  `menu_bridge::tests::file_export_is_a_menu_row_command_search_finds_and_writes_by_extension`
+  (the row in the File menu, the palette entry, and the menu bar's click
+  route writing a JPEG from a `.jpg` name), red with the row taken out of
+  the File menu.
+
+#### Changed
+
+- The READMEs, the parity matrix, the PSD support matrix and the
+  architecture, file-format and threat-model docs re-checked against the
+  code after waves 13 and 13X: every count re-derived (69 `ToolId`s, 68 of
+  them on the palette; 26 panels; 71 filters; 22 adjustments; 27 blend
+  modes; 36 extensions in `IMAGE_EXTENSIONS`; 19 formats in
+  `ExportFormat::writable()`), the contradictions a confirming audit of
+  `6e0287d` found corrected, and the "still missing" lists stated from the
+  parity rows' own "Not done" notes. `docs/main-window.png` retaken.
+
+### Wave 13X — `25b66e0`
+
+Follow-ups to wave 13: nine doer/reviewer pairs.
+
+#### Added
+
+- **Arrow-key nudge** (W13X-1). The arrow keys nudge (`Action::Nudge`,
+  `tool_input::move_duplicate::nudge`): with the Move tool the active
+  layer(s), or the selected pixels with the ants, move 1 px, 10 px with
+  Shift, and Alt+arrow duplicates first through W13-A's copy path (N+1
+  layers, one step); with a selection tool the arrows move the outline
+  only. Each press is its own history step; a held arrow repeats (Alt
+  copies on the press only); a focused text field or an open Type run keeps
+  the arrows (`shell::nudge_tests`). Known gap: Ctrl+arrow is not bound.
+- **A colour-managed canvas** (W13X-2). Every upload is converted from the
+  document's profile to the sRGB texture
+  (`app_shell::presenter::DisplayTransform`, the numbers untouched), so
+  W13-F's Assign Profile changes what the canvas shows and Convert to
+  Profile keeps it (Adobe RGB to sRGB within 2 codes; sRGB to Adobe RGB
+  within 2 codes on at least 97% of channels, and further (up to what one
+  8-bit Adobe RGB code spans on screen, 7 codes seen) on saturated pixels
+  near sRGB's gamut edge; ProPhoto and Display P3 not measured); a profile
+  the engine cannot transform (not a matrix-shaper) is shown as its
+  numbers, unconverted; and Pattern Preview's copies go through the same
+  conversion and hold the canvas's bytes. Known gaps: the display
+  conversion targets sRGB, not the monitor's profile; Pattern Preview skips
+  the canvas's view-only passes (Proof Colors, channel eyes, mask view);
+  the Navigator / History whole-canvas preview (`chrome::composite_preview`)
+  is not colour-managed yet and disagrees with the canvas on a non-sRGB
+  document.
+- **Scale Effects… is a percent dialog** (W13X-3): 1–1000%, with a Preview
+  image of the document at that percent
+  (`scale_effects_asks_for_any_percent_*` drives menu, dialog, 37% and
+  Enter). Stack Mode's enable count walks the embedded PSD's layer records,
+  so group dividers, a group's children and hidden layers are not counted
+  and a source holding one group is greyed; at 16 and 32 bits the records
+  are read from the `Lr16` / `Lr32` block. Known gaps: the Scale Effects
+  preview is an image inside the dialog, not a live canvas preview; Stack
+  Mode stays enabled, then refuses, for a linked source (the file is not
+  read to grey the row), an embedded one whose records cannot be walked, or
+  one that fails to decode.
+- **Photopea's themes, spot channels and the Channels panel menu**
+  (W13X-4). Edit ▸ Preferences… ▸ Theme and Window ▸ Appearance offer seven
+  themes: the app's own Light and Dark (modelled on Photopea's White and
+  Dark Grey, not copies: their pasteboard, buttons, text and accent differ,
+  and Light's panel too) plus five of Photopea's — Light Grey, Blue, Dark
+  Blue, Purple and Black on Photopea's `pp.js` panel, pasteboard, button,
+  button-hover, text and accent numbers except five that fail the design
+  contrast gates: Light Grey's text (#222221 for #393837) and accent
+  (#0B5CC4 for #3482F6), Blue's and Purple's accent (#5B9BF0 for #3482F6)
+  and Dark Blue's panel (#303445 for #222531), a list a `design` test pins;
+  `RASTER_SHOT_THEME` picks one for a `--shot`. The Channels panel's menu
+  has New Spot Channel… (name, ink, solidity; the selection becomes its
+  coverage; composited as ink, saved in `.rstudio`, written to and read
+  from `.psd` as a spot channel) and Merge Channels…. Known gaps:
+  Photopea's exact White and Dark Grey are not offered; a spot channel
+  cannot yet be edited, renamed, painted or deleted once made. Verified by
+  `design` `theme::tests::*` and `token_gates`, `app-shell`
+  `prefs::tests::picking_a_theme_in_preferences_installs_its_visuals` and
+  `spot_channel::tests::*`, `ui` `panels::channels::w13x4_channels_tests::*`,
+  `compositor` `spot::tests::*` and `editor-core` `spot::tests::*`.
+- **Custom warp and Flame along a path** (W13X-5). Warp Text… ▸ Custom,
+  then the Move tool drags the handles of a 4x4 Bezier mesh drawn over the
+  text, one undo step a drag, the mesh saved with the layer. Filter ▸
+  Render ▸ Flame burns along the Paths panel's current path with
+  Photopea's controls and defaults, refuses with "Make a path first"
+  without one, and keeps its path as a smart filter. Known gaps: the PSD
+  writer writes no text warp at all (every text layer is `warpNone`), so a
+  Custom warp is not in a saved PSD; Flame's renderer is this build's, not
+  a port of Photopea's. Verified by `text-engine` `warp::custom_tests::*`,
+  `app-shell` `warp_custom::tests::w13x5_*` (the mesh drawn on the canvas, a
+  dragged handle bending the text in one undo step, a press off the handles
+  not taken), `ui`
+  `dialogs::warp_text::tests::w13x5_custom_is_offered_and_keeps_the_layers_mesh`
+  and `layer-model` `text::w9k_warp_path_tests::a_custom_mesh_is_append_only_serde`.
+- **Small gaps** (W13X-6). The Background Eraser samples Continuously by
+  default, as in Photopea (Once is a choice); a group is copied with all
+  its children (nested groups included), as one step, by Alt+drag and by
+  Duplicate Layer (the menu and Ctrl+Alt+J); a tool letter enters its group
+  at the tool last used from it this session (the first tool when none was
+  used yet), whether that tool was picked by letter, palette or fly-out,
+  not remembered across sessions; the file name a script passes to
+  `app.open` or `saveAs` prefills the platform picker's file-name box (its
+  last path component only; the user still chooses the file).
+- **PDF import dialog and Paint.NET layers** (W13X-7). A PDF / AI of two or
+  more pages first asks, in an import dialog, which pages (thumbnails, each
+  a toggle), at what resolution (18-1200 dpi) and whether they open as
+  artboards or as separate documents; several such files opened at once
+  ask in turn; File ▸ Revert reads back the same choice. A Paint.NET `.pdn`
+  opens as its layers (name, opacity, visibility, blend mode) through a new
+  bounded .NET BinaryFormatter reader (no new dependency; a class's names
+  are shared by its objects, the parsed graph is held to 64 MiB, a pixel
+  block longer than its layer is refused and each block is dropped once
+  its layer is built); when the reader cannot follow a file its thumbnail
+  opens and the status line says why; File ▸ Revert reads the layers back
+  (and refuses, rather than flatten to the thumbnail, when they can no
+  longer be read). Known gaps: Paint.NET's gzip-wrapped older layout and
+  object graphs the reader does not recognise open the thumbnail (the
+  reader is checked against synthetic files, not files saved by
+  Paint.NET); a one-page PDF opens without the dialog. Verified by
+  `raster::codec::formats::vector_docs::pdn::tests::*`,
+  `dialogs::pdf_import::tests::*` and `editor::open_any::w13x7::tests::*`.
+- **Sketch, XD and Figma open as layers** (W13X-8): ZIP-packaged or a bare
+  `fig-kiwi` canvas; DEFLATE, or Zstandard through the new `ruzstd` 0.9
+  decoder (MIT); on every open route: artboards, groups, vector shape
+  layers with fill and stroke, text layers (string, font, size, colour) and
+  raster layers for bitmaps, with an import report naming what did not
+  map; the preview opens only when the layers cannot be read, saying why,
+  and File ▸ Revert rebuilds the layers. The kiwi decoder charges list
+  growth against its memory budget. Known gaps: the first page only;
+  symbols / components not expanded; gradients, effects, non-union boolean
+  operations, per-run text styles, blend modes and masks reported and not
+  kept (masked layers open unclipped); a Figma `VECTOR` with no stored
+  outline drawn as its box. Verified by
+  `raster::codec::formats::vector_docs::design_files::tests::*` and
+  `editor::open_any::import_design::tests::*`.
+- **Timeline easing, scale and rotation** (W13X-9). Scale and rotation keys
+  (about the layer centre, the canvas-sized pixel box's centre) join
+  opacity and position; each key carries Linear / Ease In / Ease Out / Hold
+  interpolation (the panel's Scale key / Rotation key buttons and four
+  interpolation buttons for the selected key; the preview well draws each
+  thumbnail as a quad at the playhead's transform); `mp4::probe` refuses a
+  sample table naming more than `MAX_PROBE_SAMPLES` (1 000 000) frames or
+  more than the file holds before allocating by it. A Scale key on a
+  mirrored layer keys the negative factor (the sign is kept, the magnitude
+  floored at 0.001), and a wave-13 position key still means the
+  transform's translation: a track's position keys become centres
+  (`M(c) - c`, marked by the appended `LayerTrack::centred`) only when it
+  first keys scale or rotation, migrated so the frame does not move.
+  Opening a video file is still refused by name: re-checked, `rav1d` /
+  `re_rav1d` (BSD-2-Clause) abort the process on damaged input and release
+  builds abort on panic, and `rav1d-safe` is AGPL-3.0. Known gaps: keying
+  scale or rotation drops a layer's shear; the pivot is the canvas-sized
+  pixel box's centre, not the painted content's; no audio; no H.264.
+  Verified by `editor_core::timeline::tests` (eased and hold values at t,
+  scale / rotation about the centre, a flipped layer keying its negative
+  scale, a wave-13 position key on a scaled layer staying the translation
+  and migrating unmoved),
+  `app_shell::timeline::tests::scale_and_rotation_keys_change_the_rendered_frame`,
+  `ui::panels::animation::timeline::tests::rotation_keys_and_interpolation_from_the_panel_turn_the_layer_and_its_preview`
+  and `raster::codec::formats::mp4::tests::probe_refuses_an_absurd_frame_count_before_allocating`.
+
+### Wave 13 — `06abd74`
+
+Gaps from the confirming Photopea-parity audit of `6e0287d`. The known gaps
+below are as they stood at `06abd74`; where wave 13X closed one, the entry
+says so.
 
 - **W13-N: Styles / Document Info / Guide Guy panels, Magic Cut, Merge
   Channels, four File ▸ Automate rows, Convert to Point / Paragraph Text.**
@@ -36,35 +226,9 @@ green on the six fix-wave commits (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727`,
   picker),
   File ▸ Automate ▸ PDF Presentation… / Resize Images… / Crop and
   Straighten Photos / Generate Mockups…, and Layer ▸ Text ▸ Convert to
-  Point / Paragraph Text. New Spot Channel and Photopea's extra themes
-  followed in W13X-4: Edit ▸ Preferences… ▸ Theme and Window ▸ Appearance
-  offer seven themes: the app's own Light and Dark (modelled on Photopea's
-  White and Dark Grey, not copies: their pasteboard, buttons, text and accent
-  differ, and Light's panel too) plus five of Photopea's, added — Light Grey,
-  Blue, Dark Blue, Purple and Black on Photopea's `pp.js` panel,
-  pasteboard, button, button-hover, text and accent numbers except five
-  that fail the design contrast gates: Light Grey's text (#222221 for
-  #393837) and accent (#0B5CC4 for #3482F6), Blue's and Purple's accent
-  (#5B9BF0 for #3482F6) and Dark Blue's panel (#303445 for #222531), a list
-  a `design` test pins; `RASTER_SHOT_THEME` picks one for a `--shot`), and the Channels panel's menu has New Spot Channel… (name,
-  ink, solidity; the selection becomes its coverage; composited as ink,
-  saved in `.rstudio`, written to and read from `.psd` as a spot channel)
-  and Merge Channels…. A spot channel cannot yet be edited or deleted once
-  made. Verified by `design` `theme::tests::*` and `token_gates`,
-  `app-shell` `prefs::tests::picking_a_theme_in_preferences_installs_its_visuals`
-  and `spot_channel::tests::*`, `ui`
-  `panels::channels::w13x4_channels_tests::*`, `compositor` `spot::tests::*`
-  and `editor-core` `spot::tests::*`.
-  The Custom warp style followed in W13X-5: Warp Text… ▸ Custom, then the
-  Move tool drags the handles of a 4x4 Bezier mesh drawn over the text, one
-  undo step a drag, the mesh saved with the layer (not in a PSD: the PSD
-  writer writes no text warp). The Custom warp is verified by `text-engine`
-  `warp::custom_tests::*`, `app-shell`
-  `warp_custom::tests::w13x5_*` (the mesh drawn on the canvas, a dragged
-  handle bending the text in one undo step, a press off the handles not
-  taken), `ui` `dialogs::warp_text::tests::w13x5_custom_is_offered_and_keeps_the_layers_mesh`
-  and `layer-model` `text::w9k_warp_path_tests::a_custom_mesh_is_append_only_serde`.
-  W13-N's own rows are verified by `ui` `panels::w13n_panel_tests::*`,
+  Point / Paragraph Text. Not built in this wave: New Spot Channel, a
+  Custom warp style and Photopea's extra themes (all three came in wave
+  13X: W13X-4 and W13X-5). Verified by `ui` `panels::w13n_panel_tests::*`,
   `app-shell` `menu_bridge::w13n_ops::tests::*` and `text-engine`
   `frame_convert::tests::*`.
 - **W13-K: File ▸ Script.** Photoshop-DOM JavaScript runs in-process on
@@ -73,11 +237,8 @@ green on the six fix-wave commits (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727`,
   sets, text items, selection, resize / crop / flatten, `alert`) goes
   through the existing menu and command routes, a run is one undo step per
   document, a step budget and time limit stop an endless loop, and a
-  `.jsx` opened or dropped runs only when Run is pressed. W13X-6: the file
-  name a script passes to `app.open` or `saveAs` prefills the platform
-  picker's file-name box (its last path component only; the user still
-  chooses the file). Verified by `app-shell` `script::tests::*` (each
-  mutation-checked).
+  `.jsx` opened or dropped runs only when Run is pressed. Verified by
+  `app-shell` `script::tests::*` (each mutation-checked).
 - **W13-F: Assign / Convert to Profile, Reduce Colors, Wavelet Decompose,
   Pattern Preview, Clear Slices, Slices from Guides.** Edit ▸ Assign
   Profile ▸ (sRGB, Adobe RGB (1998), Display P3, ProPhoto RGB, a profile
@@ -90,19 +251,7 @@ green on the six fix-wave commits (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727`,
   recomposite to the layer within 1/255) are dialogs. View ▸ Pattern
   Preview repeats the composite around the canvas; View ▸ Slices from
   Guides (also on the Slice tool's options bar) and Clear Slices are one
-  undo step each. The canvas is colour-managed (W13X-2): every upload is
-  converted from the document's profile to the sRGB texture
-  (`app_shell::presenter::DisplayTransform`, the numbers untouched), so
-  Assign changes what the canvas shows and Convert keeps it (Adobe RGB to
-  sRGB within 2 codes; sRGB to Adobe RGB within 2 codes on at least 97% of
-  channels, and further (up to what one 8-bit Adobe RGB code spans on
-  screen, 7 codes seen) on saturated pixels near sRGB's gamut edge;
-  ProPhoto and Display P3 not measured); a profile the engine cannot
-  transform (not a matrix-shaper) is shown as its numbers, unconverted;
-  and Pattern Preview's copies go through the same conversion and hold the
-  canvas's bytes (not with View ▸ Proof Colors, a hidden channel eye or a
-  mask view on: those presenter passes are not applied to the copies).
-  Every new label and message goes through
+  undo step each. Every new label and message goes through
   `ui::strings::tr`. `color::icc` writes matrix-shaper profiles with their
   media white and reads real ones (the `acsp` signature at byte 36, `para`
   parameters as s15Fixed16, kind 4 as ICC.1:2010 table 68 has it, the
@@ -110,27 +259,15 @@ green on the six fix-wave commits (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727`,
   through the menu bar, the dialog host and whole chrome frames. Known
   gaps: Perceptual and Saturation convert as Relative Colorimetric
   (matrix-shaper profiles have no tables for them); Wavelet Decompose needs
-  an sRGB-tagged 8-bit document; the display conversion targets sRGB, not
-  the monitor's profile; Pattern Preview skips the canvas's view-only passes
-  (Proof Colors, channel eyes, mask view); the Navigator / History
-  whole-canvas preview (`chrome::composite_preview`) is not colour-managed
-  yet and disagrees with the canvas on a non-sRGB document.
+  an sRGB-tagged 8-bit document.
 - **W13-A: Alt+drag with the Move tool duplicates.** Pressed with Alt
   held, a Move drag duplicates the moved layer(s) above their sources and
   moves the copies, or, with a pixel selection, lays a copy of the selected
   pixels down and keeps the originals; either is one undo step, and
   Ctrl+Alt+drag does the same from the tools Ctrl already lends the Move
-  tool on (`tool_input::move_duplicate::tests`). W13X-6: a group is
-  copied with all its children (nested groups included), as one step, by
-  Alt+drag and by Duplicate Layer (the menu and Ctrl+Alt+J). W13X-1: the
-  arrow keys nudge (`Action::Nudge`, `tool_input::move_duplicate::nudge`):
-  with the Move tool the active layer(s), or the selected pixels with the
-  ants, move 1 px, 10 px with Shift, and Alt+arrow duplicates first through
-  the same copy path (N+1 layers, one step); with a selection tool the
-  arrows move the outline only. Each press is its own history step; a held
-  arrow repeats (Alt copies on the press only); a focused text field or an
-  open Type run keeps the arrows (`shell::nudge_tests`). Known gap:
-  Ctrl+arrow is not bound.
+  tool on (`tool_input::move_duplicate::tests`). Known gaps: no arrow-key nudge exists, so there
+  is no Alt+arrow copy (closed by W13X-1); a group is refused rather than
+  copied empty (closed by W13X-6).
 - **W13-E: action sets and `.atn`.** File ▸ Open reads a Photoshop `.atn`
   (version 16) into a new set in the Actions library, where it had been
   refused. Mapped steps (new layer, selections, Fill, Image / Canvas Size,
@@ -146,10 +283,8 @@ green on the six fix-wave commits (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727`,
 - **W13-G: the last Layer-menu rows.** Layer Style ▸ Create Layers splits
   a style into raster layers (exterior passes under the layer, interior
   effects clipped to it, strokes above) that recomposite the styled original
-  within 2/255, and Layer Style ▸ Scale Effects… scales every size and
-  distance (W13X-3: a percent dialog, 1–1000%, with a Preview image of the
-  document at that percent; `scale_effects_asks_for_any_percent_*` drives
-  menu, dialog, 37% and Enter); New ▸ Artboard from Layers wraps the selected
+  within 2/255, and Layer Style ▸ Scale Effects ▸ 25/50/75/150/200% scales
+  every size and distance; New ▸ Artboard from Layers wraps the selected
   top-level layers in a transparent artboard at their ink bounds; Layer
   Mask ▸ From Transparency moves the alpha into a new mask; Smart Object ▸
   Reset Transform (source size, upright, same centre) and Stack Mode ▸ the
@@ -160,15 +295,14 @@ green on the six fix-wave commits (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727`,
   reason the click would give for: no style, a switched-off style (Create
   Layers), a locked layer anywhere (Merge), an empty layer (From
   Transparency), a source with no recorded size (Reset Transform) and an
-  embedded PSD with fewer than two visible top-level layers (Stack Mode;
-  W13X-3: the layer records are walked, so group dividers, a group's
-  children and hidden layers are not counted and a source holding one
-  group is greyed; at 16 and 32 bits the records are read from the
-  `Lr16` / `Lr32` block, so a deep layered source is not greyed by mistake).
-  Known gaps: the Scale Effects preview is an image inside the dialog, not
-  a live canvas preview; Stack Mode stays enabled, then refuses, for a
-  linked source (the file is not read to grey the row), an embedded one
-  whose records cannot be walked, or one that fails to decode; Stack Mode is not live; Create Layers
+  embedded PSD declaring fewer than two layers (Stack Mode; at 16 and 32
+  bits the count is read from the `Lr16` / `Lr32` block, so a deep layered
+  source is not greyed by mistake).
+  Known gaps: Scale Effects is fixed percentages, not a percent dialog (the
+  dialog host is outside this item's files; W13X-3 made it one, and
+  changed the Stack Mode count too); Stack Mode stays enabled, then
+  refuses, when a linked source cannot be read, an embedded one fails to
+  decode, or all but one of its layers are hidden; Stack Mode is not live; Create Layers
   is inexact for a non-Normal stroke, a non-Normal interior effect under a
   fill below 100%, and an overlapping stroke under an opacity below 100%;
   Create Layers, From Transparency, Stack Mode and Merge are 8-bit only.
@@ -179,17 +313,17 @@ green on the six fix-wave commits (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727`,
   Fourier (Fourier Transform, Inverse Fourier Transform) submenus, and the
   Filter Gallery's Distort (Diffuse Glow, Glass, Ocean Ripple) and Stylize
   (Glowing Edges) sets; each a live-preview dialog, one undo step or a smart
-  filter, with Photopea's controls and defaults (Flame's since W13X-5, which burns
-  along the Paths panel's current path, refuses with "Make a path first"
-  without one, and keeps its path as a smart filter). Shape Mosaic, Repeat, Color to
+  filter, with Photopea's controls and defaults — every one but Flame, whose
+  Photopea original draws only along a path (W13X-5 gave Flame the path
+  and Photopea's controls). Shape Mosaic, Repeat, Color to
   Alpha, Dither, Particles, Kaleidoscope, Normal Map and Texture Dilation
   are ported from Photopea's filter code. The FFT is the crate's own
   (radix-2 plus Bluestein, no new dependency); Fourier then Inverse restores
   the image within 1/255 on the float pipeline and in a 16-bit document
   (tested through the menu); on an 8-bit document the status bar says the
   round trip will not be exact and names 16 Bits/Channel. Known gaps: Flame's
-  renderer is this build's (not a port of Photopea's), and Dents' noise,
-  Glass's textures and the gallery effects' pictures are not Photopea's.
+  controls and placement are this build's, and Dents' noise, Glass's
+  textures and the gallery effects' pictures are not Photopea's.
 
 - **W13-I: tool options — Line arrowheads, Content-Aware crop, Shape Burst,
   the Eyedropper's Sample choice and ring.** The Line tool draws arrowheads
@@ -228,28 +362,8 @@ green on the six fix-wave commits (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727`,
   in the tree) in an MP4 container written in `raster::codec::formats::mp4`,
   with a quality field; an animated row writes the timeline at its frame
   rate, rendered through the compositor, or the `_a_` frames with their
-  delays. W13X-9: scale and rotation keys (about the layer centre, the
-  canvas-sized pixel box's centre) join opacity and position, each key
-  carries Linear / Ease In / Ease Out / Hold interpolation (the panel's
-  Scale key / Rotation key buttons and four interpolation buttons for the
-  selected key; the preview well draws each thumbnail as a quad at the
-  playhead's transform), and `mp4::probe` refuses a sample table naming
-  more than `MAX_PROBE_SAMPLES` (1 000 000) frames or more than the file
-  holds before allocating by it. Opening a video file is still refused by
-  name: re-checked, `rav1d` / `re_rav1d` (BSD-2-Clause) abort the process
-  on damaged input and release builds abort on panic, and `rav1d-safe` is
-  AGPL-3.0. A Scale key on a mirrored layer keys the negative factor (the
-  sign is kept, the magnitude floored at 0.001), and a wave-13 position key
-  still means the transform's translation: a track's position keys become
-  centres (`M(c) - c`, marked by the appended `LayerTrack::centred`) only
-  when it first keys scale or rotation, migrated so the frame does not
-  move. Verified by `editor_core::timeline::tests` (interpolation at t;
-  W13X-9: eased and hold values at t, scale / rotation about the centre, a
-  flipped layer keying its negative scale, a wave-13 position key on a
-  scaled layer staying the translation and migrating unmoved),
-  `app_shell::timeline::tests::scale_and_rotation_keys_change_the_rendered_frame`,
-  `ui::panels::animation::timeline::tests::rotation_keys_and_interpolation_from_the_panel_turn_the_layer_and_its_preview`,
-  `raster::codec::formats::mp4::tests::probe_refuses_an_absurd_frame_count_before_allocating`,
+  delays. Opening a video file is refused by name (no permissive pure-Rust
+  decoder). Verified by `editor_core::timeline::tests`,
   `raster::codec::formats::mp4::tests` (box structure read back: frame
   count, size, durations), `app_shell::timeline::tests` (save / open,
   Export As through `Editor::request_export` and the File menu row),
@@ -277,8 +391,8 @@ green on the six fix-wave commits (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727`,
   canvas centre; the Eraser a Mode (Brush, Pencil, Block); Colour
   Replacement a Mode (Hue, Saturation, Colour, Luminosity), Sampling
   (Continuous, Once, Background Swatch), Limits (Discontiguous, Contiguous,
-  Find Edges) and Anti-alias; the Background Eraser Sampling (W13X-6:
-  Continuous by default, as in Photopea; Once is a choice), Limits and
+  Find Edges) and Anti-alias; the Background Eraser Sampling (Once by
+  default, unlike Photopea's Continuous; Continuous since W13X-6), Limits and
   Protect Foreground Colour; Sharpen Protect Detail. Verified by the pixels
   each choice paints (`tools::stroke_options::tests`) and through the drawn
   options bar to a real press (`tool_input` `w13h_*` tests). The axis is
@@ -289,45 +403,16 @@ green on the six fix-wave commits (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727`,
   Apache-2.0) at one pixel per point; a multi-page file opens one
   artboard per page on every open route and File > Revert rebuilds them.
   WMF / EMF draw their common GDI records through `resvg`. EPS (TIFF / WMF /
-  EPSI preview) files open their embedded preview and the status line
-  says so. W13X-7: a PDF / AI of two or more pages first asks, in an
-  import dialog, which pages (thumbnails, each a toggle), at what
-  resolution (18-1200 dpi) and whether they open as artboards or as
-  separate documents; several such files opened at once ask in turn;
-  File > Revert reads back the same choice. A
-  Paint.NET `.pdn` opens as its layers (name, opacity, visibility, blend
-  mode) through a new bounded .NET BinaryFormatter reader (no new
-  dependency; a class's names are shared by its objects, the parsed
-  graph is held to 64 MiB, a pixel block longer than its layer is
-  refused and each block is dropped once its layer is built); when the reader cannot follow a file its
-  thumbnail opens and the status line says why; File > Revert reads the
-  layers back (and refuses, rather than flatten to the thumbnail, when
-  they can no longer be read). W13X-8: Sketch, XD and Figma
-  (ZIP-packaged or a bare `fig-kiwi` canvas; DEFLATE, or Zstandard through
-  the new `ruzstd` 0.9 decoder, MIT) open as layers on every open route:
-  artboards, groups, vector shape layers with fill and stroke, text layers
-  (string, font, size, colour) and raster layers for bitmaps, with an
-  import report naming what did not map; the preview opens only when the
-  layers cannot be read, saying why, and File > Revert rebuilds the
-  layers. `.svgz` joins the Open filter and
+  EPSI preview), Paint.NET (thumbnail), Sketch, XD and ZIP-packaged Figma
+  files open their embedded preview and the status line says so; a bare
+  `fig-kiwi` canvas is refused by name. `.svgz` joins the Open filter and
   `.cube` gets one. Verified by `raster::codec::formats::{pdf,metafile,
-  vector_docs}::tests::*`, `editor::open_any::open_pages::tests::*`,
-  `raster::codec::formats::vector_docs::design_files::tests::*` and
-  `editor::open_any::import_design::tests::*`,
-  `raster::codec::formats::vector_docs::pdn::tests::*`,
-  `dialogs::pdf_import::tests::*` and `editor::open_any::w13x7::tests::*`.
-  Known gaps: no PostScript interpreter (EPS artwork); Paint.NET's
-  gzip-wrapped older layout and object graphs the reader does not
-  recognise open the thumbnail (the reader is checked against synthetic
-  files, not files saved by Paint.NET); a one-page PDF opens without the
-  dialog;
-  Sketch / XD / Figma open their first page only, do not expand symbols /
-  components, report (and do not keep) gradients, effects, non-union
-  boolean operations, per-run text styles, blend modes and masks (masked
-  layers open unclipped), and draw a Figma `VECTOR`
-  with no stored outline as its box; arcs, clipping, dash styles and
-  EMF+ are not drawn; encrypted PDFs are refused; JPEG 2000 images in a
-  PDF are not drawn.
+  vector_docs}::tests::*` and `editor::open_any::open_pages::tests::*`.
+  Known gaps: no PostScript interpreter (EPS artwork), no Paint.NET layers
+  (closed by W13X-7), no Sketch / XD / Figma vector artwork (closed by
+  W13X-8); arcs, clipping, dash styles and EMF+ are not drawn; encrypted
+  PDFs are refused; JPEG 2000 images in a PDF are not drawn; no page picker
+  (closed by W13X-7).
 - **W13-M: Photopea's gestures and a real Print dialog.** A bare tool
   letter picks its group and keeps the tool when pressed again, and Shift +
   the letter steps through the group (one rule, `ui::keys::tool_for_letter`,
@@ -343,11 +428,8 @@ green on the six fix-wave commits (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727`,
   `shell::w13m_tests::*`, `editor::print::tests::*` (including a real GDI job
   on "Microsoft Print to PDF", skipped where that printer is absent) and
   `editor::tests::a_tool_letter_keeps_its_tool_and_the_step_cycles_within_its_group`.
-  W13X-6: a tool letter enters its group at the tool last used from it this
-  session (the first tool when none was used yet), whether that tool was
-  picked by letter, palette or fly-out; not remembered across sessions.
-  Known gaps: the dialog itself is not driven by a test; no print dialog on
-  macOS/Linux.
+  Known gaps: entering a group picks its first tool, not the last used
+  (closed by W13X-6); the dialog itself is not driven by a test; no print dialog on macOS/Linux.
 - **W13-B: PSD colour labels and the remaining layer-effect forms.** A
   `.psd` layer's `lclr` 0..=7 opens as its colour label and a labelled
   layer is saved with its `lclr` (the false "is not shown by this layers
@@ -359,6 +441,26 @@ green on the six fix-wave commits (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727`,
   and `app-shell` `import::tests::every_colour_label_round_trips_through_a_psd_as_its_lclr_index`
   / `repeated_gradient_pattern_and_offset_effects_survive_a_psd_save_and_reopen`;
   not yet checked in Photoshop.
+
+### CI fixes — `c52c407`, `22e31a7`
+
+#### Fixed
+
+- The shortcut-sheet test (`app-shell` `dialog_host_w11g`) failed on the
+  macOS runner only: the sheet shows the menu bar's spelling, Shift+Cmd+P
+  on macOS, while the test hard-coded Ctrl+Shift+P. `c52c407` spells its
+  expectations through `keymap::shortcut_of_chord`, the function the sheet
+  itself uses; `22e31a7` does the same for the filtered row's chord, whose
+  assertion still used the Windows spelling. Test-only; no product change.
+
+### Docs pass — `6e0287d`
+
+- README, this changelog (one entry per wave 7-11), the parity matrix
+  (re-checked at `fe978d3`), the PSD support document, the architecture,
+  file-format and threat-model docs and the `app-shell` module docs
+  reconciled with the code after waves 7-11; a fresh README screenshot.
+  A confirming audit of this commit found fourteen contradictions still
+  in the docs; wave 14 corrects the ones waves 13 and 13X left.
 
 ### Wave 11 — `fe978d3`
 
@@ -416,7 +518,8 @@ The last gaps from the parity audit of `05ec9b1`.
 
 #### Known gaps
 
-- Colour labels are not written to or read from a `.psd` (`lclr`); Transform
+- Colour labels are not written to or read from a `.psd` (`lclr`; closed by
+  W13-B); Transform
   Again repeats only a whole-layer scale / rotate / skew; the Object Selection
   tool has no hover-to-highlight finder; an Export As EXR row at a scale
   other than 100% writes the clipped 8/16-bit composite; no lossy JPEG XL.

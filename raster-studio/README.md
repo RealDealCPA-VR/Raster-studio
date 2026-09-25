@@ -6,7 +6,7 @@ file covers only what you need to build and work inside the workspace.
 ```bash
 # from this directory
 cargo check --workspace --all-targets   # type-check everything
-cargo test  --workspace                 # ~5,600 #[test] functions
+cargo test  --workspace                 # 5,946 #[test] functions
 cargo run   -p studio-desktop           # launch
 cargo run   -p studio-desktop -- img.png
 ```
@@ -28,8 +28,9 @@ rather than fail, so they can run on a runner without a GPU.
 | `crates/` | The 20 library crates — see the root README for the map |
 | `docs/PLAN.md` | The audit, the architecture decisions, and the build order |
 | `docs/PRODUCTION-TODO.md`, `docs/CORRECTIONS-TODO.md` | The production plan and the correction queue — history; each header says what is still open |
-| `../CHANGELOG.md` | What each fix wave changed |
+| `../CHANGELOG.md` | What each fix and parity wave changed |
 | `docs/parity-matrix.md` | Feature-by-feature status, kept honest |
+| `docs/PSD-THUMBNAIL-SUPPORT.md` | What the `.psd` / `.psb` reader and writer carry, and what each report note means |
 | `docs/architecture.md` | The crate graph and the layering rules |
 | `docs/render-pipeline.md` | The CPU compositor and what the GPU does |
 | `docs/file-format.md` | What a `.rstudio` package contains |

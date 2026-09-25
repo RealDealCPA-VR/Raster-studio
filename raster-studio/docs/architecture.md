@@ -75,14 +75,16 @@ only their dirty rectangle (`app_shell::dirty`).
 ## Threading
 
 The UI thread owns the documents. File ▸ Open's decode and PSD parse, save,
-autosave, Export As, File ▸ Export and Export Layers each run on a worker
+autosave, Export As, File ▸ Export… and Export Layers each run on a worker
 thread (`app-shell/src/jobs.rs`); drag-and-drop, recent files and the
 command-line argument still decode on the UI thread through
 `Editor::open_path`. The same job machinery also runs the content-aware
 fill, the Spot Healing Brush's Content-Aware type and the Content-Aware Scale
 presets (W7-I, W8-D), Select ▸ Subject (W10-K), the Object Selection tool
 (W11-G) and File ▸ Automate ▸ Batch / Convert Formats (W10-E); each lands on a
-later frame. A save or an export works on a cloned `Document`
+later frame. File ▸ Script's JavaScript engine (W13-K) runs on a thread
+of its own and reaches the editor only by messages the UI thread answers
+(`app-shell/src/script/engine.rs`). A save or an export works on a cloned `Document`
 and tile snapshot. The UI thread polls each job once a frame; an import result
 from a cancelled (stale) generation is dropped unread, and a save's outcome
 decides whether the live document is clean by comparing its digest with the
@@ -100,7 +102,7 @@ Solid edges are real `[dependencies]` entries in the manifests.
 apps/studio-desktop
   ├── telemetry                                  (tracing init, local bundles)
   └── app-shell ── winit · wgpu · egui · egui-wgpu · egui-winit · rfd · dirs
-        │           · arboard · webbrowser · accesskit_winit
+        │           · arboard · webbrowser · accesskit_winit · boa_engine
         ├── ui ── design
         │     └── editor-core · layer-model · tools · compositor · selection
         │        · filters · adjustments · vector · text-engine · raster · color
@@ -109,7 +111,7 @@ apps/studio-desktop
         ├── project-format
         ├── psd
         ├── tools
-        ├── filters · adjustments · selection · text-engine
+        ├── filters · adjustments · selection · text-engine · vector
         ├── editor-core
         ├── layer-model
         ├── asset-store
@@ -129,8 +131,9 @@ adjustments     ── color · layer-model
 editor-core     ── layer-model · color · raster
 text-engine     ── layer-model · cosmic-text
 psd             ── layer-model · flate2
-asset-store     ── raster
-raster          ── color · image · bytemuck · flate2 · blake3
+asset-store     ── raster · psd · layer-model
+raster          ── color · image · bytemuck · flate2 · blake3 · resvg · hayro
+                   · ruzstd · rav1e (and the other codec crates in its manifest)
 design          ── egui
 
 leaves (no workspace deps): color · vector · layer-model · render-shaders
@@ -159,13 +162,13 @@ the manifests actually support.
 | Crate | Owns |
 | --- | --- |
 | `apps/studio-desktop` | The executable: tracing init, argv, `app_shell::launch` |
-| `app-shell` | Window, event loop, surface, frame, editor state, documents, keymap, preferences, recent files, session markers, autosave, crash recovery, dirty-tile tracking, the canvas presenter |
+| `app-shell` | Window, event loop, surface, frame, editor state, documents, keymap, preferences, recent files, session markers, autosave, crash recovery, dirty-tile tracking, the canvas presenter (colour-managed since W13X-2), the PSD / PDN / Sketch / XD / Figma import mappings, the `.atn` player and File ▸ Script's engine host (W13-K) |
 | `ui` | Menus, panels, canvas widget, dialogs, tool options — as values, not mutations |
-| `design` | Tokens (colour, type scale, 4pt grid, radii, elevation, motion), the egui theme, themed widgets |
+| `design` | Tokens (colour, type scale, 4pt grid, radii, elevation, motion), the egui theme and its seven palettes (W13X-4: Light, Dark and five of Photopea's), themed widgets |
 | `editor-core` | `Document`, `Command`, `History`, the `PixelStore` of tile hashes, `Selection` |
 | `layer-model` | Layer tree, groups, masks, effects data, and the reference math for all 27 blend modes |
 | `compositor` | The authoritative CPU tile compositor, its tile cache, the adjustment application path, and the layer effects (`effects.rs`: all ten render; since W7-B a Pattern Overlay and a pattern-filled glow or stroke carry their pattern's pixels inside the effect, so no asset store is needed) |
-| `raster` | Tiles, tile grids, mip chains, pixel formats (RGBA8, RGBA16, and RGBA `f32` since W10-H), the codec facade, the format readers and writers beyond `image` (`formats/`: Netpbm, DDS, JPEG XL, XCF, OpenEXR / HDR, ICNS, IFF, KRA, and the AVIF refusal), export |
+| `raster` | Tiles, tile grids, mip chains, pixel formats (RGBA8, RGBA16, and RGBA `f32` since W10-H), the codec facade, the format readers and writers beyond `image` (`formats/`: Netpbm, DDS, JPEG XL, XCF, OpenEXR / HDR, ICNS, IFF, KRA; W13-D / W13X-7 / W13X-8: PDF through `hayro`, WMF / EMF, EPS previews, Paint.NET `.pdn`, Sketch, XD and Figma; W13-C: DNG and the vendor-RAW refusal; the AVIF / HEIC and video refusals; W13-L: the MP4 (AV1) writer), export |
 | `color` | Colour spaces, transfer functions, premultiply, CIELAB, HSL/HSV |
 | `selection` | Marquee, lasso, wand, colour range, morphology on fractional coverage, outline extraction |
 | `adjustments` | Parametric, non-destructive adjustment math |
@@ -174,7 +177,7 @@ the manifests actually support.
 | `vector` | Bézier paths, one anti-aliased coverage rasteriser, stroke-to-outline, booleans, SVG path I/O |
 | `text-engine` | Font enumeration and matching, shaping and layout via `cosmic-text`, glyph rasterisation |
 | `project-format` | The `.rstudio` package: read, write, migrate, verify, recover |
-| `asset-store` | Content-addressed blob storage, in memory or write-through to disk; the presets file (`presets.rs`); the Photoshop resource-file parsers (`abr.rs`, `asl.rs`, `resources/`: `.pat`, `.grd`, `.csh`, `.aco`, `.ase`, `.icc`) |
+| `asset-store` | Content-addressed blob storage, in memory or write-through to disk; the presets file (`presets.rs`); the Photoshop resource-file parsers (`abr.rs`, `asl.rs`, `resources/`: `.pat`, `.grd`, `.csh`, `.aco`, `.ase`, `.icc`, and W13-E's `.atn`) |
 | `psd` | `.psd` and (since W10-F / W11-H) `.psb` read and write, written from the published format documentation: layers, masks, vector masks, shape and fill layers, placed smart objects, adjustment payloads, the `lfx2` effects, type-layer engine data, patterns and the image resources |
 | `render` | wgpu: context, textures, mip generation, the camera affine, the quad pass, offscreen readback |
 | `render-shaders` | The WGSL sources (`quad`, `composite`, `mipmap`) as embedded constants |
@@ -209,7 +212,7 @@ Stated here rather than left for someone to discover:
 | Principle | Where it holds |
 | --- | --- |
 | No cloud, no account, no telemetry upload | There is no networking code in the workspace — no `std::net`, no socket type, no HTTP or TLS crate anywhere in the binary's dependency graph (Help items hand a fixed URL to the user's browser). `telemetry::DiagnosticBundle` is written locally and defaults `upload_consented` to `false`. |
-| No AI sidecar, no external runtime | Removed in full ([`PLAN.md`](PLAN.md) §D3). No interpreter or sidecar. The only process the app starts is the user's browser, for fixed Help URLs (`webbrowser`); the build script runs `git` for the version stamp. No interpreter is bundled, and there is no copyleft boundary to police — see [`../LICENSES/THIRD_PARTY_NOTICES.md`](../LICENSES/THIRD_PARTY_NOTICES.md). |
+| No AI sidecar, no external runtime | Removed in full ([`PLAN.md`](PLAN.md) §D3). No sidecar and no external runtime. The only process the app starts is the user's browser, for fixed Help URLs (`webbrowser`); the build script runs `git` for the version stamp. The one interpreter is in-process: File ▸ Script's JavaScript engine (`boa_engine`, Unlicense OR MIT, W13-K), on its own thread with no file or network access of its own (see [`threat-model.md`](threat-model.md) §4b), and there is no copyleft boundary to police — see [`../LICENSES/THIRD_PARTY_NOTICES.md`](../LICENSES/THIRD_PARTY_NOTICES.md). |
 | Always editable | Every user-visible edit is an invertible `editor_core::Command`; adjustments are parametric; pixels are referenced by content hash so a stroke across a hundred tiles is one small command and one undo step. |
 | The native format is authoritative | `.rstudio` carries a mandatory package version *and* a mandatory document version, an integrity seal, the pixels, and a command journal. See [`file-format.md`](file-format.md). |
 | Correctness does not require a GPU | `compositor` is the only thing that decides what a pixel is. GPU-backed tests detect the absence of an adapter and skip. |

@@ -1819,6 +1819,11 @@ pub enum MenuAction {
     /// File ▸ Save as PSD…: the layered PSD writer behind a `.psd` picker.
     /// Separate from [`MenuAction::Export`], whose formats are all flat.
     SaveAsPsd,
+    /// File ▸ Export…: one flat file whose format is the extension typed in
+    /// the platform save picker (the application's `Export` action, also
+    /// Ctrl+Alt+Shift+S), where [`MenuAction::Export`] fixes the format first
+    /// and asks for its settings.
+    ExportByName,
     Export(ExportFormat),
     ExportLayers,
     /// File ▸ Export ▸ Slices…: one file per Slice-tool region, written with
@@ -2880,6 +2885,7 @@ impl MenuAction {
         out.extend([MenuAction::Save, MenuAction::SaveAs, MenuAction::SaveAsPsd]);
         // W11-D.
         out.push(MenuAction::Revert);
+        out.push(MenuAction::ExportByName);
         out.extend(ExportFormat::ALL.iter().copied().map(MenuAction::Export));
         // W13-L: File > Export As > MP4.
         out.extend(ExportFormat::VIDEO.iter().copied().map(MenuAction::Export));
@@ -3236,6 +3242,7 @@ impl MenuAction {
             MenuAction::Save => "Save".into(),
             MenuAction::SaveAs => "Save As…".into(),
             MenuAction::SaveAsPsd => "Save as PSD…".into(),
+            MenuAction::ExportByName => "Export…".into(),
             // W11-D.
             MenuAction::Revert => "Revert".into(),
             MenuAction::Export(f) => format!("{}…", f.extension().to_uppercase()),
@@ -3692,6 +3699,7 @@ impl MenuAction {
             | MenuAction::Print
             | MenuAction::PrintAsPdf
             | MenuAction::SaveAsPsd
+            | MenuAction::ExportByName
             | MenuAction::DuplicateDocument => gate(ctx.need_document(), act(self)),
             // W10-E: Batch / Convert Formats work on folders, not on the open
             // document; the exports, Variables and Vectorize need one.
@@ -4784,6 +4792,8 @@ fn file_menu(recent_files: usize) -> Menu {
             // W11-D.
             item(MenuAction::Revert),
             Entry::Separator,
+            // File > Export…: the format is the typed extension.
+            item(MenuAction::ExportByName),
             Entry::submenu(
                 "Export As",
                 ExportFormat::ALL

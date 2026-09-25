@@ -116,14 +116,28 @@ The document also persists `meta.bit_depth` and `meta.color_mode` (a 16-bit
 document reopens as 16-bit, and since W10-H a 32-bit one keeps its `f32`
 tiles), the guides (changed by the undoable `Command::SetGuides`),
 `stored_selection` and `saved_selections`, and the asset table that smart
-objects name. Two records were added within version 4, each omitted while
-empty so an older file loads without them: `extras` (W10-B: the layer comps,
-notes, character and paragraph styles with the links saying which text layer
-wears which, and the alpha channel open for editing; W11-E: the layer colour
-labels; edited through `Command::SetDocumentExtras`) and `slices` (W11-I: each
-slice's rectangle, name, URL and alt text, `editor_core::slices::DocumentSlice`;
-since W11-E slice edits go through `Command::SetSlices`). File Info (XMP) and
-Image ▸ Variables are kept for the session only and are not saved.
+objects name. Four records were added within version 4, each omitted while
+empty (or, for the timeline, while it equals its default) so an older file
+loads without them: `extras` (W10-B: the layer comps, notes, character and
+paragraph styles with the links saying which text layer wears which, and the
+alpha channel open for editing; W11-E: the layer colour labels, which W13-B
+also reads from and writes to a `.psd`'s `lclr`; edited through
+`Command::SetDocumentExtras`), `slices` (W11-I: each slice's rectangle, name,
+URL and alt text, `editor_core::slices::DocumentSlice`; since W11-E slice
+edits go through `Command::SetSlices`), `timeline` (W13-L:
+`editor_core::timeline::DocumentTimeline` — Frames or Timeline mode, length,
+frame rate, playhead and one track per animated layer with its in / out
+points and opacity / position keys; W13X-9 appended scale and rotation keys,
+each key's `Interpolation` (omitted when Linear) and `LayerTrack::centred`
+(serde default false, so a wave-13 track keeps reading its position keys as
+translations); changed through `Command::SetTimeline`) and `spot_channels`
+(W13X-4: `editor_core::spot::SpotChannel` — name, ink as 8-bit sRGB,
+solidity 0-100 and the coverage as a `Selection`; changed through
+`Command::SetSpotChannels`). A text layer's warp gained the appended
+`WarpStyle::Custom` and its `TextWarp::mesh` (W13X-5: the 4x4 Bezier control
+mesh, 16 points; no `mesh` key is written while it is `None`, and a warp
+stored before reads back with none). File Info (XMP) and Image ▸ Variables
+are kept for the session only and are not saved.
 
 ## Integrity: what the seal proves
 
@@ -330,5 +344,7 @@ Stated rather than implied:
   `symlink_metadata` and the `open` would still be followed. Closing that needs
   platform-specific code and has not been written.
 - **The channel-isolation mask and the camera are not saved.** They are view
-  state, held by `app-shell`. Guides *are* saved: a `Document` field changed
+  state, held by `app-shell`. So are the theme (a preference, W13X-4), the
+  mask-view mode (W13-M) and the timeline's playback; the playhead *is*
+  saved, as a field of the timeline record. Guides *are* saved: a `Document` field changed
   through the undoable `Command::SetGuides`.

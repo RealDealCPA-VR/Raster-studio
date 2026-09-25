@@ -49,10 +49,11 @@
 //!
 //! These are deliberate, and none of them silently corrupts a file:
 //!
-//! * **PSB** (`.psb`, version 2) is **read** (W10-F: 64-bit section,
+//! * **PSB** (`.psb`, version 2) is read (W10-F: 64-bit section,
 //!   channel and long-key block lengths, 32-bit RLE row counts, canvases to
-//!   [`ReadOptions::max_psb_dimension`]) but not written: [`write`] produces
-//!   version 1, which caps the canvas at 30 000 px a side.
+//!   [`ReadOptions::max_psb_dimension`]) and, since W11-H, written:
+//!   [`write_psb`] always writes version 2, and [`write`] writes version 1
+//!   up to 30 000 px a side and a `.psb` past that.
 //! * **Vector masks** are carried, not rendered, here: the path is the
 //!   layer's `vmsk`/`vsms` block (decoded by [`shape::VectorPath`]) and
 //!   W9-G parses and writes the vector mask's own density and feather from

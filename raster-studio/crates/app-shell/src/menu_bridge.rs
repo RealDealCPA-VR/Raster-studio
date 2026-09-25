@@ -568,6 +568,9 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
         // `ui` names a format per item; the shell's export dialog is where the
         // format is finally chosen, so every one routes to the same action.
         MenuAction::Export(_) => Action::Export,
+        // File > Export…: the same picker, the format taken from the extension
+        // the user types (`Editor::act_export`).
+        MenuAction::ExportByName => Action::Export,
         MenuAction::Undo => Action::Undo,
         MenuAction::Redo => Action::Redo,
         // Edit ▸ Step Backward / Step Forward are Photoshop's names for the
@@ -11721,6 +11724,64 @@ mod tests {
         let mut cancelled = with_two_layers(dir.path());
         let reason = perform(MenuAction::SaveAsPsd, &mut cancelled).unwrap_err();
         assert!(reason.contains("Save as PSD"), "{reason}");
+    }
+
+    /// W14: File > Export… is a menu row (and so a Command Search entry),
+    /// not only the Ctrl+Alt+Shift+S chord: the row sits in the File menu
+    /// itself, the palette built from the menu bar finds it, and running it
+    /// through the menu bar's click route opens the plain export picker and
+    /// writes the format the typed extension names.
+    #[test]
+    fn file_export_is_a_menu_row_command_search_finds_and_writes_by_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("by-name.jpg");
+        let (mut ed, suggested) = with_two_layers_exporting_to(dir.path(), &target);
+
+        // The row is in the File menu, labelled as the application action.
+        let menus = menus(&ed);
+        let file = menus
+            .iter()
+            .find(|m| m.title == "File")
+            .expect("a File menu");
+        assert!(
+            file.actions().contains(&MenuAction::ExportByName),
+            "File > Export… is a row of the File menu"
+        );
+        assert_eq!(MenuAction::ExportByName.label(), "Export…");
+
+        // Command Search, built from the menu bar, finds it by name.
+        let bare = crate::chrome::Chrome::new();
+        let menu_ctx = context(&mut ed, bare.workspace());
+        let mut palette = ui::dialogs::CommandSearchDialog::from_menus(&menus, |a| {
+            a != MenuAction::CommandSearch && resolve_intent(a, &menu_ctx, &ed).is_ok()
+        });
+        palette.set_query("export");
+        let found: Vec<(MenuAction, String)> = palette
+            .matches()
+            .iter()
+            .map(|e| (e.action, e.path.clone()))
+            .collect();
+        assert!(
+            found.contains(&(MenuAction::ExportByName, "File > Export…".to_owned())),
+            "Command Search lists File > Export…: {found:?}"
+        );
+
+        // Clicked, it is the application's Export: one plain picker, and
+        // the file written in the format of the extension typed there.
+        let (chrome, out) = click(&mut ed, MenuAction::ExportByName);
+        assert!(
+            !chrome.dialog_open(),
+            "Export… is a file picker, not a modal"
+        );
+        assert_eq!(out.actions, vec![Action::Export]);
+        apply_output(&mut ed, out).expect("the export ran");
+        assert_eq!(suggested.borrow().len(), 1, "exactly one picker opened");
+        let bytes = std::fs::read(&target).expect("the .jpg was written");
+        assert_eq!(
+            &bytes[..3],
+            &[0xFF, 0xD8, 0xFF],
+            "a JPEG, from the typed name"
+        );
     }
 
     #[test]
